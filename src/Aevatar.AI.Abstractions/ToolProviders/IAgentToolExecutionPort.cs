@@ -36,9 +36,17 @@ public sealed record AgentToolExecutionRequest(
     string ArgumentsJson,
     AgentToolExecutionContext ExecutionContext,
     AgentToolApprovalContinuationMode ApprovalContinuationMode,
-    AgentToolApprovalGrant? ApprovalGrant)
+    AgentToolApprovalGrant? ApprovalGrant,
+    AgentToolExecutionAttemptKind ExecutionAttemptKind = AgentToolExecutionAttemptKind.Initial)
 {
     public AgentToolExecutionOwner ExecutionOwner => ExecutionContext.ExecutionOwner;
+}
+
+public enum AgentToolExecutionAttemptKind
+{
+    Unspecified = 0,
+    Initial = 1,
+    ActorRecovery = 2,
 }
 
 public static class AgentToolExecutionOwners

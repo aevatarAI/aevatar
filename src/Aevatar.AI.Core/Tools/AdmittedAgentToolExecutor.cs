@@ -62,12 +62,35 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 AgentToolExecutionFailureStage.RequestValidation);
         }
 
+        if (request.ExecutionAttemptKind is not (
+                AgentToolExecutionAttemptKind.Initial or
+                AgentToolExecutionAttemptKind.ActorRecovery))
+        {
+            return CreateUnauditedFailure(
+                tool,
+                toolName,
+                toolCallId,
+                fallbackSafety,
+                "invalid_tool_execution_attempt",
+                "Tool execution requires an explicit initial or actor-recovery attempt kind.",
+                AgentToolExecutionFailureStage.RequestValidation);
+        }
+
+        var operationId = NormalizeIdentity(request.ExecutionContext.Request.OperationId)
+                          ?? CreateOperationId(executionOwner, requestId, toolCallId);
+        var executionContext = request.ExecutionContext with
+        {
+            Request = request.ExecutionContext.Request with { OperationId = operationId },
+        };
+
         AgentToolCallSafety callSafety;
+        AgentToolReplayPolicy replayPolicy;
         try
         {
-            using var contextScope = AgentToolContextScope.Push(request.ExecutionContext);
+            using var contextScope = AgentToolContextScope.Push(executionContext);
             callSafety = tool.GetCallSafety(argumentsJson)
                 ?? throw new InvalidOperationException("Tool safety classification is required.");
+            replayPolicy = tool.ResolveReplayPolicy(argumentsJson);
         }
         catch (Exception ex)
         {
@@ -86,7 +109,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             return await CompleteBeforeTerminalAsync(
                 tool,
                 failed,
-                request.ExecutionContext,
+                executionContext,
                 AgentToolCredentialSource.System,
                 executionOwner,
                 requestId,
@@ -97,8 +120,41 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 ct).ConfigureAwait(false);
         }
 
+        if (ValidateReplayPolicy(
+                tool,
+                callSafety,
+                replayPolicy,
+                operationId,
+                executionContext.Request.IdempotencyKey) is { } replayPolicyFailure)
+        {
+            var failed = CreateFailure(
+                tool,
+                toolName,
+                toolCallId,
+                callSafety,
+                isMutation: AgentToolCredentialPolicy.IsMutation(tool, callSafety),
+                replayPolicyFailure.Code,
+                replayPolicyFailure.SafeMessage,
+                AgentToolExecutionFailureStage.Classification,
+                terminalInvoked: false,
+                retryable: false,
+                auditCompleted: false);
+            return await CompleteBeforeTerminalAsync(
+                tool,
+                failed,
+                executionContext,
+                AgentToolCredentialSource.System,
+                executionOwner,
+                requestId,
+                toolName,
+                toolCallId,
+                argumentsSha256,
+                callSafety,
+                ct).ConfigureAwait(false);
+        }
+
         var isMutation = AgentToolCredentialPolicy.IsMutation(tool, callSafety);
-        var credentialDecision = ResolveCredentials(request.ExecutionContext, isMutation, toolName);
+        var credentialDecision = ResolveCredentials(executionContext, isMutation, toolName);
         if (!credentialDecision.Allowed)
         {
             var denied = CreateDenied(
@@ -113,7 +169,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             return await CompleteBeforeTerminalAsync(
                 tool,
                 denied,
-                request.ExecutionContext,
+                executionContext,
                 credentialDecision.CredentialSource,
                 executionOwner,
                 requestId,
@@ -218,9 +274,30 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 ArgumentsSha256 = argumentsSha256,
                 ExecutionOwner = ToProto(executionOwner),
                 IssuedAtUnixMs = request.ExecutionContext.Request.IssuedAtUnixMs,
+                OperationId = operationId,
+                ReplayPolicy = replayPolicy,
             },
             ct).ConfigureAwait(false);
-        if (admission.Status != AgentToolAdmissionStatus.Started)
+        AgentToolTerminalOutcome? reconciledOutcome = null;
+        if (admission.Status == AgentToolAdmissionStatus.Duplicate &&
+            request.ExecutionAttemptKind == AgentToolExecutionAttemptKind.ActorRecovery)
+        {
+            var recovery = await ResolveDuplicateRecoveryAsync(
+                tool,
+                replayPolicy,
+                operationId,
+                argumentsJson,
+                callSafety,
+                isMutation,
+                toolName,
+                toolCallId,
+                credentialDecision.ExecutionContext,
+                ct).ConfigureAwait(false);
+            if (recovery.Failure is not null)
+                return recovery.Failure;
+            reconciledOutcome = recovery.CompletedOutcome;
+        }
+        else if (admission.Status != AgentToolAdmissionStatus.Started)
         {
             var (failureCode, safeMessage, retryable) = admission.Status switch
             {
@@ -298,6 +375,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             isMutation,
             credentialDecision,
             runningAppend,
+            reconciledOutcome,
             ct).ConfigureAwait(false);
     }
 
@@ -313,6 +391,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         bool isMutation,
         CredentialDecision credentialDecision,
         AuditTrailAppendResult runningAppend,
+        AgentToolTerminalOutcome? reconciledOutcome,
         CancellationToken ct)
     {
         using var activity = GenAIActivitySource.StartExecuteTool(toolName, toolCallId);
@@ -320,12 +399,20 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         AgentToolExecutionOutcome outcome;
         try
         {
-            using var contextScope = AgentToolContextScope.Push(credentialDecision.ExecutionContext);
-            var terminalOutcome = await tool.ExecuteWithOutcomeAsync(
-                toolCallId,
-                toolName,
-                argumentsJson,
-                ct).ConfigureAwait(false);
+            AgentToolTerminalOutcome terminalOutcome;
+            if (reconciledOutcome is null)
+            {
+                using var contextScope = AgentToolContextScope.Push(credentialDecision.ExecutionContext);
+                terminalOutcome = await tool.ExecuteWithOutcomeAsync(
+                    toolCallId,
+                    toolName,
+                    argumentsJson,
+                    ct).ConfigureAwait(false);
+            }
+            else
+            {
+                terminalOutcome = reconciledOutcome;
+            }
             var resultJson = terminalOutcome.ResultJson;
             var receipt = AgentToolReceiptFactory.CreateResult(
                 tool,
@@ -344,7 +431,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 string.Empty,
                 string.Empty,
                 AgentToolExecutionFailureStage.None,
-                TerminalInvoked: true,
+                TerminalInvoked: reconciledOutcome is null,
                 Retryable: false,
                 AuditCompleted: false);
             activity?.SetTag("gen_ai.tool.status", "ok");
@@ -364,7 +451,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 ResolveExceptionErrorCode(ex),
                 SafeExceptionClass(ex),
                 AgentToolExecutionFailureStage.TerminalExecution,
-                terminalInvoked: true,
+                terminalInvoked: reconciledOutcome is null,
                 retryable: false,
                 auditCompleted: false);
             activity?.SetTag("gen_ai.tool.status", "error");
@@ -520,6 +607,120 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 AgentToolAdmissionStatus.StoreUnavailable,
                 SafeExceptionClass(ex));
         }
+    }
+
+    private async Task<DuplicateRecoveryResolution> ResolveDuplicateRecoveryAsync(
+        IAgentTool tool,
+        AgentToolReplayPolicy replayPolicy,
+        string operationId,
+        string argumentsJson,
+        AgentToolCallSafety callSafety,
+        bool isMutation,
+        string toolName,
+        string toolCallId,
+        AgentToolExecutionContext executionContext,
+        CancellationToken ct)
+    {
+        if (replayPolicy is AgentToolReplayPolicy.ReadOnlyRetryable or
+            AgentToolReplayPolicy.IdempotentRetryable)
+        {
+            return new DuplicateRecoveryResolution(null, null);
+        }
+
+        if (replayPolicy == AgentToolReplayPolicy.Reconcilable &&
+            tool is IAgentToolOperationReconciler reconciler)
+        {
+            AgentToolOperationReconciliationResult? reconciliation;
+            try
+            {
+                using var contextScope = AgentToolContextScope.Push(executionContext);
+                reconciliation = await reconciler.ReconcileOperationAsync(
+                    new AgentToolOperationReconciliationRequest(
+                        operationId,
+                        argumentsJson,
+                        executionContext),
+                    ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                reconciliation = null;
+            }
+
+            if (reconciliation?.Disposition == AgentToolOperationReconciliationDisposition.NotFound)
+                return new DuplicateRecoveryResolution(null, null);
+            if (reconciliation?.Disposition == AgentToolOperationReconciliationDisposition.Completed &&
+                reconciliation.CompletedOutcome is not null)
+            {
+                return new DuplicateRecoveryResolution(reconciliation.CompletedOutcome, null);
+            }
+        }
+
+        const string failureCode = "outcome_uncertain";
+        const string safeMessage =
+            "OUTCOME_UNCERTAIN: the prior external effect cannot be proven complete or safe to replay.";
+        return new DuplicateRecoveryResolution(
+            null,
+            CreateFailure(
+                tool,
+                toolName,
+                toolCallId,
+                callSafety,
+                isMutation,
+                failureCode,
+                safeMessage,
+                AgentToolExecutionFailureStage.Admission,
+                terminalInvoked: false,
+                retryable: false,
+                auditCompleted: false));
+    }
+
+    private static ReplayPolicyFailure? ValidateReplayPolicy(
+        IAgentTool tool,
+        AgentToolCallSafety callSafety,
+        AgentToolReplayPolicy replayPolicy,
+        string operationId,
+        string? idempotencyKey)
+    {
+        if (replayPolicy == AgentToolReplayPolicy.Unspecified ||
+            !Enum.IsDefined(replayPolicy))
+        {
+            return new ReplayPolicyFailure(
+                "invalid_tool_replay_policy",
+                "The tool must declare a supported replay policy.");
+        }
+
+        if (replayPolicy == AgentToolReplayPolicy.ReadOnlyRetryable &&
+            (!callSafety.IsReadOnly || callSafety.IsDestructive))
+        {
+            return new ReplayPolicyFailure(
+                "invalid_read_only_replay_policy",
+                "READ_ONLY_RETRYABLE requires a non-destructive read-only invocation.");
+        }
+
+        if (replayPolicy == AgentToolReplayPolicy.IdempotentRetryable &&
+            !string.Equals(
+                NormalizeIdentity(idempotencyKey),
+                operationId,
+                StringComparison.Ordinal))
+        {
+            return new ReplayPolicyFailure(
+                "invalid_idempotent_replay_key",
+                "IDEMPOTENT_RETRYABLE requires idempotency_key to exactly equal operation_id.");
+        }
+
+        if (replayPolicy == AgentToolReplayPolicy.Reconcilable &&
+            tool is not IAgentToolOperationReconciler)
+        {
+            return new ReplayPolicyFailure(
+                "missing_tool_operation_reconciler",
+                "RECONCILABLE requires a tool-owned operation reconciler.");
+        }
+
+        return null;
     }
 
     private async Task<AuditTrailAppendResult> AppendAsync(
@@ -819,6 +1020,13 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         "tool:v1:admission:" + HashLengthPrefixed(
             OwnerKindValue(executionOwner), executionOwner.OwnerId, requestId, toolCallId);
 
+    private static string CreateOperationId(
+        ExecutionOwnerIdentity executionOwner,
+        string requestId,
+        string toolCallId) =>
+        "tool:v1:operation:" + HashLengthPrefixed(
+            OwnerKindValue(executionOwner), executionOwner.OwnerId, requestId, toolCallId);
+
     private static string CreateWaitingApprovalAuditId(
         ExecutionOwnerIdentity executionOwner,
         string requestId,
@@ -919,4 +1127,12 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
     private sealed record ExecutionOwnerIdentity(
         AgentToolExecutionOwnerKind Kind,
         string OwnerId);
+
+    private sealed record DuplicateRecoveryResolution(
+        AgentToolTerminalOutcome? CompletedOutcome,
+        AgentToolExecutionOutcome? Failure);
+
+    private sealed record ReplayPolicyFailure(
+        string Code,
+        string SafeMessage);
 }

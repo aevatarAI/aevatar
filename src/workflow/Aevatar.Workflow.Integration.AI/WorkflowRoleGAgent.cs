@@ -11,6 +11,7 @@ using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Credentials;
@@ -32,7 +33,8 @@ public class WorkflowRoleGAgent(
     IToolSetRegistry? toolSetRegistry = null,
     IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null,
     RoleChatExecutionOptions? chatExecutionOptions = null,
-    TimeProvider? timeProvider = null)
+    TimeProvider? timeProvider = null,
+    ISecretVault? chatToolRecoverySecretVault = null)
     : RoleGAgent(
         toolExecutionPort,
         llmProviderFactory,
@@ -42,7 +44,8 @@ public class WorkflowRoleGAgent(
         toolSources,
         remoteToolApprovalPort,
         timeProvider: timeProvider,
-        chatExecutionOptions: chatExecutionOptions)
+        chatExecutionOptions: chatExecutionOptions,
+        chatToolRecoverySecretVault: chatToolRecoverySecretVault)
 {
     public const string WorkflowAssistantRoleAgentKind = "workflow.assistant-role";
     private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
@@ -210,6 +213,41 @@ public class WorkflowRoleGAgent(
                    ?? throw new InvalidOperationException(
                        $"Approved workflow tool '{pending.ToolName}' is no longer available.");
         return (tool, effectiveContext);
+    }
+
+    protected override async Task<AgentToolExecutionContext?> TryResolveRecoveryExecutionContextAsync(
+        RoleChatRecoveryCheckpoint checkpoint,
+        CancellationToken ct)
+    {
+        var durable = checkpoint.CallerDurableCredential;
+        if (checkpoint.RequiresRuntimeCredential &&
+            durable?.SourceKind == DurableCallerCredentialSourceKind.ScheduledDispatch &&
+            durable.ScheduledCallerNyxIdAuthority is { } authority &&
+            !string.IsNullOrWhiteSpace(authority.Platform) &&
+            !string.IsNullOrWhiteSpace(authority.ExternalUserId) &&
+            !string.IsNullOrWhiteSpace(authority.Scope))
+        {
+            var context = AgentToolExecutionContextMapper.FromRecoveryPayload(checkpoint.RecoveryContext) with
+            {
+                ExecutionOwner = AgentToolExecutionOwners.Actor(Id),
+                NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                    authority.Platform,
+                    authority.Tenant,
+                    authority.ExternalUserId,
+                    authority.Scope),
+                SenderBinding = AgentToolExecutionContextMapper.FromRecoveryPayload(checkpoint.RecoveryContext)
+                    .SenderBinding with
+                {
+                    BindingId = string.IsNullOrWhiteSpace(authority.BindingId)
+                        ? AgentToolExecutionContextMapper.FromRecoveryPayload(checkpoint.RecoveryContext)
+                            .SenderBinding.BindingId
+                        : authority.BindingId,
+                },
+            };
+            return await RefreshCallerTokenAsync(context, ct).ConfigureAwait(false);
+        }
+
+        return await base.TryResolveRecoveryExecutionContextAsync(checkpoint, ct).ConfigureAwait(false);
     }
 
     protected override async Task OnRoleChatSessionTerminalCommittedAsync(
@@ -817,6 +855,7 @@ public class WorkflowRoleGAgent(
             TimeoutMs = intent.TimeoutMs,
             WorkflowLlmCompletionDeliveryContext =
                 ToWorkflowLlmCompletionDeliveryContext(intent),
+            CallerDurableCredential = intent.CallerCredential?.DurableCallerCredential?.Clone(),
             ToolContext = AgentToolExecutionContextMapper.ToPayload(toolContext),
             LlmControl = new LLMControlContextPayload
             {

@@ -155,6 +155,56 @@ public sealed class AgentToolAdmissionLedgerTests
         store.SetAttempts.Should().Be(0);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task TryStartAsync_WhenOperationIdIsMissing_ShouldFailClosedWithoutWriting(
+        string operationId)
+    {
+        var store = new RecordingAdmissionFactStore();
+        var ledger = new DistributedAgentToolAdmissionLedger(store, MainnetLedgerOptions());
+        var fact = CreateFact();
+        fact.OperationId = operationId;
+
+        var result = await ledger.TryStartAsync(fact);
+
+        result.Status.Should().Be(AgentToolAdmissionStatus.InvalidFact);
+        store.SetAttempts.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(AgentToolReplayPolicy.Unspecified)]
+    [InlineData((AgentToolReplayPolicy)999)]
+    public async Task TryStartAsync_WhenReplayPolicyIsUnsupported_ShouldFailClosedWithoutWriting(
+        AgentToolReplayPolicy replayPolicy)
+    {
+        var store = new RecordingAdmissionFactStore();
+        var ledger = new DistributedAgentToolAdmissionLedger(store, MainnetLedgerOptions());
+        var fact = CreateFact();
+        fact.ReplayPolicy = replayPolicy;
+
+        var result = await ledger.TryStartAsync(fact);
+
+        result.Status.Should().Be(AgentToolAdmissionStatus.InvalidFact);
+        store.SetAttempts.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task TryStartAsync_WhenRecoveryContractChangesForSameAdmissionId_ShouldConflict()
+    {
+        var store = new RecordingAdmissionFactStore();
+        var ledger = new DistributedAgentToolAdmissionLedger(store, MainnetLedgerOptions());
+        var fact = CreateFact();
+        var changedOperation = fact.Clone();
+        changedOperation.OperationId = "operation-2";
+        var changedReplayPolicy = fact.Clone();
+        changedReplayPolicy.ReplayPolicy = AgentToolReplayPolicy.NonReplayable;
+
+        (await ledger.TryStartAsync(fact)).Status.Should().Be(AgentToolAdmissionStatus.Started);
+        (await ledger.TryStartAsync(changedOperation)).Status.Should().Be(AgentToolAdmissionStatus.Conflict);
+        (await ledger.TryStartAsync(changedReplayPolicy)).Status.Should().Be(AgentToolAdmissionStatus.Conflict);
+    }
+
     [Fact]
     public async Task TryStartAsync_WhenStoreThrows_ShouldFailClosed()
     {
@@ -338,6 +388,8 @@ public sealed class AgentToolAdmissionLedgerTests
         ToolName = "test_tool",
         ArgumentsSha256 = new string('a', 64),
         IssuedAtUnixMs = (issuedAt ?? DateTimeOffset.UtcNow).ToUnixTimeMilliseconds(),
+        OperationId = "operation-1",
+        ReplayPolicy = AgentToolReplayPolicy.ReadOnlyRetryable,
     };
 
     private sealed class RecordingAdmissionFactStore : IAgentToolAdmissionFactStore

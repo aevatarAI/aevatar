@@ -24,6 +24,8 @@ using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -2453,6 +2455,7 @@ public class NyxIdChatGAgentTests
         callbackScheduler ??= new NoopRuntimeCallbackScheduler();
         var services = new ServiceCollection()
             .AddSingleton(eventStore)
+            .AddSingleton<ISecretVault, InMemorySecretVault>()
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddSingleton(callbackScheduler)
             .AddSingleton<IAuditTrailAppender, AppendedAuditTrail>()
@@ -2492,7 +2495,8 @@ public class NyxIdChatGAgentTests
             relayOptions: relayOptions,
             timeProvider: timeProvider,
             turnCatalogMaterializer: turnCatalogMaterializer,
-            chatExecutionOptions: chatExecutionOptions)
+            chatExecutionOptions: chatExecutionOptions,
+            chatToolRecoverySecretVault: provider.GetRequiredService<ISecretVault>())
         {
             Services = provider,
             EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),

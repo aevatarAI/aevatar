@@ -156,7 +156,7 @@ public sealed class AgentProfileTurnRuntimeTests
     }
 
     [Fact]
-    public async Task StepTurn_ShouldUseSameSchemaAndExecutionAdmission()
+    public async Task StepTurn_RejectedToolShouldFailClosedBeforeLaterAllowedTool()
     {
         var visible = new CountingTool("visible");
         var hidden = new CountingTool("hidden");
@@ -165,7 +165,7 @@ public sealed class AgentProfileTurnRuntimeTests
         var executor = runtime.CreateStepExecutor(NewCatalog(["visible"]));
 
         var request = executor.BuildBaseRequest(null, null, null, null);
-        await executor.ExecuteToolStepAsync(
+        var results = await executor.ExecuteToolStepAsync(
             [
                 new ToolCall { Id = "hidden-call", Name = "hidden", ArgumentsJson = "{}" },
                 new ToolCall { Id = "visible-call", Name = "visible", ArgumentsJson = "{}" },
@@ -175,8 +175,11 @@ public sealed class AgentProfileTurnRuntimeTests
             CancellationToken.None);
 
         request.Tools.Should().ContainSingle().Which.Name.Should().Be("visible");
+        results.Should().HaveCount(2);
+        results.Should().OnlyContain(result => result.IsError);
         hidden.ExecuteCount.Should().Be(0);
-        visible.ExecuteCount.Should().Be(1);
+        visible.ExecuteCount.Should().Be(0,
+            "the ordered batch must not execute later calls after a forged call fails admission");
     }
 
     [Fact]

@@ -96,6 +96,13 @@ approval，不发送 chat continuation，并提交失败的 `RoleChatSessionComp
 cancellation 后晚返回成功或晚抛其他异常，也仍归入 `APPROVAL_TOOL_TIMEOUT`，不得退化为普通失败或
 继续执行。
 
+审批结果成功时，actor 使用原 `operation_id` 和 `ActorRecovery` attempt 执行工具，将真实 result
+首次写入稳定 vault reference，再原子提交 `CONTINUATION_PREPARED + ClearPendingApprovalEvent`。
+审批等待阶段不得把 approval-required receipt 当作 terminal completion 写入同一个 result reference。
+提交后只发送 typed `RoleChatRecoveryContinuationRequested` self-message；self-message 丢失时由 activation
+按 checkpoint generation 重发。恢复 LLM 输入保持原 user message，并追加 assistant tool-call 与 tool
+result typed transcript，不把不可信 tool output 拼接成 system/recovery prompt。
+
 Host deadline 不在 provider stream 正常结束时提前失效。stream 后的 catalog、progress 与 terminal
 commit admission 仍携带同一个 turn token；每个外部 await 返回后、以及发起下一次 success commit 前都必须
 复检。`IEventStore.AppendAsync` 的 cancellation authority 只覆盖 admission：它抛出的
@@ -399,7 +406,13 @@ NyxIdChat 的用户可见 live path 不直接投影上述 transient publications
 
 `RoleChatSessionCompletedEvent` 仍是 terminal/final authority，并在同一个 committed fact 内嵌尚未 live 投递的 final text、usage、text end、authorization 与唯一 terminal typed tail。normal projector 只展开该 tail，不读取 completion snapshot 合成全文，因此 completed authority 与 terminal presentation 不会被逐事件发布失败拆开，也不会重复已流式投递的内容。显式 replay 才能把 committed completion snapshot 按 tool、reasoning、media、text、usage、terminal 的展示顺序完整展开。不同输入复用同一 turn id 时，新 producer 提交带独立 command attempt id 的 rejection，不推进已完成 session 的 progress sequence；projection 在滚动升级期间仍兼容旧 `RoleChatSessionConflictEvent` TypeUrl。provider-native tool、text-parsed tool 与 initial skill recovery 都使用同一个 start-before-execution/result lifecycle；`use_skill` 在 start snapshot 时从结构化参数解析实际 skill identity。
 
-Actor activation 对 durable session 只做候选发现：每个未终态 session 通过 typed `RoleChatIncompleteSessionFinalizationRequested(session_id, expected_last_progress_sequence)` self-message 进入下一次 actor turn，再与权威 state 对账。当前恢复契约不持久化 LLM credential、tool context 或完整 tool intent，因此 activation 和 caller retry 都不得自动重放 provider/tool 调用；started-only session 提交 `FAILED + SESSION_ORPHANED`，已有 committed progress 的 session 提交 `OUTCOME_UNCERTAIN + SESSION_OUTCOME_UNCERTAIN`。两者都复用唯一的 `RoleChatSessionCompletedEvent + terminal_progress + completion notification` 主链。completion notification 的 activation recovery 按 session 隔离失败，单个 outbox 故障不得阻断其余 pending delivery 或 incomplete-session sweep。
+`RoleGAgent` 在 session start 时提交 generation 1 的 `MODEL_READY` checkpoint。每轮 tool batch 必须先把 frozen intent 提交为 `TOOL_BATCH_PREPARED`，其中包含 stable `operation_id`、typed recovery context、replay policy、arguments digest 与 actor/session/operation-bound vault reference；intent commit 成功前不得调用外部 terminal。每个 completion 同样以 digest + vault reference 写入 checkpoint，多工具 batch 在全部 operation 都有 completion 前保持 `TOOL_BATCH_PREPARED`。result reference 内保存 protobuf typed result proof，并以 deterministic reference 实施 first-result authority：result 已写 vault 但 checkpoint append 失败时，caller redelivery 与 activation recovery 都必须在任何外呼前采用原 payload/reference，不得用第二次响应覆盖，也不得创建 alias。checkpoint generation 每次单调递增，producer 在持久化前校验合法 stage transition，consumer 再以 expected generation fence 陈旧 self-message。
+
+Actor activation 对 durable session 先检查 checkpoint：合法的 `MODEL_READY`、`TOOL_BATCH_PREPARED` 或 `CONTINUATION_PREPARED` 通过 typed `RoleChatRecoveryContinuationRequested(session_id, expected_checkpoint_generation, operation_id)` 进入下一次 actor turn；`WAITING_APPROVAL` 仅在 matching pending approval 仍由 actor 持有时继续等待并重新发布审批。恢复读取已提交 completion，不重复外部调用；未完成 operation 先探测 deterministic result，再只按 `READ_ONLY_RETRYABLE`、`IDEMPOTENT_RETRYABLE` 或 `RECONCILABLE` 契约推进，并保留原 operation/admission identity。`NON_REPLAYABLE` 的未完成 intent，以及过期、损坏或永久不可解析的 arguments/result recovery material，均提交 `OUTCOME_UNCERTAIN + SESSION_OUTCOME_UNCERTAIN`，不得反复 fault 或重放；vault 基础设施抛出的未分类瞬时异常才保留 actor redelivery。runtime credential 不进入 checkpoint；NyxID 与 Workflow 边界从 typed durable caller credential reference 重新解析，并校验 purpose、owner、version、fingerprint 与 expiry。
+
+外部 terminal 返回后的 result store/checkpoint append 失败必须以 typed post-external failure 穿过 Chat 主链，禁止被 generic LLM catch 转成 `FAILED` 或清除 checkpoint；瞬时失败保持 session incomplete 并发布 recovery continuation，永久材料失败提交 `OUTCOME_UNCERTAIN`。checkpoint 的 recovery context 持久 credential kind 与各秘密槽位的 required flag，不持久 token：`SOURCE_READABLE_USER_BEARER` 的主 bearer 恢复到 `NyxIdAccessToken`；`PROXY_DELEGATION` 若还要求独立 source-readable supplemental bearer，则必须有独立 sealed reference，否则 fail closed 为 `SESSION_OUTCOME_UNCERTAIN`，禁止拿 delegation token 冒充 supplemental credential。
+
+没有合法 recovery checkpoint 的旧 started-only session 仍通过 typed `RoleChatIncompleteSessionFinalizationRequested(session_id, expected_last_progress_sequence)` self-message进入下一次 actor turn并与权威 state 对账：started-only 提交 `FAILED + SESSION_ORPHANED`，已有 committed progress 提交 `OUTCOME_UNCERTAIN + SESSION_OUTCOME_UNCERTAIN`。所有分支都复用唯一的 `RoleChatSessionCompletedEvent + terminal_progress + completion notification` 主链。completion notification 的 activation recovery 按 session 隔离失败，单个 outbox 故障不得阻断其余 pending delivery 或 incomplete-session sweep。
 
 重复、陈旧 signal 幂等忽略，等待 typed tool approval continuation 的 session 不参与该 sweep。session retention 只在新 session admission 时回收已终态、completion notification 已完成且 transcript history 不处于 `Prepared` 的记录；terminal/progress/delivery reducer 不得隐式 trim。容量已满且没有安全可回收记录时，actor 提交 typed `CAPACITY_EXHAUSTED` rejection，且不得启动 LLM/tool。`OUTCOME_UNCERTAIN` 不是失败别名：它只允许由同一 authoritative session 的明确 `COMPLETED` 或 `FAILED` fact 对账；后两者是吸收态。合法对账复用 session identity，重置 completion outbox，并用包含 typed outcome 的 deduplication operation id 重新投递一次。
 

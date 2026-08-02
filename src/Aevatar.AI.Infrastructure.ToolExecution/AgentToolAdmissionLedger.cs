@@ -146,6 +146,21 @@ internal sealed class DistributedAgentToolAdmissionLedger : IAgentToolAdmissionL
         AgentToolAdmissionPolicy policy,
         DateTimeOffset now)
     {
+        if (string.IsNullOrWhiteSpace(fact.OperationId))
+        {
+            return AgentToolAdmissionLifetime.Reject(
+                AgentToolAdmissionStatus.InvalidFact,
+                "The tool admission fact is missing its operation identity.");
+        }
+
+        if (fact.ReplayPolicy == AgentToolReplayPolicy.Unspecified ||
+            !Enum.IsDefined(fact.ReplayPolicy))
+        {
+            return AgentToolAdmissionLifetime.Reject(
+                AgentToolAdmissionStatus.InvalidFact,
+                "The tool admission fact is missing a supported replay policy.");
+        }
+
         if (fact.IssuedAtUnixMs <= 0)
         {
             return AgentToolAdmissionLifetime.Reject(

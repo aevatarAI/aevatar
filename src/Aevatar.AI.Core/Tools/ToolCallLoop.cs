@@ -162,7 +162,12 @@ public sealed class ToolCallLoop
                             parsed.CleanedContent,
                             response.ReasoningContent,
                             parsed.ToolCalls));
-                        await ExecuteToolCallsCoreAsync(authorizedTools, parsed.ToolCalls, messages, ct);
+                        await ExecuteToolCallsCoreAsync(
+                            authorizedTools,
+                            parsed.ToolCalls,
+                            messages,
+                            baseRequest.RequestId ?? "standalone-tool-loop",
+                            ct);
                         accumulatedContent = null;
                         continue;
                     }
@@ -211,7 +216,12 @@ public sealed class ToolCallLoop
                 ReasoningContent = response.ReasoningContent,
                 ToolCalls = response.ToolCalls,
             });
-            await ExecuteToolCallsCoreAsync(authorizedTools, response.ToolCalls!, messages, ct);
+            await ExecuteToolCallsCoreAsync(
+                authorizedTools,
+                response.ToolCalls!,
+                messages,
+                baseRequest.RequestId ?? "standalone-tool-loop",
+                ct);
         }
 
         // maxRounds exhausted — tool results from the last round are already in messages.
@@ -249,6 +259,7 @@ public sealed class ToolCallLoop
                     authorizedFinalTools,
                     finalParsed.ToolCalls,
                     messages,
+                    baseRequest.RequestId ?? "standalone-tool-loop",
                     ct);
 
                 // One more LLM call to summarize
@@ -292,7 +303,12 @@ public sealed class ToolCallLoop
         {
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
         });
-        await ExecuteToolCallsCoreAsync(_tools, toolCalls, messages, ct);
+        await ExecuteToolCallsCoreAsync(
+            _tools,
+            toolCalls,
+            messages,
+            "standalone-tool-loop",
+            ct);
     }
 
     private async Task<(LLMResponse Response, bool Terminated, ToolManager AuthorizedTools)> InvokeLlmAsync(
@@ -602,6 +618,7 @@ public sealed class ToolCallLoop
         ToolManager tools,
         IReadOnlyList<ToolCall> toolCalls,
         List<ChatMessage> messages,
+        string sessionId,
         CancellationToken ct)
     {
         // Refactor (iter35/cluster-040-streaming-tool-executor):
@@ -614,8 +631,13 @@ public sealed class ToolCallLoop
             approvalContinuationMode: _approvalContinuationMode);
         using var executionState = executor.CreateExecutionState();
 
-        foreach (var call in toolCalls)
-            executor.AddTool(executionState, call);
+        var prepared = await executor.PrepareBatchAsync(
+            sessionId,
+            round: 0,
+            toolCalls,
+            ct).ConfigureAwait(false);
+        foreach (var operation in prepared)
+            executor.AddTool(executionState, operation);
 
         await foreach (var result in executor.GetRemainingResultsAsync(executionState, ct))
         {

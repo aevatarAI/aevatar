@@ -365,7 +365,12 @@ public sealed class ChatRuntimeStreamingBufferTests
             CancellationToken.None);
 
         toolResults.Should().ContainSingle();
-        tool.CapturedContext.Should().BeNull();
+        tool.CapturedContext.Should().NotBeNull();
+        tool.CapturedContext!.Request.CallId.Should().Be("tool-1");
+        tool.CapturedContext.Request.OperationId.Should().NotBeNullOrWhiteSpace();
+        tool.CapturedContext.Credentials.Should().Be(AgentToolCredentials.Empty);
+        tool.CapturedContext.Routing.Should().Be(LLMRequestRoutingContext.Empty);
+        tool.CapturedContext.ExternalMetadata.Should().BeEmpty();
         AgentToolRequestContext.Current.Should().BeNull();
     }
 

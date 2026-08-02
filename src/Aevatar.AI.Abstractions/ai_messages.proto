@@ -219,6 +219,42 @@ message AgentToolRequestIdentityPayload {
   string call_id = 2;
   string idempotency_key = 3;
   int64 issued_at_unix_ms = 4;
+  string operation_id = 5;
+}
+
+// Recovery-safe subset of tool execution context. Credential material and
+// open external bags are deliberately absent; recovery resolves authority
+// again from durable, server-sealed references owned by the actor command.
+message AgentToolRecoveryContextPayload {
+  AgentToolRequestIdentityPayload request = 1;
+  AgentToolCallerContextPayload caller = 2;
+  AgentToolChannelContextPayload channel = 3;
+  AgentToolSenderBindingContextPayload sender_binding = 4;
+  LLMRequestRoutingContextPayload routing = 5;
+  AgentSkillRecoveryCheckpointPayload skill_recovery = 6;
+  AgentWorkflowRuntimeContextPayload workflow_runtime = 7;
+  AgentToolVisibilityScopePayload tool_visibility = 8;
+  AgentToolCredentialSourcePayload credential_source = 9;
+  AgentToolScheduleContextPayload schedule = 10;
+  AgentToolNyxIdAuthorityContextPayload nyx_id_authority = 11;
+  AgentToolInvocationSurfacePayload invocation_surface = 12;
+  repeated ChatFileRef input_file_refs = 13;
+  AgentChatInvocationContextPayload chat = 14;
+  aevatar.ai.tool_providers.AgentToolExecutionOwner execution_owner = 15;
+  AgentToolNyxIdCredentialKindPayload nyx_id_credential_kind = 16;
+  bool requires_nyx_id_access_token = 17;
+  bool requires_nyx_id_org_token = 18;
+  bool requires_sender_nyx_id_access_token = 19;
+  bool requires_source_readable_nyx_id_access_token = 20;
+}
+
+message AgentSkillRecoveryCheckpointPayload {
+  bool require_initial_ornn_search = 1;
+  bool require_ornn_search_on_blocker = 2;
+  string command_name = 3;
+  string primary_skill_name = 4;
+  int32 max_ornn_search_attempts = 5;
+  bool discovery_requested = 6;
 }
 
 enum AgentToolNyxIdCredentialKindPayload {
@@ -431,12 +467,83 @@ message ChatTokenUsageEvent {
   TokenUsagePayload usage = 2;
   string model = 3;
 }
+
+enum RoleChatRecoveryCheckpointStage {
+  ROLE_CHAT_RECOVERY_CHECKPOINT_STAGE_UNSPECIFIED = 0;
+  ROLE_CHAT_RECOVERY_CHECKPOINT_STAGE_MODEL_READY = 1;
+  ROLE_CHAT_RECOVERY_CHECKPOINT_STAGE_TOOL_BATCH_PREPARED = 2;
+  ROLE_CHAT_RECOVERY_CHECKPOINT_STAGE_WAITING_APPROVAL = 3;
+  ROLE_CHAT_RECOVERY_CHECKPOINT_STAGE_CONTINUATION_PREPARED = 4;
+}
+
+message RoleChatToolIntentState {
+  string operation_id = 1;
+  string tool_call_id = 2;
+  string tool_name = 3;
+  string arguments_sha256 = 4;
+  aevatar.ai.tool_providers.AgentToolReplayPolicy replay_policy = 5;
+  AgentToolRecoveryContextPayload recovery_context = 6;
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 7;
+  aevatar.credentials.SecretReference arguments_reference = 8;
+  int32 round = 9;
+}
+
+message RoleChatToolCompletionState {
+  string operation_id = 1;
+  string result_sha256 = 2;
+  google.protobuf.Timestamp completed_at = 3;
+  aevatar.credentials.SecretReference result_reference = 4;
+  bool success = 5;
+  string safe_error_code = 6;
+}
+
+// Typed vault payload written before the actor commits the corresponding
+// completion. Its deterministic reference is a first-result authority after
+// a crash between the external effect and checkpoint persistence.
+message RoleChatToolStoredResultPayload {
+  string result_json = 1;
+  bool success = 2;
+  string safe_error_code = 3;
+  AgentToolReceipt receipt = 4;
+}
+
+message RoleChatRecoveryCheckpoint {
+  int64 generation = 1;
+  RoleChatRecoveryCheckpointStage stage = 2;
+  int32 round = 3;
+  repeated RoleChatToolIntentState tool_intents = 4;
+  repeated RoleChatToolCompletionState tool_completions = 5;
+  string pending_operation_id = 6;
+  AgentToolRecoveryContextPayload recovery_context = 7;
+  aevatar.credentials.DurableCallerCredentialRef caller_durable_credential = 8;
+  WorkflowLlmToolApprovalContinuation workflow_llm_approval_continuation = 9;
+  LLMControlContextPayload llm_control = 10;
+  string continuation_session_id = 11;
+  bool requires_runtime_credential = 12;
+  int64 payload_expires_at_unix_ms = 13;
+}
+
+message RoleChatRecoveryCheckpointUpdatedEvent {
+  string session_id = 1;
+  RoleChatRecoveryCheckpoint checkpoint = 2;
+  int64 expected_generation = 3;
+}
+
+// Actor-internal continuation. The receiving turn fences stale delivery with
+// checkpoint generation and reads recovery facts only from actor state.
+message RoleChatRecoveryContinuationRequested {
+  string session_id = 1;
+  int64 expected_checkpoint_generation = 2;
+  string operation_id = 3;
+}
+
 message RoleChatSessionStartedEvent {
   string session_id = 1;
   string prompt = 2;
   repeated ChatContentPart input_parts = 3;
   RoleChatRunContext run_context = 4;
   string scope_id = 5;
+  RoleChatRecoveryCheckpoint recovery_checkpoint = 6;
 }
 
 // Legacy committed wire contract retained for rolling upgrades and queued
@@ -531,11 +638,13 @@ message RoleChatToolStartedProgress {
   string call_id = 1;
   string tool_name = 2;
   aevatar.foundation.tools.ToolPresentationDescriptor presentation = 3;
+  string operation_id = 4;
 }
 
 message RoleChatToolCompletedProgress {
   ToolResultEvent result = 1;
   string tool_name = 2;
+  string operation_id = 3;
 }
 
 message RoleChatUsageProgress {
@@ -913,6 +1022,7 @@ message RoleChatSessionState {
   int32 workflow_llm_completion_delivery_attempt = 32;
   string workflow_llm_completion_delivery_retry_callback_id = 33;
   google.protobuf.Timestamp workflow_llm_completion_delivery_retry_at = 34;
+  RoleChatRecoveryCheckpoint recovery_checkpoint = 35;
 }
 
 message RoleGAgentState {
@@ -959,6 +1069,7 @@ message PendingToolApprovalState {
   int64 remote_approval_expires_at_unix_ms = 13;
   string scope_id = 15;
   WorkflowLlmToolApprovalContinuation workflow_llm_continuation = 16;
+  string operation_id = 17;
 }
 
 // Domain event: approval pending persisted.

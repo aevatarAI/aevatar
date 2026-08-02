@@ -1,9 +1,12 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core;
+using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Persistence;
 using FluentAssertions;
 using Google.Protobuf;
@@ -14,6 +17,64 @@ namespace Aevatar.AI.Tests;
 
 public sealed partial class RoleGAgentStateCoverageTests
 {
+    private static async Task<RoleChatRecoveryCheckpoint> BuildWaitingApprovalCheckpointAsync(
+        IServiceProvider provider,
+        string actorId,
+        PendingToolApprovalState pending)
+    {
+        var context = AgentToolExecutionContextMapper.FromPayload(pending.ToolContext);
+        var expiresAt = DateTimeOffset.UtcNow.AddHours(1);
+        var argumentsReference = await new SecretVaultChatToolRecoveryPayloadStore(
+                provider.GetRequiredService<ISecretVault>())
+            .StoreAsync(
+                actorId,
+                pending.SessionId,
+                pending.OperationId,
+                ChatToolRecoveryPayloadKind.Arguments,
+                pending.ArgumentsJson,
+                expiresAt);
+        return new RoleChatRecoveryCheckpoint
+        {
+            Generation = 3,
+            Stage = RoleChatRecoveryCheckpointStage.WaitingApproval,
+            Round = 0,
+            PendingOperationId = pending.OperationId,
+            RecoveryContext = context.ToRecoveryPayload(),
+            PayloadExpiresAtUnixMs = expiresAt.ToUnixTimeMilliseconds(),
+            ToolIntents =
+            {
+                new RoleChatToolIntentState
+                {
+                    OperationId = pending.OperationId,
+                    ToolCallId = pending.ToolCallId,
+                    ToolName = pending.ToolName,
+                    ArgumentsSha256 = AgentToolArgumentsDigest.ComputeSha256(pending.ArgumentsJson),
+                    ReplayPolicy = AgentToolReplayPolicy.NonReplayable,
+                    RecoveryContext = context.ToRecoveryPayload(),
+                    ArgumentsReference = argumentsReference,
+                    Round = 0,
+                },
+            },
+        };
+    }
+
+    private static async Task AttachPendingApprovalCheckpointAsync(
+        RoleGAgent agent,
+        IServiceProvider provider,
+        PendingToolApprovalState pending)
+    {
+        agent.State.Sessions[pending.SessionId] = new RoleChatSessionState
+        {
+            Prompt = "approval fixture",
+            RecoveryCheckpoint = await BuildWaitingApprovalCheckpointAsync(
+                provider,
+                AgentToolExecutionContextMapper.FromPayload(pending.ToolContext)
+                    .ExecutionOwner.OwnerId,
+                pending),
+        };
+        agent.State.PendingApproval = pending;
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -148,7 +209,7 @@ public sealed partial class RoleGAgentStateCoverageTests
                 ExecutionOwner = AgentToolExecutionOwners.Actor(actorId),
             },
             "{\"value\":1}");
-        await PersistPendingApprovalAsync(eventStore, actorId, pending);
+        await PersistPendingApprovalAsync(provider, eventStore, actorId, pending);
         recordingPort.Requests.Clear();
         auditTrail.Records.Clear();
         timeline.Clear();
@@ -205,15 +266,16 @@ public sealed partial class RoleGAgentStateCoverageTests
         auditTrail.TerminalAttempts.Should().Be(1);
         reactivated.State.PendingApproval.Should().BeNull();
         AssertExactApprovalGrant(recordingPort.Requests.Should().ContainSingle().Which, exactPending);
-        publisher.Published.OfType<ChatRequestEvent>().Should().ContainSingle(x =>
-            x.SessionId == "turn-approval-retry" &&
-            x.Prompt.Contains("RESULT:{\"value\":1}"));
+        publisher.Published.OfType<RoleChatRecoveryContinuationRequested>().Should().ContainSingle(x =>
+            x.SessionId == exactPending.SessionId &&
+            x.OperationId == exactPending.OperationId);
         (await eventStore.GetEventsAsync(actorId)).Count(x =>
             x.EventData.Is(ClearPendingApprovalEvent.Descriptor)).Should().Be(1);
         timeline.Should().Equal(
             "admission:Started",
             "audit:running:Appended",
             "audit:terminal:Appended",
+            "event:RoleChatRecoveryCheckpointUpdatedEvent",
             "event:ClearPendingApprovalEvent");
 
         var finalActivation = CreateRoleAgent(provider, actorId, toolSources: [new StaticToolSource([tool])]);
@@ -229,7 +291,7 @@ public sealed partial class RoleGAgentStateCoverageTests
     [Theory]
     [InlineData(AgentToolAdmissionStatus.Duplicate)]
     [InlineData(AgentToolAdmissionStatus.Conflict)]
-    public async Task HandleToolApprovalDecision_WhenAdmissionForbidsReplay_ShouldPersistFailureThenClearOnce(
+    public async Task HandleToolApprovalDecision_WhenAdmissionCannotProveOutcome_ShouldPersistOutcomeUncertainThenClearOnce(
         AgentToolAdmissionStatus admissionStatus)
     {
         var auditTrail = new ScriptedAuditTrail();
@@ -251,7 +313,7 @@ public sealed partial class RoleGAgentStateCoverageTests
                 ExecutionOwner = AgentToolExecutionOwners.Actor(actorId),
             });
         var eventStore = provider.GetRequiredService<IEventStore>();
-        await PersistPendingApprovalAsync(eventStore, actorId, pending);
+        await PersistPendingApprovalAsync(provider, eventStore, actorId, pending);
         auditTrail.Records.Clear();
         var agent = CreateRoleAgent(provider, actorId, toolSources: [new StaticToolSource([tool])]);
         await agent.ActivateAsync();
@@ -262,9 +324,16 @@ public sealed partial class RoleGAgentStateCoverageTests
             Approved = true,
         };
 
-        await FluentActions.Invoking(() => agent.HandleToolApprovalDecision(decision))
-            .Should()
-            .ThrowAsync<InvalidOperationException>();
+        if (admissionStatus == AgentToolAdmissionStatus.Duplicate)
+        {
+            await agent.HandleToolApprovalDecision(decision);
+        }
+        else
+        {
+            await FluentActions.Invoking(() => agent.HandleToolApprovalDecision(decision))
+                .Should()
+                .ThrowAsync<InvalidOperationException>();
+        }
 
         agent.State.PendingApproval.Should().BeNull();
         terminalCalls.Should().Be(0);
@@ -272,7 +341,25 @@ public sealed partial class RoleGAgentStateCoverageTests
         auditTrail.RunningAttempts.Should().Be(0);
         auditTrail.TerminalAttempts.Should().Be(0);
         auditTrail.Records.Should().BeEmpty();
-        await AssertFailureThenSingleClearAsync(eventStore, actorId);
+        if (admissionStatus == AgentToolAdmissionStatus.Duplicate)
+        {
+            agent.State.Sessions[pending.SessionId].Completed.Should().BeTrue();
+            agent.State.Sessions[pending.SessionId].Outcome.Should().Be(
+                RoleChatSessionOutcome.OutcomeUncertain);
+            agent.State.Sessions[pending.SessionId].FailureCode.Should().Be(
+                "SESSION_OUTCOME_UNCERTAIN");
+            var events = await eventStore.GetEventsAsync(actorId);
+            events.Count(x =>
+                x.EventData.Is(RoleChatSessionCompletedEvent.Descriptor) &&
+                x.EventData.Unpack<RoleChatSessionCompletedEvent>().SessionId == pending.SessionId &&
+                x.EventData.Unpack<RoleChatSessionCompletedEvent>().Outcome ==
+                RoleChatSessionOutcome.OutcomeUncertain).Should().Be(1);
+            events.Count(x => x.EventData.Is(ClearPendingApprovalEvent.Descriptor)).Should().Be(1);
+        }
+        else
+        {
+            await AssertFailureThenSingleClearAsync(eventStore, actorId);
+        }
 
         var reactivated = CreateRoleAgent(provider, actorId, toolSources: [new StaticToolSource([tool])]);
         await reactivated.ActivateAsync();
@@ -299,7 +386,7 @@ public sealed partial class RoleGAgentStateCoverageTests
                 ExecutionOwner = AgentToolExecutionOwners.Actor(actorId),
             });
         var eventStore = provider.GetRequiredService<IEventStore>();
-        await PersistPendingApprovalAsync(eventStore, actorId, pending);
+        await PersistPendingApprovalAsync(provider, eventStore, actorId, pending);
         tool.FailClassification = true;
         var agent = CreateRoleAgent(provider, actorId, toolSources: [new StaticToolSource([tool])]);
         await agent.ActivateAsync();
@@ -337,7 +424,7 @@ public sealed partial class RoleGAgentStateCoverageTests
                 ExecutionOwner = AgentToolExecutionOwners.Actor(actorId),
             });
         var eventStore = provider.GetRequiredService<IEventStore>();
-        await PersistPendingApprovalAsync(eventStore, actorId, pending);
+        await PersistPendingApprovalAsync(provider, eventStore, actorId, pending);
         var agent = CreateRoleAgent(provider, actorId, toolSources: [new StaticToolSource([tool])]);
         await agent.ActivateAsync();
 
@@ -381,7 +468,7 @@ public sealed partial class RoleGAgentStateCoverageTests
                 Request = new AgentToolRequestIdentity($"request-{scenario}", $"call-{scenario}"),
                 ExecutionOwner = AgentToolExecutionOwners.Actor(actorId),
             });
-        await PersistPendingApprovalAsync(eventStore, actorId, pending);
+        await PersistPendingApprovalAsync(provider, eventStore, actorId, pending);
         timeline.Clear();
         var agent = CreateRoleAgent(provider, actorId, toolSources: [new StaticToolSource([tool])]);
         agent.EventPublisher = new ThrowingEventPublisher();
@@ -399,6 +486,7 @@ public sealed partial class RoleGAgentStateCoverageTests
         timeline.Should().Equal(
             "audit:running:Appended",
             $"audit:terminal:{terminalStatus}",
+            "event:RoleChatRecoveryCheckpointUpdatedEvent",
             "event:ClearPendingApprovalEvent",
             "event:RoleChatSessionCompletedEvent");
         await AssertConsumedAfterReactivationAsync(provider, actorId, tool, Approved(pending));
@@ -427,7 +515,7 @@ public sealed partial class RoleGAgentStateCoverageTests
                 Request = new AgentToolRequestIdentity("request-terminal-started", "call-terminal-started"),
                 ExecutionOwner = AgentToolExecutionOwners.Actor(actorId),
             });
-        await PersistPendingApprovalAsync(eventStore, actorId, pending);
+        await PersistPendingApprovalAsync(provider, eventStore, actorId, pending);
         timeline.Clear();
         var agent = CreateRoleAgent(provider, actorId, toolSources: [new StaticToolSource([tool])]);
         agent.EventPublisher = new RecordingEventPublisher();
@@ -442,6 +530,7 @@ public sealed partial class RoleGAgentStateCoverageTests
         timeline.Should().Equal(
             "audit:running:Appended",
             "audit:terminal:Appended",
+            "event:RoleChatRecoveryCheckpointUpdatedEvent",
             "event:ClearPendingApprovalEvent");
         await AssertConsumedAfterReactivationAsync(provider, actorId, tool, Approved(pending));
         terminalCalls.Should().Be(1);
@@ -455,19 +544,73 @@ public sealed partial class RoleGAgentStateCoverageTests
     };
 
     private static async Task PersistPendingApprovalAsync(
+        IServiceProvider provider,
         IEventStore eventStore,
         string actorId,
         PendingToolApprovalState pending)
     {
+        var waitingCheckpoint = await BuildWaitingApprovalCheckpointAsync(provider, actorId, pending);
+        var modelReadyCheckpoint = waitingCheckpoint.Clone();
+        modelReadyCheckpoint.Generation = 1;
+        modelReadyCheckpoint.Stage = RoleChatRecoveryCheckpointStage.ModelReady;
+        modelReadyCheckpoint.PendingOperationId = string.Empty;
+        modelReadyCheckpoint.ToolIntents.Clear();
+        var preparedCheckpoint = waitingCheckpoint.Clone();
+        preparedCheckpoint.Generation = 2;
+        preparedCheckpoint.Stage = RoleChatRecoveryCheckpointStage.ToolBatchPrepared;
+        preparedCheckpoint.PendingOperationId = string.Empty;
         var persisted = new PendingToolApprovalPersistedEvent { Pending = pending.Clone() };
         await eventStore.AppendAsync(
             actorId,
             [
                 new StateEvent
                 {
-                    EventId = $"pending-{pending.RequestId}",
+                    EventId = $"session-{pending.SessionId}",
                     Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                     Version = 1,
+                    EventType = RoleChatSessionStartedEvent.Descriptor.FullName,
+                    EventData = Any.Pack(new RoleChatSessionStartedEvent
+                    {
+                        SessionId = pending.SessionId,
+                        Prompt = "approval fixture",
+                        ScopeId = pending.ScopeId,
+                        RecoveryCheckpoint = modelReadyCheckpoint,
+                    }),
+                    AgentId = actorId,
+                },
+                new StateEvent
+                {
+                    EventId = $"prepared-{pending.RequestId}",
+                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    Version = 2,
+                    EventType = RoleChatRecoveryCheckpointUpdatedEvent.Descriptor.FullName,
+                    EventData = Any.Pack(new RoleChatRecoveryCheckpointUpdatedEvent
+                    {
+                        SessionId = pending.SessionId,
+                        ExpectedGeneration = 1,
+                        Checkpoint = preparedCheckpoint,
+                    }),
+                    AgentId = actorId,
+                },
+                new StateEvent
+                {
+                    EventId = $"waiting-{pending.RequestId}",
+                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    Version = 3,
+                    EventType = RoleChatRecoveryCheckpointUpdatedEvent.Descriptor.FullName,
+                    EventData = Any.Pack(new RoleChatRecoveryCheckpointUpdatedEvent
+                    {
+                        SessionId = pending.SessionId,
+                        ExpectedGeneration = 2,
+                        Checkpoint = waitingCheckpoint,
+                    }),
+                    AgentId = actorId,
+                },
+                new StateEvent
+                {
+                    EventId = $"pending-{pending.RequestId}",
+                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    Version = 4,
                     EventType = PendingToolApprovalPersistedEvent.Descriptor.FullName,
                     EventData = Any.Pack(persisted),
                     AgentId = actorId,
@@ -498,8 +641,12 @@ public sealed partial class RoleGAgentStateCoverageTests
         var events = await eventStore.GetEventsAsync(actorId);
         events.Count(x => x.EventData.Is(RoleChatSessionCompletedEvent.Descriptor)).Should().Be(1);
         events.Count(x => x.EventData.Is(ClearPendingApprovalEvent.Descriptor)).Should().Be(1);
-        events.Select(x => x.EventData.TypeUrl).Should().Equal(
-            Any.Pack(new PendingToolApprovalPersistedEvent()).TypeUrl,
+        events
+            .Where(x =>
+                x.EventData.Is(RoleChatSessionCompletedEvent.Descriptor) ||
+                x.EventData.Is(ClearPendingApprovalEvent.Descriptor))
+            .Select(x => x.EventData.TypeUrl)
+            .Should().Equal(
             Any.Pack(new RoleChatSessionCompletedEvent()).TypeUrl,
             Any.Pack(new ClearPendingApprovalEvent()).TypeUrl);
     }
@@ -509,8 +656,12 @@ public sealed partial class RoleGAgentStateCoverageTests
         var events = await eventStore.GetEventsAsync(actorId);
         events.Count(x => x.EventData.Is(RoleChatSessionCompletedEvent.Descriptor)).Should().Be(1);
         events.Count(x => x.EventData.Is(ClearPendingApprovalEvent.Descriptor)).Should().Be(1);
-        events.Select(x => x.EventData.TypeUrl).Should().Equal(
-            Any.Pack(new PendingToolApprovalPersistedEvent()).TypeUrl,
+        events
+            .Where(x =>
+                x.EventData.Is(RoleChatSessionCompletedEvent.Descriptor) ||
+                x.EventData.Is(ClearPendingApprovalEvent.Descriptor))
+            .Select(x => x.EventData.TypeUrl)
+            .Should().Equal(
             Any.Pack(new ClearPendingApprovalEvent()).TypeUrl,
             Any.Pack(new RoleChatSessionCompletedEvent()).TypeUrl);
     }

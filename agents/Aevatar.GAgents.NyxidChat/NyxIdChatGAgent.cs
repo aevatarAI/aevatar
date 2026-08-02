@@ -13,6 +13,7 @@ using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -66,12 +67,14 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         NyxIdRelayOptions? relayOptions = null,
         TimeProvider? timeProvider = null,
         AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer = null,
-        RoleChatExecutionOptions? chatExecutionOptions = null)
+        RoleChatExecutionOptions? chatExecutionOptions = null,
+        ISecretVault? chatToolRecoverySecretVault = null)
         : base(toolExecutionPort, llmProviderFactory, additionalHooks, agentMiddlewares, llmMiddlewares, toolSources,
                remoteToolApprovalPort: remoteToolApprovalPort,
                remoteToolApprovalNotificationPort: remoteToolApprovalNotificationPort,
                timeProvider: timeProvider,
-               chatExecutionOptions: chatExecutionOptions)
+               chatExecutionOptions: chatExecutionOptions,
+               chatToolRecoverySecretVault: chatToolRecoverySecretVault)
     {
         _builtInPromptFloorProvider = builtInPromptFloorProvider ??
                                       throw new ArgumentNullException(nameof(builtInPromptFloorProvider));

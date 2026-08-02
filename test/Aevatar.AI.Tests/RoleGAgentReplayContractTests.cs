@@ -11,6 +11,8 @@ using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -1668,6 +1670,13 @@ public class RoleGAgentReplayContractTests
                 {
                     SessionId = "session-1",
                     Prompt = "perform approved work",
+                    RecoveryCheckpoint = new RoleChatRecoveryCheckpoint
+                    {
+                        Generation = 3,
+                        Stage = RoleChatRecoveryCheckpointStage.WaitingApproval,
+                        PendingOperationId = "operation-1",
+                        PayloadExpiresAtUnixMs = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeMilliseconds(),
+                    },
                 }),
                 StateEventFor(actorId, 2, new PendingToolApprovalPersistedEvent
                 {
@@ -1678,6 +1687,7 @@ public class RoleGAgentReplayContractTests
                         ToolName = "destructive_tool",
                         ToolCallId = "call-1",
                         ArgumentsJson = "{}",
+                        OperationId = "operation-1",
                     },
                 }),
             ],
@@ -2438,6 +2448,7 @@ public class RoleGAgentReplayContractTests
     {
         var services = new ServiceCollection()
             .AddSingleton(store)
+            .AddSingleton<ISecretVault, InMemorySecretVault>()
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddSingleton<IAuditTrailAppender, AppendedAuditTrail>()
             .AddSingleton<IAuditActorIdentityHasher, StableIdentityHasher>()
@@ -2475,7 +2486,8 @@ public class RoleGAgentReplayContractTests
             providerFactory,
             toolSources: services.GetServices<IAgentToolSource>(),
             timeProvider: timeProvider,
-            chatExecutionOptions: chatExecutionOptions)
+            chatExecutionOptions: chatExecutionOptions,
+            chatToolRecoverySecretVault: services.GetRequiredService<ISecretVault>())
         {
             Services = services,
             EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),

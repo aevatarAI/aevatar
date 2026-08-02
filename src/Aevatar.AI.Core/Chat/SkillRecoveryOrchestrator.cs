@@ -13,16 +13,19 @@ internal sealed class SkillRecoveryOrchestrator
 
     private readonly AgentSkillRecoveryContext _recovery;
     private readonly Func<AgentToolExecutionContext?, StreamingToolExecutor> _executorFactory;
+    private readonly string _sessionId;
     private int _searchAttempts;
     private int _directiveSequence;
     private bool _primarySkillAttempted;
 
     public SkillRecoveryOrchestrator(
         AgentSkillRecoveryContext recovery,
-        Func<AgentToolExecutionContext?, StreamingToolExecutor> executorFactory)
+        Func<AgentToolExecutionContext?, StreamingToolExecutor> executorFactory,
+        string sessionId = "")
     {
         _recovery = recovery;
         _executorFactory = executorFactory ?? throw new ArgumentNullException(nameof(executorFactory));
+        _sessionId = sessionId;
     }
 
     public bool RequiresInitialSearch => _recovery.RequireInitialOrnnSearch;
@@ -129,7 +132,7 @@ internal sealed class SkillRecoveryOrchestrator
         return directive with { ToolCall = uniqueToolCall };
     }
 
-    private static async IAsyncEnumerable<SkillRecoveryToolProgress> ApplyDirectiveAsync(
+    private async IAsyncEnumerable<SkillRecoveryToolProgress> ApplyDirectiveAsync(
         SkillRecoveryPlanner.RecoveryDirective directive,
         StreamingToolExecutor executor,
         List<ChatMessage> messages,
@@ -149,8 +152,14 @@ internal sealed class SkillRecoveryOrchestrator
             pendingHistoryMessages.Add(assistantToolCallMessage);
 
             using var state = executor.CreateExecutionState();
-            yield return SkillRecoveryToolProgress.Starting(toolCall);
-            executor.AddTool(state, toolCall);
+            var prepared = await executor.PrepareBatchAsync(
+                _sessionId,
+                round: 0,
+                [toolCall],
+                ct).ConfigureAwait(false);
+            var operation = prepared.Single();
+            yield return SkillRecoveryToolProgress.Starting(operation);
+            executor.AddTool(state, operation);
             var currentAssistantToolCallMessage = assistantToolCallMessage;
             await foreach (var result in executor.GetRemainingResultsAsync(state, ct))
             {
@@ -166,7 +175,7 @@ internal sealed class SkillRecoveryOrchestrator
                     result.Receipt);
                 messages.Add(toolMsg);
                 pendingHistoryMessages.Add(toolMsg);
-                yield return SkillRecoveryToolProgress.Completed(result);
+                yield return SkillRecoveryToolProgress.Completed(result, operation.OperationId);
             }
 
             yield break;
@@ -183,13 +192,14 @@ internal sealed class SkillRecoveryOrchestrator
 
 internal sealed record SkillRecoveryToolProgress(
     ToolCall? StartedToolCall,
-    ToolExecutionResult? CompletedResult)
+    ToolExecutionResult? CompletedResult,
+    string OperationId)
 {
-    public static SkillRecoveryToolProgress Starting(ToolCall toolCall) =>
-        new(CloneToolCall(toolCall), null);
+    public static SkillRecoveryToolProgress Starting(PreparedChatToolOperation operation) =>
+        new(CloneToolCall(operation.ToolCall), null, operation.OperationId);
 
-    public static SkillRecoveryToolProgress Completed(ToolExecutionResult result) =>
-        new(null, result);
+    public static SkillRecoveryToolProgress Completed(ToolExecutionResult result, string operationId) =>
+        new(null, result, operationId);
 
     private static ToolCall CloneToolCall(ToolCall toolCall) => new()
     {

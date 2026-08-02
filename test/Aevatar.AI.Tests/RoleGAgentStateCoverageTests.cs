@@ -3,6 +3,8 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
@@ -493,8 +495,9 @@ public sealed partial class RoleGAgentStateCoverageTests
             {
                 ExecutionOwner = AgentToolExecutionOwners.Actor("role-approval-approved"),
             };
-        agent.State.PendingApproval = await CreatePendingApprovalAsync(
+        var pending = await CreatePendingApprovalAsync(
             provider, tool, toolContext, "{\"value\":1}");
+        await AttachPendingApprovalCheckpointAsync(agent, provider, pending);
         var approvalRequestId = agent.State.PendingApproval.RequestId;
         await agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
         {
@@ -518,26 +521,15 @@ public sealed partial class RoleGAgentStateCoverageTests
         observedToolContext.Caller.OwnerSubject.Should().Be("owner-a");
         observedToolContext.Routing.ModelOverride.Should().Be("model-a");
         observedToolContext.Credentials.Should().Be(AgentToolCredentials.Empty);
-        var continuation = publisher.Published
-            .OfType<ChatRequestEvent>()
+        publisher.Published
+            .OfType<RoleChatRecoveryContinuationRequested>()
             .Should()
             .ContainSingle(x =>
-                x.SessionId == "turn-approval-continuation" &&
-                x.ScopeId == "scope-a" &&
-                x.ToolContext != null &&
-                x.ToolContext.Caller.ScopeId == "scope-a" &&
-                x.Prompt.Contains("dangerous_tool") &&
-                x.Prompt.Contains("RESULT:{\"value\":1}"))
-            .Which;
-        continuation.Metadata.Should().BeEmpty();
-        continuation.ToolContext.Should().NotBeNull();
-        var context = AgentToolExecutionContextMapper.FromPayload(continuation.ToolContext);
-        context.Request.RequestId.Should().Be("req-1");
-        context.Request.CallId.Should().Be("call-1");
-        context.Credentials.Should().Be(AgentToolCredentials.Empty);
-        context.Caller.ScopeId.Should().Be("scope-a");
-        context.Routing.ModelOverride.Should().Be("model-a");
-        context.ExternalMetadata.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-1");
+                x.SessionId == pending.SessionId &&
+                x.OperationId == pending.OperationId);
+        var checkpoint = agent.State.Sessions[pending.SessionId].RecoveryCheckpoint;
+        checkpoint.Stage.Should().Be(RoleChatRecoveryCheckpointStage.ContinuationPrepared);
+        checkpoint.ContinuationSessionId.Should().Be("turn-approval-continuation");
     }
 
     [Fact]
@@ -551,7 +543,7 @@ public sealed partial class RoleGAgentStateCoverageTests
             toolSources: [new StaticToolSource([tool])]);
         agent.EventPublisher = new ThrowingEventPublisher();
         await agent.ActivateAsync();
-        agent.State.PendingApproval = await CreatePendingApprovalAsync(
+        var pending = await CreatePendingApprovalAsync(
             provider,
             tool,
             AgentToolExecutionContext.Empty with
@@ -559,6 +551,7 @@ public sealed partial class RoleGAgentStateCoverageTests
                 Request = new AgentToolRequestIdentity("req-1", "call-1"),
                 ExecutionOwner = AgentToolExecutionOwners.Actor("role-approval-dispatch-fails"),
             });
+        await AttachPendingApprovalCheckpointAsync(agent, provider, pending);
         var approvalRequestId = agent.State.PendingApproval.RequestId;
         await FluentActions.Invoking(() => agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
             {
@@ -955,18 +948,20 @@ public sealed partial class RoleGAgentStateCoverageTests
             });
         pending.RemoteApprovalId = "remote-1";
         pending.RemoteStatusCheckAttempt = 1;
-        agent.State.PendingApproval = pending;
+        await AttachPendingApprovalCheckpointAsync(agent, provider, pending);
         var approvalRequestId = agent.State.PendingApproval.RequestId;
         await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
         {
             RequestId = approvalRequestId,
-            SessionId = "session-a",
+            SessionId = pending.SessionId,
             RemoteApprovalId = "remote-1",
             Attempt = 1,
         });
         agent.State.PendingApproval.Should().BeNull();
-        publisher.Published.OfType<ChatRequestEvent>().Should()
-            .ContainSingle(x => x.Prompt.Contains("remote-result"));
+        publisher.Published.OfType<RoleChatRecoveryContinuationRequested>().Should()
+            .ContainSingle(x =>
+                x.SessionId == pending.SessionId &&
+                x.OperationId == pending.OperationId);
     }
     [Theory]
     [InlineData(RemoteToolApprovalStatus.Rejected, "approval_denied")]
@@ -1413,6 +1408,7 @@ public sealed partial class RoleGAgentStateCoverageTests
     {
         var services = new ServiceCollection()
             .AddSingleton<IEventStore>(eventStore ?? new InMemoryEventStoreForTests())
+            .AddSingleton<ISecretVault, InMemorySecretVault>()
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddSingleton<IActorRuntimeCallbackScheduler, RecordingRuntimeCallbackScheduler>()
             .AddSingleton<IAuditTrailAppender>(auditTrailAppender ?? new AppendedAuditTrail())
@@ -1439,7 +1435,8 @@ public sealed partial class RoleGAgentStateCoverageTests
             llmProviderFactory,
             remoteToolApprovalPort,
             remoteToolApprovalNotificationPort,
-            toolSources ?? Enumerable.Empty<IAgentToolSource>())
+            toolSources ?? Enumerable.Empty<IAgentToolSource>(),
+            provider.GetRequiredService<ISecretVault>())
         {
             Services = provider,
             EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -1472,26 +1469,43 @@ public sealed partial class RoleGAgentStateCoverageTests
         AgentToolExecutionContext context,
         string argumentsJson = "{}")
     {
+        var sessionId = string.IsNullOrWhiteSpace(context.Request.RequestId)
+            ? "session-a"
+            : context.Request.RequestId!;
+        var operationId = string.IsNullOrWhiteSpace(context.Request.OperationId)
+            ? $"tool:test:operation:{sessionId}:{context.Request.CallId}"
+            : context.Request.OperationId!;
+        var preparedContext = context with
+        {
+            Request = context.Request with
+            {
+                RequestId = sessionId,
+                OperationId = operationId,
+                IdempotencyKey = operationId,
+            },
+        };
         var outcome = await provider.GetRequiredService<IAgentToolExecutionPort>().ExecuteAsync(
             new AgentToolExecutionRequest(
                 tool,
                 argumentsJson,
-                context,
+                preparedContext,
                 AgentToolApprovalContinuationMode.ActorOwned,
                 null));
         outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.ApprovalRequired);
         return new PendingToolApprovalState
         {
             RequestId = outcome.Receipt.ApprovalRequestId,
-            SessionId = "session-a",
-            ScopeId = context.Caller.ScopeId ?? string.Empty,
+            SessionId = sessionId,
+            ScopeId = preparedContext.Caller.ScopeId ?? string.Empty,
             ToolName = tool.Name,
-            ToolCallId = context.Request.CallId,
+            ToolCallId = preparedContext.Request.CallId,
             ArgumentsJson = argumentsJson,
             IsDestructive = outcome.Receipt.IsDestructive,
-            ToolContext = context.ToPayload(),
+            ToolContext = preparedContext.ToPayload(),
+            OperationId = operationId,
         };
     }
+
     private static T InvokePrivateInstance<T>(MethodInfo method, object instance, params object?[] args)
     {
         try
@@ -1513,13 +1527,15 @@ public sealed partial class RoleGAgentStateCoverageTests
         ILLMProviderFactory? llmProviderFactory,
         IRemoteToolApprovalPort? remoteToolApprovalPort,
         IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort,
-        IEnumerable<IAgentToolSource> toolSources)
+        IEnumerable<IAgentToolSource> toolSources,
+        ISecretVault chatToolRecoverySecretVault)
         : RoleGAgent(
             toolExecutionPort: toolExecutionPort,
             llmProviderFactory: llmProviderFactory,
             toolSources: toolSources,
             remoteToolApprovalPort: remoteToolApprovalPort,
-            remoteToolApprovalNotificationPort: remoteToolApprovalNotificationPort)
+            remoteToolApprovalNotificationPort: remoteToolApprovalNotificationPort,
+            chatToolRecoverySecretVault: chatToolRecoverySecretVault)
     {
     }
 
@@ -1696,7 +1712,8 @@ public sealed partial class RoleGAgentStateCoverageTests
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
-            _ = evt;
+            if (evt is RoleChatRecoveryContinuationRequested)
+                throw new InvalidOperationException("dispatch failed with bearer-secret credential");
             _ = direction;
             _ = ct;
             _ = sourceEnvelope;

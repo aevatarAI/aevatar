@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
@@ -20,12 +21,16 @@ public sealed class StreamingToolExecutorTests
             logger: logger);
         using var state = executor.CreateExecutionState();
 
-        executor.AddTool(state, new ToolCall
-        {
-            Id = "call-failed-finalization",
-            Name = "echo",
-            ArgumentsJson = "{}",
-        });
+        var prepared = await executor.PrepareBatchAsync(
+            "session-failed-finalization",
+            round: 0,
+            [new ToolCall
+            {
+                Id = "call-failed-finalization",
+                Name = "echo",
+                ArgumentsJson = "{}",
+            }]);
+        executor.AddTool(state, prepared.Single());
 
         var results = new List<ToolExecutionResult>();
         await foreach (var toolResult in executor.GetRemainingResultsAsync(state, CancellationToken.None))

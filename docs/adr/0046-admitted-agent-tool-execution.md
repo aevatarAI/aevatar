@@ -47,12 +47,50 @@ and `ArgumentsSha256`. A required approval without an actor-owned continuation i
 pending call is resumed only from the owning actor's persisted original arguments; clients
 cannot replace the owner, tool name, or arguments in the approval response.
 
+Role chat persists a generation-fenced recovery checkpoint before any admitted tool terminal
+can run. The checkpoint advances through `MODEL_READY`, `TOOL_BATCH_PREPARED`,
+`WAITING_APPROVAL`, and `CONTINUATION_PREPARED`. Each prepared operation owns a stable
+`operation_id` derived from the session, checkpoint generation, round, batch index, and provider
+call id. Its frozen arguments and committed result are stored behind actor/session/operation-bound
+secret-vault references; the actor journal contains their digests and typed recovery context, not
+the payloads or live credentials. A failed intent commit therefore has zero external calls, while
+a committed completion is reused without another terminal invocation.
+The deterministic result reference contains a protobuf result proof and is first-result authority.
+If result storage succeeds but checkpoint append fails, every retry adopts that exact payload and
+reference before any external invocation; it neither overwrites the result nor creates an alias.
+An expired, corrupt, or permanently unresolvable committed payload finalizes the session as
+`SESSION_OUTCOME_UNCERTAIN`; only transient vault infrastructure failures remain retryable.
+Once the external terminal has returned, result-store or checkpoint-append failure is a typed
+post-external recovery condition, never an LLM failure. The actor keeps the session incomplete and
+redelivers recovery so a sealed first result can be adopted; permanent recovery-material failure
+uses `SESSION_OUTCOME_UNCERTAIN`.
+
+Recovery obeys the tool-owned `AgentToolReplayPolicy`. Read-only and explicitly idempotent
+operations may retry with the same operation and admission identity. Reconcilable operations use
+the tool's typed reconciliation contract. An incomplete non-replayable operation is terminalized
+as `SESSION_OUTCOME_UNCERTAIN`; recovery never invents a fresh operation id to bypass that fact.
+Checkpoint generation and stage are validated before persistence and again when a self
+continuation is consumed, so stale activation or caller redelivery cannot advance the actor.
+
+An approval-required receipt atomically commits `WAITING_APPROVAL` with the matching pending
+approval. It does not write a placeholder terminal completion or occupy the deterministic result
+reference. The approved `ActorRecovery` execution writes the real result once, then atomically
+commits `CONTINUATION_PREPARED` and clears the pending approval before dispatching the actor self
+continuation. If dispatch is lost, activation redelivers from that committed checkpoint. The LLM
+resume receives the original user request plus typed assistant tool-call and tool-result messages;
+tool output is never concatenated into a synthetic recovery instruction.
+The recovery context persists credential kind and non-secret required-slot flags. A source-readable
+primary bearer is restored to `NyxIdAccessToken`. Proxy delegation that also requires a distinct
+source-readable bearer must have an independently sealed reference; without one recovery fails
+closed instead of substituting the delegation token.
+
 Admission proceeds in this order:
 
 1. Validate the typed execution owner and stable request, call, and tool identities.
 2. Classify the frozen arguments once.
 3. Apply credential policy.
-4. Validate the exact actor-owned grant or append `WAITING_APPROVAL` and yield.
+4. Validate the exact actor-owned grant or atomically commit `WAITING_APPROVAL` with its pending
+   approval and yield.
 5. Atomically create the typed admission fact, including the execution owner, in
    `IAgentToolAdmissionLedger`.
 6. Append the observational `RUNNING` audit fact.

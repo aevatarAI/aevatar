@@ -12,6 +12,29 @@ public sealed record AgentToolTerminalOutcome(
     string ResultJson,
     AgentToolReceipt? Receipt = null);
 
+public enum AgentToolOperationReconciliationDisposition
+{
+    Completed = 1,
+    NotFound = 2,
+    Unknown = 3,
+}
+
+public sealed record AgentToolOperationReconciliationRequest(
+    string OperationId,
+    string ArgumentsJson,
+    AgentToolExecutionContext ExecutionContext);
+
+public sealed record AgentToolOperationReconciliationResult(
+    AgentToolOperationReconciliationDisposition Disposition,
+    AgentToolTerminalOutcome? CompletedOutcome = null);
+
+public interface IAgentToolOperationReconciler
+{
+    Task<AgentToolOperationReconciliationResult> ReconcileOperationAsync(
+        AgentToolOperationReconciliationRequest request,
+        CancellationToken ct = default);
+}
+
 /// <summary>Agent 可调用工具接口。LLM 通过 tool_call 触发执行。</summary>
 public interface IAgentTool
 {
@@ -79,6 +102,18 @@ public interface IAgentTool
     /// <summary>Classifies one concrete invocation without collapsing approval and safety semantics.</summary>
     AgentToolCallSafety GetCallSafety(string argumentsJson) =>
         new(RequiresApproval(argumentsJson), IsReadOnly, IsDestructive);
+
+    /// <summary>
+    /// Tool-owned replay contract for one concrete invocation. Mutating tools
+    /// are non-replayable unless their implementation explicitly overrides
+    /// this contract.
+    /// </summary>
+    AgentToolReplayPolicy ResolveReplayPolicy(string argumentsJson)
+    {
+        return IsReadOnly && !IsDestructive
+            ? AgentToolReplayPolicy.ReadOnlyRetryable
+            : AgentToolReplayPolicy.NonReplayable;
+    }
 
     /// <summary>执行工具。参数为 JSON 字符串，返回结果为 JSON 字符串。</summary>
     /// <param name="argumentsJson">LLM 传入的参数 JSON。</param>

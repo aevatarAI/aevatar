@@ -633,7 +633,7 @@ public class ToolCallLoopTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenHookMutatesToolCall_ShouldUseMutatedNameAndArguments()
+    public async Task ExecuteAsync_WhenHookMutatesPreparedToolCall_ShouldRejectRewrite()
     {
         var provider = new QueueLLMProvider(
         [
@@ -676,10 +676,10 @@ public class ToolCallLoopTests
         var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
 
         result.Should().Be("ok");
-        capturedArguments.Should().Be("""{"x":999}""");
+        capturedArguments.Should().BeEmpty();
         hook.ToolStartCount.Should().Be(1);
-        hook.ToolEndCount.Should().Be(1);
-        hook.ToolResultAtEnd.Should().Be("mutated-result");
+        hook.ToolEndCount.Should().Be(0, "a rejected rewrite never executes the prepared operation");
+        hook.ToolResultAtEnd.Should().BeNull();
     }
 
     [Fact]

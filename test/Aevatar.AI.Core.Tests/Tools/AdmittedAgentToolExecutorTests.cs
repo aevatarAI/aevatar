@@ -584,6 +584,8 @@ public sealed class AdmittedAgentToolExecutorTests
             ArgumentsSha256 = AgentToolArgumentsDigest.ComputeSha256("{}"),
             ExecutionOwner = AgentToolExecutionOwners.Actor("actor-test"),
             IssuedAtUnixMs = request.ExecutionContext.Request.IssuedAtUnixMs,
+            OperationId = ledger.Facts[0].OperationId,
+            ReplayPolicy = AgentToolReplayPolicy.ReadOnlyRetryable,
         });
     }
 
@@ -1120,6 +1122,225 @@ public sealed class AdmittedAgentToolExecutorTests
         tool.ExecutionCalls.Should().Be(0);
     }
 
+    [Theory]
+    [InlineData(AgentToolExecutionAttemptKind.Unspecified)]
+    [InlineData((AgentToolExecutionAttemptKind)999)]
+    public async Task ExecuteAsync_WhenAttemptKindIsInvalid_ShouldFailBeforeAdmission(
+        AgentToolExecutionAttemptKind attemptKind)
+    {
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Started);
+        var tool = new RecordingTool(new AgentToolCallSafety(false, true, false));
+        var executor = CreateExecutor(appender, ledger);
+
+        var outcome = await executor.ExecuteAsync(CreateRequest(tool) with
+        {
+            ExecutionAttemptKind = attemptKind,
+        });
+
+        outcome.FailureCode.Should().Be("invalid_tool_execution_attempt");
+        outcome.TerminalInvoked.Should().BeFalse();
+        ledger.Facts.Should().BeEmpty();
+        tool.ExecutionCalls.Should().Be(0);
+        appender.Records.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(AgentToolReplayPolicy.Unspecified, "invalid_tool_replay_policy")]
+    [InlineData((AgentToolReplayPolicy)999, "invalid_tool_replay_policy")]
+    [InlineData(AgentToolReplayPolicy.ReadOnlyRetryable, "invalid_read_only_replay_policy")]
+    [InlineData(AgentToolReplayPolicy.Reconcilable, "missing_tool_operation_reconciler")]
+    public async Task ExecuteAsync_WhenToolOwnedReplayPolicyIsInvalid_ShouldFailBeforeAdmission(
+        AgentToolReplayPolicy replayPolicy,
+        string failureCode)
+    {
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Started);
+        var tool = new RecordingTool(
+            new AgentToolCallSafety(false, false, true),
+            replayPolicy: replayPolicy);
+        var executor = CreateExecutor(appender, ledger);
+
+        var outcome = await executor.ExecuteAsync(CreateRequest(tool));
+
+        outcome.FailureCode.Should().Be(failureCode);
+        outcome.FailureStage.Should().Be(AgentToolExecutionFailureStage.Classification);
+        outcome.TerminalInvoked.Should().BeFalse();
+        ledger.Facts.Should().BeEmpty();
+        tool.ExecutionCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenIdempotentPolicyDoesNotUseOperationIdAsKey_ShouldFailBeforeAdmission()
+    {
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Started);
+        var tool = new RecordingTool(
+            new AgentToolCallSafety(false, false, false),
+            replayPolicy: AgentToolReplayPolicy.IdempotentRetryable);
+        var executor = CreateExecutor(appender, ledger);
+
+        var outcome = await executor.ExecuteAsync(CreateRecoveryRequest(
+            tool,
+            operationId: "operation-1",
+            idempotencyKey: "different-key"));
+
+        outcome.FailureCode.Should().Be("invalid_idempotent_replay_key");
+        outcome.TerminalInvoked.Should().BeFalse();
+        ledger.Facts.Should().BeEmpty();
+        tool.ExecutionCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenInitialReadOnlyCallIsDuplicated_ShouldNotTreatItAsRecovery()
+    {
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Duplicate);
+        var tool = new RecordingTool(new AgentToolCallSafety(false, true, false));
+        var executor = CreateExecutor(appender, ledger);
+
+        var outcome = await executor.ExecuteAsync(CreateRequest(tool));
+
+        outcome.FailureCode.Should().Be("tool_execution_already_started");
+        outcome.TerminalInvoked.Should().BeFalse();
+        tool.ExecutionCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenActorRecoversExactReadOnlyAdmission_ShouldRetryWithStableOperationId()
+    {
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Duplicate);
+        var tool = new RecordingTool(new AgentToolCallSafety(false, true, false));
+        var executor = CreateExecutor(appender, ledger);
+
+        var outcome = await executor.ExecuteAsync(CreateRecoveryRequest(tool, "operation-read"));
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        outcome.TerminalInvoked.Should().BeTrue();
+        tool.ExecutionCalls.Should().Be(1);
+        tool.ExecutionContexts.Should().ContainSingle()
+            .Which.Request.OperationId.Should().Be("operation-read");
+        var fact = ledger.Facts.Should().ContainSingle().Subject;
+        fact.OperationId.Should().Be("operation-read");
+        fact.ReplayPolicy.Should().Be(AgentToolReplayPolicy.ReadOnlyRetryable);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenActorRecoversExactIdempotentAdmission_ShouldPassOperationIdAsIdempotencyKey()
+    {
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Duplicate);
+        var tool = new RecordingTool(
+            new AgentToolCallSafety(false, false, false),
+            replayPolicy: AgentToolReplayPolicy.IdempotentRetryable);
+        var executor = CreateExecutor(appender, ledger);
+
+        var outcome = await executor.ExecuteAsync(CreateRecoveryRequest(
+            tool,
+            operationId: "operation-idempotent",
+            idempotencyKey: "operation-idempotent"));
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        tool.ExecutionCalls.Should().Be(1);
+        var executionIdentity = tool.ExecutionContexts.Should().ContainSingle().Subject.Request;
+        executionIdentity.OperationId.Should().Be("operation-idempotent");
+        executionIdentity.IdempotencyKey.Should().Be("operation-idempotent");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenActorRecoversNewNonReplayableAdmission_ShouldExecuteOnce()
+    {
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Started);
+        var tool = new RecordingTool(new AgentToolCallSafety(false, false, true));
+        var executor = CreateExecutor(appender, ledger);
+
+        var outcome = await executor.ExecuteAsync(CreateRecoveryRequest(tool, "operation-new"));
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        outcome.TerminalInvoked.Should().BeTrue();
+        tool.ExecutionCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenActorRecoversDuplicateNonReplayableAdmission_ShouldReturnUncertainWithoutCallingTool()
+    {
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Duplicate);
+        var tool = new RecordingTool(new AgentToolCallSafety(false, false, true));
+        var executor = CreateExecutor(appender, ledger);
+
+        var outcome = await executor.ExecuteAsync(CreateRecoveryRequest(tool, "operation-uncertain"));
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Failed);
+        outcome.FailureCode.Should().Be("outcome_uncertain");
+        outcome.SafeMessage.Should().Contain("OUTCOME_UNCERTAIN");
+        outcome.TerminalInvoked.Should().BeFalse();
+        tool.ExecutionCalls.Should().Be(0);
+        appender.Records.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenReconciliationFindsCompletion_ShouldReuseResultWithoutCallingTool()
+    {
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Duplicate);
+        var tool = new ReconcilableRecordingTool(
+            new AgentToolOperationReconciliationResult(
+                AgentToolOperationReconciliationDisposition.Completed,
+                new AgentToolTerminalOutcome("{\"reused\":true}")));
+        var executor = CreateExecutor(appender, ledger);
+
+        var outcome = await executor.ExecuteAsync(CreateRecoveryRequest(tool, "operation-reconciled"));
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        outcome.ResultJson.Should().Be("{\"reused\":true}");
+        outcome.TerminalInvoked.Should().BeFalse();
+        tool.ReconciliationCalls.Should().Be(1);
+        tool.ExecutionCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenReconciliationProvesOperationAbsent_ShouldExecuteOnce()
+    {
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Duplicate);
+        var tool = new ReconcilableRecordingTool(
+            new AgentToolOperationReconciliationResult(
+                AgentToolOperationReconciliationDisposition.NotFound));
+        var executor = CreateExecutor(appender, ledger);
+
+        var outcome = await executor.ExecuteAsync(CreateRecoveryRequest(tool, "operation-absent"));
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        outcome.TerminalInvoked.Should().BeTrue();
+        tool.ReconciliationCalls.Should().Be(1);
+        tool.ExecutionCalls.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExecuteAsync_WhenReconciliationIsUnknown_ShouldReturnUncertainWithoutCallingTool(
+        bool throwDuringReconciliation)
+    {
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Duplicate);
+        var tool = new ReconcilableRecordingTool(
+            new AgentToolOperationReconciliationResult(
+                AgentToolOperationReconciliationDisposition.Unknown),
+            throwDuringReconciliation);
+        var executor = CreateExecutor(appender, ledger);
+
+        var outcome = await executor.ExecuteAsync(CreateRecoveryRequest(tool, "operation-unknown"));
+
+        outcome.FailureCode.Should().Be("outcome_uncertain");
+        outcome.TerminalInvoked.Should().BeFalse();
+        tool.ReconciliationCalls.Should().Be(1);
+        tool.ExecutionCalls.Should().Be(0);
+    }
+
     private static AdmittedAgentToolExecutor CreateExecutor(
         IAuditTrailAppender appender,
         IAgentToolAdmissionLedger? admissionLedger = null) =>
@@ -1173,6 +1394,9 @@ public sealed class AdmittedAgentToolExecutorTests
             _ => throw new ArgumentOutOfRangeException(nameof(status), status, null),
         };
 
+    private static RecordingAuditTrailAppender SuccessfulAuditAppender() =>
+        new((record, _) => AuditTrailAppendResult.Appended(record.AuditId));
+
     private static AgentToolExecutionRequest CreateRequest(IAgentTool tool) =>
         new(
             tool,
@@ -1184,6 +1408,25 @@ public sealed class AdmittedAgentToolExecutorTests
             },
             AgentToolApprovalContinuationMode.None,
             null);
+
+    private static AgentToolExecutionRequest CreateRecoveryRequest(
+        IAgentTool tool,
+        string operationId,
+        string? idempotencyKey = null) =>
+        CreateRequest(tool) with
+        {
+            ExecutionContext = CreateTestExecutionContext() with
+            {
+                Request = new AgentToolRequestIdentity(
+                    "request-1",
+                    "call-1",
+                    idempotencyKey,
+                    TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
+                    operationId),
+                ExecutionOwner = AgentToolExecutionOwners.Actor("actor-test"),
+            },
+            ExecutionAttemptKind = AgentToolExecutionAttemptKind.ActorRecovery,
+        };
 
     private static AgentToolExecutionContext CreateTestExecutionContext() =>
         AgentToolExecutionContext.Empty with
@@ -1197,7 +1440,8 @@ public sealed class AdmittedAgentToolExecutorTests
         bool throwOnReceipt = false,
         Func<string, AgentToolReceipt?>? createReceipt = null,
         string name = "test_tool",
-        Func<string, AgentToolCallSafety>? classify = null) : IAgentTool
+        Func<string, AgentToolCallSafety>? classify = null,
+        AgentToolReplayPolicy? replayPolicy = null) : IAgentTool
     {
         private readonly Func<string, string> _execute = execute ?? (_ => "{}");
 
@@ -1210,6 +1454,11 @@ public sealed class AdmittedAgentToolExecutorTests
         public List<string> SafetyArguments { get; } = [];
         public List<string> ExecutionArguments { get; } = [];
         public List<AgentToolExecutionContext> ExecutionContexts { get; } = [];
+
+        public AgentToolReplayPolicy ResolveReplayPolicy(string argumentsJson) =>
+            replayPolicy ?? (safety.IsReadOnly && !safety.IsDestructive
+                ? AgentToolReplayPolicy.ReadOnlyRetryable
+                : AgentToolReplayPolicy.NonReplayable);
 
         public AgentToolCallSafety GetCallSafety(string argumentsJson)
         {
@@ -1246,6 +1495,53 @@ public sealed class AdmittedAgentToolExecutorTests
             ExecutionContexts.Add(AgentToolRequestContext.Current
                                   ?? throw new InvalidOperationException("Tool execution context is required."));
             return Task.FromResult(_execute(argumentsJson));
+        }
+    }
+
+    private sealed class ReconcilableRecordingTool(
+        AgentToolOperationReconciliationResult reconciliationResult,
+        bool throwDuringReconciliation = false) : IAgentTool, IAgentToolOperationReconciler
+    {
+        public string Name => "reconcilable_tool";
+        public string Description => "test";
+        public string ParametersSchema => "{}";
+        public int ReconciliationCalls { get; private set; }
+        public int ExecutionCalls { get; private set; }
+
+        public AgentToolCallSafety GetCallSafety(string argumentsJson) =>
+            new(false, false, false);
+
+        public AgentToolReplayPolicy ResolveReplayPolicy(string argumentsJson) =>
+            AgentToolReplayPolicy.Reconcilable;
+
+        public Task<AgentToolOperationReconciliationResult> ReconcileOperationAsync(
+            AgentToolOperationReconciliationRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ReconciliationCalls++;
+            if (throwDuringReconciliation)
+                throw new InvalidOperationException("reconciliation failed");
+            return Task.FromResult(reconciliationResult);
+        }
+
+        public AgentToolReceipt CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) => new()
+        {
+            CallId = callId,
+            ToolName = toolName,
+            Status = AgentToolReceiptStatus.Success,
+            ResultJson = resultJson,
+        };
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ExecutionCalls++;
+            return Task.FromResult("{}");
         }
     }
 

@@ -69,6 +69,9 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     protected virtual AgentToolApprovalContinuationMode ToolApprovalContinuationMode =>
         AgentToolApprovalContinuationMode.None;
 
+    protected virtual IChatToolCheckpointPort ChatToolCheckpointPort =>
+        NoOpChatToolCheckpointPort.Instance;
+
     // ─── 组合的组件（各做一件事） ───
     /// <summary>工具管理器。</summary>
     protected ToolManager Tools { get; } = new();
@@ -271,6 +274,32 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             ct);
     }
 
+    protected IAsyncEnumerable<LLMStreamChunk> ContinueChatStreamAsync(
+        IReadOnlyList<ContentPart> userContent,
+        IReadOnlyList<ChatMessage> committedToolTranscript,
+        string? requestId,
+        LLMControlContext? llmControl,
+        AgentToolExecutionContext? toolContext,
+        AgentProfileTurnCatalog? turnCatalog,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        CancellationToken ct = default)
+    {
+        EnsureRuntime();
+        var maxRounds = llmControl?.MaxToolRoundsOverride
+                        ?? toolContext?.Routing.MaxToolRoundsOverride
+                        ?? EffectiveConfig.MaxToolRounds;
+        return _chat!.ContinueChatStreamAsync(
+            userContent,
+            committedToolTranscript,
+            maxRounds,
+            requestId,
+            llmControl,
+            toolContext,
+            turnCatalog,
+            metadata,
+            ct);
+    }
+
     protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         IReadOnlyList<ContentPart> userContent,
         string? requestId,
@@ -357,7 +386,8 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             llmMiddlewares: _llmMiddlewares,
             agentId: Id,
             agentName: GetType().Name,
-            compressionConfig: compressionConfig);
+            compressionConfig: compressionConfig,
+            toolCheckpointPort: ChatToolCheckpointPort);
     }
 
     private ILLMProvider GetLLMProvider()
