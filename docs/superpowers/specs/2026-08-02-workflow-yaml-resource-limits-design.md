@@ -1,6 +1,6 @@
 ---
 title: "Workflow YAML Resource Limits"
-status: "Implemented and verified"
+status: "Implemented; review fixes pending final verification"
 owner: eanzhao
 issue: 3041
 ---
@@ -56,17 +56,21 @@ not be able to weaken them accidentally.
 ### Streaming preflight
 
 Add one `WorkflowYamlResourceGuard` in `Aevatar.Workflow.Core.Primitives`. It performs
-three checks in order:
+four checks in order:
 
 1. Count UTF-8 bytes without allocating a second encoded copy and reject values over
    1 MiB.
 2. Read YamlDotNet parsing events sequentially from `YamlDotNet.Core.Parser`.
 3. Count scalar, alias, mapping, and sequence nodes while tracking open mapping and
    sequence events as collection depth.
+4. Record a bounded node/anchor graph and iteratively evaluate alias-expanded node
+   count and collection depth before any object graph is created.
 
-The guard stops at the first exceeded limit. It does not build a `YamlStream`, create a
-typed object graph, or recursively walk YAML nodes. YAML syntax errors remain
-YamlDotNet syntax errors and continue through existing validation handling.
+The guard stops at the first exceeded limit. Its compact graph can contain at most
+10,000 syntactic nodes, and expanded traversal stops at node 10,001. It does not build
+a `YamlStream`, create a typed object graph, or recursively walk YAML nodes. YAML syntax
+errors remain YamlDotNet syntax errors and continue through existing validation
+handling.
 
 `WorkflowParser.Parse` invokes the guard before `ValidateRootSchema` and typed
 deserialization. This protects all runtime, Chat, service-revision, fork, and dynamic
@@ -99,9 +103,16 @@ exception fields remain available to typed adapters.
 
 ### Node and depth semantics
 
-A mapping or sequence start counts as one node and increments collection depth. A
-scalar or alias counts as one node. Mapping and sequence end events decrement depth.
-Stream and document framing events do not count as nodes or depth.
+A mapping or sequence start counts as one syntactic node and increments collection
+depth. A scalar or alias counts as one syntactic node. Mapping and sequence end events
+decrement depth. Stream and document framing events do not count as nodes or depth.
+
+After this first pass, scalar aliases still count as one expanded node. Collection
+aliases count as the referenced collection and all descendants for each traversal.
+Alias cycles are treated as unbounded collection depth and rejected as
+`NestingDepth`; acyclic alias graphs that expand beyond 10,000 traversed nodes are
+rejected as `Nodes`. The expansion check uses an explicit stack and an active
+collection set, so hostile aliases cannot move recursion into the guard itself.
 
 Depth 64 is accepted; depth 65 is rejected. Node count 10,000 and byte count 1 MiB are
 accepted; the first value above either maximum is rejected. These inclusive boundaries
@@ -129,6 +140,10 @@ Core parser tests:
 - a document above 1 MiB fails with the byte classification;
 - exact boundary values remain accepted where a syntactically valid fixture can express
   them cheaply.
+- a cyclic collection alias fails before runtime or Studio recursive mapping;
+- an acyclic alias graph whose expansion exceeds 10,000 nodes fails as `Nodes`;
+- scalar aliases remain valid, malformed YAML remains a syntax error, and node counts
+  accumulate across YAML documents.
 
 Adapter and ingress tests:
 
@@ -145,9 +160,10 @@ full test, test-stability guards, architecture guards, and GitHub CI.
 
 ## Compatibility and Rollout
 
-Valid workflows within all three limits keep their current parsing and serialization
-behavior. Workflows exceeding a limit become invalid at every ingress, including
-previously persisted YAML when it is parsed again. This fail-closed behavior is
-intentional because such content cannot be processed safely.
+Valid workflows within all three limits, including scalar aliases and bounded acyclic
+collection aliases, keep their current parsing and serialization behavior. Workflows
+exceeding a limit or containing a collection-alias cycle become invalid at every
+ingress, including previously persisted YAML when it is parsed again. This fail-closed
+behavior is intentional because such content cannot be processed safely.
 
 No migration, backfill, feature flag, or compatibility fallback is introduced.

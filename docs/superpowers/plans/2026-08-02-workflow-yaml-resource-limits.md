@@ -4,7 +4,7 @@
 
 **Goal:** Reject oversized, over-populated, and over-deep workflow YAML before YamlDotNet builds recursive object graphs, with one boundary shared by every workflow ingress.
 
-**Architecture:** `WorkflowYamlResourceGuard` performs an allocation-free UTF-8 byte check followed by iterative YamlDotNet event scanning. `WorkflowParser` and Studio's `YamlWorkflowDocumentService` invoke it before any `YamlStream.Load` or typed deserialization, while Application parse results preserve a strong resource-limit failure code.
+**Architecture:** `WorkflowYamlResourceGuard` performs an allocation-free UTF-8 byte check followed by iterative YamlDotNet event scanning and bounded alias-graph expansion. `WorkflowParser` and Studio's `YamlWorkflowDocumentService` invoke it before any `YamlStream.Load` or typed deserialization, while Application parse results preserve a strong resource-limit failure code.
 
 **Tech Stack:** .NET 10, C#, YamlDotNet 16.3, xUnit, FluentAssertions
 
@@ -13,6 +13,7 @@
 - Maximum UTF-8 encoded YAML size is exactly 1,048,576 bytes, inclusive.
 - Maximum YAML node count is exactly 10,000 nodes, inclusive.
 - Maximum open mapping/sequence nesting depth is exactly 64, inclusive.
+- Node and depth limits apply after collection aliases are expanded; alias cycles fail closed.
 - Limits are fixed safety invariants and are not host configuration.
 - The guard must run before `YamlStream.Load` and `IDeserializer.Deserialize`.
 - Never catch `StackOverflowException`.
@@ -371,7 +372,7 @@ git commit -m "Enforce YAML limits across workflow ingresses"
 
 Change the design frontmatter status to `Implemented and verified` only after all required commands succeed. Mark each completed plan checkbox `[x]`.
 
-- [x] **Step 2: Run mandatory local verification**
+- [ ] **Step 2: Run mandatory local verification**
 
 ```bash
 dotnet build aevatar.slnx --nologo
@@ -383,9 +384,15 @@ git diff --check
 
 Expected: every command exits 0. Record existing warning counts without treating baseline warnings as new failures.
 
-- [ ] **Step 3: Perform independent review**
+- [x] **Step 3: Perform independent review**
 
 Review only the diff from the #3041 base commit through branch HEAD. Reject changes that bypass the guard, configure weaker limits, miscount YAML collections, lose typed classification, or omit an ingress. Address every Critical or Important finding with a new failing test before changing product code.
+
+The independent review found that collection aliases could create cyclic or
+exponentially expanding object graphs after the syntactic event scan. The fix added a
+bounded anchor graph, iterative expanded-limit validation, exact inclusive-boundary
+tests, cyclic and exponential alias tests, and ingress coverage for runtime,
+Infrastructure, Studio, and dynamic workflow parsing.
 
 - [ ] **Step 4: Re-run verification after review fixes**
 
