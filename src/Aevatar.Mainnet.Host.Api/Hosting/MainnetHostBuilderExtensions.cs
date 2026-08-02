@@ -100,7 +100,7 @@ public static class MainnetHostBuilderExtensions
         "AgentToolAdmission:KeyPrefix";
     internal const string DefaultAgentToolAdmissionKeyPrefix =
         "aevatar:mainnet:agent-tool-admission:v1:";
-    internal const string DefaultAuthenticationAudience = "urn:aevatar:api";
+    private const string NyxIdApiBaseUrlKey = "Aevatar:NyxId:ApiBaseUrl";
     private const string DeviceInboundDirectExternalEventTypeUrl =
         "type.googleapis.com/aevatar.gagents.household.DeviceInbound";
 
@@ -521,9 +521,15 @@ public static class MainnetHostBuilderExtensions
         if (!string.IsNullOrWhiteSpace(builder.Configuration[audienceKey]))
             return;
 
+        // NyxID access tokens use its API BASE_URL as their audience. Identity assertions use
+        // a separate audience and must not be reused for bearer-token validation.
+        var nyxIdApiBaseUrl = builder.Configuration[NyxIdApiBaseUrlKey];
+        if (string.IsNullOrWhiteSpace(nyxIdApiBaseUrl))
+            return;
+
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
-            [audienceKey] = DefaultAuthenticationAudience,
+            [audienceKey] = nyxIdApiBaseUrl.Trim(),
         });
     }
 
