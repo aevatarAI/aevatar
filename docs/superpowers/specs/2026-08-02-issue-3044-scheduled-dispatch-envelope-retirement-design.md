@@ -31,14 +31,17 @@ The retirement is enforced at three independent boundaries:
    internal caller constructs `ScheduledDispatchConfiguration` directly. Hide
    legacy envelope rows from get/list and reject their lifecycle mutations as
    not found.
-3. **Actor runtime:** reject new envelope configuration commands. On activation,
-   an existing enabled envelope schedule is durably disabled and its callbacks
-   are purged. Manual fire also fails before any target dispatch. This protects
-   persisted schedules created before the HTTP contract changes.
+3. **Actor runtime:** require a typed `TrustedInternal` authority on every new
+   envelope configuration command. On activation, an existing envelope schedule
+   without that authority is durably disabled and its callbacks are purged.
+   Manual fire also fails before any target dispatch. This protects persisted
+   schedules created before the HTTP contract changes while preserving the
+   explicit low-level internal actor protocol used by runtime tests.
 
 Legacy Protobuf/state fields and enum values remain readable only so existing
-actors and projections can recognize the retired target and fail closed. They
-are not an extension point and no administrator/raw-envelope API is introduced.
+actors and projections can recognize the retired target and fail closed. The
+new Protobuf authority enum is not exposed through Hosting or Application, and
+no administrator/raw-envelope API is introduced.
 
 ## Alternatives
 
@@ -79,14 +82,15 @@ For rejected raw writes:
 
 ```text
 HTTP envelope member -> JSON unmapped-member rejection -> 400, no mutation
-direct envelope configuration -> Application/Core rejection, no actor dispatch
+direct envelope configuration -> Application rejection, no actor dispatch
+internal actor envelope without TrustedInternal -> Core rejection
 ```
 
 For historical raw schedules:
 
 ```text
 projection row -> hidden from public get/list/lifecycle
-actor activation -> disable event + callback purge
+actor activation without TrustedInternal -> disable event + callback purge
 manual fire -> fail before FireStarted or target dispatch
 ```
 
@@ -123,9 +127,10 @@ Tests must prove:
   accepted;
 - direct Application envelope create/update is rejected before actor dispatch;
 - legacy envelope rows are hidden from get/list and lifecycle mutation;
-- new actor envelope configuration is rejected;
-- activation disables a persisted envelope schedule and manual fire never
-  dispatches it;
+- new actor envelope configuration without typed internal authority is
+  rejected, while the explicit trusted-internal protocol remains functional;
+- activation disables a persisted unauthorized envelope schedule and manual
+  fire never dispatches it;
 - existing service invocation, workflow schedule, and Studio member automation
   tests remain green.
 
