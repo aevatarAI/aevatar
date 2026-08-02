@@ -2596,6 +2596,126 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         admin.Should().Contain("data-act=\"skAuthorize\"");
     }
 
+    [Fact]
+    public async Task AdminShell_Authentication_ShouldRefreshTokensBeforeExpiryAndRetryOneUnauthorizedRequest()
+    {
+        await using var app = await CreateAppAsync();
+        var admin = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('var OIDC=');
+            const end = html.indexOf('/* ② 系统状态', start);
+            assert.notEqual(start, -1, 'admin auth script must exist');
+            assert.notEqual(end, -1, 'admin auth script boundary must exist');
+
+            const stored = new Map();
+            const calls = [];
+            let phase = 'proactive';
+            let releaseRefresh = null;
+            function response(status, body) {
+              return {
+                status,
+                ok: status >= 200 && status < 300,
+                json: async () => body,
+                text: async () => JSON.stringify(body ?? {}),
+              };
+            }
+            const localStorage = {
+              getItem: key => stored.has(key) ? stored.get(key) : null,
+              setItem: (key, value) => stored.set(key, value),
+              removeItem: key => stored.delete(key),
+            };
+            const context = {
+              BACKEND_CONSOLE_CONFIG: {
+                authority: 'https://id.example.test',
+                clientId: 'client-example',
+                scope: 'openid profile',
+                resources: [],
+                storageKey: 'console:test',
+              },
+              location: {origin:'https://console.example.test',pathname:'/admin',hash:''},
+              localStorage,
+              sessionStorage: {setItem(){},removeItem(){}},
+              fetch: async (input, init) => {
+                calls.push({input:String(input),init});
+                if(String(input) === 'https://id.example.test/oauth/token') {
+                  if(phase === 'logout') {
+                    return await new Promise(resolve => {
+                      releaseRefresh = () => resolve(response(200, {
+                        access_token: 'late-access',
+                        refresh_token: 'late-refresh',
+                        expires_in: 900,
+                        token_type: 'Bearer',
+                      }));
+                    });
+                  }
+                  return response(200, {
+                    access_token: phase === 'proactive' ? 'proactive-access' : 'retry-access',
+                    refresh_token: phase === 'proactive' ? 'proactive-refresh' : 'retry-refresh',
+                    expires_in: 900,
+                    token_type: 'Bearer',
+                  });
+                }
+                if(phase === 'retry' && calls.filter(call => call.input === '/api/probe').length === 1) {
+                  return response(401, {});
+                }
+                return response(200, {ok:true});
+              },
+              setTimeout: () => 1,
+              clearTimeout() {},
+              document: {getElementById:()=>null,body:{appendChild(){}},createElement:()=>({classList:{add(){},remove(){}},innerHTML:''})},
+              crypto: {getRandomValues(){},subtle:{}},
+              alert() {},
+              URL,
+              URLSearchParams,
+              TextEncoder,
+              Uint8Array,
+              console,
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            (async function(){
+              context.setToken({access_token:'expiring-access',refresh_token:'expiring-refresh',expires_in:30,obtained_at:Date.now()});
+              const proactive = await context.adminApi('/api/probe');
+              assert.equal(proactive.status, 200);
+              assert.equal(calls.length, 2);
+              assert.equal(calls[0].input, 'https://id.example.test/oauth/token');
+              assert.match(calls[0].init.body, /grant_type=refresh_token/);
+              assert.match(calls[0].init.body, /refresh_token=expiring-refresh/);
+              assert.equal(calls[1].init.headers.Authorization, 'Bearer proactive-access');
+              assert.equal(JSON.parse(stored.get('console:test:token')).refresh_token, 'proactive-refresh');
+
+              phase = 'retry';
+              calls.length = 0;
+              context.setToken({access_token:'active-access',refresh_token:'active-refresh',expires_in:3600,obtained_at:Date.now()});
+              const retried = await context.adminApi('/api/probe');
+              assert.equal(retried.status, 200);
+              assert.equal(calls.length, 3);
+              assert.equal(calls[0].init.headers.Authorization, 'Bearer active-access');
+              assert.equal(calls[1].input, 'https://id.example.test/oauth/token');
+              assert.equal(calls[2].init.headers.Authorization, 'Bearer retry-access');
+              assert.equal(JSON.parse(stored.get('console:test:token')).refresh_token, 'retry-refresh');
+
+              phase = 'logout';
+              context.setToken({access_token:'logout-access',refresh_token:'logout-refresh',expires_in:3600,obtained_at:Date.now()});
+              const pendingRefresh = context.refreshAccessToken(true);
+              while(!releaseRefresh) await new Promise(resolve => setImmediate(resolve));
+              context.clearToken();
+              releaseRefresh();
+              assert.equal(await pendingRefresh, null);
+              assert.equal(stored.has('console:test:token'), false, 'a late refresh response must not restore a logged-out session');
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, admin);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
     private static string ScheduleRequestSnippet(string html, string scheduleCall)
     {
         var index = html.IndexOf(scheduleCall, StringComparison.Ordinal);

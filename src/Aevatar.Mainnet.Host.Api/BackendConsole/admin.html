@@ -1306,9 +1306,54 @@ var OIDC={ authority:BACKEND_CONSOLE_CONFIG.authority||'', clientId:BACKEND_CONS
   scope:BACKEND_CONSOLE_CONFIG.scope||'', resources:Array.isArray(BACKEND_CONSOLE_CONFIG.resources)?BACKEND_CONSOLE_CONFIG.resources:[], redirectUri:location.origin+'/auto/callback', storageKey:BACKEND_CONSOLE_CONFIG.storageKey||'' };
 var VOICE_TOKEN_PURPOSE='voice-realtime';
 var TOKEN_KEY=OIDC.storageKey+':token', VOICE_TOKEN_KEY=OIDC.storageKey+':voice-realtime:token', PKCE_KEY=OIDC.storageKey+':pkce';
+var TOKEN_REFRESH_PROMISE=null,TOKEN_REFRESH_TIMER=null,TOKEN_REFRESH_SKEW_MS=60000,TOKEN_REFRESH_RETRY_MS=30000;
 function getToken(){ try{ var t=JSON.parse(localStorage.getItem(TOKEN_KEY)||'null'); return (t&&t.access_token)?t:null; }catch(e){ return null; } }
+function setToken(t){ localStorage.setItem(TOKEN_KEY,JSON.stringify(t)); scheduleTokenRefresh(t); }
 function accessToken(){ var t=getToken(); return t?t.access_token:null; }
-function clearToken(){ try{ localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(VOICE_TOKEN_KEY); }catch(e){} }
+function clearToken(){ if(TOKEN_REFRESH_TIMER){ clearTimeout(TOKEN_REFRESH_TIMER); TOKEN_REFRESH_TIMER=null; }
+  try{ localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(VOICE_TOKEN_KEY); }catch(e){} }
+function tokenExpiresAt(t){ var claims=decodeJwt(t&&t.access_token),jwtExpiry=Number(claims&&claims.exp);
+  if(Number.isFinite(jwtExpiry)&&jwtExpiry>0) return jwtExpiry*1000;
+  var obtainedAt=Number(t&&t.obtained_at),expiresIn=Number(t&&t.expires_in);
+  return Number.isFinite(obtainedAt)&&Number.isFinite(expiresIn)&&expiresIn>0?obtainedAt+expiresIn*1000:0; }
+function tokenNeedsRefresh(t){ var expiresAt=tokenExpiresAt(t); return !!expiresAt&&expiresAt<=Date.now()+TOKEN_REFRESH_SKEW_MS; }
+function scheduleTokenRefresh(t){ if(TOKEN_REFRESH_TIMER){ clearTimeout(TOKEN_REFRESH_TIMER); TOKEN_REFRESH_TIMER=null; }
+  if(!t||!t.refresh_token) return;
+  var expiresAt=tokenExpiresAt(t); if(!expiresAt) return;
+  var delay=Math.max(0,Math.min(2147483647,expiresAt-Date.now()-TOKEN_REFRESH_SKEW_MS));
+  TOKEN_REFRESH_TIMER=setTimeout(function(){ TOKEN_REFRESH_TIMER=null;
+    refreshAccessToken(false).catch(function(){ scheduleTokenRefreshRetry(); }); },delay); }
+function scheduleTokenRefreshRetry(){ if(TOKEN_REFRESH_TIMER) clearTimeout(TOKEN_REFRESH_TIMER);
+  TOKEN_REFRESH_TIMER=setTimeout(function(){ TOKEN_REFRESH_TIMER=null;
+    refreshAccessToken(false).catch(function(){ scheduleTokenRefreshRetry(); }); },TOKEN_REFRESH_RETRY_MS); }
+async function refreshAccessToken(force){ var current=getToken(); if(!current) return null;
+  if(!current.refresh_token||(!force&&!tokenNeedsRefresh(current))){ scheduleTokenRefresh(current); return current; }
+  if(TOKEN_REFRESH_PROMISE) return TOKEN_REFRESH_PROMISE;
+  var usedRefreshToken=current.refresh_token;
+  TOKEN_REFRESH_PROMISE=(async function(){
+    var form=new URLSearchParams(); form.set('grant_type','refresh_token'); form.set('refresh_token',usedRefreshToken); form.set('client_id',OIDC.clientId);
+    var res=await fetch(OIDC.authority.replace(/\/+$/,'')+'/oauth/token',{method:'POST',headers:{'Accept':'application/json','Content-Type':'application/x-www-form-urlencoded'},body:form.toString()});
+    if(!res.ok){ var latestAfterFailure=getToken();
+      if(latestAfterFailure&&latestAfterFailure.refresh_token&&latestAfterFailure.refresh_token!==usedRefreshToken){ scheduleTokenRefresh(latestAfterFailure); return latestAfterFailure; }
+      throw new Error('token-refresh-http-'+res.status); }
+    var refreshed=await res.json(); if(!refreshed||!refreshed.access_token) throw new Error('token-refresh-missing-access-token');
+    var latest=getToken(); if(!latest) return null;
+    if(latest&&latest.refresh_token&&latest.refresh_token!==usedRefreshToken){ scheduleTokenRefresh(latest); return latest; }
+    var merged=Object.assign({},current,refreshed,{obtained_at:Date.now()});
+    if(!refreshed.refresh_token) merged.refresh_token=usedRefreshToken;
+    setToken(merged); return merged;
+  })();
+  var pending=TOKEN_REFRESH_PROMISE;
+  try{ return await pending; }
+  finally{ if(TOKEN_REFRESH_PROMISE===pending) TOKEN_REFRESH_PROMISE=null; }
+}
+async function ensureAccessToken(){ var current=getToken(); if(!current) return null;
+  if(current.refresh_token&&tokenNeedsRefresh(current)){
+    try{ return await refreshAccessToken(false); }
+    catch(e){ scheduleTokenRefreshRetry(); return current; }
+  }
+  scheduleTokenRefresh(current); return current;
+}
 function loginResources(requested){
   var merged=[];
   [OIDC.resources,Array.isArray(requested)?requested:[]].forEach(function(group){ group.forEach(function(value){ var resource=typeof value==='string'?value.trim():''; if(resource&&merged.indexOf(resource)<0) merged.push(resource); }); });
@@ -1363,15 +1408,21 @@ function netProgressPush(){ NET_INFLIGHT++;
 function netProgressPop(){ NET_INFLIGHT=Math.max(0,NET_INFLIGHT-1);
   if(NET_INFLIGHT===0){ if(NET_SHOW_TIMER){ clearTimeout(NET_SHOW_TIMER); NET_SHOW_TIMER=null; }
     var el=document.getElementById('net-progress'); if(el) el.classList.remove('on'); } }
-/* 统一带 Bearer 请求：401→清 token 回登录；403→返回 {forbidden:true} 供模块诚实降级（不展示伪造数据）。
+/* 统一带 Bearer 请求：到期前续期；401→强制续期并重试一次，仍失败才清 token 回登录；
+   403→返回 {forbidden:true} 供模块诚实降级（不展示伪造数据）。
    opts.silentProgress=true 供后台轮询使用，不驱动顶部进度条。 */
-async function adminApi(path,opts){ opts=opts||{}; var h=Object.assign({},opts.headers||{}); var tok=accessToken();
-  if(tok) h['Authorization']='Bearer '+tok;
+async function adminApi(path,opts){ opts=opts||{}; var token=await ensureAccessToken();
   var silent=!!opts.silentProgress;
-  var init=Object.assign({},opts,{headers:h}); delete init.silentProgress;
+  function requestInit(activeToken){ var h=Object.assign({},opts.headers||{});
+    if(activeToken&&activeToken.access_token) h['Authorization']='Bearer '+activeToken.access_token;
+    var init=Object.assign({},opts,{headers:h}); delete init.silentProgress; return init; }
   if(!silent) netProgressPush();
   var res;
-  try{ res=await fetch(path,init); }
+  try{ res=await fetch(path,requestInit(token));
+    if(res.status===401&&token&&token.refresh_token){ var refreshed=null;
+      try{ refreshed=await refreshAccessToken(true); }catch(e){}
+      if(refreshed&&refreshed.access_token&&refreshed.access_token!==token.access_token) res=await fetch(path,requestInit(refreshed)); }
+  }
   finally{ if(!silent) netProgressPop(); }
   if(res.status===401){ showLoginGate('登录已过期，请重新使用 NyxID 登录。'); throw {unauthorized:true}; }
   if(res.status===403){ return {forbidden:true,status:403}; }
@@ -4324,10 +4375,15 @@ function renderAcctW(){
 (function boot(){
   bindEvents(); startClock();
   if(!getToken()){ renderLoginGate(); return; }
+  scheduleTokenRefresh(getToken());
   ACCOUNT=accountFromToken();
   render(); renderAcctW();
   refreshAccount().then(function(){ if(ACCOUNT) render(); renderAcctW(); });
 })();
+window.addEventListener('storage',function(ev){ if(ev.key!==TOKEN_KEY) return; var token=getToken();
+  if(token) scheduleTokenRefresh(token); else if(ACCOUNT) showLoginGate('NyxID 登录已在其他页面结束。'); });
+document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible'&&getToken())
+  refreshAccessToken(false).catch(function(){ scheduleTokenRefreshRetry(); }); });
 window.addEventListener('pagehide',function(){ captureAdminViewState(_renderedRouteKey||adminRouteKey(location.hash)); });
 
 </script>
