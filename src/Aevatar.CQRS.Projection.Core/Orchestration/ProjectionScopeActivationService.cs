@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
@@ -17,6 +18,7 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
     private readonly Func<ProjectionScopeStartRequest, TContext> _contextFactory;
     private readonly Func<ProjectionRuntimeScopeKey, TContext, TLease> _leaseFactory;
     private readonly IStreamForwardingRegistry? _forwardingRegistry;
+    private readonly ILogger<ProjectionScopeActivationService<TLease, TContext, TScopeAgent>> _logger;
 
     public ProjectionScopeActivationService(
         IActorRuntime runtime,
@@ -39,6 +41,8 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
         _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
         _leaseFactory = leaseFactory ?? throw new ArgumentNullException(nameof(leaseFactory));
         _forwardingRegistry = forwardingRegistry;
+        _logger = loggerFactory?.CreateLogger<ProjectionScopeActivationService<TLease, TContext, TScopeAgent>>() ??
+                  NullLogger<ProjectionScopeActivationService<TLease, TContext, TScopeAgent>>.Instance;
     }
 
     public async Task<TLease> EnsureAsync(
@@ -60,19 +64,55 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
             request.SessionId);
 
         await _scopeRuntime.EnsureExistsAsync(scopeKey, ct).ConfigureAwait(false);
-        await _scopeRuntime.DispatchAsync(
-            scopeKey,
-            new EnsureProjectionScopeCommand
-            {
-                RootActorId = scopeKey.RootActorId,
-                ProjectionKind = scopeKey.ProjectionKind,
-                SessionId = scopeKey.SessionId,
-                Mode = ProjectionScopeModeMapper.ToProto(scopeKey.Mode),
-            },
-            ct).ConfigureAwait(false);
-        await WaitForObservationRelayAsync(scopeKey, ct).ConfigureAwait(false);
+        var ensureDispatched = false;
+        try
+        {
+            await _scopeRuntime.DispatchAsync(
+                scopeKey,
+                new EnsureProjectionScopeCommand
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                    SessionId = scopeKey.SessionId,
+                    Mode = ProjectionScopeModeMapper.ToProto(scopeKey.Mode),
+                },
+                ct).ConfigureAwait(false);
+            ensureDispatched = true;
+            await WaitForObservationRelayAsync(scopeKey, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            if (ensureDispatched)
+                await ReleaseFailedActivationAsync(scopeKey).ConfigureAwait(false);
+            throw;
+        }
 
         return _leaseFactory(scopeKey, context);
+    }
+
+    private async Task ReleaseFailedActivationAsync(ProjectionRuntimeScopeKey scopeKey)
+    {
+        try
+        {
+            await _scopeRuntime.DispatchAsync(
+                scopeKey,
+                new ReleaseProjectionScopeCommand
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                    SessionId = scopeKey.SessionId,
+                    Mode = ProjectionScopeModeMapper.ToProto(scopeKey.Mode),
+                },
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Projection scope activation compensation dispatch failed. actorId={ActorId} projectionKind={ProjectionKind}",
+                ProjectionScopeActorId.Build(scopeKey),
+                scopeKey.ProjectionKind);
+        }
     }
 
     private async Task WaitForObservationRelayAsync(

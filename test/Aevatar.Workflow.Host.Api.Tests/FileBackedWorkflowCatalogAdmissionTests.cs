@@ -4,6 +4,7 @@ using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Core;
@@ -65,6 +66,129 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
         bind.CapabilityAdmissionPlan.AdmissionDigest.Should().Be("startup-admission-digest");
         bind.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
         bind.CapabilityAdmissionPlan.ExecutionMode.Should().Be(bind.ExpectedExecutionMode);
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_ShouldReuseExactCommittedDefinitionBinding()
+    {
+        const string actorId = "workflow-definition:committed-alpha";
+        const string workflowName = "committed-alpha";
+        const string workflowYaml = "name: committed-alpha";
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
+        var runtime = new RecordingActorRuntime();
+        var observations = new RecordingWorkflowDefinitionBindObservationRuntime();
+        var dispatch = new RecordingActorDispatchPort(observations);
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IActorRuntime>(runtime);
+        services.AddSingleton<IActorDispatchPort>(dispatch);
+        services.AddSingleton<IWorkflowDefinitionBindObservationScopeLeasePreparationPort>(observations);
+        services.AddSingleton<IWorkflowDefinitionBindObservationProjectionPort>(observations);
+        services.AddSingleton<IWorkflowExternalCapabilityAdmissionService>(
+            new RecordingWorkflowCapabilityAdmissionService(responsePlan: plan));
+        services.AddSingleton<IWorkflowActorBindingReader>(new StaticWorkflowActorBindingReader(
+            new WorkflowActorBinding(
+                WorkflowActorKind.Definition,
+                actorId,
+                actorId,
+                string.Empty,
+                workflowName,
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive,
+                SourceVersion: 7,
+                SourceEventId: "event-alpha",
+                SourceKind: "builtin",
+                CapabilityAdmissionPlan: plan.Clone())));
+        services.AddWorkflowDefinitionFileSource();
+        using var provider = services.BuildServiceProvider();
+
+        await provider.GetRequiredService<FileBackedWorkflowCatalogPort>().MaterializeAsync(
+        [
+            new WorkflowDefinitionRegistration(
+                workflowName,
+                workflowYaml,
+                actorId,
+                ExternalCapabilityExecutionMode.Interactive,
+                "builtin"),
+        ]);
+
+        runtime.Created.Should().BeEmpty();
+        dispatch.Envelopes.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("definition-actor-id")]
+    [InlineData("workflow-yaml")]
+    [InlineData("execution-mode")]
+    [InlineData("source-kind")]
+    [InlineData("admission-digest")]
+    public async Task MaterializeAsync_ShouldRebind_WhenCommittedDefinitionBindingDiffers(string mismatch)
+    {
+        const string actorId = "workflow-definition:committed-beta";
+        const string workflowName = "committed-beta";
+        const string workflowYaml = "name: committed-beta";
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
+        var persistedPlan = plan.Clone();
+        if (mismatch == "admission-digest")
+        {
+            persistedPlan.DefinitionDigest = "different-definition-digest";
+            persistedPlan.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                .ComputeAdmissionDigest(persistedPlan);
+        }
+
+        var binding = new WorkflowActorBinding(
+            WorkflowActorKind.Definition,
+            actorId,
+            mismatch == "definition-actor-id" ? "workflow-definition:other-beta" : actorId,
+            string.Empty,
+            workflowName,
+            mismatch == "workflow-yaml" ? "name: other-beta" : workflowYaml,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            mismatch == "execution-mode"
+                ? ExternalCapabilityExecutionMode.Durable
+                : ExternalCapabilityExecutionMode.Interactive,
+            SourceVersion: 8,
+            SourceEventId: "event-beta",
+            SourceKind: mismatch == "source-kind" ? "repo" : "builtin",
+            CapabilityAdmissionPlan: persistedPlan);
+        var runtime = new RecordingActorRuntime();
+        var observations = new RecordingWorkflowDefinitionBindObservationRuntime();
+        var dispatch = new RecordingActorDispatchPort(observations);
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IActorRuntime>(runtime);
+        services.AddSingleton<IActorDispatchPort>(dispatch);
+        services.AddSingleton<IWorkflowDefinitionBindObservationScopeLeasePreparationPort>(observations);
+        services.AddSingleton<IWorkflowDefinitionBindObservationProjectionPort>(observations);
+        services.AddSingleton<IWorkflowExternalCapabilityAdmissionService>(
+            new RecordingWorkflowCapabilityAdmissionService(responsePlan: plan));
+        services.AddSingleton<IWorkflowActorBindingReader>(new StaticWorkflowActorBindingReader(binding));
+        services.AddWorkflowDefinitionFileSource();
+        using var provider = services.BuildServiceProvider();
+
+        await provider.GetRequiredService<FileBackedWorkflowCatalogPort>().MaterializeAsync(
+        [
+            new WorkflowDefinitionRegistration(
+                workflowName,
+                workflowYaml,
+                actorId,
+                ExternalCapabilityExecutionMode.Interactive,
+                "builtin"),
+        ]);
+
+        runtime.Created.Should().ContainSingle(item => item.ActorId == actorId);
+        dispatch.Envelopes.Should().ContainSingle();
     }
 
     [Fact]
@@ -369,6 +493,7 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
         services.AddLogging();
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
+        services.AddSingleton<IWorkflowActorBindingReader, EmptyWorkflowActorBindingReader>();
         services.AddWorkflowExecutionProjectionCQRS();
         services.AddSingleton<IWorkflowExternalCapabilityAdmissionService,
             IntegrityWorkflowCapabilityAdmissionService>();
@@ -442,7 +567,8 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
 
     private sealed class RecordingWorkflowCapabilityAdmissionService(
         Exception? failure = null,
-        ExternalCapabilityExecutionMode? responseMode = null) :
+        ExternalCapabilityExecutionMode? responseMode = null,
+        WorkflowCapabilityAdmissionPlan? responsePlan = null) :
         IWorkflowExternalCapabilityAdmissionService
     {
         public WorkflowExternalCapabilityAdmissionRequest? Request { get; private set; }
@@ -457,7 +583,7 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             Request = request;
             if (failure is not null)
                 throw failure;
-            return Task.FromResult(new WorkflowCapabilityAdmissionPlan
+            return Task.FromResult(responsePlan?.Clone() ?? new WorkflowCapabilityAdmissionPlan
             {
                 DefinitionDigest = "startup-definition-digest",
                 AdmissionDigest = "startup-admission-digest",
@@ -474,6 +600,26 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             if (failure is not null)
                 throw failure;
             return Task.FromResult(request.Plan.Clone());
+        }
+    }
+
+    private sealed class StaticWorkflowActorBindingReader(WorkflowActorBinding binding)
+        : IWorkflowActorBindingReader
+    {
+        public Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<WorkflowActorBinding?>(
+                string.Equals(actorId, binding.ActorId, StringComparison.Ordinal) ? binding : null);
+        }
+    }
+
+    private sealed class EmptyWorkflowActorBindingReader : IWorkflowActorBindingReader
+    {
+        public Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<WorkflowActorBinding?>(null);
         }
     }
 

@@ -1,6 +1,7 @@
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Core;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -21,6 +22,7 @@ internal sealed class FileBackedWorkflowCatalogPort
     private readonly IWorkflowDefinitionBindObservationScopeLeasePreparationPort _observationPreparation;
     private readonly IWorkflowDefinitionBindObservationProjectionPort _observationProjection;
     private readonly IWorkflowExternalCapabilityAdmissionService _capabilityAdmissionService;
+    private readonly IWorkflowActorBindingReader? _bindingReader;
     private readonly WorkflowDefinitionFileSourceOptions _options;
     private readonly ILogger<FileBackedWorkflowCatalogPort> _logger;
 
@@ -31,7 +33,8 @@ internal sealed class FileBackedWorkflowCatalogPort
         IWorkflowDefinitionBindObservationProjectionPort observationProjection,
         IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService,
         IOptions<WorkflowDefinitionFileSourceOptions> options,
-        ILogger<FileBackedWorkflowCatalogPort>? logger = null)
+        ILogger<FileBackedWorkflowCatalogPort>? logger = null,
+        IWorkflowActorBindingReader? bindingReader = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
@@ -41,6 +44,7 @@ internal sealed class FileBackedWorkflowCatalogPort
                                  throw new ArgumentNullException(nameof(observationProjection));
         _capabilityAdmissionService = capabilityAdmissionService ??
                                       throw new ArgumentNullException(nameof(capabilityAdmissionService));
+        _bindingReader = bindingReader;
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
         if (_options.BindCommitTimeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(
@@ -97,6 +101,15 @@ internal sealed class FileBackedWorkflowCatalogPort
             executionMode,
             capabilityAdmissionPlan);
 
+        if (await HasExactCommittedBindingAsync(
+                definition,
+                actorId,
+                capabilityAdmissionPlan,
+                ct).ConfigureAwait(false))
+        {
+            return;
+        }
+
         var actor = await _runtime.CreateAsync<WorkflowGAgent>(actorId, ct);
         var bindEnvelope = CreateBindEnvelope(definition, capabilityAdmissionPlan);
         var stateVersion = await DispatchAndObserveBindAsync(
@@ -111,6 +124,60 @@ internal sealed class FileBackedWorkflowCatalogPort
             actor.Id,
             stateVersion);
     }
+
+    private async Task<bool> HasExactCommittedBindingAsync(
+        WorkflowDefinitionRegistration definition,
+        string actorId,
+        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan,
+        CancellationToken ct)
+    {
+        if (_bindingReader == null || string.IsNullOrWhiteSpace(capabilityAdmissionPlan.AdmissionDigest))
+            return false;
+
+        var binding = await _bindingReader.GetAsync(actorId, ct).ConfigureAwait(false);
+        var persistedPlan = binding?.CapabilityAdmissionPlan;
+        if (binding is not
+            {
+                ActorKind: WorkflowActorKind.Definition,
+                SourceVersion: > 0,
+            } ||
+            string.IsNullOrWhiteSpace(binding.SourceEventId) ||
+            !string.Equals(binding.ActorId, actorId, StringComparison.Ordinal) ||
+            !string.Equals(binding.DefinitionActorId, actorId, StringComparison.Ordinal) ||
+            !string.Equals(binding.WorkflowName, definition.WorkflowName, StringComparison.Ordinal) ||
+            !string.Equals(binding.WorkflowYaml, definition.WorkflowYaml, StringComparison.Ordinal) ||
+            binding.InlineWorkflowYamls.Count != 0 ||
+            binding.ExpectedExecutionMode != definition.ExpectedExecutionMode ||
+            !string.IsNullOrWhiteSpace(binding.ScopeId) ||
+            !string.Equals(
+                NormalizeSourceKind(binding.SourceKind),
+                NormalizeSourceKind(definition.SourceKind),
+                StringComparison.Ordinal) ||
+            !string.IsNullOrWhiteSpace(binding.WorkflowId) ||
+            !string.IsNullOrWhiteSpace(binding.RevisionId) ||
+            persistedPlan == null ||
+            !string.Equals(
+                persistedPlan.AdmissionDigest,
+                capabilityAdmissionPlan.AdmissionDigest,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                persistedPlan.AdmissionDigest,
+                WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(persistedPlan),
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        _logger.LogInformation(
+            "Reused committed startup workflow definition '{WorkflowName}' from WorkflowGAgent '{ActorId}' at state version {StateVersion}.",
+            definition.WorkflowName,
+            actorId,
+            binding.SourceVersion);
+        return true;
+    }
+
+    private static string NormalizeSourceKind(string? sourceKind) =>
+        string.IsNullOrWhiteSpace(sourceKind) ? "builtin" : sourceKind.Trim();
 
     private async Task<long> DispatchAndObserveBindAsync(
         WorkflowDefinitionRegistration definition,
