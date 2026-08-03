@@ -21,6 +21,8 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Core.Propagation;
+using Aevatar.Foundation.Runtime.Propagation;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
@@ -4369,10 +4371,18 @@ public sealed class NyxIdChatConversationGAgentTests
         Propagation = new EnvelopePropagation { CorrelationId = "correlation-alpha" },
     };
 
-    private static void AssignActorId(GAgentBase agent, string actorId) =>
+    private static void AssignActorId(
+        NyxIdChatConversationGAgent agent,
+        string actorId)
+    {
         typeof(GAgentBase)
             .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)!
             .Invoke(agent, [actorId]);
+        var dispatchPort = (IActorDispatchPort)typeof(NyxIdChatConversationGAgent)
+            .GetField("_actorDispatchPort", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(agent)!;
+        agent.EventPublisher = new NyxIdChatTestSelfEventPublisher(actorId, dispatchPort);
+    }
 
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
@@ -4604,5 +4614,78 @@ public sealed class NyxIdChatConversationGAgentTests
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+    }
+}
+
+internal sealed class NyxIdChatTestSelfEventPublisher(
+    string actorId,
+    IActorDispatchPort dispatchPort) : IEventPublisher
+{
+    private static readonly DefaultEnvelopePropagationPolicy PropagationPolicy =
+        new(new DefaultCorrelationLinkPolicy());
+
+    public Task PublishAsync<TEvent>(
+        TEvent evt,
+        TopologyAudience audience = TopologyAudience.Children,
+        CancellationToken ct = default,
+        EventEnvelope? sourceEnvelope = null,
+        EventEnvelopePublishOptions? options = null)
+        where TEvent : IMessage
+    {
+        if (audience != TopologyAudience.Self)
+            throw new NotSupportedException("The test publisher only supports self publication.");
+
+        return DispatchAsync(
+            actorId,
+            evt,
+            EnvelopeRouteSemantics.CreateTopologyPublication(actorId, audience),
+            sourceEnvelope,
+            options,
+            ct);
+    }
+
+    public Task SendToAsync<TEvent>(
+        string targetActorId,
+        TEvent evt,
+        CancellationToken ct = default,
+        EventEnvelope? sourceEnvelope = null,
+        EventEnvelopePublishOptions? options = null)
+        where TEvent : IMessage
+    {
+        if (!string.Equals(targetActorId, actorId, StringComparison.Ordinal))
+            throw new NotSupportedException("The test publisher only supports direct self delivery.");
+
+        return DispatchAsync(
+            targetActorId,
+            evt,
+            EnvelopeRouteSemantics.CreateDirect(actorId, targetActorId),
+            sourceEnvelope,
+            options,
+            ct);
+    }
+
+    private Task DispatchAsync(
+        string targetActorId,
+        IMessage evt,
+        EnvelopeRoute route,
+        EventEnvelope? sourceEnvelope,
+        EventEnvelopePublishOptions? options,
+        CancellationToken ct)
+    {
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(evt),
+            Route = route,
+        };
+        EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
+            envelope,
+            sourceEnvelope,
+            PropagationPolicy,
+            actorId,
+            routeTargetCount: 1,
+            options);
+        return dispatchPort.DispatchAsync(targetActorId, envelope, ct);
     }
 }

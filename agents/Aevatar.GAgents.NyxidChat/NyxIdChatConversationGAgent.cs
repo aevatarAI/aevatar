@@ -980,7 +980,7 @@ public sealed class NyxIdChatConversationGAgent
             await DispatchPendingHistoryTerminalAsync();
     }
 
-    [EventHandler]
+    [EventHandler(AllowSelfHandling = true)]
     public async Task HandleInputRequestAsync(NyxIdChatInputRequestCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -2485,21 +2485,25 @@ public sealed class NyxIdChatConversationGAgent
             DeliveryId = pending.DeliveryId,
             Attempt = pending.Attempt,
         };
-        var envelope = new EventEnvelope
-        {
-            Id = BuildStableIdentity(
-                "history-terminal-dispatch",
-                pending.DeliveryId,
-                pending.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-            Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-            Payload = Any.Pack(signal),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication(Id, TopologyAudience.Self),
-            Propagation = new EnvelopePropagation
+        return PublishAsync(
+            signal,
+            TopologyAudience.Self,
+            ct,
+            new EventEnvelopePublishOptions
             {
-                CorrelationId = pending.SourceCommandId,
-            },
-        };
-        return _actorDispatchPort.DispatchAsync(Id, envelope, ct);
+                Propagation = new EventEnvelopePropagationOverrides
+                {
+                    CorrelationId = pending.SourceCommandId,
+                },
+                Delivery = new EventEnvelopeDeliveryOptions
+                {
+                    OperationId = BuildStableIdentity(
+                        "history-terminal-dispatch",
+                        pending.DeliveryId,
+                        pending.Attempt.ToString(
+                            System.Globalization.CultureInfo.InvariantCulture)),
+                },
+            });
     }
 
     private static ChatHistoryTurnTerminalStatus ToHistoryTerminalStatus(
@@ -2581,43 +2585,45 @@ public sealed class NyxIdChatConversationGAgent
             OperationId = pending.OperationId,
             Attempt = pending.Attempt,
         };
-        var envelope = new EventEnvelope
-        {
-            Id = BuildStableIdentity(
-                "history-initialization-dispatch",
-                pending.OperationId,
-                pending.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-            Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-            Payload = Any.Pack(signal),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication(Id, TopologyAudience.Self),
-            Propagation = new EnvelopePropagation
+        return PublishAsync(
+            signal,
+            TopologyAudience.Self,
+            ct,
+            new EventEnvelopePublishOptions
             {
-                CorrelationId = pending.OperationId,
-            },
-        };
-        return _actorDispatchPort.DispatchAsync(Id, envelope, ct);
+                Propagation = new EventEnvelopePropagationOverrides
+                {
+                    CorrelationId = pending.OperationId,
+                },
+                Delivery = new EventEnvelopeDeliveryOptions
+                {
+                    OperationId = BuildStableIdentity(
+                        "history-initialization-dispatch",
+                        pending.OperationId,
+                        pending.Attempt.ToString(
+                            System.Globalization.CultureInfo.InvariantCulture)),
+                },
+            });
     }
 
     private Task DispatchInputRequestContinuationAsync(
         NyxIdChatInputRequestCommand command,
         CancellationToken ct)
-    {
-        var envelope = new EventEnvelope
-        {
-            Id = $"{command.RequestId}:materialize",
-            Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-            Payload = Any.Pack(command),
-            Route = new EnvelopeRoute
+        => SendToAsync(
+            Id,
+            command,
+            ct,
+            new EventEnvelopePublishOptions
             {
-                Direct = new DirectRoute { TargetActorId = Id },
-            },
-            Propagation = new EnvelopePropagation
-            {
-                CorrelationId = command.RequestId,
-            },
-        };
-        return _actorDispatchPort.DispatchAsync(Id, envelope, ct);
-    }
+                Propagation = new EventEnvelopePropagationOverrides
+                {
+                    CorrelationId = command.RequestId,
+                },
+                Delivery = new EventEnvelopeDeliveryOptions
+                {
+                    OperationId = $"{command.RequestId}:materialize",
+                },
+            });
 
     private async Task PersistRegistrationUnavailableAndCompensateAsync(
         string scopeId,

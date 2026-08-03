@@ -2518,9 +2518,10 @@ public class NyxIdChatGAgentTests
         string actorId,
         IActorDispatchPort? dispatchPort = null)
     {
+        var actorDispatchPort = dispatchPort ?? new NoopActorDispatchPort();
         var agent = new NyxIdChatConversationGAgent(
             provider.GetService<IActorRuntime>() ?? new RecordingActorRuntime(),
-            dispatchPort ?? new NoopActorDispatchPort(),
+            actorDispatchPort,
             TimeProvider.System)
         {
             Services = provider,
@@ -2530,6 +2531,9 @@ public class NyxIdChatGAgentTests
         var setId = typeof(Aevatar.Foundation.Core.GAgentBase)
             .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)!;
         setId.Invoke(agent, [actorId]);
+        agent.EventPublisher = new NyxIdChatTestSelfEventPublisher(
+            actorId,
+            actorDispatchPort);
         return agent;
     }
 
