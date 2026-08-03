@@ -285,8 +285,20 @@ public static class ServiceCollectionExtensions
             return services;
 
         services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<WorkflowExecutionCurrentStateDocument>,
+            WorkflowExecutionCurrentStateDocumentMetadataProvider>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>,
+            WorkflowRunInsightReportDocumentMetadataProvider>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<WorkflowActorBindingDocument>,
+            WorkflowActorBindingDocumentMetadataProvider>();
+        services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<WorkflowCatalogCurrentStateDocument>,
             WorkflowCatalogCurrentStateDocumentMetadataProvider>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<WorkflowExternalApprovalContinuationDocument>,
+            WorkflowExternalApprovalContinuationDocumentMetadataProvider>();
 
         if (documentProvider.ElasticsearchEnabled)
         {
@@ -318,7 +330,11 @@ public static class ServiceCollectionExtensions
                 INyxIdAuthorizationCatalogVersionRegressionRepairService,
                 NyxIdAuthorizationCatalogVersionRegressionRepairService>();
             TryAddElasticsearchDocumentProjectionStore<UserConfigCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<WorkflowExecutionCurrentStateDocument>(services, configuration, static readModel => readModel.RootActorId);
+            TryAddElasticsearchDocumentProjectionStore<WorkflowRunInsightReportDocument>(services, configuration, static readModel => readModel.RootActorId);
+            TryAddElasticsearchDocumentProjectionStore<WorkflowActorBindingDocument>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<WorkflowCatalogCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<WorkflowExternalApprovalContinuationDocument>(services, configuration, static readModel => readModel.Id);
         }
         else
         {
@@ -340,7 +356,11 @@ public static class ServiceCollectionExtensions
             TryAddInMemoryDocumentProjectionStore<ScheduledDispatchDocument>(services, static readModel => readModel.ScheduleId);
             TryAddInMemoryDocumentProjectionStore<NyxIdAuthorizationCatalogDocument>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<UserConfigCurrentStateDocument>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<WorkflowExecutionCurrentStateDocument>(services, static readModel => readModel.RootActorId);
+            TryAddInMemoryDocumentProjectionStore<WorkflowRunInsightReportDocument>(services, static readModel => readModel.RootActorId);
+            TryAddInMemoryDocumentProjectionStore<WorkflowActorBindingDocument>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<WorkflowCatalogCurrentStateDocument>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<WorkflowExternalApprovalContinuationDocument>(services, static readModel => readModel.Id);
         }
 
         return services;
@@ -368,7 +388,11 @@ public static class ServiceCollectionExtensions
                && HasProjectionDocumentReaderForProvider<ScheduledDispatchDocument>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<NyxIdAuthorizationCatalogDocument>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind)
-               && HasProjectionDocumentReaderForProvider<WorkflowCatalogCurrentStateDocument>(services, providerKind);
+               && HasProjectionDocumentReaderForProvider<WorkflowExecutionCurrentStateDocument>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<WorkflowRunInsightReportDocument>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<WorkflowActorBindingDocument>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<WorkflowCatalogCurrentStateDocument>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<WorkflowExternalApprovalContinuationDocument>(services, providerKind);
     }
 
     private static bool HasAnyProjectionDocumentReader<TReadModel>(IServiceCollection services)
