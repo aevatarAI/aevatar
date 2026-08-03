@@ -83,6 +83,45 @@ public class WorkflowLoopModuleExpressionEvaluationTests
     }
 
     [Fact]
+    public async Task DispatchStep_ForEachShouldDeferSubParameterExpressionsUntilItemDispatch()
+    {
+        const string argumentsTemplate = "{\"path_params\":{\"instance_id\":\"${input}\"}}";
+        var workflow = new WorkflowDefinition
+        {
+            Name = "wf-foreach",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "fetch_each",
+                    Type = "foreach",
+                    Parameters = new Dictionary<string, string>
+                    {
+                        ["sub_step_type"] = "tool_call",
+                        ["sub_param_tool"] = "nyxid_proxy",
+                        ["sub_param_arguments"] = argumentsTemplate,
+                    },
+                },
+            ],
+        };
+
+        var ctx = new CapturingContext();
+        var module = new WorkflowExecutionKernel(workflow, (IWorkflowExecutionStateHost)ctx.Agent);
+
+        await module.HandleAsync(Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = workflow.Name,
+            RunId = "run-foreach",
+            Input = "[\"instance-alpha\",\"instance-beta\"]",
+        }), ctx, CancellationToken.None);
+
+        var request = ctx.Published.Single(x => x.Event is StepRequestEvent).Event
+            .Should().BeOfType<StepRequestEvent>().Subject;
+        request.Parameters["sub_param_arguments"].Should().Be(argumentsTemplate);
+    }
+
+    [Fact]
     public async Task DispatchStep_ShouldPreserveEscapedExpressionOpenInParameters()
     {
         var workflow = new WorkflowDefinition

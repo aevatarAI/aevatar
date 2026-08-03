@@ -1329,9 +1329,11 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         return resolved;
     }
 
-    private static bool ShouldDeferWhileParameterEvaluation(string canonicalStepType, string parameterKey) =>
-        string.Equals(canonicalStepType, "while", StringComparison.OrdinalIgnoreCase) &&
-        (string.Equals(parameterKey, "condition", StringComparison.OrdinalIgnoreCase) ||
+    private static bool ShouldDeferLoopParameterEvaluation(string canonicalStepType, string parameterKey) =>
+        (string.Equals(canonicalStepType, "while", StringComparison.OrdinalIgnoreCase) &&
+         string.Equals(parameterKey, "condition", StringComparison.OrdinalIgnoreCase)) ||
+        ((string.Equals(canonicalStepType, "foreach", StringComparison.OrdinalIgnoreCase) ||
+          string.Equals(canonicalStepType, "while", StringComparison.OrdinalIgnoreCase)) &&
          parameterKey.StartsWith("sub_param_", StringComparison.OrdinalIgnoreCase));
 
     private static bool IsTimeoutError(string? error) =>
@@ -1878,7 +1880,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.Variables["input"] = input;
         foreach (var (key, value) in step.Parameters)
         {
-            if (ShouldDeferWhileParameterEvaluation(canonicalStepType, key))
+            if (ShouldDeferLoopParameterEvaluation(canonicalStepType, key))
             {
                 request.Parameters[key] = value;
                 continue;

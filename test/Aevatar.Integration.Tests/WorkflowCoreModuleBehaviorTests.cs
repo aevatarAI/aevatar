@@ -337,6 +337,37 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
         }
 
         [Fact]
+        public async Task ForEachModule_ShouldEvaluateSubParameterExpressionsForEachItem()
+        {
+            var module = new ForEachModule();
+            var ctx = CreateContext();
+            var request = new StepRequestEvent
+            {
+                StepId = "foreach-arguments",
+                StepType = "foreach",
+                RunId = "run-foreach-arguments",
+                Input = "[\"instance-alpha\",\"instance-beta\"]",
+                Parameters =
+                {
+                    ["sub_step_type"] = "tool_call",
+                    ["sub_param_tool"] = "nyxid_proxy",
+                    ["sub_param_arguments"] = "{\"path_params\":{\"instance_id\":\"${input}\"}}",
+                },
+            };
+
+            await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+
+            var subRequests = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().ToList();
+            subRequests.Should().HaveCount(2);
+            using var firstArguments = JsonDocument.Parse(subRequests[0].Parameters["arguments"]);
+            using var secondArguments = JsonDocument.Parse(subRequests[1].Parameters["arguments"]);
+            firstArguments.RootElement.GetProperty("path_params").GetProperty("instance_id").GetString()
+                .Should().Be("instance-alpha");
+            secondArguments.RootElement.GetProperty("path_params").GetProperty("instance_id").GetString()
+                .Should().Be("instance-beta");
+        }
+
+        [Fact]
         public async Task WhileModule_ShouldIterateAndThenComplete()
         {
             var module = new WhileModule();
