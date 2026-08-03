@@ -483,6 +483,29 @@ public sealed class ToolProviderHttpClientRegistrationTests
     }
 
     [Fact]
+    public void NyxIdProxyTool_ServiceScopeForbidden_ShouldPreserveSafeFailureClassification()
+    {
+        using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.test" });
+        var tool = new NyxIdProxyTool(client);
+        const string arguments =
+            """{"slug":"api-calendar","path":"/events/private?access_token=bearer-secret#details"}""";
+        const string result =
+            """{"error":true,"status":403,"body":"{\"error\":\"api_key_scope_forbidden\",\"error_code\":1042,\"message\":\"service-id-sensitive bearer-secret\"}"}""";
+
+        var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("NYXID_PROXY_SERVICE_SCOPE_FORBIDDEN");
+        receipt.ErrorMessage.Should().Be("The NyxID caller credential is not authorized for this service.");
+        receipt.ResultJson.Should().Contain("NYXID_PROXY_SERVICE_SCOPE_FORBIDDEN");
+        receipt.ToString().Should()
+            .NotContain("service-id-sensitive")
+            .And.NotContain("bearer-secret")
+            .And.NotContain("access_token");
+    }
+
+    [Fact]
     public async Task AddNyxIdTools_WithSshOptIn_DiscoversToolsThatAlwaysRequireApproval()
     {
         var services = new ServiceCollection();
