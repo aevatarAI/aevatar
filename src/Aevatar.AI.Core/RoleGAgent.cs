@@ -180,7 +180,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 ChatToolRecoveryPayloadKind.Arguments,
                 operation.ToolCall.ArgumentsJson,
                 expiresAt,
-                ct).ConfigureAwait(false);
+                ct);
             var intent = new RoleChatToolIntentState
             {
                 OperationId = operation.OperationId,
@@ -215,7 +215,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 ExpectedGeneration = expectedGeneration,
                 Checkpoint = checkpoint,
             },
-            ct).ConfigureAwait(false);
+            ct);
         return prepared;
     }
 
@@ -226,8 +226,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     {
         try
         {
-            await CommitCompletionCoreAsync(operation, result, storedResult: null, ct)
-                .ConfigureAwait(false);
+            await CommitCompletionCoreAsync(operation, result, storedResult: null, ct);
         }
         catch (ChatToolPostExternalCheckpointException)
         {
@@ -285,7 +284,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             operation.SessionId,
             operation.OperationId,
             now,
-            ct).ConfigureAwait(false);
+            ct);
         var checkpoint = storedCheckpoint.Clone();
         var expectedGeneration = checkpoint.Generation;
         checkpoint.Generation = expectedGeneration + 1;
@@ -303,8 +302,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                         result.Receipt?.ErrorCode ?? string.Empty,
                         result.Receipt),
                     expiresAt,
-                    ct)
-                .ConfigureAwait(false);
+                    ct);
             var completion = new RoleChatToolCompletionState
             {
                 OperationId = operation.OperationId,
@@ -365,13 +363,13 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             [
                 checkpointUpdated,
                 new PendingToolApprovalPersistedEvent { Pending = pending },
-            ], ct).ConfigureAwait(false);
+            ], ct);
         }
         else
         {
             await PersistDomainEventAsync(
                 checkpointUpdated,
-                ct).ConfigureAwait(false);
+                ct);
         }
     }
 

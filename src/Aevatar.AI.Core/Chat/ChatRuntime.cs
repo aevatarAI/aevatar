@@ -308,8 +308,8 @@ public sealed class ChatRuntime
 
         var coreTurnTask = agentBridge.WaitForCoreTurnAsync(runToken);
         var middlewareWaitTask = middlewareTask.WaitAsync(runToken);
-        var readyTask = await Task.WhenAny(coreTurnTask, middlewareWaitTask).ConfigureAwait(false);
-        await readyTask.ConfigureAwait(false);
+        var readyTask = await Task.WhenAny(coreTurnTask, middlewareWaitTask);
+        await readyTask;
 
         if (readyTask == coreTurnTask && !runContext.Terminate)
         {
@@ -330,7 +330,7 @@ public sealed class ChatRuntime
                 LLMStreamChunk current;
                 try
                 {
-                    if (!await streamEnumerator.MoveNextAsync().ConfigureAwait(false))
+                    if (!await streamEnumerator.MoveNextAsync())
                         break;
 
                     current = streamEnumerator.Current;
@@ -352,7 +352,7 @@ public sealed class ChatRuntime
         }
 
         agentBridge.CompleteCore();
-        await middlewareTask.ConfigureAwait(false);
+        await middlewareTask;
     }
 
     private async IAsyncEnumerable<LLMStreamChunk> RunChatStreamCoreAsync(
@@ -1145,8 +1145,8 @@ public sealed class ChatRuntime
 
         var coreTurnTask = llmBridge.WaitForCoreTurnAsync(ct);
         var middlewareWaitTask = middlewareTask.WaitAsync(ct);
-        var readyTask = await Task.WhenAny(coreTurnTask, middlewareWaitTask).ConfigureAwait(false);
-        await readyTask.ConfigureAwait(false);
+        var readyTask = await Task.WhenAny(coreTurnTask, middlewareWaitTask);
+        await readyTask;
 
         if (readyTask == coreTurnTask && !llmCallContext.Terminate)
         {
@@ -1172,7 +1172,7 @@ public sealed class ChatRuntime
                 LLMStreamChunk chunk;
                 try
                 {
-                    if (!await providerEnumerator.MoveNextAsync().ConfigureAwait(false))
+                    if (!await providerEnumerator.MoveNextAsync())
                         break;
 
                     chunk = providerEnumerator.Current;
@@ -1225,7 +1225,7 @@ public sealed class ChatRuntime
                 FinishReason = finishReason,
             };
             llmBridge.CompleteCore();
-            await middlewareTask.ConfigureAwait(false);
+            await middlewareTask;
         }
 
         if (llmCallContext.Terminate)
@@ -1279,7 +1279,7 @@ public sealed class ChatRuntime
         await foreach (var _ in StreamLlmRoundAsync(provider, request, roundScope, ct, onToolCallCompleted))
         {
             if (onChunkAsync is not null)
-                await onChunkAsync(_, ct).ConfigureAwait(false);
+                await onChunkAsync(_, ct);
         }
 
         return roundScope.RequireResult();
@@ -1306,7 +1306,7 @@ public sealed class ChatRuntime
             toolContext?.Request.RequestId ?? string.Empty,
             round: 0,
             toolCalls,
-            ct).ConfigureAwait(false);
+            ct);
         foreach (var operation in prepared)
             executor.AddTool(toolState, operation);
 

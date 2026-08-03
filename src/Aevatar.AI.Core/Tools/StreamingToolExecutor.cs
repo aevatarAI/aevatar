@@ -130,7 +130,7 @@ public sealed class StreamingToolExecutor
 
         var prepared = await _checkpointPort.PrepareBatchAsync(
             new ChatToolBatchIntent(sessionId, round, intents),
-            ct).ConfigureAwait(false);
+            ct);
         ValidatePreparedBatch(intents, prepared);
         return prepared;
     }
@@ -189,7 +189,7 @@ public sealed class StreamingToolExecutor
 
         while (true)
         {
-            await CommitFinishedToolsAsync(state, ct).ConfigureAwait(false);
+            await CommitFinishedToolsAsync(state, ct);
             foreach (var result in GetCompletedResults(state))
                 yield return result;
 
@@ -206,7 +206,7 @@ public sealed class StreamingToolExecutor
                 continue;
             }
 
-            await Task.WhenAny(completions).WaitAsync(ct).ConfigureAwait(false);
+            await Task.WhenAny(completions).WaitAsync(ct);
         }
     }
 
@@ -271,8 +271,7 @@ public sealed class StreamingToolExecutor
                 continue;
             }
 
-            await _checkpointPort.CommitCompletionAsync(tracked.Operation, result, ct)
-                .ConfigureAwait(false);
+            await _checkpointPort.CommitCompletionAsync(tracked.Operation, result, ct);
             tracked.CompletionCommitted = true;
         }
     }
@@ -486,7 +485,7 @@ public sealed class StreamingToolExecutor
                     _approvalContinuationMode,
                     _approvalGrant,
                     tracked.Operation.ExecutionAttemptKind),
-                ct).ConfigureAwait(false);
+                ct);
             var toolResult = outcome.ResultJson;
             var receipt = outcome.Receipt;
             var isErrorReceipt = receipt?.Status is AgentToolReceiptStatus.Error or
