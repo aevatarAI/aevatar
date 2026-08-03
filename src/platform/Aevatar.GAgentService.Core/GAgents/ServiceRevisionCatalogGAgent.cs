@@ -56,9 +56,20 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
         ArgumentNullException.ThrowIfNull(command);
         EnsureCatalogIdentity(command.Identity, allowInitialize: false);
         var record = GetRequiredRevision(command.RevisionId);
+        if (record.Status is ServiceRevisionStatus.Prepared or ServiceRevisionStatus.Published)
+        {
+            EnsureReusablePreparedArtifact(record, command.RevisionId);
+            await DispatchInvocationRevisionObservationAsync(CancellationToken.None);
+            return;
+        }
+
+        if (record.Status == ServiceRevisionStatus.Retired)
+            throw new InvalidOperationException($"Revision '{command.RevisionId}' has been retired.");
+
         var spec = record.Spec?.Clone() ?? throw new InvalidOperationException($"Revision '{command.RevisionId}' has no authoring spec.");
         var adapter = GetRequiredAdapter(spec.ImplementationKind);
         var serviceKey = ServiceKeys.Build(command.Identity);
+        PreparedServiceRevisionArtifact assembled;
 
         try
         {
@@ -69,20 +80,7 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
                     Spec = spec,
                 },
                 CancellationToken.None);
-            var assembled = _artifactAssembler.Assemble(prepared);
-
-            await PersistDomainEventAsync(new ServiceRevisionPreparedEvent
-            {
-                Identity = command.Identity.Clone(),
-                RevisionId = command.RevisionId ?? string.Empty,
-                ImplementationKind = assembled.ImplementationKind,
-                ArtifactHash = assembled.ArtifactHash ?? string.Empty,
-                Endpoints = { assembled.Endpoints.Select(x => x.Clone()) },
-                PreparedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-                // Refactor (iter100/cluster-100): Old callers rehydrated this from a process-local artifact store. / New the committed prepared event is the artifact authority.
-                PreparedArtifact = assembled.Clone(),
-            });
-            await DispatchInvocationRevisionObservationAsync(CancellationToken.None);
+            assembled = _artifactAssembler.Assemble(prepared);
         }
         catch (Exception ex)
         {
@@ -96,6 +94,19 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
             await DispatchInvocationRevisionObservationAsync(CancellationToken.None);
             throw;
         }
+
+        await PersistDomainEventAsync(new ServiceRevisionPreparedEvent
+        {
+            Identity = command.Identity.Clone(),
+            RevisionId = command.RevisionId ?? string.Empty,
+            ImplementationKind = assembled.ImplementationKind,
+            ArtifactHash = assembled.ArtifactHash ?? string.Empty,
+            Endpoints = { assembled.Endpoints.Select(x => x.Clone()) },
+            PreparedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            // Refactor (iter100/cluster-100): Old callers rehydrated this from a process-local artifact store. / New the committed prepared event is the artifact authority.
+            PreparedArtifact = assembled.Clone(),
+        });
+        await DispatchInvocationRevisionObservationAsync(CancellationToken.None);
     }
 
     [EventHandler]
@@ -104,8 +115,14 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
         ArgumentNullException.ThrowIfNull(command);
         EnsureCatalogIdentity(command.Identity, allowInitialize: false);
         var record = GetRequiredRevision(command.RevisionId);
-        if (record.Status != ServiceRevisionStatus.Prepared &&
-            record.Status != ServiceRevisionStatus.Published)
+        if (record.Status == ServiceRevisionStatus.Published)
+        {
+            EnsureReusablePreparedArtifact(record, command.RevisionId);
+            await DispatchInvocationRevisionObservationAsync(CancellationToken.None);
+            return;
+        }
+
+        if (record.Status != ServiceRevisionStatus.Prepared)
         {
             throw new InvalidOperationException($"Revision '{command.RevisionId}' must be prepared before publish.");
         }
@@ -197,8 +214,11 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
     {
         var next = state.Clone();
         var record = next.Revisions[evt.RevisionId];
-        record.Status = ServiceRevisionStatus.PreparationFailed;
-        record.FailureReason = evt.FailureReason ?? string.Empty;
+        if (record.Status is not (ServiceRevisionStatus.Prepared or ServiceRevisionStatus.Published or ServiceRevisionStatus.Retired))
+        {
+            record.Status = ServiceRevisionStatus.PreparationFailed;
+            record.FailureReason = evt.FailureReason ?? string.Empty;
+        }
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = BuildEventId(evt.Identity, evt.RevisionId, "prepare-failed");
         return next;
@@ -234,6 +254,17 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
             throw new InvalidOperationException($"Revision '{revisionId}' was not found.");
 
         return record;
+    }
+
+    private static void EnsureReusablePreparedArtifact(ServiceRevisionRecordState record, string revisionId)
+    {
+        if (string.IsNullOrWhiteSpace(record.ArtifactHash) ||
+            record.PreparedArtifact == null ||
+            !string.Equals(record.PreparedArtifact.RevisionId, revisionId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Revision '{revisionId}' is marked prepared but has no matching prepared artifact.");
+        }
     }
 
     private IServiceImplementationAdapter GetRequiredAdapter(ServiceImplementationKind implementationKind)
