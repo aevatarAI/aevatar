@@ -192,6 +192,16 @@ message AgentRunToolCall {
   string arguments_json = 3;
 }
 
+message AgentRunPendingToolAuthorization {
+  AgentRunToolCall call = 1;
+  bool has_requires_approval = 2;
+  bool requires_approval = 3;
+  bool is_read_only = 4;
+  bool is_destructive = 5;
+  string side_effect_kind = 6;
+  string tool_definition_fingerprint = 7;
+}
+
 message AgentRunChatMessage {
   string role = 1;
   string content = 2;
@@ -230,6 +240,8 @@ message AgentRunReplyStepState {
   // tool-stripping / server-default-routing semantics of final_no_tools_step: the recovery retry
   // keeps tools + the user's routing + channel-context and only trims history to the recent floor.
   bool empty_reply_retry = 25;
+  repeated AgentRunPendingToolAuthorization pending_tool_authorizations = 26;
+  bool pending_tool_authorization_consumed = 27;
 }
 
 // Typed LLM IO facts returned by the executor. The run actor reconciles these
@@ -246,6 +258,7 @@ message AgentRunLlmStepResult {
   string finish_reason = 6;
   aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 7;
   bool has_streamed_text_content = 8;
+  repeated AgentRunPendingToolAuthorization pending_tool_authorizations = 10;
 }
 
 // Typed tool IO facts returned after the run actor has reconciled and persisted

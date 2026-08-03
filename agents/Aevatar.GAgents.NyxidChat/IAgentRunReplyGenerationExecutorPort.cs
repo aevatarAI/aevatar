@@ -35,7 +35,8 @@ public sealed record AgentRunAuthorizedToolCallSafety(
     string ToolName,
     string ArgumentsJson,
     AgentToolCallSafety CallSafety,
-    string SideEffectKind);
+    string SideEffectKind,
+    string ToolDefinitionFingerprint = "");
 
 public sealed class AgentRunAuthorizedToolStep
 {
@@ -244,4 +245,5 @@ public sealed record AgentRunReplyStepExecutionRequest(
     NeedsLlmReplyEvent Request,
     AgentRunReplyStepState StepState,
     Func<LLMStreamChunk, CancellationToken, Task>? ReportChunkAsync = null,
-    AgentProfileTurnCatalog? TurnCatalog = null);
+    AgentProfileTurnCatalog? TurnCatalog = null,
+    bool AllowDurableToolAuthorization = false);

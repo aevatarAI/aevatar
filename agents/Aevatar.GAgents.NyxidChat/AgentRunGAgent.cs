@@ -591,20 +591,39 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     private async Task DispatchToolStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
     {
+        var authorizedToolStep = _authorizedToolStep;
+        _authorizedToolStep = null;
+        var durableAuthorizationAvailable = !stepState.PendingToolAuthorizationConsumed &&
+                                            stepState.PendingToolAuthorizations.Count > 0;
+        var matchedTransientAuthorization = authorizedToolStep?.Matches(
+            new AgentRunReplyStepExecutionRequest(
+                stepState.RunId,
+                Id,
+                stepState.Attempt,
+                stepState.NextStepIndex,
+                request.Clone(),
+                stepState.Clone())) == true;
+        var allowDurableAuthorization = authorizedToolStep is null && durableAuthorizationAvailable;
+        if (matchedTransientAuthorization || allowDurableAuthorization)
+        {
+            stepState = MarkPendingToolAuthorizationConsumed(stepState);
+            await PersistStepStateAsync(stepState);
+        }
+
         var executionRequest = new AgentRunReplyStepExecutionRequest(
             stepState.RunId,
             Id,
             stepState.Attempt,
             stepState.NextStepIndex,
             request.Clone(),
-            stepState.Clone());
-        var authorizedToolStep = _authorizedToolStep;
-        _authorizedToolStep = null;
+            stepState.Clone(),
+            AllowDurableToolAuthorization: allowDurableAuthorization);
+
         try
         {
             var continuation = await _generationExecutor.BuildToolStepContinuationAsync(
                 executionRequest,
-                authorizedToolStep,
+                matchedTransientAuthorization ? authorizedToolStep : null,
                 CancellationToken.None);
             await PublishAsync(
                 continuation,
@@ -1108,6 +1127,10 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.PendingToolCalls.Clear();
         if (result.ToolCalls.Count > 0)
             next.PendingToolCalls.AddRange(result.ToolCalls.Select(call => call.Clone()));
+        next.PendingToolAuthorizations.Clear();
+        if (result.PendingToolAuthorizations.Count > 0)
+            next.PendingToolAuthorizations.AddRange(result.PendingToolAuthorizations.Select(authorization => authorization.Clone()));
+        next.PendingToolAuthorizationConsumed = false;
 
         if (!string.IsNullOrEmpty(result.Content) ||
             !string.IsNullOrEmpty(result.ReasoningContent) ||
@@ -1148,6 +1171,13 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         _authorizedToolStep = null;
     }
 
+    private static AgentRunReplyStepState MarkPendingToolAuthorizationConsumed(AgentRunReplyStepState current)
+    {
+        var next = current.Clone();
+        next.PendingToolAuthorizationConsumed = true;
+        return next;
+    }
+
     // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
     //   Old pattern: AgentRunReplyGenerationExecutor cloned/mutated AgentRunReplyStepState and the actor persisted that full state.
     //   New principle: Executor returns typed IO facts; actor applies deterministic step-state transition inside event handling.
@@ -1159,6 +1189,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var next = current.Clone();
         next.NextStepIndex = completedStepIndex;
         next.PendingToolCalls.Clear();
+        next.PendingToolAuthorizations.Clear();
+        next.PendingToolAuthorizationConsumed = false;
         next.Messages.AddRange(result.ResultMessages.Select(message => message.Clone()));
         next.AppendedHistory.AddRange(
             result.ResultMessages.Select(AgentRunReplyStepMappers.ToConversationHistoryEntry));
@@ -1178,6 +1210,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.NextStepIndex = nextStepIndex;
         next.FinalNoToolsStep = true;
         next.PendingToolCalls.Clear();
+        next.PendingToolAuthorizations.Clear();
         next.AccumulatedText = string.Empty;
         next.LastFinishReason = string.Empty;
         next.HasStreamedTextContent = false;
