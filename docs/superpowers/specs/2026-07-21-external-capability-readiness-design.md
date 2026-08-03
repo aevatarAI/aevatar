@@ -258,6 +258,15 @@ still reaches `RUN_ERROR`. If the required action owner cannot be established,
 the run fails closed without fabricating a card and still dispatches the terminal
 continuation.
 
+An explicit request to connect, add, or authorize a named NyxID catalog service
+does carry a stronger product contract. Catalog lookup is discovery only: the
+role may use it to resolve the exact catalog slug, but it must then call
+`nyxid_require_service` and finish from that typed readiness result. It must not
+end the request with catalog prose. When live readiness proves the service is
+missing, the typed authorization requirement is what enters the interactive
+handoff above; neither prose nor the catalog response may fabricate or replace
+that fact.
+
 Durable and scheduled execution reuses
 `ScheduledInvocationAuthorizationPlan -> ScheduledAgentApiKeyIssuer`. Admission
 supplies exact service ids and the stamped durable catalog evidence. Issuance

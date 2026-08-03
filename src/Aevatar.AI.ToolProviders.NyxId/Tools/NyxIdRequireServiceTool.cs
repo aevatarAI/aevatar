@@ -24,7 +24,10 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
     public string Name => "nyxid_require_service";
 
     public string Description =>
-        "Verify through live typed readiness whether a required NyxID service is absent, then emit a blocker only when registration is required.";
+        "Final typed readiness gate for a connect, add, or authorize request after the exact NyxID " +
+        "catalog slug is known. Verify live whether the service is absent, then emit the typed " +
+        "authorization blocker used for the interactive service.connect handoff only when " +
+        "registration is required.";
 
     public string ParametersSchema => """
         {

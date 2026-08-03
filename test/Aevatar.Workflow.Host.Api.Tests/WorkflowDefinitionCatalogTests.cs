@@ -330,6 +330,13 @@ public class WorkflowDefinitionCatalogTests
         role.SystemPrompt.Should().Contain("Do NOT use `aevatar_list_workflows`");
         role.SystemPrompt.Should().Contain("The user does not need to say NyxID for an external capability request");
         role.SystemPrompt.Should().Contain("first look for a matching NyxID connected service");
+        role.SystemPrompt.Should().Contain("For a connect, add, or authorize request");
+        role.SystemPrompt.Should().Contain("`nyxid_catalog` is discovery only");
+        role.SystemPrompt.Should().Contain("then always call `nyxid_require_service`");
+        role.SystemPrompt.Should().Contain("Never end the turn after catalog discovery");
+        role.SystemPrompt.Should().Contain("the authority for the interactive");
+        role.SystemPrompt.Should().Contain("`service.connect` handoff");
+        role.SystemPrompt.Should().Contain("prose and catalog results are not substitutes");
         role.SystemPrompt.Should().Contain("use the admitted per-operation connected-service tool");
         role.SystemPrompt.Should().Contain("Do not call a provider-specific chat tool first");
         role.SystemPrompt.Should().Contain("`list_external_workflow_capabilities`");

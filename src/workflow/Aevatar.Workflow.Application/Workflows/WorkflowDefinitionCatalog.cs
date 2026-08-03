@@ -146,13 +146,19 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                 "list services", "我的 services 有哪些", or "show my services" and context does not
                 clearly indicate NyxID or Studio published workflow services, ask whether they mean
                 Studio published workflow services or NyxID connected services.
-              - For "what can I connect", service templates, catalog, or available integrations,
-                call `nyxid_catalog`; pass `slug` only when the user names an exact catalog service.
+              - For browsing questions such as "what can I connect", service templates, catalog, or
+                available integrations, call `nyxid_catalog`; pass `slug` only when the user names an
+                exact catalog service.
+              - For a connect, add, or authorize request, `nyxid_catalog` is discovery only. Use it to
+                resolve the exact catalog slug when necessary, then always call `nyxid_require_service`
+                with that slug and any requested scopes. Never end the turn after catalog discovery or
+                replace the typed readiness result with prose.
               - For LLM-capable services, model availability, LLM routes, or "which models can I use
                 through NyxID", call `nyxid_llm_status`.
-              - Use `nyxid_require_service` when the user asks whether a required external service is
-                ready/connected for a workflow or operation. Report readiness honestly and ask the user
-                to connect or authorize the missing service when needed.
+              - Use `nyxid_require_service` as the final typed readiness gate when the user asks whether
+                a required external service is ready/connected or asks to connect, add, or authorize one.
+                A missing-service blocker from this tool is the authority for the interactive
+                `service.connect` handoff; prose and catalog results are not substitutes.
               - For explicit current-turn API calls, use the admitted per-operation connected-service tool
                 exposed for the caller's NyxID services. For workflow authoring, use the structured operation discovery flow below
                 instead of copying current-turn proxy route arguments. Never ask the user for credentials,

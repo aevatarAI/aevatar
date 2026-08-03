@@ -123,6 +123,14 @@ public sealed class ToolProviderHttpClientRegistrationTests
         names.Should().NotContain("nyxid_proxy_execute");
         tools.Should().ContainSingle(tool => tool is NyxIdProxyTool);
         tools.Should().ContainSingle(tool => tool is NyxIdRequireServiceTool);
+        tools.Single(tool => tool is NyxIdCatalogTool).Description.Should()
+            .Contain("Discovery only")
+            .And.Contain("then call nyxid_require_service")
+            .And.Contain("do not finish the request with a catalog result");
+        tools.Single(tool => tool is NyxIdRequireServiceTool).Description.Should()
+            .Contain("Final typed readiness gate")
+            .And.Contain("connect, add, or authorize")
+            .And.Contain("interactive service.connect handoff");
     }
 
     [Fact]
