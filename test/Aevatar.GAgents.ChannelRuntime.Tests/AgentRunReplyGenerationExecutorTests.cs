@@ -567,13 +567,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var executor = CreateToolEnabledExecutor(
             registeredTool,
             new ToolCallProvider(registeredTool.Name),
-            toolContext: AgentToolExecutionContext.Empty with
-            {
-                ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["tool_safety_mode"] = "read",
-                },
-            });
+            toolContext: BuildSafetyModeToolContext(SafetyMode.ReadOnly));
         var llmWorkItem = BuildToolEnabledWorkItem();
         var execution = await executor.BuildLlmStepExecutionAsync(
             llmWorkItem,
@@ -588,6 +582,93 @@ public sealed class AgentRunReplyGenerationExecutorTests
         continuation.ToolStepResult.Should().NotBeNull();
         continuation.ToolStepResult.ResultMessages.Should().ContainSingle();
         registeredTool.ExecuteCount.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(DefinitionDrift.Description)]
+    [InlineData(DefinitionDrift.ParametersSchema)]
+    public async Task BuildToolStepContinuation_WhenToolDefinitionDrifts_ShouldRejectBeforeToolExecution(
+        DefinitionDrift drift)
+    {
+        var registeredTool = new DriftableDefinitionTool("use_skill");
+        var executor = CreateToolEnabledExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name));
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildDurablyAuthorizedToolStepWorkItem(llmWorkItem, execution.Continuation);
+        registeredTool.Apply(drift);
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            authorizedToolStep: null,
+            CancellationToken.None);
+
+        continuation.ToolStepResult.Should().NotBeNull();
+        continuation.ToolStepResult.ResultMessages.Should().OnlyContain(static message =>
+            message.Content.Contains("not authorized", StringComparison.Ordinal));
+        registeredTool.ExecuteCount.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(SafetyMode.ApprovalUnspecified)]
+    [InlineData(SafetyMode.ApprovalRequired)]
+    [InlineData(SafetyMode.Destructive)]
+    [InlineData(SafetyMode.ReadOnlyChanged)]
+    [InlineData(SafetyMode.SideEffectChanged)]
+    public async Task BuildToolStepContinuation_WhenCurrentSafetyDrifts_ShouldRejectBeforeToolExecution(
+        SafetyMode currentSafety)
+    {
+        var registeredTool = new ContextClassifiedTool("use_skill");
+        var executor = CreateToolEnabledExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name),
+            toolContext: BuildSafetyModeToolContext(SafetyMode.ReadOnly));
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildDurablyAuthorizedToolStepWorkItem(llmWorkItem, execution.Continuation);
+        registeredTool.SafetyOverride = currentSafety;
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            authorizedToolStep: null,
+            CancellationToken.None);
+
+        continuation.ToolStepResult.Should().NotBeNull();
+        continuation.ToolStepResult.ResultMessages.Should().OnlyContain(static message =>
+            message.Content.Contains("not authorized", StringComparison.Ordinal));
+        registeredTool.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BuildToolStepContinuation_WhenDurableAuthorizationWasConsumed_ShouldRejectBeforeToolExecution()
+    {
+        var registeredTool = new CountingTool("use_skill");
+        var executor = CreateToolEnabledExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name));
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildToolStepWorkItem(llmWorkItem, execution.Continuation);
+        var consumedStepState = toolWorkItem.StepState.Clone();
+        consumedStepState.PendingToolAuthorizationConsumed = true;
+        toolWorkItem = toolWorkItem with { StepState = consumedStepState };
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            authorizedToolStep: null,
+            CancellationToken.None);
+
+        continuation.ToolStepResult.Should().NotBeNull();
+        continuation.ToolStepResult.ResultMessages.Should().OnlyContain(static message =>
+            message.Content.Contains("not authorized", StringComparison.Ordinal));
+        registeredTool.ExecuteCount.Should().Be(0);
     }
 
     [Theory]
@@ -786,6 +867,15 @@ public sealed class AgentRunReplyGenerationExecutorTests
             request,
             stepState);
     }
+
+    private static AgentToolExecutionContext BuildSafetyModeToolContext(SafetyMode mode) =>
+        AgentToolExecutionContext.Empty with
+        {
+            ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["tool_safety_mode"] = mode.ToString(),
+            },
+        };
 
     private static NyxIdChatOperationKey BuildOperationKey(string stepId, string operationId) =>
         new()
@@ -997,30 +1087,116 @@ public sealed class AgentRunReplyGenerationExecutorTests
         }
     }
 
+    public enum DefinitionDrift
+    {
+        Description,
+        ParametersSchema,
+    }
+
+    private sealed class DriftableDefinitionTool : IAgentTool
+    {
+        private readonly string _name;
+
+        public DriftableDefinitionTool(string name)
+        {
+            _name = name;
+            Description = name;
+        }
+
+        public int ExecuteCount { get; private set; }
+        public string Name => _name;
+        public string Description { get; private set; }
+        public string ParametersSchema { get; private set; } = "{}";
+
+        public AgentToolCallSafety GetCallSafety(string argumentsJson) => new(
+            RequiresApproval: false,
+            IsReadOnly: true,
+            IsDestructive: false);
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ExecuteCount++;
+            return Task.FromResult("{}");
+        }
+
+        public void Apply(DefinitionDrift drift)
+        {
+            if (drift == DefinitionDrift.Description)
+            {
+                Description = "changed definition";
+                return;
+            }
+
+            ParametersSchema = "{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\"}}}";
+        }
+    }
+
+    public enum SafetyMode
+    {
+        ReadOnly,
+        ApprovalUnspecified,
+        ApprovalRequired,
+        Destructive,
+        ReadOnlyChanged,
+        SideEffectChanged,
+    }
+
     private sealed class ContextClassifiedTool(string name) : IAgentTool
     {
         public int ExecuteCount { get; private set; }
+        public SafetyMode? SafetyOverride { get; set; }
         public string Name => name;
         public string Description => name;
         public string ParametersSchema => "{}";
-        public string SideEffectKind => "context.classified";
+        public string SideEffectKind => ResolveSafetyMode() == SafetyMode.SideEffectChanged
+            ? "context.changed"
+            : "context.classified";
 
         public AgentToolCallSafety GetCallSafety(string argumentsJson)
         {
-            var isReadMode = AgentToolRequestContext.Current?.ExternalMetadata.TryGetValue(
-                "tool_safety_mode",
-                out var mode) == true &&
-                string.Equals(mode, "read", StringComparison.Ordinal);
-            return new AgentToolCallSafety(
-                RequiresApproval: false,
-                IsReadOnly: isReadMode,
-                IsDestructive: !isReadMode);
+            return ResolveSafetyMode() switch
+            {
+                SafetyMode.ApprovalUnspecified => new AgentToolCallSafety(
+                    RequiresApproval: null,
+                    IsReadOnly: true,
+                    IsDestructive: false),
+                SafetyMode.ApprovalRequired => new AgentToolCallSafety(
+                    RequiresApproval: true,
+                    IsReadOnly: true,
+                    IsDestructive: false),
+                SafetyMode.Destructive => new AgentToolCallSafety(
+                    RequiresApproval: false,
+                    IsReadOnly: false,
+                    IsDestructive: true),
+                SafetyMode.ReadOnlyChanged => new AgentToolCallSafety(
+                    RequiresApproval: false,
+                    IsReadOnly: false,
+                    IsDestructive: false),
+                _ => new AgentToolCallSafety(
+                    RequiresApproval: false,
+                    IsReadOnly: true,
+                    IsDestructive: false),
+            };
         }
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
             ExecuteCount++;
             return Task.FromResult("{}");
+        }
+
+        private SafetyMode ResolveSafetyMode()
+        {
+            if (SafetyOverride is { } safetyOverride)
+                return safetyOverride;
+
+            if (AgentToolRequestContext.Current?.ExternalMetadata.TryGetValue("tool_safety_mode", out var mode) == true &&
+                Enum.TryParse<SafetyMode>(mode, ignoreCase: false, out var parsed))
+            {
+                return parsed;
+            }
+
+            return SafetyMode.Destructive;
         }
     }
 

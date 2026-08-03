@@ -1167,6 +1167,29 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleNextToolStepAsync_AfterActorRestart_ShouldExecuteWhenDurableAuthorizationSurvivesProtobufRoundTrip()
+    {
+        var executor = new CapabilityTrackingReplyGenerationExecutor();
+        var publisher = new RecordingSelfEventPublisher();
+        var restartedRuntime = CreateCapabilityTestAgent(executor, publisher, nextStepIndex: 2);
+        restartedRuntime.State.GenerationStep!.PendingToolCalls.Add(
+            CapabilityTrackingReplyGenerationExecutor.ToolCall.Clone());
+        restartedRuntime.State.GenerationStep.PendingToolAuthorizations.Add(
+            CapabilityTrackingReplyGenerationExecutor.Authorization.Clone());
+        SetState(restartedRuntime, RoundTrip(restartedRuntime.State));
+        var toolRequest = BuildCapabilityToolStepRequest(
+            runId: restartedRuntime.State.RunId,
+            correlationId: restartedRuntime.State.CorrelationId,
+            stepIndex: 2);
+
+        await restartedRuntime.HandleNextToolStepAsync(toolRequest);
+
+        executor.ToolStepAuthorizationPresence.Should().Equal(false);
+        executor.DurableAuthorizationAllowed.Should().Equal(true);
+        executor.ToolExecutionCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task HandleNextToolStepAsync_AfterActorRestart_ShouldRejectWhenDurableAuthorizationIsMissing()
     {
         var executor = new CapabilityTrackingReplyGenerationExecutor();
@@ -1204,6 +1227,7 @@ public sealed class AgentRunGAgentTests
         await restartedRuntime.HandleNextToolStepAsync(toolRequest);
 
         executor.ToolStepAuthorizationPresence.Should().Equal(false);
+        executor.DurableAuthorizationAllowed.Should().Equal(false);
         executor.ToolExecutionCount.Should().Be(0);
     }
 
@@ -3786,6 +3810,9 @@ public sealed class AgentRunGAgentTests
         throw new InvalidOperationException("Unable to set agent id via reflection.");
     }
 
+    private static AgentRunGAgentState RoundTrip(AgentRunGAgentState state) =>
+        AgentRunGAgentState.Parser.ParseFrom(state.ToByteArray());
+
     private static void SetState(AgentRunGAgent agent, AgentRunGAgentState state)
     {
         var stateField = typeof(Aevatar.Foundation.Core.GAgentBase<AgentRunGAgentState>).GetField(
@@ -4086,6 +4113,7 @@ public sealed class AgentRunGAgentTests
         public int ToolExecutionCount { get; private set; }
 
         public List<bool> ToolStepAuthorizationPresence { get; } = [];
+        public List<bool> DurableAuthorizationAllowed { get; } = [];
 
         public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
             AgentRunReplyGenerationExecutionRequest request,
@@ -4129,6 +4157,7 @@ public sealed class AgentRunGAgentTests
             CancellationToken ct)
         {
             ToolStepAuthorizationPresence.Add(authorizedToolStep is not null);
+            DurableAuthorizationAllowed.Add(request.AllowDurableToolAuthorization);
             var result = authorizedToolStep?.Matches(request) == true
                 ? await authorizedToolStep.ExecuteAsync(ct)
                 : ExecuteDurableAuthorizationIfMatched(request);

@@ -34,7 +34,8 @@ public sealed record AgentRunAuthorizedToolCallSafety(
     string ToolName,
     string ArgumentsJson,
     AgentToolCallSafety CallSafety,
-    string SideEffectKind);
+    string SideEffectKind,
+    string ToolDefinitionFingerprint = "");
 
 public sealed class AgentRunAuthorizedToolStep
 {

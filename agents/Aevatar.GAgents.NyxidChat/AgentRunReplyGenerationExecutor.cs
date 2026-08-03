@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -330,12 +331,15 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             if (tool is null)
                 continue;
 
+            var argumentsJson = call.ArgumentsJson ?? string.Empty;
+            var callSafety = tool.GetCallSafety(argumentsJson);
             snapshots.Add(new AgentRunAuthorizedToolCallSafety(
                 call.Id ?? string.Empty,
                 call.Name ?? string.Empty,
-                call.ArgumentsJson ?? string.Empty,
-                tool.GetCallSafety(call.ArgumentsJson ?? string.Empty),
-                tool.SideEffectKind ?? string.Empty));
+                argumentsJson,
+                callSafety,
+                tool.SideEffectKind ?? string.Empty,
+                BuildToolDefinitionFingerprint(tool, callSafety)));
         }
 
         return snapshots;
@@ -356,6 +360,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             IsReadOnly = source.CallSafety.IsReadOnly,
             IsDestructive = source.CallSafety.IsDestructive,
             SideEffectKind = source.SideEffectKind ?? string.Empty,
+            ToolDefinitionFingerprint = source.ToolDefinitionFingerprint ?? string.Empty,
         };
 
     private async Task<LLMRequest> MaterializeFileRefMessagesAsync(LLMRequest request, CancellationToken ct)
@@ -578,7 +583,25 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                authorization.RequiresApproval == (currentSafety.RequiresApproval ?? false) &&
                authorization.IsReadOnly == currentSafety.IsReadOnly &&
                authorization.IsDestructive == currentSafety.IsDestructive &&
-               string.Equals(authorization.SideEffectKind, tool.SideEffectKind ?? string.Empty, StringComparison.Ordinal);
+               string.Equals(authorization.SideEffectKind, tool.SideEffectKind ?? string.Empty, StringComparison.Ordinal) &&
+               string.Equals(
+                   authorization.ToolDefinitionFingerprint,
+                   BuildToolDefinitionFingerprint(tool, currentSafety),
+                   StringComparison.Ordinal);
+    }
+
+    private static string BuildToolDefinitionFingerprint(IAgentTool tool, AgentToolCallSafety callSafety)
+    {
+        var canonical = string.Join('\n',
+            tool.Name ?? string.Empty,
+            tool.Description ?? string.Empty,
+            tool.ParametersSchema ?? string.Empty,
+            tool.SideEffectKind ?? string.Empty,
+            callSafety.RequiresApproval.HasValue ? "1" : "0",
+            callSafety.RequiresApproval == true ? "1" : "0",
+            callSafety.IsReadOnly ? "1" : "0",
+            callSafety.IsDestructive ? "1" : "0");
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
     }
 
     private static AgentRunToolStepResult BuildUnauthorizedToolStepResult(IReadOnlyList<ToolCall> toolCalls)

@@ -199,6 +199,7 @@ message AgentRunPendingToolAuthorization {
   bool is_read_only = 4;
   bool is_destructive = 5;
   string side_effect_kind = 6;
+  string tool_definition_fingerprint = 7;
 }
 
 message AgentRunChatMessage {
