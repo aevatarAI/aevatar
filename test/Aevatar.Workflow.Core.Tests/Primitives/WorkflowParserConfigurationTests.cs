@@ -372,6 +372,28 @@ public class WorkflowParserConfigurationTests
     }
 
     [Fact]
+    public void Parse_WhenTemplateTransformProvided_ShouldLiftTypedSpecAndPreserveMap()
+    {
+        var yaml = """
+            name: template_transform_lift
+            roles: []
+            steps:
+              - id: render_report
+                type: transform
+                op: template
+                template: 'count={{ data.items.size }}'
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+        var step = workflow.Steps.Should().ContainSingle().Subject;
+
+        step.Parameters["op"].Should().Be("template");
+        step.Parameters["template"].Should().Be("count={{ data.items.size }}");
+        step.TransformOperation.Should().NotBeNull();
+        step.TransformOperation!.Kind.ToString().Should().Be("Template");
+    }
+
+    [Fact]
     public void Parse_WhenBranchesProvidedAsList_ShouldNormalizeToDictionary()
     {
         var yaml = """

@@ -354,7 +354,7 @@
     <!-- ════════════════════════════════════════════════════════════ -->
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageVersion Include="YamlDotNet" Version="16.3.0" />
-    <PackageVersion Include="Scriban" Version="6.5.2" />
+    <PackageVersion Include="Scriban" Version="7.2.6" />
     <PackageVersion Include="HtmlAgilityPack" Version="1.12.4" />
     <PackageVersion Include="Supabase" Version="1.1.1" />
     <PackageVersion Include="UglyToad.PdfPig" Version="1.7.0-custom-5" />

@@ -163,6 +163,8 @@ YAML 的 exact capability 规则：
 - 常用参数：`op`、`n`、`separator`；当 `op=json_extract` 时，还可用 `path`、`field`、`sort_by`、`order`。
 - 金额级确定性操作：`sum`、`subtract`、`multiply`、`divide`、`round`、`min`、`max`、`group_by`。这些操作会被解析为 typed `transform_operation`，同时保留 legacy `parameters` map；识别到的数值/分组操作解析或运行失败时发布失败的 `StepCompletedEvent`，不会包装成成功文本。
 - `group_by` v1 只接受 JSON array of objects，支持单个 `key`/`group_by`、单个 `value`/`value_field`，`aggregate` 仅支持 `sum`、`count`、`avg`。这不是脚本、表达式、SQL 或 LLM 数据处理入口。
+- `template` 接受 bounded JSON 输入和 typed `template` program，用于确定性的多集合聚合与 JSON/report rendering。它只暴露 `append`、`date`、`get`、`json`、`keys`、`number`、`round`；默认 builtins、CLR member、template loader、文件和网络都不可用，输入对象/数组只读。模板、输入、输出分别限制为 256 KiB、4 MiB、4 MiB，loop 和 mutable template array 最多 10,000 项，递归深度最多 64；任何越界、缺失变量、输入 mutation、parse 或 evaluation error 都 fail closed。
+- typed `template` program 不参与 workflow `${...}` expansion；只有传入 transform step 的 JSON 数据可变，避免上游数据变成模板代码。
 - `rss_extract_items` 是唯一 RSS/Atom 解析 op 名称，不提供 `rss_extract` alias。输入为 RSS 2.0 或 Atom XML，输出 JSON array，每个 item 只包含 `source_id`、`source_url`、`id`、`title`、`link`、`published_at`、`summary`。
 
 ```yaml
@@ -196,6 +198,17 @@ steps:
       value: amount
       aggregate: sum
       precision: "2"
+```
+
+```yaml
+steps:
+  - id: summarize_items
+    type: transform
+    op: template
+    template: >-
+      {{ total = 0 }}
+      {{ for item in data.items; total = total + number(item.amount); end }}
+      {{ json({ count: data.items.size, total: round(total, 2) }) }}
 ```
 
 ```yaml

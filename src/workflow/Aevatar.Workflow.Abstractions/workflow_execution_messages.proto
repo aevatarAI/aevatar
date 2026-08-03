@@ -495,6 +495,7 @@ enum TransformOperationKind {
   TRANSFORM_OPERATION_KIND_MIN = 6;
   TRANSFORM_OPERATION_KIND_MAX = 7;
   TRANSFORM_OPERATION_KIND_GROUP_BY = 8;
+  TRANSFORM_OPERATION_KIND_TEMPLATE = 9;
 }
 
 enum TransformAggregateKind {
@@ -510,6 +511,7 @@ message TransformOperationSpec {
   string key = 3;
   string value = 4;
   TransformAggregateKind aggregate = 5;
+  string template = 6;
 }
 
 enum WorkflowHumanApprovalTimeoutDefaultDecision {

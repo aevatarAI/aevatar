@@ -31,7 +31,7 @@ public sealed class StepDefinition
     public ExternalWorkflowCapabilitySelector? Capability { get; init; }
 
     /// <summary>
-    /// Typed deterministic transform operation for bounded numeric and grouping transforms.
+    /// Typed deterministic transform operation for bounded numeric, grouping, and template transforms.
     /// </summary>
     public TransformOperationSpec? TransformOperation { get; init; }
 
