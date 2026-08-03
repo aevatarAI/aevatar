@@ -1758,6 +1758,67 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleChat_ShouldContinueWithActionAndTerminal_AfterUnknownRawObservedPayload()
+    {
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = async (_, emitAsync, onAcceptedAsync, ct) =>
+            {
+                var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "studio", "cmd-1", "corr-1");
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+                await emitAsync(BuildUnknownRawObservedFrame(), ct);
+                await emitAsync(new WorkflowRunEventEnvelope
+                {
+                    Custom = new WorkflowCustomEventPayload
+                    {
+                        Name = "nyxid.action.request",
+                        Payload = Any.Pack(new WorkflowInteractiveActionRequestWirePayload
+                        {
+                            SchemaVersion = 4,
+                            ActorId = "nyxid-chat-alpha",
+                            OriginTurnId = "turn-alpha",
+                            TaskId = "task-alpha",
+                            StepId = "step-alpha",
+                            ActionRequestId = "action-alpha",
+                            Action = "service.connect",
+                        }),
+                    },
+                }, ct);
+                await emitAsync(new WorkflowRunEventEnvelope
+                {
+                    RunError = new WorkflowRunErrorEventPayload
+                    {
+                        Code = "AUTHORIZATION_REQUIRED",
+                        Message = "Connect Twitter to continue.",
+                    },
+                }, ct);
+                return WorkflowChatRunInteractionResult.Success(
+                    receipt,
+                    new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
+                        WorkflowProjectionCompletionStatus.Failed,
+                        true));
+            },
+        };
+        var http = CreateHttpContext();
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "connect twitter" },
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        var rawIndex = body.IndexOf("event-unknown", StringComparison.Ordinal);
+        var actionIndex = body.IndexOf("nyxid.action.request", StringComparison.Ordinal);
+        var terminalIndex = body.IndexOf("AUTHORIZATION_REQUIRED", StringComparison.Ordinal);
+        rawIndex.Should().BeGreaterThanOrEqualTo(0);
+        actionIndex.Should().BeGreaterThan(rawIndex);
+        terminalIndex.Should().BeGreaterThan(actionIndex);
+        body.Should().NotContain("WORKFLOW_REVISION_INCOMPATIBLE");
+    }
+
+    [Fact]
     public async Task HandleChat_ShouldReturnServerError_WhenExecutionThrowsBeforeStreamStarts()
     {
         var http = CreateHttpContext();
@@ -2849,6 +2910,32 @@ public sealed class ChatEndpointsInternalTests
                     CorrelationId = "corr-1",
                     StateVersion = 2,
                     Payload = Any.Pack(payload),
+                }),
+            },
+        };
+    }
+
+    private static WorkflowRunEventEnvelope BuildUnknownRawObservedFrame()
+    {
+        const string typeUrl =
+            "type.googleapis.com/aevatar.gagents.nyxid_chat.NyxIdChatConversationCreationStartedEvent";
+        return new WorkflowRunEventEnvelope
+        {
+            Custom = new WorkflowCustomEventPayload
+            {
+                Name = "aevatar.raw.observed",
+                Payload = Any.Pack(new WorkflowObservedEnvelopeCustomPayload
+                {
+                    EventId = "event-unknown",
+                    PayloadTypeUrl = typeUrl,
+                    PublisherActorId = "nyxid-chat-alpha",
+                    CorrelationId = "corr-1",
+                    StateVersion = 13,
+                    Payload = new Any
+                    {
+                        TypeUrl = typeUrl,
+                        Value = Google.Protobuf.ByteString.CopyFromUtf8("opaque-protobuf"),
+                    },
                 }),
             },
         };

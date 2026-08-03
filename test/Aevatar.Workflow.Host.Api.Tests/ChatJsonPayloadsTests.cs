@@ -4,6 +4,7 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -116,6 +117,44 @@ public sealed class ChatJsonPayloadsTests
         payload.GetProperty("maxHistoryMessages").GetInt32().Should().Be(12);
         payload.GetProperty("eventModules").GetString().Should().Be("module-a");
         payload.GetProperty("eventRoutes").GetString().Should().Be("route-a");
+    }
+
+    [Fact]
+    public void Format_ShouldPreserveRawObservedIdentity_WhenNestedPayloadDescriptorIsUnavailable()
+    {
+        const string typeUrl =
+            "type.googleapis.com/aevatar.gagents.nyxid_chat.NyxIdChatConversationCreationStartedEvent";
+        var json = ChatJsonPayloads.Format(new WorkflowRunEventEnvelope
+        {
+            Custom = new WorkflowCustomEventPayload
+            {
+                Name = "aevatar.raw.observed",
+                Payload = Any.Pack(new WorkflowObservedEnvelopeCustomPayload
+                {
+                    EventId = "event-unknown",
+                    PayloadTypeUrl = typeUrl,
+                    PublisherActorId = "nyxid-chat-alpha",
+                    CorrelationId = "correlation-alpha",
+                    StateVersion = 13,
+                    Payload = new Any
+                    {
+                        TypeUrl = typeUrl,
+                        Value = ByteString.CopyFromUtf8("opaque-protobuf"),
+                    },
+                }),
+            },
+        });
+
+        using var document = JsonDocument.Parse(json);
+        var custom = document.RootElement.GetProperty("custom");
+        custom.GetProperty("name").GetString().Should().Be("aevatar.raw.observed");
+        var observed = custom.GetProperty("payload");
+        observed.GetProperty("eventId").GetString().Should().Be("event-unknown");
+        observed.GetProperty("payloadTypeUrl").GetString().Should().Be(typeUrl);
+        observed.GetProperty("publisherActorId").GetString().Should().Be("nyxid-chat-alpha");
+        observed.GetProperty("correlationId").GetString().Should().Be("correlation-alpha");
+        observed.GetProperty("stateVersion").GetString().Should().Be("13");
+        observed.TryGetProperty("payload", out _).Should().BeFalse();
     }
 
     [Fact]
