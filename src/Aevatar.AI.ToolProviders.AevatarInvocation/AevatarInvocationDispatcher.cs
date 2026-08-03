@@ -398,11 +398,19 @@ public sealed class AevatarInvocationDispatcher
 
         var request = parsed.Value!;
         var wait = ResolveWait(request.Wait);
+        var toolContext = AgentToolRequestContext.Current;
+        var isManagedWorkflowRuntime = TryGetManagedWorkflowRuntimeContext(toolContext, out var workflowRuntimeContext);
+        var workflowInputParts = request.Inputs == null || isManagedWorkflowRuntime
+            ? null
+            : ToWorkflowInputParts(request.Inputs, toolContext);
         var error = ProtoToolArguments.Require(request.WorkflowId, "workflow_id", "workflow_id is required.") ??
-                    ProtoToolArguments.RequirePayload(request.Inputs, "inputs");
+                    (isManagedWorkflowRuntime
+                        ? ProtoToolArguments.RequirePayload(request.Inputs, "inputs")
+                        : RequireWorkflowInputs(request.Inputs, workflowInputParts));
         if (error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(error), error);
 
+        var inputs = request.Inputs!;
         var workflowYamls = request.WorkflowYamls.Count == 0
             ? null
             : request.WorkflowYamls
@@ -411,7 +419,7 @@ public sealed class AevatarInvocationDispatcher
                 .ToArray();
         var workflowName = request.WorkflowId.Trim();
         var actorId = string.IsNullOrWhiteSpace(request.ActorId) ? null : request.ActorId.Trim();
-        if (TryGetManagedWorkflowRuntimeContext(AgentToolRequestContext.Current, out var workflowRuntimeContext))
+        if (isManagedWorkflowRuntime)
         {
             var managedScope = ResolveCallerScope(requireOwner: false);
             if (managedScope.Error != null)
@@ -449,7 +457,7 @@ public sealed class AevatarInvocationDispatcher
         if (callerCredential.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(callerCredential.Error), callerCredential.Error);
 
-        var metadata = BuildPayloadHeaders(request.Inputs.Headers);
+        var metadata = BuildPayloadHeaders(inputs.Headers);
         var sourceResolution = await ResolveWorkflowStartSourceAsync(
                 scope.ScopeId,
                 workflowName,
@@ -461,11 +469,11 @@ public sealed class AevatarInvocationDispatcher
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(sourceResolution.Error), sourceResolution.Error);
 
         var command = new WorkflowChatRunRequest(
-            Prompt: request.Inputs.Prompt,
+            Prompt: inputs.Prompt,
             Source: sourceResolution.Source!,
             ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             SessionId: ResolveSessionId(),
-            InputParts: ToWorkflowInputParts(request.Inputs),
+            InputParts: workflowInputParts,
             Metadata: metadata,
             ScopeId: scope.ScopeId,
             LlmControl: ToWorkflowLlmControl(AgentToolRequestContext.Current),
@@ -2086,6 +2094,50 @@ public sealed class AevatarInvocationDispatcher
         }).ToArray();
     }
 
+    private static InvocationToolError? RequireWorkflowInputs(
+        InvocationPayload? payload,
+        IReadOnlyList<WorkflowChatInputPart>? inputParts)
+    {
+        if (payload == null)
+        {
+            return new InvocationToolError
+            {
+                Code = "invalid_arguments",
+                Message = "inputs is required.",
+                Field = "inputs",
+            };
+        }
+
+        if (string.IsNullOrWhiteSpace(payload.Prompt) && inputParts is not { Count: > 0 })
+        {
+            return new InvocationToolError
+            {
+                Code = "invalid_arguments",
+                Message = "inputs.prompt or inputs.input_parts is required.",
+                Field = "inputs",
+            };
+        }
+
+        return null;
+    }
+
+    private static IReadOnlyList<WorkflowChatInputPart>? ToWorkflowInputParts(
+        InvocationPayload payload,
+        AgentToolExecutionContext? toolContext)
+    {
+        var explicitInputParts = ToWorkflowInputParts(payload);
+        if (HasExplicitFileRef(payload))
+            return explicitInputParts;
+
+        var ambientFileParts = ToAmbientWorkflowFileInputParts(toolContext);
+        if (ambientFileParts == null)
+            return explicitInputParts;
+
+        return explicitInputParts == null
+            ? ambientFileParts
+            : explicitInputParts.Concat(ambientFileParts).ToArray();
+    }
+
     private static IReadOnlyList<WorkflowChatInputPart>? ToWorkflowInputParts(InvocationPayload payload)
     {
         if (payload.InputParts.Count == 0)
@@ -2110,6 +2162,43 @@ public sealed class AevatarInvocationDispatcher
             FileRef = ToWorkflowFileRef(part.FileRef),
         }).ToArray();
     }
+
+    private static bool HasExplicitFileRef(InvocationPayload payload) =>
+        payload.InputParts.Any(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef));
+
+    private static IReadOnlyList<WorkflowChatInputPart>? ToAmbientWorkflowFileInputParts(
+        AgentToolExecutionContext? toolContext)
+    {
+        if (toolContext is null || toolContext.InputFileRefs.Count == 0)
+            return null;
+
+        var parts = new List<WorkflowChatInputPart>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var fileRef in toolContext.InputFileRefs)
+        {
+            if (!HasFileRefIdentity(fileRef))
+                continue;
+
+            var key = FileRefIdentityKey(fileRef);
+            if (!seen.Add(key))
+                continue;
+
+            parts.Add(new WorkflowChatInputPart
+            {
+                Kind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.File,
+                MediaType = EmptyToNull(fileRef.MediaType),
+                Name = EmptyToNull(fileRef.FileName),
+                FileRef = ToWorkflowFileRef(fileRef),
+            });
+        }
+
+        return parts.Count == 0 ? null : parts;
+    }
+
+    private static string FileRefIdentityKey(Aevatar.AI.Abstractions.ChatFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId)
+            ? $"artifact:{fileRef.ArtifactId.Trim()}"
+            : $"file:{fileRef.FileId?.Trim()}";
 
     private static FileArtifactRef? ToWorkflowFileRef(Aevatar.AI.Abstractions.ChatFileRef? fileRef) =>
         fileRef is null || !HasFileRefIdentity(fileRef)
