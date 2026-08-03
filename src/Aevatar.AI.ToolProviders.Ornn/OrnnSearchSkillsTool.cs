@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.Skills;
 
 namespace Aevatar.AI.ToolProviders.Ornn;
 
@@ -8,8 +9,15 @@ namespace Aevatar.AI.ToolProviders.Ornn;
 public sealed class OrnnSearchSkillsTool : IAgentTool
 {
     private readonly OrnnSkillClient _client;
+    private readonly IRemoteSkillAccessTokenResolver? _remoteAccessTokenResolver;
 
-    public OrnnSearchSkillsTool(OrnnSkillClient client) => _client = client;
+    public OrnnSearchSkillsTool(
+        OrnnSkillClient client,
+        IRemoteSkillAccessTokenResolver? remoteAccessTokenResolver = null)
+    {
+        _client = client;
+        _remoteAccessTokenResolver = remoteAccessTokenResolver;
+    }
 
     public string Name => "ornn_search_skills";
 
@@ -51,19 +59,6 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var token = AgentToolRequestContext.NyxIdAccessToken;
-        if (string.IsNullOrWhiteSpace(token))
-        {
-            return BuildStructuredResult(
-                status: "error",
-                query: null,
-                scope: null,
-                error: "No NyxID access token available. User must be authenticated.",
-                matches: Array.Empty<object>(),
-                httpStatus: null,
-                text: "Error: No NyxID access token available. User must be authenticated.");
-        }
-
         string query = "";
 
         try
@@ -73,6 +68,21 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
                 query = q.GetString() ?? "";
         }
         catch (JsonException) { /* malformed arguments → fall back to an empty (browse-all) query */ }
+
+        var token = _remoteAccessTokenResolver is null
+            ? AgentToolRequestContext.NyxIdAccessToken
+            : await _remoteAccessTokenResolver.ResolveAsync(query, ct).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return BuildStructuredResult(
+                status: "error",
+                query: query,
+                scope: null,
+                error: "No NyxID access token available. User must be authenticated.",
+                matches: Array.Empty<object>(),
+                httpStatus: null,
+                text: "Error: No NyxID access token available. User must be authenticated.");
+        }
 
         // No model-facing scope knob: a discovery-for-use tool must never let the model narrow
         // visibility and hide skills the caller can actually use. Always search the full accessible
