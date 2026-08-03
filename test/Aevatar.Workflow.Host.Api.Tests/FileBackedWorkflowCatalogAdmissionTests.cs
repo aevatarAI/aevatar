@@ -458,12 +458,13 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             };
             options.WorkflowDirectories.Add(tempDir);
             var observations = new RecordingWorkflowDefinitionBindObservationRuntime();
+            var dispatch = new RecordingActorDispatchPort(observations);
             var service = new WorkflowDefinitionBootstrapHostedService(
                 registry,
                 new WorkflowDefinitionFileLoader(),
                 new FileBackedWorkflowCatalogPort(
                     new RecordingActorRuntime(),
-                    new RecordingActorDispatchPort(observations),
+                    dispatch,
                     observations,
                     observations,
                     new RecordingWorkflowCapabilityAdmissionService(),
@@ -475,11 +476,67 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             await service.StartAsync(CancellationToken.None);
 
             registry.GetYaml("review").Should().Contain("name: review");
+            dispatch.Envelopes.Should().BeEmpty(
+                "actor materialization waits until every hosted service, including Kestrel and Orleans, has started");
+            await service.StartedAsync(CancellationToken.None);
+            dispatch.Envelopes.Should().ContainSingle();
             await service.StopAsync(CancellationToken.None);
             using var cts = new CancellationTokenSource();
             cts.Cancel();
             var act = () => service.StartAsync(cts.Token);
             await act.Should().ThrowAsync<OperationCanceledException>();
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Bootstrap_StartedAsync_ShouldRetryTransientBindTimeout()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "wf-bootstrap-retry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "review.yaml"), "name: review");
+            var registry = new WorkflowDefinitionCatalog();
+            var options = new WorkflowDefinitionFileSourceOptions
+            {
+                DuplicatePolicy = WorkflowDefinitionDuplicatePolicy.Override,
+                BindCommitTimeout = TimeSpan.FromMilliseconds(10),
+                BindCommitMaxAttempts = 2,
+                BindCommitRetryDelay = TimeSpan.Zero,
+            };
+            options.WorkflowDirectories.Add(tempDir);
+            var observations = new RecordingWorkflowDefinitionBindObservationRuntime
+            {
+                PublishCommittedBinds = false,
+            };
+            var dispatch = new RecordingActorDispatchPort(observations);
+            dispatch.OnDispatch = count =>
+            {
+                if (count == 2)
+                    observations.PublishCommittedBinds = true;
+            };
+            var service = new WorkflowDefinitionBootstrapHostedService(
+                registry,
+                new WorkflowDefinitionFileLoader(),
+                new FileBackedWorkflowCatalogPort(
+                    new RecordingActorRuntime(),
+                    dispatch,
+                    observations,
+                    observations,
+                    new RecordingWorkflowCapabilityAdmissionService(),
+                    Options.Create(options),
+                    NullLogger<FileBackedWorkflowCatalogPort>.Instance),
+                Options.Create(options),
+                NullLogger<WorkflowDefinitionBootstrapHostedService>.Instance);
+
+            await service.StartAsync(CancellationToken.None);
+            await service.StartedAsync(CancellationToken.None);
+
+            dispatch.Envelopes.Should().HaveCount(2);
         }
         finally
         {
@@ -653,12 +710,15 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
     {
         public List<(string ActorId, EventEnvelope Envelope)> Envelopes { get; } = [];
 
+        public Action<int>? OnDispatch { get; set; }
+
         public async Task<DispatchAdmission> DispatchAsync(
             string actorId,
             EventEnvelope envelope,
             CancellationToken ct = default)
         {
             Envelopes.Add((actorId, envelope));
+            OnDispatch?.Invoke(Envelopes.Count);
             await observations.PublishCommittedBindAsync(actorId, envelope, ct);
             return DispatchAdmissionFactory.Create(actorId, envelope);
         }
@@ -673,6 +733,8 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
         private string _commandId = string.Empty;
 
         public bool ProjectionEnabled => true;
+
+        public bool PublishCommittedBinds { get; set; } = true;
 
         public Task<WorkflowDefinitionBindObservationScopeLeasePreparation?> PrepareAsync(
             string actorId,
@@ -746,7 +808,9 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
-            if (_sink == null || !string.Equals(actorId, _actorId, StringComparison.Ordinal))
+            if (!PublishCommittedBinds ||
+                _sink == null ||
+                !string.Equals(actorId, _actorId, StringComparison.Ordinal))
                 return;
 
             var committed = new EventEnvelope

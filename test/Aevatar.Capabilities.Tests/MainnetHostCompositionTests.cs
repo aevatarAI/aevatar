@@ -1132,13 +1132,15 @@ public sealed class MainnetHostCompositionTests
     {
         // Regression guard (2026-06-03 prod incident): enabling
         // HostOptions.ServicesStartConcurrently raced the co-hosted Orleans silo
-        // reaching Active. Grain-calling startup services (WorkflowDefinitionBootstrap,
-        // ChannelBotRegistration, AevatarOAuthClientBootstrap, HealthProbeStartup,
+        // reaching Active. Grain-calling startup services (ChannelBotRegistration,
+        // AevatarOAuthClientBootstrap, HealthProbeStartup,
         // StreamingProxyChatLifecycleContinuationRunner) fired before the silo could
         // create activations -> "Unable to create local activation. Rejecting now."
         // -> AggregateException -> CrashLoopBackOff. Sequential startup (the Generic
         // Host default) runs hosted services in registration order so Kestrel binds
         // the probe port and the Orleans silo reaches Active before grain-callers run.
+        // WorkflowDefinitionBootstrap materializes actor state in StartedAsync after
+        // both of those StartAsync phases have completed.
         using var home = new TemporaryAevatarHomeScope();
         var builder = CreateBuilder();
 
