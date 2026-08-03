@@ -320,6 +320,53 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
     }
 
     [Fact]
+    public async Task Bootstrap_WhenBindCommitObservationTimesOut_ShouldContinueStartupAndRetryInBackground()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "wf-bootstrap-timeout-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "review.yaml"), "name: review");
+            var registry = new WorkflowDefinitionCatalog();
+            var options = new WorkflowDefinitionFileSourceOptions
+            {
+                DuplicatePolicy = WorkflowDefinitionDuplicatePolicy.Override,
+                BindCommitRetryDelay = TimeSpan.FromHours(1),
+            };
+            options.WorkflowDirectories.Add(tempDir);
+            var materializerOptions = new WorkflowDefinitionFileSourceOptions
+            {
+                BindCommitTimeout = TimeSpan.FromMilliseconds(10),
+            };
+            var observations = new RecordingWorkflowDefinitionBindObservationRuntime();
+            var dispatch = new RecordingActorDispatchPort(observations, publishCommittedBind: false);
+            var service = new WorkflowDefinitionBootstrapHostedService(
+                registry,
+                new WorkflowDefinitionFileLoader(),
+                new FileBackedWorkflowCatalogPort(
+                    new RecordingActorRuntime(),
+                    dispatch,
+                    observations,
+                    observations,
+                    new RecordingWorkflowCapabilityAdmissionService(),
+                    Options.Create(materializerOptions),
+                    NullLogger<FileBackedWorkflowCatalogPort>.Instance),
+                Options.Create(options),
+                NullLogger<WorkflowDefinitionBootstrapHostedService>.Instance);
+
+            await service.StartAsync(CancellationToken.None);
+
+            registry.GetYaml("review").Should().Contain("name: review");
+            dispatch.Envelopes.Should().ContainSingle();
+            await service.StopAsync(CancellationToken.None);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Bootstrap_ShouldLoadConfiguredDirectories_AndHonorCancellation()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "wf-bootstrap-" + Guid.NewGuid().ToString("N"));
@@ -503,7 +550,8 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
     }
 
     private sealed class RecordingActorDispatchPort(
-        RecordingWorkflowDefinitionBindObservationRuntime observations) : IActorDispatchPort
+        RecordingWorkflowDefinitionBindObservationRuntime observations,
+        bool publishCommittedBind = true) : IActorDispatchPort
     {
         public List<(string ActorId, EventEnvelope Envelope)> Envelopes { get; } = [];
 
@@ -513,7 +561,8 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             CancellationToken ct = default)
         {
             Envelopes.Add((actorId, envelope));
-            await observations.PublishCommittedBindAsync(actorId, envelope, ct);
+            if (publishCommittedBind)
+                await observations.PublishCommittedBindAsync(actorId, envelope, ct);
             return DispatchAdmissionFactory.Create(actorId, envelope);
         }
     }

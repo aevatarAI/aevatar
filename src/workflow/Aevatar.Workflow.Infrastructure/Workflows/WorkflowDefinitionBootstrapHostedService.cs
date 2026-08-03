@@ -12,6 +12,8 @@ internal sealed class WorkflowDefinitionBootstrapHostedService : IHostedService
     private readonly FileBackedWorkflowCatalogPort _definitionMaterializer;
     private readonly IOptions<WorkflowDefinitionFileSourceOptions> _options;
     private readonly ILogger<WorkflowDefinitionBootstrapHostedService> _logger;
+    private CancellationTokenSource? _retryCts;
+    private Task? _retryTask;
 
     public WorkflowDefinitionBootstrapHostedService(
         IWorkflowDefinitionCatalog registry,
@@ -40,8 +42,96 @@ internal sealed class WorkflowDefinitionBootstrapHostedService : IHostedService
             .Where(definition => definition != null)
             .Select(definition => definition!)
             .ToList();
-        await _definitionMaterializer.MaterializeAsync(definitions, cancellationToken);
+        try
+        {
+            await _definitionMaterializer.MaterializeAsync(definitions, cancellationToken);
+        }
+        catch (WorkflowDefinitionMaterializationException ex)
+            when (ex.Code == WorkflowDefinitionMaterializationException.BindNotCommittedCode &&
+                  !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                ex,
+                "Startup workflow definition bind was not observed before timeout; host startup will continue and retry materialization in the background. workflow_name={WorkflowName} actor_id={ActorId} expected_execution_mode={ExpectedExecutionMode}",
+                ex.WorkflowName,
+                ex.ActorId,
+                ex.ExpectedExecutionMode);
+            StartBackgroundRetry(definitions);
+        }
     }
 
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        if (_retryCts == null || _retryTask == null)
+            return;
+
+        await _retryCts.CancelAsync();
+        try
+        {
+            await _retryTask.WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            _retryCts.Dispose();
+            _retryCts = null;
+            _retryTask = null;
+        }
+    }
+
+    private void StartBackgroundRetry(IReadOnlyList<WorkflowDefinitionRegistration> definitions)
+    {
+        var retryDelay = _options.Value.BindCommitRetryDelay;
+        if (retryDelay <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(WorkflowDefinitionFileSourceOptions.BindCommitRetryDelay),
+                retryDelay,
+                "Workflow definition bind commit retry delay must be positive.");
+        }
+
+        _retryCts = new CancellationTokenSource();
+        _retryTask = RetryMaterializationAsync(definitions, retryDelay, _retryCts.Token);
+    }
+
+    private async Task RetryMaterializationAsync(
+        IReadOnlyList<WorkflowDefinitionRegistration> definitions,
+        TimeSpan retryDelay,
+        CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(retryDelay, ct);
+                await _definitionMaterializer.MaterializeAsync(definitions, ct);
+                _logger.LogInformation("Startup workflow definition materialization completed in background retry.");
+                return;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (WorkflowDefinitionMaterializationException ex)
+                when (ex.Code == WorkflowDefinitionMaterializationException.BindNotCommittedCode)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Startup workflow definition bind still has not been observed; materialization will retry. workflow_name={WorkflowName} actor_id={ActorId} expected_execution_mode={ExpectedExecutionMode}",
+                    ex.WorkflowName,
+                    ex.ActorId,
+                    ex.ExpectedExecutionMode);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Startup workflow definition materialization retry failed; materialization will retry.");
+            }
+        }
+    }
 }
