@@ -694,7 +694,7 @@ Orleans 模式的核心配置项（通过环境变量或 `appsettings.Distribute
 | `Orleans:SiloPort` | Silo 通信端口 | `11111` |
 | `Orleans:GatewayPort` | 网关端口 | `30000` |
 | `Orleans:QueueCount` | 流队列并行度（影响消费吞吐） | `8` |
-| `Orleans:QueueCacheSize` | 队列缓存大小（影响突发吸收） | `4096` |
+| `Orleans:QueueCacheSize` | 队列缓存大小（影响突发吸收） | `32768` |
 
 说明：上表给的是 Mainnet `Distributed` 模式模板值。`AevatarActorRuntimeOptions` 的全局默认值仍偏向本地开发（例如 `Provider=InMemory`、`OrleansStreamBackend=InMemory`）。
 
@@ -1005,7 +1005,7 @@ flowchart TB
 
     subgraph vertical ["垂直调优"]
         V1["QueueCount (默认 8)"]
-        V2["QueueCacheSize (默认 4096)"]
+        V2["QueueCacheSize (默认 32768)"]
         V3["Pod Resource Limits"]
     end
 

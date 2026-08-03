@@ -5,15 +5,13 @@ using Microsoft.Extensions.Options;
 
 namespace Aevatar.Workflow.Infrastructure.Workflows;
 
-internal sealed class WorkflowDefinitionBootstrapHostedService : IHostedService
+internal sealed class WorkflowDefinitionBootstrapHostedService : IHostedLifecycleService
 {
     private readonly IWorkflowDefinitionCatalog _registry;
     private readonly WorkflowDefinitionFileLoader _loader;
     private readonly FileBackedWorkflowCatalogPort _definitionMaterializer;
     private readonly IOptions<WorkflowDefinitionFileSourceOptions> _options;
     private readonly ILogger<WorkflowDefinitionBootstrapHostedService> _logger;
-    private CancellationTokenSource? _retryCts;
-    private Task? _retryTask;
 
     public WorkflowDefinitionBootstrapHostedService(
         IWorkflowDefinitionCatalog registry,
@@ -27,9 +25,21 @@ internal sealed class WorkflowDefinitionBootstrapHostedService : IHostedService
         _definitionMaterializer = definitionMaterializer;
         _options = options;
         _logger = logger;
+        if (_options.Value.BindCommitMaxAttempts <= 0)
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                _options.Value.BindCommitMaxAttempts,
+                "Workflow definition bind commit max attempts must be positive.");
+        if (_options.Value.BindCommitRetryDelay < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                _options.Value.BindCommitRetryDelay,
+                "Workflow definition bind commit retry delay cannot be negative.");
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public Task StartingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task StartAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         _loader.LoadInto(
@@ -37,132 +47,47 @@ internal sealed class WorkflowDefinitionBootstrapHostedService : IHostedService
             _options.Value.WorkflowDirectories,
             _logger,
             _options.Value.DuplicatePolicy);
+        return Task.CompletedTask;
+    }
+
+    public async Task StartedAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         var definitions = _registry.GetNames()
             .Select(name => _registry.GetDefinition(name))
             .Where(definition => definition != null)
             .Select(definition => definition!)
             .ToList();
-        try
-        {
-            await _definitionMaterializer.MaterializeAsync(definitions, cancellationToken);
-        }
-        catch (WorkflowDefinitionMaterializationException ex)
-            when (ex.Code == WorkflowDefinitionMaterializationException.BindNotCommittedCode &&
-                  !cancellationToken.IsCancellationRequested)
-        {
-            _logger.LogWarning(
-                ex,
-                "Startup workflow definition bind was not observed before timeout; host startup will continue and retry materialization in the background. workflow_name={WorkflowName} actor_id={ActorId} expected_execution_mode={ExpectedExecutionMode}",
-                ex.WorkflowName,
-                ex.ActorId,
-                ex.ExpectedExecutionMode);
-            StartBackgroundRetry(definitions, ex.WorkflowName);
-        }
-    }
 
-    public async Task StopAsync(CancellationToken cancellationToken)
-    {
-        if (_retryCts == null || _retryTask == null)
-            return;
-
-        await _retryCts.CancelAsync();
-        try
-        {
-            await _retryTask.WaitAsync(cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        finally
-        {
-            _retryCts.Dispose();
-            _retryCts = null;
-            _retryTask = null;
-        }
-    }
-
-    private void StartBackgroundRetry(
-        IReadOnlyList<WorkflowDefinitionRegistration> definitions,
-        string timedOutWorkflowName)
-    {
-        var retryDelay = _options.Value.BindCommitRetryDelay;
-        if (retryDelay <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(WorkflowDefinitionFileSourceOptions.BindCommitRetryDelay),
-                retryDelay,
-                "Workflow definition bind commit retry delay must be positive.");
-        }
-
-        var remainingDefinitions = GetDefinitionsAfter(definitions, timedOutWorkflowName);
-        if (remainingDefinitions.Count == 0)
-        {
-            _logger.LogInformation(
-                "Startup workflow definition materialization has no remaining definitions after timed-out bind observation. workflow_name={WorkflowName}",
-                timedOutWorkflowName);
-            return;
-        }
-
-        _retryCts = new CancellationTokenSource();
-        _retryTask = RetryMaterializationAsync(remainingDefinitions, retryDelay, _retryCts.Token);
-    }
-
-    private async Task RetryMaterializationAsync(
-        IReadOnlyList<WorkflowDefinitionRegistration> definitions,
-        TimeSpan retryDelay,
-        CancellationToken ct)
-    {
-        var remainingDefinitions = definitions;
-        while (!ct.IsCancellationRequested && remainingDefinitions.Count > 0)
+        for (var attempt = 1; ; attempt++)
         {
             try
             {
-                await Task.Delay(retryDelay, ct);
-                await _definitionMaterializer.MaterializeAsync(remainingDefinitions, ct);
-                _logger.LogInformation("Startup workflow definition materialization completed in background retry.");
+                await _definitionMaterializer.MaterializeAsync(definitions, cancellationToken);
                 return;
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (WorkflowDefinitionMaterializationException ex)
-                when (ex.Code == WorkflowDefinitionMaterializationException.BindNotCommittedCode)
+            catch (WorkflowDefinitionMaterializationException ex) when (
+                IsTransient(ex) && attempt < _options.Value.BindCommitMaxAttempts)
             {
                 _logger.LogWarning(
                     ex,
-                    "Startup workflow definition bind still has not been observed; materialization will continue with remaining definitions. workflow_name={WorkflowName} actor_id={ActorId} expected_execution_mode={ExpectedExecutionMode}",
-                    ex.WorkflowName,
-                    ex.ActorId,
-                    ex.ExpectedExecutionMode);
-                remainingDefinitions = GetDefinitionsAfter(remainingDefinitions, ex.WorkflowName);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Startup workflow definition materialization retry failed; materialization will retry.");
+                    "Startup workflow definition bind attempt {Attempt}/{MaxAttempts} did not reach committed observation; retrying after {RetryDelay}.",
+                    attempt,
+                    _options.Value.BindCommitMaxAttempts,
+                    _options.Value.BindCommitRetryDelay);
+                await Task.Delay(_options.Value.BindCommitRetryDelay, cancellationToken);
             }
         }
     }
 
-    private static IReadOnlyList<WorkflowDefinitionRegistration> GetDefinitionsAfter(
-        IReadOnlyList<WorkflowDefinitionRegistration> definitions,
-        string workflowName)
-    {
-        var orderedDefinitions = definitions
-            .OrderBy(definition => definition.WorkflowName, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        var failedIndex = Array.FindIndex(
-            orderedDefinitions,
-            definition => string.Equals(
-                definition.WorkflowName,
-                workflowName,
-                StringComparison.OrdinalIgnoreCase));
-        return failedIndex < 0 || failedIndex + 1 >= orderedDefinitions.Length
-            ? []
-            : orderedDefinitions[(failedIndex + 1)..];
-    }
+    public Task StoppingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task StoppedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    private static bool IsTransient(WorkflowDefinitionMaterializationException exception) =>
+        exception.Code is
+            WorkflowDefinitionMaterializationException.ObservationUnavailableCode or
+            WorkflowDefinitionMaterializationException.BindNotCommittedCode;
 }

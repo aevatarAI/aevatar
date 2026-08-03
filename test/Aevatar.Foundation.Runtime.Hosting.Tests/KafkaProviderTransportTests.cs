@@ -118,6 +118,14 @@ public sealed class KafkaProviderTransportTests
     }
 
     [Fact]
+    public void OrleansRuntimeOptions_ShouldReserveSharedKafkaBurstHeadroom()
+    {
+        var options = new AevatarOrleansRuntimeOptions();
+
+        options.QueueCacheSize.Should().BeGreaterThanOrEqualTo(32 * 1024);
+    }
+
+    [Fact]
     public async Task KafkaProviderBackend_ShouldRegisterProviderNativeComponents()
     {
         var services = new ServiceCollection();
