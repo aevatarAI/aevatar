@@ -571,20 +571,29 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
         [Fact]
         public async Task WorkflowRoleGAgent_WhenWorkflowLlmProviderCancelsAfterTimeout_ShouldPublishTimeoutCompletion()
         {
+            const int timeoutMs = 1_000;
             var eventStore = new InMemoryEventStore();
+            var timeProvider = new FakeTimeProvider();
+            var llmProvider = new LateAfterCancellationWorkflowIntentLlmProvider(yieldLateChunk: false);
             var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
                 eventStore,
-                new CancellationWorkflowIntentLlmProvider(),
-                "workflow-role-agent-timeout");
+                llmProvider,
+                "workflow-role-agent-timeout",
+                timeProvider: timeProvider,
+                chatExecutionOptions: new RoleChatExecutionOptions(timeoutMs));
 
-            await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            var execution = agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
             {
                 RunId = "run-timeout",
                 StepId = "step-timeout",
                 SessionId = "session-timeout",
                 Prompt = "hello",
-                TimeoutMs = 1,
             });
+            await llmProvider.StreamStarted;
+            timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+            await llmProvider.CancellationObserved;
+            llmProvider.ReleaseAfterCancellation();
+            await execution;
 
             agent.State.Sessions["session-timeout"].WorkflowLlmCompletionDeliveryStatus.Should()
                 .Be(WorkflowLlmCompletionDeliveryStatus.Dispatched);

@@ -23,6 +23,9 @@ public sealed class RoleGAgentRecoveryCheckpointTests
 {
     private static readonly DateTimeOffset Now = new(2026, 8, 2, 8, 0, 0, TimeSpan.Zero);
 
+    private static InMemorySecretVault CreateVault(DateTimeOffset? now = null) =>
+        new(new FakeTimeProvider(now ?? Now));
+
     [Fact]
     public async Task PrepareBatch_WhenIntentCommitFails_ShouldNotInvokeTool()
     {
@@ -217,7 +220,7 @@ public sealed class RoleGAgentRecoveryCheckpointTests
         const string firstResult = "{\"attempt\":1}";
         const string secondResult = "{\"attempt\":2}";
         var store = new FailOnceCompletionCheckpointEventStore();
-        var vault = new InMemorySecretVault();
+        var vault = CreateVault();
         var first = await CreateFixtureAsync("role-result-adoption", store, vault);
         await first.StartSessionAsync("session-a");
         var operation = (await first.Agent.PrepareBatchAsync(Batch(
@@ -341,7 +344,7 @@ public sealed class RoleGAgentRecoveryCheckpointTests
     public async Task Recovery_WhenCheckpointPayloadExpired_ShouldReachActorOwnedOutcomeUncertainFinalizer()
     {
         var store = new InMemoryEventStoreForTests();
-        var vault = new InMemorySecretVault();
+        var vault = CreateVault();
         var first = await CreateFixtureAsync("role-expired-checkpoint", store, vault);
         await first.StartSessionAsync("session-a");
         await first.Agent.PrepareBatchAsync(Batch(
@@ -525,7 +528,7 @@ public sealed class RoleGAgentRecoveryCheckpointTests
     public async Task ApprovalContinuation_WhenSelfPublishFails_ShouldCommitResultAndClearAtomicallyForActivationRecovery()
     {
         var store = new RecordingBatchEventStore();
-        var vault = new InMemorySecretVault();
+        var vault = CreateVault();
         var tool = new TestTool("approved-mutation", AgentToolReplayPolicy.NonReplayable);
         var executionPort = new RecordingExecutionPort(ExecutedOutcome("{\"approved\":true}"));
         var failingPublisher = new RecordingPublisher { FailRecoveryContinuation = true };
@@ -655,7 +658,7 @@ public sealed class RoleGAgentRecoveryCheckpointTests
     public async Task ActorRecovery_WhenPrimaryCredentialIsSourceReadable_ShouldRestorePrimaryAccessTokenSlot()
     {
         const string token = "source-readable-primary";
-        var vault = new InMemorySecretVault();
+        var vault = CreateVault();
         var tool = new TestTool("source-readable-tool", AgentToolReplayPolicy.ReadOnlyRetryable);
         var executionPort = new RecordingExecutionPort(ExecutedOutcome("{\"ok\":true}"));
         var provider = new CountingProviderFactory("credential recovery completed");
@@ -707,7 +710,7 @@ public sealed class RoleGAgentRecoveryCheckpointTests
     {
         const string delegationToken = "proxy-delegation-primary";
         const string supplementalToken = "source-readable-supplemental";
-        var vault = new InMemorySecretVault();
+        var vault = CreateVault();
         var tool = new TestTool("delegated-tool", AgentToolReplayPolicy.ReadOnlyRetryable);
         var executionPort = new RecordingExecutionPort(ExecutedOutcome("{\"must_not_run\":true}"));
         var fixture = await CreateFixtureAsync(
@@ -1001,7 +1004,8 @@ public sealed class RoleGAgentRecoveryCheckpointTests
         ILLMProviderFactory? providerFactory = null)
     {
         store ??= new InMemoryEventStoreForTests();
-        vault ??= new InMemorySecretVault();
+        var timeProvider = new FakeTimeProvider(now ?? Now);
+        vault ??= new InMemorySecretVault(timeProvider);
         tool ??= new TestTool("tool-a", AgentToolReplayPolicy.NonReplayable);
         executionPort ??= new RecordingExecutionPort(ExecutedOutcome("{\"ok\":true}"));
         publisher ??= new RecordingPublisher();
@@ -1012,7 +1016,6 @@ public sealed class RoleGAgentRecoveryCheckpointTests
             .AddSingleton<IActorRuntimeCallbackScheduler>(scheduler)
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
-        var timeProvider = new FakeTimeProvider(now ?? Now);
         var agent = new TestRoleGAgent(
             executionPort,
             [new StaticToolSource([tool])],

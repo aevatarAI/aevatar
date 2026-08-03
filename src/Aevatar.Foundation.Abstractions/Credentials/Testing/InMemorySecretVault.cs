@@ -10,7 +10,13 @@ public sealed class InMemorySecretVault : ISecretVault
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, StoredSecret> _secrets = new(StringComparer.Ordinal);
+    private readonly TimeProvider _timeProvider;
     private long _nextId;
+
+    public InMemorySecretVault(TimeProvider? timeProvider = null)
+    {
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
 
     public Task<StoreSecretResult> PutAsync(StoreSecretRequest request, CancellationToken ct = default)
     {
@@ -19,7 +25,7 @@ public sealed class InMemorySecretVault : ISecretVault
             throw new ArgumentException("RequestedRef must be null or non-empty.", nameof(request));
         ct.ThrowIfCancellationRequested();
 
-        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         var requestedRef = request.RequestedRef?.Trim();
         var reference = new SecretReference
         {
@@ -175,9 +181,9 @@ public sealed class InMemorySecretVault : ISecretVault
         return "sha256:" + Convert.ToHexString(hash).ToLowerInvariant();
     }
 
-    private static bool IsExpired(SecretReference reference) =>
+    private bool IsExpired(SecretReference reference) =>
         reference.ExpiresAtUnixMs > 0 &&
-        reference.ExpiresAtUnixMs <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        reference.ExpiresAtUnixMs <= _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
     private sealed record StoredSecret(
         SecretReference Reference,
