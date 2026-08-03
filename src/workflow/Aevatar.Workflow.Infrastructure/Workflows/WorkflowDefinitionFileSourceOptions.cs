@@ -15,4 +15,6 @@ public sealed class WorkflowDefinitionFileSourceOptions
         WorkflowDefinitionDuplicatePolicy.Throw;
 
     public TimeSpan BindCommitTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    public TimeSpan BindCommitRetryDelay { get; set; } = TimeSpan.FromSeconds(30);
 }

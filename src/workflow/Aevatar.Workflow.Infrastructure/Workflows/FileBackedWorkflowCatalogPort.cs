@@ -279,11 +279,11 @@ internal sealed class FileBackedWorkflowCatalogPort
         string actorId,
         CancellationToken ct)
     {
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(_options.BindCommitTimeout);
+        using var bindTimeoutCts = new CancellationTokenSource(_options.BindCommitTimeout);
+        using var readCts = CancellationTokenSource.CreateLinkedTokenSource(ct, bindTimeoutCts.Token);
         try
         {
-            await foreach (var observed in sink.ReadAllAsync(timeoutCts.Token))
+            await foreach (var observed in sink.ReadAllAsync(readCts.Token))
             {
                 if (TryObserveCommittedBind(
                         observed,
@@ -296,7 +296,7 @@ internal sealed class FileBackedWorkflowCatalogPort
                 }
             }
         }
-        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && timeoutCts.IsCancellationRequested)
+        catch (OperationCanceledException ex) when (bindTimeoutCts.IsCancellationRequested)
         {
             throw BindNotCommitted(definition, actorId, ex);
         }
