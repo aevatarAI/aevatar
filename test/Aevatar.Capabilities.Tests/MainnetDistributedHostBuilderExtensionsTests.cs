@@ -163,6 +163,23 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
             "with no SiloHost configured the silo must advertise an interface address peers can reach");
     }
 
+    [Fact]
+    public void AddMainnetDistributedOrleansHost_DistributedProfile_ShouldReserveSharedKafkaBurstHeadroom()
+    {
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["ActorRuntime:Provider"] = "Orleans",
+        });
+
+        builder.AddAevatarDefaultHost(options => options.AllowLocalFileSecretsStore = false);
+        builder.AddMainnetDistributedOrleansHost();
+
+        using var app = builder.Build();
+
+        app.Services.GetRequiredService<AevatarOrleansRuntimeOptions>().QueueCacheSize
+            .Should().BeGreaterThanOrEqualTo(AevatarOrleansRuntimeOptions.DefaultQueueCacheSize);
+    }
+
     private static WebApplicationBuilder CreateBuilder(Dictionary<string, string?> values)
     {
         var options = new WebApplicationOptions

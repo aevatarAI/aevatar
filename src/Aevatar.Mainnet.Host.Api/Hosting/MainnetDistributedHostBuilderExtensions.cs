@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Hosting.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Orleans.Configuration;
@@ -362,7 +363,7 @@ public static class MainnetDistributedHostBuilderExtensions
 
         public int QueueCount { get; set; } = 8;
 
-        public int QueueCacheSize { get; set; } = 4096;
+        public int QueueCacheSize { get; set; } = AevatarOrleansRuntimeOptions.DefaultQueueCacheSize;
 
         public bool ListenOnAnyHostAddress { get; set; }
     }
