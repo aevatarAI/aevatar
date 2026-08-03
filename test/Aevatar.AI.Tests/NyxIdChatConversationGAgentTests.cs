@@ -1045,7 +1045,7 @@ public sealed class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
-    public async Task ActivateAsync_WithPendingReservation_ShouldReserveBeforePublishingOperationRecovery()
+    public async Task ActivateAsync_WithPendingReservation_ShouldScheduleCallbacksWithoutSelfDispatch()
     {
         const string conversationActorId = "conversation-alpha";
         var operations = new List<string>();
@@ -1054,7 +1054,8 @@ public sealed class NyxIdChatConversationGAgentTests
             ReserveException = new OperationCanceledException("crash after turn commit"),
         };
         var eventStore = new InMemoryEventStoreForTests();
-        using var services = BuildEventSourcingServices(eventStore, history);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, history, callbacks);
         var initial = new NyxIdChatConversationGAgent(
             new RecordingActorRuntime(operations),
             new RecordingActorDispatchPort(operations, static (_, _) => Task.CompletedTask),
@@ -1066,6 +1067,7 @@ public sealed class NyxIdChatConversationGAgentTests
         };
         AssignActorId(initial, conversationActorId);
         await initial.ActivateAsync();
+        callbacks.TimeoutRequests.Clear();
         await FluentActions.Invoking(() => initial.HandleEventAsync(
                 CreateEnvelope(conversationActorId, CreateStartTurnCommand())))
             .Should().ThrowAsync<OperationCanceledException>();
@@ -1075,6 +1077,7 @@ public sealed class NyxIdChatConversationGAgentTests
         history.ReserveException = null;
         history.Reservations.Clear();
         operations.Clear();
+        callbacks.TimeoutRequests.Clear();
         var recoveryDispatch = new RecordingActorDispatchPort(
             operations,
             static (_, _) => Task.CompletedTask);
@@ -1091,7 +1094,21 @@ public sealed class NyxIdChatConversationGAgentTests
 
         await recovered.ActivateAsync();
 
-        operations.Should().Equal("history.reserve", "dispatch");
+        operations.Should().BeEmpty();
+        recoveryDispatch.Calls.Should().BeEmpty();
+        var reservationCallback = callbacks.TimeoutRequests.Should().ContainSingle().Which;
+        reservationCallback.TriggerEnvelope.Payload
+            .Is(NyxIdChatHistoryDeliveryReservationDispatchRequested.Descriptor).Should().BeTrue();
+        reservationCallback.DueTime.Should().BePositive();
+
+        await recovered.HandleEventAsync(reservationCallback.TriggerEnvelope.Clone());
+
+        callbacks.TimeoutRequests.Should().HaveCount(2);
+        var recoveryCallback = callbacks.TimeoutRequests.Last();
+        recoveryCallback.TriggerEnvelope.Payload
+            .Is(NyxIdChatRecoveryRequestedSignal.Descriptor).Should().BeTrue();
+        recoveryCallback.DueTime.Should().BePositive();
+        operations.Should().Equal("history.reserve");
         var replayedReservation = history.Reservations.Should().ContainSingle().Which;
         replayedReservation.Should().BeEquivalentTo(new ChatHistoryTurnDeliveryReservation(
             pending.DeliveryId,
@@ -1110,7 +1127,7 @@ public sealed class NyxIdChatConversationGAgentTests
         events.Select(static item => item.EventData.TypeUrl).Should().Equal(
             Any.Pack(new NyxIdChatTurnStartedEvent()).TypeUrl,
             Any.Pack(new NyxIdChatHistoryDeliveryReservationDispatchedEvent()).TypeUrl);
-        var recovery = recoveryDispatch.Calls.Should().ContainSingle().Which.Envelope.Payload
+        var recovery = recoveryCallback.TriggerEnvelope.Payload
             .Unpack<NyxIdChatRecoveryRequestedSignal>();
         recovery.Key.OperationId.Should().Be(
             recovered.State.ActiveTask.Steps.Single().Operation.Key.OperationId);
@@ -1118,7 +1135,7 @@ public sealed class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
-    public async Task ActivateAsync_WhenPendingReservationRecoveryFails_ShouldScheduleRetryAndContinueOperationRecovery()
+    public async Task ActivateAsync_WhenPendingReservationRecoveryFails_ShouldScheduleRetryThenOperationRecovery()
     {
         const string conversationActorId = "conversation-alpha";
         var operations = new List<string>();
@@ -1145,15 +1162,53 @@ public sealed class NyxIdChatConversationGAgentTests
         await recovered.ActivateAsync();
 
         recovered.State.HistoryDeliveryReservation.Dispatched.Should().BeFalse();
-        callbacks.TimeoutRequests.Should().ContainSingle();
-        recoveryDispatch.Calls.Should().ContainSingle(call =>
-            call.Envelope.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor),
-            "history recovery failure must not suppress operation recovery");
+        recoveryDispatch.Calls.Should().BeEmpty();
+        var reservationCallback = callbacks.TimeoutRequests.Should().ContainSingle().Which;
+        reservationCallback.TriggerEnvelope.Payload
+            .Is(NyxIdChatHistoryDeliveryReservationDispatchRequested.Descriptor).Should().BeTrue();
+
+        await recovered.HandleEventAsync(reservationCallback.TriggerEnvelope.Clone());
+
+        recovered.State.HistoryDeliveryReservation.Dispatched.Should().BeFalse();
+        callbacks.TimeoutRequests.Should().HaveCount(2);
+        var retryCallback = callbacks.TimeoutRequests.Last();
+        retryCallback.TriggerEnvelope.Payload
+            .Is(NyxIdChatHistoryDeliveryReservationDispatchRequested.Descriptor).Should().BeTrue();
 
         history.ReserveException = null;
-        await recovered.HandleEventAsync(callbacks.TimeoutRequests.Single().TriggerEnvelope.Clone());
+        await recovered.HandleEventAsync(retryCallback.TriggerEnvelope.Clone());
 
         recovered.State.HistoryDeliveryReservation.Dispatched.Should().BeTrue();
+        callbacks.TimeoutRequests.Should().HaveCount(3);
+        callbacks.TimeoutRequests.Last().TriggerEnvelope.Payload
+            .Is(NyxIdChatRecoveryRequestedSignal.Descriptor).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WhenRecoverySchedulingFails_ShouldFailActivation()
+    {
+        const string conversationActorId = "conversation-alpha";
+        var history = new RecordingChatHistoryCommandPort([])
+        {
+            ReserveException = new OperationCanceledException("crash after turn commit"),
+        };
+        var eventStore = new InMemoryEventStoreForTests();
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, history, callbacks);
+        var initial = CreateController(services, conversationActorId);
+        await initial.ActivateAsync();
+        await FluentActions.Invoking(() => initial.HandleEventAsync(
+                CreateEnvelope(conversationActorId, CreateStartTurnCommand())))
+            .Should().ThrowAsync<OperationCanceledException>();
+
+        callbacks.TimeoutRequests.Clear();
+        callbacks.ScheduleException = new InvalidOperationException("scheduler unavailable");
+        var recovered = CreateController(services, conversationActorId);
+
+        await FluentActions.Invoking(() => recovered.ActivateAsync())
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("scheduler unavailable");
+        callbacks.TimeoutRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -1409,7 +1464,8 @@ public sealed class NyxIdChatConversationGAgentTests
             version: 1,
             CreatePendingHistoryTerminalState(controllerStatus, text, errorCode));
         var history = new RecordingChatHistoryCommandPort([]);
-        using var services = BuildEventSourcingServices(eventStore, history);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, history, callbacks);
         var dispatch = new RecordingActorDispatchPort(
             [],
             static (_, _) => Task.CompletedTask);
@@ -1417,7 +1473,9 @@ public sealed class NyxIdChatConversationGAgentTests
 
         await agent.ActivateAsync();
 
-        var selfEnvelope = dispatch.Calls.Should().ContainSingle().Which.Envelope.Clone();
+        dispatch.Calls.Should().BeEmpty();
+        var selfEnvelope = callbacks.TimeoutRequests.Should().ContainSingle().Which
+            .TriggerEnvelope.Clone();
         var signal = selfEnvelope.Payload
             .Unpack<NyxIdChatHistoryTerminalDispatchRequested>();
         signal.DeliveryId.Should().Be("delivery-terminal-alpha");
@@ -1472,7 +1530,10 @@ public sealed class NyxIdChatConversationGAgentTests
             static (_, _) => Task.CompletedTask);
         var initial = CreateController(services, conversationActorId, firstDispatch);
         await initial.ActivateAsync();
-        var firstSignal = firstDispatch.Calls.Should().ContainSingle().Which.Envelope.Clone();
+        firstDispatch.Calls.Should().BeEmpty();
+        var firstSignal = callbacks.TimeoutRequests.Should().ContainSingle().Which
+            .TriggerEnvelope.Clone();
+        callbacks.TimeoutRequests.Clear();
 
         await initial.HandleEventAsync(firstSignal);
 
@@ -1501,9 +1562,12 @@ public sealed class NyxIdChatConversationGAgentTests
         var recoveryDispatch = new RecordingActorDispatchPort(
             [],
             static (_, _) => Task.CompletedTask);
+        callbacks.TimeoutRequests.Clear();
         var recovered = CreateController(services, conversationActorId, recoveryDispatch);
         await recovered.ActivateAsync();
-        var recoveredSignal = recoveryDispatch.Calls.Should().ContainSingle().Which.Envelope.Clone();
+        recoveryDispatch.Calls.Should().BeEmpty();
+        var recoveredSignal = callbacks.TimeoutRequests.Should().ContainSingle().Which
+            .TriggerEnvelope.Clone();
         recoveredSignal.Payload.ToByteString().Should().Equal(
             timeout.TriggerEnvelope.Payload.ToByteString(),
             "activation and durable retry must address the same pending attempt");
@@ -1936,7 +2000,8 @@ public sealed class NyxIdChatConversationGAgentTests
         var initialDispatch = new RecordingActorDispatchPort(
             operations,
             static (_, _) => Task.CompletedTask);
-        using var services = BuildEventSourcingServices(eventStore, history);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, history, callbacks);
         var initial = new NyxIdChatConversationGAgent(
             new RecordingActorRuntime(operations),
             initialDispatch,
@@ -1962,6 +2027,7 @@ public sealed class NyxIdChatConversationGAgentTests
         history.ReserveException = null;
         history.Reservations.Clear();
         operations.Clear();
+        callbacks.TimeoutRequests.Clear();
         var recoveryDispatch = new RecordingActorDispatchPort(
             operations,
             static (_, _) => Task.CompletedTask);
@@ -1977,6 +2043,14 @@ public sealed class NyxIdChatConversationGAgentTests
         AssignActorId(recovered, conversationActorId);
 
         await recovered.ActivateAsync();
+
+        operations.Should().BeEmpty();
+        recoveryDispatch.Calls.Should().BeEmpty();
+        var reservationCallback = callbacks.TimeoutRequests.Should().ContainSingle().Which;
+        reservationCallback.TriggerEnvelope.Payload
+            .Is(NyxIdChatHistoryDeliveryReservationDispatchRequested.Descriptor).Should().BeTrue();
+
+        await recovered.HandleEventAsync(reservationCallback.TriggerEnvelope.Clone());
 
         operations.Should().Equal("history.reserve");
         history.Reservations.Should().ContainSingle();
@@ -2979,7 +3053,8 @@ public sealed class NyxIdChatConversationGAgentTests
     {
         const string conversationActorId = "conversation-alpha";
         var eventStore = new InMemoryEventStoreForTests();
-        using var services = BuildEventSourcingServices(eventStore);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, callbackScheduler: callbacks);
         var initial = CreateController(services, conversationActorId);
         await initial.ActivateAsync();
         await initial.HandleEventAsync(CreateEnvelope(
@@ -3010,19 +3085,21 @@ public sealed class NyxIdChatConversationGAgentTests
                 IEventSourcingBehaviorFactory<NyxIdChatConversationGAgentState>>(),
         };
         AssignActorId(reactivated, conversationActorId);
+        callbacks.TimeoutRequests.Clear();
         await reactivated.ActivateAsync();
         var steering = CreateSteeringCommand(expectedStateVersion: checkpointVersion);
+        var activationRecovery = callbacks.TimeoutRequests.Should().ContainSingle().Which
+            .TriggerEnvelope.Clone();
+        activationRecovery.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor).Should().BeTrue(
+            "activation queues typed recovery for the requested LLM waterline");
+        dispatch.RecoveryCalls.Should().BeEmpty();
 
         await reactivated.HandleEventAsync(CreateEnvelope(conversationActorId, steering));
 
         reactivated.State.ContinuationAdmission.Status.Should().Be(
             NyxIdChatContinuationAdmissionStatus.Accepted);
-        dispatch.RecoveryCalls.Should().ContainSingle(
-            "activation queues typed recovery for the requested LLM waterline");
         dispatch.StartTurnCalls.Should().ContainSingle(
             "steering queues one continuation");
-        var activationRecovery = dispatch.Calls.Single(call =>
-            call.Envelope.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor)).Envelope.Clone();
         var firstSelfMessage = dispatch.Calls.Single(call =>
             call.Envelope.Payload.Is(NyxIdChatStartTurnCommand.Descriptor)).Envelope.Clone();
         var beforeReplay = await eventStore.GetEventsAsync(conversationActorId);
@@ -3032,7 +3109,7 @@ public sealed class NyxIdChatConversationGAgentTests
         (await eventStore.GetEventsAsync(conversationActorId)).Should().HaveCount(
             beforeReplay.Count,
             "the steering commits advance the version and make the earlier activation recovery stale");
-        dispatch.RecoveryCalls.Should().ContainSingle(
+        dispatch.RecoveryCalls.Should().BeEmpty(
             "stale recovery cannot replay the old LLM or create a turn actor");
         dispatch.StartTurnCalls.Should().ContainSingle();
 
@@ -4332,12 +4409,16 @@ public sealed class NyxIdChatConversationGAgentTests
     private sealed class RecordingRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
     {
         public List<RuntimeCallbackTimeoutRequest> TimeoutRequests { get; } = [];
+        public Exception? ScheduleException { get; set; }
 
         public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
             RuntimeCallbackTimeoutRequest request,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            if (ScheduleException is not null)
+                return Task.FromException<RuntimeCallbackLease>(ScheduleException);
+
             TimeoutRequests.Add(new RuntimeCallbackTimeoutRequest
             {
                 ActorId = request.ActorId,
