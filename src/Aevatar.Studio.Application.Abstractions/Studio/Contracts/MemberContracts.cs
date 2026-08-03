@@ -61,6 +61,7 @@ public static class StudioMemberInvocationReadinessStatusNames
     public const string ServiceCatalogTargetMissing = "service_catalog_target_missing";
     public const string TrafficViewTargetMissing = "traffic_view_target_missing";
     public const string PreparedArtifactMissing = "prepared_artifact_missing";
+    public const string InvocationCatalogNotReady = "invocation_catalog_not_ready";
     public const string Unknown = "unknown";
 }
 

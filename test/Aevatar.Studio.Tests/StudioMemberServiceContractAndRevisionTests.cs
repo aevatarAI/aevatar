@@ -97,8 +97,16 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         contract.InvocationReadiness.Status.Should().Be(StudioMemberInvocationReadinessStatusNames.Ready);
     }
 
-    [Fact]
-    public async Task GetEndpointContractAsync_ShouldExposePreparedArtifactMissingReadiness()
+    [Theory]
+    [InlineData(
+        ScopeBindingReadinessStatus.PreparedArtifactMissing,
+        StudioMemberInvocationReadinessStatusNames.PreparedArtifactMissing)]
+    [InlineData(
+        ScopeBindingReadinessStatus.InvocationCatalogNotReady,
+        StudioMemberInvocationReadinessStatusNames.InvocationCatalogNotReady)]
+    public async Task GetEndpointContractAsync_ShouldExposeNotReadyStatus(
+        ScopeBindingReadinessStatus readinessStatus,
+        string expectedStatus)
     {
         var detail = NewDetail();
         var queryPort = new InMemoryMemberQueryPort(detail);
@@ -135,7 +143,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertBindingRunQueryPort(),
             new InertTeamQueryPort(),
             lifecycle,
-            new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.PreparedArtifactMissing, invokeReady: false),
+            new FixedScopeBindingReadinessQueryPort(readinessStatus, invokeReady: false),
             new RecordingServiceCommandPort(),
             new StudioWorkflowCapabilityAdmissionTestService());
 
@@ -143,8 +151,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
 
         contract.Should().NotBeNull();
         contract!.InvocationReadiness.CanInvoke.Should().BeFalse();
-        contract.InvocationReadiness.Status.Should().Be(StudioMemberInvocationReadinessStatusNames.PreparedArtifactMissing);
-        contract.InvocationReadiness.ReasonCode.Should().Be(StudioMemberInvocationReadinessStatusNames.PreparedArtifactMissing);
+        contract.InvocationReadiness.Status.Should().Be(expectedStatus);
+        contract.InvocationReadiness.ReasonCode.Should().Be(expectedStatus);
     }
 
     [Fact]
