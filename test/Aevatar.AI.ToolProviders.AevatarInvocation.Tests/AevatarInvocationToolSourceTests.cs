@@ -1618,7 +1618,7 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task StartWorkflow_ShouldNotPopulateInputPartsFromAmbientInputFileRefs()
+    public async Task StartWorkflow_ShouldPopulateInputPartsFromAmbientInputFileRefs_WhenExplicitFileRefsAreAbsent()
     {
         var harness = new Harness();
         harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
@@ -1651,7 +1651,72 @@ public sealed class AevatarInvocationToolSourceTests
 
         ErrorCodeOrNull(output).Should().BeNull(output);
         harness.WorkflowDispatch.Command.Should().NotBeNull();
-        harness.WorkflowDispatch.Command!.InputParts.Should().BeNull();
+        harness.WorkflowDispatch.Command!.InputParts.Should().ContainSingle();
+        var inputPart = harness.WorkflowDispatch.Command.InputParts!.Single();
+        inputPart.Kind.Should().Be(Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.File);
+        inputPart.Name.Should().Be("ambient.pdf");
+        inputPart.MediaType.Should().Be("application/pdf");
+        inputPart.FileRef.Should().NotBeNull();
+        var fileRef = inputPart.FileRef!;
+        fileRef.FileId.Should().Be("file-ambient-1");
+        fileRef.ArtifactId.Should().Be("workflow-file://file-ambient-1");
+        fileRef.SourceKind.Should().Be(FileArtifactSourceKind.ConnectedServiceResource);
+        fileRef.SourceMessageId.Should().Be("om_ambient_1");
+        fileRef.SourceResourceKey.Should().Be("file_key_ambient_1");
+        fileRef.FileName.Should().Be("ambient.pdf");
+        fileRef.MediaType.Should().Be("application/pdf");
+        fileRef.SizeBytes.Should().Be(789);
+    }
+
+    [Fact]
+    public async Task StartWorkflow_ShouldNotAppendAmbientInputFileRefs_WhenExplicitFileRefExists()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+        var ambientFileRef = new Aevatar.AI.Abstractions.ChatFileRef
+        {
+            FileId = "file-ambient-1",
+            ArtifactId = "workflow-file://file-ambient-1",
+            SourceKind = Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource,
+            FileName = "ambient.pdf",
+            MediaType = "application/pdf",
+        };
+
+        using var _ = PushContext(
+            callId: "call-workflow-explicit-file-ref",
+            inputFileRefs: [ambientFileRef]);
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": {
+                "prompt": "run workflow",
+                "input_parts": [
+                  {
+                    "kind": "file",
+                    "file_ref": {
+                      "file_id": "file-explicit-1",
+                      "artifact_id": "workflow-file://file-explicit-1",
+                      "source_kind": 3,
+                      "file_name": "explicit.pdf",
+                      "media_type": "application/pdf"
+                    }
+                  }
+                ]
+              },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowDispatch.Command.Should().NotBeNull();
+        harness.WorkflowDispatch.Command!.InputParts.Should().ContainSingle();
+        var fileRef = harness.WorkflowDispatch.Command.InputParts!.Single().FileRef;
+        fileRef.Should().NotBeNull();
+        fileRef!.FileId.Should().Be("file-explicit-1");
+        fileRef.ArtifactId.Should().Be("workflow-file://file-explicit-1");
+        fileRef.FileName.Should().Be("explicit.pdf");
     }
 
     [Fact]

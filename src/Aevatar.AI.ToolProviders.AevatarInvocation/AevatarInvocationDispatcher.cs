@@ -465,7 +465,7 @@ public sealed class AevatarInvocationDispatcher
             Source: sourceResolution.Source!,
             ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             SessionId: ResolveSessionId(),
-            InputParts: ToWorkflowInputParts(request.Inputs),
+            InputParts: ToWorkflowInputParts(request.Inputs, AgentToolRequestContext.Current),
             Metadata: metadata,
             ScopeId: scope.ScopeId,
             LlmControl: ToWorkflowLlmControl(AgentToolRequestContext.Current),
@@ -2086,6 +2086,23 @@ public sealed class AevatarInvocationDispatcher
         }).ToArray();
     }
 
+    private static IReadOnlyList<WorkflowChatInputPart>? ToWorkflowInputParts(
+        InvocationPayload payload,
+        AgentToolExecutionContext? toolContext)
+    {
+        var explicitInputParts = ToWorkflowInputParts(payload);
+        if (HasExplicitFileRef(payload))
+            return explicitInputParts;
+
+        var ambientFileParts = ToAmbientWorkflowFileInputParts(toolContext);
+        if (ambientFileParts == null)
+            return explicitInputParts;
+
+        return explicitInputParts == null
+            ? ambientFileParts
+            : explicitInputParts.Concat(ambientFileParts).ToArray();
+    }
+
     private static IReadOnlyList<WorkflowChatInputPart>? ToWorkflowInputParts(InvocationPayload payload)
     {
         if (payload.InputParts.Count == 0)
@@ -2110,6 +2127,43 @@ public sealed class AevatarInvocationDispatcher
             FileRef = ToWorkflowFileRef(part.FileRef),
         }).ToArray();
     }
+
+    private static bool HasExplicitFileRef(InvocationPayload payload) =>
+        payload.InputParts.Any(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef));
+
+    private static IReadOnlyList<WorkflowChatInputPart>? ToAmbientWorkflowFileInputParts(
+        AgentToolExecutionContext? toolContext)
+    {
+        if (toolContext is null || toolContext.InputFileRefs.Count == 0)
+            return null;
+
+        var parts = new List<WorkflowChatInputPart>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var fileRef in toolContext.InputFileRefs)
+        {
+            if (!HasFileRefIdentity(fileRef))
+                continue;
+
+            var key = FileRefIdentityKey(fileRef);
+            if (!seen.Add(key))
+                continue;
+
+            parts.Add(new WorkflowChatInputPart
+            {
+                Kind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.File,
+                MediaType = EmptyToNull(fileRef.MediaType),
+                Name = EmptyToNull(fileRef.FileName),
+                FileRef = ToWorkflowFileRef(fileRef),
+            });
+        }
+
+        return parts.Count == 0 ? null : parts;
+    }
+
+    private static string FileRefIdentityKey(Aevatar.AI.Abstractions.ChatFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId)
+            ? $"artifact:{fileRef.ArtifactId.Trim()}"
+            : $"file:{fileRef.FileId?.Trim()}";
 
     private static FileArtifactRef? ToWorkflowFileRef(Aevatar.AI.Abstractions.ChatFileRef? fileRef) =>
         fileRef is null || !HasFileRefIdentity(fileRef)
