@@ -537,6 +537,89 @@ public sealed class AgentRunReplyGenerationExecutorTests
         registeredTool.ExecuteCount.Should().Be(0);
     }
 
+    [Fact]
+    public async Task BuildToolStepContinuation_WithDurableAuthorization_ShouldExecuteWhenCatalogStillAdmitsTool()
+    {
+        var registeredTool = new CountingTool("use_skill");
+        var executor = CreateToolEnabledExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name));
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildDurablyAuthorizedToolStepWorkItem(llmWorkItem, execution.Continuation);
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            authorizedToolStep: null,
+            CancellationToken.None);
+
+        continuation.ToolStepResult.Should().NotBeNull();
+        continuation.ToolStepResult.ResultMessages.Should().ContainSingle();
+        registeredTool.ExecuteCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task BuildToolStepContinuation_WithDurableAuthorization_ShouldMatchSafetyInsideToolContextScope()
+    {
+        var registeredTool = new ContextClassifiedTool("use_skill");
+        var executor = CreateToolEnabledExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name),
+            toolContext: AgentToolExecutionContext.Empty with
+            {
+                ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["tool_safety_mode"] = "read",
+                },
+            });
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildDurablyAuthorizedToolStepWorkItem(llmWorkItem, execution.Continuation);
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            authorizedToolStep: null,
+            CancellationToken.None);
+
+        continuation.ToolStepResult.Should().NotBeNull();
+        continuation.ToolStepResult.ResultMessages.Should().ContainSingle();
+        registeredTool.ExecuteCount.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(AuthorizedToolStepMutation.ToolCallId)]
+    [InlineData(AuthorizedToolStepMutation.ToolName)]
+    [InlineData(AuthorizedToolStepMutation.Arguments)]
+    public async Task BuildToolStepContinuation_WhenDurableAuthorizationIsMismatched_ShouldRejectBeforeToolExecution(
+        AuthorizedToolStepMutation mutation)
+    {
+        var registeredTool = new CountingTool("use_skill");
+        var executor = CreateToolEnabledExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name));
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = MutateToolStepWorkItem(
+            BuildDurablyAuthorizedToolStepWorkItem(llmWorkItem, execution.Continuation),
+            mutation);
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            authorizedToolStep: null,
+            CancellationToken.None);
+
+        continuation.ToolStepResult.Should().NotBeNull();
+        continuation.ToolStepResult.ResultMessages.Should().OnlyContain(static message =>
+            message.Content.Contains("not authorized", StringComparison.Ordinal));
+        registeredTool.ExecuteCount.Should().Be(0);
+    }
+
     [Theory]
     [InlineData(AuthorizedToolStepMutation.RunId)]
     [InlineData(AuthorizedToolStepMutation.CorrelationId)]
@@ -723,11 +806,23 @@ public sealed class AgentRunReplyGenerationExecutorTests
         stepState.NextStepIndex = continuation.StepIndex;
         stepState.PendingToolCalls.Clear();
         stepState.PendingToolCalls.AddRange(continuation.LlmStepResult.ToolCalls.Select(static call => call.Clone()));
+        stepState.PendingToolAuthorizations.Clear();
+        stepState.PendingToolAuthorizations.AddRange(
+            continuation.LlmStepResult.PendingToolAuthorizations.Select(static authorization => authorization.Clone()));
         return llmWorkItem with
         {
             StepIndex = continuation.StepIndex,
             StepState = stepState,
         };
+    }
+
+    private static AgentRunReplyStepExecutionRequest BuildDurablyAuthorizedToolStepWorkItem(
+        AgentRunReplyStepExecutionRequest llmWorkItem,
+        AgentRunNextLlmStepRequestedEvent continuation)
+    {
+        var workItem = BuildToolStepWorkItem(llmWorkItem, continuation);
+        workItem.StepState.PendingToolAuthorizationConsumed = true;
+        return workItem with { AllowDurableToolAuthorization = true };
     }
 
     private static AgentRunReplyStepExecutionRequest MutateToolStepWorkItem(
@@ -894,6 +989,33 @@ public sealed class AgentRunReplyGenerationExecutorTests
         public string Name => name;
         public string Description => name;
         public string ParametersSchema => "{}";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ExecuteCount++;
+            return Task.FromResult("{}");
+        }
+    }
+
+    private sealed class ContextClassifiedTool(string name) : IAgentTool
+    {
+        public int ExecuteCount { get; private set; }
+        public string Name => name;
+        public string Description => name;
+        public string ParametersSchema => "{}";
+        public string SideEffectKind => "context.classified";
+
+        public AgentToolCallSafety GetCallSafety(string argumentsJson)
+        {
+            var isReadMode = AgentToolRequestContext.Current?.ExternalMetadata.TryGetValue(
+                "tool_safety_mode",
+                out var mode) == true &&
+                string.Equals(mode, "read", StringComparison.Ordinal);
+            return new AgentToolCallSafety(
+                RequiresApproval: false,
+                IsReadOnly: isReadMode,
+                IsDestructive: !isReadMode);
+        }
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
