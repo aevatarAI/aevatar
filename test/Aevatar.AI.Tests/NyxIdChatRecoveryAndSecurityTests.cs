@@ -34,7 +34,8 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         const string actorId = "conversation-alpha";
         var eventStore = new InMemoryEventStoreForTests();
         await PersistStateAsync(eventStore, actorId, CreateRequestedPostconditionState());
-        using var services = BuildEventSourcingServices(eventStore);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, callbacks);
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
         var agent = CreateController(services, actorId, runtime, dispatch);
@@ -44,15 +45,16 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         runtime.CreateCalls.Should().BeEmpty(
             "activation recovery must first re-enter the conversation inbox");
         runtime.LinkCalls.Should().BeEmpty();
-        var recovery = dispatch.Calls.Should().ContainSingle().Which;
+        dispatch.Calls.Should().BeEmpty();
+        var recovery = callbacks.TimeoutRequests.Should().ContainSingle().Which;
         recovery.ActorId.Should().Be(actorId);
-        recovery.Envelope.Route.PublisherActorId.Should().Be(actorId);
-        recovery.Envelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
-        recovery.Envelope.Payload.TypeUrl.Should().EndWith(
+        recovery.TriggerEnvelope.Route.PublisherActorId.Should().Be(actorId);
+        recovery.TriggerEnvelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
+        recovery.TriggerEnvelope.Payload.TypeUrl.Should().EndWith(
             "/aevatar.gagents.nyxid_chat.NyxIdChatRecoveryRequestedSignal");
-        recovery.Envelope.Payload.TypeUrl.Should().NotEndWith(
+        recovery.TriggerEnvelope.Payload.TypeUrl.Should().NotEndWith(
             "/aevatar.gagents.nyxid_chat.NyxIdChatOperationDispatchCommand");
-        var signal = recovery.Envelope.Payload.Unpack<NyxIdChatRecoveryRequestedSignal>();
+        var signal = recovery.TriggerEnvelope.Payload.Unpack<NyxIdChatRecoveryRequestedSignal>();
         signal.Kind.Should().Be(NyxIdChatRecoveryKind.PostconditionRedispatch);
         signal.ExpectedStateVersion.Should().Be(1);
         signal.Key.Should().BeEquivalentTo(
@@ -65,12 +67,13 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         const string actorId = "conversation-alpha";
         var eventStore = new InMemoryEventStoreForTests();
         await PersistStateAsync(eventStore, actorId, CreateRequestedPostconditionState());
-        using var services = BuildEventSourcingServices(eventStore);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, callbacks);
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
         var agent = CreateController(services, actorId, runtime, dispatch);
         await agent.ActivateAsync();
-        var recoveryEnvelope = dispatch.Calls.Single().Envelope.Clone();
+        var recoveryEnvelope = callbacks.TimeoutRequests.Single().TriggerEnvelope.Clone();
         var recovery = recoveryEnvelope.Payload
             .Unpack<NyxIdChatRecoveryRequestedSignal>();
         dispatch.Calls.Clear();
@@ -105,7 +108,8 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         const string actorId = "conversation-alpha";
         var eventStore = new InMemoryEventStoreForTests();
         await PersistStateAsync(eventStore, actorId, CreateInterruptedLlmState());
-        using var services = BuildEventSourcingServices(eventStore);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, callbacks);
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
         var agent = CreateController(services, actorId, runtime, dispatch);
@@ -114,10 +118,11 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
 
         runtime.CreateCalls.Should().BeEmpty();
         runtime.LinkCalls.Should().BeEmpty();
-        var recovery = dispatch.Calls.Should().ContainSingle().Which;
+        dispatch.Calls.Should().BeEmpty();
+        var recovery = callbacks.TimeoutRequests.Should().ContainSingle().Which;
         recovery.ActorId.Should().Be(actorId);
-        recovery.Envelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
-        var signal = recovery.Envelope.Payload.Unpack<NyxIdChatRecoveryRequestedSignal>();
+        recovery.TriggerEnvelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
+        var signal = recovery.TriggerEnvelope.Payload.Unpack<NyxIdChatRecoveryRequestedSignal>();
         signal.Kind.Should().Be(
             NyxIdChatRecoveryKind.InterruptedOperationReconciliation);
         signal.ExpectedStateVersion.Should().Be(1);
@@ -131,12 +136,13 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         const string actorId = "conversation-alpha";
         var eventStore = new InMemoryEventStoreForTests();
         await PersistStateAsync(eventStore, actorId, CreateInterruptedLlmState());
-        using var services = BuildEventSourcingServices(eventStore);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, callbacks);
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
         var agent = CreateController(services, actorId, runtime, dispatch);
         await agent.ActivateAsync();
-        var recoveryEnvelope = dispatch.Calls.Single().Envelope.Clone();
+        var recoveryEnvelope = callbacks.TimeoutRequests.Single().TriggerEnvelope.Clone();
         dispatch.Calls.Clear();
 
         await agent.HandleEventAsync(recoveryEnvelope);
@@ -164,12 +170,13 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         const string actorId = "conversation-alpha";
         var eventStore = new InMemoryEventStoreForTests();
         await PersistStateAsync(eventStore, actorId, CreateInterruptedToolState());
-        using var services = BuildEventSourcingServices(eventStore);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, callbacks);
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
         var agent = CreateController(services, actorId, runtime, dispatch);
         await agent.ActivateAsync();
-        var recoveryEnvelope = dispatch.Calls.Single().Envelope.Clone();
+        var recoveryEnvelope = callbacks.TimeoutRequests.Single().TriggerEnvelope.Clone();
         dispatch.Calls.Clear();
 
         await agent.HandleEventAsync(recoveryEnvelope);
@@ -202,12 +209,13 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         const string actorId = "conversation-alpha";
         var eventStore = new InMemoryEventStoreForTests();
         await PersistStateAsync(eventStore, actorId, CreateInterruptedToolState());
-        using var services = BuildEventSourcingServices(eventStore);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, callbacks);
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
         var agent = CreateController(services, actorId, runtime, dispatch);
         await agent.ActivateAsync();
-        var envelope = dispatch.Calls.Single().Envelope.Clone();
+        var envelope = callbacks.TimeoutRequests.Single().TriggerEnvelope.Clone();
         var signal = envelope.Payload.Unpack<NyxIdChatRecoveryRequestedSignal>();
         if (staleVersion)
             signal.ExpectedStateVersion++;
@@ -343,12 +351,16 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         const string actorId = "conversation-alpha";
         var eventStore = new InMemoryEventStoreForTests();
         await PersistStateAsync(eventStore, actorId, CreateRequestedPostconditionState());
-        using var services = BuildEventSourcingServices(eventStore);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, callbacks);
         var firstRuntime = new RecordingActorRuntime();
         var firstDispatch = new RecordingActorDispatchPort();
         var first = CreateController(services, actorId, firstRuntime, firstDispatch);
         await first.ActivateAsync();
         var firstSnapshot = first.State.ToByteString();
+        var firstRecovery = callbacks.TimeoutRequests.Should().ContainSingle().Which
+            .TriggerEnvelope.Clone();
+        callbacks.TimeoutRequests.Clear();
 
         var secondRuntime = new RecordingActorRuntime();
         var secondDispatch = new RecordingActorDispatchPort();
@@ -358,10 +370,11 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         second.State.ToByteString().Should().Equal(firstSnapshot);
         firstRuntime.CreateCalls.Should().BeEmpty();
         secondRuntime.CreateCalls.Should().BeEmpty();
-        firstDispatch.Calls.Should().ContainSingle(call =>
-            call.Envelope.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor));
-        secondDispatch.Calls.Should().ContainSingle(call =>
-            call.Envelope.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor));
+        firstDispatch.Calls.Should().BeEmpty();
+        secondDispatch.Calls.Should().BeEmpty();
+        firstRecovery.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor).Should().BeTrue();
+        callbacks.TimeoutRequests.Should().ContainSingle().Which.TriggerEnvelope.Payload
+            .Is(NyxIdChatRecoveryRequestedSignal.Descriptor).Should().BeTrue();
         (await eventStore.GetEventsAsync(actorId)).Should().ContainSingle(
             "activation recovery signals are not committed product facts");
     }
@@ -855,11 +868,14 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         return agent;
     }
 
-    private static ServiceProvider BuildEventSourcingServices(IEventStore eventStore) =>
+    private static ServiceProvider BuildEventSourcingServices(
+        IEventStore eventStore,
+        IActorRuntimeCallbackScheduler? callbackScheduler = null) =>
         new ServiceCollection()
             .AddSingleton(eventStore)
             .AddSingleton<EventSourcingRuntimeOptions>()
-            .AddSingleton<IActorRuntimeCallbackScheduler, NoopRuntimeCallbackScheduler>()
+            .AddSingleton<IActorRuntimeCallbackScheduler>(
+                callbackScheduler ?? new NoopRuntimeCallbackScheduler())
             .AddSingleton<IChatHistoryCommandPort, NoopChatHistoryCommandPort>()
             .AddTransient(
                 typeof(IEventSourcingBehaviorFactory<>),
@@ -1043,6 +1059,41 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
                 request.CallbackId,
                 0,
                 RuntimeCallbackBackend.InMemory));
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class RecordingRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public List<RuntimeCallbackTimeoutRequest> TimeoutRequests { get; } = [];
+
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            TimeoutRequests.Add(new RuntimeCallbackTimeoutRequest
+            {
+                ActorId = request.ActorId,
+                CallbackId = request.CallbackId,
+                TriggerEnvelope = request.TriggerEnvelope.Clone(),
+                DueTime = request.DueTime,
+                DeliveryMode = request.DeliveryMode,
+            });
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                TimeoutRequests.Count,
+                RuntimeCallbackBackend.InMemory));
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) => throw new NotSupportedException();
 
         public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
             Task.CompletedTask;

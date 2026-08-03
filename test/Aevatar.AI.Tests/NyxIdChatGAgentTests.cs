@@ -580,11 +580,13 @@ public class NyxIdChatGAgentTests
         var registry = new RecordingGAgentActorRegistryCommandPort();
         var eventStore = new InMemoryEventStoreForTests();
         var initialDispatch = new RecordingSelfDispatchPort();
+        var callbacks = new RecordingRuntimeCallbackScheduler();
         using var provider = BuildServiceProvider(
             registry,
             new RecordingActorRuntime(),
             new RecordingChatHistoryCommandPort(),
-            eventStore);
+            eventStore,
+            callbacks);
         const string actorId = "nyxid-chat-history-reactivation";
         var initialAgent = CreateConversationAgent(provider, actorId, initialDispatch);
         await initialAgent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
@@ -599,7 +601,8 @@ public class NyxIdChatGAgentTests
         await recovered.ActivateAsync();
 
         recovered.State.PendingHistoryInitialization.ToByteString().Should().Equal(pending.ToByteString());
-        var signal = recoveryDispatch.Calls.Should().ContainSingle().Which.Envelope.Payload
+        recoveryDispatch.Calls.Should().BeEmpty();
+        var signal = callbacks.TimeoutRequests.Should().ContainSingle().Which.TriggerEnvelope.Payload
             .Unpack<NyxIdChatHistoryInitializationDispatchRequested>();
         signal.OperationId.Should().Be(pending.OperationId);
         signal.Attempt.Should().Be(pending.Attempt);
