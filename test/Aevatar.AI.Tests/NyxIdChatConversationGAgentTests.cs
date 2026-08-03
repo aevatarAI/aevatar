@@ -1030,16 +1030,18 @@ public sealed class NyxIdChatConversationGAgentTests
 
         operations.Should().BeEmpty();
         recoveryDispatch.Calls.Should().BeEmpty();
-        callbacks.TimeoutRequests.Should().HaveCount(2);
-        var reservationCallback = callbacks.TimeoutRequests.Single(request =>
-            request.TriggerEnvelope.Payload.Is(NyxIdChatHistoryDeliveryReservationDispatchRequested.Descriptor));
-        var recoveryCallback = callbacks.TimeoutRequests.Single(request =>
-            request.TriggerEnvelope.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor));
+        var reservationCallback = callbacks.TimeoutRequests.Should().ContainSingle().Which;
+        reservationCallback.TriggerEnvelope.Payload
+            .Is(NyxIdChatHistoryDeliveryReservationDispatchRequested.Descriptor).Should().BeTrue();
         reservationCallback.DueTime.Should().BePositive();
-        recoveryCallback.DueTime.Should().BePositive();
 
         await recovered.HandleEventAsync(reservationCallback.TriggerEnvelope.Clone());
 
+        callbacks.TimeoutRequests.Should().HaveCount(2);
+        var recoveryCallback = callbacks.TimeoutRequests.Last();
+        recoveryCallback.TriggerEnvelope.Payload
+            .Is(NyxIdChatRecoveryRequestedSignal.Descriptor).Should().BeTrue();
+        recoveryCallback.DueTime.Should().BePositive();
         operations.Should().Equal("history.reserve");
         var replayedReservation = history.Reservations.Should().ContainSingle().Which;
         replayedReservation.Should().BeEquivalentTo(new ChatHistoryTurnDeliveryReservation(
@@ -1063,11 +1065,11 @@ public sealed class NyxIdChatConversationGAgentTests
             .Unpack<NyxIdChatRecoveryRequestedSignal>();
         recovery.Key.OperationId.Should().Be(
             recovered.State.ActiveTask.Steps.Single().Operation.Key.OperationId);
-        recovery.ExpectedStateVersion.Should().Be(events[0].Version);
+        recovery.ExpectedStateVersion.Should().Be(events[^1].Version);
     }
 
     [Fact]
-    public async Task ActivateAsync_WhenPendingReservationRecoveryFails_ShouldScheduleRetryAndContinueOperationRecovery()
+    public async Task ActivateAsync_WhenPendingReservationRecoveryFails_ShouldScheduleRetryThenOperationRecovery()
     {
         const string conversationActorId = "conversation-alpha";
         var operations = new List<string>();
@@ -1095,17 +1097,14 @@ public sealed class NyxIdChatConversationGAgentTests
 
         recovered.State.HistoryDeliveryReservation.Dispatched.Should().BeFalse();
         recoveryDispatch.Calls.Should().BeEmpty();
-        callbacks.TimeoutRequests.Should().HaveCount(2);
-        var reservationCallback = callbacks.TimeoutRequests.Single(request =>
-            request.TriggerEnvelope.Payload.Is(NyxIdChatHistoryDeliveryReservationDispatchRequested.Descriptor));
-        callbacks.TimeoutRequests.Should().Contain(request =>
-            request.TriggerEnvelope.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor),
-            "history recovery scheduling failure must not suppress operation recovery scheduling");
+        var reservationCallback = callbacks.TimeoutRequests.Should().ContainSingle().Which;
+        reservationCallback.TriggerEnvelope.Payload
+            .Is(NyxIdChatHistoryDeliveryReservationDispatchRequested.Descriptor).Should().BeTrue();
 
         await recovered.HandleEventAsync(reservationCallback.TriggerEnvelope.Clone());
 
         recovered.State.HistoryDeliveryReservation.Dispatched.Should().BeFalse();
-        callbacks.TimeoutRequests.Should().HaveCount(3);
+        callbacks.TimeoutRequests.Should().HaveCount(2);
         var retryCallback = callbacks.TimeoutRequests.Last();
         retryCallback.TriggerEnvelope.Payload
             .Is(NyxIdChatHistoryDeliveryReservationDispatchRequested.Descriptor).Should().BeTrue();
@@ -1114,6 +1113,36 @@ public sealed class NyxIdChatConversationGAgentTests
         await recovered.HandleEventAsync(retryCallback.TriggerEnvelope.Clone());
 
         recovered.State.HistoryDeliveryReservation.Dispatched.Should().BeTrue();
+        callbacks.TimeoutRequests.Should().HaveCount(3);
+        callbacks.TimeoutRequests.Last().TriggerEnvelope.Payload
+            .Is(NyxIdChatRecoveryRequestedSignal.Descriptor).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WhenRecoverySchedulingFails_ShouldFailActivation()
+    {
+        const string conversationActorId = "conversation-alpha";
+        var history = new RecordingChatHistoryCommandPort([])
+        {
+            ReserveException = new OperationCanceledException("crash after turn commit"),
+        };
+        var eventStore = new InMemoryEventStoreForTests();
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, history, callbacks);
+        var initial = CreateController(services, conversationActorId);
+        await initial.ActivateAsync();
+        await FluentActions.Invoking(() => initial.HandleEventAsync(
+                CreateEnvelope(conversationActorId, CreateStartTurnCommand())))
+            .Should().ThrowAsync<OperationCanceledException>();
+
+        callbacks.TimeoutRequests.Clear();
+        callbacks.ScheduleException = new InvalidOperationException("scheduler unavailable");
+        var recovered = CreateController(services, conversationActorId);
+
+        await FluentActions.Invoking(() => recovered.ActivateAsync())
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("scheduler unavailable");
+        callbacks.TimeoutRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -4314,12 +4343,16 @@ public sealed class NyxIdChatConversationGAgentTests
     private sealed class RecordingRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
     {
         public List<RuntimeCallbackTimeoutRequest> TimeoutRequests { get; } = [];
+        public Exception? ScheduleException { get; set; }
 
         public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
             RuntimeCallbackTimeoutRequest request,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            if (ScheduleException is not null)
+                return Task.FromException<RuntimeCallbackLease>(ScheduleException);
+
             TimeoutRequests.Add(new RuntimeCallbackTimeoutRequest
             {
                 ActorId = request.ActorId,

@@ -99,8 +99,10 @@ public sealed class NyxIdChatConversationGAgent
             await ScheduleActivationHistoryInitializationAsync(pendingInitialization, ct);
         }
 
+        var hasPendingHistoryReservation = false;
         if (State.HistoryDeliveryReservation is { Dispatched: false } pendingReservation)
         {
+            hasPendingHistoryReservation = true;
             await ScheduleActivationHistoryReservationAsync(pendingReservation, ct);
         }
 
@@ -110,11 +112,10 @@ public sealed class NyxIdChatConversationGAgent
             await ScheduleActivationHistoryTerminalAsync(pendingTerminal, ct);
         }
 
-        var operation = ResolveOutstandingRecoveryOperation(State);
-        if (operation?.Key is null)
+        if (hasPendingHistoryReservation)
             return;
 
-        await ScheduleActivationRecoveryAsync(operation, ct);
+        await ScheduleOutstandingOperationRecoveryAsync(ct);
     }
 
     [EventHandler(AllowSelfHandling = true)]
@@ -331,6 +332,7 @@ public sealed class NyxIdChatConversationGAgent
                 DispatchedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
             }, CancellationToken.None);
             await DispatchPendingHistoryTerminalAsync();
+            await ScheduleOutstandingOperationRecoveryAsync(CancellationToken.None);
         }
         catch (OperationCanceledException)
         {
@@ -2162,6 +2164,7 @@ public sealed class NyxIdChatConversationGAgent
                 pending.OperationId,
                 pending.Attempt,
                 exception.GetType().Name);
+            throw;
         }
     }
 
@@ -2196,6 +2199,7 @@ public sealed class NyxIdChatConversationGAgent
                 pending.DeliveryId,
                 pending.Attempt,
                 exception.GetType().Name);
+            throw;
         }
     }
 
@@ -2230,7 +2234,16 @@ public sealed class NyxIdChatConversationGAgent
                 pending.DeliveryId,
                 pending.Attempt,
                 exception.GetType().Name);
+            throw;
         }
+    }
+
+    private Task ScheduleOutstandingOperationRecoveryAsync(CancellationToken ct)
+    {
+        var operation = ResolveOutstandingRecoveryOperation(State);
+        return operation?.Key is null
+            ? Task.CompletedTask
+            : ScheduleActivationRecoveryAsync(operation, ct);
     }
 
     private async Task ScheduleActivationRecoveryAsync(
@@ -2270,6 +2283,7 @@ public sealed class NyxIdChatConversationGAgent
                 operation.Key.OperationId,
                 version,
                 exception.GetType().Name);
+            throw;
         }
     }
 
