@@ -294,6 +294,10 @@ message StudioMemberBindAdmissionRequested {
   google.protobuf.Timestamp requested_at_utc = 6;
 }
 
+message StudioMemberBindingAdmissionWatchdogFired {
+  string binding_run_id = 1;
+}
+
 message StudioMemberBindingAdmittedEvent {
   string binding_run_id = 1;
   string member_id = 2;
