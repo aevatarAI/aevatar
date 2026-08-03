@@ -398,11 +398,19 @@ public sealed class AevatarInvocationDispatcher
 
         var request = parsed.Value!;
         var wait = ResolveWait(request.Wait);
+        var toolContext = AgentToolRequestContext.Current;
+        var isManagedWorkflowRuntime = TryGetManagedWorkflowRuntimeContext(toolContext, out var workflowRuntimeContext);
+        var workflowInputParts = request.Inputs == null || isManagedWorkflowRuntime
+            ? null
+            : ToWorkflowInputParts(request.Inputs, toolContext);
         var error = ProtoToolArguments.Require(request.WorkflowId, "workflow_id", "workflow_id is required.") ??
-                    ProtoToolArguments.RequirePayload(request.Inputs, "inputs");
+                    (isManagedWorkflowRuntime
+                        ? ProtoToolArguments.RequirePayload(request.Inputs, "inputs")
+                        : RequireWorkflowInputs(request.Inputs, workflowInputParts));
         if (error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(error), error);
 
+        var inputs = request.Inputs!;
         var workflowYamls = request.WorkflowYamls.Count == 0
             ? null
             : request.WorkflowYamls
@@ -411,7 +419,7 @@ public sealed class AevatarInvocationDispatcher
                 .ToArray();
         var workflowName = request.WorkflowId.Trim();
         var actorId = string.IsNullOrWhiteSpace(request.ActorId) ? null : request.ActorId.Trim();
-        if (TryGetManagedWorkflowRuntimeContext(AgentToolRequestContext.Current, out var workflowRuntimeContext))
+        if (isManagedWorkflowRuntime)
         {
             var managedScope = ResolveCallerScope(requireOwner: false);
             if (managedScope.Error != null)
@@ -449,7 +457,7 @@ public sealed class AevatarInvocationDispatcher
         if (callerCredential.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(callerCredential.Error), callerCredential.Error);
 
-        var metadata = BuildPayloadHeaders(request.Inputs.Headers);
+        var metadata = BuildPayloadHeaders(inputs.Headers);
         var sourceResolution = await ResolveWorkflowStartSourceAsync(
                 scope.ScopeId,
                 workflowName,
@@ -461,11 +469,11 @@ public sealed class AevatarInvocationDispatcher
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(sourceResolution.Error), sourceResolution.Error);
 
         var command = new WorkflowChatRunRequest(
-            Prompt: request.Inputs.Prompt,
+            Prompt: inputs.Prompt,
             Source: sourceResolution.Source!,
             ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             SessionId: ResolveSessionId(),
-            InputParts: ToWorkflowInputParts(request.Inputs, AgentToolRequestContext.Current),
+            InputParts: workflowInputParts,
             Metadata: metadata,
             ScopeId: scope.ScopeId,
             LlmControl: ToWorkflowLlmControl(AgentToolRequestContext.Current),
@@ -2084,6 +2092,33 @@ public sealed class AevatarInvocationDispatcher
             Name = EmptyToNull(part.Name),
             FileRef = part.FileRef?.Clone(),
         }).ToArray();
+    }
+
+    private static InvocationToolError? RequireWorkflowInputs(
+        InvocationPayload? payload,
+        IReadOnlyList<WorkflowChatInputPart>? inputParts)
+    {
+        if (payload == null)
+        {
+            return new InvocationToolError
+            {
+                Code = "invalid_arguments",
+                Message = "inputs is required.",
+                Field = "inputs",
+            };
+        }
+
+        if (string.IsNullOrWhiteSpace(payload.Prompt) && inputParts is not { Count: > 0 })
+        {
+            return new InvocationToolError
+            {
+                Code = "invalid_arguments",
+                Message = "inputs.prompt or inputs.input_parts is required.",
+                Field = "inputs",
+            };
+        }
+
+        return null;
     }
 
     private static IReadOnlyList<WorkflowChatInputPart>? ToWorkflowInputParts(
