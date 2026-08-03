@@ -804,6 +804,43 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
+    public void ApplyObservedPayloadToReport_ShouldPreserveTypedToolApprovalIdentity()
+    {
+        var document = new WorkflowRunInsightReportDocument();
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            document,
+            PackStateEvent(
+                new WorkflowSuspendedEvent
+                {
+                    RunId = "run-tool",
+                    StepId = "create_approval",
+                    SuspensionType = "tool_approval",
+                    Prompt = "Approve tool execution?",
+                    ToolApproval = new WorkflowToolApprovalSuspension
+                    {
+                        ExecutionId = "exec-alpha",
+                        ToolName = "nyxid_proxy",
+                        ToolCallId = "call-alpha",
+                        ApprovalRequestId = "approval-alpha",
+                    },
+                },
+                1,
+                "evt-tool-approval"),
+            DateTimeOffset.UnixEpoch);
+
+        var approval = new WorkflowExecutionReadModelMapper()
+            .ToRunReport(document)
+            .Steps.Should().ContainSingle().Subject;
+        approval.SuspensionType.Should().Be("tool_approval");
+        approval.ToolApproval.Should().NotBeNull();
+        approval.ToolApproval!.ExecutionId.Should().Be("exec-alpha");
+        approval.ToolApproval.ToolName.Should().Be("nyxid_proxy");
+        approval.ToolApproval.ToolCallId.Should().Be("call-alpha");
+        approval.ToolApproval.ApprovalRequestId.Should().Be("approval-alpha");
+    }
+
+    [Fact]
     public void ReportArtifact_ShouldOwnTimelineAndGraphMaterializationInputs()
     {
         var report = new WorkflowRunInsightReportDocument

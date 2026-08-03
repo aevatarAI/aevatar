@@ -281,6 +281,15 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             : SanitizeAuditText(evt.Content);
         step.SuspensionTimeoutSeconds = evt.TimeoutSeconds == 0 ? null : evt.TimeoutSeconds;
         step.RequestedVariableName = evt.VariableName ?? string.Empty;
+        step.ToolApprovalValue = evt.ToolApproval == null
+            ? null
+            : new WorkflowToolApprovalReadModel
+            {
+                ExecutionId = evt.ToolApproval.ExecutionId,
+                ToolName = evt.ToolApproval.ToolName,
+                ToolCallId = evt.ToolApproval.ToolCallId,
+                ApprovalRequestId = evt.ToolApproval.ApprovalRequestId,
+            };
         readModel.CompletionStatus = WorkflowExecutionCompletionStatus.WaitingForSignal;
         // Refactor (iter163/cluster-003-workflow-suspension-legacy-metadata):
         //   Old pattern: WorkflowSuspendedEvent.Metadata fallback for variable/secure/redacted_output reserved keys.
@@ -633,6 +642,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             SuspensionContent = source.SuspensionContent,
             SuspensionTimeoutSeconds = source.SuspensionTimeoutSeconds,
             RequestedVariableName = source.RequestedVariableName,
+            ToolApprovalValue = source.ToolApprovalValue?.Clone(),
             Usage = CloneUsage(source.Usage),
         };
     }

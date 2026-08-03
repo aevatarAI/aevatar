@@ -595,7 +595,7 @@ function signOutSilent(rejectedAccessToken){ const current=getToken(); if(reject
   clearToken(); state.signedIn=false;
   render(); return true; }
 
-const OBS = "/workflow/observatory";   // 运行观测台路由
+const OBS = "/admin#/observatory";   // admin 运行观测台路由
 
 /* Account label shown in the top-bar chip: decoded from the signed-in identity once
    available; until then we show a neutral placeholder. */
@@ -855,7 +855,7 @@ function catIcon(t){ return t==="llm"?ICON.chat : t==="tool"?ICON.tool : t==="fo
 
 /* shared suite navigation — identical markup/behaviour across the five console pages */
 const SUITE_NAV=[
-  {k:"observatory",href:"/workflow/observatory",label:"观测台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'},
+  {k:"observatory",href:"/admin#/observatory",label:"观测台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'},
   {k:"studio",href:"/workflow/studio",label:"Studio",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>'},
   {k:"schedules",href:"/schedules",label:"定时任务",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>'},
   {k:"channels",href:"/channels",label:"渠道",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.6"/><path d="M12 4.5v4.9M12 14.6v4.9M4.5 12h4.9M14.6 12h4.9"/></svg>'},
@@ -1357,13 +1357,12 @@ function ctxPanel(icon,color,title,metaHtml,bodyNode){
 
 // Live schedules (GET /api/schedules) — reuses the existing .sched component.
 // Deep-link to the observatory filtered to THIS schedule's runs (read-only view).
-// schedule rides the query string (?schedule=<id>); scope rides the hash (#scope=<id>),
-// matching how WorkflowRunObservatoryPage parses each. The observatory ignores an
-// unknown ?schedule= until the per-schedule filter is wired, so this href is forward-safe.
+// The admin route owns the hash, so all observatory filters live in its hash query.
 function observatoryRunsHref(s){
-  const q = `?schedule=${encodeURIComponent(s.scheduleId||"")}`;
-  const hash = state.scopeId ? `#scope=${encodeURIComponent(state.scopeId)}` : "";
-  return `${OBS}${q}${hash}`;
+  const query = new URLSearchParams();
+  query.set("schedule", s.scheduleId || "");
+  if(state.scopeId) query.set("scope", state.scopeId);
+  return `${OBS}?${query.toString()}`;
 }
 function schedulesSkeleton(){
   return el("div",{class:"sched"},`<div class="sched-top"><span class="sk" style="width:9px;height:9px;border-radius:50%"></span><span class="sk" style="height:13px;width:160px"></span></div><div class="sched-grid" style="margin-top:8px"><span class="sk" style="height:12px"></span><span class="sk" style="height:12px"></span><span class="sk" style="height:12px"></span><span class="sk" style="height:12px"></span></div>`);

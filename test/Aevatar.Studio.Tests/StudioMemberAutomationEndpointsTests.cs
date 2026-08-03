@@ -950,7 +950,7 @@ public sealed class StudioMemberAutomationEndpointsTests
                     request.MemberId,
                     ScheduleId,
                     "svc-alpha",
-                    "/workflow/observatory",
+                    "/admin#/observatory",
                     "pending")
                 {
                     OperationId = request.OperationId ?? "op-alpha",

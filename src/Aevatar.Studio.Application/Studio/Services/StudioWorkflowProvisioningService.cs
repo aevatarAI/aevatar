@@ -68,7 +68,7 @@ namespace Aevatar.Studio.Application.Studio.Services;
 /// </summary>
 public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvisioningService
 {
-    private const string ObservatoryPath = "/workflow/observatory";
+    private const string ObservatoryPath = "/admin#/observatory";
     private const string CredentialProvisioningKind = "dedicated_scheduled_invocation_agent_key";
 
     private readonly IStudioMemberService _memberService;

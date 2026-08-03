@@ -24,7 +24,7 @@ public sealed class WorkflowSkillsEndpointsTests
                 "run-alpha",
                 "codex-check",
                 "workflow",
-                "/workflow/observatory?run=run-alpha")),
+                "/admin#/observatory?run=run-alpha")),
         };
 
         ExternalSubjectRef? bindingSubject = null;

@@ -52,6 +52,8 @@ public sealed class ToolCallModuleApprovalTests
         suspended.ToolApproval.ToolName.Should().Be("danger");
         suspended.ToolApproval.ToolCallId.Should().Be("workflow:run-1:danger_step:exec-1");
         suspended.ToolApproval.ApprovalRequestId.Should().Be("approval-1");
+        ctx.Published.Single(x => x.Event is WorkflowSuspendedEvent)
+            .Direction.Should().Be(TopologyAudience.Self);
         var state = ctx.LoadState<ToolCallModuleState>("tool_call");
         state.PendingApprovals.Should().ContainKey("run-1:danger_step:exec-1:workflow:run-1:danger_step:exec-1:approval-1");
         var pendingState = state.PendingApprovals.Values.Should().ContainSingle().Subject;

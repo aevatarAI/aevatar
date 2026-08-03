@@ -2146,7 +2146,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             {
                 // Channel-side exclusion by GENERIC capability, not by tool name: a tool that
                 // declares AgentToolCapabilities.ExcludeFromDirectChannelChat completes its work
-                // off-chat (e.g. delivered to /workflow/observatory), so surfacing it on this
+                // off-chat (e.g. delivered to /admin#/observatory), so surfacing it on this
                 // direct-channel/Lark agent would let the model silently route a chat user's
                 // request away from their chat. Such tools stay in the global catalog for the
                 // workflow allowlist path; the exclusion is channel-side only. No channel agent

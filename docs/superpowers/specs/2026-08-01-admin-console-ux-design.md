@@ -1,8 +1,8 @@
 # Admin Console UX Design
 
 - **Date:** 2026-08-01
-- **Status:** Approved
-- **Surface:** `/admin`, `/admin#/observatory`, `/workflow/observatory`
+- **Status:** Superseded by `2026-08-04-admin-only-workflow-observatory-design.md`
+- **Surface:** `/admin`, `/admin#/observatory` (internal frame: `/admin/workflow-observatory`)
 
 ## Problem
 
@@ -19,8 +19,8 @@ admin shell owns module navigation and shell-level scroll state.
 
 ## Design
 
-Keep one renderer and one data path. `/admin#/observatory` continues to embed
-`/workflow/observatory`; no observatory cache, poller, or API client returns to
+Keep one renderer and one data path. `/admin#/observatory` embeds the internal
+`/admin/workflow-observatory` frame; no observatory cache, poller, or API client returns to
 `admin.html`. The canonical page gains a compact workspace bar with honest
 scope context, real manual refresh, admin tools, and an explicit immersive
 action. Admin-only email/scope and full-run lookup move behind the compact tools
@@ -48,7 +48,7 @@ view.
 
 ## Structure and Performance
 
-- `workflow-observatory.html` remains the sole run UI and owns observatory view
+- `admin-workflow-observatory.html` remains the sole run UI and owns observatory view
   state, rendering, refresh, and immersive behavior.
 - `admin.html` owns only shell rendering, persistent embedded-view lifecycle,
   and generic shell scroll restoration.

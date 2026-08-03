@@ -1426,7 +1426,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         root.GetProperty("member_id").GetString().Should().Be("member-alpha");
         root.GetProperty("schedule_id").GetString().Should().Be("schedule-member-1");
         root.GetProperty("published_service_id").GetString().Should().Be("published-member-1");
-        root.GetProperty("observatory_url").GetString().Should().Be("/workflow/observatory");
+        root.GetProperty("observatory_url").GetString().Should().Be("/admin#/observatory");
     }
 
     [Fact]
@@ -2097,7 +2097,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
             team_id = "team-alpha",
             schedule_id = "schedule-1",
             studio_url = "/scopes/scope-1/teams/team-alpha/members/member-1/workflow",
-            observatory_url = "/workflow/observatory",
+            observatory_url = "/admin#/observatory",
         });
 
         var receipt = tool.CreateResultReceipt("call-1", ScheduleToolName, "{}", resultJson);
@@ -2138,7 +2138,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
             ScopeId: "scope-1",
             TeamId: "team-alpha",
             BindingStatus: "accepted",
-            ObservatoryUrl: "/workflow/observatory",
+            ObservatoryUrl: "/admin#/observatory",
             StudioUrl: "/scopes/scope-1/teams/team-alpha/members/member-1/workflow")
         {
             ScheduleId = "schedule-1",
@@ -2198,7 +2198,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         root.GetProperty("schedule_id").GetString().Should().Be("schedule-1");
         root.GetProperty("studio_url").GetString().Should()
             .Be("/scopes/scope-1/teams/team-alpha/members/member-1/workflow");
-        root.GetProperty("observatory_url").GetString().Should().Be("/workflow/observatory");
+        root.GetProperty("observatory_url").GetString().Should().Be("/admin#/observatory");
     }
 
     [Theory]
@@ -2241,7 +2241,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
             ScopeId: "owner-scope",
             TeamId: "team-alpha",
             BindingStatus: "accepted",
-            ObservatoryUrl: "/workflow/observatory",
+            ObservatoryUrl: "/admin#/observatory",
             StudioUrl: "/scopes/owner-scope/teams/team-alpha/members/member-1/workflow"));
         var tool = await DiscoverToolAsync(port);
 
@@ -2415,7 +2415,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
             ScopeId: "scope-1",
             TeamId: "team-alpha",
             BindingStatus: "accepted",
-            ObservatoryUrl: "/workflow/observatory",
+            ObservatoryUrl: "/admin#/observatory",
             StudioUrl: "/scopes/scope-1/teams/team-alpha/members/member-1/workflow")
         {
             ScheduleId = "schedule-1",
@@ -2730,7 +2730,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
                 ScopeId: "scope-default",
                 TeamId: "team-alpha",
                 BindingStatus: "accepted",
-                ObservatoryUrl: "/workflow/observatory",
+                ObservatoryUrl: "/admin#/observatory",
                 StudioUrl: "/scopes/scope-default/teams/team-alpha/members/member-default/workflow");
         }
 
@@ -3253,7 +3253,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
                 MemberId: request.MemberId,
                 ScheduleId: "schedule-member-1",
                 PublishedServiceId: "published-member-1",
-                ObservatoryUrl: "/workflow/observatory",
+                ObservatoryUrl: "/admin#/observatory",
                 Status: "accepted"));
         }
     }

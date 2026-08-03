@@ -11,7 +11,7 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowConsoleStaticAssetEndpointTests
 {
     [Theory]
-    [InlineData("observatory", "Workflow Run Observatory")]
+    [InlineData("admin-observatory", "Workflow Run Observatory")]
     [InlineData("studio", "Workflow Studio")]
     public async Task WorkflowStaticShellEndpoints_ShouldRenderInjectedEmbeddedAssets(string endpoint, string marker)
     {
@@ -22,8 +22,8 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         http.Response.Body = new MemoryStream();
         var assets = http.RequestServices.GetRequiredService<IBackendConsoleAssetService>();
 
-        var result = endpoint == "observatory"
-            ? WorkflowRunObservatoryEndpoints.GetObservatoryPage(http, assets)
+        var result = endpoint == "admin-observatory"
+            ? WorkflowRunObservatoryEndpoints.GetAdminObservatoryFrame(http, assets)
             : WorkflowStudioEndpoints.GetStudioPage(http, assets);
 
         await result.ExecuteAsync(http);
@@ -45,14 +45,21 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
         html.Should().NotContain("https://nyx.chrono-ai.fun");
         html.Should().NotContain("37a93189-2734-406e-bca1-7dbdf25c5a53");
-        if (endpoint == "observatory")
+        if (endpoint == "admin-observatory")
         {
+            html.Should().Contain("if(window.top !== window) return;");
+            html.Should().Contain("location.replace(\"/admin#/observatory\"");
             html.Should().Contain("const url = CFG.nyxidApi + \"/api/v1/admin/users");
             html.Should().NotContain("const url = CFG.authority + \"/api/v1/admin/users");
             html.Should().Contain("\"aria-label\":\"完整 run id\"");
             html.Should().Contain("/api/workflow/observatory/admin/runs/");
             html.Should().Contain("detail.diagnostics");
             html.Should().NotContain("indexOf(\":run:\")");
+        }
+        else
+        {
+            html.Should().Contain("const OBS = \"/admin#/observatory\"");
+            html.Should().NotContain("const OBS = \"/workflow/observatory\"");
         }
     }
 
@@ -206,6 +213,22 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
               path: '/api/scopes/scope-alpha/runs/run-alpha:resume',
               body: { stepId: 'review', approved: true }
             });
+            const toolDetail = { summary: detail.summary, steps: [
+              { stepId: 'unsafe-tool', suspensionType: 'tool_approval', completedAtUtc: null },
+              { stepId: 'create-approval', suspensionType: 'tool_approval', completedAtUtc: null, toolApproval: {
+                executionId: 'exec-alpha', toolName: 'nyxid_proxy', toolCallId: 'call-alpha', approvalRequestId: 'approval-alpha'
+              } }
+            ] };
+            const toolApproval = vm.runInContext('findActiveApproval', context)(toolDetail);
+            assert.equal(toolApproval.stepId, 'create-approval');
+            assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext('buildApprovalRequest', context)(toolDetail, toolApproval, true, ''))), {
+              path: '/api/scopes/scope-alpha/runs/run-alpha:resume',
+              body: {
+                stepId: 'create-approval',
+                approved: true,
+                toolApproval: { executionId: 'exec-alpha', toolCallId: 'call-alpha', approvalRequestId: 'approval-alpha' }
+              }
+            });
             assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext('detailTabIds()', context))),
               ['timeline', 'steps', 'diagnostics', 'logs', 'artifacts', 'graph']);
             """;
@@ -355,7 +378,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         };
         http.Response.Body = new MemoryStream();
         var assets = http.RequestServices.GetRequiredService<IBackendConsoleAssetService>();
-        await WorkflowRunObservatoryEndpoints.GetObservatoryPage(http, assets).ExecuteAsync(http);
+        await WorkflowRunObservatoryEndpoints.GetAdminObservatoryFrame(http, assets).ExecuteAsync(http);
         http.Response.Body.Position = 0;
         using var reader = new StreamReader(http.Response.Body);
         return await reader.ReadToEndAsync();

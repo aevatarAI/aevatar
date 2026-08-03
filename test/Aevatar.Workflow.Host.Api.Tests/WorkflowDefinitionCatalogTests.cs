@@ -252,7 +252,7 @@ public class WorkflowDefinitionCatalogTests
         role.SystemPrompt.Should().Contain("NOT create a separate `wf-...` member");
         role.SystemPrompt.Should().Contain("Do not call `aevatar_provision_workflow_schedule` until a Team has been selected or created");
         role.SystemPrompt.Should().Contain("pass that confirmed `team_id`");
-        role.SystemPrompt.Should().Contain("/workflow/observatory");
+        role.SystemPrompt.Should().Contain("/admin#/observatory");
         role.SystemPrompt.Should().Contain("Do NOT");
         // Honesty: the receipt is Accepted (async), not a success claim.
         role.SystemPrompt.Should().Contain("Accepted");

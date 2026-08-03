@@ -235,6 +235,15 @@ public sealed class WorkflowExecutionReadModelMapper
             SuspensionContent = source.SuspensionContent,
             SuspensionTimeoutSeconds = source.SuspensionTimeoutSecondsValue == 0 ? null : source.SuspensionTimeoutSecondsValue,
             RequestedVariableName = source.RequestedVariableName,
+            ToolApproval = source.ToolApprovalValue == null
+                ? null
+                : new WorkflowRunToolApproval
+                {
+                    ExecutionId = source.ToolApprovalValue.ExecutionId,
+                    ToolName = source.ToolApprovalValue.ToolName,
+                    ToolCallId = source.ToolApprovalValue.ToolCallId,
+                    ApprovalRequestId = source.ToolApprovalValue.ApprovalRequestId,
+                },
             Usage = MapUsage(source.Usage),
         };
 

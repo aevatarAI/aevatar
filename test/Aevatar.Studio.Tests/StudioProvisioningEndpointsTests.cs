@@ -453,7 +453,7 @@ public sealed class StudioProvisioningEndpointsTests
         ScopeId: ScopeId,
         TeamId: TeamId,
         BindingStatus: ProvisionWorkflowBindingStatusNames.Accepted,
-        ObservatoryUrl: "/workflow/observatory")
+        ObservatoryUrl: "/admin#/observatory")
     {
         BindingRunId = "bind-run-1",
         ScheduleId = ScheduleId,

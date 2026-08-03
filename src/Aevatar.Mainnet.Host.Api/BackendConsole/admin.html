@@ -3397,13 +3397,13 @@ function viewSchedules(){
 /* 内嵌真页(同源共享 token);onload 注入 CSS 隐藏真页自带 .topbar(brand+suite-nav),消除与 /admin 左栏的双层导航。 */
 function embedTrim(f){ try{ var d=f.contentDocument; if(d&&d.head){ var s=d.createElement('style'); s.textContent=':root{--topbar-h:0px!important}.topbar{display:none!important}'; d.head.appendChild(s); } }catch(e){} }
 function suiteFrame(src,title){
-  var path=src.split('?')[0],key=path==='/workflow/observatory'?'observatory':path.replace(/^\/+|\/+$/g,'').replace(/\//g,'-');
+  var path=src.split('?')[0],key=path==='/admin/workflow-observatory'?'observatory':path.replace(/^\/+|\/+$/g,'').replace(/\//g,'-');
   return '<iframe class="suite-embed" src="'+src+'" title="'+title+'" data-console-frame="1" data-persistent-view="'+key+'" data-frame-source="'+src+'" onload="embedTrim(this)"></iframe>';
 }
 function observatoryFrameSource(){
   var q=parseHash().q||{},p=new URLSearchParams();
   ['scope','status','origin','definition','schedule','from','to','run','tab'].forEach(function(key){if(q[key])p.set(key,q[key]);});
-  return '/workflow/observatory'+(p.toString()?'?'+p.toString():'');
+  return '/admin/workflow-observatory'+(p.toString()?'?'+p.toString():'');
 }
 function viewObservatoryFrame(){ var src=observatoryFrameSource(); return {html:suiteFrame(src,'运行观测台'),persistentKey:'observatory',frameSource:src}; }
 function observatoryHash(query){

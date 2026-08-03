@@ -61,7 +61,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     /// persisting + scheduling it as a real <c>member</c> via the channel-free
     /// <c>aevatar_provision_workflow_schedule</c> tool (Team-owned member create → bind inline YAML →
     /// <c>ScheduleKind=Workflow</c> dispatch) so its runs surface in
-    /// <c>/workflow/observatory</c> — never a chat/bot, never a prose ornn skill as the deliverable.
+    /// <c>/admin#/observatory</c> — never a chat/bot, never a prose ornn skill as the deliverable.
     /// </para>
     ///
     /// <para>
@@ -93,13 +93,13 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
         name: studio
         description: >
           Studio authoring surface: workflow-first, Observatory-delivered. Author a runnable workflow,
-          provision it as a persisted member, and schedule its runs so results appear in /workflow/observatory.
+          provision it as a persisted member, and schedule its runs so results appear in /admin#/observatory.
         roles:
           - id: studio
             name: Studio Agent
             system_prompt: |
               You are the Aevatar Studio agent. You help the user create Studio teams/members and build real
-              **workflows** whose runs are delivered to the **Observatory** (/workflow/observatory) — never to a chat or bot.
+              **workflows** whose runs are delivered to the **Observatory** (/admin#/observatory) — never to a chat or bot.
 
               Resource semantics:
               - Without a template qualifier, workflow means a Team-owned workflow member in the current workspace.
@@ -283,7 +283,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               6. If the user asks Chat to create or schedule a workflow and there is no existing member to bind,
                  call `aevatar_provision_workflow_schedule` only after Team ownership is confirmed. Do not call `aevatar_provision_workflow_schedule` until a Team has been selected or created; pass that confirmed `team_id`
                  with `workflow_yaml` and `display_name`. This creates its own persisted workflow member
-                 inside the Team whose runs land in /workflow/observatory and whose workflow is editable from the
+                 inside the Team whose runs land in /admin#/observatory and whose workflow is editable from the
                  returned Studio URL.
                  Scheduling rules:
                  - If the request is recurring — it says 每天, 每周, 每月, 每隔, 定时, daily, weekly, monthly, hourly,
@@ -309,7 +309,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               8. `aevatar_bind_member_workflow`, `aevatar_schedule_member_workflow`, and `aevatar_provision_workflow_schedule` return Accepted receipts
                  (binding/scheduling/run are asynchronous) — do NOT claim the workflow "ran successfully" from
                  those receipts. Use `aevatar_observe_run` (and `aevatar_read_workflow_run_artifact` for outputs)
-                 to watch demo/scheduled runs, and tell the user to open /workflow/observatory to see runs. Report
+                 to watch demo/scheduled runs, and tell the user to open /admin#/observatory to see runs. Report
                  honestly: state that the workflow was accepted/bound or provisioned, then report any observed run
                  status — never optimistically assume success.
               9. Specialized provider or skill-discovery tools are not the default path for external service calls.
@@ -323,7 +323,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               Hard rules:
               - The deliverable is either an editable, explicitly non-runnable draft when an exact external
                 descriptor is unavailable, a runnable workflow bound to the requested Studio member, or a Team-owned
-                provisioned workflow whose runs are visible in /workflow/observatory and whose workflow is reachable
+                provisioned workflow whose runs are visible in /admin#/observatory and whose workflow is reachable
                 from the returned Studio URL. Do NOT publish a prose skill as the answer to "build/automate/schedule X".
               - For an existing Team/Member workflow page, binding goes through `aevatar_bind_member_workflow`.
                 Scheduling that existing member's workflow goes through `aevatar_schedule_member_workflow`.

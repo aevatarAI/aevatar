@@ -220,6 +220,51 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         approval.SuspensionTimeoutSeconds.Should().Be(3600);
     }
 
+    [Fact]
+    public async Task GetRunForScopeAsync_ShouldExposeTypedToolApprovalIdentity()
+    {
+        var snapshot = Snapshot(
+            "run-1",
+            CallerScope,
+            WorkflowRunCompletionStatus.Running,
+            started: 1,
+            updated: 5);
+        var currentState = new FakeCurrentStateQueryPort { SingleResult = snapshot };
+        var report = new WorkflowRunReport
+        {
+            Steps =
+            [
+                new WorkflowRunStepTrace
+                {
+                    StepId = "create_approval",
+                    StepType = "tool_call",
+                    SuspensionType = "tool_approval",
+                    SuspensionPrompt = "Approve tool execution?",
+                    ToolApproval = new WorkflowRunToolApproval
+                    {
+                        ExecutionId = "exec-alpha",
+                        ToolName = "nyxid_proxy",
+                        ToolCallId = "call-alpha",
+                        ApprovalRequestId = "approval-alpha",
+                    },
+                },
+            ],
+        };
+        var service = new WorkflowRunObservatoryQueryService(
+            currentState,
+            new FakeArtifactQueryPort { Report = report });
+
+        var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
+
+        var approval = detail!.Steps.Should().ContainSingle().Subject;
+        approval.SuspensionType.Should().Be("tool_approval");
+        approval.ToolApproval.Should().NotBeNull();
+        approval.ToolApproval!.ExecutionId.Should().Be("exec-alpha");
+        approval.ToolApproval.ToolName.Should().Be("nyxid_proxy");
+        approval.ToolApproval.ToolCallId.Should().Be("call-alpha");
+        approval.ToolApproval.ApprovalRequestId.Should().Be("approval-alpha");
+    }
+
     // 06-26 detail enrichment: the final result + per-step trace + rollup statistics are surfaced from the
     // committed run-report artifact. Final output/input are NOT truncated; step output is a 240-char preview.
     [Fact]

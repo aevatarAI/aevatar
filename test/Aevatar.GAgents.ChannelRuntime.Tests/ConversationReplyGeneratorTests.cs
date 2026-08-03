@@ -2149,7 +2149,7 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     // Tools whose outcome lands off-chat (e.g. aevatar_provision_workflow_schedule, which
-    // delivers its scheduled runs to /workflow/observatory, never a chat/bot) self-declare the
+    // delivers its scheduled runs to /admin#/observatory, never a chat/bot) self-declare the
     // generic AgentToolCapabilities.ExcludeFromDirectChannelChat marker. The channel/Lark
     // conversation agent must hide ANY tool carrying that capability — keyed off the capability,
     // not the tool name — otherwise it could route a Lark user's request away from their chat.

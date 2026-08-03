@@ -215,7 +215,7 @@ public sealed class UserSkillRunServiceTests
                 request.ScopeId,
                 request.TeamId,
                 ProvisionWorkflowBindingStatusNames.Accepted,
-                "/workflow/observatory",
+                "/admin#/observatory",
                 "/studio/member")
             {
                 ScheduleId = "schedule-alpha",

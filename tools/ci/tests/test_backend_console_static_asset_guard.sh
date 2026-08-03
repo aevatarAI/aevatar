@@ -32,7 +32,7 @@ write_fixture() {
   printf '<!doctype html><script>const cfg = __BACKEND_CONSOLE_CONFIG__;</script>\n' \
     > "${root}/src/Aevatar.Mainnet.Host.Api/Skills/workflow-skills.html"
   printf '<!doctype html><script>const cfg = __BACKEND_CONSOLE_CONFIG__;</script>\n' \
-    > "${root}/src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-observatory.html"
+    > "${root}/src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/admin-workflow-observatory.html"
   printf '<!doctype html><script>const cfg = __BACKEND_CONSOLE_CONFIG__;</script>\n' \
     > "${root}/src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-studio.html"
   printf '<!doctype html><script>const cfg = __BACKEND_CONSOLE_CONFIG__;</script>\n' \
@@ -50,7 +50,7 @@ write_fixture() {
 XML
   cat > "${root}/src/workflow/Aevatar.Workflow.Infrastructure/Aevatar.Workflow.Infrastructure.csproj" <<'XML'
 <Project><ItemGroup>
-  <EmbeddedResource Include="CapabilityApi\workflow-observatory.html" />
+  <EmbeddedResource Include="CapabilityApi\admin-workflow-observatory.html" />
   <EmbeddedResource Include="CapabilityApi\workflow-studio.html" />
 </ItemGroup></Project>
 XML

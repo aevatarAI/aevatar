@@ -387,7 +387,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         response.ScopeId.Should().Be(ScopeId);
         response.ScheduleId.Should().Be(ScheduleId);
         response.BindingRunId.Should().Be(BindingRunId);
-        response.ObservatoryUrl.Should().Be("/workflow/observatory");
+        response.ObservatoryUrl.Should().Be("/admin#/observatory");
 
         // create → bind, carrying the caller scope and Team ownership.
         member.CreateScopeId.Should().Be(ScopeId);
@@ -1226,7 +1226,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 request.MemberId,
                 receipt.ScheduleId,
                 acceptedBinding.PublishedServiceId,
-                "/workflow/observatory",
+                "/admin#/observatory",
                 "pending");
             return LastResult;
         }

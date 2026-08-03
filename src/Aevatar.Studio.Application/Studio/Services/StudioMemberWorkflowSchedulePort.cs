@@ -22,7 +22,7 @@ namespace Aevatar.Studio.Application.Studio.Services;
 public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSchedulePort
 {
     private const string WorkflowInvokeEndpointId = "chat";
-    private const string ObservatoryPath = "/workflow/observatory";
+    private const string ObservatoryPath = "/admin#/observatory";
     private const string DedicatedCredentialProvisioningKind =
         "dedicated_scheduled_invocation_agent_key";
     private const string ProvisioningBearerCapabilityScope = "proxy";

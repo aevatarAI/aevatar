@@ -53,6 +53,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().NotContain("var NYX_AUTHORITY=BACKEND_CONSOLE_CONFIG.authority");
             html.Should().Contain("searchParams.append('resource'");
             html.Should().Contain("function observatoryFrameSource()");
+            html.Should().Contain("'/admin/workflow-observatory'");
+            html.Should().NotContain("'/workflow/observatory'");
             html.Should().NotContain("function bindObservatory(");
         }
         else if (path == "/auto/callback")
@@ -2303,7 +2305,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
 
             const frame = vm.runInContext('viewObservatoryFrame().html', context);
             assert.equal(frame.title, '运行观测台');
-            assert.equal(frame.src, '/workflow/observatory?scope=scope-alpha&status=failed&origin=schedule%2Capi&definition=wf-alpha&schedule=sched-alpha&from=2026-07-29T00%3A00%3A00Z&to=2026-07-30T00%3A00%3A00Z&run=run-alpha&tab=steps');
+            assert.equal(frame.src, '/admin/workflow-observatory?scope=scope-alpha&status=failed&origin=schedule%2Capi&definition=wf-alpha&schedule=sched-alpha&from=2026-07-29T00%3A00%3A00Z&to=2026-07-30T00%3A00%3A00Z&run=run-alpha&tab=steps');
             assert.equal(vm.runInContext('observatoryHash', context)({scope:'scope-alpha',run:'run-alpha',tab:'steps',ignored:'no'}), '#/observatory?scope=scope-alpha&run=run-alpha&tab=steps');
             assert.equal(vm.runInContext('observatoryHash', context)({scope:'mine',tab:'timeline'}), '#/observatory');
             """;
@@ -2364,7 +2366,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               frame.classList = { toggle(cls, on){ frame.activeFlag = !!on; } };
               return frame;
             }
-            const obsFrame = frameStub('observatory', '/workflow/observatory?run=abc');
+            const obsFrame = frameStub('observatory', '/admin/workflow-observatory?run=abc');
             const studioFrame = frameStub('workflow-studio', '/workflow/studio');
             const dock = {
               querySelector(sel){
@@ -2376,17 +2378,17 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               insertAdjacentHTML(){ assert.fail('existing dock frames must be reused, not recreated'); }
             };
             const activate = vm.runInContext('activateDockFrame', context);
-            activate(dock, {persistentKey:'observatory', frameSource:'/workflow/observatory', html:''});
-            assert.equal(obsFrame.src, '/workflow/observatory?run=abc');
+            activate(dock, {persistentKey:'observatory', frameSource:'/admin/workflow-observatory', html:''});
+            assert.equal(obsFrame.src, '/admin/workflow-observatory?run=abc');
             assert.equal(obsFrame.activeFlag, true);
             assert.equal(studioFrame.activeFlag, false);
-            activate(dock, {persistentKey:'observatory', frameSource:'/workflow/observatory?run=zzz', html:''});
-            assert.equal(obsFrame.src, '/workflow/observatory?run=zzz');
-            assert.equal(obsFrame.attrs['data-frame-source'], '/workflow/observatory?run=zzz');
+            activate(dock, {persistentKey:'observatory', frameSource:'/admin/workflow-observatory?run=zzz', html:''});
+            assert.equal(obsFrame.src, '/admin/workflow-observatory?run=zzz');
+            assert.equal(obsFrame.attrs['data-frame-source'], '/admin/workflow-observatory?run=zzz');
             activate(dock, {persistentKey:'workflow-studio', frameSource:'/workflow/studio', html:''});
             assert.equal(studioFrame.activeFlag, true);
             assert.equal(obsFrame.activeFlag, false);
-            assert.equal(obsFrame.src, '/workflow/observatory?run=zzz');
+            assert.equal(obsFrame.src, '/admin/workflow-observatory?run=zzz');
 
             const oldScroll = {scrollTop:420};
             const nextScroll = {scrollTop:0};

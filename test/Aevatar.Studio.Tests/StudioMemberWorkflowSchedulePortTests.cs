@@ -42,7 +42,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         result.MemberId.Should().Be("member-1");
         result.ScheduleId.Should().Be(scheduleService.Configuration!.ScheduleId);
         result.PublishedServiceId.Should().Be("published-member-1");
-        result.ObservatoryUrl.Should().Be("/workflow/observatory");
+        result.ObservatoryUrl.Should().Be("/admin#/observatory");
 
         memberService.GetScopeId.Should().Be("scope-1");
         memberService.GetMemberId.Should().Be("member-1");

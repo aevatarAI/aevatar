@@ -26,7 +26,7 @@ asset_files=(
   "src/Aevatar.Mainnet.Host.Api/Cqrs/cqrs-observatory.html"
   "src/Aevatar.Mainnet.Host.Api/Voice/voice-console.html"
   "src/Aevatar.Mainnet.Host.Api/Skills/workflow-skills.html"
-  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-observatory.html"
+  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/admin-workflow-observatory.html"
   "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-studio.html"
   "agents/channels/Aevatar.GAgents.Channel.NyxIdRelay/channels.html"
 )
@@ -37,7 +37,7 @@ config_asset_files=(
   "src/Aevatar.Mainnet.Host.Api/Cqrs/cqrs-observatory.html"
   "src/Aevatar.Mainnet.Host.Api/Voice/voice-console.html"
   "src/Aevatar.Mainnet.Host.Api/Skills/workflow-skills.html"
-  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-observatory.html"
+  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/admin-workflow-observatory.html"
   "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-studio.html"
   "agents/channels/Aevatar.GAgents.Channel.NyxIdRelay/channels.html"
 )

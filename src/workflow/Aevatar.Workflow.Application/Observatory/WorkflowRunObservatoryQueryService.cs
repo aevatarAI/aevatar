@@ -321,6 +321,15 @@ public sealed class WorkflowRunObservatoryQueryService
             SuspensionPrompt = step.SuspensionPrompt,
             SuspensionContent = step.SuspensionContent,
             SuspensionTimeoutSeconds = step.SuspensionTimeoutSeconds,
+            ToolApproval = step.ToolApproval == null
+                ? null
+                : new ObservatoryToolApprovalDetail
+                {
+                    ExecutionId = step.ToolApproval.ExecutionId,
+                    ToolName = step.ToolApproval.ToolName,
+                    ToolCallId = step.ToolApproval.ToolCallId,
+                    ApprovalRequestId = step.ToolApproval.ApprovalRequestId,
+                },
             Usage = new ObservatoryUsageTotals
             {
                 PromptTokens = step.Usage.PromptTokens,

@@ -428,7 +428,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 ToolCallId = pendingState.ToolCallId,
                 ApprovalRequestId = pendingState.ApprovalRequestId,
             },
-        }, TopologyAudience.ParentAndChildren, ct);
+        }, TopologyAudience.Self, ct);
     }
 
     private static async Task PublishToolOutcomeAsync(

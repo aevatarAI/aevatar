@@ -7,7 +7,7 @@
 <style>
   /* =========================================================================
      Aevatar Console · /workflow/skills 「Skills 调用入口」
-     与 /workflow/observatory 同源：同一套 design tokens、深色为主 + 完整浅色、
+     与 /admin#/observatory 同源：同一套 design tokens、深色为主 + 完整浅色、
      响应式、键盘可达、zh-CN。单文件自包含，零外部依赖。
      JS 仅为结构性占位（渲染函数 + 各态骨架）；真实 OIDC PKCE 鉴权与 fetch 由接线方注入。
      ========================================================================= */
@@ -332,7 +332,7 @@
      scheduleAction(id,act)  POST /api/schedules/{id}:enable|:disable|:run-now / DELETE
    渲染函数与契约解耦：render*(data) 形状即「给我数据我能渲染」。鉴权/网络/错误透传由接线方注入。
    =========================================================================== */
-const OBS = "/workflow/observatory";
+const OBS = "/admin#/observatory";
 let ACCOUNT = null;
 function nowMs(){ return Date.now(); }
 
@@ -521,7 +521,7 @@ function applyTheme(){ const t=localStorage.getItem("skills-theme"); if(t)docume
    topbar
    =========================================================================== */
 const SUITE_NAV=[
-  {k:"observatory",href:"/workflow/observatory",label:"观测台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'},
+  {k:"observatory",href:"/admin#/observatory",label:"观测台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'},
   {k:"skills",href:"/workflow/skills",label:"Skills",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 13h7l-1 9 9-11h-7l1-9Z"/></svg>'},
   {k:"studio",href:"/workflow/studio",label:"Studio",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>'},
   {k:"schedules",href:"/schedules",label:"定时任务",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>'},

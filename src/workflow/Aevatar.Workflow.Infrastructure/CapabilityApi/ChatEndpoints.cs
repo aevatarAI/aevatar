@@ -53,7 +53,7 @@ public static class WorkflowCapabilityEndpoints
         WorkflowWebhookIngressEndpoints.Map(group);
         WorkflowExternalApprovalCallbackEndpoints.Map(group);
         // 06-19-workflow-run-observatory (C2): read-only, scope-gated run viewer. Maps its own absolute
-        // routes (page /workflow/observatory + data /api/workflow/observatory/*) on the root app.
+        // routes (admin frame /admin/workflow-observatory + data /api/workflow/observatory/*) on the root app.
         app.MapWorkflowRunObservatory();
         // Workflow studio: conversational orchestration surface, gated behind the same OIDC login as the
         // observatory. Mount + login only this increment (page /workflow/studio + /workflow/studio/callback).

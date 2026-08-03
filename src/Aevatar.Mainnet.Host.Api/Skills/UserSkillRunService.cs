@@ -14,7 +14,7 @@ namespace Aevatar.Mainnet.Host.Api.Skills;
 // persisted target) is a separate path.
 internal sealed class UserSkillRunService : IUserSkillRunService
 {
-    private const string ObservatoryRunPathPrefix = "/workflow/observatory?run=";
+    private const string ObservatoryRunPathPrefix = "/admin#/observatory?run=";
 
     private readonly IRemoteSkillFetcher _remoteSkillFetcher;
     private readonly ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> _chatRunDispatch;
