@@ -3,11 +3,13 @@ using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Core;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Workflow.Infrastructure.Workflows;
 
@@ -16,19 +18,35 @@ internal sealed class FileBackedWorkflowCatalogPort
     private const string PublisherActorId = "workflow.definition.startup.materializer";
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
+    private readonly IWorkflowDefinitionBindObservationScopeLeasePreparationPort _observationPreparation;
+    private readonly IWorkflowDefinitionBindObservationProjectionPort _observationProjection;
     private readonly IWorkflowExternalCapabilityAdmissionService _capabilityAdmissionService;
+    private readonly WorkflowDefinitionFileSourceOptions _options;
     private readonly ILogger<FileBackedWorkflowCatalogPort> _logger;
 
     public FileBackedWorkflowCatalogPort(
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort,
+        IWorkflowDefinitionBindObservationScopeLeasePreparationPort observationPreparation,
+        IWorkflowDefinitionBindObservationProjectionPort observationProjection,
         IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService,
+        IOptions<WorkflowDefinitionFileSourceOptions> options,
         ILogger<FileBackedWorkflowCatalogPort>? logger = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _observationPreparation = observationPreparation ??
+                                  throw new ArgumentNullException(nameof(observationPreparation));
+        _observationProjection = observationProjection ??
+                                 throw new ArgumentNullException(nameof(observationProjection));
         _capabilityAdmissionService = capabilityAdmissionService ??
                                       throw new ArgumentNullException(nameof(capabilityAdmissionService));
+        _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
+        if (_options.BindCommitTimeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                _options.BindCommitTimeout,
+                "Workflow definition bind commit timeout must be positive.");
         _logger = logger ?? NullLogger<FileBackedWorkflowCatalogPort>.Instance;
     }
 
@@ -50,29 +68,115 @@ internal sealed class FileBackedWorkflowCatalogPort
                 continue;
             }
 
-            var capabilityAdmissionPlan = await _capabilityAdmissionService.AdmitAsync(
-                new WorkflowExternalCapabilityAdmissionRequest(
-                    new ExternalWorkflowCapabilityAccessContext(
-                        "system",
-                        PublisherActorId),
-                    definition.WorkflowYaml,
-                    inlineWorkflowYamls: null,
-                    definition.SourceKind,
-                    ExternalCapabilityExecutionMode.Durable),
-                ct);
+            await MaterializeDefinitionAsync(definition, ct);
+        }
+    }
 
-            var actorId = string.IsNullOrWhiteSpace(definition.DefinitionActorId)
-                ? WorkflowDefinitionActorId.Format(definition.WorkflowName)
-                : definition.DefinitionActorId.Trim();
-            var actor = await _runtime.CreateAsync<WorkflowGAgent>(actorId, ct);
-            await _dispatchPort.DispatchAsync(
-                actor.Id,
-                CreateBindEnvelope(definition, capabilityAdmissionPlan),
-                ct);
-            _logger.LogInformation(
-                "Materialized startup workflow definition '{WorkflowName}' into WorkflowGAgent '{ActorId}'.",
+    private async Task MaterializeDefinitionAsync(
+        WorkflowDefinitionRegistration definition,
+        CancellationToken ct)
+    {
+        var actorId = string.IsNullOrWhiteSpace(definition.DefinitionActorId)
+            ? WorkflowDefinitionActorId.Format(definition.WorkflowName)
+            : definition.DefinitionActorId.Trim();
+        var executionMode = definition.ExpectedExecutionMode;
+        EnsureExpectedExecutionMode(definition.WorkflowName, actorId, executionMode);
+        var capabilityAdmissionPlan = await _capabilityAdmissionService.AdmitAsync(
+            new WorkflowExternalCapabilityAdmissionRequest(
+                new ExternalWorkflowCapabilityAccessContext(
+                    "system",
+                    PublisherActorId),
+                definition.WorkflowYaml,
+                inlineWorkflowYamls: null,
+                definition.SourceKind,
+                executionMode),
+            ct);
+        EnsureAdmissionModeMatches(
+            definition.WorkflowName,
+            actorId,
+            executionMode,
+            capabilityAdmissionPlan);
+
+        var actor = await _runtime.CreateAsync<WorkflowGAgent>(actorId, ct);
+        var bindEnvelope = CreateBindEnvelope(definition, capabilityAdmissionPlan);
+        var stateVersion = await DispatchAndObserveBindAsync(
+            definition,
+            actor.Id,
+            bindEnvelope,
+            executionMode,
+            ct);
+        _logger.LogInformation(
+            "Materialized startup workflow definition '{WorkflowName}' into WorkflowGAgent '{ActorId}' at committed state version {StateVersion}.",
+            definition.WorkflowName,
+            actor.Id,
+            stateVersion);
+    }
+
+    private async Task<long> DispatchAndObserveBindAsync(
+        WorkflowDefinitionRegistration definition,
+        string actorId,
+        EventEnvelope bindEnvelope,
+        ExternalCapabilityExecutionMode executionMode,
+        CancellationToken ct)
+    {
+        var commandId = bindEnvelope.Propagation.CorrelationId;
+        var preparation = await _observationPreparation.PrepareAsync(actorId, commandId, ct);
+        if (preparation == null)
+        {
+            throw new WorkflowDefinitionMaterializationException(
+                WorkflowDefinitionMaterializationException.ObservationUnavailableCode,
                 definition.WorkflowName,
-                actor.Id);
+                actorId,
+                executionMode,
+                $"Workflow definition bind observation is unavailable for actor '{actorId}'.");
+        }
+
+        var sink = new EventChannel<EventEnvelope>(capacity: 8);
+        EventSinkProjectionAttachment<IWorkflowDefinitionBindObservationProjectionLease>? attachment = null;
+        try
+        {
+            attachment = await _observationProjection.AttachExistingDefinitionProjectionAsync(
+                actorId,
+                commandId,
+                sink,
+                ct);
+            if (attachment == null)
+            {
+                throw new WorkflowDefinitionMaterializationException(
+                    WorkflowDefinitionMaterializationException.ObservationUnavailableCode,
+                    definition.WorkflowName,
+                    actorId,
+                    executionMode,
+                    $"Workflow definition bind observation attachment is unavailable for actor '{actorId}'.");
+            }
+
+            var dispatchAdmission = await _dispatchPort.DispatchAsync(actorId, bindEnvelope, ct);
+            if (!dispatchAdmission.Accepted)
+            {
+                throw new WorkflowDefinitionMaterializationException(
+                    WorkflowDefinitionMaterializationException.DispatchRejectedCode,
+                    definition.WorkflowName,
+                    actorId,
+                    executionMode,
+                    $"Workflow definition bind dispatch was rejected for actor '{actorId}'.");
+            }
+
+            return await WaitForCommittedBindAsync(sink, bindEnvelope, definition, actorId, ct);
+        }
+        finally
+        {
+            try
+            {
+                await _observationProjection.DetachReleaseAndDisposeAsync(
+                    attachment?.ProjectionLease,
+                    attachment?.LiveSinkLease,
+                    sink,
+                    ct: CancellationToken.None);
+            }
+            finally
+            {
+                await _observationPreparation.ReleaseAsync(preparation, CancellationToken.None);
+            }
         }
     }
 
@@ -92,6 +196,7 @@ internal sealed class FileBackedWorkflowCatalogPort
                     ? "builtin"
                     : definition.SourceKind.Trim(),
                 CapabilityAdmissionPlan = capabilityAdmissionPlan.Clone(),
+                ExpectedExecutionMode = definition.ExpectedExecutionMode,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(PublisherActorId, TopologyAudience.Self),
             Propagation = new EnvelopePropagation
@@ -99,4 +204,126 @@ internal sealed class FileBackedWorkflowCatalogPort
                 CorrelationId = Guid.NewGuid().ToString("N"),
             },
         };
+
+    private async Task<long> WaitForCommittedBindAsync(
+        IEventSink<EventEnvelope> sink,
+        EventEnvelope bindEnvelope,
+        WorkflowDefinitionRegistration definition,
+        string actorId,
+        CancellationToken ct)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(_options.BindCommitTimeout);
+        try
+        {
+            await foreach (var observed in sink.ReadAllAsync(timeoutCts.Token))
+            {
+                if (TryObserveCommittedBind(
+                        observed,
+                        bindEnvelope,
+                        definition,
+                        actorId,
+                        out var stateVersion))
+                {
+                    return stateVersion;
+                }
+            }
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && timeoutCts.IsCancellationRequested)
+        {
+            throw BindNotCommitted(definition, actorId, ex);
+        }
+
+        throw BindNotCommitted(definition, actorId);
+    }
+
+    private static bool TryObserveCommittedBind(
+        EventEnvelope observed,
+        EventEnvelope bindEnvelope,
+        WorkflowDefinitionRegistration definition,
+        string actorId,
+        out long stateVersion)
+    {
+        stateVersion = 0;
+        if (!string.Equals(
+                observed.Propagation?.CorrelationId,
+                bindEnvelope.Propagation?.CorrelationId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                observed.Propagation?.CausationEventId,
+                bindEnvelope.Id,
+                StringComparison.Ordinal) ||
+            observed.Payload?.Is(CommittedStateEventPublished.Descriptor) != true)
+        {
+            return false;
+        }
+
+        var publication = observed.Payload.Unpack<CommittedStateEventPublished>();
+        if (publication.StateEvent?.EventData?.Is(BindWorkflowDefinitionEvent.Descriptor) != true)
+            return false;
+
+        var committedBind = publication.StateEvent.EventData.Unpack<BindWorkflowDefinitionEvent>();
+        if (committedBind.ExpectedExecutionMode != definition.ExpectedExecutionMode ||
+            committedBind.CapabilityAdmissionPlan?.ExecutionMode != definition.ExpectedExecutionMode)
+        {
+            var committedPlanMode = committedBind.CapabilityAdmissionPlan?.ExecutionMode.ToString() ?? "missing";
+            throw new WorkflowDefinitionMaterializationException(
+                WorkflowDefinitionMaterializationException.AdmissionModeMismatchCode,
+                definition.WorkflowName,
+                actorId,
+                definition.ExpectedExecutionMode,
+                $"Committed workflow definition bind execution mode '{committedBind.ExpectedExecutionMode}' " +
+                $"and admission mode '{committedPlanMode}' do not match startup registration mode " +
+                $"'{definition.ExpectedExecutionMode}'.");
+        }
+
+        stateVersion = publication.StateEvent.Version;
+        return true;
+    }
+
+    private WorkflowDefinitionMaterializationException BindNotCommitted(
+        WorkflowDefinitionRegistration definition,
+        string actorId,
+        Exception? innerException = null) =>
+        new(
+            WorkflowDefinitionMaterializationException.BindNotCommittedCode,
+            definition.WorkflowName,
+            actorId,
+            definition.ExpectedExecutionMode,
+            $"Workflow definition bind was not observed as committed for actor '{actorId}' " +
+            $"within {_options.BindCommitTimeout}.",
+            innerException);
+
+    private static void EnsureExpectedExecutionMode(
+        string workflowName,
+        string actorId,
+        ExternalCapabilityExecutionMode executionMode)
+    {
+        if (executionMode != ExternalCapabilityExecutionMode.Unspecified && System.Enum.IsDefined(executionMode))
+            return;
+
+        throw new WorkflowDefinitionMaterializationException(
+            WorkflowDefinitionMaterializationException.InvalidExecutionModeCode,
+            workflowName,
+            actorId,
+            executionMode,
+            "Startup workflow definition requires an explicit expected execution mode.");
+    }
+
+    private static void EnsureAdmissionModeMatches(
+        string workflowName,
+        string actorId,
+        ExternalCapabilityExecutionMode executionMode,
+        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan)
+    {
+        if (capabilityAdmissionPlan.ExecutionMode == executionMode)
+            return;
+
+        throw new WorkflowDefinitionMaterializationException(
+            WorkflowDefinitionMaterializationException.AdmissionModeMismatchCode,
+            workflowName,
+            actorId,
+            executionMode,
+            "Startup workflow capability admission mode does not match its registration.");
+    }
 }

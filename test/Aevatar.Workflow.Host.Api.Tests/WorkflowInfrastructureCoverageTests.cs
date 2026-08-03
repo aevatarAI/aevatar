@@ -1026,7 +1026,10 @@ public sealed class WorkflowInfrastructureCoverageTests
     public async Task RegistryWorkflowDefinitionResolver_ShouldTrimLookup_AndReturnNullForBlank()
     {
         var registry = new WorkflowDefinitionCatalog();
-        registry.Register("direct", "name: direct");
+        registry.Register(
+            "direct",
+            "name: direct",
+            Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode.Interactive);
         var resolver = new RegistryWorkflowDefinitionResolver(registry);
 
         (await resolver.GetWorkflowYamlAsync(" direct ", CancellationToken.None)).Should().Contain("name: direct");

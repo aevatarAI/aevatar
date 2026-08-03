@@ -287,14 +287,16 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
             steps:
               - id: reply
                 type: llm_call
-            """);
+            """,
+            ExternalCapabilityExecutionMode.Interactive);
         registry.Register("alpha", """
             name: alpha
             description: Alpha workflow.
             steps:
               - id: reply
                 type: llm_call
-            """);
+            """,
+            ExternalCapabilityExecutionMode.Interactive);
         var port = new RegistryBackedWorkflowCatalogPort(registry);
 
         var catalog = await port.ListWorkflowCatalogAsync();
@@ -322,7 +324,11 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
 
     private sealed class StaticWorkflowDefinitionCatalog(IReadOnlyList<string> names) : IWorkflowDefinitionCatalog
     {
-        public void Register(string name, string yaml) => throw new NotSupportedException();
+        public void Register(
+            string name,
+            string yaml,
+            ExternalCapabilityExecutionMode expectedExecutionMode) =>
+            throw new NotSupportedException();
 
         public WorkflowDefinitionRegistration? GetDefinition(string name) => null;
 

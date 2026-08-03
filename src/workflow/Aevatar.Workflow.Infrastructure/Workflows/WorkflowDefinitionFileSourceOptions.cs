@@ -13,4 +13,6 @@ public sealed class WorkflowDefinitionFileSourceOptions
 
     public WorkflowDefinitionDuplicatePolicy DuplicatePolicy { get; set; } =
         WorkflowDefinitionDuplicatePolicy.Throw;
+
+    public TimeSpan BindCommitTimeout { get; set; } = TimeSpan.FromSeconds(30);
 }

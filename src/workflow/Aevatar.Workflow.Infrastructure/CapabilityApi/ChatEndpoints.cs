@@ -1175,6 +1175,8 @@ public static class WorkflowCapabilityEndpoints
 
             for (var current = ex; current != null; current = current.InnerException)
             {
+                if (current is WorkflowExpectedExecutionModeCompatibilityException)
+                    return true;
                 if (current.Message.Contains(DescriptorMissingMarker, StringComparison.Ordinal))
                     return true;
             }

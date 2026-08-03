@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Abstractions.Workflows;
 
@@ -397,13 +398,21 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
             includeExecuteStep: false);
 
     /// <inheritdoc />
-    public void Register(string name, string yaml)
+    public void Register(
+        string name,
+        string yaml,
+        ExternalCapabilityExecutionMode expectedExecutionMode)
     {
-        Register(name, yaml, "builtin");
+        Register(name, yaml, expectedExecutionMode, "builtin");
     }
 
-    public void Register(string name, string yaml, string sourceKind)
+    public void Register(
+        string name,
+        string yaml,
+        ExternalCapabilityExecutionMode expectedExecutionMode,
+        string sourceKind)
     {
+        EnsureExpectedExecutionMode(expectedExecutionMode);
         var normalizedName = NormalizeName(name);
         var normalizedSourceKind = string.IsNullOrWhiteSpace(sourceKind)
             ? "builtin"
@@ -415,11 +424,13 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                 normalizedName,
                 yaml,
                 WorkflowDefinitionActorId.Format(normalizedName),
+                expectedExecutionMode,
                 normalizedSourceKind),
             (_, _) => new WorkflowDefinitionRegistration(
                 normalizedName,
                 yaml,
                 WorkflowDefinitionActorId.Format(normalizedName),
+                expectedExecutionMode,
                 normalizedSourceKind));
     }
 
@@ -446,6 +457,15 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
             throw new ArgumentException("Workflow name is required.", nameof(workflowName));
 
         return workflowName.Trim();
+    }
+
+    private static void EnsureExpectedExecutionMode(ExternalCapabilityExecutionMode executionMode)
+    {
+        if (executionMode == ExternalCapabilityExecutionMode.Unspecified || !Enum.IsDefined(executionMode))
+            throw new ArgumentOutOfRangeException(
+                nameof(executionMode),
+                executionMode,
+                "Workflow expected execution mode is required.");
     }
 
     private static string BuildAutoWorkflowYaml(

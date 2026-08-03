@@ -1846,6 +1846,23 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public void WorkflowExecutionErrorMapper_ShouldMapExpectedExecutionModeMismatchAsCompatibilityFailure()
+    {
+        var failure = new InvalidOperationException(
+            "wrapped",
+            new WorkflowExpectedExecutionModeCompatibilityException(
+                "workflow-definition:studio",
+                ExternalCapabilityExecutionMode.Unspecified,
+                ExternalCapabilityExecutionMode.Interactive));
+
+        var mapped = WorkflowCapabilityEndpoints.WorkflowExecutionErrorMapper.ToError(failure);
+
+        mapped.Code.Should().Be(
+            WorkflowCapabilityEndpoints.WorkflowExecutionErrorMapper.CompatibilityErrorCode);
+        mapped.Message.Should().Contain("Re-publish or migrate");
+    }
+
+    [Fact]
     public async Task HandleResume_ShouldRejectMissingFields()
     {
         var service = new RecordingDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>();

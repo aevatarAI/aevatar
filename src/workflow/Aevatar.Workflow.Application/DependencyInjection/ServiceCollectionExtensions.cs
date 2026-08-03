@@ -55,13 +55,25 @@ public static class ServiceCollectionExtensions
         {
             var catalog = new WorkflowDefinitionCatalog();
             if (options.RegisterBuiltInDirectWorkflow)
-                catalog.Register("direct", WorkflowDefinitionCatalog.BuiltInDirectYaml);
+                catalog.Register(
+                    "direct",
+                    WorkflowDefinitionCatalog.BuiltInDirectYaml,
+                    Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode.Interactive);
             if (options.RegisterBuiltInStudioWorkflow)
-                catalog.Register("studio", WorkflowDefinitionCatalog.BuiltInStudioYaml);
+                catalog.Register(
+                    "studio",
+                    WorkflowDefinitionCatalog.BuiltInStudioYaml,
+                    Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode.Interactive);
             if (options.RegisterBuiltInAutoWorkflow)
-                catalog.Register("auto", WorkflowDefinitionCatalog.CreateBuiltInAutoYaml());
+                catalog.Register(
+                    "auto",
+                    WorkflowDefinitionCatalog.CreateBuiltInAutoYaml(),
+                    Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode.Interactive);
             if (options.RegisterBuiltInAutoReviewWorkflow)
-                catalog.Register("auto_review", WorkflowDefinitionCatalog.CreateBuiltInAutoReviewYaml());
+                catalog.Register(
+                    "auto_review",
+                    WorkflowDefinitionCatalog.CreateBuiltInAutoReviewYaml(),
+                    Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode.Interactive);
 
             return catalog;
         });

@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Core;
@@ -19,20 +20,40 @@ public class WorkflowDefinitionCatalogTests
     public void Register_And_GetYaml()
     {
         var registry = new WorkflowDefinitionCatalog();
-        registry.Register("test", "name: test\nsteps: []");
+        registry.Register(
+            "test",
+            "name: test\nsteps: []",
+            ExternalCapabilityExecutionMode.Interactive);
 
         registry.GetYaml("test").Should().Contain("name: test");
         registry.GetYaml("TEST").Should().NotBeNull(); // Case-insensitive lookup.
         registry.GetYaml("nonexistent").Should().BeNull();
         registry.GetDefinition("test")!.DefinitionActorId.Should().Be(WorkflowDefinitionActorId.Format("test"));
+        registry.GetDefinition("test")!.ExpectedExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Interactive);
+    }
+
+    [Fact]
+    public void Register_WithUnspecifiedMode_ShouldReject()
+    {
+        var registry = new WorkflowDefinitionCatalog();
+
+        var act = () => registry.Register(
+            "test",
+            "name: test\nsteps: []",
+            ExternalCapabilityExecutionMode.Unspecified);
+
+        act.Should().Throw<ArgumentOutOfRangeException>()
+            .WithMessage("*execution mode is required*");
+        registry.GetNames().Should().BeEmpty();
     }
 
     [Fact]
     public void GetNames_ReturnsAll()
     {
         var registry = new WorkflowDefinitionCatalog();
-        registry.Register("alpha", "a");
-        registry.Register("beta", "b");
+        registry.Register("alpha", "a", ExternalCapabilityExecutionMode.Interactive);
+        registry.Register("beta", "b", ExternalCapabilityExecutionMode.Interactive);
 
         registry.GetNames().Should().HaveCount(2);
     }
@@ -112,7 +133,10 @@ public class WorkflowDefinitionCatalogTests
             File.WriteAllText(Path.Combine(tmpDir, "direct.yaml"), "name: direct\nsteps:\n  - id: from_file\n");
 
             var registry = new WorkflowDefinitionCatalog();
-            registry.Register("direct", "name: direct\nsteps:\n  - id: built_in\n");
+            registry.Register(
+                "direct",
+                "name: direct\nsteps:\n  - id: built_in\n",
+                ExternalCapabilityExecutionMode.Interactive);
             var loader = new WorkflowDefinitionFileLoader();
 
             var count = loader.LoadInto(
@@ -402,8 +426,14 @@ public class WorkflowDefinitionCatalogTests
     public void Catalog_ShouldRegisterStudioWorkflowAlongsideDirect()
     {
         var registry = new WorkflowDefinitionCatalog();
-        registry.Register("direct", WorkflowDefinitionCatalog.BuiltInDirectYaml);
-        registry.Register("studio", WorkflowDefinitionCatalog.BuiltInStudioYaml);
+        registry.Register(
+            "direct",
+            WorkflowDefinitionCatalog.BuiltInDirectYaml,
+            ExternalCapabilityExecutionMode.Interactive);
+        registry.Register(
+            "studio",
+            WorkflowDefinitionCatalog.BuiltInStudioYaml,
+            ExternalCapabilityExecutionMode.Interactive);
 
         registry.GetYaml("studio").Should().Contain("name: studio");
         registry.GetDefinition("studio")!.DefinitionActorId

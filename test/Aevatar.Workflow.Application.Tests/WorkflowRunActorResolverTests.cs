@@ -37,7 +37,10 @@ public sealed class WorkflowRunActorResolverTests
         var bindingReader = new StaticWorkflowActorBindingReader(null);
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
+        registry.Register(
+            "direct",
+            "name: direct\nroles: []\nsteps: []\n",
+            ExternalCapabilityExecutionMode.Interactive);
         var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry);
 
         var result = await resolver.ResolveOrCreateAsync(
@@ -58,7 +61,10 @@ public sealed class WorkflowRunActorResolverTests
         var bindingReader = new StaticWorkflowActorBindingReader(null);
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
+        registry.Register(
+            "direct",
+            "name: direct\nroles: []\nsteps: []\n",
+            ExternalCapabilityExecutionMode.Interactive);
         var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry);
 
         var result = await resolver.ResolveOrCreateAsync(
@@ -80,7 +86,10 @@ public sealed class WorkflowRunActorResolverTests
         var bindingReader = new StaticWorkflowActorBindingReader(null);
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register("auto", "name: auto\nroles: []\nsteps: []\n");
+        registry.Register(
+            "auto",
+            "name: auto\nroles: []\nsteps: []\n",
+            ExternalCapabilityExecutionMode.Interactive);
         var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry, new WorkflowRunBehaviorOptions
             {
                 UseAutoAsDefaultWhenWorkflowUnspecified = true,
@@ -101,7 +110,10 @@ public sealed class WorkflowRunActorResolverTests
     {
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register("review", "name: review\nroles: []\nsteps: []\n");
+        registry.Register(
+            "review",
+            "name: review\nroles: []\nsteps: []\n",
+            ExternalCapabilityExecutionMode.Interactive);
         var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), actorPort, actorPort, registry, new WorkflowRunBehaviorOptions
             {
                 DefaultWorkflowName = "review",
@@ -123,7 +135,10 @@ public sealed class WorkflowRunActorResolverTests
         var bindingReader = new ThrowingWorkflowActorBindingReader();
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
+        registry.Register(
+            "direct",
+            "name: direct\nroles: []\nsteps: []\n",
+            ExternalCapabilityExecutionMode.Interactive);
         var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry);
 
         var result = await resolver.ResolveOrCreateAsync(
@@ -275,7 +290,10 @@ public sealed class WorkflowRunActorResolverTests
                 ScopeId: "source-scope-1"));
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
+        registry.Register(
+            "direct",
+            "name: direct\nroles: []\nsteps: []\n",
+            ExternalCapabilityExecutionMode.Interactive);
         var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry);
 
         var result = await resolver.ResolveOrCreateAsync(
@@ -558,7 +576,10 @@ public sealed class WorkflowRunActorResolverTests
     public async Task ResolveOrCreateAsync_ShouldUseRegistryYaml_WhenSourceBindingHasWorkflowNameOnly()
     {
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
+        registry.Register(
+            "direct",
+            "name: direct\nroles: []\nsteps: []\n",
+            ExternalCapabilityExecutionMode.Interactive);
         var actorPort = new RecordingWorkflowRunActorPort();
         var resolver = new WorkflowRunActorResolver(
             new StaticWorkflowActorBindingReader(
@@ -588,7 +609,10 @@ public sealed class WorkflowRunActorResolverTests
     public async Task ResolveOrCreateAsync_ShouldPreferSourceBindingYamlAndDefinitionActorId_WhenPresent()
     {
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
+        registry.Register(
+            "direct",
+            "name: direct\nroles: []\nsteps: []\n",
+            ExternalCapabilityExecutionMode.Interactive);
         var actorPort = new RecordingWorkflowRunActorPort();
         var resolver = new WorkflowRunActorResolver(
             new StaticWorkflowActorBindingReader(
@@ -699,7 +723,10 @@ public sealed class WorkflowRunActorResolverTests
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), ExternalCapabilityExecutionMode.Interactive));
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register("direct", latestYaml);
+        registry.Register(
+            "direct",
+            latestYaml,
+            ExternalCapabilityExecutionMode.Interactive);
         var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry);
 
         var boundResult = await resolver.ResolveOrCreateAsync(
@@ -760,7 +787,10 @@ public sealed class WorkflowRunActorResolverTests
             CreateRunException = new InvalidOperationException("boom"),
         };
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
+        registry.Register(
+            "direct",
+            "name: direct\nroles: []\nsteps: []\n",
+            ExternalCapabilityExecutionMode.Interactive);
         var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), actorPort, actorPort, registry);
 
         var act = async () => await resolver.ResolveOrCreateAsync(
@@ -928,13 +958,18 @@ public sealed class WorkflowRunActorResolverTests
     {
         private readonly Dictionary<string, WorkflowDefinitionRegistration> _definitions = new(StringComparer.OrdinalIgnoreCase);
 
-        public void Register(string name, string yaml)
+        public void Register(
+            string name,
+            string yaml,
+            ExternalCapabilityExecutionMode expectedExecutionMode)
         {
             var normalizedName = name.Trim();
             _definitions[normalizedName] = new WorkflowDefinitionRegistration(
                 normalizedName,
                 yaml,
-                $"definition-{normalizedName}");
+                $"definition-{normalizedName}",
+                expectedExecutionMode,
+                "test");
         }
 
         public WorkflowDefinitionRegistration? GetDefinition(string name) =>
