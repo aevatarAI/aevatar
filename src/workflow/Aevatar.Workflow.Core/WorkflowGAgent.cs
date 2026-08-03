@@ -68,6 +68,9 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             bindDefinitionEvent.CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone();
         }
 
+        if (MatchesCurrentBinding(bindDefinitionEvent))
+            return;
+
         await PersistDomainEventAsync(bindDefinitionEvent, ct);
     }
 
@@ -99,6 +102,48 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             .Match(current, evt)
             .On<BindWorkflowDefinitionEvent>(ApplyBindWorkflowDefinition)
             .OrCurrent();
+
+    private bool MatchesCurrentBinding(BindWorkflowDefinitionEvent evt)
+    {
+        return string.Equals(State.WorkflowYaml, evt.WorkflowYaml ?? string.Empty, StringComparison.Ordinal) &&
+               string.Equals(State.WorkflowName, evt.WorkflowName?.Trim() ?? string.Empty, StringComparison.Ordinal) &&
+               string.Equals(State.ScopeId, evt.HasScopeId ? evt.ScopeId.Trim() : string.Empty, StringComparison.Ordinal) &&
+               string.Equals(State.SourceKind, string.IsNullOrWhiteSpace(evt.SourceKind) ? "builtin" : evt.SourceKind.Trim(), StringComparison.Ordinal) &&
+               string.Equals(State.WorkflowId, evt.WorkflowId ?? string.Empty, StringComparison.Ordinal) &&
+               string.Equals(State.RevisionId, evt.RevisionId ?? string.Empty, StringComparison.Ordinal) &&
+               State.ExpectedExecutionMode == evt.ExpectedExecutionMode &&
+               MapEquals(State.InlineWorkflowYamls, evt.InlineWorkflowYamls) &&
+               MessageEquals(State.AuthorizationDependencies, evt.AuthorizationDependencies) &&
+               MessageEquals(State.CapabilityAdmissionPlan, evt.CapabilityAdmissionPlan);
+    }
+
+    private static bool MapEquals(
+        IDictionary<string, string> current,
+        IDictionary<string, string> incoming)
+    {
+        if (current.Count != incoming.Count)
+            return false;
+
+        foreach (var (key, value) in current)
+        {
+            if (!incoming.TryGetValue(key, out var incomingValue) ||
+                !string.Equals(value, incomingValue, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool MessageEquals<TMessage>(TMessage? current, TMessage? incoming)
+        where TMessage : class, IMessage
+    {
+        if (current == null || incoming == null)
+            return current == null && incoming == null;
+
+        return current.Equals(incoming);
+    }
 
     private WorkflowState ApplyBindWorkflowDefinition(WorkflowState current, BindWorkflowDefinitionEvent evt)
     {

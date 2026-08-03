@@ -56,7 +56,7 @@ internal sealed class WorkflowDefinitionBootstrapHostedService : IHostedService
                 ex.WorkflowName,
                 ex.ActorId,
                 ex.ExpectedExecutionMode);
-            StartBackgroundRetry(definitions);
+            StartBackgroundRetry(definitions, ex.WorkflowName);
         }
     }
 
@@ -85,7 +85,9 @@ internal sealed class WorkflowDefinitionBootstrapHostedService : IHostedService
         }
     }
 
-    private void StartBackgroundRetry(IReadOnlyList<WorkflowDefinitionRegistration> definitions)
+    private void StartBackgroundRetry(
+        IReadOnlyList<WorkflowDefinitionRegistration> definitions,
+        string timedOutWorkflowName)
     {
         var retryDelay = _options.Value.BindCommitRetryDelay;
         if (retryDelay <= TimeSpan.Zero)
@@ -96,8 +98,17 @@ internal sealed class WorkflowDefinitionBootstrapHostedService : IHostedService
                 "Workflow definition bind commit retry delay must be positive.");
         }
 
+        var remainingDefinitions = GetDefinitionsAfter(definitions, timedOutWorkflowName);
+        if (remainingDefinitions.Count == 0)
+        {
+            _logger.LogInformation(
+                "Startup workflow definition materialization has no remaining definitions after timed-out bind observation. workflow_name={WorkflowName}",
+                timedOutWorkflowName);
+            return;
+        }
+
         _retryCts = new CancellationTokenSource();
-        _retryTask = RetryMaterializationAsync(definitions, retryDelay, _retryCts.Token);
+        _retryTask = RetryMaterializationAsync(remainingDefinitions, retryDelay, _retryCts.Token);
     }
 
     private async Task RetryMaterializationAsync(
@@ -105,12 +116,13 @@ internal sealed class WorkflowDefinitionBootstrapHostedService : IHostedService
         TimeSpan retryDelay,
         CancellationToken ct)
     {
-        while (!ct.IsCancellationRequested)
+        var remainingDefinitions = definitions;
+        while (!ct.IsCancellationRequested && remainingDefinitions.Count > 0)
         {
             try
             {
                 await Task.Delay(retryDelay, ct);
-                await _definitionMaterializer.MaterializeAsync(definitions, ct);
+                await _definitionMaterializer.MaterializeAsync(remainingDefinitions, ct);
                 _logger.LogInformation("Startup workflow definition materialization completed in background retry.");
                 return;
             }
@@ -123,15 +135,34 @@ internal sealed class WorkflowDefinitionBootstrapHostedService : IHostedService
             {
                 _logger.LogWarning(
                     ex,
-                    "Startup workflow definition bind still has not been observed; materialization will retry. workflow_name={WorkflowName} actor_id={ActorId} expected_execution_mode={ExpectedExecutionMode}",
+                    "Startup workflow definition bind still has not been observed; materialization will continue with remaining definitions. workflow_name={WorkflowName} actor_id={ActorId} expected_execution_mode={ExpectedExecutionMode}",
                     ex.WorkflowName,
                     ex.ActorId,
                     ex.ExpectedExecutionMode);
+                remainingDefinitions = GetDefinitionsAfter(remainingDefinitions, ex.WorkflowName);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Startup workflow definition materialization retry failed; materialization will retry.");
             }
         }
+    }
+
+    private static IReadOnlyList<WorkflowDefinitionRegistration> GetDefinitionsAfter(
+        IReadOnlyList<WorkflowDefinitionRegistration> definitions,
+        string workflowName)
+    {
+        var orderedDefinitions = definitions
+            .OrderBy(definition => definition.WorkflowName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var failedIndex = Array.FindIndex(
+            orderedDefinitions,
+            definition => string.Equals(
+                definition.WorkflowName,
+                workflowName,
+                StringComparison.OrdinalIgnoreCase));
+        return failedIndex < 0 || failedIndex + 1 >= orderedDefinitions.Length
+            ? []
+            : orderedDefinitions[(failedIndex + 1)..];
     }
 }

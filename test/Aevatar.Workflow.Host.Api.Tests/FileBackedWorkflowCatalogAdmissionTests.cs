@@ -216,6 +216,59 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
     }
 
     [Fact]
+    public async Task MaterializeAsync_WhenSameDefinitionAlreadyBound_ShouldNotAppendDuplicateBind()
+    {
+        const string actorId = "workflow-definition:studio-idempotent";
+        const string workflowYaml = """
+            name: studio
+            roles:
+              - id: assistant
+                name: Assistant
+            steps:
+              - id: reply
+                type: llm_call
+                role: assistant
+                parameters: {}
+            """;
+        using var provider = CreateLocalRuntimeProvider(TimeSpan.FromSeconds(2));
+        var runtime = provider.GetRequiredService<IActorRuntime>();
+
+        try
+        {
+            await provider.GetRequiredService<FileBackedWorkflowCatalogPort>().MaterializeAsync(
+            [
+                new WorkflowDefinitionRegistration(
+                    "studio",
+                    workflowYaml,
+                    actorId,
+                    ExternalCapabilityExecutionMode.Interactive,
+                    "builtin"),
+            ]);
+
+            var actor = await runtime.GetAsync(actorId);
+            var definitionAgent = actor!.Agent.Should().BeOfType<WorkflowGAgent>().Subject;
+            await definitionAgent.BindWorkflowDefinitionAsync(
+                workflowYaml,
+                "studio",
+                inlineWorkflowYamls: null,
+                scopeId: string.Empty,
+                sourceKind: "builtin",
+                capabilityAdmissionPlan: definitionAgent.State.CapabilityAdmissionPlan.Clone(),
+                workflowId: string.Empty,
+                revisionId: string.Empty,
+                expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
+
+            definitionAgent.State.Version.Should().Be(1);
+            var events = await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId);
+            events.Should().ContainSingle();
+        }
+        finally
+        {
+            await runtime.DestroyAsync(actorId);
+        }
+    }
+
+    [Fact]
     public async Task MaterializeAsync_WithLegacyUnspecifiedBinding_ShouldCommitForwardRepair()
     {
         const string actorId = "workflow-definition:studio-legacy";
@@ -358,6 +411,61 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
 
             registry.GetYaml("review").Should().Contain("name: review");
             dispatch.Envelopes.Should().ContainSingle();
+            await service.StopAsync(CancellationToken.None);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Bootstrap_WhenBindCommitObservationTimesOut_ShouldContinueRemainingDefinitionsWithoutRedispatchingTimedOutDefinition()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "wf-bootstrap-remaining-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "alpha.yaml"), "name: alpha");
+            File.WriteAllText(Path.Combine(tempDir, "bravo.yaml"), "name: bravo");
+            var registry = new WorkflowDefinitionCatalog();
+            var options = new WorkflowDefinitionFileSourceOptions
+            {
+                DuplicatePolicy = WorkflowDefinitionDuplicatePolicy.Override,
+                BindCommitRetryDelay = TimeSpan.FromMilliseconds(10),
+            };
+            options.WorkflowDirectories.Add(tempDir);
+            var materializerOptions = new WorkflowDefinitionFileSourceOptions
+            {
+                BindCommitTimeout = TimeSpan.FromMilliseconds(10),
+            };
+            var observations = new RecordingWorkflowDefinitionBindObservationRuntime();
+            var dispatch = new RecordingActorDispatchPort(
+                observations,
+                actorIdsWithoutCommittedBind: new HashSet<string>(StringComparer.Ordinal)
+                {
+                    "workflow-definition:alpha",
+                });
+            var service = new WorkflowDefinitionBootstrapHostedService(
+                registry,
+                new WorkflowDefinitionFileLoader(),
+                new FileBackedWorkflowCatalogPort(
+                    new RecordingActorRuntime(),
+                    dispatch,
+                    observations,
+                    observations,
+                    new RecordingWorkflowCapabilityAdmissionService(),
+                    Options.Create(materializerOptions),
+                    NullLogger<FileBackedWorkflowCatalogPort>.Instance),
+                Options.Create(options),
+                NullLogger<WorkflowDefinitionBootstrapHostedService>.Instance);
+
+            await service.StartAsync(CancellationToken.None);
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            await dispatch.WaitForDispatchAsync("workflow-definition:bravo", timeoutCts.Token);
+
+            dispatch.Envelopes.Should().ContainSingle(item => item.ActorId == "workflow-definition:alpha");
+            dispatch.Envelopes.Should().ContainSingle(item => item.ActorId == "workflow-definition:bravo");
             await service.StopAsync(CancellationToken.None);
         }
         finally
@@ -551,17 +659,47 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
 
     private sealed class RecordingActorDispatchPort(
         RecordingWorkflowDefinitionBindObservationRuntime observations,
-        bool publishCommittedBind = true) : IActorDispatchPort
+        bool publishCommittedBind = true,
+        IReadOnlySet<string>? actorIdsWithoutCommittedBind = null) : IActorDispatchPort
     {
+        private readonly object _gate = new();
+        private readonly Dictionary<string, TaskCompletionSource> _dispatchWaiters = new(StringComparer.Ordinal);
+
         public List<(string ActorId, EventEnvelope Envelope)> Envelopes { get; } = [];
+
+        public Task WaitForDispatchAsync(string actorId, CancellationToken ct)
+        {
+            TaskCompletionSource waiter;
+            lock (_gate)
+            {
+                if (Envelopes.Any(item => string.Equals(item.ActorId, actorId, StringComparison.Ordinal)))
+                    return Task.CompletedTask;
+
+                if (!_dispatchWaiters.TryGetValue(actorId, out waiter!))
+                {
+                    waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    _dispatchWaiters[actorId] = waiter;
+                }
+            }
+
+            return waiter.Task.WaitAsync(ct);
+        }
 
         public async Task<DispatchAdmission> DispatchAsync(
             string actorId,
             EventEnvelope envelope,
             CancellationToken ct = default)
         {
-            Envelopes.Add((actorId, envelope));
-            if (publishCommittedBind)
+            TaskCompletionSource? waiter = null;
+            lock (_gate)
+            {
+                Envelopes.Add((actorId, envelope));
+                if (_dispatchWaiters.Remove(actorId, out var existingWaiter))
+                    waiter = existingWaiter;
+            }
+
+            waiter?.TrySetResult();
+            if (publishCommittedBind && actorIdsWithoutCommittedBind?.Contains(actorId) != true)
                 await observations.PublishCommittedBindAsync(actorId, envelope, ct);
             return DispatchAdmissionFactory.Create(actorId, envelope);
         }
