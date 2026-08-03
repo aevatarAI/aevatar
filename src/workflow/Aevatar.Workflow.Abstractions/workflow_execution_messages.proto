@@ -221,6 +221,7 @@ message WorkflowChatRequestEvent {
   WorkflowExternalIngressContext external_ingress = 12;
   WorkflowCompletionNotificationTarget completion_notification_target = 13;
   WorkflowConversationContext conversation_context = 14;
+  string current_turn_id = 15;
 }
 
 enum WorkflowConversationRole {

@@ -21,6 +21,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             Prompt = command.Prompt,
             SessionId = sessionId,
             ScopeId = command.ScopeId ?? string.Empty,
+            CurrentTurnId = command.CurrentTurnId ?? string.Empty,
         };
         if (command.InputParts is { Count: > 0 })
             chatRequest.InputParts.Add(command.InputParts.Select(ToProto));

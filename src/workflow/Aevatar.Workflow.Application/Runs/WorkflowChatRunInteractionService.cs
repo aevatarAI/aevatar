@@ -48,10 +48,12 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         var correlationId = string.IsNullOrWhiteSpace(request.CorrelationIdSeed)
             ? CreateInteractionId()
             : request.CorrelationIdSeed.Trim();
+        var currentTurnId = ResolveCurrentTurnId(request);
         var currentRequest = request with
         {
             CommandIdSeed = commandId,
             CorrelationIdSeed = correlationId,
+            CurrentTurnId = currentTurnId,
             TargetSeed = null,
         };
 
@@ -87,6 +89,7 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
                 {
                     CommandIdSeed = commandId,
                     CorrelationIdSeed = correlationId,
+                    CurrentTurnId = currentTurnId,
                     Headers = request.Headers,
                     TargetSeed = null,
                 };
@@ -176,13 +179,18 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         }
 
         var conversationContext = BuildDispatchConversationContext(chatHistoryDelivery);
-        var dispatchRequest = chatHistoryDelivery?.Reservation is null
-            ? attempt.Request
-            : attempt.Request with
+        var dispatchRequest = attempt.Request with
+        {
+            CurrentTurnId = ResolveDispatchCurrentTurnId(attempt.Request, chatHistoryDelivery),
+        };
+        if (chatHistoryDelivery?.Reservation is { } reservation)
+        {
+            dispatchRequest = dispatchRequest with
             {
-                CompletionNotificationTarget = CreateCompletionNotificationTarget(chatHistoryDelivery.Reservation),
+                CompletionNotificationTarget = CreateCompletionNotificationTarget(reservation),
                 ConversationContext = conversationContext,
             };
+        }
         CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus> result;
         try
         {
@@ -382,6 +390,23 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
             0,
             chatContext.TurnId);
     }
+
+    private static string ResolveCurrentTurnId(WorkflowChatRunRequest request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.CurrentTurnId))
+            return request.CurrentTurnId.Trim();
+        if (!string.IsNullOrWhiteSpace(request.ConversationContext?.CurrentTurnId))
+            return request.ConversationContext.CurrentTurnId.Trim();
+
+        return $"turn-{CreateInteractionId()}";
+    }
+
+    private static string ResolveDispatchCurrentTurnId(
+        WorkflowChatRunRequest request,
+        WorkflowChatHistoryTerminalDeliveryReservationResult? delivery) =>
+        string.IsNullOrWhiteSpace(delivery?.ChatContext?.TurnId)
+            ? request.CurrentTurnId ?? string.Empty
+            : delivery.ChatContext.TurnId.Trim();
 
     private async Task CleanupAttemptAsync(
         WorkflowChatRunInteractionAttempt attempt,

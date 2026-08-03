@@ -189,6 +189,43 @@ public sealed class WorkflowChatRunInteractionServiceTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShouldAssignDistinctCurrentTurnId_WithoutConversationContext()
+    {
+        var actorResolver = new RecordingActorResolver
+        {
+            Results =
+            {
+                new WorkflowActorResolutionResult(
+                    new WorkflowRunCreationReceipt("run-1", "definition-1", ["definition-1", "run-1"]),
+                    "direct",
+                    WorkflowChatRunStartError.None),
+            },
+        };
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            new RecordingRunProvisioningPort(),
+            inner);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
+                CommandIdSeed: "command-alpha",
+                CorrelationIdSeed: "correlation-alpha"),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        var dispatched = inner.Requests.Should().ContainSingle().Subject;
+        dispatched.CurrentTurnId.Should().StartWith("turn-");
+        dispatched.CurrentTurnId.Should().NotBe(dispatched.CommandIdSeed);
+        dispatched.CurrentTurnId.Should().NotBe(dispatched.CorrelationIdSeed);
+        dispatched.ConversationContext.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldReturnRecoveredCreateContextWithoutResolvingActor_WhenCreateRecoveryMatchesRequest()
     {
         var recovery = new RecordingChatHistoryCreateRecoveryReadPort();
@@ -332,6 +369,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
         notificationTarget.ExpiresAtUnixMs.Should().BeGreaterThan(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         inner.Requests[0].ConversationContext.Should().NotBeNull();
         inner.Requests[0].ConversationContext!.CurrentTurnId.Should().Be("generated-turn");
+        inner.Requests[0].CurrentTurnId.Should().Be("generated-turn");
         deliveryPort.Bindings.Should().ContainSingle();
         deliveryPort.Bindings[0].WorkflowActorId.Should().Be("run-1");
         deliveryPort.Bindings[0].WorkflowCommandId.Should().Be(inner.Requests[0].CommandIdSeed);
@@ -442,6 +480,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
         dispatched.Prompt.Should().Be("team01");
         dispatched.ConversationContext.Should().BeEquivalentTo(
             deliveryPort.ConversationContext with { CurrentTurnId = "generated-turn" });
+        dispatched.CurrentTurnId.Should().Be("generated-turn");
         dispatched.CompletionNotificationTarget.Should().NotBeNull();
     }
 
@@ -1082,6 +1121,9 @@ public sealed class WorkflowChatRunInteractionServiceTests
         inner.Requests[1].Source.ActorId.Should().BeNull();
         inner.Requests[1].CommandIdSeed.Should().Be(inner.Requests[0].CommandIdSeed);
         inner.Requests[1].CorrelationIdSeed.Should().Be(inner.Requests[0].CorrelationIdSeed);
+        inner.Requests[1].CurrentTurnId.Should().Be(inner.Requests[0].CurrentTurnId);
+        inner.Requests[0].CurrentTurnId.Should().NotBe(inner.Requests[0].CommandIdSeed);
+        inner.Requests[0].CurrentTurnId.Should().NotBe(inner.Requests[0].CorrelationIdSeed);
         runProvisioningPort.DestroyCalls.Should().Equal("auto-run", "definition-auto");
     }
 

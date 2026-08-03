@@ -199,14 +199,11 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
             {
                 Prompt = "can i connect to github?",
                 SessionId = "studio-session-alpha",
+                CurrentTurnId = "turn-studio-alpha",
                 CallerCredential = InteractiveCallerCredential("owner-alpha"),
-                ConversationContext = new WorkflowConversationContext
-                {
-                    ScopeId = "scope-alpha",
-                    ConversationId = "chatc-alpha",
-                    CurrentTurnId = "turn-studio-alpha",
-                },
             });
+            publisher.Published.Select(x => x.evt).OfType<StartWorkflowEvent>()
+                .Should().ContainSingle().Which.Input.Should().Be("can i connect to github?");
             var completed = InteractiveAuthorizationCompletion();
 
             await agent.HandleInteractiveAuthorizationRequirementAsync(completed);

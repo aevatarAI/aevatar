@@ -591,7 +591,9 @@ public sealed partial class WorkflowRunGAgent
             StartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             WorkflowCommandId = commandId,
             WorkflowCorrelationId = correlationId,
-            CurrentTurnId = request.ConversationContext?.CurrentTurnId ?? string.Empty,
+            CurrentTurnId = string.IsNullOrWhiteSpace(request.CurrentTurnId)
+                ? request.ConversationContext?.CurrentTurnId ?? string.Empty
+                : request.CurrentTurnId,
         };
         if (request.CompletionNotificationTarget != null)
             executionStarted.CompletionNotificationTarget = request.CompletionNotificationTarget.Clone();

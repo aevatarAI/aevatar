@@ -263,6 +263,7 @@ public sealed record WorkflowChatRunRequest(
     WorkflowExternalIngressContext? ExternalIngress = null,
     WorkflowChatConversationIntent? ChatConversation = null,
     WorkflowConversationExecutionContext? ConversationContext = null,
+    [property: JsonIgnore] string? CurrentTurnId = null,
     [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null,
     [property: JsonIgnore] WorkflowCompletionNotificationTarget? CompletionNotificationTarget = null) : ICommandContextSeed
 {
