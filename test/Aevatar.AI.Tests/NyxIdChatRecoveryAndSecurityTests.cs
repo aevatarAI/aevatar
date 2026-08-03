@@ -46,16 +46,17 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         runtime.CreateCalls.Should().BeEmpty(
             "activation recovery must first re-enter the conversation inbox");
         runtime.LinkCalls.Should().BeEmpty();
-        dispatch.Calls.Should().BeEmpty();
-        var recovery = callbacks.TimeoutRequests.Should().ContainSingle().Which;
-        recovery.ActorId.Should().Be(actorId);
-        recovery.TriggerEnvelope.Route.PublisherActorId.Should().Be(actorId);
-        recovery.TriggerEnvelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
-        recovery.TriggerEnvelope.Payload.TypeUrl.Should().EndWith(
-            "/aevatar.gagents.nyxid_chat.NyxIdChatRecoveryRequestedSignal");
-        recovery.TriggerEnvelope.Payload.TypeUrl.Should().NotEndWith(
-            "/aevatar.gagents.nyxid_chat.NyxIdChatOperationDispatchCommand");
-        var signal = recovery.TriggerEnvelope.Payload.Unpack<NyxIdChatRecoveryRequestedSignal>();
+        dispatch.Calls.Should().BeEmpty(
+            "activation recovery must use a durable self callback");
+        publisher.PublishCalls.Should().BeEmpty();
+        var callback = GetSingleRecoveryCallback(callbacks, actorId);
+        callback.CallbackId.Should().NotBeNullOrWhiteSpace();
+        callback.TriggerEnvelope.Propagation.CorrelationId.Should().Be(
+            "operation-postcondition-alpha");
+        callback.TriggerEnvelope.Runtime.DeliveryIdentity.OperationId.Should().Be(
+            "operation-postcondition-alpha:recovery:1");
+        var signal = callback.TriggerEnvelope.Payload
+            .Unpack<NyxIdChatRecoveryRequestedSignal>();
         signal.Kind.Should().Be(NyxIdChatRecoveryKind.PostconditionRedispatch);
         signal.ExpectedStateVersion.Should().Be(1);
         signal.Key.Should().BeEquivalentTo(
@@ -75,11 +76,12 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         var publisher = new RecoveryRecordingEventPublisher();
         var agent = CreateController(services, actorId, runtime, dispatch, publisher);
         await agent.ActivateAsync();
-        var recoveryEnvelope = callbacks.TimeoutRequests.Single().TriggerEnvelope.Clone();
+        var recoveryEnvelope = GetSingleRecoveryCallback(callbacks, actorId)
+            .TriggerEnvelope.Clone();
         var recovery = recoveryEnvelope.Payload
             .Unpack<NyxIdChatRecoveryRequestedSignal>();
         dispatch.Calls.Should().BeEmpty(
-            "activation recovery must use the current actor publisher");
+            "activation recovery must use a durable self callback");
         publisher.PublishCalls.Clear();
 
         await agent.HandleEventAsync(recoveryEnvelope);
@@ -123,11 +125,11 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
 
         runtime.CreateCalls.Should().BeEmpty();
         runtime.LinkCalls.Should().BeEmpty();
-        dispatch.Calls.Should().BeEmpty();
-        var recovery = callbacks.TimeoutRequests.Should().ContainSingle().Which;
-        recovery.ActorId.Should().Be(actorId);
-        recovery.TriggerEnvelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
-        var signal = recovery.TriggerEnvelope.Payload.Unpack<NyxIdChatRecoveryRequestedSignal>();
+        dispatch.Calls.Should().BeEmpty(
+            "activation recovery must use a durable self callback");
+        publisher.PublishCalls.Should().BeEmpty();
+        var signal = GetSingleRecoveryCallback(callbacks, actorId).TriggerEnvelope.Payload
+            .Unpack<NyxIdChatRecoveryRequestedSignal>();
         signal.Kind.Should().Be(
             NyxIdChatRecoveryKind.InterruptedOperationReconciliation);
         signal.ExpectedStateVersion.Should().Be(1);
@@ -148,8 +150,11 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         var publisher = new RecoveryRecordingEventPublisher();
         var agent = CreateController(services, actorId, runtime, dispatch, publisher);
         await agent.ActivateAsync();
-        var recoveryEnvelope = callbacks.TimeoutRequests.Single().TriggerEnvelope.Clone();
-        dispatch.Calls.Clear();
+        var recoveryEnvelope = GetSingleRecoveryCallback(callbacks, actorId)
+            .TriggerEnvelope.Clone();
+        dispatch.Calls.Should().BeEmpty(
+            "activation recovery must use a durable self callback");
+        publisher.PublishCalls.Clear();
 
         await agent.HandleEventAsync(recoveryEnvelope);
 
@@ -184,8 +189,11 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         var publisher = new RecoveryRecordingEventPublisher();
         var agent = CreateController(services, actorId, runtime, dispatch, publisher);
         await agent.ActivateAsync();
-        var recoveryEnvelope = callbacks.TimeoutRequests.Single().TriggerEnvelope.Clone();
-        dispatch.Calls.Clear();
+        var recoveryEnvelope = GetSingleRecoveryCallback(callbacks, actorId)
+            .TriggerEnvelope.Clone();
+        dispatch.Calls.Should().BeEmpty(
+            "activation recovery must use a durable self callback");
+        publisher.PublishCalls.Clear();
 
         await agent.HandleEventAsync(recoveryEnvelope);
 
@@ -224,7 +232,7 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         var publisher = new RecoveryRecordingEventPublisher();
         var agent = CreateController(services, actorId, runtime, dispatch, publisher);
         await agent.ActivateAsync();
-        var envelope = callbacks.TimeoutRequests.Single().TriggerEnvelope.Clone();
+        var envelope = GetSingleRecoveryCallback(callbacks, actorId).TriggerEnvelope.Clone();
         var signal = envelope.Payload.Unpack<NyxIdChatRecoveryRequestedSignal>();
         if (staleVersion)
             signal.ExpectedStateVersion++;
@@ -232,7 +240,7 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
             signal.Key.OperationGeneration++;
         envelope.Payload = Any.Pack(signal);
         dispatch.Calls.Should().BeEmpty(
-            "activation recovery must use the current actor publisher");
+            "activation recovery must use a durable self callback");
         publisher.PublishCalls.Clear();
 
         await agent.HandleEventAsync(envelope);
@@ -252,7 +260,8 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         const string actorId = "conversation-alpha";
         var eventStore = new InMemoryEventStoreForTests();
         await PersistStateAsync(eventStore, actorId, CreateBlockedBrowserActionState());
-        using var services = BuildEventSourcingServices(eventStore);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, callbacks);
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
         var publisher = new RecoveryRecordingEventPublisher();
@@ -264,6 +273,7 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         runtime.LinkCalls.Should().BeEmpty();
         dispatch.Calls.Should().BeEmpty();
         publisher.PublishCalls.Should().BeEmpty();
+        callbacks.TimeoutRequests.Should().BeEmpty();
         agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Blocked);
         agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Blocked);
         (await eventStore.GetEventsAsync(actorId)).Should().ContainSingle();
@@ -386,8 +396,7 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
             services, actorId, firstRuntime, firstDispatch, firstPublisher);
         await first.ActivateAsync();
         var firstSnapshot = first.State.ToByteString();
-        var firstRecovery = callbacks.TimeoutRequests.Should().ContainSingle().Which
-            .TriggerEnvelope.Clone();
+        var firstCallback = GetSingleRecoveryCallback(callbacks, actorId);
         callbacks.TimeoutRequests.Clear();
 
         var secondRuntime = new RecordingActorRuntime();
@@ -402,9 +411,12 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         secondRuntime.CreateCalls.Should().BeEmpty();
         firstDispatch.Calls.Should().BeEmpty();
         secondDispatch.Calls.Should().BeEmpty();
-        firstRecovery.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor).Should().BeTrue();
-        callbacks.TimeoutRequests.Should().ContainSingle().Which.TriggerEnvelope.Payload
-            .Is(NyxIdChatRecoveryRequestedSignal.Descriptor).Should().BeTrue();
+        firstPublisher.PublishCalls.Should().BeEmpty();
+        secondPublisher.PublishCalls.Should().BeEmpty();
+        var secondCallback = GetSingleRecoveryCallback(callbacks, actorId);
+        secondCallback.CallbackId.Should().Be(firstCallback.CallbackId);
+        secondCallback.TriggerEnvelope.Payload.ToByteString().Should().Equal(
+            firstCallback.TriggerEnvelope.Payload.ToByteString());
         (await eventStore.GetEventsAsync(actorId)).Should().ContainSingle(
             "activation recovery signals are not committed product facts");
     }
@@ -838,6 +850,19 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
                 CorrelationId = publication.Options?.Propagation?.CorrelationId ?? string.Empty,
             },
         };
+
+    private static RuntimeCallbackTimeoutRequest GetSingleRecoveryCallback(
+        RecordingRuntimeCallbackScheduler callbacks,
+        string actorId)
+    {
+        var callback = callbacks.TimeoutRequests.Should().ContainSingle().Which;
+        callback.ActorId.Should().Be(actorId);
+        callback.TriggerEnvelope.Route.GetTopologyAudience().Should().Be(
+            TopologyAudience.Self);
+        callback.TriggerEnvelope.Payload
+            .Is(NyxIdChatRecoveryRequestedSignal.Descriptor).Should().BeTrue();
+        return callback;
+    }
 
     private static EventEnvelope WrapCommittedState(
         NyxIdChatConversationGAgentState state,

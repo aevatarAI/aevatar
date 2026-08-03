@@ -575,7 +575,7 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
-    public async Task ActivateAsync_WithPendingHistoryInitialization_ShouldRepublishTypedSelfSignal()
+    public async Task ActivateAsync_WithPendingHistoryInitialization_ShouldScheduleTypedSelfCallback()
     {
         var registry = new RecordingGAgentActorRegistryCommandPort();
         var eventStore = new InMemoryEventStoreForTests();
@@ -602,7 +602,11 @@ public class NyxIdChatGAgentTests
 
         recovered.State.PendingHistoryInitialization.ToByteString().Should().Equal(pending.ToByteString());
         recoveryDispatch.Calls.Should().BeEmpty();
-        var signal = callbacks.TimeoutRequests.Should().ContainSingle().Which.TriggerEnvelope.Payload
+        var callback = callbacks.TimeoutRequests.Should().ContainSingle().Which;
+        callback.TriggerEnvelope.Propagation.CorrelationId.Should().Be(pending.OperationId);
+        callback.TriggerEnvelope.Runtime.DeliveryIdentity.OperationId.Should().Be(
+            "history-initialization-dispatch-1b202924688a5c7b8a414ea320a55afc");
+        var signal = callback.TriggerEnvelope.Payload
             .Unpack<NyxIdChatHistoryInitializationDispatchRequested>();
         signal.OperationId.Should().Be(pending.OperationId);
         signal.Attempt.Should().Be(pending.Attempt);

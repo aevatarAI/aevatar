@@ -2331,6 +2331,21 @@ public sealed class NyxIdChatConversationGAgent
                     OperationId = pending.OperationId,
                     Attempt = pending.Attempt,
                 },
+                new EventEnvelopePublishOptions
+                {
+                    Propagation = new EventEnvelopePropagationOverrides
+                    {
+                        CorrelationId = pending.OperationId,
+                    },
+                    Delivery = new EventEnvelopeDeliveryOptions
+                    {
+                        OperationId = BuildStableIdentity(
+                            "history-initialization-dispatch",
+                            pending.OperationId,
+                            pending.Attempt.ToString(
+                                System.Globalization.CultureInfo.InvariantCulture)),
+                    },
+                },
                 ct: ct);
         }
         catch (OperationCanceledException)
@@ -2401,6 +2416,21 @@ public sealed class NyxIdChatConversationGAgent
                     DeliveryId = pending.DeliveryId,
                     Attempt = pending.Attempt,
                 },
+                new EventEnvelopePublishOptions
+                {
+                    Propagation = new EventEnvelopePropagationOverrides
+                    {
+                        CorrelationId = pending.SourceCommandId,
+                    },
+                    Delivery = new EventEnvelopeDeliveryOptions
+                    {
+                        OperationId = BuildStableIdentity(
+                            "history-terminal-dispatch",
+                            pending.DeliveryId,
+                            pending.Attempt.ToString(
+                                System.Globalization.CultureInfo.InvariantCulture)),
+                    },
+                },
                 ct: ct);
         }
         catch (OperationCanceledException)
@@ -2449,6 +2479,17 @@ public sealed class NyxIdChatConversationGAgent
                     Key = operation.Key.Clone(),
                     ExpectedStateVersion = version,
                     Kind = kind,
+                },
+                new EventEnvelopePublishOptions
+                {
+                    Propagation = new EventEnvelopePropagationOverrides
+                    {
+                        CorrelationId = operation.Key.OperationId,
+                    },
+                    Delivery = new EventEnvelopeDeliveryOptions
+                    {
+                        OperationId = $"{operation.Key.OperationId}:recovery:{version}",
+                    },
                 },
                 ct: ct);
         }

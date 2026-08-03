@@ -1476,8 +1476,12 @@ public sealed class NyxIdChatConversationGAgentTests
         await agent.ActivateAsync();
 
         dispatch.Calls.Should().BeEmpty();
-        var selfEnvelope = callbacks.TimeoutRequests.Should().ContainSingle().Which
-            .TriggerEnvelope.Clone();
+        var callback = callbacks.TimeoutRequests.Should().ContainSingle().Which;
+        callback.TriggerEnvelope.Propagation.CorrelationId.Should().Be(
+            "command-terminal-alpha");
+        callback.TriggerEnvelope.Runtime.DeliveryIdentity.OperationId.Should().Be(
+            "history-terminal-dispatch-7ab612402d13f08eb287413f5c223404");
+        var selfEnvelope = callback.TriggerEnvelope.Clone();
         var signal = selfEnvelope.Payload
             .Unpack<NyxIdChatHistoryTerminalDispatchRequested>();
         signal.DeliveryId.Should().Be("delivery-terminal-alpha");
