@@ -21,7 +21,7 @@ namespace Aevatar.AI.Tests;
 
 public sealed class RoleGAgentRecoveryCheckpointTests
 {
-    private static readonly DateTimeOffset Now = new(2026, 8, 2, 8, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset Now = DateTimeOffset.UtcNow;
 
     [Fact]
     public async Task PrepareBatch_WhenIntentCommitFails_ShouldNotInvokeTool()

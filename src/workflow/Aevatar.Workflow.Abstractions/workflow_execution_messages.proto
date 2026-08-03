@@ -244,6 +244,7 @@ message WorkflowConversationContext {
   repeated WorkflowConversationMessage messages = 4;
   bool truncated = 5;
   int32 max_message_count = 6;
+  string current_turn_id = 7;
 }
 
 message WorkflowRunForkSeed
@@ -355,6 +356,7 @@ message WorkflowRunExecutionStartedEvent
   WorkflowCompletionNotificationTarget completion_notification_target = 10;
   string workflow_command_id = 11;
   string workflow_correlation_id = 12;
+  string current_turn_id = 13;
 }
 message WorkflowRunExecutionContextDelta
 {
@@ -815,6 +817,12 @@ message WorkflowRoleReplyToolCall
   bool success = 5;
   string error = 6;
 }
+message WorkflowArtifactSourceIdentity
+{
+  string publisher_actor_id = 1;
+  string committed_event_id = 2;
+  int64 committed_state_version = 3;
+}
 message WorkflowRoleReplyRecordedEvent
 {
   string run_id = 1;
@@ -826,6 +834,7 @@ message WorkflowRoleReplyRecordedEvent
   string prompt = 7;
   bool content_emitted = 8;
   repeated WorkflowRoleReplyToolCall tool_calls = 9;
+  WorkflowArtifactSourceIdentity source = 10;
 }
 
 message WorkflowLlmExecutionIntent
@@ -904,6 +913,61 @@ message WorkflowLlmInvocationCompletedEvent
   string error = 8;
   WorkflowUsageMetrics usage = 9;
   WorkflowManagedHandoffOutcome managed_handoff = 10;
+  WorkflowInteractiveAuthorizationRequirement authorization_requirement = 11;
+}
+
+message WorkflowInteractiveAuthorizationRequirement
+{
+  string service_slug = 1;
+  repeated string requested_scopes = 2;
+  string reason_code = 3;
+  string safe_message = 4;
+}
+
+message WorkflowInteractiveCatalogServiceActionParams
+{
+  string service_slug = 1;
+  repeated string requested_scopes = 2;
+}
+
+message WorkflowInteractiveActionParams
+{
+  WorkflowInteractiveCatalogServiceActionParams catalog_service = 1;
+}
+
+// Presentation-safe schema-v4 request. It intentionally mirrors NyxID's wire
+// field names while keeping workflow and nyxid.chat state contracts isolated.
+message WorkflowInteractiveActionRequestWirePayload
+{
+  int32 schema_version = 1;
+  string actor_id = 2;
+  string origin_turn_id = 3;
+  string task_id = 4;
+  string step_id = 5;
+  string action_request_id = 6;
+  string action = 7;
+  WorkflowInteractiveActionParams params = 8;
+}
+
+message WorkflowInteractiveActionHandoffCommand
+{
+  string handoff_id = 1;
+  string scope_id = 2;
+  string owner_subject = 3;
+  string source_workflow_actor_id = 4;
+  WorkflowInteractiveActionRequestWirePayload request = 5;
+}
+
+message WorkflowInteractiveActionHandoffDispatchedEvent
+{
+  string handoff_id = 1;
+  WorkflowInteractiveActionRequestWirePayload request = 2;
+  WorkflowLlmInvocationCompletedEvent terminal_continuation = 3;
+}
+
+message WorkflowInteractiveActionContinuationDispatchedEvent
+{
+  string handoff_id = 1;
 }
 
 message WorkflowManagedHandoffOutcome

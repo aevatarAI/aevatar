@@ -79,7 +79,9 @@ public static class NyxIdChatBrowserActions
             sourceStep = FindStep(actionState, signalKey.StepId)!;
         }
 
-        var validated = registry.ResolveCatalogServiceConnect(blocker.ServiceSlug);
+        var validated = registry.ResolveCatalogServiceConnect(
+            blocker.ServiceSlug,
+            blocker.RequestedScopes);
         var actionRequestId = BuildStableIdentity(
             "action",
             actionState.ConversationActorId,

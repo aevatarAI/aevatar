@@ -131,7 +131,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
         var handler = new StubUserServiceListHandler("""{ "keys": [{ "id": "us-other-alpha", "slug": "api-slack" }] }""");
         var tool = CreateRequireServiceTool(handler);
         const string arguments =
-            """{"service_slug":"catalog-finops-alpha","service_label":"FinOps Alpha","resource_uri":"/billing/private?token=bearer-secret"}""";
+            """{"service_slug":"catalog-finops-alpha","service_label":"FinOps Alpha","resource_uri":"/billing/private?token=bearer-secret","requested_scopes":["repo","read:org","repo"]}""";
 
         var previous = AgentToolRequestContext.Current;
         AgentToolRequestContext.Current = CapabilityContext();
@@ -148,12 +148,33 @@ public sealed class ToolProviderHttpClientRegistrationTests
             receipt.AuthorizationRequired.ResourceUri.Should().Be("/billing/private");
             receipt.AuthorizationRequired.ReasonCode.Should().Be("USER_SERVICE_NOT_VISIBLE");
             receipt.AuthorizationRequired.SafeMessage.Should().Be("No caller-visible NyxID UserService matches the requested service.");
+            receipt.AuthorizationRequired.RequestedScopes.Should().Equal("repo", "read:org");
             receipt.ToString().Should().NotContain("bearer-secret").And.NotContain("token=");
         }
         finally
         {
             AgentToolRequestContext.Current = previous;
         }
+    }
+
+    [Theory]
+    [InlineData("{\"service_slug\":\"api-github\",\"requested_scopes\":\"repo\"}")]
+    [InlineData("{\"service_slug\":\"api-github\",\"requested_scopes\":[1]}")]
+    [InlineData("{\"service_slug\":\"api-github\",\"requested_scopes\":[\"\"]}")]
+    public async Task NyxIdRequireServiceTool_ShouldRejectMalformedRequestedScopes(string arguments)
+    {
+        var handler = new StubUserServiceListHandler("""{ "keys": [] }""");
+        var tool = CreateRequireServiceTool(handler);
+
+        var result = await tool.ExecuteAsync(arguments);
+        var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, result);
+
+        handler.Requests.Should().BeEmpty();
+        result.Should().Contain("NYXID_REQUIRE_SERVICE_ARGUMENTS_INVALID");
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("NYXID_REQUIRE_SERVICE_ARGUMENTS_INVALID");
+        receipt.AuthorizationRequired.Should().BeNull();
     }
 
     [Fact]

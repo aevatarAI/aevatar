@@ -107,7 +107,8 @@ public sealed record WorkflowConversationExecutionContext(
     long StateVersion,
     IReadOnlyList<WorkflowConversationExecutionMessage> Messages,
     bool Truncated,
-    int MaxMessageCount);
+    int MaxMessageCount,
+    string CurrentTurnId = "");
 
 public enum WorkflowChatConversationIntentKind
 {

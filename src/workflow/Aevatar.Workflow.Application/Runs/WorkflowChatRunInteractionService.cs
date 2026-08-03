@@ -175,12 +175,13 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
                     chatHistoryDelivery?.ChatContext), token).ConfigureAwait(false);
         }
 
+        var conversationContext = BuildDispatchConversationContext(chatHistoryDelivery);
         var dispatchRequest = chatHistoryDelivery?.Reservation is null
             ? attempt.Request
             : attempt.Request with
             {
                 CompletionNotificationTarget = CreateCompletionNotificationTarget(chatHistoryDelivery.Reservation),
-                ConversationContext = chatHistoryDelivery.ConversationContext,
+                ConversationContext = conversationContext,
             };
         CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus> result;
         try
@@ -362,6 +363,25 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
             reservation.DeliveryActorId,
             reservation.DeliveryId,
             DateTimeOffset.UtcNow.Add(ChatHistoryTerminalDeliveryLifetime).ToUnixTimeMilliseconds());
+
+    private static WorkflowConversationExecutionContext? BuildDispatchConversationContext(
+        WorkflowChatHistoryTerminalDeliveryReservationResult? delivery)
+    {
+        if (delivery?.ChatContext is not { } chatContext)
+            return delivery?.ConversationContext;
+
+        if (delivery.ConversationContext is { } existing)
+            return existing with { CurrentTurnId = chatContext.TurnId };
+
+        return new WorkflowConversationExecutionContext(
+            chatContext.ScopeId,
+            chatContext.ConversationId,
+            chatContext.StateVersion,
+            [],
+            false,
+            0,
+            chatContext.TurnId);
+    }
 
     private async Task CleanupAttemptAsync(
         WorkflowChatRunInteractionAttempt attempt,

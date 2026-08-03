@@ -10,6 +10,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -273,6 +274,186 @@ public sealed class NyxIdChatConversationGAgent
                 exception.GetType().Name);
         }
     }
+
+    [EventHandler]
+    public async Task HandleWorkflowInteractiveActionHandoffAsync(
+        WorkflowInteractiveActionHandoffCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ValidateWorkflowInteractiveActionHandoff(command);
+        var wireRequest = command.Request;
+        var registry = Services.GetRequiredService<NyxIdAssistantActionRegistry>();
+        var validated = registry.ResolveCatalogServiceConnect(
+            wireRequest.Params.CatalogService.ServiceSlug,
+            wireRequest.Params.CatalogService.RequestedScopes);
+
+        if (!string.IsNullOrWhiteSpace(State.ConversationActorId))
+        {
+            if (!string.Equals(State.ConversationActorId, Id, StringComparison.Ordinal) ||
+                !string.Equals(State.ScopeId, command.ScopeId, StringComparison.Ordinal) ||
+                !string.Equals(State.OwnerSubject, command.OwnerSubject, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "A workflow action handoff cannot replace the conversation authority.");
+            }
+
+            var existing = State.PendingActions
+                .Concat(State.RecentActions)
+                .FirstOrDefault(candidate => string.Equals(
+                    candidate.ActionRequestId,
+                    wireRequest.ActionRequestId,
+                    StringComparison.Ordinal));
+            if (existing is null ||
+                !WorkflowInteractiveActionMatches(existing, wireRequest, validated))
+            {
+                throw new InvalidOperationException(
+                    "A workflow action handoff identity was reused with different content.");
+            }
+
+            return;
+        }
+
+        var commandId = ActiveInboundEnvelope?.Id ?? command.HandoffId;
+        var correlationId = ActiveInboundEnvelope?.Propagation?.CorrelationId ?? commandId;
+        await PersistDomainEventAsync(new NyxIdChatConversationCreationStartedEvent
+        {
+            ScopeId = command.ScopeId,
+            ActorId = Id,
+            CreatedLocally = true,
+            CommandId = commandId,
+            CorrelationId = correlationId,
+            OwnerSubject = command.OwnerSubject,
+        }, CancellationToken.None);
+
+        var receipt = await Services.GetRequiredService<IGAgentActorRegistryCommandPort>()
+            .RegisterActorAsync(
+                new GAgentActorRegistration(
+                    command.ScopeId,
+                    NyxIdChatServiceDefaults.GAgentKind,
+                    Id),
+                CancellationToken.None);
+        if (!receipt.IsAdmissionVisible)
+        {
+            throw new InvalidOperationException(
+                "The workflow action actor registration is not admission visible.");
+        }
+
+        await PersistDomainEventAsync(new NyxIdChatConversationRegistrationAcceptedEvent
+        {
+            ScopeId = command.ScopeId,
+            ActorId = Id,
+            CommandId = commandId,
+            CorrelationId = correlationId,
+            State = PrepareHistoryInitializationState(command.ScopeId),
+        }, CancellationToken.None);
+
+        var now = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
+        var actionBase = State.Clone();
+        actionBase.ActiveTurn = new NyxIdChatTurnState
+        {
+            TurnId = wireRequest.OriginTurnId,
+            TaskId = wireRequest.TaskId,
+            ClientRequestId = command.HandoffId,
+            CommandId = commandId,
+            Status = NyxIdChatTurnStatus.Active,
+            CreatedAt = now.Clone(),
+        };
+        actionBase.LatestTurn = actionBase.ActiveTurn.Clone();
+        actionBase.ActiveTask = new NyxIdChatTaskState
+        {
+            TurnId = wireRequest.OriginTurnId,
+            TaskId = wireRequest.TaskId,
+            Status = NyxIdChatTaskStatus.Active,
+            CreatedAt = now.Clone(),
+            UpdatedAt = now.Clone(),
+        };
+        actionBase.ProgressSequence = Math.Max(1, State.ProgressSequence + 1);
+        actionBase.UpdatedAt = now.Clone();
+
+        var actionRequest = new NyxIdChatActionRequestState
+        {
+            SchemaVersion = validated.Definition.SchemaVersion,
+            RegistryRevision = validated.Definition.RegistryRevision,
+            ConversationActorId = Id,
+            OriginTurnId = wireRequest.OriginTurnId,
+            TaskId = wireRequest.TaskId,
+            StepId = wireRequest.StepId,
+            ActionRequestId = wireRequest.ActionRequestId,
+            Action = validated.Definition.Action,
+            Params = validated.Params.Clone(),
+            AdvisoryRisk = validated.Definition.AdvisoryRisk,
+            RememberEligible = validated.Definition.RememberEligible,
+            RequestedAt = now.Clone(),
+        };
+        var decision = NyxIdChatBrowserActions.CommitRequest(actionBase, actionRequest, now);
+        if (!decision.ShouldCommit || decision.Outcome != NyxIdChatTransitionOutcome.Accepted)
+        {
+            throw new InvalidOperationException(
+                "The workflow action handoff could not establish an action request.");
+        }
+
+        var actionState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
+        await PersistDomainEventAsync(new NyxIdChatActionRequestedEvent
+        {
+            Request = decision.Request.Clone(),
+            Task = actionState.ActiveTask.Clone(),
+            OriginTurn = actionState.ActiveTurn.Clone(),
+            State = actionState,
+        }, CancellationToken.None);
+    }
+
+    private void ValidateWorkflowInteractiveActionHandoff(
+        WorkflowInteractiveActionHandoffCommand command)
+    {
+        var request = command.Request;
+        if (request is null ||
+            !IsValidWorkflowActionActorId(Id) ||
+            !string.Equals(request.ActorId, Id, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(command.HandoffId) ||
+            string.IsNullOrWhiteSpace(command.ScopeId) ||
+            string.IsNullOrWhiteSpace(command.OwnerSubject) ||
+            string.IsNullOrWhiteSpace(command.SourceWorkflowActorId) ||
+            request.SchemaVersion != NyxIdAssistantActionRegistry.SupportedSchemaVersion ||
+            !string.Equals(request.Action, "service.connect", StringComparison.Ordinal) ||
+            request.Params?.CatalogService is null ||
+            string.IsNullOrWhiteSpace(request.Params.CatalogService.ServiceSlug) ||
+            string.IsNullOrWhiteSpace(request.OriginTurnId) ||
+            string.IsNullOrWhiteSpace(request.TaskId) ||
+            string.IsNullOrWhiteSpace(request.StepId) ||
+            string.IsNullOrWhiteSpace(request.ActionRequestId))
+        {
+            throw new InvalidOperationException(
+                "The workflow interactive action handoff is invalid.");
+        }
+    }
+
+    private static bool IsValidWorkflowActionActorId(string actorId)
+    {
+        const string prefix = "nyxid-chat-";
+        if (!actorId.StartsWith(prefix, StringComparison.Ordinal) ||
+            actorId.Length <= prefix.Length ||
+            actorId.Length > 128)
+        {
+            return false;
+        }
+
+        return actorId[prefix.Length..].All(static character =>
+            char.IsAsciiLetterOrDigit(character) || character is '_' or '-');
+    }
+
+    private static bool WorkflowInteractiveActionMatches(
+        NyxIdChatActionRequestState existing,
+        WorkflowInteractiveActionRequestWirePayload wireRequest,
+        NyxIdAssistantActionValidation validated) =>
+        existing.SchemaVersion == wireRequest.SchemaVersion &&
+        string.Equals(existing.RegistryRevision, validated.Definition.RegistryRevision, StringComparison.Ordinal) &&
+        string.Equals(existing.ConversationActorId, wireRequest.ActorId, StringComparison.Ordinal) &&
+        string.Equals(existing.OriginTurnId, wireRequest.OriginTurnId, StringComparison.Ordinal) &&
+        string.Equals(existing.TaskId, wireRequest.TaskId, StringComparison.Ordinal) &&
+        string.Equals(existing.StepId, wireRequest.StepId, StringComparison.Ordinal) &&
+        string.Equals(existing.ActionRequestId, wireRequest.ActionRequestId, StringComparison.Ordinal) &&
+        existing.Action == validated.Definition.Action &&
+        existing.Params.ToByteString().Equals(validated.Params.ToByteString());
 
     [EventHandler(AllowSelfHandling = true)]
     public async Task HandleHistoryInitializationDispatchRequestedAsync(

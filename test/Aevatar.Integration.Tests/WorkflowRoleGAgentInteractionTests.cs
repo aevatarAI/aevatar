@@ -558,14 +558,21 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             terminal.SafeMessage.Should().Be("Connect Calendar to continue.");
             terminal.AuthorizationRequired.Should().NotBeNull();
             terminal.AuthorizationRequired!.ServiceSlug.Should().Be("calendar");
+            terminal.AuthorizationRequired.RequestedScopes.Should().Equal("calendar.read");
             terminal.ToolReceipts.Should().ContainSingle(receipt =>
                 receipt.Status == AgentToolReceiptStatus.AuthorizationRequired);
-            publisher.Published.Select(static item => item.evt)
+            var workflowCompletion = publisher.Published.Select(static item => item.evt)
                 .OfType<WorkflowLlmInvocationCompletedEvent>()
                 .Should().ContainSingle(completed =>
                     !completed.Success &&
                     completed.Error ==
-                    "authorization_required: Connect Calendar to continue.");
+                    "authorization_required: Connect Calendar to continue.")
+                .Which;
+            workflowCompletion.AuthorizationRequirement.Should().NotBeNull();
+            workflowCompletion.AuthorizationRequirement.ServiceSlug.Should().Be("calendar");
+            workflowCompletion.AuthorizationRequirement.RequestedScopes.Should().Equal("calendar.read");
+            workflowCompletion.AuthorizationRequirement.ReasonCode.Should().Be("service_not_connected");
+            workflowCompletion.AuthorizationRequirement.SafeMessage.Should().Be("Connect Calendar to continue.");
         }
 
         [Fact]
@@ -3066,6 +3073,7 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                             ServiceSlug = "calendar",
                             ReasonCode = "service_not_connected",
                             SafeMessage = "Connect Calendar to continue.",
+                            RequestedScopes = { "calendar.read" },
                         },
                     },
                 };

@@ -17,6 +17,7 @@ using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using ApplicationWorkflowFileArtifactOwnershipPort = Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactOwnershipPort;
 using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
@@ -55,6 +56,9 @@ public sealed partial class WorkflowRunGAgent
     private const int TerminalNotificationMaxRetryDelayMs = 30_000;
     private const string WorkflowNotExecutableError = "Workflow run is not definition-bound or compiled.";
     private const string InputFileBindingError = "workflow_input_file_binding_failed";
+    private const int ProcessedArtifactSourceLimit = 128;
+    private const int InteractiveActionHandoffLimit = 32;
+    private const string NyxIdChatAgentKind = "nyxid.chat";
     private WorkflowDefinition? _compiledWorkflow;
     private readonly WorkflowParser _parser = new();
     private readonly List<string> _childAgentIds = [];
@@ -393,8 +397,17 @@ public sealed partial class WorkflowRunGAgent
         if (!IsTerminalStatus(State.Status))
             await _subWorkflowOrchestrator.RecoverPendingSubWorkflowInvocationsAsync(State, ct);
 
+        await DispatchPendingInteractiveActionContinuationsAsync(ct);
         await ResumeCompensationAsync(ct);
         await RecoverTerminalNotificationAsync(ct);
+    }
+
+    protected override async Task OnCommittedStatePublicationRecoveredAsync(
+        EventEnvelope envelope,
+        CancellationToken ct)
+    {
+        await base.OnCommittedStatePublicationRecoveredAsync(envelope, ct);
+        await DispatchPendingInteractiveActionContinuationsAsync(ct);
     }
 
     public async Task BindWorkflowRunDefinitionAsync(
@@ -578,6 +591,7 @@ public sealed partial class WorkflowRunGAgent
             StartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             WorkflowCommandId = commandId,
             WorkflowCorrelationId = correlationId,
+            CurrentTurnId = request.ConversationContext?.CurrentTurnId ?? string.Empty,
         };
         if (request.CompletionNotificationTarget != null)
             executionStarted.CompletionNotificationTarget = request.CompletionNotificationTarget.Clone();
@@ -645,6 +659,7 @@ public sealed partial class WorkflowRunGAgent
             Attempt = State.ForkAttempt,
             // O2 (06-19-workflow-run-observatory): capture the run-start fact so the readmodel can sort by it.
             StartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            CurrentTurnId = State.CurrentTurnId,
         });
 
         await PublishStartWorkflowOrTerminalFailureAsync(
@@ -701,6 +716,270 @@ public sealed partial class WorkflowRunGAgent
                 }, TopologyAudience.Parent);
             }
         }
+    }
+
+    [EventHandler(Priority = -5)]
+    public async Task HandleInteractiveAuthorizationRequirementAsync(
+        WorkflowLlmInvocationCompletedEvent completed)
+    {
+        ArgumentNullException.ThrowIfNull(completed);
+        if (completed.AuthorizationRequirement is not { } requirement)
+            return;
+
+        var terminalContinuation = BuildInteractiveTerminalContinuation(completed, requirement);
+        if (!TryBuildInteractiveActionHandoff(
+                completed,
+                requirement,
+                terminalContinuation,
+                out var handoff,
+                out var command))
+        {
+            await PublishInteractiveTerminalContinuationAsync(completed, terminalContinuation);
+            return;
+        }
+
+        var existing = State.InteractiveActionHandoffs.FirstOrDefault(candidate =>
+            string.Equals(candidate.HandoffId, handoff.HandoffId, StringComparison.Ordinal));
+        if (existing is not null)
+        {
+            if (!existing.Request.ToByteString().Equals(handoff.Request.ToByteString()) ||
+                !existing.TerminalContinuation.ToByteString().Equals(
+                    handoff.TerminalContinuation.ToByteString()))
+            {
+                throw new InvalidOperationException(
+                    "An interactive action handoff identity was reused with different content.");
+            }
+
+            if (!existing.ContinuationDispatched)
+                await DispatchInteractiveActionContinuationAsync(existing, CancellationToken.None);
+            return;
+        }
+
+        try
+        {
+            await EnsureInteractiveActionActorHandoffAsync(command, CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(
+                exception,
+                "Interactive action handoff failed run={RunId} step={StepId} session={SessionId} actor={ActorId}.",
+                completed.RunId,
+                completed.StepId,
+                completed.SessionId,
+                command.Request.ActorId);
+            await PublishInteractiveTerminalContinuationAsync(completed, terminalContinuation);
+            return;
+        }
+
+        await PersistDomainEventAsync(new WorkflowInteractiveActionHandoffDispatchedEvent
+        {
+            HandoffId = handoff.HandoffId,
+            Request = handoff.Request.Clone(),
+            TerminalContinuation = handoff.TerminalContinuation.Clone(),
+        }, CancellationToken.None);
+
+        var committed = State.InteractiveActionHandoffs.Single(candidate =>
+            string.Equals(candidate.HandoffId, handoff.HandoffId, StringComparison.Ordinal));
+        await DispatchInteractiveActionContinuationAsync(committed, CancellationToken.None);
+    }
+
+    private Task PublishInteractiveTerminalContinuationAsync(
+        WorkflowLlmInvocationCompletedEvent completed,
+        WorkflowLlmInvocationCompletedEvent terminalContinuation) =>
+        PublishAsync(
+            terminalContinuation,
+            TopologyAudience.Self,
+            CancellationToken.None,
+            BuildDeliveryOptions(BuildStableIdentity(
+                "interactive-terminal",
+                Id,
+                completed.RunId,
+                completed.StepId,
+                completed.SessionId)));
+
+    private bool TryBuildInteractiveActionHandoff(
+        WorkflowLlmInvocationCompletedEvent completed,
+        WorkflowInteractiveAuthorizationRequirement requirement,
+        WorkflowLlmInvocationCompletedEvent terminalContinuation,
+        out WorkflowInteractiveActionHandoffState handoff,
+        out WorkflowInteractiveActionHandoffCommand command)
+    {
+        handoff = null!;
+        command = null!;
+        var callerAuthority = CallerNyxIdAuthority;
+        var serviceSlug = NormalizeInteractiveValue(requirement.ServiceSlug, 128);
+        var currentTurnId = NormalizeInteractiveValue(State.CurrentTurnId, 256);
+        var scopeId = NormalizeInteractiveValue(State.ScopeId, 256);
+        if (State.ExpectedExecutionMode != ExternalCapabilityExecutionMode.Interactive ||
+            callerAuthority is null ||
+            serviceSlug is null ||
+            currentTurnId is null ||
+            scopeId is null ||
+            !serviceSlug.All(static character =>
+                char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.'))
+        {
+            return false;
+        }
+
+        var requestedScopes = requirement.RequestedScopes
+            .Select(scope => NormalizeInteractiveValue(scope, 256))
+            .Where(static scope => scope is not null)
+            .Cast<string>()
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (requestedScopes.Length != requirement.RequestedScopes.Count)
+            return false;
+
+        var actionActorId = BuildStableIdentity(
+            "nyxid-chat",
+            scopeId,
+            callerAuthority.ExternalUserId,
+            Id,
+            currentTurnId,
+            serviceSlug);
+        var taskId = BuildStableIdentity("task", actionActorId, currentTurnId, completed.SessionId);
+        var actionRequestId = BuildStableIdentity(
+            "action",
+            actionActorId,
+            currentTurnId,
+            taskId,
+            serviceSlug,
+            string.Join("\n", requestedScopes));
+        var stepId = BuildStableIdentity(
+            "step",
+            actionActorId,
+            currentTurnId,
+            taskId,
+            actionRequestId,
+            "browser-action");
+        var request = new WorkflowInteractiveActionRequestWirePayload
+        {
+            SchemaVersion = 4,
+            ActorId = actionActorId,
+            OriginTurnId = currentTurnId,
+            TaskId = taskId,
+            StepId = stepId,
+            ActionRequestId = actionRequestId,
+            Action = "service.connect",
+            Params = new WorkflowInteractiveActionParams
+            {
+                CatalogService = new WorkflowInteractiveCatalogServiceActionParams
+                {
+                    ServiceSlug = serviceSlug,
+                    RequestedScopes = { requestedScopes },
+                },
+            },
+        };
+        var handoffId = BuildStableIdentity(
+            "handoff",
+            Id,
+            completed.RunId,
+            completed.StepId,
+            completed.SessionId,
+            actionRequestId);
+        handoff = new WorkflowInteractiveActionHandoffState
+        {
+            HandoffId = handoffId,
+            Request = request,
+            TerminalContinuation = terminalContinuation.Clone(),
+        };
+        command = new WorkflowInteractiveActionHandoffCommand
+        {
+            HandoffId = handoffId,
+            ScopeId = scopeId,
+            OwnerSubject = callerAuthority.ExternalUserId,
+            SourceWorkflowActorId = Id,
+            Request = request.Clone(),
+        };
+        return true;
+    }
+
+    private async Task EnsureInteractiveActionActorHandoffAsync(
+        WorkflowInteractiveActionHandoffCommand command,
+        CancellationToken ct)
+    {
+        var actorId = command.Request.ActorId;
+        var actor = await _runtime.GetAsync(actorId) ??
+                    await _runtime.CreateByKindAsync(NyxIdChatAgentKind, actorId, ct);
+        await _runtime.LinkAsync(Id, actor.Id, ct);
+        await SendToAsync(
+            actor.Id,
+            command,
+            ct,
+            BuildDeliveryOptions(BuildStableIdentity(
+                "interactive-handoff-delivery",
+                command.HandoffId,
+                actor.Id)));
+    }
+
+    private async Task DispatchPendingInteractiveActionContinuationsAsync(CancellationToken ct)
+    {
+        foreach (var handoff in State.InteractiveActionHandoffs
+                     .Where(static handoff => !handoff.ContinuationDispatched)
+                     .ToArray())
+        {
+            await DispatchInteractiveActionContinuationAsync(handoff, ct);
+        }
+    }
+
+    private async Task DispatchInteractiveActionContinuationAsync(
+        WorkflowInteractiveActionHandoffState handoff,
+        CancellationToken ct)
+    {
+        await PublishAsync(
+            handoff.TerminalContinuation.Clone(),
+            TopologyAudience.Self,
+            ct,
+            BuildDeliveryOptions(BuildStableIdentity(
+                "interactive-continuation-delivery",
+                handoff.HandoffId)));
+        await PersistDomainEventAsync(new WorkflowInteractiveActionContinuationDispatchedEvent
+        {
+            HandoffId = handoff.HandoffId,
+        }, ct);
+    }
+
+    private static WorkflowLlmInvocationCompletedEvent BuildInteractiveTerminalContinuation(
+        WorkflowLlmInvocationCompletedEvent completed,
+        WorkflowInteractiveAuthorizationRequirement requirement) =>
+        new()
+        {
+            RunId = completed.RunId,
+            StepId = completed.StepId,
+            SessionId = completed.SessionId,
+            RoleActorId = completed.RoleActorId,
+            Success = false,
+            Error = NormalizeInteractiveValue(completed.Error, 512) ??
+                    NormalizeInteractiveValue(requirement.SafeMessage, 512) ??
+                    "The requested service requires authorization.",
+            Usage = completed.Usage?.Clone(),
+        };
+
+    private static EventEnvelopePublishOptions BuildDeliveryOptions(string operationId) =>
+        new()
+        {
+            Delivery = new EventEnvelopeDeliveryOptions
+            {
+                OperationId = operationId,
+            },
+        };
+
+    private static string? NormalizeInteractiveValue(string? value, int maxLength)
+    {
+        var normalized = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        return normalized is not null &&
+               normalized.Length <= maxLength &&
+               !normalized.Any(char.IsControl)
+            ? normalized
+            : null;
+    }
+
+    private static string BuildStableIdentity(string prefix, params string[] parts)
+    {
+        var identity = string.Concat(parts.Select(static part => $"{part.Length}:{part}"));
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(identity));
+        return $"{prefix}-{Convert.ToHexStringLower(hash)[..32]}";
     }
 
     private Task AdoptCompletionNotificationTargetAsync(
@@ -1334,8 +1613,16 @@ public sealed partial class WorkflowRunGAgent
     {
         ArgumentNullException.ThrowIfNull(envelope);
 
-        if (WorkflowArtifactFactBuilder.TryBuild(envelope, Id, State.RunId, out var artifactFact))
-            await PersistDomainEventAsync(artifactFact, CancellationToken.None);
+        if (!WorkflowArtifactFactBuilder.TryBuild(envelope, Id, State.RunId, out var artifactFact))
+            return;
+
+        if (artifactFact is WorkflowRoleReplyRecordedEvent roleReply &&
+            IsProcessedArtifactSource(State, roleReply.Source))
+        {
+            return;
+        }
+
+        await PersistDomainEventAsync(artifactFact, CancellationToken.None);
     }
 
     private async Task CleanupRoleAgentTreeAsync(CancellationToken ct)
@@ -1524,6 +1811,9 @@ public sealed partial class WorkflowRunGAgent
             .On<WorkflowRunTerminalNotificationDispatchedEvent>(ApplyWorkflowRunTerminalNotificationDispatched)
             .On<WorkflowRunTerminalNotificationExpiredEvent>(ApplyWorkflowRunTerminalNotificationExpired)
             .On<WorkflowRunTerminalNotificationRetryFiredEvent>(KeepCurrentState)
+            .On<WorkflowRoleReplyRecordedEvent>(ApplyWorkflowRoleReplyRecorded)
+            .On<WorkflowInteractiveActionHandoffDispatchedEvent>(ApplyInteractiveActionHandoffDispatched)
+            .On<WorkflowInteractiveActionContinuationDispatchedEvent>(ApplyInteractiveActionContinuationDispatched)
             .On<SubWorkflowDefinitionResolutionRegisteredEvent>(SubWorkflowOrchestrator.ApplySubWorkflowDefinitionResolutionRegistered)
             .On<SubWorkflowDefinitionResolvedEvent>(KeepCurrentState)
             .On<SubWorkflowDefinitionResolveFailedEvent>(KeepCurrentState)
@@ -1534,6 +1824,103 @@ public sealed partial class WorkflowRunGAgent
             .On<SubWorkflowInvocationHandoffAdvancedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationHandoffAdvanced)
             .On<SubWorkflowInvocationCompletedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationCompleted)
             .OrCurrent();
+
+    private static WorkflowRunState ApplyInteractiveActionHandoffDispatched(
+        WorkflowRunState current,
+        WorkflowInteractiveActionHandoffDispatchedEvent evt)
+    {
+        if (string.IsNullOrWhiteSpace(evt.HandoffId) ||
+            evt.Request is null ||
+            evt.TerminalContinuation is null)
+        {
+            return current;
+        }
+
+        var existing = current.InteractiveActionHandoffs.FirstOrDefault(candidate =>
+            string.Equals(candidate.HandoffId, evt.HandoffId, StringComparison.Ordinal));
+        if (existing is not null)
+        {
+            if (!existing.Request.ToByteString().Equals(evt.Request.ToByteString()) ||
+                !existing.TerminalContinuation.ToByteString().Equals(
+                    evt.TerminalContinuation.ToByteString()))
+            {
+                throw new InvalidOperationException(
+                    "An interactive action handoff identity was reused with different content.");
+            }
+
+            return current;
+        }
+
+        var next = current.Clone();
+        next.InteractiveActionHandoffs.Add(new WorkflowInteractiveActionHandoffState
+        {
+            HandoffId = evt.HandoffId,
+            Request = evt.Request.Clone(),
+            TerminalContinuation = evt.TerminalContinuation.Clone(),
+        });
+        while (next.InteractiveActionHandoffs.Count > InteractiveActionHandoffLimit)
+            next.InteractiveActionHandoffs.RemoveAt(0);
+        return next;
+    }
+
+    private static WorkflowRunState ApplyInteractiveActionContinuationDispatched(
+        WorkflowRunState current,
+        WorkflowInteractiveActionContinuationDispatchedEvent evt)
+    {
+        var index = -1;
+        for (var candidate = 0; candidate < current.InteractiveActionHandoffs.Count; candidate++)
+        {
+            if (string.Equals(
+                    current.InteractiveActionHandoffs[candidate].HandoffId,
+                    evt.HandoffId,
+                    StringComparison.Ordinal))
+            {
+                index = candidate;
+                break;
+            }
+        }
+
+        if (index < 0 ||
+            current.InteractiveActionHandoffs[index].ContinuationDispatched)
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.InteractiveActionHandoffs[index].ContinuationDispatched = true;
+        return next;
+    }
+
+    private static WorkflowRunState ApplyWorkflowRoleReplyRecorded(
+        WorkflowRunState current,
+        WorkflowRoleReplyRecordedEvent evt)
+    {
+        if (!IsValidArtifactSource(evt.Source) || IsProcessedArtifactSource(current, evt.Source))
+            return current;
+
+        var next = current.Clone();
+        next.ProcessedArtifactSources.Add(evt.Source.Clone());
+        while (next.ProcessedArtifactSources.Count > ProcessedArtifactSourceLimit)
+            next.ProcessedArtifactSources.RemoveAt(0);
+        return next;
+    }
+
+    private static bool IsProcessedArtifactSource(
+        WorkflowRunState state,
+        WorkflowArtifactSourceIdentity? source) =>
+        IsValidArtifactSource(source) &&
+        state.ProcessedArtifactSources.Any(candidate =>
+            string.Equals(candidate.PublisherActorId, source!.PublisherActorId, StringComparison.Ordinal) &&
+            string.Equals(candidate.CommittedEventId, source.CommittedEventId, StringComparison.Ordinal) &&
+            candidate.CommittedStateVersion == source.CommittedStateVersion);
+
+    private static bool IsValidArtifactSource(WorkflowArtifactSourceIdentity? source) =>
+        source is
+        {
+            PublisherActorId.Length: > 0,
+            CommittedEventId.Length: > 0,
+            CommittedStateVersion: > 0,
+        };
 
     private WorkflowRunState ApplyBindWorkflowRunDefinition(WorkflowRunState current, BindWorkflowRunDefinitionEvent evt)
     {
@@ -1667,6 +2054,8 @@ public sealed partial class WorkflowRunGAgent
         next.TerminalNotificationAttempt = 0;
         next.TerminalNotificationDeliveryStatus = WorkflowRunTerminalNotificationDeliveryStatus.Unspecified;
         next.TerminalNotificationRetryCallbackId = string.Empty;
+        next.CurrentTurnId = evt.CurrentTurnId?.Trim() ?? string.Empty;
+        next.InteractiveActionHandoffs.Clear();
         next.ExecutionContext ??= new WorkflowRunExecutionContextState();
         ApplyExecutionContextDelta(next.ExecutionContext, evt.ExecutionContextDelta);
         if (string.IsNullOrWhiteSpace(next.DefinitionActorId) && !string.IsNullOrWhiteSpace(evt.DefinitionActorId))

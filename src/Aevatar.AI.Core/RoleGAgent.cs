@@ -134,6 +134,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         await RequestIncompleteSessionFinalizationAsync(ct);
     }
 
+    protected override Task OnCommittedStatePublicationRecoveredAsync(
+        EventEnvelope envelope,
+        CancellationToken ct)
+    {
+        _ = envelope;
+        return RequestIncompleteSessionFinalizationAsync(ct);
+    }
+
     public async Task<IReadOnlyList<PreparedChatToolOperation>> PrepareBatchAsync(
         ChatToolBatchIntent batch,
         CancellationToken ct = default)
@@ -4091,7 +4099,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         }
     }
 
-    private async Task RequestIncompleteSessionFinalizationAsync(CancellationToken ct)
+    protected async Task RequestIncompleteSessionFinalizationAsync(CancellationToken ct)
     {
         var candidates = State.Sessions
             .Where(entry => !entry.Value.Completed)

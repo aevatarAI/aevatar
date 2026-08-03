@@ -119,6 +119,44 @@ public sealed class WorkflowRunExecutionStartedEnvelopeMappingHandler : IWorkflo
     }
 }
 
+public sealed class WorkflowInteractiveActionRunEventEnvelopeMappingHandler
+    : IWorkflowRunEventEnvelopeMappingHandler
+{
+    public const string EventName = "nyxid.action.request";
+
+    public int Order => -5;
+
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<WorkflowRunEventEnvelope> events)
+    {
+        if (envelope.Payload?.Is(WorkflowInteractiveActionHandoffDispatchedEvent.Descriptor) != true)
+        {
+            events = [];
+            return false;
+        }
+
+        var handoff = envelope.Payload.Unpack<WorkflowInteractiveActionHandoffDispatchedEvent>();
+        if (handoff.Request is null)
+        {
+            events = [];
+            return true;
+        }
+
+        events =
+        [
+            new WorkflowRunEventEnvelope
+            {
+                Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
+                Custom = new WorkflowCustomEventPayload
+                {
+                    Name = EventName,
+                    Payload = Any.Pack(handoff.Request),
+                },
+            },
+        ];
+        return true;
+    }
+}
+
 public sealed class StartWorkflowRunEventEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler
 {
     public int Order => 0;

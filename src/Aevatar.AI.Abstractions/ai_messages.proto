@@ -407,6 +407,7 @@ message NyxIdAuthorizationRequiredEvent {
   string reason_code = 4;
   string safe_message = 5;
   optional string user_service_id = 6;
+  repeated string requested_scopes = 7;
 }
 
 message AgentToolReceipt {

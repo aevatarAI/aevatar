@@ -330,6 +330,8 @@ public sealed class WorkflowChatRunInteractionServiceTests
         notificationTarget.DeliveryId.Should().Be(deliveryPort.Reservations[0].DeliveryId);
         notificationTarget.ActorId.Should().NotBe(notificationTarget.DeliveryId);
         notificationTarget.ExpiresAtUnixMs.Should().BeGreaterThan(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        inner.Requests[0].ConversationContext.Should().NotBeNull();
+        inner.Requests[0].ConversationContext!.CurrentTurnId.Should().Be("generated-turn");
         deliveryPort.Bindings.Should().ContainSingle();
         deliveryPort.Bindings[0].WorkflowActorId.Should().Be("run-1");
         deliveryPort.Bindings[0].WorkflowCommandId.Should().Be(inner.Requests[0].CommandIdSeed);
@@ -438,7 +440,8 @@ public sealed class WorkflowChatRunInteractionServiceTests
         result.Succeeded.Should().BeTrue();
         var dispatched = inner.Requests.Should().ContainSingle().Subject;
         dispatched.Prompt.Should().Be("team01");
-        dispatched.ConversationContext.Should().BeEquivalentTo(deliveryPort.ConversationContext);
+        dispatched.ConversationContext.Should().BeEquivalentTo(
+            deliveryPort.ConversationContext with { CurrentTurnId = "generated-turn" });
         dispatched.CompletionNotificationTarget.Should().NotBeNull();
     }
 

@@ -121,6 +121,7 @@ internal static class WorkflowArtifactFactBuilder
             Content = SanitizeArtifactText(completed.Content),
             ReasoningContent = SanitizeArtifactText(completed.ReasoningContent),
             ContentEmitted = completed.Success,
+            Source = BuildSourceIdentity(publisherActorId, published.StateEvent),
         };
 
         return true;
@@ -159,10 +160,21 @@ internal static class WorkflowArtifactFactBuilder
             Content = SanitizeArtifactText(completed.Content),
             ReasoningContent = SanitizeArtifactText(completed.ReasoningContent),
             ContentEmitted = completed.ContentEmitted,
+            Source = BuildSourceIdentity(publisherActorId, published.StateEvent),
         };
         evt.ToolCalls.AddRange(BuildEnrichedToolCalls(completed));
         return true;
     }
+
+    private static WorkflowArtifactSourceIdentity BuildSourceIdentity(
+        string publisherActorId,
+        StateEvent stateEvent) =>
+        new()
+        {
+            PublisherActorId = publisherActorId,
+            CommittedEventId = stateEvent.EventId ?? string.Empty,
+            CommittedStateVersion = stateEvent.Version,
+        };
 
     private static IReadOnlyList<WorkflowRoleReplyToolCall> BuildEnrichedToolCalls(
         RoleChatSessionCompletedEvent completed)

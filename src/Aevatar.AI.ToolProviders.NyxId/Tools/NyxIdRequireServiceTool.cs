@@ -8,6 +8,7 @@ namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
 {
+    private const int MaxRequestedScopes = 64;
     private const string ArgumentsInvalidCode = "NYXID_REQUIRE_SERVICE_ARGUMENTS_INVALID";
     private const string ContextUnavailableCode = "NYXID_REQUIRE_SERVICE_CONTEXT_UNAVAILABLE";
     private const string ResultInvalidCode = "NYXID_REQUIRE_SERVICE_RESULT_INVALID";
@@ -31,7 +32,12 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
           "properties": {
             "service_slug": { "type": "string" },
             "service_label": { "type": "string" },
-            "resource_uri": { "type": "string" }
+            "resource_uri": { "type": "string" },
+            "requested_scopes": {
+              "type": "array",
+              "items": { "type": "string" },
+              "maxItems": 64
+            }
           },
           "required": ["service_slug"]
         }
@@ -44,8 +50,8 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         ct.ThrowIfCancellationRequested();
         var args = ToolArgs.Parse(argumentsJson);
         var serviceSlug = NormalizeSlug(args.Str("service_slug"));
-        if (args.HasParseError || serviceSlug is null)
-            return ErrorResult(ArgumentsInvalidCode, "service_slug is required");
+        if (args.HasParseError || serviceSlug is null || !TryReadRequestedScopes(args, out _))
+            return ErrorResult(ArgumentsInvalidCode, "service_slug and requested_scopes must be valid");
 
         if (!TryResolveAccess(out var access, out var error))
             return ErrorResult(ContextUnavailableCode, error!);
@@ -163,8 +169,16 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
     {
         var args = ToolArgs.Parse(argumentsJson);
         var requestedSlug = NormalizeSlug(args.Str("service_slug"));
-        if (args.HasParseError || requestedSlug is null)
-            return ErrorReceipt(callId, toolName, ArgumentsInvalidCode, "service_slug is required");
+        if (args.HasParseError ||
+            requestedSlug is null ||
+            !TryReadRequestedScopes(args, out var requestedScopes))
+        {
+            return ErrorReceipt(
+                callId,
+                toolName,
+                ArgumentsInvalidCode,
+                "service_slug and requested_scopes must be valid");
+        }
 
         if (TryReadError(resultJson, out var errorCode, out var errorMessage))
             return ErrorReceipt(callId, toolName, errorCode, errorMessage);
@@ -205,7 +219,12 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
                 : ErrorReceipt(callId, toolName, ResultInvalidCode, ResultInvalidMessage);
         }
 
-        var blocker = BuildVerifiedBlocker(args, verifiedSlug, reasonCode, safeMessage);
+        var blocker = BuildVerifiedBlocker(
+            args,
+            verifiedSlug,
+            reasonCode,
+            safeMessage,
+            requestedScopes);
 
         return new AgentToolReceipt
         {
@@ -222,7 +241,8 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         ToolArgs args,
         string verifiedSlug,
         string reasonCode,
-        string safeMessage)
+        string safeMessage,
+        IReadOnlyList<string> requestedScopes)
     {
         var blocker = new NyxIdAuthorizationRequiredEvent
         {
@@ -236,7 +256,38 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         var resourceUri = NormalizeResourceUri(args.Str("resource_uri"));
         if (resourceUri != null)
             blocker.ResourceUri = resourceUri;
+        blocker.RequestedScopes.Add(requestedScopes);
         return blocker;
+    }
+
+    private static bool TryReadRequestedScopes(
+        ToolArgs args,
+        out IReadOnlyList<string> requestedScopes)
+    {
+        requestedScopes = [];
+        var element = args.Element("requested_scopes");
+        if (element is null)
+            return true;
+        if (element.Value.ValueKind != JsonValueKind.Array ||
+            element.Value.GetArrayLength() > MaxRequestedScopes)
+        {
+            return false;
+        }
+
+        var normalized = new List<string>();
+        foreach (var item in element.Value.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String)
+                return false;
+            var scope = Normalize(item.GetString());
+            if (scope is null || scope.Length > 256 || scope.Any(char.IsControl))
+                return false;
+            if (!normalized.Contains(scope, StringComparer.Ordinal))
+                normalized.Add(scope);
+        }
+
+        requestedScopes = normalized;
+        return true;
     }
 
     private static AgentToolReceipt ErrorReceipt(

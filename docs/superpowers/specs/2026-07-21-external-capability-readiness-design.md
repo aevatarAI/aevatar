@@ -236,6 +236,28 @@ Interactive execution uses the current verified caller bearer. If access is
 revoked, the existing structured NyxID error mapping produces a safe typed tool
 failure and terminates that run without storing the raw response or any secret.
 
+`INTERACTIVE` is admission semantics, not a promise that every run will emit a
+prompt or card. When an interactive role completion contains a typed NyxID
+authorization requirement, the Workflow Run requires the reserved current turn,
+scope, and complete verified caller NyxID authority before it can expose an
+action. The action owner is the current caller authority's `external_user_id`;
+it never comes from the durable authorization catalog owner, which is not
+applicable to normal interactive admission. The run derives a stable, separate
+`nyxid-chat-*` actor, hands the schema-v4 `service.connect` request to that actor,
+and commits
+`WorkflowInteractiveActionHandoffDispatchedEvent`. The AGUI adapter maps that
+committed fact to `CUSTOM name=nyxid.action.request`; it never exposes the
+private terminal continuation as card payload. The original Studio conversation
+remains `chatc-*`, while `action.continue` targets the action-owning
+`nyxid-chat-*` actor.
+
+The action-card fact commits before the Workflow Run dispatches its sanitized
+self-continuation. That continuation follows the normal failed-step and run
+terminal path, so an authorization-blocked turn produces an actionable card and
+still reaches `RUN_ERROR`. If the required action owner cannot be established,
+the run fails closed without fabricating a card and still dispatches the terminal
+continuation.
+
 Durable and scheduled execution reuses
 `ScheduledInvocationAuthorizationPlan -> ScheduledAgentApiKeyIssuer`. Admission
 supplies exact service ids and the stamped durable catalog evidence. Issuance
@@ -285,6 +307,8 @@ Tests use deliberately distinct identities such as
 - all workflow write surfaces share the same admission contract;
 - exact service ids reach proxy routing and scoped key evidence;
 - interactive and durable credentials never cross their authority boundary;
+- interactive authorization blockers commit a schema-v4 action card before the
+  run terminal continuation, with replay-safe action and delivery identities;
 - unprovable durable authorization fails closed; and
 - no secret-bearing input or output is stored in repository-owned contracts.
 

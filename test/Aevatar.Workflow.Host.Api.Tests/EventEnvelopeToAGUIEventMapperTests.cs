@@ -109,6 +109,34 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
+    public void WorkflowInteractiveActionHandoff_ShouldMapOnlyTheSchemaV4ActionRequest()
+    {
+        var events = CreateMapper().Map(WrapCommitted(
+            new WorkflowInteractiveActionHandoffDispatchedEvent
+            {
+                HandoffId = "handoff-alpha",
+                Request = InteractiveActionRequest(),
+                TerminalContinuation = new WorkflowLlmInvocationCompletedEvent
+                {
+                    RunId = "run-alpha",
+                    StepId = "reply",
+                    SessionId = "session-alpha",
+                    Success = false,
+                    Error = "private-terminal-continuation",
+                },
+            }));
+
+        var mapped = events.Should().ContainSingle().Which;
+        mapped.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.Custom);
+        mapped.Custom.Name.Should().Be("nyxid.action.request");
+        mapped.Custom.Payload.Is(WorkflowInteractiveActionRequestWirePayload.Descriptor)
+            .Should().BeTrue();
+        var request = mapped.Custom.Payload.Unpack<WorkflowInteractiveActionRequestWirePayload>();
+        request.Should().BeEquivalentTo(InteractiveActionRequest());
+        mapped.Custom.Payload.ToString().Should().NotContain("private-terminal-continuation");
+    }
+
+    [Fact]
     public void StepRequestEvent_ShouldMapToStepStartedAndCustomPayload()
     {
         var events = CreateMapper().Map(WrapCommitted(new StepRequestEvent
@@ -626,6 +654,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         return new EventEnvelopeToWorkflowRunEventMapper(
         [
             new WorkflowRunExecutionStartedEnvelopeMappingHandler(),
+            new WorkflowInteractiveActionRunEventEnvelopeMappingHandler(),
             new StartWorkflowRunEventEnvelopeMappingHandler(),
             new StepRequestRunEventEnvelopeMappingHandler(),
             new StepCompletedRunEventEnvelopeMappingHandler(),
@@ -639,4 +668,24 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
             new WorkflowSignalBufferedRunEventEnvelopeMappingHandler(),
         ]);
     }
+
+    private static WorkflowInteractiveActionRequestWirePayload InteractiveActionRequest() =>
+        new()
+        {
+            SchemaVersion = 4,
+            ActorId = "nyxid-chat-alpha",
+            OriginTurnId = "turn-alpha",
+            TaskId = "task-alpha",
+            StepId = "step-alpha",
+            ActionRequestId = "action-alpha",
+            Action = "service.connect",
+            Params = new WorkflowInteractiveActionParams
+            {
+                CatalogService = new WorkflowInteractiveCatalogServiceActionParams
+                {
+                    ServiceSlug = "api-github",
+                    RequestedScopes = { "repo" },
+                },
+            },
+        };
 }

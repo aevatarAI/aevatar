@@ -25,6 +25,7 @@ using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -86,6 +87,71 @@ public sealed class NyxIdChatConversationGAgentTests
         var recovered = CreateController(services, actorId);
         await recovered.ActivateAsync();
         recovered.State.OwnerSubject.Should().Be("owner-alpha");
+    }
+
+    [Fact]
+    public async Task WorkflowInteractiveActionHandoff_ShouldCreateActionOnlyStateAndRejectConflictingReplay()
+    {
+        const string actorId = "nyxid-chat-workflow-alpha";
+        var eventStore = new InMemoryEventStoreForTests();
+        using var services = BuildEventSourcingServices(eventStore);
+        var agent = CreateController(services, actorId);
+        await agent.ActivateAsync();
+        var command = new WorkflowInteractiveActionHandoffCommand
+        {
+            HandoffId = "handoff-alpha",
+            ScopeId = "scope-alpha",
+            OwnerSubject = "owner-alpha",
+            SourceWorkflowActorId = "workflow-run-alpha",
+            Request = new WorkflowInteractiveActionRequestWirePayload
+            {
+                SchemaVersion = 4,
+                ActorId = actorId,
+                OriginTurnId = "turn-studio-alpha",
+                TaskId = "task-action-alpha",
+                StepId = "step-action-alpha",
+                ActionRequestId = "action-request-alpha",
+                Action = "service.connect",
+                Params = new WorkflowInteractiveActionParams
+                {
+                    CatalogService = new WorkflowInteractiveCatalogServiceActionParams
+                    {
+                        ServiceSlug = "api-github",
+                        RequestedScopes = { "repo" },
+                    },
+                },
+            },
+        };
+
+        await agent.HandleWorkflowInteractiveActionHandoffAsync(command);
+
+        agent.State.ConversationActorId.Should().Be(actorId);
+        agent.State.ScopeId.Should().Be("scope-alpha");
+        agent.State.OwnerSubject.Should().Be("owner-alpha");
+        agent.State.ActiveTurn.TurnId.Should().Be("turn-studio-alpha");
+        agent.State.ActiveTurn.TaskId.Should().Be("task-action-alpha");
+        agent.State.ActiveTask.TurnId.Should().Be("turn-studio-alpha");
+        agent.State.ActiveTask.TaskId.Should().Be("task-action-alpha");
+        var action = agent.State.PendingActions.Should().ContainSingle().Which;
+        action.ConversationActorId.Should().Be(actorId);
+        action.ActionRequestId.Should().Be("action-request-alpha");
+        action.Action.Should().Be(NyxIdAssistantActionKind.ServiceConnect);
+        action.Params.CatalogServiceConnect.ServiceSlug.Should().Be("api-github");
+        action.Params.CatalogServiceConnect.RequestedScopes.Should().Equal("repo");
+        var committedCount = (await eventStore.GetEventsAsync(actorId)).Count;
+
+        await agent.HandleWorkflowInteractiveActionHandoffAsync(command.Clone());
+
+        (await eventStore.GetEventsAsync(actorId)).Should().HaveCount(committedCount);
+
+        var conflicting = command.Clone();
+        conflicting.Request.Params.CatalogService.RequestedScopes.Clear();
+        conflicting.Request.Params.CatalogService.RequestedScopes.Add("read:org");
+        var act = () => agent.HandleWorkflowInteractiveActionHandoffAsync(conflicting);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*identity was reused with different content*");
+        (await eventStore.GetEventsAsync(actorId)).Should().HaveCount(committedCount);
     }
 
     [Fact]

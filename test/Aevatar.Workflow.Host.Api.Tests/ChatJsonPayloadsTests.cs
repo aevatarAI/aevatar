@@ -118,6 +118,53 @@ public sealed class ChatJsonPayloadsTests
         payload.GetProperty("eventRoutes").GetString().Should().Be("route-a");
     }
 
+    [Fact]
+    public void Format_ShouldSerializeNyxIdActionRequestWithSchemaV4CamelCaseFields()
+    {
+        var json = ChatJsonPayloads.Format(new WorkflowRunEventEnvelope
+        {
+            Custom = new WorkflowCustomEventPayload
+            {
+                Name = "nyxid.action.request",
+                Payload = Any.Pack(new WorkflowInteractiveActionRequestWirePayload
+                {
+                    SchemaVersion = 4,
+                    ActorId = "nyxid-chat-alpha",
+                    OriginTurnId = "turn-alpha",
+                    TaskId = "task-alpha",
+                    StepId = "step-alpha",
+                    ActionRequestId = "action-alpha",
+                    Action = "service.connect",
+                    Params = new WorkflowInteractiveActionParams
+                    {
+                        CatalogService = new WorkflowInteractiveCatalogServiceActionParams
+                        {
+                            ServiceSlug = "api-github",
+                            RequestedScopes = { "repo" },
+                        },
+                    },
+                }),
+            },
+        });
+
+        using var document = JsonDocument.Parse(json);
+        var custom = document.RootElement.GetProperty("custom");
+        custom.GetProperty("name").GetString().Should().Be("nyxid.action.request");
+        var payload = custom.GetProperty("payload");
+        payload.GetProperty("schemaVersion").GetInt32().Should().Be(4);
+        payload.GetProperty("actorId").GetString().Should().Be("nyxid-chat-alpha");
+        payload.GetProperty("originTurnId").GetString().Should().Be("turn-alpha");
+        payload.GetProperty("taskId").GetString().Should().Be("task-alpha");
+        payload.GetProperty("stepId").GetString().Should().Be("step-alpha");
+        payload.GetProperty("actionRequestId").GetString().Should().Be("action-alpha");
+        payload.GetProperty("action").GetString().Should().Be("service.connect");
+        var catalogService = payload.GetProperty("params").GetProperty("catalogService");
+        catalogService.GetProperty("serviceSlug").GetString().Should().Be("api-github");
+        catalogService.GetProperty("requestedScopes")[0].GetString().Should().Be("repo");
+        payload.TryGetProperty("terminalContinuation", out _).Should().BeFalse();
+        payload.TryGetProperty("handoffId", out _).Should().BeFalse();
+    }
+
     private static WorkflowRunEventEnvelope BuildFrame() =>
         new()
         {

@@ -150,7 +150,8 @@ public sealed class WorkflowChatRunRequestSeedTests
                         Content: "Choose a Team: team01 or team02."),
                 ],
                 Truncated: false,
-                MaxMessageCount: 24));
+                MaxMessageCount: 24,
+                CurrentTurnId: "turn-current"));
 
         var envelope = factory.CreateEnvelope(
             request,
@@ -166,6 +167,7 @@ public sealed class WorkflowChatRunRequestSeedTests
         payload.ConversationContext.StateVersion.Should().Be(7);
         payload.ConversationContext.Truncated.Should().BeFalse();
         payload.ConversationContext.MaxMessageCount.Should().Be(24);
+        payload.ConversationContext.CurrentTurnId.Should().Be("turn-current");
         payload.ConversationContext.Messages.Select(static message => (message.Sequence, message.TurnId, message.Role, message.Content))
             .Should()
             .Equal(

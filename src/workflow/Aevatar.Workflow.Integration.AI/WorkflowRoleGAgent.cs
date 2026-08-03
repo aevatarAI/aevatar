@@ -14,6 +14,7 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Credentials;
 using Aevatar.Workflow.Core.Primitives;
@@ -199,6 +200,10 @@ public class WorkflowRoleGAgent(
             if (await TryHandlePostExternalToolCheckpointFailureAsync(chatRequest.SessionId, ex))
                 return;
 
+            throw;
+        }
+        catch (CommittedStatePublicationException)
+        {
             throw;
         }
         catch (Exception) when (
@@ -680,6 +685,16 @@ public class WorkflowRoleGAgent(
         var managedHandoff = ToWorkflowManagedHandoffOutcome(session.ToolReceipts);
         if (managedHandoff is not null)
             completed.ManagedHandoff = managedHandoff;
+        if (session.AuthorizationRequired is { } authorizationRequired)
+        {
+            completed.AuthorizationRequirement = new WorkflowInteractiveAuthorizationRequirement
+            {
+                ServiceSlug = authorizationRequired.ServiceSlug,
+                ReasonCode = authorizationRequired.ReasonCode,
+                SafeMessage = authorizationRequired.SafeMessage,
+                RequestedScopes = { authorizationRequired.RequestedScopes },
+            };
+        }
         return completed;
     }
 
@@ -804,6 +819,10 @@ public class WorkflowRoleGAgent(
             if (await TryHandlePostExternalToolCheckpointFailureAsync(request.SessionId, ex))
                 return;
 
+            throw;
+        }
+        catch (CommittedStatePublicationException)
+        {
             throw;
         }
         catch (Exception) when (
@@ -1356,7 +1375,8 @@ public class WorkflowRoleGAgent(
         }
         catch (Exception ex) when (
             ex is not OperationCanceledException and
-                not ChatToolPostExternalCheckpointException)
+                not ChatToolPostExternalCheckpointException and
+                not CommittedStatePublicationException)
         {
             throw new WorkflowIntentStreamingException(CaptureReplay(), ex);
         }

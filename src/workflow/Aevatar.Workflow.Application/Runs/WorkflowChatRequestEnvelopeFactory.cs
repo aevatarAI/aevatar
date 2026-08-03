@@ -246,6 +246,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             StateVersion = Math.Max(0, source.StateVersion),
             Truncated = source.Truncated,
             MaxMessageCount = Math.Max(0, source.MaxMessageCount),
+            CurrentTurnId = Normalize(source.CurrentTurnId),
         };
         payload.Messages.Add(source.Messages
             .Where(static message => !string.IsNullOrWhiteSpace(message.Content))
