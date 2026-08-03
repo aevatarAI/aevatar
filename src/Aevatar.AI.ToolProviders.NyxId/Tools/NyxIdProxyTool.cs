@@ -25,6 +25,9 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         "Managed workflow NyxID proxy calls require an admitted operation proof.";
     private const string OperationAdmissionRequiredResult =
         """{"error":true,"error_code":"NYXID_OPERATION_ADMISSION_REQUIRED","message":"Managed workflow NyxID proxy calls require an admitted operation proof."}""";
+    private const string AccessTokenMissingErrorCode = "NYXID_ACCESS_TOKEN_MISSING";
+    private const string AccessTokenMissingErrorMessage =
+        "No NyxID access token available. User must be authenticated.";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -363,26 +366,36 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 "[nyxid_proxy] Admitted request rejected. identity={Identity} code={Code}",
                 FormatAdmissionIdentity(admission.Identity),
                 failure.Code);
-            return new AgentToolTerminalOutcome(JsonSerializer.Serialize(new
-            {
-                error = true,
-                error_code = failure.Code,
-                message = failure.Message,
-            }));
+            return CreateAdmittedFailureOutcome(
+                admission,
+                callId,
+                toolName,
+                failure.Code,
+                failure.Message);
         }
 
         var request = build.Request!;
         var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
         {
-            return new AgentToolTerminalOutcome(request.FileArtifact
-                ? FileArtifactError("missing_nyxid_access_token", "No NyxID access token available. User must be authenticated.")
-                : """{"error":"No NyxID access token available. User must be authenticated."}""");
+            return CreateAdmittedFailureOutcome(
+                admission,
+                callId,
+                toolName,
+                AccessTokenMissingErrorCode,
+                AccessTokenMissingErrorMessage);
         }
 
         var revalidationFailure = await RevalidateAdmittedOperationAsync(admission, token, ct);
         if (revalidationFailure is not null)
-            return new AgentToolTerminalOutcome(revalidationFailure);
+        {
+            return CreateAdmittedFailureOutcome(
+                admission,
+                callId,
+                toolName,
+                revalidationFailure.Code,
+                revalidationFailure.Message);
+        }
 
         _logger.LogInformation(
             "[nyxid_proxy] admitted {Method} slug={Slug} identity={Identity}",
@@ -444,7 +457,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         return new AgentToolTerminalOutcome(result, receipt);
     }
 
-    private async Task<string?> RevalidateAdmittedOperationAsync(
+    private async Task<NyxIdOperationRequestFailure?> RevalidateAdmittedOperationAsync(
         AgentToolOperationAdmission admission,
         string token,
         CancellationToken ct)
@@ -458,7 +471,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
 
         if (admission.Identity is not AgentToolOperationIdentity.PublishedEndpoint publishedEndpoint)
         {
-            return AdmissionDriftError(
+            return new NyxIdOperationRequestFailure(
                 "NYXID_OPERATION_IDENTITY_NOT_SUPPORTED",
                 "The admitted request identity is not supported by published endpoint revalidation.");
         }
@@ -473,7 +486,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         if (service is null ||
             !string.Equals(service.ServiceSlug, admission.ServiceSlug, StringComparison.Ordinal))
         {
-            return AdmissionDriftError(
+            return new NyxIdOperationRequestFailure(
                 "NYXID_OPERATION_AUTHORITY_DRIFT",
                 "The live NyxID service authority no longer matches the admitted operation.");
         }
@@ -486,7 +499,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         if (endpoint is null ||
             !string.Equals(endpoint.ContractDigest, admission.ContractDigest, StringComparison.Ordinal))
         {
-            return AdmissionDriftError(
+            return new NyxIdOperationRequestFailure(
                 "NYXID_OPERATION_CONTRACT_DRIFT",
                 "The live NyxID endpoint no longer matches the admitted contract.");
         }
@@ -671,6 +684,25 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
 
     private static string AdmissionDriftError(string code, string message) =>
         JsonSerializer.Serialize(new { error = true, error_code = code, message });
+
+    private static AgentToolTerminalOutcome CreateAdmittedFailureOutcome(
+        AgentToolOperationAdmission admission,
+        string callId,
+        string toolName,
+        string errorCode,
+        string errorMessage)
+    {
+        var result = AdmissionDriftError(errorCode, errorMessage);
+        return new AgentToolTerminalOutcome(
+            result,
+            NyxIdProxyReceiptFactory.CreateError(
+                callId,
+                toolName,
+                admission.ServiceInstanceId,
+                errorCode,
+                errorMessage,
+                result));
+    }
 
     private async Task<AgentToolTerminalOutcome> ExecuteAdmittedFileArtifactAsync(
         string effectiveToken,

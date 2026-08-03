@@ -545,7 +545,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Fact]
-    public async Task ExecuteWithOutcomeAsync_ShouldNotReceiptRejectedProofArguments()
+    public async Task ExecuteWithOutcomeAsync_ShouldReceiptRejectedProofArguments()
     {
         var handler = new RecordingHandler();
         var tool = CreateTool(handler);
@@ -557,7 +557,30 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             """{"path":"/forged"}""");
 
         outcome.ResultJson.Should().Contain("NYXID_OPERATION_ARGUMENT_NOT_SUPPORTED");
-        outcome.Receipt.Should().BeNull();
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        outcome.Receipt.ErrorCode.Should().Be("NYXID_OPERATION_ARGUMENT_NOT_SUPPORTED");
+        outcome.Receipt.SubjectKind.Should().Be("nyxid.user-service");
+        outcome.Receipt.SubjectId.Should().Be("us-calendar-alpha");
+        handler.RequestCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ShouldReceiptMissingWorkflowCallerCredential()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(AuthoredRequestAdmission(), userToken: null);
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-missing-credential",
+            tool.Name,
+            """{"path_params":{"event_id":"evt-runtime"},"body":{"title":"Planning"}}""");
+
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        outcome.Receipt.ErrorCode.Should().Be("NYXID_ACCESS_TOKEN_MISSING");
+        outcome.Receipt.SubjectId.Should().Be("us-calendar-alpha");
         handler.RequestCount.Should().Be(0);
     }
 
@@ -848,10 +871,16 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         var tool = CreateTool(handler);
         using var scope = PushContext(ListMessagesAdmission());
 
-        var result = await tool.ExecuteAsync(
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-authority-drift",
+            tool.Name,
             """{"query":{"container_id":"oc_1"}}""");
 
-        result.Should().Contain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        outcome.ResultJson.Should().Contain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        outcome.Receipt.ErrorCode.Should().Be("NYXID_OPERATION_AUTHORITY_DRIFT");
+        outcome.Receipt.SubjectId.Should().Be("us-lark-alpha");
         handler.McpConfigRequests.Should().ContainSingle();
         handler.ProxyRequests.Should().BeEmpty();
     }
@@ -1483,10 +1512,11 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
 
     private static AgentToolContextScope PushContext(
         AgentToolOperationAdmission admission,
-        string? organizationToken = null) =>
+        string? organizationToken = null,
+        string? userToken = "user-token") =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             AgentToolRequestIdentity.Empty,
-            new AgentToolCredentials("user-token", organizationToken, null),
+            new AgentToolCredentials(userToken, organizationToken, null),
             new AgentToolCallerContext("scope-alpha", null, null),
             AgentToolChannelContext.Empty,
             AgentToolSenderBindingContext.Empty,

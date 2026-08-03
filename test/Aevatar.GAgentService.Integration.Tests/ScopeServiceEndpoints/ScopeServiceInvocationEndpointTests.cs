@@ -190,6 +190,50 @@ public sealed class ScopeServiceInvocationEndpointTests : ScopeServiceEndpointTe
     }
 
     [Fact]
+    public async Task MemberInvokeEndpoint_ShouldProjectHttpCallerCredentialIntoTypedChatPayload()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.MemberPublishedServiceResolver.Result = new MemberPublishedServiceResolution(
+            "scope-alpha",
+            "m-alpha",
+            "svc-alpha",
+            IsMemberAuthorityBacked: true);
+        var clientPayload = new ChatRequestEvent
+        {
+            Prompt = "run workflow",
+            ScopeId = "scope-alpha",
+            ConnectorHttpAuthorization = "Bearer untrusted-payload-token",
+            CallerNyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+            CallerSourceReadableNyxIdBearerToken = "untrusted-source-token",
+        };
+
+        using var request = CreateAuthenticatedJsonRequest(
+            HttpMethod.Post,
+            "/api/scopes/scope-alpha/members/m-alpha/invoke/chat",
+            new
+            {
+                payloadTypeUrl = Any.Pack(clientPayload).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(clientPayload.ToByteArray()),
+            },
+            "scope-alpha");
+        request.Headers.Add("X-Test-Member-Id", "m-alpha");
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Bearer",
+            "fixture-caller-token");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        host.InvocationPort.LastRequest.Should().NotBeNull();
+        host.InvocationPort.LastRequest!.Identity.ServiceId.Should().Be("svc-alpha");
+        var payload = host.InvocationPort.LastRequest.Payload.Unpack<ChatRequestEvent>();
+        payload.ConnectorHttpAuthorization.Should().Be("Bearer fixture-caller-token");
+        payload.CallerNyxIdCredentialKind.Should().Be(
+            AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer);
+        payload.CallerSourceReadableNyxIdBearerToken.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task TeamInvokeEndpoint_ShouldMapTeamEntryToPublishedServiceIdentity()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();

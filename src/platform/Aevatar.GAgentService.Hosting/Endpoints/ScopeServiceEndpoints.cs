@@ -16,6 +16,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.ScopeScripts;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.Workflows;
@@ -2337,6 +2338,19 @@ public static class ScopeServiceEndpoints
                 revisionCatalogReader,
                 ct);
 
+            if (payload.Is(ChatRequestEvent.Descriptor))
+            {
+                var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+                if (!callerCredential.Succeeded)
+                {
+                    var (statusCode, code, message) =
+                        ScopeWorkflowEndpoints.MapRunStartError(callerCredential.Error);
+                    return Results.Json(new { code, message }, statusCode: statusCode);
+                }
+
+                payload = ProjectHttpCallerCredential(payload, callerCredential.Credential);
+            }
+
             var receipt = await invocationPort.InvokeAsync(new ServiceInvocationRequest
             {
                 Identity = identity,
@@ -3669,6 +3683,20 @@ const response = await fetch("{{invokePath}}", {
     {
         var token = callerCredential?.BearerToken?.Trim();
         return string.IsNullOrWhiteSpace(token) ? string.Empty : $"Bearer {token}";
+    }
+
+    private static Any ProjectHttpCallerCredential(
+        Any payload,
+        WorkflowCallerCredential? callerCredential)
+    {
+        var sanitized = ScheduledServiceInvocationPayloadPolicy
+            .StripScheduleOwnedCredentialFields(payload)
+            .Unpack<ChatRequestEvent>();
+        sanitized.ConnectorHttpAuthorization = ToConnectorHttpAuthorization(callerCredential);
+        sanitized.CallerNyxIdCredentialKind = ToAgentToolNyxIdCredentialKind(callerCredential?.Kind);
+        sanitized.CallerSourceReadableNyxIdBearerToken =
+            callerCredential?.SourceReadableUserBearerToken?.Trim() ?? string.Empty;
+        return Any.Pack(sanitized);
     }
 
     private static AgentToolNyxIdCredentialKindPayload ToAgentToolNyxIdCredentialKind(
