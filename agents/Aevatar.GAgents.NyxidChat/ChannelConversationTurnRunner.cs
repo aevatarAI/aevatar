@@ -2509,6 +2509,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 NormalizeOptional(registration.Id),
                 replyChannelContext.IdentityHints),
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyMetadata),
+            ExecutionOwner = AgentToolExecutionOwners.ChannelRegistration(registration.Id),
         }).ToPayload();
 
         if (TryBuildSkillRecoveryContext(inboundEvent.Text, inboundEvent.Platform, defaultSkillName, out var skillRecovery))

@@ -367,6 +367,8 @@ public sealed class ChannelConversationTurnRunnerTests
         toolContext.Caller.OwnerSubject.Should().Be("scope-1");
         toolContext.Caller.ResponseId.Should().Be("msg-sched-1");
         toolContext.Channel.RegistrationScopeId.Should().Be("scope-1");
+        toolContext.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.ChannelRegistration);
+        toolContext.ExecutionOwner.OwnerId.Should().Be("reg-1");
         // The inbound bot's provider slug is also exposed as the default OUTBOUND delivery provider,
         // so scheduled_agent_creator resolves one without manual config.
         toolContext.ExternalMetadata.Should().ContainKey(ChannelMetadataKeys.OutboundProviderSlug)
