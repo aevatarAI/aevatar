@@ -206,6 +206,7 @@ internal sealed class ProjectionWorkflowActorBindingReader : IWorkflowActorBindi
         var definitionActorId = string.IsNullOrWhiteSpace(document.DefinitionActorId) && actorKind == WorkflowActorKind.Definition
             ? actorId
             : document.DefinitionActorId ?? string.Empty;
+        var expectedExecutionMode = ResolveExpectedExecutionMode(document);
 
         return new WorkflowActorBinding(
             actorKind,
@@ -215,7 +216,7 @@ internal sealed class ProjectionWorkflowActorBindingReader : IWorkflowActorBindi
             document.WorkflowName ?? string.Empty,
             document.WorkflowYaml ?? string.Empty,
             new Dictionary<string, string>(document.InlineWorkflowYamls, StringComparer.OrdinalIgnoreCase),
-            document.ExpectedExecutionMode,
+            expectedExecutionMode,
             document.ScopeId ?? string.Empty,
             document.StateVersion,
             document.LastEventId ?? string.Empty,
@@ -225,5 +226,14 @@ internal sealed class ProjectionWorkflowActorBindingReader : IWorkflowActorBindi
             document.CapabilityAdmissionPlan?.Clone(),
             document.WorkflowId ?? string.Empty,
             document.RevisionId ?? string.Empty);
+    }
+
+    private static ExternalCapabilityExecutionMode ResolveExpectedExecutionMode(
+        WorkflowActorBindingDocument document)
+    {
+        if (document.ExpectedExecutionMode != ExternalCapabilityExecutionMode.Unspecified)
+            return document.ExpectedExecutionMode;
+
+        return document.CapabilityAdmissionPlan?.ExecutionMode ?? ExternalCapabilityExecutionMode.Unspecified;
     }
 }
