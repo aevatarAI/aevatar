@@ -1816,6 +1816,38 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleChat_ShouldWriteTypedErrorFrame_WhenAcceptedRunObservationTimesOut()
+    {
+        var http = CreateHttpContext();
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = async (_, _, onAcceptedAsync, ct) =>
+            {
+                var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+
+                throw new CommandObservationTimeoutException(
+                    typeof(WorkflowChatRunRequest).FullName!,
+                    TimeSpan.FromSeconds(30));
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello" },
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Contain("aevatar.run.context");
+        body.Should().Contain("RUN_OBSERVATION_TIMEOUT");
+        body.Should().Contain("did not become observable before the deadline");
+        body.Should().NotContain(typeof(WorkflowChatRunRequest).FullName!);
+    }
+
+    [Fact]
     public async Task HandleChat_ShouldWriteCompatibilityError_WhenTypeRegistryDescriptorIsMissing()
     {
         var http = CreateHttpContext();

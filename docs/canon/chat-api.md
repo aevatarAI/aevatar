@@ -85,6 +85,7 @@ applies only to Audit Trail artifacts with typed chat provenance.
 - 这里的 `EventEnvelope` 是 runtime message envelope，不等于 Event Sourcing 的领域事件记录。
 - 命令主链路不额外经过 ingress queue/stream；stream 保留给 actor envelope 的投影、实时输出与读侧观察。
 - `command.ack` / `accepted=true` 对外只应被解释为“系统接受了该次交互并返回追踪句柄”，不应被解释为领域事件已提交或 ReadModel 已可见。
+- Workflow command accepted 后，interaction layer 要求在 30 秒内收到首个 projection-backed 业务 frame。该 deadline 只约束“accepted 到首次可观察”，不是整个 workflow 的执行超时；若超时，SSE 必须发送 `RUN_ERROR(code=RUN_OBSERVATION_TIMEOUT)` 并关闭，不能只保留 heartbeat。
 - Webhook ingress 是 start-run 入口，不是 `wait_signal` continuation；外部 JSON 只在 Host/Adapter 边界解析，进入应用层后只保留 typed `WorkflowExternalIngressContext` 与 `WorkflowChatRunRequest`。
 
 ## 2. 输入模型（chat）
@@ -341,6 +342,8 @@ POST /api/workflows/signal
 - `aevatar.llm.reasoning`：LLM 思考过程增量
 - `aevatar.media.chunk`：媒体分片，payload 为 `MediaContentEvent`
 - `aevatar.workflow.waiting_signal`
+
+SSE `: keepalive` 只维持传输连接，不表示 run 有业务进展，也不会延长 accepted observation deadline。任何已经 accepted 但在 deadline 内没有首个 projection-backed frame 的 run，都以 `RUN_OBSERVATION_TIMEOUT` 终止当前 stream；客户端可继续使用 `actorId + commandId` 查询该 run 后续状态。
 
 ## 6. WebSocket 请求/回包协议
 

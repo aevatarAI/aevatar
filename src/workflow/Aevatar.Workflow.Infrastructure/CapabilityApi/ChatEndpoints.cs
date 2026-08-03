@@ -1160,6 +1160,13 @@ public static class WorkflowCapabilityEndpoints
         {
             ArgumentNullException.ThrowIfNull(ex);
 
+            if (FindException<CommandObservationTimeoutException>(ex) != null)
+            {
+                return (
+                    "RUN_OBSERVATION_TIMEOUT",
+                    "Run was accepted but did not become observable before the deadline.");
+            }
+
             return IsCompatibilityFailure(ex)
                 ? (
                     CompatibilityErrorCode,
@@ -1182,6 +1189,18 @@ public static class WorkflowCapabilityEndpoints
             }
 
             return false;
+        }
+
+        private static TException? FindException<TException>(Exception ex)
+            where TException : Exception
+        {
+            for (var current = ex; current != null; current = current.InnerException)
+            {
+                if (current is TException matched)
+                    return matched;
+            }
+
+            return null;
         }
     }
 

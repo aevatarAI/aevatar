@@ -178,9 +178,11 @@ public sealed class KafkaProviderTransportTests
         var streamId = StreamId.Create("aevatar.events", "actor-42");
         var queueId = mapper.GetQueueForStream(streamId);
         var receiver = adapter.CreateReceiver(queueId);
+        var failureHandler = await factory.GetDeliveryFailureHandler(queueId);
 
         adapter.GetType().Name.Should().Be("KafkaProviderQueueAdapter");
         receiver.GetType().Name.Should().Be("KafkaProviderQueueAdapterReceiver");
+        failureHandler.ShouldFaultSubsriptionOnError.Should().BeTrue();
     }
 
     [Fact]

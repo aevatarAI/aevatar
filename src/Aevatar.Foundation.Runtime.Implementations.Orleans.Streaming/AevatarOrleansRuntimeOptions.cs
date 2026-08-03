@@ -21,4 +21,6 @@ public sealed class AevatarOrleansRuntimeOptions
     public int QueueCount { get; set; } = 8;
 
     public int QueueCacheSize { get; set; } = 4096;
+
+    public TimeSpan MaxEventDeliveryTime { get; set; } = TimeSpan.FromSeconds(10);
 }

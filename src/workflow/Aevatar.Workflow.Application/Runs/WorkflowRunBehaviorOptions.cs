@@ -25,6 +25,12 @@ public sealed class WorkflowRunBehaviorOptions
     public bool EnableDirectFallback { get; set; } = true;
 
     /// <summary>
+    /// Maximum time from command acceptance to the first projection-backed
+    /// workflow frame. This is not an overall workflow execution timeout.
+    /// </summary>
+    public TimeSpan AcceptedObservationTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
     /// Workflow names that are allowed to trigger direct fallback.
     /// </summary>
     public ISet<string> DirectFallbackWorkflowWhitelist { get; } =

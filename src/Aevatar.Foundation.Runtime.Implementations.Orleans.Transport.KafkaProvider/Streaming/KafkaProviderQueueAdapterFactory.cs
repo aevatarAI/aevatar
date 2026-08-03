@@ -12,7 +12,8 @@ public sealed class KafkaProviderQueueAdapterFactory : IQueueAdapterFactory
 {
     private readonly IQueueAdapterCache _cache;
     private readonly KafkaProviderQueueAdapter _adapter;
-    private static readonly IStreamFailureHandler NoOpFailureHandler = new NoOpStreamDeliveryFailureHandler();
+    private static readonly IStreamFailureHandler DeliveryFailureHandler =
+        new NoOpStreamDeliveryFailureHandler(faultOnError: true);
 
     [ActivatorUtilitiesConstructor]
     public KafkaProviderQueueAdapterFactory(
@@ -55,6 +56,6 @@ public sealed class KafkaProviderQueueAdapterFactory : IQueueAdapterFactory
     public Task<IStreamFailureHandler> GetDeliveryFailureHandler(QueueId queueId)
     {
         _ = queueId;
-        return Task.FromResult(NoOpFailureHandler);
+        return Task.FromResult(DeliveryFailureHandler);
     }
 }

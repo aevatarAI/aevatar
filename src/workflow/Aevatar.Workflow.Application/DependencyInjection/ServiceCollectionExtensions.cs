@@ -38,6 +38,12 @@ public static class ServiceCollectionExtensions
         configureRegistry?.Invoke(options);
         var runBehaviorOptions = new WorkflowRunBehaviorOptions();
         configureRunBehavior?.Invoke(runBehaviorOptions);
+        if (runBehaviorOptions.AcceptedObservationTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(configureRunBehavior),
+                "Workflow accepted observation timeout must be positive.");
+        }
         services.AddSingleton(runBehaviorOptions);
         services.TryAddTransient<ExternalWorkflowCapabilityReadinessService>();
         services.TryAddTransient<IExternalWorkflowCapabilityListPort>(provider =>
@@ -139,7 +145,8 @@ public static class ServiceCollectionExtensions
                 sp.GetService<Microsoft.Extensions.Logging.ILogger<DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>>(),
                 sp.GetRequiredService<ICommandObservationLifecycle<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>(),
                 sp.GetRequiredService<ICommandReceiptFactory<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>>(),
-                sp.GetRequiredService<ICommandObservationScopeLeasePreparation<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>()));
+                sp.GetRequiredService<ICommandObservationScopeLeasePreparation<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>(),
+                acceptedObservationTimeout: sp.GetRequiredService<WorkflowRunBehaviorOptions>().AcceptedObservationTimeout));
         services.AddSingleton<IWorkflowChatRunInteractionPort>(sp =>
             new WorkflowChatRunInteractionService(
                 sp.GetRequiredService<IWorkflowRunActorResolver>(),

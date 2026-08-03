@@ -6,6 +6,16 @@ owner: liyingpei
 
 # ADR-0015: AGUI / SSE Projection Session Pipeline
 
+> 2026-08-03 update (#3170): production command
+> `8088d2e7-50a9-418f-8f88-b1a1897fcc7f` was accepted but its SSE emitted only
+> context and keepalive frames. The original pod stdout had expired; a canary on
+> the same `d0e20fe9` image (`d3c07a09-2d79-4a4d-87d5-9908df80c4d1`) reproduced
+> the stall while the run actor committed through state version 11. Orleans then
+> logged delivery to a consumer on the previous silo activation failing, followed
+> by continuous queue-cache pressure. The Kafka provider used a non-faulting
+> delivery failure handler, so the stale explicit subscription kept its cursor
+> and blocked shared queue progress.
+
 > 2026-07-21 update: NyxIdChat live output is actor-committed progress. Text,
 > reasoning, media, tool lifecycle, usage, authorization, and terminal frames
 > use one `EventEnvelope -> Projection -> AGUI -> SSE` path with actor-owned
@@ -52,6 +62,10 @@ Host 只负责：
 3. 提供 `emitAsync` 或 SSE writer
 
 Host 不再拥有 observation lifecycle、completion 判定、runtime lease 状态或 raw stream subscription。
+
+Accepted receipt 之后的首次可观察性由 interaction layer 约束，而不是由 Host heartbeat 猜测。Workflow chat 的默认 deadline 是 30 秒：首个 projection-backed frame 到达后，workflow 继续遵循自身执行/步骤 timeout；deadline 前始终没有业务 frame 时，interaction 抛出 typed observation timeout，external adapter 输出 `RUN_OBSERVATION_TIMEOUT` terminal error 并关闭 stream。
+
+Persistent stream transport 必须在 delivery retry horizon 耗尽后 fault 失效的 explicit subscription。尤其是 rollout 后指向旧 silo activation 的 consumer，不能永久保留 cursor 并阻止共享 queue cache purge；subscription fault/removal 由 Orleans pulling agent 按 subscription id 完成，不得在 HTTP/query path 通过整 stream reset 修复。
 
 The application-facing lifecycle contract is
 `IRealtimeSession<TInbound,TReceipt,TStartError,TOutboundFrame,TCompletion>`.

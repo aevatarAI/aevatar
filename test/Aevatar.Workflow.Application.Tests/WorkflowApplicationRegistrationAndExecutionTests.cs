@@ -125,6 +125,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var options = provider.GetRequiredService<WorkflowRunBehaviorOptions>();
 
         options.DefaultWorkflowName.Should().Be("direct");
+        options.AcceptedObservationTimeout.Should().Be(TimeSpan.FromSeconds(30));
         options.UseAutoAsDefaultWhenWorkflowUnspecified.Should().BeFalse();
         options.EnableDirectFallback.Should().BeTrue();
         options.DirectFallbackWorkflowWhitelist.Should().Contain("auto");
