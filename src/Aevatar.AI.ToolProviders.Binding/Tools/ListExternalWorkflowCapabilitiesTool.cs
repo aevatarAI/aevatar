@@ -4,7 +4,7 @@ using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 
 namespace Aevatar.AI.ToolProviders.Binding.Tools;
 
-public sealed class ListExternalWorkflowCapabilitiesTool : IAgentTool
+public sealed class ListExternalWorkflowCapabilitiesTool : ExternalWorkflowCapabilityReadOnlyTool
 {
     private readonly IExternalWorkflowCapabilityListPort _listPort;
     private readonly BindingToolOptions _options;
@@ -17,13 +17,13 @@ public sealed class ListExternalWorkflowCapabilitiesTool : IAgentTool
         _options = options ?? new BindingToolOptions();
     }
 
-    public string Name => "list_external_workflow_capabilities";
+    public override string Name => "list_external_workflow_capabilities";
 
-    public string Description =>
+    public override string Description =>
         "List exact Host Connector operations and caller-visible NyxID UserService operations " +
         "available for workflow authoring in the current scope. Identical display slugs may identify distinct services.";
 
-    public string ParametersSchema => """
+    public override string ParametersSchema => """
         {
           "type": "object",
           "properties": {
@@ -36,9 +36,7 @@ public sealed class ListExternalWorkflowCapabilitiesTool : IAgentTool
         }
         """;
 
-    public bool IsReadOnly => true;
-
-    public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+    public override async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         try
         {
@@ -75,6 +73,22 @@ public sealed class ListExternalWorkflowCapabilitiesTool : IAgentTool
             return JsonDefaults.Error($"External capability list failed: {exception.GetType().Name}");
         }
     }
+
+    protected override bool IsVerifiedResult(JsonElement result) =>
+        result.TryGetProperty("scope_id", out var scopeId) &&
+        scopeId.ValueKind == JsonValueKind.String &&
+        result.TryGetProperty("count", out var count) &&
+        count.TryGetInt32(out _) &&
+        result.TryGetProperty("total", out var total) &&
+        total.TryGetInt32(out _) &&
+        result.TryGetProperty("candidate_count", out var candidateCount) &&
+        candidateCount.TryGetInt32(out _) &&
+        result.TryGetProperty("rejected_count", out var rejectedCount) &&
+        rejectedCount.TryGetInt32(out _) &&
+        result.TryGetProperty("capabilities", out var capabilities) &&
+        capabilities.ValueKind == JsonValueKind.Array &&
+        result.TryGetProperty("diagnostics", out var diagnostics) &&
+        diagnostics.ValueKind == JsonValueKind.Array;
 
     private static JsonElement ToJsonElement(Google.Protobuf.IMessage descriptor)
     {

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
@@ -5,7 +6,7 @@ using Google.Protobuf;
 
 namespace Aevatar.AI.ToolProviders.Binding.Tools;
 
-public sealed class InspectExternalWorkflowCapabilityReadinessTool : IAgentTool
+public sealed class InspectExternalWorkflowCapabilityReadinessTool : ExternalWorkflowCapabilityReadOnlyTool
 {
     private readonly IExternalWorkflowCapabilityReadinessPort _readinessPort;
 
@@ -15,13 +16,13 @@ public sealed class InspectExternalWorkflowCapabilityReadinessTool : IAgentTool
         _readinessPort = readinessPort;
     }
 
-    public string Name => "inspect_external_workflow_capability_readiness";
+    public override string Name => "inspect_external_workflow_capability_readiness";
 
-    public string Description =>
+    public override string Description =>
         "Inspect point-in-time readiness for one exact workflow capability and execution mode. " +
         "Returns typed blockers and trusted remediation locators without returning credentials.";
 
-    public string ParametersSchema => """
+    public override string ParametersSchema => """
         {
           "type": "object",
           "properties": {
@@ -53,9 +54,7 @@ public sealed class InspectExternalWorkflowCapabilityReadinessTool : IAgentTool
         }
         """;
 
-    public bool IsReadOnly => true;
-
-    public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+    public override async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         try
         {
@@ -103,6 +102,14 @@ public sealed class InspectExternalWorkflowCapabilityReadinessTool : IAgentTool
             return JsonDefaults.Error($"External capability readiness inspection failed: {exception.GetType().Name}");
         }
     }
+
+    protected override bool IsVerifiedResult(JsonElement result) =>
+        result.TryGetProperty("execution_mode", out var executionMode) &&
+        executionMode.ValueKind == JsonValueKind.String &&
+        result.TryGetProperty("status", out var status) &&
+        status.ValueKind == JsonValueKind.String &&
+        result.TryGetProperty("selected_selector", out var selectedSelector) &&
+        selectedSelector.ValueKind == JsonValueKind.Object;
 
     private static bool TryParseExecutionMode(
         string? value,

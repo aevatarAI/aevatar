@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Binding.Models;
@@ -156,6 +157,90 @@ public class BindingToolsTests
         {
             AgentToolRequestContext.Current = null;
         }
+    }
+
+    [Fact]
+    public async Task ExternalWorkflowCapabilityReadTools_ShouldEmitTypedResultReceipts()
+    {
+        IAgentTool listTool = new ListExternalWorkflowCapabilitiesTool(
+            new StubExternalWorkflowCapabilityListPort(
+                new ExternalWorkflowCapabilityDiscoveryResult()));
+        IAgentTool readinessTool = new InspectExternalWorkflowCapabilityReadinessTool(
+            new StubExternalWorkflowCapabilityReadinessPort());
+        AgentToolRequestContext.Current = CapabilityContext(
+            "scope-receipt-alpha",
+            "caller-receipt-alpha",
+            "caller-bearer-alpha",
+            "organization-bearer-alpha");
+
+        try
+        {
+            var listResult = await listTool.ExecuteAsync("{}");
+            var listReceipt = listTool.CreateResultReceipt(
+                "call-list-alpha",
+                listTool.Name,
+                "{}",
+                listResult);
+
+            listReceipt.Should().NotBeNull();
+            listReceipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+            listReceipt.CallId.Should().Be("call-list-alpha");
+            listReceipt.ToolName.Should().Be("list_external_workflow_capabilities");
+            listReceipt.ResultJson.Should().Be(listResult);
+
+            const string readinessArguments =
+                """
+                {
+                  "selector": {
+                    "nyx_id_operation": {
+                      "user_service_id": "us-receipt-alpha",
+                      "endpoint_id": "endpoint-receipt-beta"
+                    }
+                  },
+                  "execution_mode": "interactive"
+                }
+                """;
+            var readinessResult = await readinessTool.ExecuteAsync(readinessArguments);
+            var readinessReceipt = readinessTool.CreateResultReceipt(
+                "call-readiness-beta",
+                readinessTool.Name,
+                readinessArguments,
+                readinessResult);
+
+            readinessReceipt.Should().NotBeNull();
+            readinessReceipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+            readinessReceipt.CallId.Should().Be("call-readiness-beta");
+            readinessReceipt.ToolName.Should().Be("inspect_external_workflow_capability_readiness");
+            readinessReceipt.ResultJson.Should().Be(readinessResult);
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public void ExternalWorkflowCapabilityReadTools_ShouldPreserveErrorsAndRejectUnstructuredResults()
+    {
+        IAgentTool tool = new ListExternalWorkflowCapabilitiesTool(
+            new StubExternalWorkflowCapabilityListPort(
+                new ExternalWorkflowCapabilityDiscoveryResult()));
+
+        const string errorResult = """{"error":"safe discovery failure"}""";
+        var errorReceipt = tool.CreateResultReceipt(
+            "call-error-alpha",
+            tool.Name,
+            "{}",
+            errorResult);
+
+        errorReceipt.Should().NotBeNull();
+        errorReceipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        errorReceipt.ErrorCode.Should().Be("external_workflow_capability_query_failed");
+        errorReceipt.ResultJson.Should().Be(errorResult);
+        tool.CreateResultReceipt("call-invalid-beta", tool.Name, "{}", "not-json")
+            .Should().BeNull();
+        tool.CreateResultReceipt("call-unverified-gamma", tool.Name, "{}", "{}")
+            .Should().BeNull();
     }
 
     [Fact]
