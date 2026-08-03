@@ -1,7 +1,7 @@
 # NyxID Chat Activation Self-Recovery Fix
 
 **Date:** 2026-08-03
-**Status:** Awaiting written review
+**Status:** Approved in conversation
 **Scope:** Feature-preserving repair of NyxID Chat activation recovery
 
 ## Incident And Introducing Change
