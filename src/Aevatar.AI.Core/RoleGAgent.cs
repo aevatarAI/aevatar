@@ -3605,7 +3605,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         return events;
     }
 
-    private async Task PersistSessionProgressAsync(
+    protected async Task PersistSessionProgressAsync(
         string? sessionId,
         Action<RoleChatSessionProgressedEvent> configure,
         CancellationToken ct = default)

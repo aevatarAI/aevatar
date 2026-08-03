@@ -345,6 +345,13 @@ POST /api/workflows/signal
 
 SSE `: keepalive` 只维持传输连接，不表示 run 有业务进展，也不会延长 accepted observation deadline。任何已经 accepted 但在 deadline 内没有首个 projection-backed frame 的 run，都以 `RUN_OBSERVATION_TIMEOUT` 终止当前 stream；客户端可继续使用 `actorId + commandId` 查询该 run 后续状态。
 
+Workflow role 的用户可见输出只投影 actor 已提交的
+`RoleChatSessionProgressedEvent` 与 completion 内的 typed terminal tail。
+text/reasoning/media/tool/usage/authorization 均通过同一 Projection Pipeline
+生成 run-event；不存在 workflow 专用 transient chunk 旁路。Role terminal
+progress 不关闭 workflow stream，`RUN_FINISHED/RUN_ERROR` 的唯一权威仍是
+workflow 根 actor 的 committed terminal event。
+
 ## 6. WebSocket 请求/回包协议
 
 连接 `GET /api/ws/chat` 后，发送：

@@ -341,9 +341,6 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             publisher.Published.Select(x => x.evt).OfType<WorkflowLlmInvocationStartedEvent>()
                 .Should()
                 .ContainSingle(x => x.RunId == "run-1" && x.StepId == "step-1" && x.SessionId == "session-1");
-            var chunks = publisher.Published.Select(x => x.evt).OfType<WorkflowLlmStreamChunkEvent>().ToList();
-            chunks.Should().Contain(x => x.DeltaContent == "workflow ");
-            chunks.Should().Contain(x => x.DeltaReasoningContent == "reasoning");
             publisher.Published.Select(x => x.evt).OfType<WorkflowLlmInvocationCompletedEvent>()
                 .Should()
                 .ContainSingle(x =>
@@ -353,6 +350,19 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                     x.RoleActorId == "workflow-role-agent");
 
             var persisted = await eventStore.GetEventsAsync(agent.Id);
+            var progress = persisted
+                .Where(x => x.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+                .Select(x => x.EventData.Unpack<RoleChatSessionProgressedEvent>())
+                .ToArray();
+            progress.Should().ContainSingle(item =>
+                item.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.TextStarted);
+            progress.Where(item =>
+                    item.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.TextDelta)
+                .Select(item => item.TextDelta.Delta)
+                .Should().Equal("workflow ", "answer");
+            progress.Should().ContainSingle(item =>
+                item.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.ReasoningDelta &&
+                item.ReasoningDelta.Delta == "reasoning");
             var completion = persisted
                 .Where(x => x.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
                 .Select(x => x.EventData.Unpack<RoleChatSessionCompletedEvent>())
@@ -1269,16 +1279,19 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             llmProvider.ReleaseAfterCancellation();
             await execution;
 
-            var completion = (await eventStore.GetEventsAsync(agent.Id))
+            var persisted = await eventStore.GetEventsAsync(agent.Id);
+            var completion = persisted
                 .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
                 .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
                 .Should().ContainSingle(completed => completed.SessionId == sessionId).Which;
             completion.Outcome.Should().Be(RoleChatSessionOutcome.Failed);
             completion.FailureCode.Should().Be("LLM_TIMEOUT");
             completion.Content.Should().NotContain(LateAfterCancellationWorkflowIntentLlmProvider.LateContent);
-            publisher.Published.Select(static item => item.evt)
-                .OfType<WorkflowLlmStreamChunkEvent>()
-                .Should().NotContain(chunk => chunk.DeltaContent.Contains(
+            persisted
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>())
+                .Where(progress => progress.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.TextDelta)
+                .Should().NotContain(progress => progress.TextDelta.Delta.Contains(
                     LateAfterCancellationWorkflowIntentLlmProvider.LateContent,
                     StringComparison.Ordinal));
             publisher.Published.Select(static item => item.evt)
@@ -1419,16 +1432,19 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             sourceReconciliations.Should().HaveCount(2);
             await agent.HandleChatRecoveryContinuationRequestedAsync(sourceReconciliations[^1]);
 
-            var completion = (await eventStore.GetEventsAsync(agent.Id))
+            var persisted = await eventStore.GetEventsAsync(agent.Id);
+            var completion = persisted
                 .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
                 .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
                 .Should().ContainSingle(completed => completed.SessionId == continuationTurnId).Which;
             completion.Outcome.Should().Be(RoleChatSessionOutcome.Failed);
             completion.FailureCode.Should().Be("APPROVAL_TOOL_TIMEOUT");
             completion.Content.Should().NotContain(LateAfterCancellationWorkflowIntentLlmProvider.LateContent);
-            publisher.Published.Select(static item => item.evt)
-                .OfType<WorkflowLlmStreamChunkEvent>()
-                .Should().NotContain(chunk => chunk.DeltaContent.Contains(
+            persisted
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>())
+                .Where(progress => progress.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.TextDelta)
+                .Should().NotContain(progress => progress.TextDelta.Delta.Contains(
                     LateAfterCancellationWorkflowIntentLlmProvider.LateContent,
                     StringComparison.Ordinal));
             publisher.Published.Select(static item => item.evt)

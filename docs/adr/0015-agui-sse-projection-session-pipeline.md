@@ -6,6 +6,12 @@ owner: liyingpei
 
 # ADR-0015: AGUI / SSE Projection Session Pipeline
 
+> 2026-08-04 update (#3170): workflow role streaming now commits the existing
+> typed `RoleChatSessionProgressedEvent` contract for text, reasoning, media,
+> and tool progress. The workflow run-event projector maps those committed
+> facts to presentation frames. Transient workflow chunk messages are removed;
+> only the workflow root actor may emit the workflow terminal frame.
+
 > 2026-08-03 update (#3170): production command
 > `8088d2e7-50a9-418f-8f88-b1a1897fcc7f` was accepted but its SSE emitted only
 > context and keepalive frames. The original pod stdout had expired; a canary on
@@ -124,6 +130,20 @@ Required behavior:
 - explicit replay is a typed progress payload, restores tool, reasoning, media, text, usage, and terminal frames from the committed snapshot, and does not commit a second completion;
 - attachment-scoped sequence/protobuf fencing removes post-fan-out duplicates without collapsing distinct frames in a multi-frame replay sequence;
 - no in-process session registry, callback-owned progress state, `Task.Run`, or extra projection transport envelope is introduced.
+
+### 3.2 Workflow role live progress uses the same committed contract
+
+`WorkflowRoleGAgent` commits `RoleChatSessionProgressedEvent` for each live
+text, reasoning, media, and tool lifecycle update. Its completion commits the
+existing typed `terminal_progress` tail for usage, fallback text, text end, and
+authorization. `WorkflowExecutionRunEventProjector` maps those committed facts
+to `WorkflowRunEventEnvelope`; it does not consume a workflow-only transient
+chunk protocol.
+
+Role progress is presentation input, not workflow completion authority. The
+adapter deliberately ignores role `terminal` and `replay` payloads, and only a
+terminal event committed by the workflow root actor may close the workflow run
+stream.
 
 ### 4. StreamingProxy durable completion 必须落到 committed terminal fact
 

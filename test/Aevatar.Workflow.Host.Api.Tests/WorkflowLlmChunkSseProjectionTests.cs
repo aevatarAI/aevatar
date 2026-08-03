@@ -6,6 +6,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
@@ -28,7 +29,7 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowLlmChunkSseProjectionTests
 {
     [Fact]
-    public async Task WorkflowLlmChunks_ShouldReachSseInOrderBeforeTerminalEvent()
+    public async Task WorkflowRoleCommittedProgress_ShouldReachSseInOrderBeforeTerminalEvent()
     {
         var streams = new InMemoryStreamProvider();
         var streamHub = new ProjectionSessionEventHub<WorkflowRunEventEnvelope>(
@@ -36,6 +37,7 @@ public sealed class WorkflowLlmChunkSseProjectionTests
             new WorkflowRunEventSessionCodec());
         var mapper = new EventEnvelopeToWorkflowRunEventMapper(
         [
+            new RoleChatSessionProgressRunEventEnvelopeMappingHandler(),
             new AITextStreamRunEventEnvelopeMappingHandler(),
             new AIReasoningRunEventEnvelopeMappingHandler(),
             new WorkflowCompletedRunEventEnvelopeMappingHandler(),
@@ -59,23 +61,29 @@ public sealed class WorkflowLlmChunkSseProjectionTests
         };
         await using var projectionSubscription = await streams.GetStream("workflow-run-1")
             .SubscribeAsync<EventEnvelope>(envelope => projector.ProjectAsync(context, envelope).AsTask());
+        await streams.GetStream("role:assistant").UpsertRelayAsync(
+            StreamForwardingRules.CreateCommittedObservationBinding(
+                "role:assistant",
+                "workflow-run-1"));
         await using var services = new ServiceCollection()
             .AddSingleton<IEventStore, InMemoryEventStore>()
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
         var llmProvider = new StreamingLlmProvider();
+        var rolePublisher = new LocalActorPublisher(
+            "role:assistant",
+            () => "workflow-run-1",
+            () => 0,
+            streams);
         var roleAgent = new WorkflowRoleGAgent(UnexpectedAgentToolExecutionPort.Instance, llmProvider)
         {
             Services = services,
-            EventPublisher = new LocalActorPublisher(
-                "role:assistant",
-                () => "workflow-run-1",
-                () => 0,
-                streams),
+            EventPublisher = rolePublisher,
             EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
         };
         SetAgentId(roleAgent, "role:assistant");
+        SetCommittedStateEventPublisher(roleAgent, rolePublisher);
         await roleAgent.ActivateAsync();
         await roleAgent.HandleWorkflowRoleInitialize(new WorkflowRoleInitializeEvent
         {
@@ -107,6 +115,7 @@ public sealed class WorkflowLlmChunkSseProjectionTests
             TimeSpan.FromSeconds(2));
 
         var preTerminalFrames = ReadSseFrames(responseBody.SnapshotText());
+        preTerminalFrames.Count(HasTextMessageStart).Should().Be(1);
         var preTerminalText = preTerminalFrames
             .Where(HasTextMessageContent)
             .Select(frame => frame.GetProperty("textMessageContent"))
@@ -118,6 +127,11 @@ public sealed class WorkflowLlmChunkSseProjectionTests
         string.Concat(preTerminalText.Select(frame => frame.GetProperty("delta").GetString()))
             .Should().Be("Hello world");
         preTerminalFrames.Count(IsReasoningFrame).Should().Be(1);
+        preTerminalFrames.Count(HasTextMessageEnd).Should().Be(1);
+        preTerminalFrames.FindIndex(HasTextMessageStart)
+            .Should().BeLessThan(preTerminalFrames.FindIndex(HasTextMessageContent));
+        preTerminalFrames.FindIndex(HasTextMessageEnd)
+            .Should().BeGreaterThan(preTerminalFrames.FindLastIndex(HasTextMessageContent));
         preTerminalFrames.Count(HasRunFinished).Should().Be(0);
 
         var runPublisher = new LocalActorPublisher(
@@ -138,7 +152,7 @@ public sealed class WorkflowLlmChunkSseProjectionTests
 
         var frames = ReadSseFrames(responseBody.SnapshotText());
         frames.FindIndex(HasRunFinished)
-            .Should().BeGreaterThan(frames.FindLastIndex(HasTextMessageContent));
+            .Should().BeGreaterThan(frames.FindIndex(HasTextMessageEnd));
         responseBody.FlushedFrameCount.Should().Be(frames.Count);
     }
 
@@ -149,6 +163,17 @@ public sealed class WorkflowLlmChunkSseProjectionTests
             BindingFlags.Instance | BindingFlags.NonPublic);
         setIdMethod.Should().NotBeNull();
         setIdMethod!.Invoke(agent, [agentId]);
+    }
+
+    private static void SetCommittedStateEventPublisher(
+        GAgentBase agent,
+        LocalActorPublisher publisher)
+    {
+        var property = typeof(GAgentBase).GetProperty(
+            "CommittedStateEventPublisher",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        property.Should().NotBeNull();
+        property!.SetValue(agent, publisher);
     }
 
     private static List<JsonElement> ReadSseFrames(string text)
@@ -162,6 +187,12 @@ public sealed class WorkflowLlmChunkSseProjectionTests
 
     private static bool HasTextMessageContent(JsonElement frame) =>
         frame.TryGetProperty("textMessageContent", out _);
+
+    private static bool HasTextMessageStart(JsonElement frame) =>
+        frame.TryGetProperty("textMessageStart", out _);
+
+    private static bool HasTextMessageEnd(JsonElement frame) =>
+        frame.TryGetProperty("textMessageEnd", out _);
 
     private static bool HasRunFinished(JsonElement frame) =>
         frame.TryGetProperty("runFinished", out _);

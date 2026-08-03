@@ -84,7 +84,10 @@ classifier 的普通 provider failure JSON fallback 只作为主链上的非超�
 `WorkflowRoleGAgent` 的 workflow intent 与 approval continuation 使用独立的流消费循环，但仍遵循
 同一 fencing 契约：每个 chunk 在写入内容、发布进度或收集 tool receipt 前先检查 host token，
 异步枚举正常结束后再次检查，防止忽略 cancellation 的 provider 以晚到 chunk 或无 chunk 的正常
-结束伪造成功终态。
+结束伪造成功终态。所有用户可见 text/reasoning/media/tool progress 均提交为统一的
+`RoleChatSessionProgressedEvent`，由 workflow Projection Pipeline 映射为 run-event；禁止恢复
+workflow 专用 transient chunk 协议。completion 中的 typed terminal tail 只补齐 usage、fallback text、
+text end 与 authorization，role terminal/replay 不得冒充 workflow 根 actor 的 run terminal。
 
 审批通过后的 tool resume 是新的 actor turn，必须创建新的 Host-owned deadline；其 token 连续覆盖
 caller token refresh、request tool catalog materialization 和 approved tool execution，禁止使用

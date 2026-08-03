@@ -892,16 +892,6 @@ message WorkflowLlmInvocationStartedEvent
   string role_actor_id = 4;
 }
 
-message WorkflowLlmStreamChunkEvent
-{
-  string run_id = 1;
-  string step_id = 2;
-  string session_id = 3;
-  string role_actor_id = 4;
-  string delta_content = 5;
-  string delta_reasoning_content = 6;
-}
-
 message WorkflowLlmInvocationCompletedEvent
 {
   string run_id = 1;

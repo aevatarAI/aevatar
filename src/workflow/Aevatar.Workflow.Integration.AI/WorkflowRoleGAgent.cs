@@ -123,6 +123,11 @@ public class WorkflowRoleGAgent(
                     return;
                 }
 
+                await PersistSessionProgressAsync(
+                    chatRequest.SessionId,
+                    progress => progress.TextStarted = new RoleChatTextStartedProgress { AgentId = Id },
+                    streamCt);
+                streamCt.ThrowIfCancellationRequested();
                 await PublishAsync(new WorkflowLlmInvocationStartedEvent
                 {
                     RunId = intent.RunId ?? string.Empty,
@@ -1321,36 +1326,63 @@ public class WorkflowRoleGAgent(
                 if (!string.IsNullOrEmpty(chunk.DeltaContent))
                 {
                     fullContent.Append(chunk.DeltaContent);
-                    await PublishAsync(new WorkflowLlmStreamChunkEvent
-                    {
-                        RunId = intent.RunId ?? string.Empty,
-                        StepId = intent.StepId ?? string.Empty,
-                        SessionId = intent.SessionId ?? string.Empty,
-                        RoleActorId = Id,
-                        DeltaContent = chunk.DeltaContent,
-                    }, TopologyAudience.Parent, streamCt);
+                    await PersistSessionProgressAsync(
+                        request.SessionId,
+                        progress => progress.TextDelta = new RoleChatTextDeltaProgress
+                        {
+                            Delta = chunk.DeltaContent,
+                        },
+                        streamCt);
                     streamCt.ThrowIfCancellationRequested();
                 }
 
                 if (chunk.DeltaContentPart != null)
+                {
                     contentParts.Add(chunk.DeltaContentPart);
+                    await PersistSessionProgressAsync(
+                        request.SessionId,
+                        progress => progress.Media = new RoleChatMediaProgress
+                        {
+                            AgentId = Id,
+                            Part = ContentPartProtoMapper.ToProto(chunk.DeltaContentPart),
+                        },
+                        streamCt);
+                    streamCt.ThrowIfCancellationRequested();
+                }
 
                 if (!string.IsNullOrEmpty(chunk.DeltaReasoningContent))
                 {
                     fullReasoning.Append(chunk.DeltaReasoningContent);
-                    await PublishAsync(new WorkflowLlmStreamChunkEvent
-                    {
-                        RunId = intent.RunId ?? string.Empty,
-                        StepId = intent.StepId ?? string.Empty,
-                        SessionId = intent.SessionId ?? string.Empty,
-                        RoleActorId = Id,
-                        DeltaReasoningContent = chunk.DeltaReasoningContent,
-                    }, TopologyAudience.Parent, streamCt);
+                    await PersistSessionProgressAsync(
+                        request.SessionId,
+                        progress => progress.ReasoningDelta = new RoleChatReasoningDeltaProgress
+                        {
+                            Delta = chunk.DeltaReasoningContent,
+                        },
+                        streamCt);
                     streamCt.ThrowIfCancellationRequested();
                 }
 
                 if (chunk.DeltaToolCall != null)
                     toolCalls.TrackDelta(chunk.DeltaToolCall);
+
+                if (chunk.ToolCallStarted != null)
+                {
+                    var started = chunk.ToolCallStarted;
+                    await PersistSessionProgressAsync(
+                        request.SessionId,
+                        progress => progress.ToolStarted = new RoleChatToolStartedProgress
+                        {
+                            CallId = started.ToolCall.Id,
+                            ToolName = started.ToolCall.Name,
+                            Presentation = ToolPresentationDescriptors.Snapshot(
+                                started.Presentation,
+                                started.ToolCall.Name),
+                            OperationId = started.OperationId,
+                        },
+                        streamCt);
+                    streamCt.ThrowIfCancellationRequested();
+                }
 
                 if (chunk.ToolCallCompleted != null)
                 {
@@ -1366,6 +1398,16 @@ public class WorkflowRoleGAgent(
                         toolResult.Receipt = completed.Receipt.Clone();
                     if (toolResults.All(existing => !existing.Equals(toolResult)))
                         toolResults.Add(toolResult);
+                    await PersistSessionProgressAsync(
+                        request.SessionId,
+                        progress => progress.ToolCompleted = new RoleChatToolCompletedProgress
+                        {
+                            Result = toolResult.Clone(),
+                            ToolName = completed.ToolName,
+                            OperationId = completed.OperationId,
+                        },
+                        streamCt);
+                    streamCt.ThrowIfCancellationRequested();
                 }
 
                 var receipt = chunk.ToolCallCompleted?.Receipt ?? chunk.ToolReceipt;
