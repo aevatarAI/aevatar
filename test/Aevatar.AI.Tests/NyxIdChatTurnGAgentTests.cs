@@ -311,6 +311,8 @@ public sealed class NyxIdChatTurnGAgentTests
         progress[1].Reasoning.Delta.Should().Be("private reasoning");
         progress[2].ToolStarted.CallId.Should().Be("call-alpha");
         progress[2].ToolStarted.ToolName.Should().Be("tool-alpha");
+        progress[2].ToolStarted.Presentation.DisplayName.Should().Be("Tool Alpha");
+        progress[2].ToolStarted.Presentation.Kind.Should().Be(ToolPresentationKind.Generic);
 
         execution.Result.ResultCase.Should().Be(NyxIdChatOperationResultSignal.ResultOneofCase.Llm);
         execution.Result.Llm.Content.Should().Be("visible text");

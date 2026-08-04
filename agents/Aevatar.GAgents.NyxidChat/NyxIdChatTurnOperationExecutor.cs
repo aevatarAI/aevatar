@@ -913,6 +913,9 @@ public sealed class NyxIdChatTurnOperationExecutor
                     {
                         CallId = started.Id,
                         ToolName = started.Name,
+                        Presentation = ToolPresentationDescriptors.Snapshot(
+                            chunk.ToolCallStarted.Presentation,
+                            started.Name),
                     },
                     session,
                     reportProgressAsync,

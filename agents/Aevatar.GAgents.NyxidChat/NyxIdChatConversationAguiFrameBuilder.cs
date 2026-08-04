@@ -82,6 +82,9 @@ internal static class NyxIdChatConversationAguiFrameBuilder
                 {
                     ToolCallId = progressed.Progress.ToolStarted.CallId,
                     ToolName = progressed.Progress.ToolStarted.ToolName,
+                    Presentation = Aevatar.AI.Abstractions.ToolProviders.ToolPresentationDescriptors.Snapshot(
+                        progressed.Progress.ToolStarted.Presentation,
+                        progressed.Progress.ToolStarted.ToolName),
                 },
             },
             _ => null,

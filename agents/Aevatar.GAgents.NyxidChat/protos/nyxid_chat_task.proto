@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.GAgents.NyxidChat";
 
 import "ai_messages.proto";
 import "google/protobuf/timestamp.proto";
+import "Tools/tool_presentation.proto";
 
 message NyxIdDirectChatHistoryDispatchedEvent {
   string session_id = 1;
@@ -977,6 +978,7 @@ message NyxIdChatReasoningProgress {
 message NyxIdChatToolProgress {
   string call_id = 1;
   string tool_name = 2;
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 3;
 }
 
 message NyxIdChatOperationProgressSignal {
