@@ -429,9 +429,8 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             request.Body,
             request.Headers,
             ct);
-        var authorityFailure = !response.Succeeded &&
-                               admission.Identity is AgentToolOperationIdentity.AuthoredRequest
-            ? MapAuthoredExactRouteFailure(response.Content, admission.ServiceInstanceId, request.Slug)
+        var authorityFailure = !response.Succeeded
+            ? MapExactRouteFailure(response.Content, admission.ServiceInstanceId, request.Slug)
             : null;
         var result = authorityFailure is { } authorityError
             ? AdmissionDriftError(authorityError.ErrorCode, authorityError.ErrorMessage)
@@ -487,8 +486,22 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             TimeSpan.FromMinutes(5));
         var service = catalog.Services.SingleOrDefault(candidate =>
             string.Equals(candidate.UserServiceId, admission.ServiceInstanceId, StringComparison.Ordinal));
-        if (service is null ||
-            !string.Equals(service.ServiceSlug, admission.ServiceSlug, StringComparison.Ordinal))
+        if (service is null)
+        {
+            // A source catalog and the execution delegation can expose different visibility
+            // windows for the same exact UserService. Read-only proofs may let NyxID's exact
+            // route make the final live authority decision; writes remain fail-closed here.
+            if (!catalog.AccessDenied &&
+                !catalog.SourceUnavailable &&
+                CanUseExactReadOnlyAuthority(admission))
+                return null;
+
+            return new NyxIdOperationRequestFailure(
+                "NYXID_OPERATION_AUTHORITY_DRIFT",
+                "The live NyxID service authority no longer matches the admitted operation.");
+        }
+
+        if (!string.Equals(service.ServiceSlug, admission.ServiceSlug, StringComparison.Ordinal))
         {
             return new NyxIdOperationRequestFailure(
                 "NYXID_OPERATION_AUTHORITY_DRIFT",
@@ -511,7 +524,11 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         return null;
     }
 
-    private static (string ErrorCode, string ErrorMessage)? MapAuthoredExactRouteFailure(
+    private static bool CanUseExactReadOnlyAuthority(AgentToolOperationAdmission admission) =>
+        admission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly &&
+        admission.HttpMethod is "GET" or "HEAD" or "OPTIONS";
+
+    private static (string ErrorCode, string ErrorMessage)? MapExactRouteFailure(
         string response,
         string serviceInstanceId,
         string serviceSlug)
@@ -519,10 +536,10 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         if (!TryReadNyxIdTextProxyFailure(response, out var httpStatus, out var error, out var errorCode, out var message))
             return null;
 
-        return MapAuthoredExactRouteError(httpStatus, error, errorCode, message, serviceInstanceId, serviceSlug);
+        return MapExactRouteError(httpStatus, error, errorCode, message, serviceInstanceId, serviceSlug);
     }
 
-    private static (string ErrorCode, string ErrorMessage)? MapAuthoredExactRouteFailure(
+    private static (string ErrorCode, string ErrorMessage)? MapExactRouteFailure(
         NyxIdProxyBinaryResponse response,
         string serviceInstanceId,
         string serviceSlug)
@@ -533,10 +550,10 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             return null;
         }
 
-        return MapAuthoredExactRouteError(response.HttpStatus, error, errorCode, message, serviceInstanceId, serviceSlug);
+        return MapExactRouteError(response.HttpStatus, error, errorCode, message, serviceInstanceId, serviceSlug);
     }
 
-    private static (string ErrorCode, string ErrorMessage)? MapAuthoredExactRouteError(
+    private static (string ErrorCode, string ErrorMessage)? MapExactRouteError(
         int httpStatus,
         string error,
         int errorCode,
@@ -737,7 +754,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
 
         if (authoredServiceInstanceId is not null)
         {
-            var authorityFailure = MapAuthoredExactRouteFailure(
+            var authorityFailure = MapExactRouteFailure(
                 response,
                 authoredServiceInstanceId,
                 request.Slug);

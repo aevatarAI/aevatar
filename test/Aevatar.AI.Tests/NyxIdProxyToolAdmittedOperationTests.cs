@@ -912,6 +912,97 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShouldUseExactRouteWhenPublishedReadOnlyServiceIsNotVisibleInRuntimeCatalog()
+    {
+        var admission = ListMessagesAdmission();
+        var handler = new RecordingHandler
+        {
+            McpConfigJson = McpConfig(admission with { ServiceInstanceId = "us-lark-other" }),
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(
+            admission,
+            userToken: "proxy-delegation-token",
+            credentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation,
+            sourceReadableToken: "source-readable-token");
+
+        var result = await tool.ExecuteAsync(
+            """{"query":{"container_id":"oc_1"}}""");
+
+        result.Should().NotContain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        handler.McpConfigRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().ContainSingle().Which.Query
+            .Should().Be("?_nyxid_via=us-lark-alpha&container_id=oc_1");
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ShouldMapExactRouteAuthorityFailureAfterReadOnlyCatalogMiss()
+    {
+        var admission = ListMessagesAdmission();
+        var handler = new RecordingHandler
+        {
+            McpConfigJson = McpConfig(admission with { ServiceInstanceId = "us-lark-other" }),
+            ProxyStatusCode = HttpStatusCode.NotFound,
+            ProxyResponseBody = JsonSerializer.Serialize(new
+            {
+                error = "not_found",
+                error_code = 1003,
+                message = "Not found: UserService 'us-lark-alpha' not found",
+            }),
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(admission);
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-runtime-catalog-miss",
+            tool.Name,
+            """{"query":{"container_id":"oc_1"}}""");
+
+        outcome.ResultJson.Should().Contain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        outcome.Receipt.ErrorCode.Should().Be("NYXID_OPERATION_AUTHORITY_DRIFT");
+        handler.McpConfigRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldFailClosedWhenPublishedWriteServiceIsNotVisibleInRuntimeCatalog()
+    {
+        var admission = CreateApprovalAdmission();
+        var handler = new RecordingHandler
+        {
+            McpConfigJson = McpConfig(admission with { ServiceInstanceId = "us-lark-other" }),
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(admission);
+
+        var result = await tool.ExecuteAsync("""{"body":{"approval_code":"budget"}}""");
+
+        result.Should().Contain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        handler.McpConfigRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldFailClosedWhenPublishedReadOnlyRuntimeCatalogIsUnavailable()
+    {
+        var handler = new RecordingHandler
+        {
+            McpConfigJson = """{"error":true,"status":403}""",
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission());
+
+        var result = await tool.ExecuteAsync(
+            """{"query":{"container_id":"oc_1"}}""");
+
+        result.Should().Contain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        handler.McpConfigRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldRejectLiveContractDigestDriftBeforeProxyDispatch()
     {
         var handler = new RecordingHandler
