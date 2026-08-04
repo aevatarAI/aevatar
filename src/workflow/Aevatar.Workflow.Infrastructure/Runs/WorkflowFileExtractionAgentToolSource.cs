@@ -23,7 +23,7 @@ public sealed class WorkflowFileExtractionAgentToolSource(
         tools.AddRange(documentTools.Select(tool => new WorkflowFileExtractionAgentTool(tool, _logger)));
         var spreadsheetTools = await _spreadsheetExtractToolSource.GetToolsAsync(ct).ConfigureAwait(false);
         tools.AddRange(spreadsheetTools.Select(tool => new WorkflowFileExtractionAgentTool(tool, _logger)));
-        _logger?.LogInformation(
+        _logger?.LogWarning(
             "Workflow file extraction agent tools discovered. documentToolCount={DocumentToolCount} spreadsheetToolCount={SpreadsheetToolCount} toolNames={ToolNames}",
             documentTools.Count,
             spreadsheetTools.Count,
@@ -96,7 +96,7 @@ public sealed class WorkflowFileExtractionAgentToolSource(
                 IdempotencyKey: Normalize(context.Request.IdempotencyKey) ?? string.Empty,
                 ScheduleId: Normalize(context.Schedule.ScheduleId) ?? string.Empty);
             var firstFileRef = inputFileRefs.FirstOrDefault();
-            _logger?.LogInformation(
+            _logger?.LogWarning(
                 "Workflow file extraction agent tool executing. toolName={ToolName} runId={RunId} stepId={StepId} callId={CallId} scopeId={ScopeId} inputFileRefCount={InputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
                 Name,
                 request.RunId,
@@ -109,7 +109,7 @@ public sealed class WorkflowFileExtractionAgentToolSource(
                 firstFileRef?.MediaType ?? string.Empty);
 
             var result = await _tool.ExecuteAsync(request, ct).ConfigureAwait(false);
-            _logger?.LogInformation(
+            _logger?.LogWarning(
                 "Workflow file extraction agent tool completed. toolName={ToolName} runId={RunId} stepId={StepId} callId={CallId} resultJsonLength={ResultJsonLength} failureCode={FailureCode} failureMessage={FailureMessage}",
                 Name,
                 request.RunId,

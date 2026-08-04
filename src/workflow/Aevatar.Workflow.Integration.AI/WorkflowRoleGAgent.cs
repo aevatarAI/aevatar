@@ -1232,7 +1232,7 @@ public class WorkflowRoleGAgent(
         var turnCatalog = await BuildRequestToolCatalogAsync(intent.AgentToolScope, toolContext, streamCt);
         streamCt.ThrowIfCancellationRequested();
         var firstToolContextFileRef = toolContext.InputFileRefs.FirstOrDefault();
-        Logger.LogInformation(
+        Logger.LogWarning(
             "Workflow LLM request tool catalog resolved. runId={RunId} stepId={StepId} sessionId={SessionId} intentInputFileRefCount={IntentInputFileRefCount} requestInputPartCount={RequestInputPartCount} toolContextInputFileRefCount={ToolContextInputFileRefCount} toolSetRefCount={ToolSetRefCount} routeOwnedToolCount={RouteOwnedToolCount} routeOwnedToolNames={RouteOwnedToolNames} firstToolContextFileId={FirstToolContextFileId} firstToolContextArtifactId={FirstToolContextArtifactId} firstToolContextMediaType={FirstToolContextMediaType}",
             intent.RunId ?? string.Empty,
             intent.StepId ?? string.Empty,
