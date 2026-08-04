@@ -26,6 +26,7 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
             dispatcher,
             new FixedProjectionClock(DateTimeOffset.Parse("2026-07-25T06:30:00Z")));
         var state = BuildState();
+        state.OwnerSubject = "owner-alpha";
 
         await projector.ProjectAsync(
             NewContext(),
@@ -49,8 +50,10 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
 
         document.ActiveTurn.TurnId.Should().Be("turn-alpha");
         document.ActiveTurn.TaskId.Should().Be("task-alpha");
+        document.ActiveTurn.CommandId.Should().Be("command-alpha");
         document.ActiveTurn.Status.Should().Be("active");
         document.LatestTurn.TurnId.Should().Be("turn-alpha");
+        document.LatestTurn.CommandId.Should().Be("command-alpha");
         document.RecentTerminalTurns.Should().ContainSingle(turn =>
             turn.TurnId == "turn-before" && turn.Status == "failed");
 
@@ -85,6 +88,15 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
 
         document.PendingApproval.ApprovalRequestId.Should().Be("approval-alpha");
         document.PendingApproval.StepId.Should().Be("step-beta");
+        document.PendingApproval.Action.Should().Be("delete");
+        document.PendingApproval.Target.Should().Be("repository:repo-alpha");
+        document.PendingApproval.ActorLabel.Should().Be("Aevatar Assistant");
+        document.PendingApproval.Reversibility.Should().Be("irreversible");
+        document.PendingApproval.GrantBoundary.Should().Be("within_grant");
+        document.TaskStatus.Should().Be("active");
+        document.AttentionKind.Should().Be("approval");
+        document.AttentionSince.Should().Be(state.Attention.AttentionSince);
+        document.ActiveStepSummary.Should().Be("Connect a service.");
         document.ControlFence.Kind.Should().Be("steering");
         document.ControlFence.RequestId.Should().Be("steering-alpha");
         document.ControlFence.Outcome.Should().Be("accepted");
@@ -109,13 +121,15 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         serialized.Should().NotContain("prompt-secret-alpha");
         serialized.Should().NotContain("https://user:password@example.com");
         serialized.Should().NotContain("owner-subject-alpha");
+        serialized.Should().NotContain("owner-alpha");
         serialized.Should().NotContain("access-token-alpha");
         serialized.Should().NotContain("history-initialization-outbox-sentinel");
         serialized.Should().NotContain("history-reservation-outbox-sentinel");
         serialized.Should().NotContain("history-terminal-outbox-sentinel");
         serialized.Should().NotContain("credential-outbox-sentinel");
         NyxIdChatConversationCurrentStateDocument.Descriptor.Fields.InFieldNumberOrder()
-            .Should().NotContain(field => field.Name == "state_root");
+            .Should().NotContain(field =>
+                field.Name == "state_root" || field.Name == "owner_subject");
     }
 
     [Fact]
@@ -172,6 +186,95 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         document.ControlFence.Should().BeNull();
         document.LatestControlResult.Should().BeNull();
         document.ContinuationAdmission.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldCopyPendingInputAndLatestResolutionFacts()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new NyxIdChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-01T12:05:00Z")));
+        var state = BuildState();
+        var askedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T12:00:00Z"));
+        state.PendingApproval = null;
+        state.PendingInput = new NyxIdChatPendingInputState
+        {
+            RequestId = "input-alpha",
+            TurnId = "turn-alpha",
+            TaskId = "task-alpha",
+            StepId = "step-beta",
+            Prompt = "Choose a deployment region.",
+            AskedAt = askedAt.Clone(),
+            AllowFreeText = false,
+            MultiSelect = false,
+            Options =
+            {
+                new NyxIdChatInputOption
+                {
+                    OptionId = "option-singapore",
+                    Label = "Singapore",
+                    Description = "Use the Singapore region.",
+                },
+                new NyxIdChatInputOption
+                {
+                    OptionId = "option-frankfurt",
+                    Label = "Frankfurt",
+                    Description = "Use the Frankfurt region.",
+                },
+            },
+        };
+        state.LatestInputResolution = new NyxIdChatInputResolutionState
+        {
+            RequestId = "input-before",
+            ClientRequestId = "client-input-before",
+            Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+            CommittedAt = askedAt.Clone(),
+        };
+        state.LatestApprovalResolution = new NyxIdChatApprovalResolutionState
+        {
+            RequestId = "approval-before",
+            ClientRequestId = "client-approval-before",
+            Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+            Approved = false,
+            CommittedAt = askedAt.Clone(),
+        };
+        state.Attention = new NyxIdChatConversationAttentionState
+        {
+            TaskStatus = NyxIdChatTaskStatus.Active,
+            AttentionKind = NyxIdChatAttentionKind.Input,
+            AttentionSince = askedAt.Clone(),
+            ActiveStepSummary = "Choose a deployment region.",
+        };
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new NyxIdChatInputRequestedEvent
+                {
+                    PendingInput = state.PendingInput.Clone(),
+                    State = state.Clone(),
+                },
+                state,
+                version: 23,
+                eventId: "event-alpha-input-23",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-08-01T12:00:00Z")));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.StateVersion.Should().Be(23);
+        document.PendingApproval.Should().BeNull();
+        document.PendingInput.RequestId.Should().Be("input-alpha");
+        document.PendingInput.Prompt.Should().Be("Choose a deployment region.");
+        document.PendingInput.Options.Select(static option => option.Label).Should()
+            .Equal("Singapore", "Frankfurt");
+        document.PendingInput.AskedAt.Should().Be(askedAt);
+        document.LatestInputResolution.RequestId.Should().Be("input-before");
+        document.LatestInputResolution.Outcome.Should().Be("accepted");
+        document.LatestApprovalResolution.RequestId.Should().Be("approval-before");
+        document.LatestApprovalResolution.Approved.Should().BeFalse();
+        document.AttentionKind.Should().Be("input");
+        document.AttentionSince.Should().Be(askedAt);
+        document.ActiveStepSummary.Should().Be("Choose a deployment region.");
     }
 
     [Fact]
@@ -242,6 +345,7 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
                 TurnId = "turn-alpha",
                 TaskId = "task-alpha",
                 ClientRequestId = "client-alpha",
+                CommandId = "command-alpha",
                 Status = NyxIdChatTurnStatus.Active,
                 Prompt = "prompt-secret-alpha",
                 CreatedAt = now.Clone(),
@@ -250,6 +354,7 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
             {
                 TurnId = "turn-alpha",
                 TaskId = "task-alpha",
+                CommandId = "command-alpha",
                 Status = NyxIdChatTurnStatus.Active,
                 Prompt = "prompt-secret-alpha",
                 CreatedAt = now.Clone(),
@@ -272,6 +377,22 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
                 StepId = "step-beta",
                 ToolName = "safe-tool-name",
                 ExpiresAt = now.Clone(),
+                AskedAt = now.Clone(),
+                Presentation = new NyxIdChatApprovalPresentation
+                {
+                    Action = "delete",
+                    Target = "repository:repo-alpha",
+                    ActorLabel = "Aevatar Assistant",
+                    Reversibility = NyxIdChatApprovalReversibility.Irreversible,
+                    GrantBoundary = "within_grant",
+                },
+            },
+            Attention = new NyxIdChatConversationAttentionState
+            {
+                TaskStatus = NyxIdChatTaskStatus.Active,
+                AttentionKind = NyxIdChatAttentionKind.Approval,
+                AttentionSince = now.Clone(),
+                ActiveStepSummary = "Connect a service.",
             },
             ControlFence = new NyxIdChatControlFenceState
             {

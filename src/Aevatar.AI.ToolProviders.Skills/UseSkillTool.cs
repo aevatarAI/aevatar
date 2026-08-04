@@ -1,10 +1,12 @@
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.Skills;
 
@@ -118,6 +120,69 @@ public sealed class UseSkillTool : IAgentTool
             RequiresApproval: false,
             IsReadOnly: !mountsWorkflows,
             IsDestructive: false);
+    }
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("result_type", out var resultType) ||
+                !string.Equals(resultType.GetString(), "skill_load", StringComparison.Ordinal) ||
+                !root.TryGetProperty("status", out var statusValue) ||
+                statusValue.ValueKind != JsonValueKind.String ||
+                !root.TryGetProperty("loaded", out var loadedValue) ||
+                loadedValue.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                return null;
+            }
+
+            var status = statusValue.GetString() ?? string.Empty;
+            if (!loadedValue.GetBoolean() || !string.Equals(status, "success", StringComparison.Ordinal))
+                return ErrorReceipt(callId, toolName, LoadFailureCode(status), "The skill could not be loaded.");
+
+            if (ParseArguments(argumentsJson).MountWorkflows != true)
+                return SuccessReceipt(callId, toolName);
+
+            if (!root.TryGetProperty("workflow_mount", out var workflowMount) ||
+                workflowMount.ValueKind != JsonValueKind.Object)
+            {
+                return ErrorReceipt(
+                    callId,
+                    toolName,
+                    "USE_SKILL_MOUNT_RESULT_INVALID",
+                    "Skill workflow mounting returned an invalid result.");
+            }
+
+            var mounted = workflowMount.TryGetProperty("mounted", out var mountedValue) &&
+                          mountedValue.ValueKind == JsonValueKind.True;
+            var accepted = workflowMount.TryGetProperty("accepted", out var acceptedValue) &&
+                           acceptedValue.ValueKind == JsonValueKind.True;
+            var succeeded = workflowMount.TryGetProperty("success", out var successValue) &&
+                            successValue.ValueKind == JsonValueKind.True;
+            if (mounted || accepted && succeeded)
+                return SuccessReceipt(callId, toolName, sideEffectKind: "workflow.mount");
+
+            var mountStatus = workflowMount.TryGetProperty("status", out var mountStatusValue) &&
+                              mountStatusValue.ValueKind == JsonValueKind.String
+                ? mountStatusValue.GetString()
+                : null;
+            return ErrorReceipt(
+                callId,
+                toolName,
+                MountFailureCode(mountStatus),
+                "Skill workflow mounting failed.");
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
@@ -379,7 +444,9 @@ public sealed class UseSkillTool : IAgentTool
                 {
                     CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
                         callerId,
-                        AgentToolRequestContext.NyxIdAccessToken,
+                        NyxIdCallerCredentialSelection.SourceReadableUserBearerOrNull(
+                            AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
+                                AgentToolRequestContext.Current?.Credentials)),
                         AgentToolRequestContext.NyxIdOrgToken),
                 },
                 ct);
@@ -687,6 +754,54 @@ public sealed class UseSkillTool : IAgentTool
             workflow_mount = workflowMount,
         }, s_jsonOptions);
     }
+
+    private AgentToolReceipt SuccessReceipt(
+        string callId,
+        string toolName,
+        string sideEffectKind = "") =>
+        new()
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+            Status = AgentToolReceiptStatus.Success,
+            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            SideEffectKind = sideEffectKind,
+        };
+
+    private AgentToolReceipt ErrorReceipt(
+        string callId,
+        string toolName,
+        string errorCode,
+        string errorMessage) =>
+        new()
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+            Status = AgentToolReceiptStatus.Error,
+            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            ErrorCode = errorCode,
+            ErrorMessage = errorMessage,
+            ResultJson = JsonSerializer.Serialize(new { error = errorCode, message = errorMessage }),
+        };
+
+    private static string LoadFailureCode(string status) =>
+        status switch
+        {
+            "access_denied" => "USE_SKILL_ACCESS_DENIED",
+            "not_found" => "USE_SKILL_NOT_FOUND",
+            _ => "USE_SKILL_LOAD_FAILED",
+        };
+
+    private static string MountFailureCode(string? status) =>
+        status switch
+        {
+            "missing_scope" => "USE_SKILL_MOUNT_MISSING_SCOPE",
+            "missing_identity" => "USE_SKILL_MOUNT_MISSING_IDENTITY",
+            "no_workflows" => "USE_SKILL_MOUNT_NO_WORKFLOWS",
+            "invalid_workflow" => "USE_SKILL_MOUNT_INVALID_WORKFLOW",
+            "not_available" => "USE_SKILL_MOUNT_NOT_AVAILABLE",
+            _ => "USE_SKILL_MOUNT_FAILED",
+        };
 
     private static WorkflowMountRenderResult BuildScopeWorkflowMountError(
         string status,

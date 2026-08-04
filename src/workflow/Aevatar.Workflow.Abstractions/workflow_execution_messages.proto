@@ -160,11 +160,20 @@ message WorkflowLlmControlContext {
   string sender_nyx_id_access_token = 5;
 }
 
+enum NyxIdCallerCredentialKind {
+  NYX_ID_CALLER_CREDENTIAL_KIND_UNSPECIFIED = 0;
+  NYX_ID_CALLER_CREDENTIAL_KIND_SOURCE_READABLE_USER_BEARER = 1;
+  NYX_ID_CALLER_CREDENTIAL_KIND_PROXY_DELEGATION = 2;
+}
+
 message WorkflowCallerCredential {
   string bearer_token = 1;
   aevatar.credentials.RuntimeSecretReference runtime_secret_reference = 2;
   aevatar.credentials.DurableCallerCredentialRef durable_caller_credential = 3;
   WorkflowCallerNyxIdAuthority nyx_id_authority = 4;
+  NyxIdCallerCredentialKind kind = 5;
+  string source_readable_user_bearer_token = 6;
+  aevatar.credentials.RuntimeSecretReference source_readable_user_bearer_runtime_secret_reference = 7;
 }
 
 message WorkflowCallerNyxIdAuthority {
@@ -290,6 +299,7 @@ message BindWorkflowRunDefinitionEvent
   // Committed call-site admission proof copied from the authoritative Definition binding.
   // The Run actor owns this copy for its whole lifetime; runtime never re-reads the Definition.
   WorkflowCapabilityAdmissionPlan capability_admission_plan = 9;
+  ExternalCapabilityExecutionMode expected_execution_mode = 10;
 }
 
 // Idempotent provisioning command for a stable Run actor identity. The first
@@ -311,6 +321,9 @@ message BindWorkflowDefinitionEvent
   string source_kind = 5;
   WorkflowAuthorizationDependencies authorization_dependencies = 6;
   WorkflowCapabilityAdmissionPlan capability_admission_plan = 7;
+  string workflow_id = 8;
+  string revision_id = 9;
+  ExternalCapabilityExecutionMode expected_execution_mode = 10;
 }
 
 enum WorkflowServiceGrantPolicy {
@@ -601,6 +614,7 @@ message SubWorkflowInvokeRequestedEvent
   string requested_by_actor_id = 7;
   string root_run_id = 8;
   int32 requested_depth = 9;
+  repeated WorkflowFileRef input_file_refs = 10;
 }
 message WorkflowDefinitionSnapshot
 {
@@ -659,6 +673,7 @@ message SubWorkflowDefinitionResolutionRegisteredEvent
   int32 timeout_callback_slot_epoch = 13;
   string root_run_id = 14;
   int32 requested_depth = 15;
+  repeated WorkflowFileRef input_file_refs = 16;
 }
 message SubWorkflowDefinitionResolutionClearedEvent
 {
@@ -690,6 +705,7 @@ message SubWorkflowInvocationRegisteredEvent
   map<string, string> inline_workflow_yamls = 14;
   string root_run_id = 15;
   int32 depth = 16;
+  repeated WorkflowFileRef input_file_refs = 17;
 }
 message SubWorkflowInvocationHandoffAdvancedEvent
 {
@@ -1101,6 +1117,8 @@ message WorkflowConnectorAttemptCompletedEvent {
   string error = 7;
   map<string, string> annotations = 8;
   string execution_id = 9;
+  optional bool terminal_invoked = 10;
+  optional bool retryable = 11;
 }
 message WorkflowSignalBufferedEvent
 {

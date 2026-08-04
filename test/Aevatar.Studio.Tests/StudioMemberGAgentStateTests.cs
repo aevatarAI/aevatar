@@ -1694,17 +1694,24 @@ public sealed class StudioMemberGAgentStateTests
 
     private sealed class RecordingEventSourcing(StudioMemberState replayState) : IEventSourcingBehavior<StudioMemberState>
     {
+        private readonly List<IMessage> _pending = [];
         public List<IMessage> RaisedEvents { get; } = [];
         public int ConfirmCallCount { get; private set; }
-        public long CurrentVersion => 0;
+        public long CurrentVersion { get; private set; }
 
-        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage =>
+        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage
+        {
             RaisedEvents.Add(evt);
+            _pending.Add(evt);
+        }
 
         public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
         {
             ConfirmCallCount++;
-            return Task.FromResult(new EventStoreCommitResult());
+            var result = EventSourcingTestCommit.From(_pending, CurrentVersion);
+            CurrentVersion = result.LatestVersion;
+            _pending.Clear();
+            return Task.FromResult(result);
         }
 
         public Task PersistSnapshotAsync(StudioMemberState currentState, CancellationToken ct = default) =>
@@ -1713,8 +1720,11 @@ public sealed class StudioMemberGAgentStateTests
         public Task<StudioMemberState?> ReplayAsync(string agentId, CancellationToken ct = default) =>
             Task.FromResult<StudioMemberState?>(replayState.Clone());
 
-        public void DiscardPendingEvents() =>
+        public void DiscardPendingEvents()
+        {
             RaisedEvents.Clear();
+            _pending.Clear();
+        }
 
         public StudioMemberState TransitionState(StudioMemberState current, IMessage evt) =>
             current.Clone();

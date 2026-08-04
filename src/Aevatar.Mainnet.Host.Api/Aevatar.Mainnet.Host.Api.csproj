@@ -58,9 +58,9 @@
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Workflow\Aevatar.AI.ToolProviders.Workflow.csproj" />
     <ProjectReference Include="..\Aevatar.AI.Application.CodexExecution\Aevatar.AI.Application.CodexExecution.csproj" />
     <ProjectReference Include="..\Aevatar.AI.Infrastructure.ChronoSandbox\Aevatar.AI.Infrastructure.ChronoSandbox.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.Infrastructure.ToolExecution\Aevatar.AI.Infrastructure.ToolExecution.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="Profiles\nyxid-chat\*.profile.pb.json" CopyToOutputDirectory="PreserveNewest" />
     <EmbeddedResource Include="BackendConsole\admin.html" />
     <EmbeddedResource Include="BackendConsole\auto-callback.html" />
     <EmbeddedResource Include="Status\status.html" />

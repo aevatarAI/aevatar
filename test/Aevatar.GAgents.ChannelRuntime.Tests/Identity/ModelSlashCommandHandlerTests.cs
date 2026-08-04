@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
@@ -24,8 +26,7 @@ public sealed class ModelSlashCommandHandlerTests
         ServiceSlug: "chrono-llm",
         DisplayName: "chrono-llm shared",
         RouteValue: "/api/v1/proxy/s/chrono-llm",
-        DefaultModel: "gpt-5.4",
-        Models: ["gpt-5.4"],
+        ModelCatalog: EnumeratedCatalog("gpt-5.4"),
         Status: "ready",
         Source: "shared",
         Allowed: true,
@@ -39,8 +40,7 @@ public sealed class ModelSlashCommandHandlerTests
         ServiceSlug: "openai-work",
         DisplayName: "OpenAI (work)",
         RouteValue: "/api/v1/proxy/s/openai-work",
-        DefaultModel: "gpt-4o",
-        Models: ["gpt-4o"],
+        ModelCatalog: EnumeratedCatalog("gpt-4o"),
         Status: "ready",
         Source: "user",
         Allowed: true,
@@ -343,10 +343,13 @@ public sealed class ModelSlashCommandHandlerTests
 
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("OpenAI (work)");
-        var saved = preferencePort.SelectedOptions.Should().ContainSingle().Subject;
+        reply.Text.Should().Contain("更新已提交");
+        var saved = preferencePort.Commands.Should().ContainSingle().Subject;
         saved.BindingId.Should().Be("bnd_sender");
-        saved.Option.RouteValue.Should().Be(OpenAi.RouteValue);
-        saved.Model.Should().Be("gpt-4o");
+        var intent = saved.Intent.Should().BeOfType<SelectUserServiceUserLlmPreferenceIntent>().Subject;
+        intent.UserServiceId.Should().Be(OpenAi.Identity!.NyxIdUserServiceId);
+        intent.ModelSelection.Kind.Should().Be(LLMModelSelectionKind.ProviderDefault);
+        intent.ModelSelection.ModelId.Should().BeEmpty();
     }
 
     [Fact]
@@ -355,11 +358,12 @@ public sealed class ModelSlashCommandHandlerTests
         var preferencePort = new StubChannelUserLlmPreferencePort();
         var handler = CreateHandler(preferencePort: preferencePort);
 
-        var reply = await handler.HandleAsync(Context(subAndArgs: "use openai"), default);
+        var reply = await handler.HandleAsync(Context(subAndArgs: "use openai-work"), default);
 
         reply.Should().NotBeNull();
-        preferencePort.SelectedOptions.Should().ContainSingle()
-            .Subject.Option.RouteValue.Should().Be(OpenAi.RouteValue);
+        preferencePort.Commands.Should().ContainSingle()
+            .Subject.Intent.Should().BeOfType<SelectUserServiceUserLlmPreferenceIntent>()
+            .Which.UserServiceId.Should().Be(OpenAi.Identity!.NyxIdUserServiceId);
     }
 
     [Fact]
@@ -384,9 +388,10 @@ public sealed class ModelSlashCommandHandlerTests
 
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("Chrono LLM");
-        var saved = preferencePort.SelectedOptions.Should().ContainSingle().Subject;
-        saved.Option.RouteValue.Should().Be(selectableProxy.RouteValue);
-        saved.Model.Should().Be(selectableProxy.DefaultModel);
+        var saved = preferencePort.Commands.Should().ContainSingle().Subject;
+        var intent = saved.Intent.Should().BeOfType<SelectUserServiceUserLlmPreferenceIntent>().Subject;
+        intent.UserServiceId.Should().Be(selectableProxy.Identity!.NyxIdUserServiceId);
+        intent.ModelSelection.Kind.Should().Be(LLMModelSelectionKind.ProviderDefault);
     }
 
     [Fact]
@@ -421,9 +426,11 @@ public sealed class ModelSlashCommandHandlerTests
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("Chrono LLM");
         reply.Text.Should().Contain("gpt-5.5");
-        var saved = preferencePort.SelectedOptions.Should().ContainSingle().Subject;
-        saved.Option.RouteValue.Should().Be(userKey.RouteValue);
-        saved.Model.Should().Be("gpt-5.5");
+        var saved = preferencePort.Commands.Should().ContainSingle().Subject;
+        var intent = saved.Intent.Should().BeOfType<SelectUserServiceUserLlmPreferenceIntent>().Subject;
+        intent.UserServiceId.Should().Be(userKey.Identity!.NyxIdUserServiceId);
+        intent.ModelSelection.Kind.Should().Be(LLMModelSelectionKind.ExplicitModel);
+        intent.ModelSelection.ModelId.Should().Be("gpt-5.5");
     }
 
     [Fact]
@@ -450,14 +457,18 @@ public sealed class ModelSlashCommandHandlerTests
             .AddSingleton<IChannelUserLlmPreferencePort>(preferencePort)
             .BuildServiceProvider();
         var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
-        var options = new DefaultUserLlmOptionsService(catalog, scopeFactory);
-        var selection = new DefaultUserLlmSelectionService(options, catalog, scopeFactory);
+        var selection = new DefaultUserLlmSelectionService(scopeFactory, new RecordingCapabilityBroker());
 
-        await selection.SetByServiceAsync(BuildSelectionContext(), "us-beta", null, default);
+        await selection.SetByServiceAsync(
+            BuildSelectionContext(),
+            "us-beta",
+            new LLMModelSelection { Kind = LLMModelSelectionKind.ProviderDefault },
+            default);
 
-        var saved = preferencePort.SelectedOptions.Should().ContainSingle().Subject;
+        var saved = preferencePort.Commands.Should().ContainSingle().Subject;
         saved.BindingId.Should().Be("bnd_sender");
-        saved.Option.Identity!.NyxIdUserServiceId.Should().Be("us-beta");
+        saved.Intent.Should().BeOfType<SelectUserServiceUserLlmPreferenceIntent>()
+            .Which.UserServiceId.Should().Be("us-beta");
     }
 
     [Fact]
@@ -487,39 +498,31 @@ public sealed class ModelSlashCommandHandlerTests
             "token-for-service-list",
             "token-for-preset-write",
             "token-for-prefixed-model-write");
-        var options = new DefaultUserLlmOptionsService(catalog, scopeFactory, broker);
-        var selection = new DefaultUserLlmSelectionService(options, catalog, scopeFactory, broker);
+        var selection = new DefaultUserLlmSelectionService(scopeFactory, broker);
         var context = BuildSelectionContext();
 
         await selection.SetByServiceAsync(
             context,
             OpenAi.Identity!.NyxIdUserServiceId,
-            null,
+            new LLMModelSelection { Kind = LLMModelSelectionKind.ProviderDefault },
             default);
         await selection.ApplyPresetAsync(context, "chrono-provision", default);
-        await selection.SetModelOverrideAsync(context, "chrono-llm/gpt-5.5", default);
 
         catalog.GetServicesCalls.Should().NotContain(call => call.AccessToken == "channel-context");
         catalog.ProvisionCalls.Should().NotContain(call => call.AccessToken == "channel-context");
-        catalog.GetServicesCalls.Should().ContainSingle(call =>
-            call.Query.BindingId.Value == "bnd_sender" &&
-            call.Query.RegistrationScopeId == "owner-scope" &&
-            call.AccessToken == "token-for-service-list");
+        catalog.GetServicesCalls.Should().BeEmpty();
         catalog.ProvisionCalls.Should().BeEmpty();
         broker.RequestedScopes.Should().Equal(
             AevatarOAuthClientScopes.Proxy,
-            AevatarOAuthClientScopes.Proxy,
             AevatarOAuthClientScopes.Proxy);
-        preferencePort.SelectedOptions.Should().HaveCount(1);
-        preferencePort.SelectedOptions[0].BindingId.Should().Be("bnd_sender");
-        preferencePort.SelectedOptions[0].Option.RouteValue.Should().Be(OpenAi.RouteValue);
         preferencePort.Commands.Should().HaveCount(2);
         preferencePort.Commands[0].BindingId.Should().Be("bnd_sender");
-        preferencePort.Commands[0].BearerToken.Should().Be("token-for-preset-write");
-        preferencePort.Commands[0].Command.PresetId.Should().Be("chrono-provision");
+        preferencePort.Commands[0].BearerToken.Should().Be("token-for-service-list");
+        preferencePort.Commands[0].Intent.Should().BeOfType<SelectUserServiceUserLlmPreferenceIntent>();
         preferencePort.Commands[1].BindingId.Should().Be("bnd_sender");
-        preferencePort.Commands[1].BearerToken.Should().Be("token-for-prefixed-model-write");
-        preferencePort.Commands[1].Command.Model.Should().Be("chrono-llm/gpt-5.5");
+        preferencePort.Commands[1].BearerToken.Should().Be("token-for-preset-write");
+        preferencePort.Commands[1].Intent.Should().BeOfType<ActivateUserLlmPresetIntent>()
+            .Which.PresetId.Should().Be("chrono-provision");
     }
 
     [Fact]
@@ -533,9 +536,11 @@ public sealed class ModelSlashCommandHandlerTests
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("chrono-llm shared");
         reply.Text.Should().Contain("gpt-5.5");
-        var saved = preferencePort.SelectedOptions.Should().ContainSingle().Subject;
-        saved.Option.RouteValue.Should().Be(ChronoLlm.RouteValue);
-        saved.Model.Should().Be("gpt-5.5");
+        var saved = preferencePort.Commands.Should().ContainSingle().Subject;
+        var intent = saved.Intent.Should().BeOfType<SelectUserServiceUserLlmPreferenceIntent>().Subject;
+        intent.UserServiceId.Should().Be(ChronoLlm.Identity!.NyxIdUserServiceId);
+        intent.ModelSelection.Kind.Should().Be(LLMModelSelectionKind.ExplicitModel);
+        intent.ModelSelection.ModelId.Should().Be("gpt-5.5");
     }
 
     [Fact]
@@ -548,9 +553,9 @@ public sealed class ModelSlashCommandHandlerTests
 
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("OpenAI (work)");
-        var saved = preferencePort.SelectedOptions.Should().ContainSingle().Subject;
-        saved.Option.RouteValue.Should().Be(OpenAi.RouteValue);
-        saved.Model.Should().Be(OpenAi.DefaultModel);
+        var saved = preferencePort.Commands.Should().ContainSingle().Subject;
+        saved.Intent.Should().BeOfType<SelectUserServiceUserLlmPreferenceIntent>()
+            .Which.ModelSelection.Kind.Should().Be(LLMModelSelectionKind.ProviderDefault);
     }
 
     [Fact]
@@ -564,13 +569,15 @@ public sealed class ModelSlashCommandHandlerTests
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("OpenAI (work)");
         reply.Text.Should().Contain("gpt-5.5");
-        var saved = preferencePort.SelectedOptions.Should().ContainSingle().Subject;
-        saved.Option.RouteValue.Should().Be(OpenAi.RouteValue);
-        saved.Model.Should().Be("gpt-5.5");
+        var saved = preferencePort.Commands.Should().ContainSingle().Subject;
+        var intent = saved.Intent.Should().BeOfType<SelectUserServiceUserLlmPreferenceIntent>().Subject;
+        intent.UserServiceId.Should().Be(OpenAi.Identity!.NyxIdUserServiceId);
+        intent.ModelSelection.Kind.Should().Be(LLMModelSelectionKind.ExplicitModel);
+        intent.ModelSelection.ModelId.Should().Be("gpt-5.5");
     }
 
     [Fact]
-    public async Task Use_RawModel_WritesModelOnlyAndPreservesRoute()
+    public async Task Use_RawModel_ReturnsUsageAndNeverWrites()
     {
         var queryPort = new StubUserConfigQueryPort
         {
@@ -582,9 +589,8 @@ public sealed class ModelSlashCommandHandlerTests
         var reply = await handler.HandleAsync(Context(subAndArgs: "use claude-sonnet-4"), default);
 
         reply.Should().NotBeNull();
-        reply!.Text.Should().Contain("claude-sonnet-4");
-        var saved = preferencePort.Commands.Should().ContainSingle().Subject;
-        saved.Command.Model.Should().Be("claude-sonnet-4");
+        reply!.Text.Should().Contain("/model use <编号|service-name> [model-name]");
+        preferencePort.Commands.Should().BeEmpty();
     }
 
     [Fact]
@@ -598,13 +604,14 @@ public sealed class ModelSlashCommandHandlerTests
 
         reply.Should().NotBeNull();
         var saved = preferencePort.Commands.Should().ContainSingle().Subject;
-        saved.Command.PresetId.Should().Be("chrono-shared");
+        saved.Intent.Should().BeOfType<ActivateUserLlmPresetIntent>()
+            .Which.PresetId.Should().Be("chrono-shared");
     }
 
     [Fact]
     public async Task Preset_ProvisionThenUse_PreservesCurrentModel_WhenProvisionedServiceHasNoDefaultModel()
     {
-        var provisioned = ChronoLlm with { DefaultModel = null };
+        var provisioned = ChronoLlm with { ModelCatalog = EnumeratedCatalog("gpt-5.4", includeDefault: false) };
         var catalog = new StubCatalogClient
         {
             Services = [],
@@ -630,7 +637,8 @@ public sealed class ModelSlashCommandHandlerTests
 
         reply.Should().NotBeNull();
         var saved = preferencePort.Commands.Should().ContainSingle().Subject;
-        saved.Command.PresetId.Should().Be("chrono-provision");
+        saved.Intent.Should().BeOfType<ActivateUserLlmPresetIntent>()
+            .Which.PresetId.Should().Be("chrono-provision");
     }
 
     [Fact]
@@ -646,9 +654,9 @@ public sealed class ModelSlashCommandHandlerTests
         var reply = await handler.HandleAsync(Context(subAndArgs: "reset"), default);
 
         reply.Should().NotBeNull();
-        reply!.Text.Should().Contain("已清空");
+        reply!.Text.Should().Contain("重置已提交");
         var saved = preferencePort.Commands.Should().ContainSingle().Subject;
-        saved.Command.Reset.Should().BeTrue();
+        saved.Intent.Should().BeOfType<ResetUserLlmPreferenceIntent>();
     }
 
     [Fact]
@@ -662,7 +670,6 @@ public sealed class ModelSlashCommandHandlerTests
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("没有编号 7");
         preferencePort.Commands.Should().BeEmpty();
-        preferencePort.SelectedOptions.Should().BeEmpty();
     }
 
     private static ModelChannelSlashCommandHandler CreateHandler(
@@ -684,7 +691,7 @@ public sealed class ModelSlashCommandHandlerTests
             .BuildServiceProvider();
         var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
         var options = new DefaultUserLlmOptionsService(catalog, scopeFactory, broker);
-        var selection = new DefaultUserLlmSelectionService(options, catalog, scopeFactory, broker);
+        var selection = new DefaultUserLlmSelectionService(scopeFactory, broker);
         return new ModelChannelSlashCommandHandler(
             NullLogger<ModelChannelSlashCommandHandler>.Instance,
             actorDispatchPort,
@@ -730,11 +737,25 @@ public sealed class ModelSlashCommandHandlerTests
         RemoteRuntimeBaseUrl: UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl,
         GithubUsername: null,
         MaxToolRounds: 0,
-        LlmSelection: new UserLlmSelectionValue(
-            UserLlmSelectionKind.NyxIdUserService,
-            service.RouteValue,
-            service.Identity!.NyxIdUserServiceId,
-            service.ServiceSlug));
+        LlmSelection: new LLMSelection
+        {
+            RouteKind = LLMRouteKind.NyxIdUserService,
+            RouteValue = service.RouteValue,
+            NyxIdUserServiceId = service.Identity!.NyxIdUserServiceId,
+            ServiceSlugSnapshot = service.ServiceSlug,
+            ModelSelection = new LLMModelSelection
+            {
+                Kind = LLMModelSelectionKind.ExplicitModel,
+                ModelId = defaultModel,
+            },
+        });
+
+    private static LLMModelCatalog EnumeratedCatalog(string modelId, bool includeDefault = true) => new()
+    {
+        Certainty = LLMModelCatalogCertainty.Enumerated,
+        DefaultModelId = includeDefault ? modelId : string.Empty,
+        ModelIds = { modelId },
+    };
 
     private sealed class StubCatalogClient : INyxIdLlmServiceCatalogClient
     {
@@ -754,7 +775,7 @@ public sealed class ModelSlashCommandHandlerTests
                     new UseExistingService(
                         ChronoLlm.Identity!.NyxIdUserServiceId,
                         ChronoLlm.RouteValue,
-                        ChronoLlm.DefaultModel)),
+                        ChronoLlm.ModelCatalog.DefaultModelId)),
             ]);
 
         public Task<NyxIdLlmServicesResult> GetServicesAsync(
@@ -886,27 +907,15 @@ public sealed class ModelSlashCommandHandlerTests
 
     private sealed class StubChannelUserLlmPreferencePort : IChannelUserLlmPreferencePort
     {
-        public List<(string BindingId, string? BearerToken, SaveUserLlmPreferenceCommand Command)> Commands { get; } = [];
-        public List<(string BindingId, UserLlmOption Option, string? Model, bool PreserveCurrentModelWhenMissing)> SelectedOptions { get; } = [];
+        public List<(string BindingId, string? BearerToken, UserLlmPreferenceIntent Intent)> Commands { get; } = [];
 
         public Task<UserConfigSaveReceipt> SaveAsync(
             string bindingId,
             string? bearerToken,
-            SaveUserLlmPreferenceCommand command,
+            UserLlmPreferenceIntent intent,
             CancellationToken ct)
         {
-            Commands.Add((bindingId, bearerToken, command));
-            return Task.FromResult(Receipt());
-        }
-
-        public Task<UserConfigSaveReceipt> SaveSelectedOptionAsync(
-            string bindingId,
-            UserLlmOption option,
-            string? model,
-            bool preserveCurrentModelWhenMissing,
-            CancellationToken ct)
-        {
-            SelectedOptions.Add((bindingId, option, model, preserveCurrentModelWhenMissing));
+            Commands.Add((bindingId, bearerToken, intent));
             return Task.FromResult(Receipt());
         }
 

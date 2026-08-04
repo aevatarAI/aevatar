@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package aevatar.integration.tests;
+
+option csharp_namespace = "Aevatar.Integration.Tests";
+
+enum WorkflowDeliveryInvocationKind {
+  WORKFLOW_DELIVERY_INVOCATION_KIND_UNSPECIFIED = 0;
+  WORKFLOW_DELIVERY_INVOCATION_KIND_TEAM = 1;
+  WORKFLOW_DELIVERY_INVOCATION_KIND_DIRECT = 2;
+}
+
+message WorkflowDeliverySchedulerProbeRequested {
+  WorkflowDeliveryInvocationKind invocation_kind = 1;
+}

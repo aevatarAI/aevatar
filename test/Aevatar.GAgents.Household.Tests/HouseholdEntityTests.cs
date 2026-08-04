@@ -6,7 +6,7 @@ namespace Aevatar.GAgents.Household.Tests;
 
 public class TriggerConditionTests
 {
-    private readonly HouseholdEntity _entity = new();
+    private readonly HouseholdEntity _entity = new(UnexpectedAgentToolExecutionPort.Instance);
 
     [Fact]
     public void ShouldTrigger_WhenTemperatureChangesSignificantly()
@@ -75,7 +75,7 @@ public class TriggerConditionTests
 
 public class SafetyCheckTests
 {
-    private readonly HouseholdEntity _entity = new();
+    private readonly HouseholdEntity _entity = new(UnexpectedAgentToolExecutionPort.Instance);
 
     [Fact]
     public void CanReason_WhenStateIsDefault()
@@ -247,6 +247,14 @@ public class ProtobufSerializationTests
                 KillSwitch = false,
                 ActionsThisMinute = 2,
             },
+            LastReasoningTerminal = new HouseholdReasoningTerminalState
+            {
+                Trigger = "Periodic heartbeat",
+                Outcome = HouseholdReasoningOutcome.Failed,
+                FailureCode = "LLM_TIMEOUT",
+                SafeMessage = "The reasoning turn timed out.",
+                Timestamp = 1234567891,
+            },
         };
 
         state.RecentActions.Add(new ActionRecord
@@ -281,6 +289,8 @@ public class ProtobufSerializationTests
         restored.Memories.Should().HaveCount(1);
         restored.Memories[0].Reinforcement.Should().Be(3);
         restored.Safety.ActionsThisMinute.Should().Be(2);
+        restored.LastReasoningTerminal.Outcome.Should().Be(HouseholdReasoningOutcome.Failed);
+        restored.LastReasoningTerminal.FailureCode.Should().Be("LLM_TIMEOUT");
     }
 }
 

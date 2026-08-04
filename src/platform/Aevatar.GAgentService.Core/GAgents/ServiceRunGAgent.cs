@@ -105,7 +105,9 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
         var status = terminal.Outcome switch
         {
             RoleChatSessionOutcome.Completed => ServiceRunStatus.Completed,
-            RoleChatSessionOutcome.Failed or RoleChatSessionOutcome.Blocked => ServiceRunStatus.Failed,
+            RoleChatSessionOutcome.Failed or
+            RoleChatSessionOutcome.Blocked => ServiceRunStatus.Failed,
+            RoleChatSessionOutcome.OutcomeUncertain => ServiceRunStatus.OutcomeUncertain,
             _ => throw new InvalidOperationException("Role chat terminal outcome is required."),
         };
         EnsureTerminalStatusDoesNotConflict(status);
@@ -221,11 +223,7 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
         if (command.Status == ServiceRunStatus.Unspecified)
             return;
 
-        if (IsTerminal(existing.Status) && existing.Status != command.Status)
-        {
-            await DeliverPendingTerminalNotificationAsync();
-            return;
-        }
+        EnsureStatusTransitionAllowed(existing.Status, command.Status);
 
         var outputChanged = command.LastOutput != null &&
                             !string.Equals(existing.LastOutput ?? string.Empty, command.LastOutput ?? string.Empty, StringComparison.Ordinal);
@@ -234,7 +232,7 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
         var resultArtifactsChanged = resultArtifactAdditions.Count > 0;
         var shouldPrepareTerminalNotification =
             implementationTerminalEvidence &&
-            IsTerminal(command.Status) &&
+            IsNotifiableTerminalStatus(command.Status) &&
             HasCompletionNotificationTarget(existing.CompletionNotificationTarget) &&
             State.PendingTerminalNotification == null &&
             State.TerminalNotificationDeliveryStatus == ServiceRunTerminalNotificationDeliveryStatus.Unspecified;
@@ -477,7 +475,15 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
     }
 
     private static bool IsTerminal(ServiceRunStatus status) =>
-        status is ServiceRunStatus.Completed or ServiceRunStatus.Failed or ServiceRunStatus.Stopped;
+        status is ServiceRunStatus.Completed or
+            ServiceRunStatus.Failed or
+            ServiceRunStatus.Stopped or
+            ServiceRunStatus.OutcomeUncertain;
+
+    private static bool IsNotifiableTerminalStatus(ServiceRunStatus status) =>
+        status is ServiceRunStatus.Completed or
+            ServiceRunStatus.Failed or
+            ServiceRunStatus.Stopped;
 
     private void ValidateImplementationTerminalIdentity(
         ServiceImplementationKind expectedImplementationKind,
@@ -524,7 +530,21 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
     private void EnsureTerminalStatusDoesNotConflict(ServiceRunStatus incoming)
     {
         var current = State.Record?.Status ?? ServiceRunStatus.Unspecified;
-        if (IsTerminal(current) && current != incoming)
+        EnsureStatusTransitionAllowed(current, incoming);
+    }
+
+    private void EnsureStatusTransitionAllowed(ServiceRunStatus current, ServiceRunStatus incoming)
+    {
+        if (current == incoming || current is ServiceRunStatus.Unspecified or ServiceRunStatus.Accepted)
+            return;
+
+        if (current == ServiceRunStatus.OutcomeUncertain &&
+            incoming is ServiceRunStatus.Completed or ServiceRunStatus.Failed)
+        {
+            return;
+        }
+
+        if (IsTerminal(current))
         {
             throw new InvalidOperationException(
                 $"Service run actor '{Id}' is already terminal as '{current}' and cannot adopt '{incoming}'.");
@@ -728,7 +748,7 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
                 {
                     Delivery = new EventEnvelopeDeliveryOptions
                     {
-                        DeduplicationOperationId = $"service-run-terminal-{notification.DeliveryId}",
+                        OperationId = $"service-run-terminal-{notification.DeliveryId}",
                     },
                 });
         }
@@ -848,7 +868,7 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
         {
             Delivery = new EventEnvelopeDeliveryOptions
             {
-                DeduplicationOperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
+                OperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
                     callbackId,
                     attempt.ToString(CultureInfo.InvariantCulture)),
             },

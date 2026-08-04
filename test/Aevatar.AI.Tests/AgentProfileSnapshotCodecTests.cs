@@ -33,6 +33,14 @@ public sealed class AgentProfileSnapshotCodecTests
     }
 
     [Fact]
+    public void PublishedWrapperDigest_ShouldNotLiveInsideLegacyRuntimeSnapshot()
+    {
+        AgentProfileSnapshot.Descriptor.Fields.InFieldNumberOrder()
+            .Select(static field => (field.Name, field.FieldNumber))
+            .Should().NotContain(("published_snapshot_sha256", 19));
+    }
+
+    [Fact]
     public void Seal_ShouldCloneInputAndExcludeDigestFromItsOwnHash()
     {
         var input = BuildProfile("profile-v1");

@@ -58,7 +58,7 @@ public sealed class AgentRunDispatcher : IChannelLlmReplyRunDispatcher
             },
             Runtime = new EnvelopeRuntime
             {
-                Deduplication = new DeliveryDeduplication
+                DeliveryIdentity = new DeliveryIdentity
                 {
                     OperationId = commandId,
                 },

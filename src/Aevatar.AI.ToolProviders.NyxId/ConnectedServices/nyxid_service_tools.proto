@@ -16,25 +16,6 @@ enum NyxIdServiceAccessTokenSource {
   NYX_ID_SERVICE_ACCESS_TOKEN_SOURCE_ORGANIZATION = 2;
 }
 
-enum NyxIdServiceHttpMethod {
-  NYX_ID_SERVICE_HTTP_METHOD_UNSPECIFIED = 0;
-  NYX_ID_SERVICE_HTTP_METHOD_GET = 1;
-  NYX_ID_SERVICE_HTTP_METHOD_HEAD = 2;
-  NYX_ID_SERVICE_HTTP_METHOD_OPTIONS = 3;
-  NYX_ID_SERVICE_HTTP_METHOD_POST = 4;
-  NYX_ID_SERVICE_HTTP_METHOD_PUT = 5;
-  NYX_ID_SERVICE_HTTP_METHOD_PATCH = 6;
-  NYX_ID_SERVICE_HTTP_METHOD_DELETE = 7;
-}
-
-enum NyxIdServiceHeaderName {
-  NYX_ID_SERVICE_HEADER_NAME_UNSPECIFIED = 0;
-  NYX_ID_SERVICE_HEADER_NAME_ACCEPT = 1;
-  NYX_ID_SERVICE_HEADER_NAME_CONTENT_TYPE = 2;
-  NYX_ID_SERVICE_HEADER_NAME_IF_MATCH = 3;
-  NYX_ID_SERVICE_HEADER_NAME_IF_NONE_MATCH = 4;
-}
-
 message NyxIdProxyRouteConstraint {
   oneof route {
     string catalog_service_id = 1;
@@ -53,7 +34,8 @@ message NyxIdServiceInstance {
   optional string node_id = 8;
   NyxIdServiceCredentialSource credential_source = 9;
   NyxIdServiceAccessTokenSource access_token_source = 10;
-  string proxy_spec_service_id = 11;
+  reserved 11;
+  reserved "proxy_spec_service_id";
   NyxIdProxyRouteConstraint route_constraint = 12;
   bool credential_allowed = 13;
 }
@@ -74,25 +56,6 @@ message NyxIdServiceRouteRequest {
   }
 }
 
-message NyxIdServiceQueryEntry {
-  string name = 1;
-  string value = 2;
-}
-
-message NyxIdServiceHeader {
-  NyxIdServiceHeaderName name = 1;
-  string value = 2;
-}
-
-message NyxIdServiceRequest {
-  string user_service_id = 1;
-  NyxIdServiceHttpMethod method = 2;
-  string relative_path = 3;
-  repeated NyxIdServiceQueryEntry query = 4;
-  repeated NyxIdServiceHeader headers = 5;
-  optional string json_body = 6;
-}
-
 message NyxIdServiceInventoryResult {
   repeated NyxIdServiceInstance instances = 1;
 }
@@ -109,9 +72,4 @@ message NyxIdServiceDeleteResult {
   string user_service_id = 1;
   bool deleted = 2;
   string response_json = 3;
-}
-
-message NyxIdServiceRequestResult {
-  string user_service_id = 1;
-  string response_json = 2;
 }

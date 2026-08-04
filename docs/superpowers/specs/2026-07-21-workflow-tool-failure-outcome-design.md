@@ -37,8 +37,11 @@ provider or workflow-native tool explicitly returns a typed failure.
 
 ## Boundary Mapping
 
-`AgentWorkflowToolSourceAdapter` finalizes the existing provider-owned
-`AgentToolReceipt` and maps receipt status as follows:
+`AgentWorkflowToolSourceAdapter` finalizes the provider-owned
+`AgentToolReceipt` and maps receipt status as follows. Providers whose
+classification depends on execution-only facts may return the receipt together
+with the result; existing tools retain post-result `CreateResultReceipt`.
+Both paths use the same finalizer:
 
 - `Success` becomes `WorkflowToolExecutionResult.Success`;
 - `Error`, `Denied`, and `AuthorizationRequired` become
@@ -47,10 +50,12 @@ provider or workflow-native tool explicitly returns a typed failure.
   `ErrorMessage`; it never copies a raw downstream response into the run error;
 - approval pending continues through the existing typed suspension path.
 
-NyxID already implements `CreateResultReceipt` for proxy tools. Its receipt
-factory recognizes the documented outer proxy envelope and maps a 503 response
-to `AgentToolReceiptStatus.Error`. This design reuses that provider boundary and
-does not duplicate NyxID or HTTP rules in Workflow Core.
+NyxID's legacy proxy path implements `CreateResultReceipt` from explicit route
+arguments and the documented outer proxy envelope. Proof-bound proxy execution
+instead returns an execution-time receipt because the proof owns route identity
+and only the HTTP/file-ingress boundary knows whether dispatch succeeded. This
+design reuses that provider boundary and does not duplicate NyxID or HTTP rules
+in Workflow Core.
 
 Workflow-native document extraction, spreadsheet extraction, connected-service
 resource fetch, and file submission tools change their existing `Error(...)`

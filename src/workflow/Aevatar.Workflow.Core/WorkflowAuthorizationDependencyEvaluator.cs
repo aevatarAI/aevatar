@@ -118,6 +118,12 @@ public static class WorkflowAuthorizationDependencyEvaluator
         var toolName = rawToolName.Trim();
         if (ContainsTemplate(toolName))
             throw Invalid(invocation.Step, "tool name must be static.");
+        if (IsDirectNyxIdConnectedServiceTool(toolName))
+        {
+            throw MigrationInvalid(
+                invocation.Step,
+                "direct NyxID connected-service tool names are no longer supported; select an operation through nyxid_proxy and rebind.");
+        }
 
         if (!RequiresExternalCapabilityAdmission(toolName))
         {
@@ -130,13 +136,16 @@ public static class WorkflowAuthorizationDependencyEvaluator
         var selector = invocation.Step.Capability?.Clone() ?? new ExternalWorkflowCapabilitySelector();
         if (selector.SelectorCase is not (
                 ExternalWorkflowCapabilitySelector.SelectorOneofCase.None or
-                ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation))
+                ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation or
+                ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest))
         {
             throw SelectionInvalid(invocation.Step, "nyxid_proxy requires a NyxID operation selector.");
         }
 
         if (selector.SelectorCase == ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation)
             ValidateNyxIdSelector(invocation.Step, selector.NyxIdOperation);
+        else if (selector.SelectorCase == ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest)
+            ValidateNyxIdRequestSelector(invocation.Step, selector.NyxIdRequest);
 
         return new ExternalToolInvocationSpec
         {
@@ -179,6 +188,12 @@ public static class WorkflowAuthorizationDependencyEvaluator
 
         if (ContainsTemplate(selector.UserServiceId) || ContainsTemplate(selector.EndpointId))
             throw SelectionInvalid(step, "NyxID service and operation selectors must be static.");
+    }
+
+    private static void ValidateNyxIdRequestSelector(StepDefinition step, NyxIdRequestSelector selector)
+    {
+        if (!NyxIdRequestSelectorContract.TryNormalize(selector, out _, out var error))
+            throw SelectionInvalid(step, $"NyxID {error}.");
     }
 
     private static void ValidateNyxIdRuntimeArguments(StepDefinition step)
@@ -363,6 +378,10 @@ public static class WorkflowAuthorizationDependencyEvaluator
     private static bool ContainsTemplate(string value) =>
         value.Contains("${", StringComparison.Ordinal);
 
+    private static bool IsDirectNyxIdConnectedServiceTool(string toolName) =>
+        toolName.StartsWith("nyxid_", StringComparison.OrdinalIgnoreCase) &&
+        toolName.Contains("__", StringComparison.Ordinal);
+
     private static WorkflowExternalCapabilityValidationException Invalid(
         StepDefinition step,
         string detail) =>
@@ -441,11 +460,17 @@ public static class WorkflowAuthorizationDependencyEvaluator
     private static ExternalWorkflowCapabilitySelector? SafeSelector(
         ExternalWorkflowCapabilitySelector? selector)
     {
-        if (selector?.SelectorCase !=
-            ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation)
+        if (selector?.SelectorCase is not (
+                ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation or
+                ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest))
         {
             return null;
         }
+
+        if (selector.SelectorCase == ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest)
+            return string.IsNullOrWhiteSpace(selector.NyxIdRequest.UserServiceId)
+                ? null
+                : selector.Clone();
 
         var userServiceId = selector.NyxIdOperation.UserServiceId;
         var endpointId = selector.NyxIdOperation.EndpointId;

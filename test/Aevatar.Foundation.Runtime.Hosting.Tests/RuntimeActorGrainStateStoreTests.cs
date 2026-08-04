@@ -2,6 +2,7 @@ using System.Reflection;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using FluentAssertions;
@@ -139,6 +140,69 @@ public sealed class RuntimeActorGrainStateStoreTests
         stateProxy.State.AgentStateTypeName.Should().BeNull();
         stateProxy.State.AgentStateSnapshot.Should().BeNull();
         stateProxy.WriteCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RuntimeActorPublicationStateStore_ShouldPersistTypedCheckpointSeparatelyFromBusinessSnapshot()
+    {
+        var runtimeState = DispatchProxy.Create<IPersistentState<RuntimeActorGrainState>, RuntimeActorPersistentStateProxy>();
+        var stateProxy = (RuntimeActorPersistentStateProxy)(object)runtimeState;
+        stateProxy.State.AgentId = "actor-publication";
+        stateProxy.State.AgentStateSnapshot = new byte[] { 1, 2, 3 };
+        var store = new RuntimeActorGrainCommittedStatePublicationStateStore(runtimeState);
+
+        await store.InitializeAsync("actor-publication", 3);
+        await store.RecordFailureAsync(
+            "actor-publication",
+            3,
+            new StateEvent
+            {
+                AgentId = "actor-publication",
+                EventId = "event-4",
+                Version = 4,
+            },
+            CommittedStatePublicationFailureStage.AdapterAcceptance,
+            new InvalidOperationException("injected"));
+        var advanced = await store.AdvanceAsync(
+            "actor-publication",
+            3,
+            new StateEvent
+            {
+                AgentId = "actor-publication",
+                EventId = "event-4",
+                Version = 4,
+            });
+
+        advanced.PublishedVersion.Should().Be(4);
+        advanced.PublishedEventId.Should().Be("event-4");
+        advanced.Failure.Should().BeNull();
+        stateProxy.State.AgentStateSnapshot.Should().Equal(1, 2, 3);
+        var persisted = CommittedStatePublicationState.Parser.ParseFrom(
+            stateProxy.State.CommittedStatePublicationState);
+        persisted.Should().BeEquivalentTo(advanced);
+        stateProxy.WriteCount.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task PublicationStateResolution_WithBoundRuntimeState_ShouldUseActorOwnedStore()
+    {
+        var runtimeState = DispatchProxy.Create<IPersistentState<RuntimeActorGrainState>, RuntimeActorPersistentStateProxy>();
+        var stateProxy = (RuntimeActorPersistentStateProxy)(object)runtimeState;
+        stateProxy.State.AgentId = "actor-publication-di";
+        var services = new ServiceCollection();
+        services.AddAevatarFoundationRuntimeOrleans();
+        using var provider = services.BuildServiceProvider();
+        var accessor = provider.GetRequiredService<IRuntimeActorStateBindingAccessor>();
+
+        using (accessor.Bind(runtimeState))
+        {
+            var store = provider.GetRequiredService<ICommittedStatePublicationStateStore>();
+            await store.InitializeAsync("actor-publication-di", 7);
+        }
+
+        var persisted = CommittedStatePublicationState.Parser.ParseFrom(
+            stateProxy.State.CommittedStatePublicationState);
+        persisted.PublishedVersion.Should().Be(7);
     }
 
     [Fact]

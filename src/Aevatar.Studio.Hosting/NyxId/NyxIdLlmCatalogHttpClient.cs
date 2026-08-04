@@ -55,6 +55,9 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
         return await ComposeUserServiceInventoryAsync(result, bearerToken, ct).ConfigureAwait(false);
     }
 
+    public Task<NyxIdLlmServicesResult> GetFreshServicesAsync(string bearerToken, CancellationToken ct) =>
+        GetServicesAsync(bearerToken, ct);
+
     public async Task<NyxIdLlmService> ProvisionAsync(
         string bearerToken,
         string provisionEndpointId,

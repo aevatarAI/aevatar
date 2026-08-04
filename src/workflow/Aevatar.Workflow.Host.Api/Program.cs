@@ -24,6 +24,7 @@ builder.AddAevatarDefaultHost(
         options.EnableWebSockets = true;
     });
 builder.AddAevatarPlatform();
+builder.AddWorkflowAgentToolAdmission();
 // NyxID-backed current-user resolver plus aevatar admin access policy.
 builder.Services.AddNyxIdPlatformAuthorization(builder.Configuration);
 builder.Services.AddNyxIdTools(options =>

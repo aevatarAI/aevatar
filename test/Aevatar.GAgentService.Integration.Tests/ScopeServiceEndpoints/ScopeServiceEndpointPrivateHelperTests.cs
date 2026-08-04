@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Claims;
+using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -18,6 +19,8 @@ using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.ScopeScripts;
 using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Services;
+using Aevatar.Workflow.Abstractions;
+using WorkflowCallerCredential = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Governance.Abstractions;
@@ -106,11 +109,14 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
                     new UserConfig(
                         DefaultModel: "user-model",
                         PreferredLlmRoute: "/api/v1/proxy/s/legacy",
-                        LlmSelection: new UserLlmSelectionValue(
-                            UserLlmSelectionKind.NyxIdUserService,
-                            " /preferred-route ",
-                            "us-preferred",
-                            "preferred"))))
+                        LlmSelection: new LLMSelection
+                        {
+                            RouteKind = LLMRouteKind.NyxIdUserService,
+                            RouteValue = " /preferred-route ",
+                            NyxIdUserServiceId = "us-preferred",
+                            ServiceSlugSnapshot = "preferred",
+                            ModelSelection = new LLMModelSelection { Kind = LLMModelSelectionKind.ProviderDefault },
+                        })))
                 .BuildServiceProvider(),
         };
         successContext.Request.Headers.Authorization = "Bearer token-123";
@@ -164,11 +170,14 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
     {
         const string prefixedModel = "chrono-llm/gpt-5.5";
         var selection = useUnspecifiedSelection
-            ? new UserLlmSelectionValue(
-                UserLlmSelectionKind.Unspecified,
-                "/api/v1/proxy/s/typed-but-ignored",
-                "us-ignored",
-                "ignored")
+            ? new LLMSelection
+            {
+                RouteKind = LLMRouteKind.Unspecified,
+                RouteValue = "/api/v1/proxy/s/typed-but-ignored",
+                NyxIdUserServiceId = "us-ignored",
+                ServiceSlugSnapshot = "ignored",
+                ModelSelection = new LLMModelSelection { Kind = LLMModelSelectionKind.Unspecified },
+            }
             : null;
         var context = new DefaultHttpContext
         {
@@ -370,6 +379,41 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
     }
 
     [Fact]
+    public void ScopeServiceEndpointHelpers_ShouldPreserveTypedFileRefInput()
+    {
+        var request = JsonSerializer.Deserialize<ScopeServiceEndpoints.StreamScopeServiceHttpRequest>(
+            """
+            {
+              "prompt": "inspect the sanitized attachment",
+              "inputParts": [
+                {
+                  "type": "file",
+                  "fileRef": {
+                    "fileId": "file-alpha",
+                    "artifactId": "workflow-file://file-alpha",
+                    "sourceKind": "chat_input",
+                    "fileName": "probe.pdf",
+                    "mediaType": "application/pdf",
+                    "ownerScopeId": "scope-alpha"
+                  }
+                }
+              ]
+            }
+            """,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        var mappedParts = InvokePrivateStatic<IReadOnlyList<ChatInputContentPart>?>(
+            "MapInputParts",
+            request!.InputParts);
+
+        var fileRef = mappedParts.Should().ContainSingle().Which.FileRef;
+        fileRef.Should().NotBeNull();
+        fileRef!.FileId.Should().Be("file-alpha");
+        fileRef.ArtifactId.Should().Be("workflow-file://file-alpha");
+        fileRef.OwnerScopeId.Should().Be("scope-alpha");
+    }
+
+    [Fact]
     public void ScopeServiceEndpointHelpers_ShouldMapInputParts_AndBuildStreamInvocationRequest()
     {
         var mappedParts = InvokePrivateStatic<IReadOnlyList<ChatInputContentPart>?>(
@@ -401,7 +445,10 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
             " chat ",
             "prompt",
             new Dictionary<string, string> { ["trace-id"] = "abc" },
-            new WorkflowCallerCredential("connector-token"),
+            new WorkflowCallerCredential(
+                "delegation-alpha",
+                Kind: Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.ProxyDelegation,
+                SourceReadableUserBearerToken: "source-alpha"),
             " rev-1 ",
             " app-x ");
         invocation.Identity.AppId.Should().Be("app-x");
@@ -410,7 +457,11 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
         invocation.RevisionId.Should().Be("rev-1");
         var payload = invocation.Payload!.Unpack<ChatRequestEvent>();
         payload.Metadata["trace-id"].Should().Be("abc");
-        payload.ConnectorHttpAuthorization.Should().Be("Bearer connector-token");
+        payload.ConnectorHttpAuthorization.Should().Be("Bearer delegation-alpha");
+        payload.CallerNyxIdCredentialKind.Should().Be(
+            AgentToolNyxIdCredentialKindPayload.ProxyDelegation);
+        payload.CallerSourceReadableNyxIdBearerToken.Should().Be("source-alpha");
+        payload.LlmControl.Should().BeNull();
 
         InvokePrivateStatic<string>("ResolveDefaultScopeServiceId", options).Should().Be("default");
     }
@@ -454,6 +505,7 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
             "main",
             "yaml",
             new Dictionary<string, string>(StringComparer.Ordinal),
+            ExternalCapabilityExecutionMode.Durable,
             "scope-a");
         var deployments = new ServiceDeploymentCatalogSnapshot(
             "scope-a:default:default:orders",
@@ -474,6 +526,7 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
             "main",
             "yaml",
             new Dictionary<string, string>(StringComparer.Ordinal),
+            ExternalCapabilityExecutionMode.Durable,
             "scope-a");
         var fallbackDeployment = InvokePrivateStatic<ServiceDeploymentSnapshot?>(
             "ResolveRunDeployment",
@@ -491,6 +544,7 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
             "main",
             "yaml",
             new Dictionary<string, string>(StringComparer.Ordinal),
+            ExternalCapabilityExecutionMode.Durable,
             "scope-a");
         InvokePrivateStatic<ServiceDeploymentSnapshot?>("ResolveRunDeployment", missingBinding, service, deployments)
             .Should().BeNull();
@@ -625,6 +679,7 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
             "scope-a",
             service,
@@ -640,6 +695,7 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
             "scope-a",
             service,
@@ -655,6 +711,7 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
             "scope-a",
             service,
@@ -670,6 +727,7 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
             "scope-a",
             service,
@@ -685,6 +743,7 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-b"),
             "scope-a",
             service,
@@ -700,6 +759,7 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
             "scope-a",
             service,

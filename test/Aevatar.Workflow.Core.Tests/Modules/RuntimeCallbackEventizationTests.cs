@@ -796,15 +796,18 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
-    public async Task LlmCallModule_ShouldReuseDispatchDedupState_WhenDispatchIsReplayed()
+    public async Task LlmCallModule_ShouldReuseDispatchOperationIdentity_WhenDispatchIsReplayed()
     {
+        PendingLlmCallState.Descriptor.FindFieldByName("dispatch_operation_id")!
+            .FieldNumber.Should().Be(7);
+
         var module = new LLMCallModule();
         var ctx = new SchedulingContext();
         var requestEnvelope = Wrap(new StepRequestEvent
         {
             StepId = "step-1",
             StepType = "llm_call",
-            RunId = "run-llm-dedup",
+            RunId = "run-llm-operation",
             Input = "prompt",
             TargetRole = "assistant",
             Parameters = { ["timeout_ms"] = "5000" },
@@ -818,8 +821,8 @@ public class RuntimeCallbackEventizationTests
         firstDispatch.TargetActorId.Should().NotBeNullOrWhiteSpace();
         firstDispatch.Options.Should().NotBeNull();
         firstDispatch.Options!.Delivery.Should().NotBeNull();
-        var dedupOriginId = firstDispatch.Options.Delivery!.DeduplicationOperationId;
-        dedupOriginId.Should().StartWith("workflow-llm-dispatch:");
+        var dispatchOperationId = firstDispatch.Options.Delivery!.OperationId;
+        dispatchOperationId.Should().StartWith("workflow-llm-dispatch:");
 
         var state = ctx.LoadState<LLMCallModuleState>("llm_call");
         var pending = state.PendingBySessionId[firstIntent.SessionId];
@@ -836,11 +839,11 @@ public class RuntimeCallbackEventizationTests
         var replayIntent = (WorkflowLlmExecutionIntent)replayDispatch.Event;
         replayIntent.SessionId.Should().Be(firstIntent.SessionId);
         replayDispatch.TargetActorId.Should().Be(firstDispatch.TargetActorId);
-        replayDispatch.Options!.Delivery!.DeduplicationOperationId.Should().Be(dedupOriginId);
+        replayDispatch.Options!.Delivery!.OperationId.Should().Be(dispatchOperationId);
 
         ctx.LoadState<LLMCallModuleState>("llm_call")
             .PendingBySessionId[firstIntent.SessionId]
-            .DispatchDedupId.Should().Be(dedupOriginId);
+            .DispatchOperationId.Should().Be(dispatchOperationId);
     }
 
     [Fact]

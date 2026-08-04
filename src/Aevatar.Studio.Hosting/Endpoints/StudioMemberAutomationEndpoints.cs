@@ -50,6 +50,7 @@ internal static class StudioMemberAutomationEndpoints
         StudioMemberAutomationPreflightRequest body,
         [FromServices] IStudioMemberWorkflowSchedulePort schedules,
         [FromServices] IExternalIdentityBindingQueryPort bindingQuery,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
@@ -62,7 +63,7 @@ internal static class StudioMemberAutomationEndpoints
                     http,
                     bindingQuery,
                     ct);
-            return Results.Ok(await schedules.PreflightAsync(
+            var authorization = await schedules.PreflightForWriteAsync(
                 BuildScheduleRequest(
                     scopeId,
                     teamId,
@@ -70,7 +71,18 @@ internal static class StudioMemberAutomationEndpoints
                     body,
                     authority.AuthenticatedOwner,
                     authority.ProvisioningBearerToken),
-                ct));
+                ct);
+            if (authorization.Success)
+                return Results.Ok(authorization);
+
+            loggerFactory.CreateLogger(StudioMemberAutomationAuditContract.Category).LogWarning(
+                "Team automation preflight authorization failed. scope={ScopeId} team={TeamId} member={MemberId} " +
+                "failureCode={FailureCode}",
+                scopeId,
+                teamId,
+                memberId,
+                authorization.FailureCode);
+            return MapPreflightFailure(authorization.FailureCode);
         }
         catch (Exception ex) when (TryMapError(ex, scopeId, teamId, memberId, out var error))
         {
@@ -520,6 +532,86 @@ internal static class StudioMemberAutomationEndpoints
 
     private static IResult AutomationNotFound() =>
         NotFound("TEAM_AUTOMATION_NOT_FOUND", "Team automation resource was not found.");
+
+    private static IResult MapPreflightFailure(
+        ScheduledInvocationAuthorizationFailureCode failureCode)
+    {
+        var (statusCode, code, message, retryable) = failureCode switch
+        {
+            ScheduledInvocationAuthorizationFailureCode.TargetInvalid => (
+                StatusCodes.Status400BadRequest,
+                "TEAM_AUTOMATION_AUTHORIZATION_TARGET_INVALID",
+                "The automation authorization target is invalid.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.OwnerInvalid => (
+                StatusCodes.Status400BadRequest,
+                "TEAM_AUTOMATION_AUTHORIZATION_OWNER_INVALID",
+                "The authenticated authorization owner is invalid.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.OwnerMismatch => (
+                StatusCodes.Status403Forbidden,
+                "TEAM_AUTOMATION_AUTHORIZATION_OWNER_MISMATCH",
+                "The authorization owner does not match this automation.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.ServiceNotFound => (
+                StatusCodes.Status403Forbidden,
+                "TEAM_AUTOMATION_AUTHORIZATION_SERVICE_NOT_FOUND",
+                "One or more required services are not available to this automation.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.ServiceAmbiguous => (
+                StatusCodes.Status403Forbidden,
+                "TEAM_AUTOMATION_AUTHORIZATION_SERVICE_AMBIGUOUS",
+                "A required service could not be identified unambiguously.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.ServiceAccessDenied => (
+                StatusCodes.Status403Forbidden,
+                "TEAM_AUTOMATION_AUTHORIZATION_SERVICE_ACCESS_DENIED",
+                "This automation is not authorized to use one or more required services.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.NodeGrantMissing => (
+                StatusCodes.Status403Forbidden,
+                "TEAM_AUTOMATION_AUTHORIZATION_NODE_GRANT_MISSING",
+                "This automation is missing a required service permission.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.AuthorizationPlanChanged => (
+                StatusCodes.Status409Conflict,
+                "TEAM_AUTOMATION_AUTHORIZATION_PLAN_CHANGED",
+                "The authorization plan changed. Run preflight again.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound => (
+                StatusCodes.Status503ServiceUnavailable,
+                "TEAM_AUTOMATION_AUTHORIZATION_SNAPSHOT_NOT_FOUND",
+                "Authorization data is temporarily unavailable. Retry this request.",
+                true),
+            ScheduledInvocationAuthorizationFailureCode.SnapshotStale => (
+                StatusCodes.Status503ServiceUnavailable,
+                "TEAM_AUTOMATION_AUTHORIZATION_SNAPSHOT_STALE",
+                "Authorization data is temporarily stale. Retry this request.",
+                true),
+            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable => (
+                StatusCodes.Status503ServiceUnavailable,
+                "TEAM_AUTOMATION_AUTHORIZATION_DURABLE_AUTHORIZATION_UNAVAILABLE",
+                "Authorization is temporarily unavailable. Retry this request.",
+                true),
+            ScheduledInvocationAuthorizationFailureCode.CatalogProjectionPending => (
+                StatusCodes.Status503ServiceUnavailable,
+                "TEAM_AUTOMATION_AUTHORIZATION_PROJECTION_PENDING",
+                "The authorization catalog is still being projected. Retry this request.",
+                true),
+            ScheduledInvocationAuthorizationFailureCode.UnknownEnum => (
+                StatusCodes.Status400BadRequest,
+                "TEAM_AUTOMATION_AUTHORIZATION_UNKNOWN_ENUM",
+                "The automation authorization request contains an unsupported value.",
+                false),
+            _ => (
+                StatusCodes.Status400BadRequest,
+                "TEAM_AUTOMATION_AUTHORIZATION_FAILED",
+                "Authorization could not continue.",
+                false),
+        };
+
+        return Results.Json(new { code, message, retryable }, statusCode: statusCode);
+    }
 
     private static string ToPlanConflictCode(string code) => code switch
     {

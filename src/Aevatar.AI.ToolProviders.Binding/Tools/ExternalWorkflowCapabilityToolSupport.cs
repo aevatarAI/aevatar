@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Google.Protobuf;
 
@@ -35,7 +36,9 @@ internal static class ExternalWorkflowCapabilityToolSupport
         access = new ExternalWorkflowCapabilityAccessContext(
             scopeId,
             callerId,
-            AgentToolRequestContext.NyxIdAccessToken,
+            ResolveCallerCredential(
+                AgentToolRequestContext.NyxIdCredentialKind,
+                AgentToolRequestContext.NyxIdAccessToken),
             AgentToolRequestContext.NyxIdOrgToken);
         error = null;
         return true;
@@ -43,4 +46,18 @@ internal static class ExternalWorkflowCapabilityToolSupport
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static NyxIdCallerCredentialSelection? ResolveCallerCredential(
+        AgentToolNyxIdCredentialKind kind,
+        string? bearerToken) =>
+        string.IsNullOrWhiteSpace(bearerToken)
+            ? null
+            : kind switch
+            {
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer =>
+                    NyxIdCallerCredentialSelection.SourceReadableUserBearer(bearerToken),
+                AgentToolNyxIdCredentialKind.ProxyDelegation =>
+                    NyxIdCallerCredentialSelection.ProxyDelegation(bearerToken),
+                _ => null,
+            };
 }

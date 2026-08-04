@@ -106,7 +106,11 @@ public sealed class StudioMemberService : IStudioMemberService
         if (request.Workflow is { } workflow)
         {
             var suppliedAdmission = request.CapabilityAdmission;
-            var existingPlan = workflow.CapabilityAdmissionPlan ?? suppliedAdmission?.ExistingPlan;
+            var callerId = suppliedAdmission?.CallerId ?? string.Empty;
+            var callerCredential = suppliedAdmission?.NyxIdCallerCredential;
+            var organizationBearerToken = suppliedAdmission?.NyxIdOrganizationBearerToken;
+            var existingPlan = (workflow.CapabilityAdmissionPlan ?? suppliedAdmission?.ExistingPlan)?.Clone();
+            var explicitRequestConfirmations = suppliedAdmission?.ExplicitRequestConfirmations ?? [];
             var executionMode = suppliedAdmission?.ExecutionMode
                 ?? ExternalCapabilityExecutionMode.Interactive;
             var capabilityAdmissionPlan = existingPlan is not null
@@ -115,21 +119,27 @@ public sealed class StudioMemberService : IStudioMemberService
                         existingPlan,
                         workflow.WorkflowYamls,
                         "studio_member_binding_run",
-                        executionMode),
+                        executionMode,
+                        workflow.WorkflowId,
+                        request.RevisionId),
                     ct)
                 : await _capabilityAdmissionService.AdmitAsync(
                     WorkflowExternalCapabilityAdmissionRequest.FromWorkflowYamls(
                     new ExternalWorkflowCapabilityAccessContext(
                         normalizedScopeId,
-                        suppliedAdmission?.CallerId ?? string.Empty,
-                        suppliedAdmission?.NyxIdCallerBearerToken,
-                        suppliedAdmission?.NyxIdOrganizationBearerToken),
+                        callerId,
+                        callerCredential,
+                        organizationBearerToken),
                     workflow.WorkflowYamls,
                     "studio_member_binding_run",
-                    executionMode),
+                    executionMode,
+                    explicitRequestConfirmations,
+                    workflow.WorkflowId,
+                    request.RevisionId),
                     ct);
             request = request with
             {
+                CapabilityAdmission = null,
                 Workflow = workflow with
                 {
                     CapabilityAdmissionPlan = capabilityAdmissionPlan,

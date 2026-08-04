@@ -8,6 +8,7 @@ using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Tests.Primitives;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -186,19 +187,22 @@ public sealed class WorkflowRuntimeModuleBranchTests
         var module = new WorkflowCallModule();
         var ctx = new RecordingWorkflowContext();
 
-        await module.HandleAsync(
-            Wrap(new StepRequestEvent
+        var request = new StepRequestEvent
+        {
+            StepId = "step-b",
+            StepType = "workflow_call",
+            RunId = "parent-run",
+            Input = "payload",
+            Parameters =
             {
-                StepId = "step-b",
-                StepType = "workflow_call",
-                RunId = "parent-run",
-                Input = "payload",
-                Parameters =
-                {
-                    ["workflow"] = "child_flow",
-                    ["lifecycle"] = "scope",
-                },
-            }),
+                ["workflow"] = "child_flow",
+                ["lifecycle"] = "scope",
+            },
+        };
+        request.InputFileRefs.Add(BuildWorkflowFileRef("file-workflow-call"));
+
+        await module.HandleAsync(
+            Wrap(request),
             ctx,
             CancellationToken.None);
 
@@ -209,6 +213,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
         invocation.Input.Should().Be("payload");
         invocation.Lifecycle.Should().Be(WorkflowCallLifecycle.Scope);
         invocation.InvocationId.Should().StartWith("parent-run:workflow_call:step-b:");
+        invocation.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-workflow-call");
     }
 
     [Fact]
@@ -1221,6 +1226,37 @@ public sealed class WorkflowRuntimeModuleBranchTests
             ctx);
 
         errors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void DynamicWorkflowModule_ValidateWorkflowYaml_ShouldRejectExcessiveNesting()
+    {
+        var ctx = new RecordingWorkflowContext();
+        var yaml = WorkflowYamlResourceGuardTests.BuildNestedWorkflow(childLinks: 31);
+
+        var errors = DynamicWorkflowModule.ValidateWorkflowYaml(yaml, ctx);
+
+        errors.Should().ContainSingle()
+            .Which.Should().ContainAll("YAML parse failed", "nesting depth");
+    }
+
+    [Fact]
+    public void DynamicWorkflowModule_ValidateWorkflowYaml_ShouldRejectCollectionAliasCycle()
+    {
+        var ctx = new RecordingWorkflowContext();
+        const string yaml = """
+                            name: cyclic
+                            roles: []
+                            steps: &steps
+                              - id: loop
+                                type: assign
+                                children: *steps
+                            """;
+
+        var errors = DynamicWorkflowModule.ValidateWorkflowYaml(yaml, ctx);
+
+        errors.Should().ContainSingle()
+            .Which.Should().ContainAll("YAML parse failed", "nesting depth");
     }
 
     private static EventEnvelope Wrap(IMessage evt, EnvelopeCallbackContext? callback = null)

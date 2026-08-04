@@ -86,6 +86,12 @@ public sealed record AgentToolExecutionContext(
     public AgentToolInvocationSurface InvocationSurface { get; init; } =
         AgentToolInvocationSurface.Unspecified;
 
+    public AgentChatInvocationContext Chat { get; init; } = AgentChatInvocationContext.Empty;
+
+    public IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef> InputFileRefs { get; init; } = [];
+
+    public AgentToolExecutionOwner ExecutionOwner { get; init; } = new();
+
     public static AgentToolExecutionContext Empty { get; } = new(
         AgentToolRequestIdentity.Empty,
         AgentToolCredentials.Empty,
@@ -113,6 +119,25 @@ public enum AgentToolInvocationSurface
     HumanSession = 1,
     WorkflowToolCall = 2,
     WorkflowLlmToolLoop = 3,
+}
+
+public enum AgentChatInvocationSurface
+{
+    Unspecified = 0,
+    NyxIdAssistant = 1,
+    WorkflowChat = 2,
+}
+
+public sealed record AgentChatInvocationContext(
+    AgentChatInvocationSurface Surface,
+    string? ConversationId,
+    string? TurnId,
+    string? TaskId,
+    string? StepId,
+    string? ActionRequestId)
+{
+    public static AgentChatInvocationContext Empty { get; } =
+        new(AgentChatInvocationSurface.Unspecified, null, null, null, null, null);
 }
 
 public sealed record AgentToolVisibilityScope(IReadOnlySet<string>? AllowedToolNames)
@@ -151,15 +176,41 @@ public sealed record AgentToolVisibilityScope(IReadOnlySet<string>? AllowedToolN
     }
 }
 
-public sealed record AgentToolRequestIdentity(string? RequestId, string? CallId, string? IdempotencyKey = null)
+public sealed record AgentToolRequestIdentity(
+    string? RequestId,
+    string? CallId,
+    string? IdempotencyKey,
+    long IssuedAtUnixMs,
+    string? OperationId = null)
 {
-    public static AgentToolRequestIdentity Empty { get; } = new(null, null, null);
+    public AgentToolRequestIdentity(
+        string? requestId,
+        string? callId,
+        string? idempotencyKey = null)
+        : this(
+            requestId,
+            callId,
+            idempotencyKey,
+            TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds())
+    {
+    }
+
+    public static AgentToolRequestIdentity Empty { get; } = new(null, null, null, 0);
+}
+
+public enum AgentToolNyxIdCredentialKind
+{
+    Unspecified = 0,
+    SourceReadableUserBearer = 1,
+    ProxyDelegation = 2,
 }
 
 public sealed record AgentToolCredentials(
     string? NyxIdAccessToken,
     string? NyxIdOrgToken,
-    string? SenderNyxIdAccessToken)
+    string? SenderNyxIdAccessToken,
+    AgentToolNyxIdCredentialKind NyxIdCredentialKind = AgentToolNyxIdCredentialKind.Unspecified,
+    string? SourceReadableNyxIdAccessToken = null)
 {
     public static AgentToolCredentials Empty { get; } = new(null, null, null);
 }

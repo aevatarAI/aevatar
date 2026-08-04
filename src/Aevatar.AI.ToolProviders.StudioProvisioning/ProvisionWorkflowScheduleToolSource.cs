@@ -73,6 +73,26 @@ public sealed class CreateStudioMemberToolSource : IAgentToolSource
     }
 }
 
+public sealed class CreateStudioMemberWorkflowDraftToolSource : IAgentToolSource
+{
+    private readonly IStudioMemberWorkflowDraftProvisioningPort? _provisioningPort;
+
+    public CreateStudioMemberWorkflowDraftToolSource(
+        IStudioMemberWorkflowDraftProvisioningPort? provisioningPort = null)
+    {
+        _provisioningPort = provisioningPort;
+    }
+
+    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<IAgentTool>>(
+            _provisioningPort is null
+                ? []
+                : [new CreateStudioMemberWorkflowDraftTool(_provisioningPort)]);
+    }
+}
+
 public sealed class BindStudioMemberWorkflowToolSource : IAgentToolSource
 {
     private readonly IStudioMemberWorkflowBindingPort? _bindingPort;

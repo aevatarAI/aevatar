@@ -200,6 +200,9 @@ public sealed class AuditRecordSanitizer
             if (!string.Equals(provenance.ScopeId, record.ScopeId, StringComparison.Ordinal))
                 throw new ArgumentException("Execution provenance ScopeId must match the audit scope.", nameof(record));
 
+            if (provenance.Chat is { Surface: AuditChatSurface.Unspecified })
+                throw new ArgumentException("Chat provenance surface must be specified.", nameof(record));
+
             EnsureMatchingIfPresent(provenance.RunId, record.Correlation?.WorkflowRunId, "run identity", record);
             EnsureMatchingIfPresent(
                 provenance.CorrelationId,

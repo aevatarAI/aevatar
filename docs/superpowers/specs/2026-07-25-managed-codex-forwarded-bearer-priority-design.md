@@ -1,122 +1,93 @@
-# Managed Codex Forwarded Bearer Priority Design
+# Managed Codex Workflow Caller Credential Separation
 
 ## Status
 
-Approved for the internal P0 rollout on July 25, 2026.
+Amended on August 2, 2026. The former single-credential priority rule is
+superseded.
 
 ## Product Mismatch
 
-The workflow boundary currently treats the NyxID delegation token as the only
-caller credential when both inbound credentials are present, while transparent
-managed Codex readiness requires the forwarded current-user bearer for NyxID
-identity confirmation and API-key management.
+A NyxID-proxied workflow request can carry two credentials with different
+purposes:
 
-This is a runtime and credential-contract mismatch:
+- `X-NyxID-Delegation-Token` authorizes downstream NyxID REST proxy execution;
+- `Authorization: Bearer ...` is source-readable and supports current-user
+  identity, inventory, and managed Codex readiness.
 
-- `X-NyxID-Delegation-Token` is a short-lived downstream proxy credential;
-- `Authorization: Bearer ...` is the internal P0 current-user authorization
-  credential;
-- the authenticated NyxID subject remains derived from the validated principal,
-  not from either raw credential.
-
-## Production Evidence
-
-The canary workflow reached `codex_exec` on Aevatar image `0c873a03`, with the
-managed feature enabled, the caller admitted by the allowlist, and an active
-credential projection. The workflow boundary reported both an inbound caller
-bearer and NyxID tool credentials.
-
-`WorkflowCallerCredentialExtractor` selected the injected delegation token.
-Managed Codex readiness then sent that token to
-`GET https://nyx-api.chrono-ai.fun/api/v1/users/me`, which returned HTTP 403.
-The execution failed with `nyxid_identity_invalid` before chrono-sandbox was
-called.
+Treating these credentials as alternatives is incorrect. Selecting the
+forwarded bearer makes managed Codex readiness work but sends the wrong token
+to ordinary NyxID REST proxy tools. Selecting delegation makes proxy execution
+work but prevents source-readable readiness.
 
 ## Decision
 
-For the internal P0, workflow HTTP ingress selects its caller credential in this
-order:
+Workflow ingress preserves both purposes in one typed caller-credential
+contract:
 
-1. If an `Authorization` header is present, it must be a valid single
-   `Bearer <token>` value. Use that bearer.
-2. Otherwise, if `X-NyxID-Delegation-Token` is present, it must contain exactly
-   one valid raw token. Use that delegation token.
-3. If neither credential is present, continue without a workflow caller
-   credential.
-4. A malformed selected credential fails closed. Do not fall back from a
-   malformed Authorization header to delegation.
+1. `BearerToken + Kind` is the execution credential. Delegation is selected
+   when the delegation header is present; otherwise the source-readable bearer
+   remains the execution credential for source-only callers.
+2. `SourceReadableUserBearerToken` is an optional supplemental credential. It
+   is valid only when the execution kind is `ProxyDelegation`.
+3. Any present malformed credential fails closed. A valid credential never
+   hides a malformed second credential.
+4. Admission/readiness uses the source-readable credential when available.
+   Runtime proxy execution uses the execution credential.
+5. Service invocation carries the caller credential kind as a typed enum and
+   the supplemental bearer in the dedicated
+   `caller_source_readable_nyx_id_bearer_token` field. It never reuses LLM
+   control or metadata fields for this purpose. Dispatch never infers
+   credential purpose from token equality, route shape, or header precedence.
 
-This keeps the existing typed `WorkflowCallerCredential` contract for P0 and
-does not introduce a second credential field into workflow Actor state.
+The execution and supplemental credentials are stored under distinct
+run-scoped runtime-secret references. Raw values are removed from committed
+events and committed state roots. An unresolved required secret reference
+fails the entire caller-credential resolution.
 
-## Why This Is the P0 Choice
+## Tool Context Mapping
 
-The current internal Aevatar NyxID UserService temporarily forwards the user's
-access token and also injects a delegation token. Prioritizing the forwarded
-bearer lets the same `codex_exec` call create or repair the user's managed Agent
-Key without a manual provisioning step or a NyxID change.
+Workflow tool context maps the purpose-separated credentials as follows:
 
-The alternatives are deliberately deferred:
+- `NyxIdAccessToken`: execution credential;
+- `NyxIdOrgToken`: organization credential, not a source-readable transport;
+- `SenderNyxIdAccessToken`: channel sender credential, not a source-readable transport;
+- `SourceReadableNyxIdAccessToken`: supplemental source-readable credential;
+- `NyxIdCredentialKind`: execution credential kind.
 
-- Carrying both credentials as separate typed fields is the long-term precise
-  contract, but requires protobuf, Actor-state, command, mapping, and migration
-  changes.
-- Disabling delegation injection on the Aevatar UserService would avoid a code
-  change but couples product readiness to mutable NyxID configuration.
+The credential middleware preserves the dedicated supplemental credential for
+proxy delegation without copying it into organization, sender, LLM-control, or
+metadata fields. Existing proxy isolation still clears organization and sender
+credentials before tool execution.
 
-## Boundary and Security Properties
+Managed Codex resolves the source-readable credential. For a typed proxy
+delegation context it must not fall back to the delegation token. Other NyxID
+proxy tools continue to use `NyxIdAccessToken`.
 
-- Caller identity still comes from the authenticated principal and typed native
-  NyxID authority.
-- `scopeId` is not used as a credential identity.
-- The forwarded user bearer is used only because the internal P0 explicitly
-  accepts this weaker boundary.
-- The persistent managed Codex Agent Key remains stored only in `ISecretVault`.
-- Aevatar continues to call the user's exact `chrono-sandbox` UserService with
-  the Vault Agent Key.
-- The chrono-sandbox UserService continues to terminate that persistent key at
-  NyxID and inject a five-minute delegation token into the one-shot runner.
-- No OpenSandbox, runner, Codex provider, or chrono-sandbox credential contract
-  changes.
+## Security Properties
 
-The public rollout remains blocked. Before disabling access-token forwarding,
-the product must either carry both credential purposes as separate typed
-contracts or NyxID must provide a delegated capability that can safely perform
-the required self-service readiness operations.
-
-## Implementation Surface
-
-Change only the workflow HTTP credential extractor and its focused tests:
-
-- prefer a valid forwarded Authorization bearer when both headers exist;
-- retain delegation-only behavior;
-- retain missing-credential behavior;
-- fail closed for malformed Authorization and malformed selected delegation;
-- update canonical NyxID workflow credential documentation and the managed
-  Codex rollout documentation to describe the temporary internal P0 rule.
-
-No API field, protobuf field, Actor identity, Projection Pipeline, or chrono
-transport contract changes.
+- Authenticated caller identity continues to come from the validated principal
+  and typed NyxID authority, not from either raw token.
+- The supplemental field cannot be used with an untyped, durable, or
+  source-readable execution credential.
+- Raw credentials are not logged, projected, returned by APIs, or included in
+  workflow output.
+- Managed Codex Agent Keys remain in `ISecretVault`; this change does not alter
+  chrono-sandbox or NyxID credential contracts.
+- Source-only and delegation-only callers remain supported without inventing a
+  second workflow execution path.
 
 ## Verification
 
 Automated verification must prove:
 
-1. Authorization-only requests expose the bearer.
-2. Delegation-only requests expose the delegation token.
-3. Requests containing both expose the forwarded bearer.
-4. Malformed Authorization fails even when a valid delegation header exists.
-5. A valid Authorization bearer is not rejected because an unselected
-   delegation header is malformed.
-6. Existing workflow capability tests, managed Codex tests, architecture
-   guards, and the full build remain green.
-
-Production verification must use the signed-in local NyxID CLI to invoke the
-canonical inline `codex_exec` workflow. Success requires:
-
-- workflow terminal status succeeded;
-- managed target `managed_sandbox`;
-- output exactly `CODEX_EXEC_READY`;
-- a sanitized diagnostic ID;
-- no manual provisioning call before the workflow;
-- chrono-sandbox creation, execution, and cleanup evidence.
+1. Authorization-only requests produce a typed source-readable credential.
+2. Delegation-only requests preserve `ProxyDelegation` through service dispatch.
+3. Requests containing both preserve distinct execution and source-readable
+   credentials.
+4. Malformed Authorization or delegation fails closed even when the other
+   credential is valid.
+5. Runtime-secret resolution restores both credentials, while a missing
+   supplemental reference fails closed.
+6. Tool context sends delegation to proxy tools and source-readable bearer to
+   managed Codex.
+7. Committed event and state-root publication remove both raw fields.

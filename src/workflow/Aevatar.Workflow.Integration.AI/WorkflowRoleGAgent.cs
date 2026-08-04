@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -5,44 +6,62 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Credentials;
 using Aevatar.Workflow.Core.Primitives;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Integration.AI;
 
 [GAgent(WorkflowRoleConventions.DefaultAgentKind)]
 public class WorkflowRoleGAgent(
+    IAgentToolExecutionPort toolExecutionPort,
     ILLMProviderFactory? llmProviderFactory = null,
     IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
     IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
-    IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
     IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
     IEnumerable<IAgentToolSource>? toolSources = null,
-    IToolApprovalHandler? approvalHandler = null,
     IRemoteToolApprovalPort? remoteToolApprovalPort = null,
     IToolSetRegistry? toolSetRegistry = null,
-    IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
+    IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null,
+    RoleChatExecutionOptions? chatExecutionOptions = null,
+    TimeProvider? timeProvider = null,
+    ISecretVault? chatToolRecoverySecretVault = null)
     : RoleGAgent(
+        toolExecutionPort,
         llmProviderFactory,
         additionalHooks,
         agentMiddlewares,
-        toolMiddlewares,
         llmMiddlewares,
         toolSources,
-        approvalHandler,
-        remoteToolApprovalPort)
+        remoteToolApprovalPort,
+        timeProvider: timeProvider,
+        chatExecutionOptions: chatExecutionOptions,
+        chatToolRecoverySecretVault: chatToolRecoverySecretVault)
 {
     public const string WorkflowAssistantRoleAgentKind = "workflow.assistant-role";
     private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
+    private const string WorkflowCompletionRetryCallbackPrefix = "workflow-llm-completion-retry";
+    private const int WorkflowCompletionRetryInitialDelayMs = 250;
+    private const int WorkflowCompletionRetryMaxDelayMs = 30_000;
     private readonly IToolSetRegistry? _toolSetRegistry = toolSetRegistry;
     private readonly IWorkflowCallerAccessTokenProvider? _callerAccessTokenProvider = callerAccessTokenProvider;
+    private readonly TimeProvider _workflowTimeProvider = timeProvider ?? TimeProvider.System;
+
+    protected override async Task OnActivateAsync(CancellationToken ct)
+    {
+        await base.OnActivateAsync(ct);
+        await DeliverPendingWorkflowCompletionsAsync(ct);
+    }
 
     [EventHandler(AllowSelfHandling = true)]
     public Task HandleWorkflowRoleInitialize(WorkflowRoleInitializeEvent evt)
@@ -71,49 +90,79 @@ public class WorkflowRoleGAgent(
     public async Task HandleWorkflowLlmExecutionIntent(WorkflowLlmExecutionIntent intent)
     {
         ArgumentNullException.ThrowIfNull(intent);
-        await PublishAsync(new WorkflowLlmInvocationStartedEvent
-        {
-            RunId = intent.RunId ?? string.Empty,
-            StepId = intent.StepId ?? string.Empty,
-            SessionId = intent.SessionId ?? string.Empty,
-            RoleActorId = Id,
-        }, TopologyAudience.Parent);
-
         var chatRequest = BuildChatRequestFromWorkflowIntent(intent);
-        using var timeoutCts = intent.TimeoutMs > 0 ? new CancellationTokenSource(intent.TimeoutMs) : null;
-        var streamCt = timeoutCts?.Token ?? CancellationToken.None;
+        await HandleWorkflowIntentAsync(intent, chatRequest, publishStarted: true);
+    }
+
+    private async Task HandleWorkflowIntentAsync(
+        WorkflowLlmExecutionIntent intent,
+        ChatRequestEvent chatRequest,
+        bool publishStarted,
+        RecoveredChatTurn? recovery = null,
+        AgentToolExecutionContext? recoveryToolContext = null,
+        LLMControlContext? recoveryLlmControl = null)
+    {
+        var timeoutMs = ResolveLlmTimeoutMs(intent.TimeoutMs);
+        using var timeoutCts = CreateTurnDeadlineCancellationSource(timeoutMs);
+        var streamCt = timeoutCts.Token;
         try
         {
-            var replayRecord = await ExecuteWorkflowIntentStreamingChatAsync(intent, chatRequest, streamCt);
+            var llmControl = recoveryLlmControl ??
+                             LLMControlContextMapper.FromPayload(chatRequest.LlmControl);
+            var toolContext = recoveryToolContext ??
+                              llmControl.ToToolContext(
+                                  AgentToolExecutionContextMapper.FromPayload(chatRequest.ToolContext));
+            if (publishStarted)
+            {
+                if (!await TryEstablishWorkflowTurnAuthorityAsync(
+                        chatRequest,
+                        toolContext,
+                        streamCt))
+                {
+                    return;
+                }
+
+                await PublishAsync(new WorkflowLlmInvocationStartedEvent
+                {
+                    RunId = intent.RunId ?? string.Empty,
+                    StepId = intent.StepId ?? string.Empty,
+                    SessionId = intent.SessionId ?? string.Empty,
+                    RoleActorId = Id,
+                }, TopologyAudience.Parent, streamCt);
+                streamCt.ThrowIfCancellationRequested();
+            }
+
+            var replayRecord = await ExecuteWorkflowIntentStreamingChatAsync(
+                intent,
+                chatRequest,
+                streamCt,
+                recovery,
+                toolContext,
+                llmControl,
+                turnAuthorityEstablished:
+                    publishStarted ||
+                    recovery?.Stage != RoleChatRecoveryCheckpointStage.ContinuationPrepared);
+            if (replayRecord is null)
+                return;
+            streamCt.ThrowIfCancellationRequested();
             var pendingApproval = DetectPendingApproval(
                 replayRecord.ToolReceipts,
                 replayRecord.ToolCalls,
                 chatRequest);
             if (pendingApproval != null)
             {
-                pendingApproval.WorkflowLlmContinuation = BuildApprovalContinuation(intent);
-                await SuspendForToolApprovalAsync(pendingApproval);
+                pendingApproval.WorkflowLlmContinuation = BuildApprovalContinuation(
+                    intent,
+                    chatRequest.SessionId);
+                await SuspendForToolApprovalAsync(pendingApproval, streamCt);
+                streamCt.ThrowIfCancellationRequested();
                 return;
             }
 
-            var completed = new WorkflowLlmInvocationCompletedEvent
-            {
-                RunId = intent.RunId ?? string.Empty,
-                StepId = intent.StepId ?? string.Empty,
-                SessionId = intent.SessionId ?? string.Empty,
-                RoleActorId = Id,
-                Success = true,
-                Content = replayRecord.Content,
-                ReasoningContent = replayRecord.ReasoningContent,
-                Usage = ToWorkflowUsageMetrics(replayRecord.Usage, replayRecord.Model),
-            };
-            var managedHandoff = ToWorkflowManagedHandoffOutcome(replayRecord.ToolReceipts);
-            if (managedHandoff != null)
-                completed.ManagedHandoff = managedHandoff;
-            await PublishAsync(completed, TopologyAudience.Parent);
             // O1 (06-19-workflow-run-observatory): the committed RoleChatSessionCompletedEvent is the only
             // committed fact carrying both tool_calls (arguments) and tool_receipts (result/success/error);
             // persist the receipts (previously dropped) so the run-artifact fact builder can enrich tool detail.
+            streamCt.ThrowIfCancellationRequested();
             await PersistRoleChatSessionCompletionAsync(
                 chatRequest,
                 replayRecord.Content,
@@ -123,19 +172,50 @@ public class WorkflowRoleGAgent(
                 replayRecord.ContentEmitted,
                 replayRecord.Usage,
                 replayRecord.Model,
-                replayRecord.ToolReceipts);
+                replayRecord.ToolReceipts,
+                replayRecord.ToolResults,
+                outcome: replayRecord.Outcome,
+                failureCode: replayRecord.FailureCode,
+                safeMessage: replayRecord.SafeMessage,
+                authorizationRequired: replayRecord.AuthorizationRequired,
+                ct: streamCt);
         }
-        catch (OperationCanceledException) when (timeoutCts is { IsCancellationRequested: true })
+        catch (Exception ex) when (HasCommittedSessionCompletion(chatRequest.SessionId))
         {
-            await PublishAsync(new WorkflowLlmInvocationCompletedEvent
-            {
-                RunId = intent.RunId ?? string.Empty,
-                StepId = intent.StepId ?? string.Empty,
-                SessionId = intent.SessionId ?? string.Empty,
-                RoleActorId = Id,
-                Success = false,
-                Error = $"LLM request timed out after {intent.TimeoutMs}ms",
-            }, TopologyAudience.Parent);
+            Logger.LogWarning(
+                ex,
+                "[{Role}] Workflow post-commit work failed after terminal authority was acquired. run={RunId} step={StepId} session={SessionId}",
+                RoleName,
+                intent.RunId,
+                intent.StepId,
+                intent.SessionId);
+            await DeliverWorkflowCompletionAsync(
+                chatRequest.SessionId,
+                State.Sessions[chatRequest.SessionId],
+                CancellationToken.None);
+        }
+        catch (ChatToolPostExternalCheckpointException ex)
+        {
+            if (await TryHandlePostExternalToolCheckpointFailureAsync(chatRequest.SessionId, ex))
+                return;
+
+            throw;
+        }
+        catch (Exception) when (
+            timeoutCts.IsCancellationRequested &&
+            !HasCommittedSessionCompletion(chatRequest.SessionId))
+        {
+            await PersistRoleChatSessionCompletionAsync(
+                chatRequest,
+                content: string.Empty,
+                reasoningContent: string.Empty,
+                toolCalls: [],
+                contentParts: [],
+                contentEmitted: false,
+                outcome: RoleChatSessionOutcome.Failed,
+                failureCode: "LLM_TIMEOUT",
+                safeMessage: "The LLM turn exceeded its deadline. Please try again.",
+                clearMatchingPendingApproval: true);
         }
         catch (Exception ex)
         {
@@ -145,15 +225,13 @@ public class WorkflowRoleGAgent(
                 intent.RunId,
                 intent.StepId,
                 intent.SessionId);
-            await PublishAsync(new WorkflowLlmInvocationCompletedEvent
-            {
-                RunId = intent.RunId ?? string.Empty,
-                StepId = intent.StepId ?? string.Empty,
-                SessionId = intent.SessionId ?? string.Empty,
-                RoleActorId = Id,
-                Success = false,
-                Error = SanitizeWorkflowFailureMessage(ex.Message),
-            }, TopologyAudience.Parent);
+            await PersistWorkflowFailureAsync(
+                chatRequest,
+                "LLM_REQUEST_FAILED",
+                ResolveWorkflowFailureMessage(ex),
+                recovery,
+                partialReplay: ResolvePartialReplay(ex),
+                model: ResolveWorkflowModel(chatRequest, recoveryLlmControl));
         }
     }
 
@@ -168,79 +246,528 @@ public class WorkflowRoleGAgent(
         await HandleWorkflowApprovalContinuationAsync(request);
     }
 
-    protected override async Task<ChatMessage> ExecuteApprovedToolAsync(
+    protected override Task HandleRecoveredChatTurnAsync(
+        ChatRequestEvent request,
+        RoleChatRecoveryCheckpoint checkpoint,
+        RecoveredChatTurn recovery,
+        AgentToolExecutionContext recoveryToolContext,
+        LLMControlContext recoveryLlmControl)
+    {
+        var continuation = checkpoint.WorkflowLlmApprovalContinuation;
+        if (continuation is null)
+        {
+            return base.HandleRecoveredChatTurnAsync(
+                request,
+                checkpoint,
+                recovery,
+                recoveryToolContext,
+                recoveryLlmControl);
+        }
+
+        request.WorkflowLlmToolApprovalContinuation = continuation.Clone();
+        if (recovery.Stage == RoleChatRecoveryCheckpointStage.ContinuationPrepared)
+        {
+            return HandleWorkflowApprovalContinuationAsync(
+                request,
+                recoveryToolContext,
+                recoveryLlmControl,
+                recovery,
+                deliverFromContinuationSession: false);
+        }
+
+        return HandleWorkflowIntentAsync(
+            BuildContinuationIntent(continuation),
+            request,
+            publishStarted: false,
+            recovery: recovery,
+            recoveryToolContext: recoveryToolContext,
+            recoveryLlmControl: recoveryLlmControl);
+    }
+
+    protected override async Task<(IAgentTool Tool, AgentToolExecutionContext ExecutionContext)>
+        ResolveApprovedToolExecutionAsync(
         PendingToolApprovalState pending,
         AgentToolExecutionContext toolContext,
         CancellationToken ct)
     {
         var continuation = pending.WorkflowLlmContinuation;
         if (continuation is null)
-            return await base.ExecuteApprovedToolAsync(pending, toolContext, ct);
+            return await base.ResolveApprovedToolExecutionAsync(pending, toolContext, ct);
 
-        var effectiveContext = await RefreshCallerTokenAsync(toolContext, ct);
+        var effectiveContext = string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdAccessToken)
+            ? await RefreshCallerTokenAsync(toolContext, ct)
+            : toolContext;
+        ct.ThrowIfCancellationRequested();
         var catalog = await BuildRequestToolCatalogAsync(ToToolScope(continuation), effectiveContext, ct);
+        ct.ThrowIfCancellationRequested();
         var tool = catalog?.RouteOwnedTools.GetValueOrDefault(pending.ToolName)
                    ?? throw new InvalidOperationException(
                        $"Approved workflow tool '{pending.ToolName}' is no longer available.");
-        using var _ = AgentToolContextScope.Push(effectiveContext);
-        return ChatMessage.Tool(
-            pending.ToolCallId,
-            await tool.ExecuteAsync(pending.ArgumentsJson, ct));
+        return (tool, effectiveContext);
     }
 
-    protected override Task OnApprovalTerminalFailureAsync(
-        PendingToolApprovalState pending,
-        string reasonCode,
-        string reasonMessage)
+    protected override async Task<AgentToolExecutionContext?> TryResolveRecoveryExecutionContextAsync(
+        RoleChatRecoveryCheckpoint checkpoint,
+        CancellationToken ct)
     {
-        var continuation = pending.WorkflowLlmContinuation;
-        return continuation is null
-            ? Task.CompletedTask
-            : PublishWorkflowCompletionAsync(
-                continuation,
-                success: false,
-                content: string.Empty,
-                reasoningContent: string.Empty,
-                usage: null,
-                error: $"{reasonCode}: {SanitizeWorkflowFailureMessage(reasonMessage)}");
+        var durable = checkpoint.CallerDurableCredential;
+        if (checkpoint.RequiresRuntimeCredential &&
+            durable?.SourceKind == DurableCallerCredentialSourceKind.ScheduledDispatch &&
+            durable.ScheduledCallerNyxIdAuthority is { } authority &&
+            !string.IsNullOrWhiteSpace(authority.Platform) &&
+            !string.IsNullOrWhiteSpace(authority.ExternalUserId) &&
+            !string.IsNullOrWhiteSpace(authority.Scope))
+        {
+            var context = AgentToolExecutionContextMapper.FromRecoveryPayload(checkpoint.RecoveryContext) with
+            {
+                ExecutionOwner = AgentToolExecutionOwners.Actor(Id),
+                NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                    authority.Platform,
+                    authority.Tenant,
+                    authority.ExternalUserId,
+                    authority.Scope),
+                SenderBinding = AgentToolExecutionContextMapper.FromRecoveryPayload(checkpoint.RecoveryContext)
+                    .SenderBinding with
+                {
+                    BindingId = string.IsNullOrWhiteSpace(authority.BindingId)
+                        ? AgentToolExecutionContextMapper.FromRecoveryPayload(checkpoint.RecoveryContext)
+                            .SenderBinding.BindingId
+                        : authority.BindingId,
+                },
+            };
+            return await RefreshCallerTokenAsync(context, ct).ConfigureAwait(false);
+        }
+
+        if (checkpoint.RequiresRuntimeCredential)
+        {
+            var context = AgentToolExecutionContextMapper.FromRecoveryPayload(
+                checkpoint.RecoveryContext) with
+            {
+                ExecutionOwner = AgentToolExecutionOwners.Actor(Id),
+            };
+            if (context.NyxIdAuthority.IsComplete &&
+                !string.IsNullOrWhiteSpace(context.NyxIdAuthority.Scope))
+            {
+                return await RefreshCallerTokenAsync(context, ct).ConfigureAwait(false);
+            }
+        }
+
+        return await base.TryResolveRecoveryExecutionContextAsync(checkpoint, ct).ConfigureAwait(false);
     }
 
-    private async Task HandleWorkflowApprovalContinuationAsync(ChatRequestEvent request)
+    protected override async Task<IAgentTool?> ResolveRecoveryToolAsync(
+        RoleChatRecoveryCheckpoint checkpoint,
+        RoleChatToolIntentState intent,
+        AgentToolExecutionContext executionContext,
+        CancellationToken ct)
     {
-        var continuation = request.WorkflowLlmToolApprovalContinuation;
+        var continuation = checkpoint.WorkflowLlmApprovalContinuation;
+        if (continuation is null)
+            return await base.ResolveRecoveryToolAsync(checkpoint, intent, executionContext, ct);
+
+        var catalog = await BuildRequestToolCatalogAsync(
+            ToToolScope(continuation),
+            executionContext,
+            ct).ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
+        return catalog?.RouteOwnedTools.GetValueOrDefault(intent.ToolName)
+               ?? Tools.Get(intent.ToolName);
+    }
+
+    protected override async Task OnRoleChatSessionTerminalCommittedAsync(
+        string sessionId,
+        CancellationToken ct)
+    {
+        await base.OnRoleChatSessionTerminalCommittedAsync(sessionId, ct);
+        if (State.Sessions.TryGetValue(sessionId, out var session) &&
+            IsWorkflowLlmCompletionDeliveryPending(session))
+        {
+            await DeliverWorkflowCompletionAsync(sessionId, session.Clone(), ct);
+        }
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleWorkflowLlmCompletionDeliveryRetryFired(
+        WorkflowLlmCompletionDeliveryRetryFiredEvent retry)
+    {
+        ArgumentNullException.ThrowIfNull(retry);
+        if (string.IsNullOrWhiteSpace(retry.SessionId) ||
+            !State.Sessions.TryGetValue(retry.SessionId, out var session) ||
+            session.WorkflowLlmCompletionDeliveryContext is null ||
+            !string.Equals(
+                ResolveWorkflowLlmCompletionDeliveryId(
+                    session.WorkflowLlmCompletionDeliveryContext),
+                retry.DeliveryId,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var matchesScheduledAttempt =
+            session.WorkflowLlmCompletionDeliveryStatus ==
+                WorkflowLlmCompletionDeliveryStatus.RetryScheduled &&
+            retry.Attempt == session.WorkflowLlmCompletionDeliveryAttempt;
+        var matchesScheduledNextAttemptRecovery =
+            session.WorkflowLlmCompletionDeliveryStatus ==
+                WorkflowLlmCompletionDeliveryStatus.RetryScheduled &&
+            retry.Attempt == session.WorkflowLlmCompletionDeliveryAttempt + 1;
+        var matchesScheduleBeforeCommitRecovery =
+            session.WorkflowLlmCompletionDeliveryStatus ==
+                WorkflowLlmCompletionDeliveryStatus.Prepared &&
+            retry.Attempt == session.WorkflowLlmCompletionDeliveryAttempt + 1;
+        if (!matchesScheduledAttempt &&
+            !matchesScheduledNextAttemptRecovery &&
+            !matchesScheduleBeforeCommitRecovery)
+        {
+            return;
+        }
+
+        if (matchesScheduledNextAttemptRecovery || matchesScheduleBeforeCommitRecovery)
+        {
+            await PersistDomainEventAsync(new WorkflowLlmCompletionDeliveryRetryScheduledEvent
+            {
+                SessionId = retry.SessionId,
+                DeliveryId = retry.DeliveryId,
+                Attempt = retry.Attempt,
+                CallbackId = BuildWorkflowCompletionRetryCallbackId(
+                    retry.SessionId,
+                    retry.DeliveryId),
+                RetryAt = Timestamp.FromDateTimeOffset(_workflowTimeProvider.GetUtcNow()),
+            });
+            session = State.Sessions[retry.SessionId];
+        }
+
+        await DeliverWorkflowCompletionAsync(
+            retry.SessionId,
+            session.Clone(),
+            CancellationToken.None,
+            retry.Attempt);
+    }
+
+    private async Task DeliverPendingWorkflowCompletionsAsync(CancellationToken ct)
+    {
+        var pending = State.Sessions
+            .Where(static entry =>
+                entry.Value.Completed &&
+                entry.Value.WorkflowLlmCompletionDeliveryContext is not null &&
+                IsWorkflowLlmCompletionDeliveryPending(entry.Value))
+            .OrderBy(static entry => entry.Value.Sequence)
+            .Select(static entry => (entry.Key, State: entry.Value.Clone()))
+            .ToArray();
+
+        foreach (var (sessionId, session) in pending)
+            await DeliverWorkflowCompletionAsync(sessionId, session, ct);
+    }
+
+    private async Task DeliverWorkflowCompletionAsync(
+        string roleSessionId,
+        RoleChatSessionState session,
+        CancellationToken ct,
+        int? deliveryAttempt = null)
+    {
+        var context = session.WorkflowLlmCompletionDeliveryContext?.Clone();
+        if (!session.Completed ||
+            context is null ||
+            !IsWorkflowLlmCompletionDeliveryPending(session))
+        {
+            return;
+        }
+
+        var deliveryId = ResolveWorkflowLlmCompletionDeliveryId(context);
+        var attempt = Math.Max(
+            session.WorkflowLlmCompletionDeliveryAttempt,
+            deliveryAttempt ?? 0);
+        var completion = BuildWorkflowCompletionFromCommittedSession(
+            context.RunId,
+            context.StepId,
+            context.SessionId,
+            session);
+        using var deliveryDeadlineCts = CreatePostTurnProcessingCancellationSource();
+        using var deliveryCts = CancellationTokenSource.CreateLinkedTokenSource(
+            ct,
+            deliveryDeadlineCts.Token);
+        var deliveryCt = deliveryCts.Token;
         try
         {
-            var toolContext = await RefreshCallerTokenAsync(
-                AgentToolExecutionContextMapper.FromPayload(request.ToolContext),
+            await PublishAsync(
+                    completion,
+                    TopologyAudience.Parent,
+                    deliveryCt,
+                    new EventEnvelopePublishOptions
+                    {
+                        Delivery = new EventEnvelopeDeliveryOptions
+                        {
+                            OperationId = string.Create(
+                                CultureInfo.InvariantCulture,
+                                $"workflow-llm-terminal:{deliveryId}:outcome:{(int)session.Outcome}"),
+                        },
+                    })
+                .WaitAsync(deliveryCt);
+        }
+        catch (OperationCanceledException ex) when (
+            deliveryDeadlineCts.IsCancellationRequested || ct.IsCancellationRequested)
+        {
+            Logger.LogWarning(
+                ex,
+                "Workflow LLM completion delivery exceeded its deadline; scheduling durable retry. actor={ActorId} session={SessionId} delivery={DeliveryId} attempt={Attempt}",
+                Id,
+                roleSessionId,
+                deliveryId,
+                attempt);
+            await ScheduleWorkflowCompletionRetryAsync(
+                roleSessionId,
+                deliveryId,
+                attempt,
                 CancellationToken.None);
+            return;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "Workflow LLM completion delivery failed; scheduling durable retry. actor={ActorId} session={SessionId} delivery={DeliveryId} attempt={Attempt}",
+                Id,
+                roleSessionId,
+                deliveryId,
+                attempt);
+            await ScheduleWorkflowCompletionRetryAsync(
+                roleSessionId,
+                deliveryId,
+                attempt,
+                CancellationToken.None);
+            return;
+        }
+
+        try
+        {
+            await PersistDomainEventAsync(new WorkflowLlmCompletionDeliveryDispatchedEvent
+            {
+                SessionId = roleSessionId,
+                DeliveryId = deliveryId,
+                Attempt = attempt,
+                DispatchedAtUnixTimeMs =
+                    _workflowTimeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            }, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "Workflow LLM completion dispatch acknowledgement failed; scheduling deduplicated retry. actor={ActorId} session={SessionId} delivery={DeliveryId} attempt={Attempt}",
+                Id,
+                roleSessionId,
+                deliveryId,
+                attempt);
+            await ScheduleWorkflowCompletionRetryAsync(
+                roleSessionId,
+                deliveryId,
+                attempt,
+                CancellationToken.None);
+        }
+    }
+
+    private async Task ScheduleWorkflowCompletionRetryAsync(
+        string sessionId,
+        string deliveryId,
+        int failedAttempt,
+        CancellationToken ct)
+    {
+        var currentAttempt = State.Sessions.TryGetValue(sessionId, out var current)
+            ? current.WorkflowLlmCompletionDeliveryAttempt
+            : 0;
+        var attempt = Math.Max(currentAttempt, failedAttempt) + 1;
+        var retryDelayMs = CalculateWorkflowCompletionRetryDelayMs(attempt);
+        var dueTime = TimeSpan.FromMilliseconds(retryDelayMs);
+        var retryAt = _workflowTimeProvider.GetUtcNow().Add(dueTime);
+        var callbackId = BuildWorkflowCompletionRetryCallbackId(sessionId, deliveryId);
+        var retry = new WorkflowLlmCompletionDeliveryRetryFiredEvent
+        {
+            SessionId = sessionId,
+            DeliveryId = deliveryId,
+            Attempt = attempt,
+        };
+        var retryOptions = BuildWorkflowCompletionRetryOptions(callbackId, attempt);
+        try
+        {
+            var scheduled = await TrySchedulePostTurnDurableTimeoutAsync(
+                callbackId,
+                dueTime,
+                retry,
+                retryOptions,
+                ct);
+            if (!scheduled)
+            {
+                Logger.LogWarning(
+                    "Workflow LLM completion retry scheduling exceeded its deadline; preserving Prepared outbox for activation recovery. actor={ActorId} session={SessionId} delivery={DeliveryId} attempt={Attempt}",
+                    Id,
+                    sessionId,
+                    deliveryId,
+                    attempt);
+                return;
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.LogWarning(
+                ex,
+                "Workflow LLM completion retry scheduling failed; preserving Prepared outbox for activation recovery. actor={ActorId} session={SessionId} delivery={DeliveryId} attempt={Attempt}",
+                Id,
+                sessionId,
+                deliveryId,
+                attempt);
+            return;
+        }
+
+        await PersistDomainEventAsync(new WorkflowLlmCompletionDeliveryRetryScheduledEvent
+        {
+            SessionId = sessionId,
+            DeliveryId = deliveryId,
+            Attempt = attempt,
+            CallbackId = callbackId,
+            RetryAt = Timestamp.FromDateTimeOffset(retryAt),
+        }, ct);
+    }
+
+    private static string BuildWorkflowCompletionRetryCallbackId(
+        string sessionId,
+        string deliveryId) =>
+        RuntimeCallbackKeyComposer.BuildCallbackId(
+            WorkflowCompletionRetryCallbackPrefix,
+            sessionId,
+            deliveryId);
+
+    private static EventEnvelopePublishOptions BuildWorkflowCompletionRetryOptions(
+        string callbackId,
+        int attempt) =>
+        new()
+        {
+            Delivery = new EventEnvelopeDeliveryOptions
+            {
+                OperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
+                    callbackId,
+                    attempt.ToString(CultureInfo.InvariantCulture)),
+            },
+        };
+
+    private static long CalculateWorkflowCompletionRetryDelayMs(int attempt)
+    {
+        var exponent = Math.Clamp(attempt - 1, 0, 7);
+        var delayMs = WorkflowCompletionRetryInitialDelayMs * (1L << exponent);
+        return Math.Min(delayMs, WorkflowCompletionRetryMaxDelayMs);
+    }
+
+    private WorkflowLlmInvocationCompletedEvent BuildWorkflowCompletionFromCommittedSession(
+        string runId,
+        string stepId,
+        string sessionId,
+        RoleChatSessionState session)
+    {
+        var succeeded = session.Outcome == RoleChatSessionOutcome.Completed;
+        var completed = new WorkflowLlmInvocationCompletedEvent
+        {
+            RunId = runId,
+            StepId = stepId,
+            SessionId = sessionId,
+            RoleActorId = Id,
+            Success = succeeded,
+            Content = session.FinalContent ?? string.Empty,
+            ReasoningContent = session.FinalReasoningContent ?? string.Empty,
+            Usage = ToWorkflowUsageMetrics(session.Usage, session.Model),
+            Error = succeeded
+                ? string.Empty
+                : BuildCommittedWorkflowFailureError(session),
+        };
+        var managedHandoff = ToWorkflowManagedHandoffOutcome(session.ToolReceipts);
+        if (managedHandoff is not null)
+            completed.ManagedHandoff = managedHandoff;
+        return completed;
+    }
+
+    private static string BuildCommittedWorkflowFailureError(RoleChatSessionState session)
+    {
+        var safeMessage = SanitizeWorkflowFailureMessage(session.SafeMessage);
+        return string.IsNullOrWhiteSpace(session.FailureCode)
+            ? safeMessage
+            : $"{session.FailureCode.Trim().ToLowerInvariant()}: {safeMessage}";
+    }
+
+    private async Task HandleWorkflowApprovalContinuationAsync(
+        ChatRequestEvent request,
+        AgentToolExecutionContext? recoveryToolContext = null,
+        LLMControlContext? recoveryLlmControl = null,
+        RecoveredChatTurn? recovery = null,
+        bool deliverFromContinuationSession = true)
+    {
+        var continuation = request.WorkflowLlmToolApprovalContinuation;
+        if (deliverFromContinuationSession)
+        {
+            request.WorkflowLlmCompletionDeliveryContext ??=
+                ToWorkflowLlmCompletionDeliveryContext(continuation);
+        }
+        else
+        {
+            request.WorkflowLlmCompletionDeliveryContext = null;
+        }
+        if (HasCommittedSessionCompletion(request.SessionId))
+        {
+            Logger.LogInformation(
+                "[{Role}] Ignoring stale workflow approval continuation after terminal commit. run={RunId} step={StepId} session={SessionId}",
+                RoleName,
+                continuation.RunId,
+                continuation.StepId,
+                request.SessionId);
+            await DeliverWorkflowCompletionAsync(
+                request.SessionId,
+                State.Sessions[request.SessionId],
+                CancellationToken.None);
+            return;
+        }
+
+        var timeoutMs = ResolveLlmTimeoutMs(continuation.TimeoutMs);
+        using var timeoutCts = CreateTurnDeadlineCancellationSource(timeoutMs);
+        try
+        {
+            var toolContext = recoveryToolContext ?? await RefreshCallerTokenAsync(
+                    AgentToolExecutionContextMapper.FromPayload(request.ToolContext),
+                    timeoutCts.Token)
+                .ConfigureAwait(false);
+            timeoutCts.Token.ThrowIfCancellationRequested();
+            toolContext = toolContext with
+            {
+                Chat = WorkflowChatContext(
+                    continuation.RunId,
+                    continuation.SessionId,
+                    continuation.StepId),
+            };
             request.ToolContext = toolContext.ToPayload();
-            request.LlmControl = BuildContinuationLlmControl(continuation, toolContext);
+            request.LlmControl = recoveryLlmControl?.ToPayload() ??
+                                 BuildContinuationLlmControl(continuation, toolContext);
             var intent = BuildContinuationIntent(continuation);
-            using var timeoutCts = continuation.TimeoutMs > 0
-                ? new CancellationTokenSource(continuation.TimeoutMs)
-                : null;
             var replay = await ExecuteWorkflowIntentStreamingChatAsync(
                 intent,
                 request,
-                timeoutCts?.Token ?? CancellationToken.None);
+                timeoutCts.Token,
+                recovery,
+                recoveryToolContext,
+                recoveryLlmControl);
+            if (replay is null)
+                return;
+            timeoutCts.Token.ThrowIfCancellationRequested();
             var pendingApproval = DetectPendingApproval(
                 replay.ToolReceipts,
                 replay.ToolCalls,
                 request);
             if (pendingApproval != null)
             {
-                pendingApproval.WorkflowLlmContinuation = continuation.Clone();
-                await SuspendForToolApprovalAsync(pendingApproval);
+                pendingApproval.WorkflowLlmContinuation = CloneApprovalContinuationForDirectParent(
+                    continuation,
+                    request.SessionId);
+                await SuspendForToolApprovalAsync(pendingApproval, timeoutCts.Token);
+                timeoutCts.Token.ThrowIfCancellationRequested();
                 return;
             }
 
-            await PublishWorkflowCompletionAsync(
-                continuation,
-                success: true,
-                replay.Content,
-                replay.ReasoningContent,
-                ToWorkflowUsageMetrics(replay.Usage, replay.Model),
-                error: string.Empty);
+            timeoutCts.Token.ThrowIfCancellationRequested();
             await PersistRoleChatSessionCompletionAsync(
                 request,
                 replay.Content,
@@ -250,7 +777,50 @@ public class WorkflowRoleGAgent(
                 replay.ContentEmitted,
                 replay.Usage,
                 replay.Model,
-                replay.ToolReceipts);
+                replay.ToolReceipts,
+                replay.ToolResults,
+                outcome: replay.Outcome,
+                failureCode: replay.FailureCode,
+                safeMessage: replay.SafeMessage,
+                authorizationRequired: replay.AuthorizationRequired,
+                ct: timeoutCts.Token);
+        }
+        catch (Exception ex) when (HasCommittedSessionCompletion(request.SessionId))
+        {
+            Logger.LogWarning(
+                ex,
+                "[{Role}] Workflow approval post-commit work failed after terminal authority was acquired. run={RunId} step={StepId} session={SessionId}",
+                RoleName,
+                continuation.RunId,
+                continuation.StepId,
+                continuation.SessionId);
+            await DeliverWorkflowCompletionAsync(
+                request.SessionId,
+                State.Sessions[request.SessionId],
+                CancellationToken.None);
+        }
+        catch (ChatToolPostExternalCheckpointException ex)
+        {
+            if (await TryHandlePostExternalToolCheckpointFailureAsync(request.SessionId, ex))
+                return;
+
+            throw;
+        }
+        catch (Exception) when (
+            timeoutCts.IsCancellationRequested &&
+            !HasCommittedSessionCompletion(request.SessionId))
+        {
+            await PersistRoleChatSessionCompletionAsync(
+                request,
+                content: string.Empty,
+                reasoningContent: string.Empty,
+                toolCalls: [],
+                contentParts: [],
+                contentEmitted: false,
+                outcome: RoleChatSessionOutcome.Failed,
+                failureCode: "APPROVAL_TOOL_TIMEOUT",
+                safeMessage: "The approval continuation exceeded its deadline. Please try again.",
+                clearMatchingPendingApproval: true);
         }
         catch (Exception ex)
         {
@@ -261,13 +831,14 @@ public class WorkflowRoleGAgent(
                 continuation.RunId,
                 continuation.StepId,
                 continuation.SessionId);
-            await PublishWorkflowCompletionAsync(
-                continuation,
-                success: false,
-                content: string.Empty,
-                reasoningContent: string.Empty,
-                usage: null,
-                error: SanitizeWorkflowFailureMessage(ex.Message));
+            await PersistWorkflowFailureAsync(
+                request,
+                "APPROVAL_CONTINUATION_FAILED",
+                ResolveWorkflowFailureMessage(ex),
+                recovery,
+                partialReplay: ResolvePartialReplay(ex),
+                model: ResolveWorkflowModel(request, recoveryLlmControl),
+                clearMatchingPendingApproval: true);
         }
     }
 
@@ -292,32 +863,67 @@ public class WorkflowRoleGAgent(
         }, ct);
         return context with
         {
-            Credentials = new AgentToolCredentials(token, token, token),
+            Credentials = new AgentToolCredentials(
+                token,
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.ProxyDelegation),
         };
     }
 
-    private Task PublishWorkflowCompletionAsync(
-        WorkflowLlmToolApprovalContinuation continuation,
-        bool success,
-        string content,
-        string reasoningContent,
-        WorkflowUsageMetrics? usage,
-        string error) =>
-        PublishAsync(new WorkflowLlmInvocationCompletedEvent
+    private async Task PersistWorkflowFailureAsync(
+        ChatRequestEvent request,
+        string failureCode,
+        string safeMessage,
+        RecoveredChatTurn? recovery = null,
+        WorkflowIntentReplayRecord? partialReplay = null,
+        string? model = null,
+        bool clearMatchingPendingApproval = false)
+    {
+        if (string.IsNullOrWhiteSpace(request.SessionId))
         {
-            RunId = continuation.RunId,
-            StepId = continuation.StepId,
-            SessionId = continuation.SessionId,
-            RoleActorId = Id,
-            Success = success,
-            Content = content,
-            ReasoningContent = reasoningContent,
-            Usage = usage,
-            Error = error,
-        }, TopologyAudience.Parent);
+            var delivery = request.WorkflowLlmCompletionDeliveryContext;
+            await PublishAsync(new WorkflowLlmInvocationCompletedEvent
+            {
+                RunId = delivery?.RunId ?? string.Empty,
+                StepId = delivery?.StepId ?? string.Empty,
+                SessionId = delivery?.SessionId ?? string.Empty,
+                RoleActorId = Id,
+                Success = false,
+                Error = safeMessage,
+            }, TopologyAudience.Parent);
+            return;
+        }
+
+        var recoveredResults = recovery?.ToolResults ?? [];
+        await PersistRoleChatSessionCompletionAsync(
+            request,
+            content: partialReplay?.Content ?? string.Empty,
+            reasoningContent: partialReplay?.ReasoningContent ?? string.Empty,
+            toolCalls: partialReplay?.ToolCalls ?? recoveredResults
+                .Select(static result => result.ToolCall)
+                .ToArray(),
+            contentParts: partialReplay?.ContentParts ?? [],
+            contentEmitted: partialReplay?.ContentEmitted == true,
+            usage: partialReplay?.Usage,
+            model: partialReplay?.Model ?? model,
+            toolReceipts: partialReplay?.ToolReceipts ?? recoveredResults
+                .Where(static result => result.Receipt is not null)
+                .Select(static result => result.Receipt!.Clone())
+                .ToArray(),
+            toolResults: partialReplay?.ToolResults ?? recoveredResults
+                .Select(ToToolResultEvent)
+                .ToArray(),
+            outcome: RoleChatSessionOutcome.Failed,
+            failureCode: failureCode,
+            safeMessage: safeMessage,
+            authorizationRequired: partialReplay?.AuthorizationRequired,
+            clearMatchingPendingApproval: clearMatchingPendingApproval);
+    }
 
     private static WorkflowLlmToolApprovalContinuation BuildApprovalContinuation(
-        WorkflowLlmExecutionIntent intent)
+        WorkflowLlmExecutionIntent intent,
+        string directParentRoleChatSessionId = "")
     {
         var continuation = new WorkflowLlmToolApprovalContinuation
         {
@@ -328,6 +934,7 @@ public class WorkflowRoleGAgent(
             UserMemoryPrompt = intent.UserMemoryPrompt ?? string.Empty,
             RoutePreference = intent.RoutePreference ?? string.Empty,
             TimeoutMs = intent.TimeoutMs,
+            DirectParentRoleChatSessionId = directParentRoleChatSessionId,
             RestrictToolSets = intent.AgentToolScope?.RestrictToolSets == true,
             RestrictAllowedToolNames = intent.AgentToolScope?.RestrictAllowedToolNames == true,
         };
@@ -340,6 +947,33 @@ public class WorkflowRoleGAgent(
         }
         return continuation;
     }
+
+    private static WorkflowLlmToolApprovalContinuation CloneApprovalContinuationForDirectParent(
+        WorkflowLlmToolApprovalContinuation continuation,
+        string directParentRoleChatSessionId)
+    {
+        var next = continuation.Clone();
+        next.DirectParentRoleChatSessionId = directParentRoleChatSessionId;
+        return next;
+    }
+
+    private static WorkflowLlmCompletionDeliveryContext ToWorkflowLlmCompletionDeliveryContext(
+        WorkflowLlmExecutionIntent intent) =>
+        new()
+        {
+            RunId = intent.RunId ?? string.Empty,
+            StepId = intent.StepId ?? string.Empty,
+            SessionId = intent.SessionId ?? string.Empty,
+        };
+
+    private static WorkflowLlmCompletionDeliveryContext ToWorkflowLlmCompletionDeliveryContext(
+        WorkflowLlmToolApprovalContinuation continuation) =>
+        new()
+        {
+            RunId = continuation.RunId ?? string.Empty,
+            StepId = continuation.StepId ?? string.Empty,
+            SessionId = continuation.SessionId ?? string.Empty,
+        };
 
     private static WorkflowAgentToolScope ToToolScope(
         WorkflowLlmToolApprovalContinuation continuation)
@@ -361,6 +995,7 @@ public class WorkflowRoleGAgent(
             RunId = continuation.RunId,
             StepId = continuation.StepId,
             SessionId = continuation.SessionId,
+            TimeoutMs = continuation.TimeoutMs,
             AgentToolScope = ToToolScope(continuation),
         };
 
@@ -409,6 +1044,7 @@ public class WorkflowRoleGAgent(
         toolContext = toolContext with
         {
             InvocationSurface = AgentToolInvocationSurface.WorkflowLlmToolLoop,
+            Chat = WorkflowChatContext(intent.RunId, intent.SessionId, intent.StepId),
         };
 
         var request = new ChatRequestEvent
@@ -416,6 +1052,10 @@ public class WorkflowRoleGAgent(
             Prompt = intent.Prompt ?? string.Empty,
             SessionId = intent.SessionId ?? string.Empty,
             TimeoutMs = intent.TimeoutMs,
+            WorkflowLlmCompletionDeliveryContext =
+                ToWorkflowLlmCompletionDeliveryContext(intent),
+            WorkflowLlmToolApprovalContinuation = BuildApprovalContinuation(intent),
+            CallerDurableCredential = intent.CallerCredential?.DurableCallerCredential?.Clone(),
             ToolContext = AgentToolExecutionContextMapper.ToPayload(toolContext),
             LlmControl = new LLMControlContextPayload
             {
@@ -434,6 +1074,18 @@ public class WorkflowRoleGAgent(
         return request;
     }
 
+    private static AgentChatInvocationContext WorkflowChatContext(
+        string? runId,
+        string? sessionId,
+        string? stepId) =>
+        new(
+            AgentChatInvocationSurface.WorkflowChat,
+            Normalize(runId),
+            Normalize(sessionId),
+            null,
+            Normalize(stepId),
+            null);
+
     private static ChatContentPart ToChatContentPart(WorkflowFileRef fileRef)
     {
         ArgumentNullException.ThrowIfNull(fileRef);
@@ -443,8 +1095,40 @@ public class WorkflowRoleGAgent(
             Uri = ResolveFileRefUri(fileRef),
             MediaType = Normalize(fileRef.MediaType) ?? string.Empty,
             Name = Normalize(fileRef.FileName) ?? string.Empty,
+            FileRef = ToChatFileRef(fileRef),
         };
     }
+
+    private static Aevatar.AI.Abstractions.ChatFileRef ToChatFileRef(WorkflowFileRef fileRef) =>
+        new()
+        {
+            FileId = Normalize(fileRef.FileId) ?? string.Empty,
+            ArtifactId = Normalize(fileRef.ArtifactId) ?? string.Empty,
+            SourceKind = ToChatFileSourceKind(fileRef.SourceKind),
+            SourceMessageId = Normalize(fileRef.SourceMessageId) ?? string.Empty,
+            SourceResourceKey = Normalize(fileRef.SourceResourceKey) ?? string.Empty,
+            FileName = Normalize(fileRef.FileName) ?? string.Empty,
+            MediaType = Normalize(fileRef.MediaType) ?? string.Empty,
+            SizeBytes = fileRef.SizeBytes,
+            Sha256 = Normalize(fileRef.Sha256) ?? string.Empty,
+            CreatedAtUnixMs = fileRef.CreatedAtUnixMs,
+            ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs,
+            OwnerRunId = Normalize(fileRef.OwnerRunId) ?? string.Empty,
+            OwnerScopeId = Normalize(fileRef.OwnerScopeId) ?? string.Empty,
+        };
+
+    private static Aevatar.AI.Abstractions.ChatFileSourceKind ToChatFileSourceKind(
+        WorkflowFileSourceKind sourceKind) =>
+        sourceKind switch
+        {
+            WorkflowFileSourceKind.ChatInput => Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput,
+            WorkflowFileSourceKind.FormUpload => Aevatar.AI.Abstractions.ChatFileSourceKind.FormUpload,
+            WorkflowFileSourceKind.ConnectedServiceResource =>
+                Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource,
+            WorkflowFileSourceKind.ExternalResource => Aevatar.AI.Abstractions.ChatFileSourceKind.ExternalResource,
+            WorkflowFileSourceKind.Generated => Aevatar.AI.Abstractions.ChatFileSourceKind.Generated,
+            _ => Aevatar.AI.Abstractions.ChatFileSourceKind.Unspecified,
+        };
 
     private static ChatContentPartKind ResolveChatContentPartKind(string? mediaType)
     {
@@ -502,15 +1186,26 @@ public class WorkflowRoleGAgent(
         }
     }
 
-    private async Task<WorkflowIntentReplayRecord> ExecuteWorkflowIntentStreamingChatAsync(
+    private async Task<WorkflowIntentReplayRecord?> ExecuteWorkflowIntentStreamingChatAsync(
         WorkflowLlmExecutionIntent intent,
         ChatRequestEvent request,
-        CancellationToken streamCt)
+        CancellationToken streamCt,
+        RecoveredChatTurn? recovery = null,
+        AgentToolExecutionContext? recoveryToolContext = null,
+        LLMControlContext? recoveryLlmControl = null,
+        bool turnAuthorityEstablished = false)
     {
         var inputParts = ResolveWorkflowRequestInputParts(request);
-        var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
-        var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
+        var llmControl = recoveryLlmControl ?? LLMControlContextMapper.FromPayload(request.LlmControl);
+        var toolContext = recoveryToolContext ??
+                          llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
+        if (!turnAuthorityEstablished &&
+            !await TryEstablishWorkflowTurnAuthorityAsync(request, toolContext, streamCt))
+        {
+            return null;
+        }
         var turnCatalog = await BuildRequestToolCatalogAsync(intent.AgentToolScope, toolContext, streamCt);
+        streamCt.ThrowIfCancellationRequested();
         if (turnCatalog is not null)
             toolContext = AddRequestToolsToVisibility(toolContext, turnCatalog.RouteOwnedTools.Keys);
         var metadata = request.Metadata.Count > 0
@@ -521,67 +1216,188 @@ public class WorkflowRoleGAgent(
         var fullContent = new StringBuilder();
         var fullReasoning = new StringBuilder();
         var toolCalls = new WorkflowToolCallAccumulator();
-        var toolReceipts = new List<AgentToolReceipt>();
+        var recoveredToolResults = recovery?.ToolResults ?? [];
+        foreach (var recoveredToolResult in recoveredToolResults)
+            toolCalls.TrackDelta(recoveredToolResult.ToolCall);
+        var toolReceipts = recoveredToolResults
+            .Where(static result => result.Receipt is not null)
+            .Select(static result => result.Receipt!.Clone())
+            .ToList();
+        var toolResults = recoveredToolResults
+            .Select(ToToolResultEvent)
+            .ToList();
         var contentParts = new List<ContentPart>();
         TokenUsage? usage = null;
 
-        await foreach (var chunk in ChatStreamAsync(
-                           inputParts,
-                           request.SessionId,
-                           llmControl,
-                           toolContext,
-                           turnCatalog,
-                           metadata,
-                           streamCt))
+        WorkflowIntentReplayRecord CaptureReplay()
         {
-            if (chunk.Usage != null)
-                usage = chunk.Usage;
-
-            if (!string.IsNullOrEmpty(chunk.DeltaContent))
-            {
-                fullContent.Append(chunk.DeltaContent);
-                await PublishAsync(new WorkflowLlmStreamChunkEvent
+            var normalizedToolResults = toolResults
+                .Select(result =>
                 {
-                    RunId = intent.RunId ?? string.Empty,
-                    StepId = intent.StepId ?? string.Empty,
-                    SessionId = intent.SessionId ?? string.Empty,
-                    RoleActorId = Id,
-                    DeltaContent = chunk.DeltaContent,
-                }, TopologyAudience.Parent);
-            }
+                    var normalized = result.Clone();
+                    var receipt = toolReceipts.LastOrDefault(candidate =>
+                        string.Equals(candidate.CallId, normalized.CallId, StringComparison.Ordinal));
+                    if (receipt is null)
+                        return normalized;
 
-            if (chunk.DeltaContentPart != null)
-                contentParts.Add(chunk.DeltaContentPart);
-
-            if (!string.IsNullOrEmpty(chunk.DeltaReasoningContent))
-            {
-                fullReasoning.Append(chunk.DeltaReasoningContent);
-                await PublishAsync(new WorkflowLlmStreamChunkEvent
-                {
-                    RunId = intent.RunId ?? string.Empty,
-                    StepId = intent.StepId ?? string.Empty,
-                    SessionId = intent.SessionId ?? string.Empty,
-                    RoleActorId = Id,
-                    DeltaReasoningContent = chunk.DeltaReasoningContent,
-                }, TopologyAudience.Parent);
-            }
-
-            if (chunk.DeltaToolCall != null)
-                toolCalls.TrackDelta(chunk.DeltaToolCall);
-
-            if (chunk.ToolReceipt != null)
-                toolReceipts.Add(chunk.ToolReceipt.Clone());
+                    normalized.Success = receipt.Status == AgentToolReceiptStatus.Success;
+                    normalized.Error = normalized.Success
+                        ? string.Empty
+                        : receipt.ErrorMessage ?? string.Empty;
+                    normalized.Receipt = receipt.Clone();
+                    return normalized;
+                })
+                .ToArray();
+            var authorizationRequired = toolReceipts
+                .LastOrDefault(receipt =>
+                    receipt.Status == AgentToolReceiptStatus.AuthorizationRequired &&
+                    receipt.AuthorizationRequired != null)
+                ?.AuthorizationRequired
+                .Clone();
+            return new WorkflowIntentReplayRecord(
+                fullContent.ToString(),
+                fullReasoning.ToString(),
+                toolCalls.BuildToolCalls(),
+                toolReceipts.Select(static receipt => receipt.Clone()).ToArray(),
+                normalizedToolResults,
+                contentParts.ToArray(),
+                Usage: usage,
+                Model: ResolveWorkflowModel(request, llmControl),
+                ContentEmitted: fullContent.Length > 0,
+                Outcome: authorizationRequired is null
+                    ? RoleChatSessionOutcome.Completed
+                    : RoleChatSessionOutcome.Blocked,
+                FailureCode: authorizationRequired is null ? string.Empty : "AUTHORIZATION_REQUIRED",
+                SafeMessage: authorizationRequired?.SafeMessage ?? string.Empty,
+                AuthorizationRequired: authorizationRequired);
         }
 
-        return new WorkflowIntentReplayRecord(
-            fullContent.ToString(),
-            fullReasoning.ToString(),
-            toolCalls.BuildToolCalls(),
-            toolReceipts,
-            contentParts,
-            Usage: usage,
-            Model: EffectiveConfig.Model ?? string.Empty,
-            ContentEmitted: fullContent.Length > 0);
+        var stream = recovery?.Transcript is { Count: > 0 } recoveryTranscript
+            ? ContinueChatStreamAsync(
+                inputParts,
+                recoveryTranscript,
+                request.SessionId,
+                llmControl,
+                toolContext,
+                turnCatalog,
+                metadata,
+                streamCt)
+            : ChatStreamAsync(
+                inputParts,
+                request.SessionId,
+                llmControl,
+                toolContext,
+                turnCatalog,
+                metadata,
+                streamCt);
+        try
+        {
+            await foreach (var chunk in stream)
+            {
+                streamCt.ThrowIfCancellationRequested();
+
+                if (chunk.Usage != null)
+                    usage = chunk.Usage;
+
+                if (!string.IsNullOrEmpty(chunk.DeltaContent))
+                {
+                    fullContent.Append(chunk.DeltaContent);
+                    await PublishAsync(new WorkflowLlmStreamChunkEvent
+                    {
+                        RunId = intent.RunId ?? string.Empty,
+                        StepId = intent.StepId ?? string.Empty,
+                        SessionId = intent.SessionId ?? string.Empty,
+                        RoleActorId = Id,
+                        DeltaContent = chunk.DeltaContent,
+                    }, TopologyAudience.Parent, streamCt);
+                    streamCt.ThrowIfCancellationRequested();
+                }
+
+                if (chunk.DeltaContentPart != null)
+                    contentParts.Add(chunk.DeltaContentPart);
+
+                if (!string.IsNullOrEmpty(chunk.DeltaReasoningContent))
+                {
+                    fullReasoning.Append(chunk.DeltaReasoningContent);
+                    await PublishAsync(new WorkflowLlmStreamChunkEvent
+                    {
+                        RunId = intent.RunId ?? string.Empty,
+                        StepId = intent.StepId ?? string.Empty,
+                        SessionId = intent.SessionId ?? string.Empty,
+                        RoleActorId = Id,
+                        DeltaReasoningContent = chunk.DeltaReasoningContent,
+                    }, TopologyAudience.Parent, streamCt);
+                    streamCt.ThrowIfCancellationRequested();
+                }
+
+                if (chunk.DeltaToolCall != null)
+                    toolCalls.TrackDelta(chunk.DeltaToolCall);
+
+                if (chunk.ToolCallCompleted != null)
+                {
+                    var completed = chunk.ToolCallCompleted;
+                    var toolResult = new ToolResultEvent
+                    {
+                        CallId = completed.CallId,
+                        ResultJson = completed.ResultJson,
+                        Success = completed.Receipt?.Status == AgentToolReceiptStatus.Success,
+                        Error = completed.Error,
+                    };
+                    if (completed.Receipt != null)
+                        toolResult.Receipt = completed.Receipt.Clone();
+                    if (toolResults.All(existing => !existing.Equals(toolResult)))
+                        toolResults.Add(toolResult);
+                }
+
+                var receipt = chunk.ToolCallCompleted?.Receipt ?? chunk.ToolReceipt;
+                if (receipt != null && toolReceipts.All(existing => !existing.Equals(receipt)))
+                    toolReceipts.Add(receipt.Clone());
+            }
+        }
+        catch (Exception ex) when (
+            ex is not OperationCanceledException and
+                not ChatToolPostExternalCheckpointException)
+        {
+            throw new WorkflowIntentStreamingException(CaptureReplay(), ex);
+        }
+
+        streamCt.ThrowIfCancellationRequested();
+        return CaptureReplay();
+    }
+
+    private async Task<bool> TryEstablishWorkflowTurnAuthorityAsync(
+        ChatRequestEvent request,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct)
+    {
+        if (!State.Sessions.TryGetValue(request.SessionId, out var trackedSession))
+        {
+            await EstablishTurnAuthorityAsync(request, trackedSession: null, toolContext, ct);
+            ct.ThrowIfCancellationRequested();
+            return true;
+        }
+
+        if (trackedSession.Completed)
+        {
+            await DeliverWorkflowCompletionAsync(
+                request.SessionId,
+                trackedSession.Clone(),
+                CancellationToken.None);
+            return false;
+        }
+
+        if (await TryRequestCheckpointRecoveryAsync(
+                request.SessionId,
+                trackedSession,
+                CancellationToken.None))
+        {
+            return false;
+        }
+
+        await TryFinalizeIncompleteSessionAsync(
+            request.SessionId,
+            trackedSession.LastProgressSequence);
+        return false;
     }
 
     private async Task<AgentProfileTurnCatalog?> BuildRequestToolCatalogAsync(
@@ -624,6 +1440,7 @@ public class WorkflowRoleGAgent(
                 try
                 {
                     tools.AddRange(await source.DiscoverToolsAsync(ct));
+                    ct.ThrowIfCancellationRequested();
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -704,6 +1521,38 @@ public class WorkflowRoleGAgent(
     private static string SanitizeWorkflowFailureMessage(string? message) =>
         string.IsNullOrWhiteSpace(message) ? "LLM request failed." : message.Trim();
 
+    private static string ResolveWorkflowFailureMessage(Exception exception) =>
+        SanitizeWorkflowFailureMessage(
+            exception is WorkflowIntentStreamingException streaming
+                ? streaming.InnerException?.Message
+                : exception.Message);
+
+    private static WorkflowIntentReplayRecord? ResolvePartialReplay(Exception exception) =>
+        (exception as WorkflowIntentStreamingException)?.PartialReplay;
+
+    private string ResolveWorkflowModel(
+        ChatRequestEvent request,
+        LLMControlContext? control = null) =>
+        Normalize((control ?? LLMControlContextMapper.FromPayload(request.LlmControl)).ModelOverride) ??
+        EffectiveConfig.Model ??
+        string.Empty;
+
+    private static ToolResultEvent ToToolResultEvent(RecoveredChatToolResult recovered)
+    {
+        var result = new ToolResultEvent
+        {
+            CallId = recovered.ToolCall.Id,
+            ResultJson = recovered.Result,
+            Success = recovered.Success,
+            Error = recovered.Success
+                ? string.Empty
+                : recovered.Receipt?.ErrorMessage ?? recovered.SafeErrorCode,
+        };
+        if (recovered.Receipt is not null)
+            result.Receipt = recovered.Receipt.Clone();
+        return result;
+    }
+
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
@@ -712,10 +1561,23 @@ public class WorkflowRoleGAgent(
         string ReasoningContent,
         IReadOnlyList<ToolCall> ToolCalls,
         IReadOnlyList<AgentToolReceipt> ToolReceipts,
+        IReadOnlyList<ToolResultEvent> ToolResults,
         IReadOnlyList<ContentPart> ContentParts,
         TokenUsage? Usage,
         string? Model,
-        bool ContentEmitted);
+        bool ContentEmitted,
+        RoleChatSessionOutcome Outcome,
+        string FailureCode,
+        string SafeMessage,
+        NyxIdAuthorizationRequiredEvent? AuthorizationRequired);
+
+    private sealed class WorkflowIntentStreamingException(
+        WorkflowIntentReplayRecord partialReplay,
+        Exception innerException)
+        : Exception(innerException.Message, innerException)
+    {
+        public WorkflowIntentReplayRecord PartialReplay { get; } = partialReplay;
+    }
 
     private static WorkflowManagedHandoffOutcome? ToWorkflowManagedHandoffOutcome(
         IReadOnlyList<AgentToolReceipt> toolReceipts)
@@ -738,6 +1600,19 @@ public class WorkflowRoleGAgent(
     }
 
     private static WorkflowUsageMetrics? ToWorkflowUsageMetrics(TokenUsage? usage, string? model) =>
+        usage == null
+            ? null
+            : new WorkflowUsageMetrics
+            {
+                PromptTokens = usage.PromptTokens,
+                CompletionTokens = usage.CompletionTokens,
+                TotalTokens = usage.TotalTokens,
+                Model = model ?? string.Empty,
+            };
+
+    private static WorkflowUsageMetrics? ToWorkflowUsageMetrics(
+        TokenUsagePayload? usage,
+        string? model) =>
         usage == null
             ? null
             : new WorkflowUsageMetrics

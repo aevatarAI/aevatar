@@ -10,6 +10,7 @@ internal static class AuditRecordContentHasher
         ArgumentNullException.ThrowIfNull(record);
 
         var semanticRecord = record.Clone();
+        semanticRecord.OccurredAt = null;
         semanticRecord.RecordedAt = null;
         return Convert.ToHexString(SHA256.HashData(semanticRecord.ToByteArray())).ToLowerInvariant();
     }

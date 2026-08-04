@@ -49,6 +49,30 @@ public sealed class AuditActorIdentityHasherTests
     }
 
     [Fact]
+    public void HashAll_ReturnsActiveFirstThenRemainingKeysInOrdinalOrder()
+    {
+        var hasher = new AuditActorIdentityHasher(Options.Create(new AuditActorIdentityHasherOptions
+        {
+            ActiveKeyId = "key-2",
+            Keys =
+            [
+                new AuditActorIdentityHasherKeyOptions { KeyId = "key-3", Key = Key("third secret material for audit identity") },
+                new AuditActorIdentityHasherKeyOptions { KeyId = "key-1", Key = Key("old secret material for audit identity") },
+                new AuditActorIdentityHasherKeyOptions { KeyId = "key-2", Key = Key("new secret material for audit identity") },
+            ],
+        }));
+        var canonicalKey = AuditCanonicalActorKeys.ForNyxIdUser("user-audit-alpha");
+
+        var identities = hasher.HashAll(canonicalKey);
+
+        identities.Select(static identity => identity.IdentityKeyId)
+            .ShouldBe(["key-2", "key-1", "key-3"]);
+        identities.Select(static identity => identity.AuditActorId).Distinct().Count().ShouldBe(3);
+        identities[0].ShouldBe(hasher.Hash(canonicalKey));
+        Should.Throw<ArgumentException>(() => hasher.HashAll("  "));
+    }
+
+    [Fact]
     public void Constructor_FailsClosed_WhenSecretIsMissing()
     {
         Should.Throw<OptionsValidationException>(() => new AuditActorIdentityHasher(

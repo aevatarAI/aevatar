@@ -282,6 +282,8 @@ public sealed record UpdateStudioMemberBindingRequest(
     StudioMemberScriptBindingSpec? Script = null,
     StudioMemberGAgentBindingSpec? GAgent = null)
 {
+    public IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations { get; init; }
+
     [JsonIgnore]
     public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
 }

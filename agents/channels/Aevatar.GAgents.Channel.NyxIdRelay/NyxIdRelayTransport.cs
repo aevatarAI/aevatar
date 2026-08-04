@@ -233,14 +233,14 @@ public sealed class NyxIdRelayTransport
             {
                 var attachment = BuildAttachment(callbackAttachment);
                 if (attachment is not null)
-                    AddAttachment(attachments, seenAttachmentKeys, attachment);
+                    AddAttachment(attachments, seenAttachmentKeys, attachment, platform);
             }
         }
 
         if (IsLark(platform))
         {
             foreach (var candidate in EnumerateLarkRawAttachmentCandidates(payload))
-                AddAttachment(attachments, seenAttachmentKeys, BuildLarkAttachment(candidate));
+                AddAttachment(attachments, seenAttachmentKeys, BuildLarkAttachment(candidate), platform);
         }
 
         return attachments;
@@ -249,11 +249,20 @@ public sealed class NyxIdRelayTransport
     private static void AddAttachment(
         List<AttachmentRef> attachments,
         HashSet<string> seenAttachmentKeys,
-        AttachmentRef attachment)
+        AttachmentRef attachment,
+        string platform)
     {
-        var dedupeKey = $"{attachment.Kind}:{attachment.AttachmentId}";
+        var dedupeKey = BuildAttachmentDedupeKey(attachment, platform);
         if (seenAttachmentKeys.Add(dedupeKey))
             attachments.Add(attachment);
+    }
+
+    private static string BuildAttachmentDedupeKey(AttachmentRef attachment, string platform)
+    {
+        var attachmentId = IsLark(platform)
+            ? LarkAttachmentResourceKeys.Normalize(attachment.AttachmentId) ?? attachment.AttachmentId
+            : attachment.AttachmentId;
+        return $"{attachment.Kind}:{attachmentId}";
     }
 
     private static AttachmentRef? BuildAttachment(NyxIdRelayAttachmentPayload attachment)

@@ -1,3 +1,4 @@
+using System.Reflection;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.LLMProviders.NyxId;
@@ -426,6 +427,36 @@ public sealed class NyxIdLLMProviderRoutingTests
         route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/proxy/s/chrono-llm"));
     }
 
+    [Fact]
+    public void CreateDelegateProvider_ShouldPassToolExecutionPortToMeaiProvider()
+    {
+        var executionPort = new RecordingExecutionPort();
+        var provider = new NyxIdLLMProvider(
+            name: "nyxid",
+            defaultModel: "gpt-5.5",
+            nyxEndpoint: "https://nyx.example.com/api/v1/llm/gateway/v1",
+            accessTokenAccessor: static () => null,
+            toolExecutionPort: executionPort);
+        var method = typeof(NyxIdLLMProvider).GetMethod(
+            "CreateDelegateProvider",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+
+        var delegateProvider = method!.Invoke(provider,
+            [
+                new LLMRequest { Messages = [ChatMessage.User("hi")], Model = "gpt-5.5" },
+                new Uri("https://nyx.example.com/api/v1/proxy/s/chrono-llm-public"),
+                "/api/v1/proxy/s/chrono-llm-public",
+                "test-token",
+            ]);
+
+        delegateProvider.Should().NotBeNull();
+        var executionPortField = delegateProvider!.GetType().GetField(
+            "_toolExecutionPort",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        executionPortField.Should().NotBeNull();
+        executionPortField!.GetValue(delegateProvider).Should().BeSameAs(executionPort);
+    }
+
     private static NyxIdLLMProvider CreateProvider() =>
         new(
             name: "nyxid",
@@ -461,4 +492,12 @@ public sealed class NyxIdLLMProviderRoutingTests
             NyxIdRoutePreference: routePreference,
             MaxToolRoundsOverride: null,
             UserMemoryPrompt: null);
+
+    private sealed class RecordingExecutionPort : IAgentToolExecutionPort
+    {
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
 }

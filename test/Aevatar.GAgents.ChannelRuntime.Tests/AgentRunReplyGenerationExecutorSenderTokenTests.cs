@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using Aevatar.Foundation.Abstractions;
@@ -267,7 +268,19 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             .Returns(Task.FromResult(new StudioConfig(
                 DefaultModel: " owner-model ",
                 PreferredLlmRoute: " /api/v1/proxy/s/owner ",
-                MaxToolRounds: 7)));
+                MaxToolRounds: 7,
+                LlmSelection: new LLMSelection
+                {
+                    RouteKind = LLMRouteKind.NyxIdUserService,
+                    RouteValue = "/api/v1/proxy/s/owner",
+                    NyxIdUserServiceId = "us-owner",
+                    ServiceSlugSnapshot = "owner",
+                    ModelSelection = new LLMModelSelection
+                    {
+                        Kind = LLMModelSelectionKind.ExplicitModel,
+                        ModelId = "owner-model",
+                    },
+                })));
         var generator = new EchoStepPlanReplyGenerator();
         var executor = CreateExecutor(
             generator,
@@ -411,7 +424,8 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             IReadOnlyList<ConversationHistoryEntry>? priorHistory,
             ChatAttachmentInputContext? attachmentContext,
             bool forceDisableTools,
-            CancellationToken ct)
+            CancellationToken ct,
+            AgentProfileTurnCatalog? turnCatalog = null)
         {
             CapturedLlmControl = llmControl;
             CapturedToolContext = toolContext;

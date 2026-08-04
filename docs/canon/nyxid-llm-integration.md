@@ -16,6 +16,30 @@ Activation is committed before an external refresh begins. Every refresh reads t
 
 Cleanup is stronger than invalidation: it clears services, observation freshness, revision, and content digest while retaining owner identity and a terminal reason. Invalidation and cleanup both produce projected tombstones, including when the actor has never published a successful observation. Consumers can therefore distinguish `missing` from an actor-owned `invalidated` or `cleaned` state through the projected `state_version`, `lifecycle_fence`, and lifecycle fields. Scheduling reads this replica only and never fetches, refreshes, replays, or primes NyxID inside the query call stack.
 
+## Atomic selection and durable model evidence
+
+`LLMSelection` is the atomic UserConfig route/model fact. It contains the route kind and canonical route identity together with either `ProviderDefault` or one explicit model. `UserConfigGAgent` is its only authoritative owner: settings, channel commands, and preset flows submit a complete selection, the actor commits it, and the unified projection pipeline publishes the actor-scoped current-state replica. Compatibility `default_model` and `preferred_llm_route` strings are derived reads only; no normal write can update either string independently.
+
+Reset commits a complete `Unspecified` selection and the product displays it as System default, not Gateway. Gateway is a separate typed selection with the canonical `/api/v1/llm/gateway/v1` route. A saved route that becomes unavailable remains visible with typed Retry, Choose replacement, or Reselect remediation; runtime and UI must not silently fall back to Gateway or another provider.
+
+An accepted UserConfig receipt means accepted-for-dispatch only. The UI shows Update submitted with the command ID until the current-state projection observes the exact submitted `LLMSelection`; only that equality makes the selection Active.
+
+Durable execution requires `ExplicitModel` plus exact `Enumerated` evidence from the committed authorization catalog for the same route. In other words, only enumerated committed catalog evidence can authorize a durable route/model pair. `NotVerifiable`, `Unavailable`, a missing snapshot, an empty model list, a model outside the ordinal exact list, or Gateway without its own committed evidence all fail closed. An empty list is never an open identifier set.
+
+The evidence path has one owner and one projection path:
+
+```text
+configured NyxID authority + verified canonical owner
+  -> bounded catalog refresh
+  -> authorization catalog actor commit
+  -> unified current-state projection
+  -> planner exact route/model match and permission digest
+  -> persisted authorization fact and identical runtime payload
+  -> runtime exact match before actor inbox
+```
+
+Refresh destinations come only from configured NyxID authority and verified canonical identity; caller route strings, URLs, labels, slugs, and model prefixes cannot choose a network destination. Query, planner, and invocation paths do not refresh catalogs, replay events, prime projections, or perform external I/O. The legacy bare-model fallback described for external Responses clients is not authority for UserConfig, scheduling, or workflow execution.
+
 ## Published topology contract boundary
 
 The external source of truth is a published NyxID contract, not the shape or iteration order of a runtime JSON response. The read-only audit target for this integration is `/Users/chronoai/Code/NyxID`; Aevatar work must not patch that repository as part of Milestone 33.

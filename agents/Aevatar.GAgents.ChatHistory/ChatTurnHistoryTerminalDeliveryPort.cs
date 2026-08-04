@@ -208,7 +208,7 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
                     : correlationId.Trim(),
             },
         };
-        envelope.EnsureRuntime().EnsureDeduplication().OperationId = operationId;
+        envelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId = operationId;
 
         var admission = await _dispatchPort.DispatchAsync(actorId, envelope, ct).ConfigureAwait(false);
         if (!admission.Accepted)

@@ -466,6 +466,110 @@ public sealed class DefaultCommandInteractionServiceTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenLiveStreamStaysOpenAndDurableTerminalExists_ShouldFinalizePromptly()
+    {
+        var sink = new EventChannel<string>();
+        var target = new TestTarget("target-1", sink);
+        var receipt = new TestReceipt("target-1", "receipt-exact-replay");
+        var durableResolver = new RecordingDurableResolver(
+            new CommandDurableCompletionObservation<string>(true, "durable_completed"));
+        var finalizeEmitter = new RecordingFinalizeEmitter();
+        var service = CreateService(
+            new TestDispatchPipeline(CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                CreateExecution(target, receipt, commandId: "cmd-exact-replay"))),
+            finalizeEmitter: finalizeEmitter,
+            durableResolver: durableResolver,
+            probeDurableCompletionWhileLive: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+
+        var result = await service.ExecuteAsync(
+            "command-exact-replay",
+            static (_, _) => ValueTask.CompletedTask,
+            ct: timeout.Token);
+
+        result.Succeeded.Should().BeTrue();
+        result.FinalizeResult.Should().Be(
+            new CommandInteractionFinalizeResult<string>("durable_completed", true));
+        durableResolver.Calls.Should().Be(1);
+        finalizeEmitter.Calls.Should().ContainSingle();
+        target.ReleaseCalls.Should().ContainSingle();
+        target.ReleaseCalls[0].Cleanup.DurableCompletion.HasTerminalCompletion.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenDurableWinsBeforeLiveTerminalIsBuffered_ShouldFinalizeDurableTerminal()
+    {
+        var sink = new EventChannel<string>();
+        sink.Push("done:live");
+        var target = new TestTarget("target-1", sink);
+        var receipt = new TestReceipt("target-1", "receipt-terminal-race");
+        var durableResolver = new GatedDurableResolver();
+        var outputStream = new GatedBeforeEmissionOutputStream();
+        var finalizeEmitter = new RecordingFinalizeEmitter();
+        var service = CreateService(
+            new TestDispatchPipeline(CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                CreateExecution(target, receipt, commandId: "cmd-terminal-race"))),
+            finalizeEmitter: finalizeEmitter,
+            durableResolver: durableResolver,
+            outputStream: outputStream,
+            probeDurableCompletionWhileLive: true);
+
+        var execution = service.ExecuteAsync(
+            "command-terminal-race",
+            static (_, _) => ValueTask.CompletedTask);
+        await outputStream.EventRead.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        durableResolver.Complete(
+            new CommandDurableCompletionObservation<string>(true, "durable_completed"));
+
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(1));
+
+        result.FinalizeResult.Should().Be(
+            new CommandInteractionFinalizeResult<string>("durable_completed", true));
+        finalizeEmitter.Calls.Should().ContainSingle();
+        finalizeEmitter.Calls[0].Completion.Should().Be("durable_completed");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenDurableProbeIsEnabled_ShouldResolveBeforeDispatchAndPreserveFreshLiveFrames()
+    {
+        var order = new List<string>();
+        var sink = new EventChannel<string>();
+        sink.Push("rich-card");
+        sink.Push("done:live");
+        sink.Complete();
+        var target = new TestTarget("target-1", sink);
+        var receipt = new TestReceipt("target-1", "receipt-live-buffered");
+        var durableResolver = new RecordingDurableResolver(
+            CommandDurableCompletionObservation<string>.Incomplete,
+            order);
+        var finalizeEmitter = new RecordingFinalizeEmitter();
+        var frames = new List<string>();
+        var service = CreateService(
+            new RecordingInteractionPipeline(
+                CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                    CreateExecution(target, receipt, commandId: "cmd-live-buffered")),
+                order),
+            finalizeEmitter: finalizeEmitter,
+            durableResolver: durableResolver,
+            probeDurableCompletionWhileLive: true);
+
+        var result = await service.ExecuteAsync(
+            "command-live-buffered",
+            (frame, _) =>
+            {
+                frames.Add(frame);
+                return ValueTask.CompletedTask;
+            });
+
+        result.FinalizeResult.Should().Be(
+            new CommandInteractionFinalizeResult<string>("live", true));
+        frames.Should().Equal("rich-card", "done:live");
+        order.IndexOf("durable").Should().BeLessThan(order.IndexOf("dispatch"));
+        finalizeEmitter.Calls.Should().ContainSingle();
+        finalizeEmitter.Calls[0].Completion.Should().Be("live");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenCleanupFailsAfterSuccess_ShouldThrowCleanupFailure()
     {
         var sink = new EventChannel<string>();
@@ -528,6 +632,28 @@ public sealed class DefaultCommandInteractionServiceTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenPreDispatchDurableProbeThrows_ShouldReleaseInteractionResources()
+    {
+        var target = new TestTarget("target-1", new EventChannel<string>());
+        var receipt = new TestReceipt("target-1", "receipt-preflight-failure");
+        var durableResolver = new ThrowingDurableResolver(new TimeoutException("durable-timeout"));
+        var service = CreateService(
+            new TestDispatchPipeline(CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                CreateExecution(target, receipt, commandId: "cmd-preflight-failure"))),
+            durableResolver: durableResolver,
+            probeDurableCompletionWhileLive: true);
+
+        var act = () => service.ExecuteAsync(
+            "command-preflight-failure",
+            static (_, _) => ValueTask.CompletedTask);
+
+        await act.Should().ThrowAsync<TimeoutException>()
+            .WithMessage("durable-timeout");
+        durableResolver.Calls.Should().Be(1);
+        target.ReleaseCalls.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenEmitFails_ShouldResolveDurableCompletionAndPreserveExecutionFailureOverCleanupFailure()
     {
         var sink = new EventChannel<string>();
@@ -574,7 +700,8 @@ public sealed class DefaultCommandInteractionServiceTests
         ICommandObservationLifecycle<string, TestTarget, TestReceipt, string>? observationLifecycle = null,
         ICommandReceiptFactory<TestTarget, TestReceipt>? receiptFactory = null,
         ICommandObservationScopeLeasePreparation<string, TestTarget, TestReceipt, string>? observationScopePreparation = null,
-        IEventOutputStream<string, string>? outputStream = null) =>
+        IEventOutputStream<string, string>? outputStream = null,
+        bool probeDurableCompletionWhileLive = false) =>
         new(
             dispatchPipeline,
             outputStream ?? new DefaultEventOutputStream<string, string>(new PassThroughFrameMapper()),
@@ -584,7 +711,8 @@ public sealed class DefaultCommandInteractionServiceTests
             logger: null,
             observationLifecycle,
             receiptFactory,
-            observationScopePreparation);
+            observationScopePreparation,
+            probeDurableCompletionWhileLive);
 
     private static CommandDispatchExecution<TestTarget, TestReceipt> CreateExecution(
         TestTarget target,
@@ -931,7 +1059,8 @@ public sealed class DefaultCommandInteractionServiceTests
     }
 
     private sealed class RecordingDurableResolver(
-        CommandDurableCompletionObservation<string> observation)
+        CommandDurableCompletionObservation<string> observation,
+        List<string>? order = null)
         : ICommandDurableCompletionResolver<TestReceipt, string>
     {
         public int Calls { get; private set; }
@@ -943,6 +1072,7 @@ public sealed class DefaultCommandInteractionServiceTests
             _ = receipt;
             ct.ThrowIfCancellationRequested();
             Calls++;
+            order?.Add("durable");
             return Task.FromResult(observation);
         }
     }
@@ -966,6 +1096,49 @@ public sealed class DefaultCommandInteractionServiceTests
     private sealed class PassThroughFrameMapper : IEventFrameMapper<string, string>
     {
         public string Map(string evt) => evt;
+    }
+
+    private sealed class GatedBeforeEmissionOutputStream : IEventOutputStream<string, string>
+    {
+        private readonly TaskCompletionSource _emitGate =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource EventRead { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task PumpAsync(
+            IAsyncEnumerable<string> events,
+            Func<string, CancellationToken, ValueTask> emitAsync,
+            Func<string, bool>? shouldStop = null,
+            CancellationToken ct = default)
+        {
+            await foreach (var evt in events.WithCancellation(ct))
+            {
+                EventRead.TrySetResult();
+                await _emitGate.Task.WaitAsync(ct);
+                await emitAsync(evt, ct);
+                if (shouldStop?.Invoke(evt) == true)
+                    break;
+            }
+        }
+    }
+
+    private sealed class GatedDurableResolver
+        : ICommandDurableCompletionResolver<TestReceipt, string>
+    {
+        private readonly TaskCompletionSource<CommandDurableCompletionObservation<string>> _completion =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Complete(CommandDurableCompletionObservation<string> completion) =>
+            _completion.TrySetResult(completion);
+
+        public Task<CommandDurableCompletionObservation<string>> ResolveAsync(
+            TestReceipt receipt,
+            CancellationToken ct = default)
+        {
+            _ = receipt;
+            return _completion.Task.WaitAsync(ct);
+        }
     }
 }
 

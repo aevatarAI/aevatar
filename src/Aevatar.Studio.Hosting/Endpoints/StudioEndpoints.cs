@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Scripts.Contracts;
 using Aevatar.Studio.Application.Studio;
@@ -1280,14 +1281,18 @@ internal static class StudioEndpoints
                 // channel inbound path is the only caller that overrides
                 // with a sender-specific binding-id.
                 var preferences = await llmPreferencesStore.GetOwnerAsync(ct);
-                if (!string.IsNullOrWhiteSpace(preferences.DefaultModel))
-                    llmControl = llmControl with { ModelOverride = preferences.DefaultModel.Trim() };
-                if (!string.IsNullOrWhiteSpace(preferences.PreferredRoute))
-                    llmControl = llmControl with { NyxIdRoutePreference = preferences.PreferredRoute.Trim() };
+                llmControl = preferences.ApplyTo(llmControl);
             }
-            catch
+            catch (LLMSelectionRepairRequiredException)
             {
-                // Best-effort
+                throw;
+            }
+            catch (Exception ex)
+            {
+                http.RequestServices
+                    .GetService<ILoggerFactory>()?
+                    .CreateLogger(typeof(StudioEndpoints).FullName!)
+                    .LogWarning(ex, "Failed to apply the owner LLM selection to the Studio preview context.");
             }
         }
 

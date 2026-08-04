@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Security.Claims;
+using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -111,13 +112,96 @@ public sealed class StudioProvisioningEndpointsTests
         var context = service.ProvisionRequest!.CapabilityAdmission;
         context.Should().NotBeNull();
         context!.CallerId.Should().Be("caller-alpha");
-        context.NyxIdCallerBearerToken.Should().Be("runtime-caller-credential");
+        context.NyxIdCallerCredential?.SourceReadableUserBearerToken
+            .Should().Be("runtime-caller-credential");
         context.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
         context.ToString().Should().NotContain("runtime-caller-credential");
         service.ProvisionRequest.AuthenticatedOwner.Should().NotBeNull();
         service.ProvisionRequest.AuthenticatedOwner!.SubjectExternalUserId.Should().Be("caller-alpha");
         service.ProvisionRequest.AuthenticatedOwner.VerifiedBindingId.Should().Be("binding-alpha");
         service.ProvisionRequest.ProvisioningBearerToken.Should().Be("runtime-caller-credential");
+    }
+
+    [Fact]
+    public async Task HandleProvisionWorkflowAsync_ShouldMapAndScrubExplicitRequestConfirmations()
+    {
+        var service = new RecordingProvisioningService { Response = NewResponse() };
+
+        await InvokeHandle<IResult>(
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new ProvisionWorkflowRequest("Monitor", "name: wf-alpha", Caller: Caller)
+            {
+                TeamId = TeamId,
+                ExplicitRequestConfirmations =
+                [
+                    new NyxIdExplicitRequestConfirmationInput(
+                        "wf-alpha/request-alpha",
+                        "digest-alpha",
+                        "read_only"),
+                ],
+            },
+            service,
+            CancellationToken.None);
+
+        service.ProvisionRequest.Should().NotBeNull();
+        service.ProvisionRequest!.ExplicitRequestConfirmations.Should().BeNull();
+        service.ProvisionRequest.CapabilityAdmission!.CallerId.Should().Be("caller-alpha");
+        service.ProvisionRequest.CapabilityAdmission.ExplicitRequestConfirmations
+            .Should().ContainSingle().Which.RequestContractDigest.Should().Be("digest-alpha");
+    }
+
+    [Fact]
+    public async Task HandleProvisionWorkflowAsync_WithNullExplicitRequestConfirmation_ShouldReturnTypedBadRequestWithoutDispatch()
+    {
+        var service = new RecordingProvisioningService();
+        var http = CreateAuthenticatedContext(ScopeId);
+        http.Response.Body = new MemoryStream();
+
+        var result = await InvokeHandle<IResult>(
+            http,
+            ScopeId,
+            new ProvisionWorkflowRequest("Monitor", "name: wf-alpha", Caller: Caller)
+            {
+                TeamId = TeamId,
+                ExplicitRequestConfirmations = [null!],
+            },
+            service,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var body = await JsonDocument.ParseAsync(http.Response.Body);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.RootElement.GetProperty("code").GetString().Should()
+            .Be("INVALID_EXPLICIT_REQUEST_CONFIRMATION");
+        service.ProvisionInvoked.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleProvisionWorkflowAsync_WithMultipleAuthorizationValues_ShouldRejectWithoutDispatch()
+    {
+        var service = new RecordingProvisioningService();
+        var http = CreateAuthenticatedContext(ScopeId);
+        http.Request.Headers.Authorization =
+            new Microsoft.Extensions.Primitives.StringValues(["Bearer first", "Bearer second"]);
+
+        var result = await InvokeHandle<IResult>(
+            http,
+            ScopeId,
+            new ProvisionWorkflowRequest(
+                DisplayName: "Monitor",
+                WorkflowYaml: "name: monitor\nsteps: []\n",
+                Caller: Caller)
+            {
+                TeamId = TeamId,
+            },
+            service,
+            CancellationToken.None);
+
+        AssertBadRequestResult(result, "INVALID_WORKFLOW_CALLER_CREDENTIAL");
+        service.ProvisionInvoked.Should().BeFalse();
     }
 
     [Fact]
@@ -186,6 +270,30 @@ public sealed class StudioProvisioningEndpointsTests
             CancellationToken.None);
 
         service.ProvisionCaller!.Scope.Should().Be(ProvisionWorkflowCallerCredential.DefaultScope);
+    }
+
+    [Fact]
+    public void ProvisionWorkflowRequest_ShouldNotBindScheduleIdentityFromHttpJson()
+    {
+        var request = JsonSerializer.Deserialize<ProvisionWorkflowRequest>("""
+            {
+              "displayName": "Monitor",
+              "workflowYaml": "name: monitor",
+              "caller": {
+                "platform": "nyxid",
+                "externalUserId": "user-42",
+                "scope": "proxy"
+              },
+              "teamId": "team-alpha",
+              "scheduleOperationId": "caller-pinned-operation",
+              "scheduleIdempotencyKey": "caller-pinned-key"
+            }
+            """,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        request.Should().NotBeNull();
+        request!.ScheduleOperationId.Should().BeNull();
+        request.ScheduleIdempotencyKey.Should().BeNull();
     }
 
     [Fact]
@@ -383,6 +491,7 @@ public sealed class StudioProvisioningEndpointsTests
 
     private static IServiceProvider BuildAuthEnabledServices() =>
         new ServiceCollection()
+            .AddLogging()
             .AddSingleton<IConfiguration>(new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {

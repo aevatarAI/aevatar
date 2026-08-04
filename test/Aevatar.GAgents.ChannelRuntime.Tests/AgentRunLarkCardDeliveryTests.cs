@@ -1692,12 +1692,23 @@ public sealed class AgentRunLarkCardDeliveryTests
 
         public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
         {
-            CurrentVersion += _pending.Count;
-            _pending.Clear();
-            return Task.FromResult(new EventStoreCommitResult
+            var result = new EventStoreCommitResult();
+            foreach (var evt in _pending)
             {
-                LatestVersion = CurrentVersion,
-            });
+                CurrentVersion++;
+                result.CommittedEvents.Add(new StateEvent
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                    Version = CurrentVersion,
+                    EventType = evt.Descriptor.FullName,
+                    EventData = Any.Pack(evt),
+                });
+            }
+
+            result.LatestVersion = CurrentVersion;
+            _pending.Clear();
+            return Task.FromResult(result);
         }
 
         public Task PersistSnapshotAsync(TState currentState, CancellationToken ct = default) =>

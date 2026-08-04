@@ -137,6 +137,97 @@ public sealed class NyxIdApiAccessContractTests
     }
 
     [Fact]
+    public void ParseUserServiceKeys_ShouldMapPublishedExecutionAndAuthorityFacts()
+    {
+        const string response = """
+            {
+              "keys": [
+                {
+                  "id": "service-direct",
+                  "slug": "api-github",
+                  "label": "GitHub",
+                  "catalog_service_name": "GitHub API",
+                  "status": "active",
+                  "is_active": true,
+                  "credential_source": { "type": "personal" },
+                  "endpoint_id": "endpoint-direct",
+                  "endpoint_url": "https://example.invalid",
+                  "connected": true
+                },
+                {
+                  "id": "service-node",
+                  "slug": "api-linear",
+                  "label": "Linear",
+                  "catalog_service_name": null,
+                  "status": "pending_auth",
+                  "is_active": true,
+                  "node_id": "node-alpha",
+                  "node_status": "online",
+                  "credential_source": {
+                    "type": "org",
+                    "org_id": "org-alpha",
+                    "org_name": "Alpha",
+                    "avatar_url": null,
+                    "role": "member",
+                    "allowed": true
+                  },
+                  "endpoint_id": "endpoint-node",
+                  "endpoint_url": "https://node.invalid",
+                  "connected": true
+                }
+              ],
+              "future_field": true
+            }
+            """;
+
+        var result = NyxIdApiAccessResponseParser.ParseUserServiceKeys(response);
+
+        result.Succeeded.Should().BeTrue();
+        result.Failure.Should().BeNull();
+        result.Value!.Services.Should().Equal(
+            new NyxIdUserServiceKey(
+                "service-direct",
+                "api-github",
+                "GitHub",
+                "GitHub API",
+                true,
+                NyxIdUserServiceCredentialStatus.Active,
+                null,
+                NyxIdUserServiceNodeStatus.NotBound,
+                new NyxIdUserServiceCredentialSource(
+                    NyxIdUserServiceCredentialSourceKind.Personal)),
+            new NyxIdUserServiceKey(
+                "service-node",
+                "api-linear",
+                "Linear",
+                null,
+                true,
+                NyxIdUserServiceCredentialStatus.PendingAuthorization,
+                "node-alpha",
+                NyxIdUserServiceNodeStatus.Online,
+                new NyxIdUserServiceCredentialSource(
+                    NyxIdUserServiceCredentialSourceKind.Organization,
+                    "org-alpha",
+                    "Alpha",
+                    null,
+                    NyxIdOrganizationRole.Member,
+                    true)));
+    }
+
+    [Theory]
+    [MemberData(nameof(MalformedUserServiceKeys))]
+    public void ParseUserServiceKeys_ShouldRejectMalformedExecutionInventory(string response)
+    {
+        var result = NyxIdApiAccessResponseParser.ParseUserServiceKeys(response);
+
+        result.Succeeded.Should().BeFalse();
+        result.Value.Should().BeNull();
+        result.Failure.Should().Be(new NyxIdApiAccessFailure(
+            NyxIdApiAccessFailureKind.MalformedResponse,
+            "nyxid_user_service_keys_response_malformed"));
+    }
+
+    [Fact]
     public void ParseScopePlan_ShouldMapCompletePublishedContract()
     {
         var result = NyxIdApiAccessResponseParser.ParseScopePlan(ValidScopePlanJson());
@@ -234,6 +325,12 @@ public sealed class NyxIdApiAccessContractTests
             .Be(new NyxIdApiAccessFailure(
                 NyxIdApiAccessFailureKind.MalformedResponse,
                 "nyxid_user_services_response_malformed"));
+        NyxIdApiAccessResponseParser.ParseUserServiceKeys(response!)
+            .Failure
+            .Should()
+            .Be(new NyxIdApiAccessFailure(
+                NyxIdApiAccessFailureKind.MalformedResponse,
+                "nyxid_user_service_keys_response_malformed"));
         NyxIdApiAccessResponseParser.ParseScopePlan(response!)
             .Failure
             .Should()
@@ -406,6 +503,28 @@ public sealed class NyxIdApiAccessContractTests
             valid.Replace("\"node_ids\": [\"node-a\", \"node-b\"]", "\"node_ids\": []", StringComparison.Ordinal),
         };
     }
+
+    public static TheoryData<string> MalformedUserServiceKeys() => new()
+    {
+        """
+        {"services":[{"id":"service-a","slug":"api-a","status":"active","is_active":true,"credential_source":{"type":"personal"}}]}
+        """,
+        """
+        {"keys":[
+          {"id":"service-a","slug":"api-a","status":"active","is_active":true,"credential_source":{"type":"personal"}},
+          {"id":"service-a","slug":"api-b","status":"active","is_active":true,"credential_source":{"type":"personal"}}
+        ]}
+        """,
+        """
+        {"keys":[{"id":"service-a","slug":"api-a","status":"mystery","is_active":true,"credential_source":{"type":"personal"}}]}
+        """,
+        """
+        {"keys":[{"id":"service-a","slug":"api-a","status":"active","is_active":true,"node_id":"node-a","credential_source":{"type":"personal"}}]}
+        """,
+        """
+        {"keys":[{"id":"service-a","slug":"api-a","status":"active","is_active":true,"node_id":"node-a","node_status":"mystery","credential_source":{"type":"personal"}}]}
+        """,
+    };
 
     private static string ValidScopePlanJson() => $$"""
         {

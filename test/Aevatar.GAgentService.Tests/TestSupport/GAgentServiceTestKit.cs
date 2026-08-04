@@ -1,4 +1,5 @@
 using System.Reflection;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
@@ -154,6 +155,7 @@ internal static class GAgentServiceTestKit
             .AddSingleton<InMemoryActorRuntimeCallbackScheduler>()
             .AddSingleton<IActorRuntimeCallbackScheduler>(sp =>
                 sp.GetRequiredService<InMemoryActorRuntimeCallbackScheduler>())
+            .AddSingleton<IAgentToolExecutionPort, RecordingAgentToolExecutionPort>()
             .AddSingleton<ILogger<LlmRunCore>>(NullLogger<LlmRunCore>.Instance)
             .AddSingleton<IEnumerable<IGAgentExecutionHook>>(Array.Empty<IGAgentExecutionHook>());
         configureServices?.Invoke(services);
@@ -168,7 +170,8 @@ internal static class GAgentServiceTestKit
                         providerFactory,
                         sp.GetServices<IResponsesToolProvider>(),
                         sp.GetService<IToolSetRegistry>() ?? TestToolSetRegistry.Empty,
-                        sp.GetRequiredService<ILogger<LlmRunCore>>());
+                        sp.GetRequiredService<ILogger<LlmRunCore>>(),
+                        sp.GetRequiredService<IAgentToolExecutionPort>());
             });
             services.TryAddSingleton<InlineLlmRunExecutor>(sp => new InlineLlmRunExecutor(
                 sp.GetRequiredService<ILlmRunCore>(),
@@ -378,6 +381,78 @@ internal static class GAgentServiceTestKit
         private string ResolveRunId(string? candidate) =>
             string.IsNullOrWhiteSpace(candidate) ? runId : candidate.Trim();
     }
+}
+
+internal sealed class RecordingAgentToolExecutionPort : IAgentToolExecutionPort
+{
+    public List<AgentToolExecutionRequest> Requests { get; } = [];
+
+    public async Task<AgentToolExecutionOutcome> ExecuteAsync(
+        AgentToolExecutionRequest request,
+        CancellationToken ct = default)
+    {
+        Requests.Add(request);
+        try
+        {
+            var resultJson = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
+            return CreateOutcome(
+                request,
+                AgentToolExecutionOutcomeKind.Executed,
+                AgentToolReceiptStatus.Success,
+                resultJson,
+                string.Empty,
+                string.Empty);
+        }
+        catch (Exception)
+        {
+            const string failureCode = "aevatar_local_tool_execution_failed";
+            var resultJson = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                error = new
+                {
+                    code = failureCode,
+                    tool_name = request.Tool.Name,
+                    message = "Local tool execution failed.",
+                },
+            });
+            return CreateOutcome(
+                request,
+                AgentToolExecutionOutcomeKind.Failed,
+                AgentToolReceiptStatus.Error,
+                resultJson,
+                failureCode,
+                "Local tool execution failed.");
+        }
+    }
+
+    private static AgentToolExecutionOutcome CreateOutcome(
+        AgentToolExecutionRequest request,
+        AgentToolExecutionOutcomeKind kind,
+        AgentToolReceiptStatus status,
+        string resultJson,
+        string failureCode,
+        string safeMessage) =>
+        new(
+            kind,
+            resultJson,
+            new AgentToolReceipt
+            {
+                CallId = request.ExecutionContext.Request.CallId,
+                ToolName = request.Tool.Name,
+                Status = status,
+                ResultJson = resultJson,
+                ErrorCode = failureCode,
+                ErrorMessage = safeMessage,
+            },
+            IsMutation: false,
+            failureCode,
+            safeMessage,
+            kind == AgentToolExecutionOutcomeKind.Executed
+                ? AgentToolExecutionFailureStage.None
+                : AgentToolExecutionFailureStage.TerminalExecution,
+            TerminalInvoked: true,
+            Retryable: false,
+            AuditCompleted: true);
 }
 
 internal sealed class RecordingActorDispatchPort : IActorDispatchPort

@@ -5,16 +5,19 @@ namespace Aevatar.AI.Core.Tools;
 
 internal static class AgentToolReceiptFactory
 {
-    public static bool IsReceiptWorthy(IAgentTool tool, AgentToolCallSafety callSafety)
-    {
-        ArgumentNullException.ThrowIfNull(tool);
-        ArgumentNullException.ThrowIfNull(callSafety);
-        return tool.ApprovalMode != ToolApprovalMode.NeverRequire ||
-               callSafety.IsDestructive ||
-               !string.IsNullOrWhiteSpace(tool.SideEffectKind);
-    }
+    internal const string UnknownErrorCode = "tool_outcome_unknown";
+    internal const string UnknownErrorMessage = "The tool outcome could not be verified.";
+    internal const string UnknownResultJson =
+        "{\"status\":\"unknown\",\"message\":\"The tool outcome could not be verified.\"}";
 
-    public static AgentToolReceipt? CreateSuccess(
+    public static AgentToolReceipt CreateRunning(
+        IAgentTool tool,
+        string callId,
+        string toolName,
+        AgentToolCallSafety callSafety) =>
+        CreateBase(tool, callId, toolName, callSafety, AgentToolReceiptStatus.Unspecified);
+
+    public static AgentToolReceipt CreateResult(
         IAgentTool tool,
         string callId,
         string toolName,
@@ -22,23 +25,63 @@ internal static class AgentToolReceiptFactory
         string resultJson,
         string argumentsJson = "")
     {
-        var providerReceipt = tool.CreateResultReceipt(
-            callId,
-            toolName,
-            argumentsJson ?? string.Empty,
-            resultJson ?? string.Empty);
+        AgentToolReceipt? providerReceipt;
+        try
+        {
+            providerReceipt = tool.CreateResultReceipt(
+                callId,
+                toolName,
+                argumentsJson ?? string.Empty,
+                resultJson ?? string.Empty);
+        }
+        catch
+        {
+            return CreateUnknown(tool, callId, toolName, callSafety);
+        }
+
         if (providerReceipt is not null)
             return NormalizeProviderResultReceipt(tool, callId, toolName, callSafety, resultJson, providerReceipt);
 
-        if (!IsReceiptWorthy(tool, callSafety))
-            return null;
-
-        var receipt = CreateBase(tool, callId, toolName, callSafety, AgentToolReceiptStatus.Success);
-        receipt.ResultJson = resultJson ?? string.Empty;
-        return receipt;
+        return CreateUnknown(tool, callId, toolName, callSafety);
     }
 
-    public static AgentToolReceipt? CreateError(
+    public static AgentToolReceipt CreateResult(
+        IAgentTool tool,
+        string callId,
+        string toolName,
+        AgentToolCallSafety callSafety,
+        string resultJson,
+        AgentToolReceipt? terminalReceipt,
+        string argumentsJson = "")
+    {
+        if (terminalReceipt is null)
+            return CreateResult(tool, callId, toolName, callSafety, resultJson, argumentsJson);
+
+        try
+        {
+            return NormalizeProviderResultReceipt(
+                tool,
+                callId,
+                toolName,
+                callSafety,
+                resultJson,
+                terminalReceipt);
+        }
+        catch
+        {
+            return CreateUnknown(tool, callId, toolName, callSafety);
+        }
+    }
+
+    public static AgentToolReceipt CreateSuccess(
+        IAgentTool tool,
+        string callId,
+        string toolName,
+        AgentToolCallSafety callSafety,
+        string resultJson) =>
+        CreateResult(tool, callId, toolName, callSafety, resultJson);
+
+    public static AgentToolReceipt CreateError(
         IAgentTool tool,
         string callId,
         string toolName,
@@ -47,9 +90,6 @@ internal static class AgentToolReceiptFactory
         string errorCode,
         string errorMessage)
     {
-        if (!IsReceiptWorthy(tool, callSafety))
-            return null;
-
         var receipt = CreateBase(tool, callId, toolName, callSafety, AgentToolReceiptStatus.Error);
         receipt.ResultJson = resultJson ?? string.Empty;
         receipt.ErrorCode = errorCode ?? string.Empty;
@@ -85,6 +125,24 @@ internal static class AgentToolReceiptFactory
         receipt.ApprovalRequestId = approvalRequestId ?? string.Empty;
         receipt.ErrorCode = "approval_denied";
         receipt.ErrorMessage = reason ?? string.Empty;
+        return receipt;
+    }
+
+    public static AgentToolReceipt CreateDenied(
+        IAgentTool tool,
+        string callId,
+        string toolName,
+        AgentToolCallSafety callSafety,
+        string resultJson,
+        string errorCode,
+        string errorMessage,
+        string approvalRequestId = "")
+    {
+        var receipt = CreateBase(tool, callId, toolName, callSafety, AgentToolReceiptStatus.Denied);
+        receipt.ResultJson = resultJson ?? string.Empty;
+        receipt.ApprovalRequestId = approvalRequestId ?? string.Empty;
+        receipt.ErrorCode = errorCode ?? string.Empty;
+        receipt.ErrorMessage = errorMessage ?? string.Empty;
         return receipt;
     }
 
@@ -134,6 +192,24 @@ internal static class AgentToolReceiptFactory
     private static string NormalizeSideEffectKind(string? sideEffectKind) =>
         string.IsNullOrWhiteSpace(sideEffectKind) ? string.Empty : sideEffectKind.Trim().ToLowerInvariant();
 
+    private static AgentToolReceipt CreateUnknown(
+        IAgentTool tool,
+        string callId,
+        string toolName,
+        AgentToolCallSafety callSafety)
+    {
+        var receipt = CreateBase(
+            tool,
+            callId,
+            toolName,
+            callSafety,
+            AgentToolReceiptStatus.Unspecified);
+        receipt.ResultJson = UnknownResultJson;
+        receipt.ErrorCode = UnknownErrorCode;
+        receipt.ErrorMessage = UnknownErrorMessage;
+        return receipt;
+    }
+
     private static AgentToolReceipt NormalizeProviderResultReceipt(
         IAgentTool tool,
         string callId,
@@ -143,18 +219,20 @@ internal static class AgentToolReceiptFactory
         AgentToolReceipt receipt)
     {
         var normalized = receipt.Clone();
-        normalized.CallId = string.IsNullOrWhiteSpace(normalized.CallId) ? callId ?? string.Empty : normalized.CallId;
-        normalized.ToolName = string.IsNullOrWhiteSpace(normalized.ToolName)
-            ? string.IsNullOrWhiteSpace(toolName) ? tool.Name ?? string.Empty : toolName
-            : normalized.ToolName;
-        if (normalized.Status == AgentToolReceiptStatus.Unspecified)
-            normalized.Status = AgentToolReceiptStatus.Success;
-        if (normalized.ApprovalMode == AgentToolReceiptApprovalMode.Unspecified)
-            normalized.ApprovalMode = MapApprovalMode(tool.ApprovalMode);
+        normalized.CallId = callId ?? string.Empty;
+        normalized.ToolName = string.IsNullOrWhiteSpace(toolName) ? tool.Name ?? string.Empty : toolName;
+        normalized.ApprovalMode = MapApprovalMode(tool.ApprovalMode);
         normalized.IsDestructive = normalized.IsDestructive || callSafety.IsDestructive;
         normalized.SideEffectKind = string.IsNullOrWhiteSpace(normalized.SideEffectKind)
             ? NormalizeSideEffectKind(tool.SideEffectKind)
             : NormalizeSideEffectKind(normalized.SideEffectKind);
+        if (normalized.Status == AgentToolReceiptStatus.Unspecified)
+        {
+            normalized.ResultJson = UnknownResultJson;
+            normalized.ErrorCode = UnknownErrorCode;
+            normalized.ErrorMessage = UnknownErrorMessage;
+            return normalized;
+        }
         if (normalized.Status == AgentToolReceiptStatus.Success &&
             string.IsNullOrWhiteSpace(normalized.ResultJson))
         {

@@ -37,7 +37,8 @@ public class NyxIdSshExecToolTests
     {
         var tool = new NyxIdSshExecTool(CreateDummyClient());
 
-        tool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        tool.IsDestructive.Should().BeTrue();
         tool.Description.Should().Contain("ssh://");
         tool.Description.Should().Contain("nyxid_proxy");
         tool.Description.Should().Contain("nyxid_services");
@@ -47,24 +48,12 @@ public class NyxIdSshExecToolTests
     }
 
     [Fact]
-    public void RequiresApproval_DefaultsToTrue()
+    public void ApprovalPolicy_AlwaysRequiresDurableGrant()
     {
         var tool = new NyxIdSshExecTool(CreateDummyClient());
-        tool.RequiresApproval(
-            """{"service":"sg-office","command":"uname -a","principal":"ubuntu"}""")
-            .Should().BeTrue();
-    }
 
-    [Fact]
-    public void RequiresApproval_WhenBypassEnabled_ReturnsFalse()
-    {
-        var tool = new NyxIdSshExecTool(
-            CreateDummyClient(),
-            new NyxIdToolOptions { BypassSshExecApproval = true });
-
-        tool.RequiresApproval(
-                """{"service":"sg-office","command":"uname -a","principal":"ubuntu"}""")
-            .Should().BeFalse();
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        tool.IsDestructive.Should().BeTrue();
     }
 
     [Fact]

@@ -3,7 +3,6 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Hosting;
-using Aevatar.Workflow.Abstractions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
@@ -180,12 +179,7 @@ public sealed class WorkspaceController : ControllerBase
             {
                 return Accepted(await _scopeWorkflowService.CreateDraftAsync(
                     scopeContext.ScopeId,
-                    request with
-                    {
-                        CapabilityAdmission = StudioWorkflowCapabilityAdmissionHttpContext.Create(
-                            HttpContext,
-                            ExternalCapabilityExecutionMode.Interactive),
-                    },
+                    request,
                     cancellationToken));
             }
             catch (AppApiException exception)
@@ -235,12 +229,7 @@ public sealed class WorkspaceController : ControllerBase
                 return Ok(await _scopeWorkflowService.UpdateDraftAsync(
                     scopeContext.ScopeId,
                     workflowId,
-                    request with
-                    {
-                        CapabilityAdmission = StudioWorkflowCapabilityAdmissionHttpContext.Create(
-                            HttpContext,
-                            ExternalCapabilityExecutionMode.Interactive),
-                    },
+                    request,
                     cancellationToken));
             }
 

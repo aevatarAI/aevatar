@@ -18,18 +18,7 @@ internal static class NyxIdProxyReceiptFactory
     {
         var normalizedUserServiceId = NormalizeUserServiceId(userServiceId);
         if (!NyxIdApiClient.TryParseProxyError(resultJson, out var error) || error is null)
-        {
-            return normalizedUserServiceId == null
-                ? null
-                : new AgentToolReceipt
-                {
-                    CallId = callId ?? string.Empty,
-                    ToolName = toolName ?? string.Empty,
-                    Status = AgentToolReceiptStatus.Success,
-                    SubjectKind = UserServiceSubjectKind,
-                    SubjectId = normalizedUserServiceId,
-                };
-        }
+            return CreateSuccess(callId, toolName, normalizedUserServiceId, resultJson);
 
         var normalizedSlug = NormalizeSlug(serviceSlug);
         if (error.IsAuthorizationRequired)
@@ -51,16 +40,53 @@ internal static class NyxIdProxyReceiptFactory
             ? "The service request was denied."
             : "The service request failed.";
 
+        return CreateError(
+            callId,
+            toolName,
+            normalizedUserServiceId,
+            errorCode,
+            safeMessage,
+            BuildSafeResult(errorCode, safeMessage));
+    }
+
+    public static AgentToolReceipt? CreateSuccess(
+        string callId,
+        string toolName,
+        string? userServiceId,
+        string resultJson)
+    {
+        var normalizedUserServiceId = NormalizeUserServiceId(userServiceId);
+        return normalizedUserServiceId == null
+            ? null
+            : new AgentToolReceipt
+            {
+                CallId = callId ?? string.Empty,
+                ToolName = toolName ?? string.Empty,
+                Status = AgentToolReceiptStatus.Success,
+                SubjectKind = UserServiceSubjectKind,
+                SubjectId = normalizedUserServiceId,
+                ResultJson = resultJson ?? string.Empty,
+            };
+    }
+
+    public static AgentToolReceipt CreateError(
+        string callId,
+        string toolName,
+        string? userServiceId,
+        string errorCode,
+        string errorMessage,
+        string resultJson)
+    {
         var receipt = new AgentToolReceipt
         {
             CallId = callId ?? string.Empty,
             ToolName = toolName ?? string.Empty,
             Status = AgentToolReceiptStatus.Error,
-            ErrorCode = errorCode,
-            ErrorMessage = safeMessage,
-            ResultJson = BuildSafeResult(errorCode, safeMessage),
+            ErrorCode = errorCode ?? string.Empty,
+            ErrorMessage = errorMessage ?? string.Empty,
+            ResultJson = resultJson ?? string.Empty,
         };
-        AttachUserServiceSubject(receipt, normalizedUserServiceId);
+        AttachUserServiceSubject(receipt, NormalizeUserServiceId(userServiceId));
         return receipt;
     }
 

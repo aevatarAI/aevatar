@@ -1,6 +1,8 @@
 import { USER_LLM_ROUTE_GATEWAY } from "@/pages/chat/chatConversationConfig";
 import { t } from "@/shared/i18n/messages";
 import type {
+  StudioLlmSelection,
+  StudioSelectedLlmModelSelection,
   StudioUserLlmRouteOption,
   StudioUserLlmSettings,
 } from "@/shared/studio/models";
@@ -8,13 +10,10 @@ import type {
 const USER_SERVICE_SELECTION_PREFIX = "user-service:";
 const GATEWAY_SELECTION_VALUE = "gateway";
 
-export type UserLlmSelectionDraft =
-  | { readonly kind: "gateway"; readonly routeValue: string }
-  | {
-      readonly kind: "nyx_id_user_service";
-      readonly userServiceId: string;
-      readonly routeValue: string;
-    };
+export type UserLlmSelectionDraft = Exclude<
+  StudioLlmSelection,
+  { routeKind: "unspecified" }
+>;
 
 export type UserLlmSelectionOption = {
   readonly label: string;
@@ -22,7 +21,7 @@ export type UserLlmSelectionOption = {
   readonly selection: UserLlmSelectionDraft;
   readonly ready: boolean;
   readonly allowed: boolean;
-  readonly defaultModel: string | null;
+  readonly modelCatalog: StudioUserLlmRouteOption["modelCatalog"];
 };
 
 function trimOptional(value: unknown): string | undefined {
@@ -30,12 +29,16 @@ function trimOptional(value: unknown): string | undefined {
   return normalized || undefined;
 }
 
+function providerDefault(): StudioSelectedLlmModelSelection {
+  return { kind: "provider_default" };
+}
+
 export function encodeUserLlmSelectionValue(
   selection: UserLlmSelectionDraft,
 ): string {
-  return selection.kind === "gateway"
+  return selection.routeKind === "gateway"
     ? GATEWAY_SELECTION_VALUE
-    : `${USER_SERVICE_SELECTION_PREFIX}${encodeURIComponent(selection.userServiceId)}`;
+    : `${USER_SERVICE_SELECTION_PREFIX}${encodeURIComponent(selection.nyxIdUserServiceId)}`;
 }
 
 export function buildUserLlmSelectionOptions(
@@ -53,8 +56,9 @@ export function buildUserLlmSelectionOptions(
 
       hasGateway = true;
       const selection: UserLlmSelectionDraft = {
-        kind: "gateway",
+        routeKind: "gateway",
         routeValue: USER_LLM_ROUTE_GATEWAY,
+        modelSelection: providerDefault(),
       };
       options.push({
         label:
@@ -64,7 +68,7 @@ export function buildUserLlmSelectionOptions(
         selection,
         ready: option.ready,
         allowed: option.allowed,
-        defaultModel: null,
+        modelCatalog: option.modelCatalog,
       });
       continue;
     }
@@ -74,23 +78,32 @@ export function buildUserLlmSelectionOptions(
     }
 
     const userServiceId = trimOptional(option.userServiceId);
-    if (!userServiceId || seenUserServiceIds.has(userServiceId)) {
+    const serviceSlug = trimOptional(option.serviceSlug);
+    const routeValue = trimOptional(option.routeValue);
+    if (
+      !userServiceId ||
+      !serviceSlug ||
+      !routeValue ||
+      seenUserServiceIds.has(userServiceId)
+    ) {
       continue;
     }
 
     seenUserServiceIds.add(userServiceId);
     const selection: UserLlmSelectionDraft = {
-      kind: "nyx_id_user_service",
-      userServiceId,
-      routeValue: option.routeValue.trim(),
+      routeKind: "nyx_id_user_service",
+      routeValue,
+      nyxIdUserServiceId: userServiceId,
+      serviceSlugSnapshot: serviceSlug,
+      modelSelection: providerDefault(),
     };
     options.push({
-      label: option.label.trim() || option.serviceSlug?.trim() || userServiceId,
+      label: option.label.trim() || serviceSlug || userServiceId,
       value: encodeUserLlmSelectionValue(selection),
       selection,
       ready: option.ready,
       allowed: option.allowed,
-      defaultModel: trimOptional(option.defaultModel) ?? null,
+      modelCatalog: option.modelCatalog,
     });
   }
 
@@ -105,61 +118,68 @@ export function decodeUserLlmSelectionValue(
 }
 
 export function resolveSavedUserLlmSelection(
-  settings:
-    | (Pick<
-        StudioUserLlmSettings,
-        "savedRoute" | "savedRouteKind" | "savedUserServiceId"
-      > &
-        Partial<Pick<StudioUserLlmSettings, "routeOptions">>)
-    | undefined,
+  settings: Pick<StudioUserLlmSettings, "savedSelection"> | undefined,
 ): UserLlmSelectionDraft | undefined {
-  if (!settings) {
+  const selection = settings?.savedSelection;
+  if (!selection || selection.routeKind === "unspecified") {
     return undefined;
   }
 
-  if (settings.savedRouteKind === "gateway") {
-    return {
-      kind: "gateway",
-      routeValue: USER_LLM_ROUTE_GATEWAY,
-    };
-  }
+  return cloneUserLlmSelection(selection);
+}
 
-  if (settings.savedRouteKind !== "nyx_id_user_service") {
-    return undefined;
-  }
-
-  const userServiceId = trimOptional(settings.savedUserServiceId);
-  if (!userServiceId) {
-    return undefined;
-  }
-
-  const currentOption = settings.routeOptions?.find(
-    (option) =>
-      option.source === "user_service" &&
-      trimOptional(option.userServiceId) === userServiceId,
-  );
-
-  return {
-    kind: "nyx_id_user_service",
-    userServiceId,
-    routeValue:
-      trimOptional(currentOption?.routeValue) ?? settings.savedRoute.trim(),
-  };
+export function cloneUserLlmSelection(
+  selection: UserLlmSelectionDraft,
+): UserLlmSelectionDraft {
+  return selection.routeKind === "gateway"
+    ? {
+        routeKind: selection.routeKind,
+        routeValue: selection.routeValue,
+        modelSelection: { ...selection.modelSelection },
+      }
+    : {
+        routeKind: selection.routeKind,
+        routeValue: selection.routeValue,
+        nyxIdUserServiceId: selection.nyxIdUserServiceId,
+        serviceSlugSnapshot: selection.serviceSlugSnapshot,
+        modelSelection: { ...selection.modelSelection },
+      };
 }
 
 export function userLlmSelectionsEqual(
-  left: UserLlmSelectionDraft | undefined,
-  right: UserLlmSelectionDraft | undefined,
+  left: StudioLlmSelection | null | undefined,
+  right: StudioLlmSelection | null | undefined,
 ): boolean {
   if (!left || !right) {
     return left === right;
   }
 
-  if (left.kind !== right.kind) {
+  if (left.routeKind !== right.routeKind) {
+    return false;
+  }
+  if (left.modelSelection.kind !== right.modelSelection.kind) {
+    return false;
+  }
+  if (
+    left.modelSelection.kind === "explicit_model" &&
+    (right.modelSelection.kind !== "explicit_model" ||
+      left.modelSelection.modelId !== right.modelSelection.modelId)
+  ) {
     return false;
   }
 
-  return left.kind === "gateway" ||
-    (right.kind === "nyx_id_user_service" &&
-      left.userServiceId === right.userServiceId);
+  if (left.routeKind === "unspecified" || right.routeKind === "unspecified") {
+    return left.routeKind === right.routeKind;
+  }
+  if (left.routeValue !== right.routeValue) {
+    return false;
+  }
+  if (left.routeKind === "gateway" || right.routeKind === "gateway") {
+    return left.routeKind === right.routeKind;
+  }
+
+  return (
+    left.nyxIdUserServiceId === right.nyxIdUserServiceId &&
+    left.serviceSlugSnapshot === right.serviceSlugSnapshot
+  );
 }

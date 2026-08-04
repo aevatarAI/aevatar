@@ -396,7 +396,7 @@ describe("ChatPage server-backed history", () => {
     ).toBeTruthy();
   });
 
-  it("recovers an accepted create after the stream disconnects before context", async () => {
+  it("hydrates a recovered create from its conversation version before continuing", async () => {
     const stream = createControlledSseResponse();
     const recoveredMeta = {
       ...serverConversation,
@@ -425,11 +425,11 @@ describe("ChatPage server-backed history", () => {
       .mockResolvedValueOnce([])
       .mockResolvedValue([recoveredMeta]);
     (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue(
-      conversationDetail(recoveredMessages, 2)
+      conversationDetail(recoveredMessages, 1)
     );
     (chatHistoryApi.recoverCreate as jest.Mock).mockResolvedValue({
       conversationId: "recovered-after-disconnect",
-      stateVersion: 2,
+      stateVersion: 4,
       status: "append_committed",
       turnId: "recovered-turn",
     });
@@ -441,7 +441,7 @@ describe("ChatPage server-backed history", () => {
             "recovered-after-disconnect",
             "continued-turn",
             "scope-a",
-            2
+            1
           ),
           { runFinished: { result: { output: "Continued recovered chat." } } },
         ])
@@ -465,7 +465,7 @@ describe("ChatPage server-backed history", () => {
     expect(chatRequestBodies()[1]).toMatchObject({
       conversation: {
         conversationId: "recovered-after-disconnect",
-        minimumStateVersion: 2,
+        minimumStateVersion: 1,
       },
       prompt: "Continue the recovered chat",
     });
@@ -746,7 +746,7 @@ describe("ChatPage server-backed history", () => {
     expect(changedBody.commandId).not.toBe(firstBody.commandId);
   });
 
-  it("uses the reconciled server watermark for a second Team-selection turn", async () => {
+  it("uses the reconciled Conversation watermark when create context reports another version domain", async () => {
     const firstProjectedConversation = {
       ...serverConversation,
       id: "server-conversation",
@@ -795,7 +795,7 @@ describe("ChatPage server-backed history", () => {
     (authFetch as jest.Mock)
       .mockResolvedValueOnce(
         createSseResponse([
-          chatContextFrame("server-conversation", "turn-1", "scope-a", 0),
+          chatContextFrame("server-conversation", "turn-1", "scope-a", 40),
           {
             runFinished: {
               result: { output: "Choose a Team: team01 or team02." },
@@ -1241,7 +1241,7 @@ describe("ChatPage server-backed history", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
-  it("keeps every chat action disabled until reconciliation reaches the known watermark", async () => {
+  it("keeps every chat action disabled until reconciliation observes a positive Conversation watermark", async () => {
     let resolveZeroDetail: (
       detail: ReturnType<typeof conversationDetail>
     ) => void = () => undefined;
@@ -1256,14 +1256,6 @@ describe("ChatPage server-backed history", () => {
     const regressedDetail = new Promise<ReturnType<typeof conversationDetail>>(
       (resolve) => {
         resolveRegressedDetail = resolve;
-      }
-    );
-    let resolveCurrentDetail: (
-      detail: ReturnType<typeof conversationDetail>
-    ) => void = () => undefined;
-    const currentDetail = new Promise<ReturnType<typeof conversationDetail>>(
-      (resolve) => {
-        resolveCurrentDetail = resolve;
       }
     );
     const projectedConversation = {
@@ -1288,7 +1280,6 @@ describe("ChatPage server-backed history", () => {
     (chatHistoryApi.loadConversation as jest.Mock)
       .mockReturnValueOnce(zeroDetail)
       .mockReturnValueOnce(regressedDetail)
-      .mockReturnValueOnce(currentDetail)
       .mockResolvedValue(
         conversationDetail(
           [
@@ -1342,16 +1333,9 @@ describe("ChatPage server-backed history", () => {
     expect(confirmButton).toBeDisabled();
     expect(screen.getByRole("textbox")).toBeDisabled();
 
-    act(() => resolveRegressedDetail(conversationDetail(projectedMessages, 6)));
-    await waitFor(
-      () => expect(chatHistoryApi.loadConversation).toHaveBeenCalledTimes(3),
-      { timeout: 2_500 }
+    act(() =>
+      resolveRegressedDetail(conversationDetail(projectedMessages, 6))
     );
-    expect(confirmButton).toBeDisabled();
-    expect(screen.getByRole("textbox")).toBeDisabled();
-    expect(chatRequestBodies()).toHaveLength(1);
-
-    act(() => resolveCurrentDetail(conversationDetail(projectedMessages, 8)));
     await waitFor(() =>
       expect(
         screen.getByRole("button", { name: "Confirm and create" })
@@ -1364,7 +1348,7 @@ describe("ChatPage server-backed history", () => {
     expect(chatRequestBodies()[1]).toMatchObject({
       conversation: {
         conversationId: "server-confirm",
-        minimumStateVersion: 8,
+        minimumStateVersion: 6,
       },
       prompt: "Confirm. Please create it now.",
     });

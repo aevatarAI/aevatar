@@ -16,6 +16,15 @@ namespace Aevatar.Workflow.Core.Tests.Modules;
 public sealed class ToolCallModuleContextTests
 {
     [Fact]
+    public void ToolExecutionIssuedTime_ShouldCrossWorkflowBoundariesAsTypedData()
+    {
+        typeof(WorkflowToolExecutionRequest).GetProperty("IssuedAtUnixMs")
+            .Should().NotBeNull();
+        PendingToolCallApprovalState.Descriptor.FindFieldByName("issued_at_unix_ms")
+            .Should().NotBeNull();
+    }
+
+    [Fact]
     public void ExternalOperationAdmissionContract_ShouldCrossEveryRuntimeBoundaryAsTypedData()
     {
         BindWorkflowRunDefinitionEvent.Descriptor.FindFieldByName("capability_admission_plan")
@@ -45,9 +54,9 @@ public sealed class ToolCallModuleContextTests
 
         var admission = tool.Requests.Should().ContainSingle().Subject.InvocationAdmission;
         admission.Should().NotBeNull();
-        admission!.NyxIdUserService.EndpointId.Should().Be("get_item");
-        admission.NyxIdUserService.PathTemplate.Should().Be("/items/{item_id}");
-        admission.NyxIdUserService.ContractDigest.Should().Be("server-derived-digest");
+        admission!.Capability.NyxIdUserService.EndpointId.Should().Be("get_item");
+        admission.Capability.NyxIdUserService.PathTemplate.Should().Be("/items/{item_id}");
+        admission.Capability.NyxIdUserService.ContractDigest.Should().Be("server-derived-digest");
     }
 
     [Theory]
@@ -275,6 +284,7 @@ public sealed class ToolCallModuleContextTests
     [Fact]
     public async Task ToolCallModule_ShouldPassTypedWorkflowToolExecutionRequestToDirectTool()
     {
+        var issuedAt = new DateTimeOffset(2026, 7, 31, 10, 11, 12, TimeSpan.Zero);
         var tool = new CapturingWorkflowTool("nyxid_tool");
         var module = CreateModule(tool);
         var ctx = new RecordingWorkflowContext
@@ -293,6 +303,14 @@ public sealed class ToolCallModuleContextTests
             RootRunId = "root-run",
             Depth = 2,
         };
+        ctx.ExecutionContextState.Llm = new WorkflowLlmExecutionContextState
+        {
+            ModelOverride = " model-alpha ",
+            RoutePreference = " route-alpha ",
+            UserMemoryPrompt = " remember-alpha ",
+            MaxToolRoundsOverride = 4,
+        };
+        ctx.RuntimeContext.ApplySenderNyxIdAccessToken(" sender-alpha ");
         ctx.RuntimeContext.ApplyRequestMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["connector.http.authorization"] = "Bearer metadata-token",
@@ -304,7 +322,8 @@ public sealed class ToolCallModuleContextTests
             tool.Name,
             input: """{"operation":"read"}""",
             executionId: "exec-1",
-            idempotencyKey: "idem-tool-1");
+            idempotencyKey: "idem-tool-1",
+            issuedAt: issuedAt);
 
         tool.LastRequest.Should().NotBeNull();
         tool.LastRequest!.ArgumentsJson.Should().Be("""{"operation":"read"}""");
@@ -316,11 +335,18 @@ public sealed class ToolCallModuleContextTests
         tool.LastRequest.ScopeId.Should().Be("scope-1");
         tool.LastRequest.CallerCredential.BearerToken.Should().Be("typed-token");
         tool.LastRequest.ScheduleId.Should().Be("schedule-tool");
+        tool.LastRequest.IssuedAtUnixMs.Should().Be(issuedAt.ToUnixTimeMilliseconds());
         tool.LastRequest.RuntimeContext.ParentActorId.Should().Be("agent-1");
         tool.LastRequest.RuntimeContext.ParentRunId.Should().Be("run-1");
         tool.LastRequest.RuntimeContext.ParentStepId.Should().Be("call_proxy");
         tool.LastRequest.RuntimeContext.RootRunId.Should().Be("root-run");
         tool.LastRequest.RuntimeContext.Depth.Should().Be(2);
+        tool.LastRequest.LlmControl.Should().NotBeNull();
+        tool.LastRequest.LlmControl!.ModelOverride.Should().Be("model-alpha");
+        tool.LastRequest.LlmControl.RoutePreference.Should().Be("route-alpha");
+        tool.LastRequest.LlmControl.UserMemoryPrompt.Should().Be("remember-alpha");
+        tool.LastRequest.LlmControl.MaxToolRoundsOverride.Should().Be(4);
+        tool.LastRequest.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-alpha");
         LastCompleted(ctx).Success.Should().BeTrue();
     }
 
@@ -506,7 +532,8 @@ public sealed class ToolCallModuleContextTests
         string executionId = "",
         IReadOnlyList<WorkflowFileRef>? inputFileRefs = null,
         string idempotencyKey = "",
-        ExternalToolInvocationSpec? externalInvocation = null)
+        ExternalToolInvocationSpec? externalInvocation = null,
+        DateTimeOffset? issuedAt = null)
     {
         var request = new StepRequestEvent
         {
@@ -522,7 +549,7 @@ public sealed class ToolCallModuleContextTests
         request.InputFileRefs.Add(inputFileRefs?.Select(static fileRef => fileRef.Clone()) ?? []);
 
         await module.HandleAsync(
-            Envelope(request),
+            Envelope(request, issuedAt),
             ctx,
             CancellationToken.None);
     }
@@ -540,12 +567,12 @@ public sealed class ToolCallModuleContextTests
     private static StepCompletedEvent LastCompleted(RecordingWorkflowContext ctx) =>
         ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Last();
 
-    private static EventEnvelope Envelope(IMessage evt)
+    private static EventEnvelope Envelope(IMessage evt, DateTimeOffset? issuedAt = null)
     {
         return new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Timestamp = Timestamp.FromDateTimeOffset(issuedAt ?? DateTimeOffset.UtcNow),
             Payload = Any.Pack(evt),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
         };

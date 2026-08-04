@@ -1176,6 +1176,23 @@ const enUSMessages = {
     'Workflow draft could not be loaded.',
   'teamMemberWorkflowStudio.common.close': 'Close',
   'teamMemberWorkflowStudio.executionPanel.consoleAria': 'Draft run console',
+  'teamMemberWorkflowStudio.explicitRequest.approval': 'Approval',
+  'teamMemberWorkflowStudio.explicitRequest.body': 'Request body',
+  'teamMemberWorkflowStudio.explicitRequest.cancel': 'Cancel',
+  'teamMemberWorkflowStudio.explicitRequest.confirm': 'Confirm and publish',
+  'teamMemberWorkflowStudio.explicitRequest.description':
+    'Review each external request before publishing this workflow.',
+  'teamMemberWorkflowStudio.explicitRequest.executionModes':
+    'Allowed execution modes',
+  'teamMemberWorkflowStudio.explicitRequest.interactiveUnavailable':
+    'An external request is not available for interactive publication.',
+  'teamMemberWorkflowStudio.explicitRequest.methodPath': 'Method and path',
+  'teamMemberWorkflowStudio.explicitRequest.notRequired': 'Not required',
+  'teamMemberWorkflowStudio.explicitRequest.required': 'Required',
+  'teamMemberWorkflowStudio.explicitRequest.response': 'Response',
+  'teamMemberWorkflowStudio.explicitRequest.risk': 'Risk',
+  'teamMemberWorkflowStudio.explicitRequest.service': 'Service',
+  'teamMemberWorkflowStudio.explicitRequest.title': 'Review external requests',
   'teamMemberWorkflowStudio.executionPanel.duration': 'Duration',
   'teamMemberWorkflowStudio.executionPanel.clear': 'Clear logs',
   'teamMemberWorkflowStudio.executionPanel.copyAll': 'Copy all logs',

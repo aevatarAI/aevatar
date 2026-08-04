@@ -13,7 +13,7 @@ internal enum WorkflowCapabilityAdmissionResolution
 
 internal readonly record struct WorkflowCapabilityAdmissionLookup(
     WorkflowCapabilityAdmissionResolution Resolution,
-    ExternalWorkflowCapabilityRef? Proof)
+    WorkflowCapabilityInvocationAdmission? Admission)
 {
     public bool IsResolved => Resolution == WorkflowCapabilityAdmissionResolution.Resolved;
 
@@ -72,7 +72,8 @@ internal static class WorkflowCapabilityAdmissionRuntimeAccess
         if (matches.Length > 1)
             return new WorkflowCapabilityAdmissionLookup(WorkflowCapabilityAdmissionResolution.CallSiteAmbiguous, null);
 
-        var proof = matches[0].Capability;
+        var admission = matches[0];
+        var proof = admission.Capability;
         if (proof is null ||
             !WorkflowCapabilityAdmissionPlanIntegrity.SelectorMatchesCapability(invocation.Selector, proof))
         {
@@ -83,7 +84,7 @@ internal static class WorkflowCapabilityAdmissionRuntimeAccess
 
         return new WorkflowCapabilityAdmissionLookup(
             WorkflowCapabilityAdmissionResolution.Resolved,
-            proof.Clone());
+            admission.Clone());
     }
 
     private static WorkflowCapabilityAdmissionPlan? GetPlan(IWorkflowExecutionContext ctx) =>

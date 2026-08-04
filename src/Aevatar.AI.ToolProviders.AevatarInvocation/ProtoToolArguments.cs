@@ -205,10 +205,12 @@ internal static class ProtoToolArguments
             "image" => "INVOCATION_CONTENT_PART_KIND_IMAGE",
             "audio" => "INVOCATION_CONTENT_PART_KIND_AUDIO",
             "video" => "INVOCATION_CONTENT_PART_KIND_VIDEO",
+            "file" => "INVOCATION_CONTENT_PART_KIND_FILE",
             "invocation_content_part_kind_text" => "INVOCATION_CONTENT_PART_KIND_TEXT",
             "invocation_content_part_kind_image" => "INVOCATION_CONTENT_PART_KIND_IMAGE",
             "invocation_content_part_kind_audio" => "INVOCATION_CONTENT_PART_KIND_AUDIO",
             "invocation_content_part_kind_video" => "INVOCATION_CONTENT_PART_KIND_VIDEO",
+            "invocation_content_part_kind_file" => "INVOCATION_CONTENT_PART_KIND_FILE",
             _ => raw,
         };
 }

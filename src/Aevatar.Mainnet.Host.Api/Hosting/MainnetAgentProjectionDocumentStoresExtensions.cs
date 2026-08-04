@@ -685,6 +685,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             AddTimestampRange(filters, "artifact.occurred_at", query.OccurredFrom, query.OccurredTo);
             AddTerm(filters, "artifact.scope_id.keyword", query.ScopeId);
             AddTerm(filters, "artifact.audit_actor_id.keyword", query.AuditActorId);
+            AddTerms(filters, "artifact.audit_actor_id.keyword", query.AuditActorIds);
             AddTerm(filters, "artifact.record.identity_key_id.keyword", query.IdentityKeyId);
             AddTerm(filters, "artifact.operation_name.keyword", query.OperationName);
             AddTerm(filters, "artifact.target_kind.keyword", query.TargetKind);
@@ -709,6 +710,19 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             AddEnumTerm(filters, "artifact.terminal_outcome.keyword", query.TerminalOutcome);
             AddEnumTerm(filters, "artifact.sensitivity_level.keyword", query.SensitivityLevel);
             AddEnumTerm(filters, "artifact.record.capture_plane.keyword", query.CapturePlane);
+            if (query.RequireChatProvenance)
+            {
+                filters.Add(new Dictionary<string, object?>
+                {
+                    ["exists"] = new Dictionary<string, object?>
+                    {
+                        ["field"] = "artifact.record.provenance.chat.surface",
+                    },
+                });
+            }
+
+            AddEnumTerm(filters, "artifact.record.provenance.chat.surface", query.ChatSurface);
+            AddTerm(filters, "artifact.record.provenance.chat.conversation_id", query.ChatConversationId);
             if (query.CommittedStateVersion.HasValue)
                 AddTerm(filters, "artifact.committed_state_version", query.CommittedStateVersion.Value);
 
@@ -754,6 +768,33 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         private static void AddTerm(List<object> filters, string fieldPath, long value)
         {
             AddTermValue(filters, fieldPath, value);
+        }
+
+        private static void AddTerms(
+            List<object> filters,
+            string fieldPath,
+            IReadOnlyList<string>? values)
+        {
+            if (values is null)
+                return;
+
+            var normalized = values
+                .Where(static value => !string.IsNullOrWhiteSpace(value))
+                .Select(static value => value.Trim())
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            filters.Add(normalized.Length == 0
+                ? new Dictionary<string, object?>
+                {
+                    ["match_none"] = new Dictionary<string, object?>(),
+                }
+                : new Dictionary<string, object?>
+                {
+                    ["terms"] = new Dictionary<string, object?>
+                    {
+                        [fieldPath] = normalized,
+                    },
+                });
         }
 
         private static void AddEnumTerm<TEnum>(List<object> filters, string fieldPath, TEnum? value)

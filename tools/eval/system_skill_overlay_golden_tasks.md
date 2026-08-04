@@ -1,9 +1,7 @@
 # System Skill Overlay Golden Tasks
 
-Status: the dynamic overlay tasks remain a human-readable review source. The
-immutable NyxID chat profile has a separate executable 64-case xUnit matrix and
-typed rollout report gate; see `nyxid-chat-profile-rollout-matrix.md`. CI checks
-both documents and runs the profile governance behavior test.
+Status: the dynamic overlay tasks remain a human-readable review source. CI
+checks this document independently from the Agent Profile governance guard.
 
 ## Task 1: Kernel Plus Overlay Composition
 

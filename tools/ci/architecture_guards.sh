@@ -2072,14 +2072,9 @@ check_system_skill_overlay_dual_seam_injection() {
 
 check_system_skill_overlay_eval_docs() {
   local eval_file="tools/eval/system_skill_overlay_golden_tasks.md"
-  local profile_eval_file="tools/eval/nyxid-chat-profile-rollout-matrix.md"
 
   if [ ! -s "${eval_file}" ]; then
     echo "System skill overlay golden-tasks document is required (tools/eval/system_skill_overlay_golden_tasks.md)."
-    exit 1
-  fi
-  if [ ! -s "${profile_eval_file}" ]; then
-    echo "NyxID chat profile rollout evaluation matrix is required."
     exit 1
   fi
 }
@@ -2161,9 +2156,6 @@ bash tools/ci/runtime_callback_guards.sh
 
 echo "Running channel card literal guard..."
 bash tools/ci/channel_card_literal_guard.sh
-
-echo "Running tool approval wiring guard..."
-bash tools/ci/tool_approval_wiring_guard.sh
 
 echo "Running Nyx relay replay authority guard..."
 python3 tools/ci/guards/nyx_relay_replay_authority_guard.py

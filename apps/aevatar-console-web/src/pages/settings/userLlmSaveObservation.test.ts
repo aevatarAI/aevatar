@@ -1,6 +1,5 @@
 import {
   USER_LLM_SAVE_OBSERVATION_DELAYS_MS,
-  expectedCommittedUserLlmModel,
   observeUserLlmSave,
 } from "./userLlmSaveObservation";
 
@@ -11,23 +10,6 @@ describe("userLlmSaveObservation", () => {
 
   afterEach(() => {
     jest.useRealTimers();
-  });
-
-  it("normalizes blank model intent against the exact selected option", () => {
-    expect(
-      expectedCommittedUserLlmModel({
-        kind: "nyx_id_user_service",
-        submittedModel: " ",
-        optionDefaultModel: " gpt-service-default ",
-      }),
-    ).toBe("gpt-service-default");
-    expect(
-      expectedCommittedUserLlmModel({
-        kind: "gateway",
-        submittedModel: " ",
-        optionDefaultModel: "must-not-be-used",
-      }),
-    ).toBe("");
   });
 
   it("observes at the fixed sequential delays and exhausts as accepted_unobserved", async () => {

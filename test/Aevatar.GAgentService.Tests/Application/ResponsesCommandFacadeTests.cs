@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
@@ -97,7 +98,7 @@ public sealed class ResponsesCommandFacadeTests
                 ForwardToModelAction("deepseek/deepseek-chat")),
             defaultIngressModel: "fallback-vendor/fallback-model",
             ownerLlmConfigSource: new StubOwnerLlmConfigSource(
-                new OwnerLlmConfig("chrono-llm/gpt-5.5", null, 0)));
+                OwnerConfig("chrono-llm/gpt-5.5")));
 
         var result = await facade.CreateAsync(new ResponsesCommandRequest(
             "  ",
@@ -1020,6 +1021,20 @@ public sealed class ResponsesCommandFacadeTests
             llmRunExecutor);
     }
 
+    private static OwnerLlmConfig OwnerConfig(string modelId) => new(
+        new LLMSelection
+        {
+            RouteKind = LLMRouteKind.Gateway,
+            RouteValue = LLMSelectionPolicy.GatewayRoute,
+            ModelSelection = new LLMModelSelection
+            {
+                Kind = LLMModelSelectionKind.ExplicitModel,
+                ModelId = modelId,
+            },
+        },
+        LLMSelectionPersistenceStatus.Ready,
+        0);
+
     private sealed class StubOwnerLlmConfigSource(OwnerLlmConfig? config = null)
         : IOwnerLlmConfigSource
     {
@@ -1167,11 +1182,11 @@ public sealed class ResponsesCommandFacadeTests
     {
         public IReadOnlyList<string> GetRegisteredNames() => [];
 
-        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
+        public ToolSetResolveResult Resolve(string? name) =>
             ToolSetResolveResult.Failure(new ToolSetResolveError(
                 ToolSetResolveError.UnknownNameCode,
-                toolSetRef?.Name ?? string.Empty,
-                $"Tool set '{toolSetRef?.Name}' is not registered.",
+                name ?? string.Empty,
+                $"Tool set '{name}' is not registered.",
                 []));
     }
 
@@ -1179,9 +1194,9 @@ public sealed class ResponsesCommandFacadeTests
     {
         public IReadOnlyList<string> GetRegisteredNames() => ["workspace.default"];
 
-        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
+        public ToolSetResolveResult Resolve(string? name) =>
             ToolSetResolveResult.Success(
-                toolSetRef?.Name ?? "workspace.default",
+                name ?? "workspace.default",
                 [new StaticAgentToolSource(tools)]);
     }
 

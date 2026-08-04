@@ -34,7 +34,7 @@ namespace Aevatar.Studio.Hosting;
 /// configuration. Required by the actor-backed stores
 /// (<c>IRoleCatalogQueryPort</c>, <c>IConnectorCatalogQueryPort</c>,
 /// <c>IChatHistoryQueryPort</c>, <c>IGAgentActorRegistryQueryPort</c>,
-/// <c>IUserMemoryStore</c>) that read
+/// <c>IUserMemoryQueryPort</c>) that read
 /// from these documents via <c>IProjectionDocumentReader</c>.
 /// </summary>
 internal static class StudioProjectionReadModelServiceCollectionExtensions

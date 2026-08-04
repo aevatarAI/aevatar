@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -23,12 +24,17 @@ public sealed class UserConfigCurrentStateProjectorTests
         var projector = new UserConfigCurrentStateProjector(
             dispatcher,
             new FixedProjectionClock(DateTimeOffset.Parse("2026-07-22T08:00:00Z")));
-        var selection = new UserLlmSelection
+        var selection = new LLMSelection
         {
-            RouteKind = UserLlmRouteKind.NyxIdUserService,
+            RouteKind = LLMRouteKind.NyxIdUserService,
             RouteValue = "/api/v1/proxy/s/chrono-llm-public",
             NyxIdUserServiceId = "us-alpha",
             ServiceSlugSnapshot = "chrono-llm-public",
+            ModelSelection = new LLMModelSelection
+            {
+                Kind = LLMModelSelectionKind.ExplicitModel,
+                ModelId = "gpt-5.5",
+            },
         };
         var state = new UserConfigGAgentState
         {
@@ -46,10 +52,12 @@ public sealed class UserConfigCurrentStateProjectorTests
         written.StateVersion.Should().Be(37);
         written.LlmSelection.Should().NotBeNull();
         written.LlmSelection.Should().NotBeSameAs(selection);
-        written.LlmSelection.RouteKind.Should().Be(UserLlmRouteKind.NyxIdUserService);
+        written.LlmSelection.RouteKind.Should().Be(LLMRouteKind.NyxIdUserService);
         written.LlmSelection.RouteValue.Should().Be("/api/v1/proxy/s/chrono-llm-public");
         written.LlmSelection.NyxIdUserServiceId.Should().Be("us-alpha");
         written.LlmSelection.ServiceSlugSnapshot.Should().Be("chrono-llm-public");
+        written.LlmSelection.ModelSelection.Kind.Should().Be(LLMModelSelectionKind.ExplicitModel);
+        written.LlmSelection.ModelSelection.ModelId.Should().Be("gpt-5.5");
     }
 
     [Fact]

@@ -6,12 +6,11 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Options;
 
 namespace Aevatar.Mainnet.Host.Api.WorkflowAdmission;
 
 internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
-    IOptions<NyxIdToolOptions> options,
+    NyxIdToolOptions options,
     IWorkflowDefinitionParser workflowDefinitionParser,
     IProjectionDocumentReader<WorkflowActorBindingDocument, string> definitionReader,
     IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string> runReader,
@@ -22,7 +21,7 @@ internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        if (options.Value.ManagedWorkflowAdmissionMode != NyxIdManagedWorkflowAdmissionMode.Enforce)
+        if (options.ManagedWorkflowAdmissionMode != NyxIdManagedWorkflowAdmissionMode.Enforce)
             return;
 
         var deactivatedServiceDefinitions = await ScanDeactivatedServiceDefinitionsAsync(cancellationToken);

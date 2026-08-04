@@ -1,0 +1,16 @@
+{
+  "id": "conversation-alpha",
+  "title": "Deploy the application",
+  "serviceId": "nyxid-chat",
+  "serviceKind": "nyxid.chat",
+  "createdAt": "2026-08-01T11:59:00+00:00",
+  "updatedAt": "2026-08-01T12:00:00+00:00",
+  "messageCount": 1,
+  "llmRoute": "nyxid",
+  "llmModel": "nyxid-model",
+  "taskStatus": "active",
+  "attentionKind": "input",
+  "attentionSince": "2026-08-01T12:00:00+00:00",
+  "activeStepSummary": "Select the deployment regions.",
+  "stateVersion": 23
+}

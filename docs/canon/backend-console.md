@@ -66,25 +66,62 @@ Aevatar admins resolved by `IPlatformAdminAuthorizer` may use
 drilldown endpoints still read only workflow current-state/readmodel artifacts; they do not replay events, prime
 projections, or dispatch actor commands.
 
-The embedded `/admin#/observatory` UI defaults every caller, including an administrator, to the caller's own
-scope. `scope=all` is an explicit administrator viewing mode that maps to the backend-only `__all__` sentinel;
-exact scope IDs remain exact and are never inferred from role. Its shareable hash state uses only `scope`,
-`status`, `origin`, `definition`, `schedule`, `from`, `to`, `run`, and `tab`. Local text search, the collapsed run
-rail, expanded filter controls, and immersive mode are viewing preferences rather than shareable query state.
+`/workflow/observatory` is the only Workflow Observatory renderer and data client. `/admin#/observatory` is a
+shell route that embeds that page in a same-origin iframe; it does not retain a second run cache, renderer,
+poller, or API path. The shell forwards only `scope`, `status`, `origin`, `definition`, `schedule`, `from`, `to`,
+`run`, and `tab`, preserving exact values so standalone and embedded deep links express the same observation
+intent. Typed same-origin messages carry CQRS/audit navigation back to the shell without duplicating data reads.
+The canonical page also owns the compact observation workspace bar, manual refresh, admin lookup tools, and
+immersive observation. Immersive mode is session-local rather than URL state. When embedded, a typed same-origin
+message asks the admin shell to hide its navigation/header/account chrome; `Escape` exits without changing scope,
+filters, selected run, or tab.
+
+The canonical observatory stores run-list and detail-canvas scroll positions in `sessionStorage`, keyed by the
+canonical observation route. Polling and same-route refresh preserve both positions; changing scope or server
+filters resets the list, while changing run or detail tab resets the detail canvas. Browser reload restores only
+the matching route's positions. The admin shell independently stores ordinary module scroll positions per hash
+route. Same-route shell renders reuse an existing embedded suite iframe and update only shell chrome, avoiding an
+unnecessary document reload; a different module or iframe source still creates the correct new view.
+
+The authoritative page defaults every caller, including an administrator, to the caller's own scope.
+`scope=all` is an explicit administrator viewing mode that maps to the backend-only `__all__` sentinel; exact
+scope IDs remain exact and are never inferred from role.
 
 Fleet links carry exact `scope + run`, and schedule links carry `schedule` while clearing an unrelated selected
-run. A selected run outside the current server filters or local search stays pinned instead of changing the
-filters or silently selecting the first result. Local text search is limited to the loaded maximum of 100 run
-summaries and presents visible and loaded counts explicitly.
+run. The embedded page writes canonical route changes back to the parent hash without reloading its iframe.
 
 Own-scope detail and graph reads use normal endpoints without `scope`; exact-scope reads use normal endpoints
 with that scope; all-scope selections and unknown-owner manual run lookup use the administrator endpoints.
 Administrator identity by itself does not select the administrator endpoint.
 
+An active human approval is recognized only from a typed step with `suspensionType=human_approval` and no
+completion timestamp. Only the run owner (`detail.summary.scopeId == /api/workflow/observatory/me.scopeId`) may
+submit the existing scope resume command; an administrator inspecting another scope remains read-only. HTTP
+`202` means accepted for dispatch, not committed. The UI waits for a newer committed state version before
+treating the approval as resolved. The Artifacts tab is deliberately labelled as a download derived from
+`finalOutput`; the current detail contract does not claim a formal artifact collection.
+
 Run detail responses expose `diagnostics` assembled from the committed workflow current-state snapshot and the
 materialized run-report artifact. Diagnostics are query-time explanations for operators; they are not durable log
 entries or deletion tombstones and must not be presented as either. Admin controls accept a run id through an
 explicit run-id input. The browser must not infer run identity from actor-id prefixes or delimiters.
+
+The CQRS observatory exposes three platform-admin-only projection-scope reads: the existing scope list,
+`GET /api/cqrs/scopes/{scopeActorId}`, and
+`GET /api/cqrs/scopes/{scopeActorId}/recent-envelopes?take=20`. All three read the materialized
+`ProjectionScopeStatusDocument`; they do not activate a scope, read actor state, replay events, rebuild a view, or
+prime a projection. The detail `StateVersion` is the authoritative projection-scope actor version copied into that
+current-state read model. Each recent-envelope `stateVersion` is instead the version of its source committed state
+event. Both surfaces are eventually consistent and expose the read-model refresh timestamp so operators can judge
+freshness honestly.
+
+Projection-scope actor state retains at most the newest 50 committed-envelope metadata records, and the endpoint
+returns newest first with a default of 20 and a maximum of 50. Each record contains only `eventId`, `typeUrl`, source
+`stateVersion`, and an optional source timestamp. Missing timestamps remain absent/null; neither the actor nor the
+projector fabricates them from a processing clock. Payloads, outer-envelope data, projector-local counters, generic
+state dumps, `lastError`, and query-time failure aggregation are not part of this contract. The CQRS page loads detail
+and recent metadata only after an operator selects a scope, renders an explicit empty state when the materialized
+window is empty, and offers no mutation controls.
 
 ## 4. Governance
 

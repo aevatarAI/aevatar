@@ -192,6 +192,28 @@ describe("teamAutomationApi", () => {
     },
   );
 
+  it("decodes canonical no-owner LLM runtime evidence", () => {
+    expect(
+      teamAutomationApiDecoders.view(
+        automationView({
+          ownerLlmRouteKind: "unspecified",
+          ownerLlmRoute: "",
+          ownerLlmUserServiceId: "",
+          ownerLlmServiceSlug: "",
+          ownerLlmModel: "",
+        }),
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        ownerLLMRouteKind: "unspecified",
+        ownerLLMRoute: "",
+        ownerLLMUserServiceId: "",
+        ownerLLMServiceSlug: "",
+        ownerLLMModel: "",
+      }),
+    );
+  });
+
   it.each([
     ["NeedsAuthorization", "needs_authorization"],
     [
@@ -856,6 +878,28 @@ describe("teamAutomationApi", () => {
       requiredStateVersion: 19,
       retryable: true,
       status: 503,
+    });
+  });
+
+  it("preserves typed preflight authorization failure details", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: "Forbidden",
+      text: async () => JSON.stringify({
+        code: "TEAM_AUTOMATION_AUTHORIZATION_SERVICE_ACCESS_DENIED",
+        message:
+          "This automation is not authorized to use one or more required services.",
+        retryable: false,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(teamAutomationApi.preflightCreate(draft)).rejects.toMatchObject({
+      code: "TEAM_AUTOMATION_AUTHORIZATION_SERVICE_ACCESS_DENIED",
+      message: "This automation is not authorized to use one or more required services.",
+      retryable: false,
+      status: 403,
     });
   });
 

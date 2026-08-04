@@ -35,7 +35,20 @@ public sealed class NyxIdChatStateEndpointTests
                 null,
                 [],
                 null,
-                null,
+                new NyxIdChatPendingApprovalSnapshot(
+                    ApprovalRequestId: "approval-alpha",
+                    TurnId: "turn-alpha",
+                    TaskId: "task-alpha",
+                    StepId: "step-alpha",
+                    ToolName: "service.connect",
+                    ExpiresAt: null,
+                    AskedAt: DateTimeOffset.Parse("2026-07-25T06:19:00Z"),
+                    Action: "connect",
+                    Target: "service-alpha",
+                    ActorLabel: "Aevatar Assistant",
+                    Reversibility: "reversible",
+                    GrantBoundary: "nyxid_step_up",
+                    NyxIdRequestId: "nyx-request-alpha"),
                 [],
                 null,
                 null,
@@ -58,6 +71,12 @@ public sealed class NyxIdChatStateEndpointTests
         json.RootElement.GetProperty("turnId").GetString().Should().Be("turn-alpha");
         json.RootElement.GetProperty("snapshot").GetProperty("actorId").GetString()
             .Should().Be("conversation-alpha");
+        var pendingApproval = json.RootElement
+            .GetProperty("snapshot")
+            .GetProperty("pendingApproval");
+        pendingApproval.GetProperty("nyxidRequestId").GetString()
+            .Should().Be("nyx-request-alpha");
+        pendingApproval.TryGetProperty("nyxIdRequestId", out _).Should().BeFalse();
     }
 
     [Fact]
@@ -242,6 +261,14 @@ public sealed class NyxIdChatStateEndpointTests
             Queries.Add(query);
             return Task.FromResult(Result);
         }
+
+        public Task<IReadOnlyDictionary<string, NyxIdChatConversationAttentionSummary>>
+            GetAttentionSummariesAsync(
+                string scopeId,
+                IReadOnlyCollection<string> actorIds,
+                CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyDictionary<string, NyxIdChatConversationAttentionSummary>>(
+                new Dictionary<string, NyxIdChatConversationAttentionSummary>());
     }
 
     private sealed class RecordingRegistryQueryPort : IGAgentActorRegistryQueryPort

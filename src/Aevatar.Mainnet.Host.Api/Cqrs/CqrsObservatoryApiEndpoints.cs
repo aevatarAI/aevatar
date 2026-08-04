@@ -34,12 +34,32 @@ public static class CqrsObservatoryApiEndpoints
 
         data.MapGet("/scopes", ListScopes)
             .WithName("ListCqrsProjectionScopes")
-            .WithSummary("List projection-scope statuses (version lag, active, failures). Aevatar admin only.")
+            .WithSummary("List projection-scope processing and unresolved-failure statuses. Aevatar admin only.")
             .WithEndpointAudit(
                 "cqrs.observatory.list-scopes",
                 AuditSensitivityLevel.Confidential,
                 "cqrs-projection-scopes",
                 EndpointAuditTargetResolvers.Static("cqrs-projection-scopes", "platform"))
+            .RequireAuthorization();
+
+        data.MapGet("/scopes/{scopeActorId}", GetScope)
+            .WithName("GetCqrsProjectionScope")
+            .WithSummary("Get one materialized projection-scope status. Aevatar admin only.")
+            .WithEndpointAudit(
+                "cqrs.observatory.get-scope",
+                AuditSensitivityLevel.Confidential,
+                "cqrs-projection-scope",
+                EndpointAuditTargetResolvers.FromRouteValue("cqrs-projection-scope", "scopeActorId"))
+            .RequireAuthorization();
+
+        data.MapGet("/scopes/{scopeActorId}/recent-envelopes", ListRecentEnvelopes)
+            .WithName("ListCqrsProjectionScopeRecentEnvelopes")
+            .WithSummary("List payload-free committed-envelope metadata for one projection scope. Aevatar admin only.")
+            .WithEndpointAudit(
+                "cqrs.observatory.list-recent-envelopes",
+                AuditSensitivityLevel.Confidential,
+                "cqrs-projection-scope",
+                EndpointAuditTargetResolvers.FromRouteValue("cqrs-projection-scope", "scopeActorId"))
             .RequireAuthorization();
 
         data.MapGet("/readmodels", ListReadModels)
@@ -88,9 +108,82 @@ public static class CqrsObservatoryApiEndpoints
             {
                 id = snapshot.ScopeActorId,
                 active = snapshot.Active,
-                observed = snapshot.LastObservedVersion,
-                successful = snapshot.LastSuccessfulVersion,
-                failures = snapshot.FailureCount,
+                receivedEnvelopeTotal = snapshot.ReceivedEnvelopeTotal,
+                attemptedEnvelopeTotal = snapshot.AttemptedEnvelopeTotal,
+                successfulMaterializationTotal = snapshot.SuccessfulMaterializationTotal,
+                failedAttemptTotal = snapshot.FailedAttemptTotal,
+                retryExhaustedTotal = snapshot.RetryExhaustedTotal,
+                retryExhaustedFailureCount = snapshot.RetryExhaustedFailureCount,
+                unresolvedFailureCount = snapshot.UnresolvedFailureCount,
+                oldestUnresolvedFailureAt = snapshot.OldestUnresolvedFailureAt,
+                failureDiagnosticDroppedTotal = snapshot.FailureDiagnosticDroppedTotal,
+                sourceActorCount = snapshot.SourceActorCount,
+                singleSourceVersionGap = snapshot.SingleSourceVersionGap,
+            }),
+        });
+    }
+
+    internal static async Task<IResult> GetScope(
+        HttpContext http,
+        string scopeActorId,
+        [FromServices] IProjectionScopeIntrospectionQueryPort introspection,
+        [FromServices] IPlatformAdminAuthorizer authorizer,
+        CancellationToken ct = default)
+    {
+        var denied = await AuthorizeAdminAsync(http, authorizer, ct);
+        if (denied != null)
+            return denied;
+
+        var snapshot = await introspection.GetAsync(scopeActorId, ct);
+        return snapshot == null
+            ? Results.NotFound()
+            : Results.Json(new
+            {
+                snapshot.ScopeActorId,
+                snapshot.RootActorId,
+                snapshot.ProjectionKind,
+                snapshot.SessionId,
+                mode = snapshot.Mode.ToString(),
+                snapshot.Active,
+                snapshot.ObservationAttached,
+                snapshot.Released,
+                snapshot.StateVersion,
+                snapshot.ReceivedEnvelopeTotal,
+                snapshot.AttemptedEnvelopeTotal,
+                snapshot.SuccessfulMaterializationTotal,
+                snapshot.FailedAttemptTotal,
+                snapshot.RetryExhaustedTotal,
+                snapshot.RetryExhaustedFailureCount,
+                snapshot.UnresolvedFailureCount,
+                snapshot.OldestUnresolvedFailureAt,
+                snapshot.FailureDiagnosticDroppedTotal,
+                snapshot.SourceVersions,
+                snapshot.UpdatedAt,
+            });
+    }
+
+    internal static async Task<IResult> ListRecentEnvelopes(
+        HttpContext http,
+        string scopeActorId,
+        [FromServices] IProjectionScopeIntrospectionQueryPort introspection,
+        [FromServices] IPlatformAdminAuthorizer authorizer,
+        int take = 20,
+        CancellationToken ct = default)
+    {
+        var denied = await AuthorizeAdminAsync(http, authorizer, ct);
+        if (denied != null)
+            return denied;
+
+        var envelopes = await introspection.ListRecentEnvelopesAsync(scopeActorId, take, ct);
+        return Results.Json(new
+        {
+            scopeActorId,
+            envelopes = envelopes.Select(static envelope => new
+            {
+                envelope.EventId,
+                envelope.TypeUrl,
+                envelope.StateVersion,
+                envelope.TimestampUtc,
             }),
         });
     }
@@ -149,6 +242,26 @@ public static class CqrsObservatoryApiEndpoints
         ProjectionReadModelSinkShape.Memory => "mem",
         _ => "doc",
     };
+
+    private static async Task<IResult?> AuthorizeAdminAsync(
+        HttpContext http,
+        IPlatformAdminAuthorizer authorizer,
+        CancellationToken ct)
+    {
+        if (!AevatarScopeAccessGuard.TryGetCallerScopeId(http, out _) || !TryGetBearer(http, out var token))
+            return Results.Unauthorized();
+
+        var caller = await authorizer.ResolveCallerAsync(token, ct);
+        return caller.IsElevated
+            ? null
+            : Results.Json(
+                new
+                {
+                    code = "SCOPE_ACCESS_DENIED",
+                    message = "Aevatar admin access required to inspect projection scopes.",
+                },
+                statusCode: StatusCodes.Status403Forbidden);
+    }
 
     private static bool TryGetBearer(HttpContext http, out string token)
     {

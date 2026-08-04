@@ -48,7 +48,7 @@ public sealed class StudioTeamRosterFanoutMaterializerTests
     }
 
     [Fact]
-    public async Task ProjectAsync_ShouldUseStableCommandId_ForCommittedEventReplay()
+    public async Task ProjectAsync_ShouldUseStableCommandAndDeliveryOperationIds_ForCommittedEventReplay()
     {
         var dispatch = new RecordingDispatchPort();
         var materializer = new StudioTeamRosterFanoutMaterializer(
@@ -69,9 +69,9 @@ public sealed class StudioTeamRosterFanoutMaterializerTests
         dispatch.Dispatches[0].ActorId.Should().Be("studio-team:scope-1:t-new");
         dispatch.Dispatches[1].ActorId.Should().Be("studio-team:scope-1:t-new");
         dispatch.Dispatches[1].Envelope.Id.Should().Be(dispatch.Dispatches[0].Envelope.Id);
-        dispatch.Dispatches[1].Envelope.Runtime?.Deduplication?.OperationId
-            .Should().Be(dispatch.Dispatches[0].Envelope.Runtime?.Deduplication?.OperationId);
-        dispatch.Dispatches[0].Envelope.Runtime?.Deduplication?.OperationId
+        dispatch.Dispatches[1].Envelope.Runtime?.DeliveryIdentity?.OperationId
+            .Should().Be(dispatch.Dispatches[0].Envelope.Runtime?.DeliveryIdentity?.OperationId);
+        dispatch.Dispatches[0].Envelope.Runtime?.DeliveryIdentity?.OperationId
             .Should().NotBeNullOrWhiteSpace();
     }
 

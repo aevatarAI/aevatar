@@ -13,6 +13,13 @@ import type {
   StudioScopeBindingStatus,
   StudioExecutionDetail,
   StudioExecutionSummary,
+  StudioExplicitRequestBodyMode,
+  StudioExplicitRequestMethod,
+  StudioExplicitRequestPreview,
+  StudioExplicitRequestPreviewInput,
+  StudioExplicitRequestPreviewItem,
+  StudioExplicitRequestResponseMode,
+  StudioExplicitRequestRisk,
   StudioMemberBindingContract,
   StudioMemberBindingAcceptedResponse,
   StudioMemberBindingAckStage,
@@ -58,7 +65,14 @@ import type {
   StudioUserConfig,
   StudioUserConfigSaveReceipt,
   StudioUserConfigRuntime,
-  StudioUserLlmSavedRouteKind,
+  StudioLlmModelCatalog,
+  StudioLlmModelCatalogCertainty,
+  StudioLlmModelCatalogDiagnostic,
+  StudioLlmModelSelection,
+  StudioLlmSelection,
+  StudioSaveUserLlmIntent,
+  StudioUserLlmRemediation,
+  StudioUserLlmSelectionStatus,
   StudioUserLlmSettings,
   StudioWorkflowDraft,
   StudioWorkflowDraftCreateAcceptedReceipt,
@@ -181,6 +195,141 @@ function compactObject<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(
     Object.entries(value).filter(([, entry]) => entry !== undefined)
   ) as T;
+}
+
+function readExplicitRequestEnum<T extends string>(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+  allowedValues: readonly T[],
+): T {
+  const value = readString(record, key, label);
+  if (!allowedValues.includes(value as T)) {
+    throw new Error(`${label} is not supported.`);
+  }
+
+  return value as T;
+}
+
+function readNonBlankExplicitRequestString(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+): string {
+  const value = readString(record, key, label);
+  if (!value.trim()) {
+    throw new Error(`${label} must not be blank.`);
+  }
+
+  return value;
+}
+
+function decodeStudioExplicitRequestPreviewItem(
+  value: unknown,
+  label = "StudioExplicitRequestPreviewItem",
+): StudioExplicitRequestPreviewItem {
+  const record = expectRecord(value, label);
+  const allowedExecutionModes = expectArray(
+    record.allowedExecutionModes,
+    `${label}.allowedExecutionModes`,
+    (entry, entryLabel) => {
+      if (entry !== "interactive" && entry !== "durable") {
+        throw new Error(`${entryLabel} is not supported.`);
+      }
+
+      return entry;
+    },
+  );
+  if (allowedExecutionModes.length === 0) {
+    throw new Error(`${label}.allowedExecutionModes must not be empty.`);
+  }
+
+  return {
+    callSiteId: readNonBlankExplicitRequestString(
+      record,
+      "callSiteId",
+      `${label}.callSiteId`,
+    ),
+    requestContractDigest: readNonBlankExplicitRequestString(
+      record,
+      "requestContractDigest",
+      `${label}.requestContractDigest`,
+    ),
+    userServiceId: readNonBlankExplicitRequestString(
+      record,
+      "userServiceId",
+      `${label}.userServiceId`,
+    ),
+    method: readExplicitRequestEnum<StudioExplicitRequestMethod>(
+      record,
+      "method",
+      `${label}.method`,
+      ["get", "head", "options", "post", "put", "patch", "delete"],
+    ),
+    pathTemplate: readNonBlankExplicitRequestString(
+      record,
+      "pathTemplate",
+      `${label}.pathTemplate`,
+    ),
+    bodyMode: readExplicitRequestEnum<StudioExplicitRequestBodyMode>(
+      record,
+      "bodyMode",
+      `${label}.bodyMode`,
+      ["none", "json"],
+    ),
+    bodyRequired: readBoolean(record, "bodyRequired", `${label}.bodyRequired`),
+    responseMode: readExplicitRequestEnum<StudioExplicitRequestResponseMode>(
+      record,
+      "responseMode",
+      `${label}.responseMode`,
+      ["text", "file_artifact"],
+    ),
+    effectiveRisk: readExplicitRequestEnum<StudioExplicitRequestRisk>(
+      record,
+      "effectiveRisk",
+      `${label}.effectiveRisk`,
+      ["read_only", "write", "destructive"],
+    ),
+    approvalRequired: readBoolean(
+      record,
+      "approvalRequired",
+      `${label}.approvalRequired`,
+    ),
+    allowedExecutionModes,
+  };
+}
+
+function decodeStudioExplicitRequestPreview(value: unknown): StudioExplicitRequestPreview {
+  const record = expectRecord(value, "StudioExplicitRequestPreview");
+  const items = expectArray(
+    record.items,
+    "StudioExplicitRequestPreview.items",
+    decodeStudioExplicitRequestPreviewItem,
+  );
+  const callSiteIds = new Set<string>();
+  for (const item of items) {
+    if (callSiteIds.has(item.callSiteId)) {
+      throw new Error(
+        `StudioExplicitRequestPreview.items contains duplicate callSiteId '${item.callSiteId}'.`,
+      );
+    }
+
+    callSiteIds.add(item.callSiteId);
+  }
+
+  return {
+    workflowId: readNonBlankExplicitRequestString(
+      record,
+      "workflowId",
+      "StudioExplicitRequestPreview.workflowId",
+    ),
+    revisionId: readNonBlankExplicitRequestString(
+      record,
+      "revisionId",
+      "StudioExplicitRequestPreview.revisionId",
+    ),
+    items,
+  };
 }
 
 function toScopeWorkflowDirectoryId(scopeId: string): string {
@@ -387,14 +536,181 @@ function decodeOrnnSkillSearchResult(
   };
 }
 
-function decodeStudioUserLlmSavedRouteKind(
+function decodeStudioLlmModelCatalogDiagnostic(
   value: unknown,
   label: string
-): StudioUserLlmSavedRouteKind {
-  const kind = expectString(value, label);
-  return kind === "gateway" || kind === "nyx_id_user_service"
-    ? kind
-    : "unknown";
+): StudioLlmModelCatalogDiagnostic {
+  const diagnostic = expectString(value, label);
+  switch (diagnostic) {
+    case "unspecified":
+    case "not_published":
+    case "route_not_ready":
+    case "access_denied":
+    case "observation_unavailable":
+    case "response_invalid":
+    case "response_too_large":
+    case "pattern_only":
+      return diagnostic;
+    default:
+      throw new Error(`${label} is not supported.`);
+  }
+}
+
+function decodeStudioLlmModelSelection(
+  value: unknown,
+  label: string,
+): StudioLlmModelSelection {
+  const record = expectRecord(value, label);
+  const kind = readString(record, "kind", `${label}.kind`);
+  const modelId = readNullableString(record, "modelId", `${label}.modelId`);
+  switch (kind) {
+    case "unspecified":
+    case "provider_default":
+      if (modelId !== null) {
+        throw new Error(`${label}.modelId must be null for ${kind}.`);
+      }
+      return { kind };
+    case "explicit_model":
+      if (!modelId) {
+        throw new Error(`${label}.modelId must not be empty.`);
+      }
+      return { kind, modelId };
+    default:
+      throw new Error(`${label}.kind is not supported.`);
+  }
+}
+
+function decodeStudioLlmSelection(
+  value: unknown,
+  label: string,
+): StudioLlmSelection {
+  const record = expectRecord(value, label);
+  const routeKind = readString(record, "routeKind", `${label}.routeKind`);
+  const modelSelection = decodeStudioLlmModelSelection(
+    record.modelSelection,
+    `${label}.modelSelection`,
+  );
+  switch (routeKind) {
+    case "unspecified":
+      if (modelSelection.kind !== "unspecified") {
+        throw new Error(`${label}.modelSelection must be unspecified.`);
+      }
+      return { routeKind, modelSelection };
+    case "gateway": {
+      if (modelSelection.kind === "unspecified") {
+        throw new Error(`${label}.modelSelection must select a model behavior.`);
+      }
+      const routeValue = readString(record, "routeValue", `${label}.routeValue`);
+      if (!routeValue) {
+        throw new Error(`${label}.routeValue must not be empty.`);
+      }
+      return { routeKind, routeValue, modelSelection };
+    }
+    case "nyx_id_user_service": {
+      if (modelSelection.kind === "unspecified") {
+        throw new Error(`${label}.modelSelection must select a model behavior.`);
+      }
+      const routeValue = readString(record, "routeValue", `${label}.routeValue`);
+      const nyxIdUserServiceId = readString(
+        record,
+        "nyxIdUserServiceId",
+        `${label}.nyxIdUserServiceId`,
+      );
+      const serviceSlugSnapshot = readString(
+        record,
+        "serviceSlugSnapshot",
+        `${label}.serviceSlugSnapshot`,
+      );
+      if (!routeValue || !nyxIdUserServiceId || !serviceSlugSnapshot) {
+        throw new Error(`${label} must contain a complete user service identity.`);
+      }
+      return {
+        routeKind,
+        routeValue,
+        nyxIdUserServiceId,
+        serviceSlugSnapshot,
+        modelSelection,
+      };
+    }
+    default:
+      throw new Error(`${label}.routeKind is not supported.`);
+  }
+}
+
+function decodeStudioLlmModelCatalogCertainty(
+  value: unknown,
+  label: string,
+): StudioLlmModelCatalogCertainty {
+  const certainty = expectString(value, label);
+  switch (certainty) {
+    case "enumerated":
+    case "not_verifiable":
+    case "unavailable":
+      return certainty;
+    default:
+      throw new Error(`${label} is not supported.`);
+  }
+}
+
+function decodeStudioLlmModelCatalog(
+  value: unknown,
+  label: string,
+): StudioLlmModelCatalog {
+  const record = expectRecord(value, label);
+  return {
+    certainty: decodeStudioLlmModelCatalogCertainty(
+      record.certainty,
+      `${label}.certainty`,
+    ),
+    modelIds: expectArray(
+      record.modelIds,
+      `${label}.modelIds`,
+      (entry, entryLabel) => expectString(entry, entryLabel ?? `${label}.modelIds[]`),
+    ),
+    defaultModelId: readNullableString(
+      record,
+      "defaultModelId",
+      `${label}.defaultModelId`,
+    ),
+    diagnostic: decodeStudioLlmModelCatalogDiagnostic(
+      record.diagnostic,
+      `${label}.diagnostic`,
+    ),
+  };
+}
+
+function decodeStudioUserLlmSelectionStatus(
+  value: unknown,
+  label: string,
+): StudioUserLlmSelectionStatus {
+  const status = expectString(value, label);
+  switch (status) {
+    case "system_default":
+    case "ready":
+    case "verification_unavailable":
+    case "needs_repair":
+    case "legacy_repair_required":
+      return status;
+    default:
+      throw new Error(`${label} is not supported.`);
+  }
+}
+
+function decodeStudioUserLlmRemediation(
+  value: unknown,
+  label: string,
+): StudioUserLlmRemediation {
+  const remediation = expectString(value, label);
+  switch (remediation) {
+    case "none":
+    case "retry_catalog":
+    case "connect_provider":
+    case "choose_replacement":
+    case "reselect":
+      return remediation;
+    default:
+      throw new Error(`${label} is not supported.`);
+  }
 }
 
 function decodeStudioUserLlmSettings(
@@ -403,26 +719,22 @@ function decodeStudioUserLlmSettings(
 ): StudioUserLlmSettings {
   const record = expectRecord(value, label);
   return {
-    savedRoute: readString(record, "savedRoute", `${label}.savedRoute`),
+    savedSelection: record.savedSelection == null
+      ? null
+      : decodeStudioLlmSelection(record.savedSelection, `${label}.savedSelection`),
     savedRouteLabel: readString(record, "savedRouteLabel", `${label}.savedRouteLabel`),
-    savedRouteKind: decodeStudioUserLlmSavedRouteKind(
-      record.savedRouteKind,
-      `${label}.savedRouteKind`
+    selectionStatus: decodeStudioUserLlmSelectionStatus(
+      record.selectionStatus,
+      `${label}.selectionStatus`,
     ),
-    savedUserServiceId: readNullableString(
-      record,
-      "savedUserServiceId",
-      `${label}.savedUserServiceId`
+    catalogDiagnostic: decodeStudioLlmModelCatalogDiagnostic(
+      record.catalogDiagnostic,
+      `${label}.catalogDiagnostic`,
     ),
-    savedServiceSlug: readNullableString(
-      record,
-      "savedServiceSlug",
-      `${label}.savedServiceSlug`
+    remediation: decodeStudioUserLlmRemediation(
+      record.remediation,
+      `${label}.remediation`,
     ),
-    effectiveRoute: readString(record, "effectiveRoute", `${label}.effectiveRoute`),
-    effectiveRouteLabel: readString(record, "effectiveRouteLabel", `${label}.effectiveRouteLabel`),
-    routeFallbackActive: readBoolean(record, "routeFallbackActive", `${label}.routeFallbackActive`),
-    fallbackReason: readNullableString(record, "fallbackReason", `${label}.fallbackReason`),
     routeOptions: expectArray(
       record.routeOptions ?? [],
       `${label}.routeOptions`,
@@ -442,7 +754,10 @@ function decodeStudioUserLlmSettings(
             `${resolvedOptionLabel}.userServiceId`
           ),
           serviceSlug: readNullableString(option, "serviceSlug", `${resolvedOptionLabel}.serviceSlug`),
-          defaultModel: readNullableString(option, "defaultModel", `${resolvedOptionLabel}.defaultModel`),
+          modelCatalog: decodeStudioLlmModelCatalog(
+            option.modelCatalog,
+            `${resolvedOptionLabel}.modelCatalog`,
+          ),
           description: readNullableString(option, "description", `${resolvedOptionLabel}.description`),
         };
       }
@@ -476,7 +791,6 @@ function decodeStudioUserLlmSettings(
         canRetryCatalog: readBoolean(capabilities, "canRetryCatalog", `${label}.capabilities.canRetryCatalog`),
       };
     })(),
-    defaultModel: readString(record, "defaultModel", `${label}.defaultModel`),
     setupHint: record.setupHint,
   };
 }
@@ -2762,6 +3076,32 @@ export const studioApi = {
     );
   },
 
+  previewExplicitRequests(
+    input: StudioExplicitRequestPreviewInput,
+  ): Promise<StudioExplicitRequestPreview> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/workflows:explicit-request-preview`,
+      decodeStudioExplicitRequestPreview,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            workflowYaml: input.workflowYaml,
+            executionMode: input.executionMode,
+            inlineWorkflowYamls:
+              input.inlineWorkflowYamls &&
+              Object.keys(input.inlineWorkflowYamls).length > 0
+                ? input.inlineWorkflowYamls
+                : undefined,
+            workflowId: input.workflowId.trim(),
+            revisionId: trimOptional(input.revisionId),
+          }),
+        ),
+      },
+    );
+  },
+
   async saveWorkflow(input: StudioSaveWorkflowInput): Promise<StudioWorkflowSaveResult> {
     const normalizedWorkflowId = trimOptional(input.workflowId);
     const shouldUpdate =
@@ -2800,6 +3140,7 @@ export const studioApi = {
         body: JSON.stringify(
           compactObject({
             workflowId: trimOptional(input.workflowId),
+            revisionId: input.revisionId.trim(),
             workflowYaml: input.workflowYaml,
             workflowName: trimOptional(input.workflowName),
             displayName: trimOptional(input.displayName),
@@ -2811,6 +3152,17 @@ export const studioApi = {
             appId: trimOptional(input.appId),
             serviceId: trimOptional(input.serviceId),
             exposureDesired: input.exposureDesired ?? undefined,
+            explicitRequestConfirmations:
+              input.explicitRequestConfirmations &&
+              input.explicitRequestConfirmations.length > 0
+                ? input.explicitRequestConfirmations.map((confirmation) => ({
+                    workflowId: confirmation.workflowId,
+                    revisionId: confirmation.revisionId,
+                    callSiteId: confirmation.callSiteId,
+                    requestContractDigest: confirmation.requestContractDigest,
+                    attestedRisk: confirmation.attestedRisk,
+                  }))
+                : undefined,
           })
         ),
       }
@@ -2999,6 +3351,17 @@ export const studioApi = {
               workflowYamls: input.workflowYamls,
             },
             revisionId: trimOptional(input.revisionId),
+            explicitRequestConfirmations:
+              input.explicitRequestConfirmations &&
+              input.explicitRequestConfirmations.length > 0
+                ? input.explicitRequestConfirmations.map((confirmation) => ({
+                    workflowId: confirmation.workflowId,
+                    revisionId: confirmation.revisionId,
+                    callSiteId: confirmation.callSiteId,
+                    requestContractDigest: confirmation.requestContractDigest,
+                    attestedRisk: confirmation.attestedRisk,
+                  }))
+                : undefined,
           })
         ),
       }
@@ -3334,23 +3697,14 @@ export const studioApi = {
     );
   },
 
-  saveUserLlmSettings(input: {
-    userServiceId?: string | null;
-    routeValue?: string | null;
-    model?: string | null;
-  }): Promise<StudioUserConfigSaveReceipt> {
-    const userServiceId = trimOptional(input.userServiceId);
-    const routeValue = input.routeValue?.trim() ?? null;
-    const model = input.model?.trim() ?? "";
+  saveUserLlmSettings(input: StudioSaveUserLlmIntent): Promise<StudioUserConfigSaveReceipt> {
     return requestDecodedJson(
       "/api/user-config/llm",
       decodeStudioUserConfigSaveReceipt,
       {
         method: "PUT",
         headers: JSON_HEADERS,
-        body: JSON.stringify(userServiceId
-          ? { userServiceId, model }
-          : { routeValue, model }),
+        body: JSON.stringify(input),
       }
     );
   },

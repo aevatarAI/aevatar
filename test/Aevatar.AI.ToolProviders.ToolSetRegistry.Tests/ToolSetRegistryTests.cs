@@ -1,5 +1,4 @@
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.ChatRouting.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -24,7 +23,7 @@ public sealed class ToolSetRegistryTests
         using var provider = services.BuildServiceProvider();
         var registry = provider.GetRequiredService<IToolSetRegistry>();
 
-        var result = registry.Resolve(new ChatRouteToolSetRef { Name = " test.default " });
+        var result = registry.Resolve(" test.default ");
 
         result.IsSuccess.Should().BeTrue();
         result.Error.Should().BeNull();
@@ -54,7 +53,7 @@ public sealed class ToolSetRegistryTests
         using var provider = services.BuildServiceProvider();
         var registry = provider.GetRequiredService<IToolSetRegistry>();
 
-        var result = registry.Resolve(new ChatRouteToolSetRef { Name = "lark.self_notify" });
+        var result = registry.Resolve("lark.self_notify");
 
         result.IsSuccess.Should().BeTrue();
         result.Name.Should().Be("lark.self_notify");
@@ -77,7 +76,7 @@ public sealed class ToolSetRegistryTests
         using var provider = services.BuildServiceProvider();
         var registry = provider.GetRequiredService<IToolSetRegistry>();
 
-        var act = () => registry.Resolve(new ChatRouteToolSetRef { Name = "lark.self_notify" });
+        var act = () => registry.Resolve("lark.self_notify");
 
         act.Should()
             .Throw<InvalidOperationException>()
@@ -95,7 +94,7 @@ public sealed class ToolSetRegistryTests
         using var provider = services.BuildServiceProvider();
         var registry = provider.GetRequiredService<IToolSetRegistry>();
 
-        var result = registry.Resolve(new ChatRouteToolSetRef { Name = "missing.set" });
+        var result = registry.Resolve("missing.set");
 
         result.IsSuccess.Should().BeFalse();
         result.Sources.Should().BeEmpty();
@@ -119,7 +118,7 @@ public sealed class ToolSetRegistryTests
         using var provider = services.BuildServiceProvider();
         var registry = provider.GetRequiredService<IToolSetRegistry>();
 
-        var result = registry.Resolve(name is null ? null : new ChatRouteToolSetRef { Name = name });
+        var result = registry.Resolve(name);
 
         result.IsSuccess.Should().BeFalse();
         result.Error.Should().NotBeNull();

@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using ExternalCapabilityExecutionMode = Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 
@@ -80,6 +81,7 @@ internal sealed class WorkflowWebhookIngressRequestBuilder
         var command = new WorkflowChatRunRequest(
             Prompt: prompt,
             Source: WorkflowChatSource.CatalogWorkflow(workflowName),
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             ScopeId: Normalize(binding.ScopeId),
             CommandIdSeed: commandId,
             CorrelationIdSeed: commandId,

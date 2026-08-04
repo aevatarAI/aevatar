@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Services;
 using FluentAssertions;
@@ -6,6 +7,47 @@ namespace Aevatar.Studio.Tests;
 
 public sealed class UserConfigServiceTests
 {
+    [Fact]
+    public async Task SaveAsync_WithGateway_ShouldUseFreshCatalogAndCommitWholeSelection()
+    {
+        var commands = new RecordingUserConfigCommandService();
+        var catalog = new StubUserLlmCatalogPort(new NyxIdLlmServicesResult(
+            [GatewayService("gpt-5.5")],
+            null));
+        var writer = new UserLlmPreferenceWriter(commands, catalog);
+
+        await writer.SaveAsync(
+            UserConfigResourceKey.ForOwnerScope("scope-alpha"),
+            "bearer",
+            new SelectGatewayUserLlmPreferenceIntent(
+                new LLMModelSelection { Kind = LLMModelSelectionKind.ProviderDefault }),
+            CancellationToken.None);
+
+        catalog.FreshCalls.Should().Be(1);
+        catalog.GetServicesCalls.Should().Be(0);
+        commands.Updates.Single().Update.LlmSelection!.RouteKind.Should().Be(LLMRouteKind.Gateway);
+    }
+
+    [Fact]
+    public async Task SaveAsync_WithReset_ShouldNotReadCatalog()
+    {
+        var commands = new RecordingUserConfigCommandService();
+        var catalog = new StubUserLlmCatalogPort(new NyxIdLlmServicesResult([], null));
+        var writer = new UserLlmPreferenceWriter(commands, catalog);
+
+        await writer.SaveAsync(
+            UserConfigResourceKey.ForOwnerScope("scope-alpha"),
+            bearerToken: null,
+            new ResetUserLlmPreferenceIntent(),
+            CancellationToken.None);
+
+        catalog.FreshCalls.Should().Be(0);
+        catalog.GetServicesCalls.Should().Be(0);
+        var selection = commands.Updates.Single().Update.LlmSelection!;
+        selection.RouteKind.Should().Be(LLMRouteKind.Unspecified);
+        selection.ModelSelection.Kind.Should().Be(LLMModelSelectionKind.Unspecified);
+    }
+
     [Fact]
     public async Task SaveLlmPreferenceAsync_WithExactInventoryId_ShouldDispatchDeltaWithoutReadingConfig()
     {
@@ -21,7 +63,7 @@ public sealed class UserConfigServiceTests
         var update = commands.Updates.Should().ContainSingle().Which.Update;
         update.LlmSelection!.NyxIdUserServiceId.Should().Be("us-beta");
         update.LlmSelection.ServiceSlugSnapshot.Should().Be("shared-slug");
-        update.DefaultModel.Should().Be("gpt-5.5");
+        update.LlmSelection.ModelSelection.ModelId.Should().Be("gpt-5.5");
     }
 
     [Fact]
@@ -93,22 +135,29 @@ public sealed class UserConfigServiceTests
     [InlineData(" GATEWAY ")]
     [InlineData(UserConfigLlmRouteDefaults.Gateway)]
     [InlineData(" /api/v1/llm/gateway/v1 ")]
-    public async Task SaveLlmPreferenceAsync_WithGatewayAlias_ShouldDispatchWithoutCatalogCall(string routeValue)
+    public async Task SaveLlmPreferenceAsync_WithGatewayAlias_ShouldUseFreshCatalog(string routeValue)
     {
         var commands = new RecordingUserConfigCommandService();
-        var catalog = new StubUserLlmCatalogPort(new NyxIdLlmServicesResult([], null));
+        var catalog = new StubUserLlmCatalogPort(new NyxIdLlmServicesResult(
+            [GatewayService("gpt-5.5")],
+            null));
         var writer = new UserLlmPreferenceWriter(commands, catalog);
 
         await writer.SaveAsync(
             UserConfigResourceKey.ForOwnerScope("scope-alpha"),
-            bearerToken: null,
+            bearerToken: "bearer",
             new SaveUserLlmPreferenceCommand(RouteValue: routeValue, Model: " gpt-5.5 "),
             CancellationToken.None);
 
         catalog.GetServicesCalls.Should().Be(0);
+        catalog.FreshCalls.Should().Be(1);
         var update = commands.Updates.Should().ContainSingle().Which.Update;
-        update.DefaultModel.Should().Be("gpt-5.5");
-        update.LlmSelection.Should().Be(UserLlmPreferenceWriteCore.BuildGatewaySelection());
+        update.LlmSelection!.Should().BeEquivalentTo(UserLlmPreferenceWriteCore.BuildGatewaySelection(
+            new LLMModelSelection
+            {
+                Kind = LLMModelSelectionKind.ExplicitModel,
+                ModelId = "gpt-5.5",
+            }));
     }
 
     [Theory]
@@ -133,22 +182,22 @@ public sealed class UserConfigServiceTests
     }
 
     [Fact]
-    public async Task SaveLlmPreferenceAsync_WithModelOnly_ShouldOmitSelection()
+    public async Task SaveLlmPreferenceAsync_WithModelOnly_ShouldRejectWithoutDispatch()
     {
         var commands = new RecordingUserConfigCommandService();
         var catalog = new StubUserLlmCatalogPort(new NyxIdLlmServicesResult([], null));
         var writer = new UserLlmPreferenceWriter(commands, catalog);
 
-        await writer.SaveAsync(
+        var act = () => writer.SaveAsync(
             UserConfigResourceKey.ForOwnerScope("scope-alpha"),
             bearerToken: null,
             new SaveUserLlmPreferenceCommand(Model: " gpt-5.5 "),
             CancellationToken.None);
 
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("A complete LLM route selection is required.");
         catalog.GetServicesCalls.Should().Be(0);
-        var update = commands.Updates.Should().ContainSingle().Which.Update;
-        update.DefaultModel.Should().Be("gpt-5.5");
-        update.LlmSelection.Should().BeNull();
+        commands.Updates.Should().BeEmpty();
     }
 
     [Fact]
@@ -165,13 +214,13 @@ public sealed class UserConfigServiceTests
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("userServiceId is required for a route-prefixed model selection.");
+            .WithMessage("A complete LLM route selection is required.");
         catalog.GetServicesCalls.Should().Be(0);
         commands.Updates.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task SaveLlmPreferenceAsync_WithReset_ShouldDispatchCanonicalGatewaySelection()
+    public async Task SaveLlmPreferenceAsync_WithReset_ShouldDispatchUnspecifiedSelection()
     {
         var commands = new RecordingUserConfigCommandService();
         var catalog = new StubUserLlmCatalogPort(new NyxIdLlmServicesResult([], null));
@@ -185,8 +234,7 @@ public sealed class UserConfigServiceTests
 
         catalog.GetServicesCalls.Should().Be(0);
         var update = commands.Updates.Should().ContainSingle().Which.Update;
-        update.DefaultModel.Should().BeEmpty();
-        update.LlmSelection.Should().Be(UserLlmPreferenceWriteCore.BuildGatewaySelection());
+        update.LlmSelection.Should().BeEquivalentTo(UserLlmPreferenceWriteCore.BuildResetSelection());
     }
 
     [Theory]
@@ -241,7 +289,7 @@ public sealed class UserConfigServiceTests
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("LLM preset user service 'catalog-alpha' is not selectable for this user.");
+            .WithMessage("LLM user service 'catalog-alpha' is not selectable.");
         commands.Updates.Should().BeEmpty();
     }
 
@@ -274,12 +322,12 @@ public sealed class UserConfigServiceTests
             new SaveUserLlmPreferenceCommand(PresetId: "provision"),
             CancellationToken.None);
 
-        catalog.GetServicesCalls.Should().Be(2);
+        catalog.FreshCalls.Should().Be(2);
         catalog.ProvisionCalls.Should().ContainSingle().Which.Should().Be(("bearer", "catalog/provision"));
         var recorded = commands.Updates.Should().ContainSingle().Which;
         recorded.Resource.Should().Be(UserConfigResourceKey.ForChannelBinding("binding-alpha"));
-        recorded.Update.DefaultModel.Should().BeNull();
         recorded.Update.LlmSelection!.NyxIdUserServiceId.Should().Be("us-provisioned");
+        recorded.Update.LlmSelection.ModelSelection.Kind.Should().Be(LLMModelSelectionKind.ProviderDefault);
     }
 
     [Theory]
@@ -318,7 +366,7 @@ public sealed class UserConfigServiceTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("LLM user service 'us-provisioned' is not selectable.");
-        catalog.GetServicesCalls.Should().Be(2);
+        catalog.FreshCalls.Should().Be(2);
         commands.Updates.Should().BeEmpty();
     }
 
@@ -332,7 +380,13 @@ public sealed class UserConfigServiceTests
         await preferencePort.SaveAsync(
             "binding-alpha",
             "bearer",
-            new SaveUserLlmPreferenceCommand(UserServiceId: "us-alpha", Model: "gpt-5.5"),
+            new SelectUserServiceUserLlmPreferenceIntent(
+                "us-alpha",
+                new LLMModelSelection
+                {
+                    Kind = LLMModelSelectionKind.ExplicitModel,
+                    ModelId = "gpt-5.5",
+                }),
             CancellationToken.None);
 
         var update = commands.Updates.Should().ContainSingle().Which;
@@ -341,16 +395,9 @@ public sealed class UserConfigServiceTests
     }
 
     [Fact]
-    public async Task SaveAsync_WithRoutePrefixedDefaultModel_ShouldRejectWithoutDispatch()
+    public void SaveUserConfigCommand_ShouldNotExposeDefaultModel()
     {
-        var commands = new RecordingUserConfigCommandService();
-        var service = CreateService(commands);
-
-        var act = () => service.SaveAsync(new SaveUserConfigCommand(
-            DefaultModel: "chrono-llm-public/gpt-5.5"));
-
-        await act.Should().ThrowAsync<InvalidOperationException>();
-        commands.Updates.Should().BeEmpty();
+        typeof(SaveUserConfigCommand).GetProperty("DefaultModel").Should().BeNull();
     }
 
     [Fact]
@@ -360,7 +407,6 @@ public sealed class UserConfigServiceTests
         var service = CreateService(commands);
 
         await service.SaveAsync(new SaveUserConfigCommand(
-            DefaultModel: " gpt-5.5 ",
             RuntimeMode: " REMOTE ",
             LocalRuntimeBaseUrl: " http://127.0.0.1:5080/ ",
             RemoteRuntimeBaseUrl: " https://runtime.example.com/ ",
@@ -370,7 +416,6 @@ public sealed class UserConfigServiceTests
         var recorded = commands.Updates.Should().ContainSingle().Which;
         recorded.Resource.Should().Be(UserConfigResourceKey.ForOwnerScope("scope-alpha"));
         recorded.Update.Should().BeEquivalentTo(new UserConfigUpdate(
-            DefaultModel: "gpt-5.5",
             RuntimeMode: UserConfigRuntimeDefaults.RemoteMode,
             LocalRuntimeBaseUrl: "http://127.0.0.1:5080",
             RemoteRuntimeBaseUrl: "https://runtime.example.com",
@@ -412,7 +457,7 @@ public sealed class UserConfigServiceTests
     {
         var fixture = CreateMissingScopeService(authenticatedWithoutScope: true);
 
-        var act = () => fixture.Service.SaveAsync(new SaveUserConfigCommand(DefaultModel: "gpt-5.5"));
+        var act = () => fixture.Service.SaveAsync(new SaveUserConfigCommand(GithubUsername: "octocat"));
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("HTTP request has no resolvable scope*");
@@ -428,7 +473,9 @@ public sealed class UserConfigServiceTests
 
         var act = () => fixture.Service.SaveLlmPreferenceAsync(
             "bearer",
-            new SaveUserLlmPreferenceCommand(UserServiceId: "us-alpha"));
+            new SelectUserServiceUserLlmPreferenceIntent(
+                "us-alpha",
+                new LLMModelSelection { Kind = LLMModelSelectionKind.ProviderDefault }));
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("HTTP request has no resolvable scope*");
@@ -456,7 +503,7 @@ public sealed class UserConfigServiceTests
     {
         var fixture = CreateMissingScopeService(authenticatedWithoutScope: false);
 
-        var act = () => fixture.Service.SaveAsync(new SaveUserConfigCommand(DefaultModel: "gpt-5.5"));
+        var act = () => fixture.Service.SaveAsync(new SaveUserConfigCommand(GithubUsername: "octocat"));
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("HTTP request has no resolvable scope*");
@@ -512,11 +559,18 @@ public sealed class UserConfigServiceTests
     [Fact]
     public async Task GetSettingsAsync_WhenSavedIdDisappearsButSameRouteRemains_ShouldMarkSavedSelectionUnavailable()
     {
-        var saved = new UserLlmSelectionValue(
-            UserLlmSelectionKind.NyxIdUserService,
-            "/api/v1/proxy/s/shared",
-            "us-beta",
-            "shared");
+        var saved = new LLMSelection
+        {
+            RouteKind = LLMRouteKind.NyxIdUserService,
+            RouteValue = "/api/v1/proxy/s/shared",
+            NyxIdUserServiceId = "us-beta",
+            ServiceSlugSnapshot = "shared",
+            ModelSelection = new LLMModelSelection
+            {
+                Kind = LLMModelSelectionKind.ExplicitModel,
+                ModelId = "gpt-5.5",
+            },
+        };
         var service = new UserLlmPreferenceService(
             new StubUserConfigQueryPort(new UserConfig(
                 DefaultModel: "gpt-5.5",
@@ -528,39 +582,53 @@ public sealed class UserConfigServiceTests
 
         var result = await service.GetSettingsAsync("bearer", CancellationToken.None);
 
-        result.SavedUserServiceId.Should().Be("us-beta");
-        result.RouteFallbackActive.Should().BeTrue();
-        result.FallbackReason.Should().Be(UserLlmFallbackReason.SavedRouteUnavailable);
-        result.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        result.SavedSelection.Should().BeEquivalentTo(saved);
+        result.SelectionStatus.Should().Be(UserLlmSelectionStatus.NeedsRepair);
+        result.Remediation.Should().Be(UserLlmRemediationKind.ChooseReplacement);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task GetSettingsAsync_WithoutCommittedSelection_ShouldKeepSavedRouteUnspecified(
-        bool useUnspecifiedSelection)
+    [Fact]
+    public async Task GetSettingsAsync_WithCompatibilityOnlySelection_ShouldRequireLegacyRepair()
     {
         var service = new UserLlmPreferenceService(
             new StubUserConfigQueryPort(new UserConfig(
                 DefaultModel: "shared/gpt-5.5",
-                PreferredLlmRoute: string.Empty,
-                LlmSelection: useUnspecifiedSelection
-                    ? new UserLlmSelectionValue(
-                        UserLlmSelectionKind.Unspecified,
-                        UserConfigLlmRouteDefaults.Gateway,
-                        "us-legacy",
-                        "shared")
-                    : null)),
+                PreferredLlmRoute: "/api/v1/proxy/s/shared",
+                LlmSelection: null)),
             new StubUserLlmCatalogPort(new NyxIdLlmServicesResult(
                 [InventoryService("us-alpha", "shared")],
                 null)));
 
         var result = await service.GetSettingsAsync("bearer", CancellationToken.None);
 
-        result.SavedRouteKind.Should().Be(UserLlmSelectionKindWire.Unspecified);
-        result.SavedRoute.Should().BeEmpty();
-        result.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
-        result.DefaultModel.Should().Be("shared/gpt-5.5");
+        result.SavedSelection.Should().BeNull();
+        result.SelectionStatus.Should().Be(UserLlmSelectionStatus.LegacyRepairRequired);
+        result.Remediation.Should().Be(UserLlmRemediationKind.Reselect);
+    }
+
+    [Fact]
+    public async Task GetSettingsAsync_WithResetSelection_ShouldUseSystemDefault()
+    {
+        var selection = new LLMSelection
+        {
+            ModelSelection = new LLMModelSelection
+            {
+                Kind = LLMModelSelectionKind.Unspecified,
+            },
+        };
+        var service = new UserLlmPreferenceService(
+            new StubUserConfigQueryPort(new UserConfig(
+                DefaultModel: string.Empty,
+                PreferredLlmRoute: string.Empty,
+                LlmSelection: selection)),
+            new StubUserLlmCatalogPort(new NyxIdLlmServicesResult(
+                [InventoryService("us-alpha", "shared")],
+                null)));
+
+        var result = await service.GetSettingsAsync("bearer", CancellationToken.None);
+
+        result.SavedSelection.Should().BeEquivalentTo(selection);
+        result.SelectionStatus.Should().Be(UserLlmSelectionStatus.SystemDefault);
     }
 
     private static UserLlmPreferenceWriter CreateWriter(
@@ -606,8 +674,18 @@ public sealed class UserConfigServiceTests
         ServiceSlug: slug,
         DisplayName: slug,
         RouteValue: $"/api/v1/proxy/s/{slug}",
-        DefaultModel: defaultModel,
-        Models: defaultModel is null ? [] : [defaultModel],
+        ModelCatalog: defaultModel is null
+            ? new LLMModelCatalog
+            {
+                Certainty = LLMModelCatalogCertainty.NotVerifiable,
+                DiagnosticKind = LLMModelCatalogDiagnosticKind.NotPublished,
+            }
+            : new LLMModelCatalog
+            {
+                Certainty = LLMModelCatalogCertainty.Enumerated,
+                DefaultModelId = defaultModel,
+                ModelIds = { defaultModel },
+            },
         Status: UserLlmRouteStatus.Ready,
         Source: UserLlmRouteSource.UserService,
         Allowed: true,
@@ -615,6 +693,22 @@ public sealed class UserConfigServiceTests
         Identity: new UserLlmServiceIdentity(
             UserLlmIdentityAuthority.NyxIdUserServicesInventory,
             id));
+
+    private static NyxIdLlmService GatewayService(string model) => new(
+        CatalogEntryId: null,
+        ServiceSlug: "gateway",
+        DisplayName: "Gateway",
+        RouteValue: UserConfigLlmRouteDefaults.Gateway,
+        ModelCatalog: new LLMModelCatalog
+        {
+            Certainty = LLMModelCatalogCertainty.Enumerated,
+            DefaultModelId = model,
+            ModelIds = { model },
+        },
+        Status: UserLlmRouteStatus.Ready,
+        Source: UserLlmRouteSource.GatewayProvider,
+        Allowed: true,
+        Description: null);
 
     private sealed class StubScopeResolver(
         string? scopeId,
@@ -676,11 +770,18 @@ public sealed class UserConfigServiceTests
         private bool _provisioned;
 
         public int GetServicesCalls { get; private set; }
+        public int FreshCalls { get; private set; }
         public List<(string BearerToken, string ProvisionEndpointId)> ProvisionCalls { get; } = [];
 
         public Task<NyxIdLlmServicesResult> GetServicesAsync(string bearerToken, CancellationToken ct)
         {
             GetServicesCalls++;
+            return Task.FromResult(_provisioned && refreshedResult is not null ? refreshedResult : result);
+        }
+
+        public Task<NyxIdLlmServicesResult> GetFreshServicesAsync(string bearerToken, CancellationToken ct)
+        {
+            FreshCalls++;
             return Task.FromResult(_provisioned && refreshedResult is not null ? refreshedResult : result);
         }
 

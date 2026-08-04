@@ -377,10 +377,7 @@ function bindCreateRecovery(
     conversationId: recovery.conversationId,
     expectedTurnCount: conversation.expectedTurnCount + 1,
     latestTurnId: recovery.turnId,
-    stateVersion: Math.max(
-      conversation.stateVersion ?? 0,
-      recovery.stateVersion
-    ),
+    stateVersion: undefined,
   };
 }
 
@@ -1474,6 +1471,9 @@ const ChatPage: React.FC = () => {
             if (!acceptedChatHistoryContext) {
               acceptedChatHistoryContext = chatHistoryContext;
               receivedChatHistoryContext = true;
+              const acceptedConversationStateVersion = conversation.conversationId
+                ? chatHistoryContext.stateVersion
+                : 0;
               streamingConversation = {
                 ...streamingConversation,
                 conversationId: chatHistoryContext.conversationId,
@@ -1482,7 +1482,7 @@ const ChatPage: React.FC = () => {
                 stateVersion: Math.max(
                   streamingConversation.stateVersion ?? 0,
                   latestRefreshedDetail?.stateVersion ?? 0,
-                  chatHistoryContext.stateVersion
+                  acceptedConversationStateVersion
                 ),
               };
               activeConversationRef.current = streamingConversation;

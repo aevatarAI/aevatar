@@ -22,9 +22,14 @@ public sealed class ExternalWorkflowCapabilityReadinessService(
             source.ListAsync(request.Access, cancellationToken)));
         var capabilities = batches
             .SelectMany(static batch => batch.Capabilities)
-            .Select(static descriptor => descriptor.Clone())
-            .OrderBy(static descriptor => descriptor.Selector.SelectorCase)
-            .ThenBy(IdentityKey, StringComparer.Ordinal)
+            .Select(static descriptor => new
+            {
+                Descriptor = descriptor.Clone(),
+                Identity = IdentityKey(descriptor),
+            })
+            .OrderBy(static item => item.Descriptor.Selector.SelectorCase)
+            .ThenBy(static item => item.Identity, StringComparer.Ordinal)
+            .Select(static item => item.Descriptor)
             .ToArray();
         var result = new ExternalWorkflowCapabilityDiscoveryResult
         {
@@ -91,6 +96,11 @@ public sealed class ExternalWorkflowCapabilityReadinessService(
                 $"{descriptor.Selector.HostConnector.ConnectorCapabilityRef}\n{descriptor.Selector.HostConnector.OperationId}",
             ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation =>
                 $"{descriptor.Selector.NyxIdOperation.UserServiceId}\n{descriptor.Selector.NyxIdOperation.EndpointId}",
-            _ => string.Empty,
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest =>
+                $"{descriptor.Selector.NyxIdRequest.UserServiceId}\n" +
+                WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdRequestContractDigest(
+                    descriptor.Selector.NyxIdRequest),
+            _ => throw new InvalidOperationException(
+                "External workflow capability selector identity is unavailable."),
         };
 }

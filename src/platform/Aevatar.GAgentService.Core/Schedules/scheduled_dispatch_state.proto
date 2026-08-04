@@ -81,6 +81,7 @@ message ScheduledDispatchState
   int64 pending_team_credential_expiry_generation = 63;
   TeamAutomationActivationDecisionState team_automation_activation_decision = 64;
   optional string team_automation_delete_reason = 65;
+  string last_error_code = 66;
 }
 
 message TeamMemberAutomationOwnerState
@@ -153,6 +154,12 @@ message ScheduledDispatchRuntimeCallbackLeaseState
   int32 slot_epoch = 5;
 }
 
+enum ScheduledDispatchEnvelopeAuthorityState
+{
+  SCHEDULED_DISPATCH_ENVELOPE_AUTHORITY_STATE_UNSPECIFIED = 0;
+  SCHEDULED_DISPATCH_ENVELOPE_AUTHORITY_STATE_TRUSTED_INTERNAL = 1;
+}
+
 message ScheduledDispatchTargetState
 {
   ScheduledDispatchTargetKindState kind = 1;
@@ -161,6 +168,7 @@ message ScheduledDispatchTargetState
   ScheduledServiceInvocationTargetState service_invocation = 4;
   reserved 5;
   ScheduledDispatchCredentialRequirementTargetKindState credential_requirement_target_kind = 6;
+  ScheduledDispatchEnvelopeAuthorityState envelope_authority = 7;
 }
 
 enum ScheduledDispatchTargetKindState
@@ -715,6 +723,7 @@ message ScheduledDispatchFireFailedEvent
   string idempotency_key = 3;
   string error = 4;
   bool manual = 5;
+  string error_code = 6;
 }
 
 message ScheduledDispatchFireOverdueDetectedEvent
@@ -735,6 +744,7 @@ message ScheduledDispatchFireRecordState
   string error = 7;
   bool manual = 8;
   ScheduledDispatchFireStatusState status = 9;
+  string error_code = 10;
 }
 
 enum ScheduledDispatchFireStatusState

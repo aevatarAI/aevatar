@@ -75,11 +75,11 @@ public sealed class MessagesCommandFacade(
         // Single preferred-model source: explicit caller model > account UserConfig > route
         // policy / deployment default. See IngressModelPreference.
         var explicitCallerModel = IngressModelPreference.Normalize(request.Model);
-        var ownerConfig = await TryLoadOwnerConfigAsync(callerScopeResult.Scope!.ScopeId, ct);
+        var ownerControl = await TryLoadOwnerControlAsync(callerScopeResult.Scope!.ScopeId, ct);
 
         var trigger = ParseSkillInvocationTrigger(BuildRouteContentHint(normalized));
         var routedModelResult = await ResolveRouteTargetAsync(
-            normalized, callerScopeResult.Scope!, explicitCallerModel, ownerConfig, trigger, ct);
+            normalized, callerScopeResult.Scope!, explicitCallerModel, ownerControl, trigger, ct);
         if (routedModelResult.Error is not null)
             return MessagesCreateCommandResult.FromError(
                 routedModelResult.Error.StatusCode,
@@ -98,7 +98,7 @@ public sealed class MessagesCommandFacade(
             callerScopeResult.Scope!,
             routedModelResult.Model!,
             routedModelResult.Action!,
-            ownerConfig,
+            ownerControl,
             trigger,
             callerScopeContext.InboundBearerToken,
             sessionResult.Session!,
@@ -195,16 +195,21 @@ public sealed class MessagesCommandFacade(
     // Account UserConfig is the single "preferred model" source for ingress. Reads are
     // swallow-and-logged (mirroring OwnerLlmConfigApplier) so a flaky projection never fails a
     // request — resolution then falls through to the route policy / deployment default.
-    private async Task<OwnerLlmConfig?> TryLoadOwnerConfigAsync(string scopeId, CancellationToken ct)
+    private async Task<LLMControlContext?> TryLoadOwnerControlAsync(string scopeId, CancellationToken ct)
     {
         if (ownerLlmConfigSource is null || string.IsNullOrWhiteSpace(scopeId))
             return null;
 
         try
         {
-            return await ownerLlmConfigSource.GetForScopeAsync(scopeId, ct).ConfigureAwait(false);
+            var config = await ownerLlmConfigSource.GetForScopeAsync(scopeId, ct).ConfigureAwait(false);
+            return config.ApplyTo(LLMControlContext.Empty);
         }
         catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (LLMSelectionRepairRequiredException)
         {
             throw;
         }
@@ -219,7 +224,7 @@ public sealed class MessagesCommandFacade(
         NormalizedMessagesRequest normalized,
         ResponsesCallerScope callerScope,
         string? explicitCallerModel,
-        OwnerLlmConfig? ownerConfig,
+        LLMControlContext? ownerControl,
         SkillInvocationTrigger? trigger,
         CancellationToken ct)
     {
@@ -251,7 +256,7 @@ public sealed class MessagesCommandFacade(
             : null;
         var routedModel = IngressModelPreference.ResolveModel(
             explicitCallerModel,
-            ownerConfig?.DefaultModel,
+            ownerControl?.ModelOverride,
             routePolicyForwardModel,
             normalized.Model);
         if (action.ForwardToModel is null)
@@ -307,7 +312,7 @@ public sealed class MessagesCommandFacade(
         ResponsesCallerScope callerScope,
         string routedModel,
         ChatRouteAction routeAction,
-        OwnerLlmConfig? ownerConfig,
+        LLMControlContext? ownerControl,
         SkillInvocationTrigger? trigger,
         string bearerToken,
         LlmSessionRegistrationResult session,
@@ -324,7 +329,7 @@ public sealed class MessagesCommandFacade(
             toolPlan.AdditionalToolProviders,
             ct: ct);
         var (effectiveModel, resolvedRouteValue) = await ResolveModelRouteAsync(
-            routedModel, ownerConfig?.PreferredLlmRoute, bearerToken, ct);
+            routedModel, ownerControl?.NyxIdRoutePreference, bearerToken, ct);
         var toolContext = toolProviderContext.ToolContext with
         {
             Routing = toolProviderContext.ToolContext.Routing with

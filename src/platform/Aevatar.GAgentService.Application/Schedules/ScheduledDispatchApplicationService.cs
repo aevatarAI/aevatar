@@ -176,7 +176,14 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     {
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
         var schedule = await _queryPort.GetAsync(normalizedScheduleId, ct);
-        return schedule?.Schedule is { Deleted: false, TeamOwned: false } ? schedule : null;
+        return schedule?.Schedule is
+        {
+            Deleted: false,
+            TeamOwned: false,
+            TargetKind: ScheduledDispatchTargetKind.ServiceInvocation,
+        }
+            ? schedule
+            : null;
     }
 
     public Task<ScheduledDispatchListResult> ListAsync(
@@ -196,6 +203,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             return _queryPort.ListAsync(query with
             {
                 Take = Math.Clamp(query.Take, 1, 200),
+                TargetKind = ScheduledDispatchTargetKind.ServiceInvocation,
                 TeamAutomationOwner = NormalizeTeamOwner(query.TeamAutomationOwner),
                 TeamAutomationScopeId = null,
                 TeamAutomationTeamId = null,
@@ -212,6 +220,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             return _queryPort.ListAsync(query with
             {
                 Take = Math.Clamp(query.Take, 1, 200),
+                TargetKind = ScheduledDispatchTargetKind.ServiceInvocation,
                 TeamAutomationOwner = null,
                 TeamAutomationScopeId = teamAutomationScopeId,
                 TeamAutomationTeamId = NormalizeNullable(query.TeamAutomationTeamId),
@@ -223,6 +232,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         return _queryPort.ListAsync(query with
         {
             Take = Math.Clamp(query.Take, 1, 200),
+            TargetKind = ScheduledDispatchTargetKind.ServiceInvocation,
             TeamAutomationOwner = null,
             ExcludeTeamOwned = true,
             IncludeDeleted = false,
@@ -653,7 +663,11 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var normalizedTeamId = NormalizeNullable(teamId);
         var normalizedMemberId = NormalizeNullable(memberId);
         var detail = await _queryPort.GetAsync(normalizedScheduleId, ct);
-        return detail?.Schedule is { Deleted: false } &&
+        return detail?.Schedule is
+               {
+                   Deleted: false,
+                   TargetKind: ScheduledDispatchTargetKind.ServiceInvocation,
+               } &&
                TeamScopeEquals(detail.Schedule, normalizedScopeId) &&
                (normalizedTeamId is null || TeamEquals(detail.Schedule, normalizedTeamId)) &&
                (normalizedMemberId is null || TeamMemberEquals(detail.Schedule, normalizedMemberId))
@@ -669,7 +683,11 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
         var normalizedOwner = NormalizeTeamOwner(owner);
         var detail = await _queryPort.GetAsync(normalizedScheduleId, ct);
-        return detail?.Schedule is { TeamOwned: true } &&
+        return detail?.Schedule is
+               {
+                   TeamOwned: true,
+                   TargetKind: ScheduledDispatchTargetKind.ServiceInvocation,
+               } &&
                (!detail.Schedule.Deleted || detail.Schedule.RevocationPending) &&
                TeamOwnerEquals(detail.Schedule, normalizedOwner)
             ? detail
@@ -687,6 +705,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             Take: Math.Clamp(take, 1, 200),
             Cursor: cursor,
             IncludeTotalCount: includeTotalCount,
+            TargetKind: ScheduledDispatchTargetKind.ServiceInvocation,
             TeamAutomationOwner: NormalizeTeamOwner(owner),
             ExcludeCompletedTeamAutomationDeletions: true), ct);
         return result;
@@ -1227,6 +1246,11 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         CancellationToken ct)
     {
         var existing = await _queryPort.GetAsync(scheduleId, ct);
+        if (existing is not null &&
+            existing.Schedule.TargetKind != ScheduledDispatchTargetKind.ServiceInvocation)
+        {
+            throw new ScheduledDispatchNotFoundException(scheduleId);
+        }
         if (existing?.Schedule.Deleted == true)
             throw new ScheduledDispatchNotFoundException(scheduleId);
         if (existing?.Schedule.TeamOwned == true)
@@ -1248,8 +1272,14 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         CancellationToken ct)
     {
         var existing = await _queryPort.GetAsync(scheduleId, ct);
-        if (existing?.Schedule.TeamOwned != true || !TeamOwnerEquals(existing.Schedule, owner))
+        if (existing?.Schedule is not
+            {
+                TeamOwned: true,
+                TargetKind: ScheduledDispatchTargetKind.ServiceInvocation,
+            } || !TeamOwnerEquals(existing.Schedule, owner))
+        {
             throw new ScheduledDispatchNotFoundException(scheduleId);
+        }
         return existing;
     }
 
@@ -1384,30 +1414,11 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         ArgumentNullException.ThrowIfNull(target);
         return target.Kind switch
         {
-            ScheduledDispatchTargetKind.Envelope => NormalizeEnvelopeTarget(target),
             ScheduledDispatchTargetKind.ServiceInvocation => NormalizeServiceInvocationTarget(target),
+            ScheduledDispatchTargetKind.Envelope => throw new ArgumentException(
+                "Raw envelope scheduled dispatch targets are not supported by the Application contract.",
+                nameof(target)),
             _ => throw new ArgumentException($"Unsupported scheduled dispatch target kind '{target.Kind}'.", nameof(target)),
-        };
-    }
-
-    private static ScheduledDispatchTargetDescriptor NormalizeEnvelopeTarget(ScheduledDispatchTargetDescriptor target)
-    {
-        if (target.Envelope?.Payload == null)
-            throw new ArgumentException("Envelope scheduled dispatch target requires an envelope payload.", nameof(target));
-
-        var actorId = NormalizeNullable(target.ActorId);
-        if (string.IsNullOrWhiteSpace(actorId))
-        {
-            actorId = NormalizeNullable(target.Envelope.Route.GetTargetActorId());
-            if (string.IsNullOrWhiteSpace(actorId))
-                throw new ArgumentException("Envelope scheduled dispatch target requires an actor id.", nameof(target));
-        }
-
-        return target with
-        {
-            ActorId = actorId,
-            Envelope = target.Envelope.Clone(),
-            ServiceInvocation = null,
         };
     }
 

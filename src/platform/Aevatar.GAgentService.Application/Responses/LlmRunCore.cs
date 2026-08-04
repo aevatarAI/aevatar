@@ -17,7 +17,8 @@ public sealed class LlmRunCore(
     ILLMProviderFactory providerFactory,
     IEnumerable<IResponsesToolProvider> toolProviders,
     IToolSetRegistry toolSetRegistry,
-    ILogger<LlmRunCore> logger) : ILlmRunCore
+    ILogger<LlmRunCore> logger,
+    IAgentToolExecutionPort? toolExecutionPort = null) : ILlmRunCore
 {
     private static readonly Duration DefaultTtl = Duration.FromTimeSpan(TimeSpan.FromHours(24));
     private const int MaxToolRounds = 8;
@@ -64,7 +65,10 @@ public sealed class LlmRunCore(
     {
         var command = request.Command;
         var provider = providerFactory.GetDefault();
-        var toolContext = BuildToolContext(command);
+        var toolContext = BuildToolContext(command) with
+        {
+            ExecutionOwner = AgentToolExecutionOwners.WorkflowRun(request.RunId),
+        };
         var tools = await BuildEffectiveToolsAsync(command, toolContext, request.OriginPlatform, ct).ConfigureAwait(false);
         var ownershipPlan = LlmToolOwnershipPlan.From(command.ToolSelection, tools);
         var messages = command.Messages.Select(ToChatMessage).ToList();
@@ -202,7 +206,7 @@ public sealed class LlmRunCore(
 
         try
         {
-            var resolved = toolSetRegistry.Resolve(new ChatRouteToolSetRef { Name = toolSetName });
+            var resolved = toolSetRegistry.Resolve(toolSetName);
             if (resolved.IsSuccess)
                 return toolProviders.Append(new ToolSetResponsesToolProvider(resolved.Sources, logger));
 
@@ -333,7 +337,7 @@ public sealed class LlmRunCore(
         return effective;
     }
 
-    private static async Task<LlmRunRecordDecision> ExecuteLocalToolCallsAsync(
+    private async Task<LlmRunRecordDecision> ExecuteLocalToolCallsAsync(
         LlmRunRequested command,
         string runId,
         int round,
@@ -352,9 +356,28 @@ public sealed class LlmRunCore(
                 var argumentsJson = string.IsNullOrWhiteSpace(toolCall.ArgumentsJson)
                     ? "{}"
                     : toolCall.ArgumentsJson;
-                var result = ownershipPlan.TryGetExecutableTool(toolCall.Name, out var tool)
-                    ? await ResponsesSafeToolExecutor.ExecuteAsync(tool, argumentsJson, ct).ConfigureAwait(false)
-                    : BuildLocalToolUnavailableResult(ownershipPlan.ResolveUnavailableToolCode(toolCall.Name), toolCall.Name);
+                string result;
+                if (ownershipPlan.TryGetExecutableTool(toolCall.Name, out var tool))
+                {
+                    var executionPort = toolExecutionPort
+                        ?? throw new InvalidOperationException(
+                            "IAgentToolExecutionPort is required for server-owned Responses tools.");
+                    var outcome = await executionPort.ExecuteAsync(
+                        new AgentToolExecutionRequest(
+                            tool,
+                            argumentsJson,
+                            toolContext.WithCallId(toolCall.Id),
+                            AgentToolApprovalContinuationMode.None,
+                            null),
+                        ct).ConfigureAwait(false);
+                    result = outcome.ResultJson;
+                }
+                else
+                {
+                    result = BuildLocalToolUnavailableResult(
+                        ownershipPlan.ResolveUnavailableToolCode(toolCall.Name),
+                        toolCall.Name);
+                }
 
                 var decision = await sink.RecordToolCallObservedAsync(new LlmToolCallObserved
                 {

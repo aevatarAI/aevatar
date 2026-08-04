@@ -1,10 +1,12 @@
 using Aevatar.Capabilities;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -97,9 +99,11 @@ internal static class StudioProvisioningEndpoints
                 : null;
             var admittedRequest = request with
             {
+                ExplicitRequestConfirmations = null,
                 CapabilityAdmission = StudioWorkflowCapabilityAdmissionHttpContext.Create(
                     http,
-                    executionMode),
+                    executionMode,
+                    request.ExplicitRequestConfirmations),
                 AuthenticatedOwner = scheduleAuthority?.AuthenticatedOwner,
                 ProvisioningBearerToken = scheduleAuthority?.ProvisioningBearerToken,
             };
@@ -113,6 +117,16 @@ internal static class StudioProvisioningEndpoints
             return Results.Accepted(
                 BuildScheduleLocation(response.ScheduleId),
                 response);
+        }
+        catch (NyxIdExplicitRequestConfirmationInputException ex)
+        {
+            return BadRequest(NyxIdExplicitRequestConfirmationInputException.ErrorCode, ex.Message);
+        }
+        catch (WorkflowCallerCredentialSelectionException)
+        {
+            return BadRequest(
+                WorkflowCallerCredentialSelectionException.ErrorCode,
+                WorkflowCallerCredentialSelectionException.SafeMessage);
         }
         catch (StudioMemberAutomationAuthorizationBindingRequiredException)
         {

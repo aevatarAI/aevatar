@@ -52,7 +52,9 @@ internal static class NyxIdChatCompletionAguiFrameBuilder
             return frames;
         }
 
-        if (completed.Outcome == RoleChatSessionOutcome.Failed)
+        if (completed.Outcome is
+            RoleChatSessionOutcome.Failed or
+            RoleChatSessionOutcome.OutcomeUncertain)
         {
             AppendTextAndUsageFrames(
                 frames,

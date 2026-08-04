@@ -30,11 +30,12 @@ public sealed class ScopeWorkflowSaveAndBindApplicationService : IScopeWorkflowS
 
         var normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(request.ScopeId, nameof(request.ScopeId));
         var normalizedWorkflowId = ResolveWorkflowId(request.WorkflowId);
-        var revisionId = ScopeWorkflowCapabilityConventions.ResolveRevisionId(null);
+        var revisionId = ScopeWorkflowCapabilityConventions.ResolveRevisionId(request.RevisionId);
         var workflowYaml = ScopeWorkflowCapabilityOptions.NormalizeRequired(request.WorkflowYaml, nameof(request.WorkflowYaml));
         var inlineWorkflowYamls = NormalizeInlineWorkflowYamls(request.InlineWorkflowYamls);
         var admissionContext = request.CapabilityAdmission;
         var executionMode = admissionContext?.ExecutionMode ?? ExternalCapabilityExecutionMode.Interactive;
+        var explicitRequestConfirmations = admissionContext?.ExplicitRequestConfirmations;
         var capabilityAdmissionPlan = admissionContext?.ExistingPlan is { } existingPlan
             ? await _capabilityAdmissionService.RevalidatePersistedAsync(
                 new PersistedWorkflowCapabilityAdmissionRequest(
@@ -42,26 +43,32 @@ public sealed class ScopeWorkflowSaveAndBindApplicationService : IScopeWorkflowS
                     workflowYaml,
                     inlineWorkflowYamls,
                     "scope_workflow_save_and_bind",
-                    executionMode),
+                    executionMode,
+                    normalizedWorkflowId,
+                    revisionId),
                 ct)
             : await _capabilityAdmissionService.AdmitAsync(
                 new WorkflowExternalCapabilityAdmissionRequest(
                 new ExternalWorkflowCapabilityAccessContext(
                     normalizedScopeId,
                     admissionContext?.CallerId ?? string.Empty,
-                    admissionContext?.NyxIdCallerBearerToken,
+                    admissionContext?.NyxIdCallerCredential,
                     admissionContext?.NyxIdOrganizationBearerToken),
                 workflowYaml,
                 inlineWorkflowYamls,
                 "scope_workflow_save_and_bind",
-                executionMode),
+                executionMode,
+                explicitRequestConfirmations,
+                normalizedWorkflowId,
+                revisionId),
                 ct);
         var trustedAdmissionContext = new WorkflowCapabilityAdmissionContext(
             admissionContext?.CallerId ?? string.Empty,
-            admissionContext?.NyxIdCallerBearerToken,
+            admissionContext?.NyxIdCallerCredential,
             admissionContext?.NyxIdOrganizationBearerToken,
             executionMode,
-            capabilityAdmissionPlan);
+            capabilityAdmissionPlan,
+            explicitRequestConfirmations);
 
         var workflowResult = await _workflowCommandPort.UpsertAsync(
             new ScopeWorkflowUpsertRequest(

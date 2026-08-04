@@ -56,6 +56,7 @@ public sealed partial class ConnectorCallModule
             material.TimeoutMs,
             material.OnErrorContinue,
             material.SecureStep,
+            plan.CreatedAt?.ToDateTimeOffset().ToUnixTimeMilliseconds() ?? 0,
             ctx,
             ct,
             plan.ActionId);
@@ -230,6 +231,7 @@ public sealed partial class ConnectorCallModule
                 static parameter => parameter.Value,
                 StringComparer.Ordinal),
             IdempotencyKey = material.IdempotencyKey,
+            IssuedAtUnixMs = pending.IssuedAtUnixMs,
         };
         _ = ExecuteConnectorAndSignalAsync(ctx, connector, connectorRequest, pending);
         await MarkConnectorRequestDispatchedAsync(pending, ctx, ct);
@@ -349,6 +351,7 @@ public sealed partial class ConnectorCallModule
 
         var error = string.IsNullOrWhiteSpace(evt.Error) ? "connector call failed" : evt.Error;
         if (pending.Attempt < pending.Attempts &&
+            CanRetry(evt) &&
             ResolveEffectiveExpiry(coordination.Snapshot) > ctx.UtcNow &&
             !IsExpired(coordination.Snapshot.Plan.ExpiresAt, ctx.UtcNow))
         {
