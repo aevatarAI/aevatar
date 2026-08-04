@@ -244,20 +244,55 @@ public class BindingToolsTests
     }
 
     [Fact]
-    public async Task ExternalWorkflowCapabilityToolSupport_PreservesProxyDelegationCredentialKind()
+    public async Task ExternalWorkflowCapabilityToolSupport_UsesSupplementalSourceCredentialForDelegatedCaller()
     {
         var listPort = new StubExternalWorkflowCapabilityListPort(
             new ExternalWorkflowCapabilityDiscoveryResult());
         var tool = new ListExternalWorkflowCapabilitiesTool(listPort);
         AgentToolRequestContext.Current = CapabilityContext(
-            "owner-scope-alpha",
-            "caller-subject-alpha",
-            "delegation-alpha",
+            "owner-scope-m-alpha",
+            "caller-subject-wf-alpha",
+            "delegation-svc-alpha",
             "organization-bearer-alpha") with
         {
             Credentials = new AgentToolCredentials(
-                "delegation-alpha",
+                "delegation-svc-alpha",
                 "organization-bearer-alpha",
+                null,
+                AgentToolNyxIdCredentialKind.ProxyDelegation,
+                "source-readable-wf-alpha"),
+        };
+
+        try
+        {
+            await tool.ExecuteAsync("{}");
+
+            var credential = listPort.Request!.Access.NyxIdCallerCredential!;
+            credential.Kind.Should().Be(NyxIdCallerCredentialKind.SourceReadableUserBearer);
+            credential.SourceReadableUserBearerToken.Should().Be("source-readable-wf-alpha");
+            credential.ProxyDelegationToken.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExternalWorkflowCapabilityToolSupport_PreservesDelegationWhenSupplementalSourceCredentialIsAbsent()
+    {
+        var listPort = new StubExternalWorkflowCapabilityListPort(
+            new ExternalWorkflowCapabilityDiscoveryResult());
+        var tool = new ListExternalWorkflowCapabilitiesTool(listPort);
+        AgentToolRequestContext.Current = CapabilityContext(
+            "owner-scope-m-beta",
+            "caller-subject-wf-beta",
+            "delegation-svc-beta",
+            "organization-bearer-beta") with
+        {
+            Credentials = new AgentToolCredentials(
+                "delegation-svc-beta",
+                "organization-bearer-beta",
                 null,
                 AgentToolNyxIdCredentialKind.ProxyDelegation),
         };
@@ -268,7 +303,7 @@ public class BindingToolsTests
 
             var credential = listPort.Request!.Access.NyxIdCallerCredential!;
             credential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
-            credential.ProxyDelegationToken.Should().Be("delegation-alpha");
+            credential.ProxyDelegationToken.Should().Be("delegation-svc-beta");
             credential.SourceReadableUserBearerToken.Should().BeNull();
         }
         finally

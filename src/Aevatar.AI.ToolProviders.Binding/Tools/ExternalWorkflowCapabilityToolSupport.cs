@@ -104,12 +104,11 @@ internal static class ExternalWorkflowCapabilityToolSupport
             return false;
         }
 
+        var credentials = AgentToolRequestContext.Current?.Credentials;
         access = new ExternalWorkflowCapabilityAccessContext(
             scopeId,
             callerId,
-            ResolveCallerCredential(
-                AgentToolRequestContext.NyxIdCredentialKind,
-                AgentToolRequestContext.NyxIdAccessToken),
+            ResolveCallerCredential(credentials),
             AgentToolRequestContext.NyxIdOrgToken);
         error = null;
         return true;
@@ -119,11 +118,20 @@ internal static class ExternalWorkflowCapabilityToolSupport
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static NyxIdCallerCredentialSelection? ResolveCallerCredential(
-        AgentToolNyxIdCredentialKind kind,
-        string? bearerToken) =>
-        string.IsNullOrWhiteSpace(bearerToken)
+        AgentToolCredentials? credentials)
+    {
+        var sourceReadableBearerToken =
+            AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(credentials);
+        if (sourceReadableBearerToken is not null)
+        {
+            return NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                sourceReadableBearerToken);
+        }
+
+        var bearerToken = credentials?.NyxIdAccessToken;
+        return string.IsNullOrWhiteSpace(bearerToken)
             ? null
-            : kind switch
+            : credentials!.NyxIdCredentialKind switch
             {
                 AgentToolNyxIdCredentialKind.SourceReadableUserBearer =>
                     NyxIdCallerCredentialSelection.SourceReadableUserBearer(bearerToken),
@@ -131,4 +139,5 @@ internal static class ExternalWorkflowCapabilityToolSupport
                     NyxIdCallerCredentialSelection.ProxyDelegation(bearerToken),
                 _ => null,
             };
+    }
 }
