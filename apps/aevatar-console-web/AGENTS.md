@@ -137,15 +137,18 @@ pnpm --dir apps/aevatar-console-web build
 
 - Before changing any route, page, component, hook, query, adapter, model,
   style, locale, or test for
-  `/scopes/:scopeId/workflow-activity-vnext`, read both
+  `/scopes/:scopeId/workflow-activity-vnext`, read all three of these sources
+  completely:
   `docs/design-baselines/workflow-activity-vnext/README.md` and
-  `docs/superpowers/specs/2026-08-04-workflow-activity-vnext-design.md`
-  completely.
+  `docs/superpowers/specs/2026-08-04-workflow-activity-vnext-design.md` and
+  `docs/superpowers/specs/2026-08-04-workflow-activity-vnext-user-paths.md`.
 - Treat
   `docs/design-baselines/workflow-activity-vnext/aevatar-workflow-activity-vnext.excalidraw`
   as the primary visual, information-architecture, and interaction reference.
   Treat the design specification as the normative route, product identity,
-  API, state, and backend-compatibility contract.
+  API, state, and backend-compatibility contract. Treat the user-path
+  specification as the normative journey, decision, recovery, and completion
+  evidence contract.
 - The PNG and HTML prototypes are reference artifacts, not runtime data
   sources. Never copy their hard-coded records, `localStorage` persistence,
   timers, simulated receipts, or successful-looking defaults into production
@@ -159,7 +162,7 @@ pnpm --dir apps/aevatar-console-web build
 - Include the design-baseline declaration from
   `docs/design-baselines/workflow-activity-vnext/README.md` in every vNext
   implementation task and pull request so the Excalidraw hash, contract
-  document, and real-API-only data-source rule are reviewable.
+  documents, user paths, and real-API-only data-source rule are reviewable.
 - Keep this feature frontend-only and isolated to its new route namespace.
   Do not change backend code or alter existing Workflow, Run, Settings, Studio,
   Team, member, redirect, or menu behavior to implement it.

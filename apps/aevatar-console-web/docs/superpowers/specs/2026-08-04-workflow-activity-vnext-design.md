@@ -11,7 +11,9 @@ Implementation branch: `feat/2026-08-04_workflow-activity-vnext`.
 After approval, this document is the normative product and engineering
 contract for the Workflow Activity vNext frontend. It must be read together
 with the in-repository design baseline at
-`apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/`.
+`apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/` and
+the normative user paths in
+`2026-08-04-workflow-activity-vnext-user-paths.md`.
 
 This phase changes documentation only. The eventual implementation is strictly
 frontend-only: no backend source, endpoint, DTO, projection, or persistence
@@ -909,7 +911,11 @@ are true:
   or horizontally escape, and remain keyboard accessible.
 - The implementation task and pull request carry the baseline declaration from
   `docs/design-baselines/workflow-activity-vnext/README.md`, including the
-  Excalidraw hash and the real-API-only data-source statement.
+  Excalidraw hash, user-path specification, and the real-API-only data-source
+  statement.
+- Every user path defined in
+  `2026-08-04-workflow-activity-vnext-user-paths.md` reaches its documented
+  completion evidence and recovery state without mock fallback data.
 - Focused affected tests, TypeScript, affected lint, production build, docs
   lint, and `git diff --check` pass. The final report lists exact commands and
   explicitly states that the full frontend test suite was not run.

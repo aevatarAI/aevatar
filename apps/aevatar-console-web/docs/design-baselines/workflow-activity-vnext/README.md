@@ -6,8 +6,10 @@ Status: **Normative for the Workflow Activity vNext frontend**.
 
 Any implementation or review of routes below
 `/scopes/:scopeId/workflow-activity-vnext` must read this directory together
-with
-[`2026-08-04-workflow-activity-vnext-design.md`](../../superpowers/specs/2026-08-04-workflow-activity-vnext-design.md).
+with the
+[`design specification`](../../superpowers/specs/2026-08-04-workflow-activity-vnext-design.md)
+and
+[`user paths`](../../superpowers/specs/2026-08-04-workflow-activity-vnext-user-paths.md).
 
 Use the sources in this order:
 
@@ -15,9 +17,11 @@ Use the sources in this order:
    information-architecture, and interaction reference.
 2. The design specification is the normative product, route, identity, API,
    state, and backend-compatibility contract.
-3. The PNG files are viewport references for individual states.
-4. `prototype.html` is an interaction demonstration only.
-5. `aevatar-workflow-activity-vnext.gen.py` is the source generator for these
+3. The user-path specification is the normative end-to-end journey, decision,
+   recovery, and completion-evidence contract.
+4. The PNG files are viewport references for individual states.
+5. `prototype.html` is an interaction demonstration only.
+6. `aevatar-workflow-activity-vnext.gen.py` is the source generator for these
    reference artifacts; it is not application runtime code.
 
 If the Excalidraw or prototype conflicts with a real API contract, follow the
@@ -67,6 +71,9 @@ Design SHA-256:
 Contract specification:
   apps/aevatar-console-web/docs/superpowers/specs/
   2026-08-04-workflow-activity-vnext-design.md
+User paths:
+  apps/aevatar-console-web/docs/superpowers/specs/
+  2026-08-04-workflow-activity-vnext-user-paths.md
 Production data source:
   Real APIs and API-acknowledged user actions only; no mock fallback.
 ```
