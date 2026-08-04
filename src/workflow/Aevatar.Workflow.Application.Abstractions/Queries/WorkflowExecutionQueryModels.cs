@@ -124,6 +124,8 @@ public enum WorkflowRunCompletionStatus
     Stopped = 4,
     NotFound = 5,
     Disabled = 6,
+    AwaitingToolApproval = 7,
+    WaitingForSignal = 8,
     Unknown = 99,
 }
 

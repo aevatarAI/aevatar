@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Security;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Security;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection;
@@ -1041,6 +1042,52 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         fileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
         fileRef.OwnerRunId.Should().Be("run-owner");
         fileRef.OwnerScopeId.Should().Be("scope-owner");
+    }
+
+    [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldExposePendingToolApprovalStatus()
+    {
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-04T09:00:00+00:00")));
+        var state = new WorkflowRunState
+        {
+            RunId = "run-approval",
+            Status = "running",
+        };
+        state.ExecutionStates["tool_call"] = Any.Pack(new ToolCallModuleState
+        {
+            PendingApprovals =
+            {
+                ["approval-key"] = new PendingToolCallApprovalState
+                {
+                    RunId = "run-approval",
+                    StepId = "write_record",
+                    ExecutionId = "exec-alpha",
+                    ToolName = "nyxid_proxy",
+                    ToolCallId = "call-alpha",
+                    ApprovalRequestId = "approval-alpha",
+                },
+            },
+        });
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowSuspendedEvent
+                {
+                    RunId = "run-approval",
+                    StepId = "write_record",
+                    SuspensionType = "tool_approval",
+                },
+                state));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.Status.Should().Be("awaiting_tool_approval");
+        new WorkflowExecutionReadModelMapper()
+            .ToActorSnapshot(document)
+            .CompletionStatus.Should().Be(WorkflowRunCompletionStatus.AwaitingToolApproval);
     }
 
     [Fact]

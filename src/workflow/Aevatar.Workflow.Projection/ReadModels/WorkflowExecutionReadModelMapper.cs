@@ -56,7 +56,7 @@ public sealed class WorkflowExecutionReadModelMapper
             ReportVersion = source.ReportVersion,
             ProjectionScope = MapProjectionScope(source.ProjectionScope),
             TopologySource = MapTopologySource(source.TopologySource),
-            CompletionStatus = MapCompletionStatus(source.CompletionStatus),
+            CompletionStatus = MapCompletionStatus(source),
             WorkflowName = source.WorkflowName,
             RootActorId = source.RootActorId,
             CommandId = source.CommandId,
@@ -159,6 +159,8 @@ public sealed class WorkflowExecutionReadModelMapper
             "stopped" => WorkflowRunCompletionStatus.Stopped,
             "not_found" => WorkflowRunCompletionStatus.NotFound,
             "disabled" => WorkflowRunCompletionStatus.Disabled,
+            "awaiting_tool_approval" => WorkflowRunCompletionStatus.AwaitingToolApproval,
+            "waiting_for_signal" => WorkflowRunCompletionStatus.WaitingForSignal,
             _ => WorkflowRunCompletionStatus.Unknown,
         };
     }
@@ -192,9 +194,23 @@ public sealed class WorkflowExecutionReadModelMapper
             WorkflowExecutionCompletionStatus.Stopped => WorkflowRunCompletionStatus.Stopped,
             WorkflowExecutionCompletionStatus.NotFound => WorkflowRunCompletionStatus.NotFound,
             WorkflowExecutionCompletionStatus.Disabled => WorkflowRunCompletionStatus.Disabled,
-            WorkflowExecutionCompletionStatus.WaitingForSignal => WorkflowRunCompletionStatus.Running,
+            WorkflowExecutionCompletionStatus.WaitingForSignal => WorkflowRunCompletionStatus.WaitingForSignal,
             _ => WorkflowRunCompletionStatus.Unknown,
         };
+    }
+
+    private static WorkflowRunCompletionStatus MapCompletionStatus(
+        WorkflowRunInsightReportDocument source)
+    {
+        if (source.CompletionStatus == WorkflowExecutionCompletionStatus.WaitingForSignal &&
+            source.Steps.Any(static step =>
+                step.ToolApprovalValue != null &&
+                step.CompletedAtUtcValue == null))
+        {
+            return WorkflowRunCompletionStatus.AwaitingToolApproval;
+        }
+
+        return MapCompletionStatus(source.CompletionStatus);
     }
 
     private static WorkflowRunProjectionScope MapProjectionScope(WorkflowExecutionProjectionScope scope) =>

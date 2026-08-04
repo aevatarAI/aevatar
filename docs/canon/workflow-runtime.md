@@ -119,6 +119,28 @@ Dynamic LLM exposure、definition admission 与 runtime authorization are separa
 
 Runtime does no raw OpenAPI read, definition-actor/read-model/event-store side read, admission refresh/priming, or process-local proof registration. `PublishedEndpoint` retains current MCP exact endpoint-digest revalidation. `AuthoredRequest` reads neither MCP nor UserService inventory: before dispatch it validates its committed plan, request identity, matching explicit grant, execution mode, and local digests, then sends exactly one exact NyxID proxy route using exact `user_service_id` and the server-derived route slug constraint. There is no slug-only fallback.
 
+#### Authored request approval and resume
+
+`explicitRequestConfirmations` confirms the exact authored request contract and attests its classified risk when binding. It is admission evidence, not blanket approval for future executions. Trusted `GET / HEAD / OPTIONS` requests may execute without a per-run approval; authored `POST / PUT / PATCH` writes and `DELETE` requests require an exact per-run approval and are interactive-only. A run suspended for that approval materializes `awaiting_tool_approval` in workflow current state and emits `aevatar.tool_approval.pending` on the run stream. The event carries the typed `step_id / execution_id / tool_call_id / approval_request_id` identity needed to resume the same pending call.
+
+Scope-service callers approve or reject the pending call through `POST /api/scopes/{scopeId}/services/{publishedServiceId}/runs/{runId}:resume`:
+
+```json
+{
+  "stepId": "write_record",
+  "approved": true,
+  "toolApproval": {
+    "executionId": "exec-alpha",
+    "toolCallId": "call-alpha",
+    "approvalRequestId": "approval-alpha"
+  }
+}
+```
+
+The identifiers must come from the typed pending-approval event or read model; callers must not infer them from route identities or string patterns. There is no pre-authorization that turns authored writes into unattended or scheduled operations. Durable authored reads additionally require current `DURABLE_AUTHORIZATION_CATALOG` evidence, while durable writes/destructive requests require an admitted `PublishedEndpoint` contract with current durable authorization evidence; a UserService identity alone does not prove publication or durable authority.
+
+Published endpoint creation is owned by NyxID, not by Aevatar workflow save/bind. A NyxID admin or the catalog service creator must create the endpoint contract or run endpoint discovery; seeded third-party services normally receive endpoint contracts from operator-maintained catalog overlays. Aevatar consumes only the resulting exact `user_service_id + endpoint_id` MCP descriptor and still requires separate, current owner-scoped durable authorization catalog evidence for durable admission.
+
 ### Admission v4 与 forward-only migration
 
 `external-capability-admission.v4` 只以 call-site scoped `invocation_admissions` 表达当前事实。proto field 4 `external_capabilities` 是 deprecated v2 deserialization slot；v4 creation 保持为空，v4 validation 对非空值 fail closed，禁止双事实源。Published-endpoint proof 必须带 `NYX_ID_MCP_CONFIG` source stamp; authored-request proof 必须带 `NYX_ID_USER_SERVICES` source stamp and a matching typed binder grant. Durable authored read additionally requires `DURABLE_AUTHORIZATION_CATALOG`; no source stamp can authorize a durable write/destructive request.

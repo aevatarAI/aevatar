@@ -226,7 +226,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         var snapshot = Snapshot(
             "run-1",
             CallerScope,
-            WorkflowRunCompletionStatus.Running,
+            WorkflowRunCompletionStatus.AwaitingToolApproval,
             started: 1,
             updated: 5);
         var currentState = new FakeCurrentStateQueryPort { SingleResult = snapshot };
@@ -257,12 +257,17 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
 
         var approval = detail!.Steps.Should().ContainSingle().Subject;
+        detail.Summary.Status.Should().Be("awaiting_tool_approval");
         approval.SuspensionType.Should().Be("tool_approval");
         approval.ToolApproval.Should().NotBeNull();
         approval.ToolApproval!.ExecutionId.Should().Be("exec-alpha");
         approval.ToolApproval.ToolName.Should().Be("nyxid_proxy");
         approval.ToolApproval.ToolCallId.Should().Be("call-alpha");
         approval.ToolApproval.ApprovalRequestId.Should().Be("approval-alpha");
+        detail.Diagnostics.Should().ContainSingle(diagnostic =>
+            diagnostic.Code == "awaiting_tool_approval" &&
+            diagnostic.Severity == "info" &&
+            diagnostic.StepId == "create_approval");
     }
 
     // 06-26 detail enrichment: the final result + per-step trace + rollup statistics are surfaced from the
