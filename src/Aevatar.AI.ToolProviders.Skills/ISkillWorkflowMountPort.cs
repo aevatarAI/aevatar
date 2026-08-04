@@ -1,3 +1,5 @@
+using Aevatar.Workflow.Abstractions;
+
 namespace Aevatar.AI.ToolProviders.Skills;
 
 /// <summary>
@@ -12,8 +14,9 @@ public interface ISkillWorkflowMountPort
 
 public sealed record SkillWorkflowMountRequest(
     string ScopeId,
-    string NyxIdAccessToken,
-    IReadOnlyList<SkillWorkflowDescriptor> Workflows)
+    string SourceReadableNyxIdAccessToken,
+    IReadOnlyList<SkillWorkflowDescriptor> Workflows,
+    IReadOnlyList<SkillWorkflowMountConfirmation>? Confirmations = null)
 {
     public string CallerId { get; init; } = string.Empty;
 
@@ -25,7 +28,40 @@ public sealed record SkillWorkflowMountResult(
     string Status,
     bool Mounted,
     IReadOnlyList<MountedSkillWorkflow> Workflows,
-    string? Message = null);
+    string? Message = null,
+    IReadOnlyList<SkillWorkflowMountPreview>? ConfirmationRequests = null,
+    string? FailureCode = null);
+
+public sealed record SkillWorkflowMountConfirmation(
+    string WorkflowId,
+    string RevisionId,
+    string WorkflowBundleDigest,
+    IReadOnlyList<SkillWorkflowExplicitRequestConfirmation> ExplicitRequests);
+
+public sealed record SkillWorkflowExplicitRequestConfirmation(
+    string CallSiteId,
+    string RequestContractDigest,
+    NyxIdOperationRisk AttestedRisk);
+
+public sealed record SkillWorkflowMountPreview(
+    string WorkflowId,
+    string RevisionId,
+    string WorkflowBundleDigest,
+    IReadOnlyList<SkillWorkflowExplicitRequestPreview> ExplicitRequests,
+    SkillWorkflowMountConfirmation Confirmation);
+
+public sealed record SkillWorkflowExplicitRequestPreview(
+    string CallSiteId,
+    string RequestContractDigest,
+    string UserServiceId,
+    NyxIdRequestMethod Method,
+    string PathTemplate,
+    NyxIdRequestBodyMode BodyMode,
+    bool BodyRequired,
+    NyxIdRequestResponseMode ResponseMode,
+    NyxIdOperationRisk EffectiveRisk,
+    bool RuntimeApprovalRequired,
+    IReadOnlyList<ExternalCapabilityExecutionMode> AllowedExecutionModes);
 
 public sealed record MountedSkillWorkflow(
     string WorkflowId,

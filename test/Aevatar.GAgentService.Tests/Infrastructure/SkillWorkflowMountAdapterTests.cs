@@ -2,6 +2,8 @@ using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Infrastructure.Adapters;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 
@@ -16,7 +18,7 @@ public sealed class SkillWorkflowMountAdapterTests
         const string secretWorkflowContents = "name: workflow-secret-sentinel-5a93de\nsteps: []";
         var request = new SkillWorkflowMountRequest(
             ScopeId: "scope-alpha",
-            NyxIdAccessToken: secretToken,
+            SourceReadableNyxIdAccessToken: secretToken,
             Workflows:
             [
                 new SkillWorkflowDescriptor
@@ -45,12 +47,15 @@ public sealed class SkillWorkflowMountAdapterTests
     {
         var commandPort = new RecordingScopeWorkflowCommandPort();
         var parser = new StubWorkflowDefinitionParser(new Dictionary<string, string>());
+        var previewService = new RecordingWorkflowExplicitRequestPreviewService();
 
-        var noCommandPort = () => new SkillWorkflowMountAdapter(null!, parser);
-        var noParser = () => new SkillWorkflowMountAdapter(commandPort, null!);
+        var noCommandPort = () => new SkillWorkflowMountAdapter(null!, parser, previewService);
+        var noParser = () => new SkillWorkflowMountAdapter(commandPort, null!, previewService);
+        var noPreviewService = () => new SkillWorkflowMountAdapter(commandPort, parser, null!);
 
         noCommandPort.Should().Throw<ArgumentNullException>().WithParameterName("scopeWorkflowCommandPort");
         noParser.Should().Throw<ArgumentNullException>().WithParameterName("workflowDefinitionParser");
+        noPreviewService.Should().Throw<ArgumentNullException>().WithParameterName("explicitRequestPreviewService");
     }
 
     [Fact]
@@ -59,11 +64,12 @@ public sealed class SkillWorkflowMountAdapterTests
         var commandPort = new RecordingScopeWorkflowCommandPort();
         var adapter = new SkillWorkflowMountAdapter(
             commandPort,
-            new StubWorkflowDefinitionParser(new Dictionary<string, string>()));
+            new StubWorkflowDefinitionParser(new Dictionary<string, string>()),
+            new RecordingWorkflowExplicitRequestPreviewService());
 
         var result = await adapter.MountAsync(new SkillWorkflowMountRequest(
             ScopeId: "scope-1",
-            NyxIdAccessToken: "token-a",
+            SourceReadableNyxIdAccessToken: "token-a",
             Workflows: []));
 
         result.Status.Should().Be("no_workflows");
@@ -74,7 +80,7 @@ public sealed class SkillWorkflowMountAdapterTests
     }
 
     [Fact]
-    public async Task MountAsync_UsesScopeWorkflowUpsert_WithEquivalentRootAndInlineYamls()
+    public async Task MountAsync_PreviewsBeforeUpsert_ThenMountsTheExactReviewedBundle()
     {
         var commandPort = new RecordingScopeWorkflowCommandPort();
         var parser = new StubWorkflowDefinitionParser(new Dictionary<string, string>
@@ -82,11 +88,12 @@ public sealed class SkillWorkflowMountAdapterTests
             ["name: talisman_review\nsteps: []"] = "talisman_review",
             ["name: shared_child\nsteps: []"] = "shared_child",
         });
-        var adapter = new SkillWorkflowMountAdapter(commandPort, parser);
+        var previewService = new RecordingWorkflowExplicitRequestPreviewService();
+        var adapter = new SkillWorkflowMountAdapter(commandPort, parser, previewService);
 
-        var result = await adapter.MountAsync(new SkillWorkflowMountRequest(
+        var request = new SkillWorkflowMountRequest(
             ScopeId: "scope-1",
-            NyxIdAccessToken: "token-a",
+            SourceReadableNyxIdAccessToken: "token-a",
             Workflows:
             [
                 new SkillWorkflowDescriptor
@@ -101,7 +108,17 @@ public sealed class SkillWorkflowMountAdapterTests
             ])
         {
             CallerId = "caller-alpha",
-        });
+        };
+
+        var preview = await adapter.MountAsync(request);
+
+        preview.Status.Should().Be("confirmation_required");
+        preview.Mounted.Should().BeFalse();
+        preview.ConfirmationRequests.Should().ContainSingle();
+        commandPort.Requests.Should().BeEmpty();
+
+        var confirmation = preview.ConfirmationRequests![0].Confirmation;
+        var result = await adapter.MountAsync(request with { Confirmations = [confirmation] });
 
         commandPort.Requests.Should().ContainSingle();
         commandPort.Requests[0].ScopeId.Should().Be("scope-1");
@@ -112,6 +129,8 @@ public sealed class SkillWorkflowMountAdapterTests
         commandPort.Requests[0].InlineWorkflowYamls!["shared_child"].Should().Be("name: shared_child\nsteps: []");
         commandPort.Requests[0].CapabilityAdmission.Should().NotBeNull();
         commandPort.Requests[0].CapabilityAdmission!.CallerId.Should().Be("caller-alpha");
+        commandPort.Requests[0].RevisionId.Should().Be(confirmation.RevisionId);
+        previewService.Requests.Should().HaveCount(2);
 
         result.Status.Should().Be("mounted");
         result.Mounted.Should().BeTrue();
@@ -119,6 +138,90 @@ public sealed class SkillWorkflowMountAdapterTests
         result.Workflows[0].WorkflowId.Should().Be("talisman_review");
         result.Workflows[0].ServiceId.Should().Be("talisman_review");
         result.Workflows[0].EndpointId.Should().Be("chat");
+    }
+
+    [Theory]
+    [InlineData("revision")]
+    [InlineData("bundle")]
+    [InlineData("call_site")]
+    [InlineData("request_digest")]
+    [InlineData("risk")]
+    public async Task MountAsync_WhenReviewedConfirmationChanges_RejectsBeforeUpsert(string mutation)
+    {
+        const string yaml = "name: guarded_workflow\nsteps: []";
+        var commandPort = new RecordingScopeWorkflowCommandPort();
+        var previewService = new RecordingWorkflowExplicitRequestPreviewService(
+        [
+            ExplicitRequestPreview(),
+        ]);
+        var adapter = new SkillWorkflowMountAdapter(
+            commandPort,
+            new StubWorkflowDefinitionParser(new Dictionary<string, string>
+            {
+                [yaml] = "guarded_workflow",
+            }),
+            previewService);
+        var request = MountRequest("guarded_workflow", yaml);
+        var preview = await adapter.MountAsync(request);
+        var confirmation = preview.ConfirmationRequests!.Single().Confirmation;
+        var explicitRequest = confirmation.ExplicitRequests.Single();
+        var mutated = mutation switch
+        {
+            "revision" => confirmation with { RevisionId = "rev-forged" },
+            "bundle" => confirmation with { WorkflowBundleDigest = "sha256:forged" },
+            "call_site" => confirmation with
+            {
+                ExplicitRequests = [explicitRequest with { CallSiteId = "forged/call-site" }],
+            },
+            "request_digest" => confirmation with
+            {
+                ExplicitRequests = [explicitRequest with { RequestContractDigest = "sha256:forged" }],
+            },
+            "risk" => confirmation with
+            {
+                ExplicitRequests = [explicitRequest with { AttestedRisk = NyxIdOperationRisk.ReadOnly }],
+            },
+            _ => throw new InvalidOperationException($"Unknown test mutation '{mutation}'."),
+        };
+
+        var result = await adapter.MountAsync(request with { Confirmations = [mutated] });
+
+        result.Status.Should().Be("confirmation_mismatch");
+        result.FailureCode.Should().Be("USE_SKILL_MOUNT_CONFIRMATION_MISMATCH");
+        result.Mounted.Should().BeFalse();
+        commandPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task MountAsync_WithExactExplicitRequestConfirmation_ForwardsTypedGrant()
+    {
+        const string yaml = "name: guarded_workflow\nsteps: []";
+        var commandPort = new RecordingScopeWorkflowCommandPort();
+        var adapter = new SkillWorkflowMountAdapter(
+            commandPort,
+            new StubWorkflowDefinitionParser(new Dictionary<string, string>
+            {
+                [yaml] = "guarded_workflow",
+            }),
+            new RecordingWorkflowExplicitRequestPreviewService(
+            [
+                ExplicitRequestPreview(),
+            ]));
+        var request = MountRequest("guarded_workflow", yaml);
+        var preview = await adapter.MountAsync(request);
+        var confirmation = preview.ConfirmationRequests!.Single().Confirmation;
+
+        var result = await adapter.MountAsync(request with { Confirmations = [confirmation] });
+
+        result.Status.Should().Be("mounted");
+        var admission = commandPort.Requests.Should().ContainSingle().Which.CapabilityAdmission;
+        admission.Should().NotBeNull();
+        var forwarded = admission!.ExplicitRequestConfirmations.Should().ContainSingle().Which;
+        forwarded.WorkflowId.Should().Be(confirmation.WorkflowId);
+        forwarded.RevisionId.Should().Be(confirmation.RevisionId);
+        forwarded.CallSiteId.Should().Be("guarded_workflow/fetch");
+        forwarded.RequestContractDigest.Should().Be("sha256:request-alpha");
+        forwarded.AttestedRisk.Should().Be(NyxIdOperationRisk.Write);
     }
 
     [Fact]
@@ -130,11 +233,12 @@ public sealed class SkillWorkflowMountAdapterTests
             new StubWorkflowDefinitionParser(new Dictionary<string, string>
             {
                 ["name: caller_required\nsteps: []"] = "caller_required",
-            }));
+            }),
+            new RecordingWorkflowExplicitRequestPreviewService());
 
         var act = () => adapter.MountAsync(new SkillWorkflowMountRequest(
             ScopeId: "scope-alpha",
-            NyxIdAccessToken: "token-a",
+            SourceReadableNyxIdAccessToken: "token-a",
             Workflows:
             [
                 new SkillWorkflowDescriptor
@@ -157,11 +261,14 @@ public sealed class SkillWorkflowMountAdapterTests
         {
             ["name: duplicate\nsteps: []"] = "duplicate",
         });
-        var adapter = new SkillWorkflowMountAdapter(commandPort, parser);
+        var adapter = new SkillWorkflowMountAdapter(
+            commandPort,
+            parser,
+            new RecordingWorkflowExplicitRequestPreviewService());
 
         var act = () => adapter.MountAsync(new SkillWorkflowMountRequest(
             ScopeId: "scope-1",
-            NyxIdAccessToken: "token-a",
+            SourceReadableNyxIdAccessToken: "token-a",
             Workflows:
             [
                 new SkillWorkflowDescriptor
@@ -187,11 +294,12 @@ public sealed class SkillWorkflowMountAdapterTests
     {
         var adapter = new SkillWorkflowMountAdapter(
             new RecordingScopeWorkflowCommandPort(),
-            new StubWorkflowDefinitionParser(new Dictionary<string, string>()));
+            new StubWorkflowDefinitionParser(new Dictionary<string, string>()),
+            new RecordingWorkflowExplicitRequestPreviewService());
 
         var act = () => adapter.MountAsync(new SkillWorkflowMountRequest(
             ScopeId: "scope-1",
-            NyxIdAccessToken: "token-a",
+            SourceReadableNyxIdAccessToken: "token-a",
             Workflows:
             [
                 new SkillWorkflowDescriptor
@@ -213,11 +321,12 @@ public sealed class SkillWorkflowMountAdapterTests
     {
         var adapter = new SkillWorkflowMountAdapter(
             new RecordingScopeWorkflowCommandPort(),
-            new StubWorkflowDefinitionParser(new Dictionary<string, string>()));
+            new StubWorkflowDefinitionParser(new Dictionary<string, string>()),
+            new RecordingWorkflowExplicitRequestPreviewService());
 
         var act = () => adapter.MountAsync(new SkillWorkflowMountRequest(
             ScopeId: "scope-1",
-            NyxIdAccessToken: "token-a",
+            SourceReadableNyxIdAccessToken: "token-a",
             Workflows:
             [
                 new SkillWorkflowDescriptor
@@ -245,11 +354,12 @@ public sealed class SkillWorkflowMountAdapterTests
             })
             {
                 Failure = "parse failed",
-            });
+            },
+            new RecordingWorkflowExplicitRequestPreviewService());
 
         var act = () => adapter.MountAsync(new SkillWorkflowMountRequest(
             ScopeId: "scope-1",
-            NyxIdAccessToken: "token-a",
+            SourceReadableNyxIdAccessToken: "token-a",
             Workflows:
             [
                 new SkillWorkflowDescriptor
@@ -274,11 +384,12 @@ public sealed class SkillWorkflowMountAdapterTests
             new StubWorkflowDefinitionParser(new Dictionary<string, string>
             {
                 ["name: blank\nsteps: []"] = " ",
-            }));
+            }),
+            new RecordingWorkflowExplicitRequestPreviewService());
 
         var act = () => adapter.MountAsync(new SkillWorkflowMountRequest(
             ScopeId: "scope-1",
-            NyxIdAccessToken: "token-a",
+            SourceReadableNyxIdAccessToken: "token-a",
             Workflows:
             [
                 new SkillWorkflowDescriptor
@@ -294,6 +405,35 @@ public sealed class SkillWorkflowMountAdapterTests
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("Skill workflow 'blank-name' must define a workflow name.");
     }
+
+    private static SkillWorkflowMountRequest MountRequest(string workflowId, string yaml) =>
+        new(
+            "scope-alpha",
+            "token-alpha",
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = workflowId,
+                    WorkflowYamls = [yaml],
+                },
+            ])
+        {
+            CallerId = "caller-alpha",
+        };
+
+    private static WorkflowExplicitRequestPreviewItem ExplicitRequestPreview() =>
+        new(
+            "guarded_workflow/fetch",
+            "sha256:request-alpha",
+            "service-alpha",
+            NyxIdRequestMethod.Post,
+            "/records/search",
+            NyxIdRequestBodyMode.Json,
+            true,
+            NyxIdRequestResponseMode.Text,
+            NyxIdOperationRisk.Write,
+            true,
+            [ExternalCapabilityExecutionMode.Interactive]);
 
     private sealed class RecordingScopeWorkflowCommandPort : IScopeWorkflowCommandPort
     {
@@ -315,6 +455,24 @@ public sealed class SkillWorkflowMountAdapterTests
                 AcceptedAtUtc: DateTimeOffset.UtcNow,
                 CommandHandles: [],
                 ReadModelUrl: $"/scopes/{request.ScopeId}/workflows/{request.WorkflowId}"));
+        }
+    }
+
+    private sealed class RecordingWorkflowExplicitRequestPreviewService(
+        IReadOnlyList<WorkflowExplicitRequestPreviewItem>? items = null) :
+        IWorkflowExplicitRequestPreviewService
+    {
+        public List<WorkflowExplicitRequestPreviewRequest> Requests { get; } = [];
+
+        public Task<WorkflowExplicitRequestPreviewResult> PreviewAsync(
+            WorkflowExplicitRequestPreviewRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            return Task.FromResult(new WorkflowExplicitRequestPreviewResult(
+                request.WorkflowId ?? string.Empty,
+                request.RevisionId ?? string.Empty,
+                items ?? []));
         }
     }
 

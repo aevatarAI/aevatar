@@ -212,7 +212,7 @@ public sealed class LocalSkillCatalogTests
     }
 
     [Fact]
-    public async Task UseSkillTool_MountsWorkflows_WhenExplicitlyRequested()
+    public async Task UseSkillTool_PreviewsThenMountsWorkflows_WhenExactConfirmationIsApproved()
     {
         var catalog = new LocalSkillCatalog();
         var mountPort = new RecordingSkillWorkflowMountPort();
@@ -234,21 +234,49 @@ public sealed class LocalSkillCatalogTests
             [LLMRequestMetadataKeys.OwnerSubject] = "owner-alpha",
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-a",
         }, nyxIdUserId: "nyx-user-alpha");
-        const string argumentsJson =
+        const string previewArgumentsJson =
             """{"skill":"workflow-skill","mount_workflows":true}""";
-        var result = await tool.ExecuteAsync(argumentsJson);
+        var previewResult = await tool.ExecuteAsync(previewArgumentsJson);
 
-        ExtractLoaded(result).Should().BeTrue();
-        var receipt = ((IAgentTool)tool).CreateResultReceipt(
-            "call-mount", tool.Name, argumentsJson, result);
-        receipt.Should().NotBeNull();
-        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        ExtractLoaded(previewResult).Should().BeTrue();
+        var previewReceipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-preview", tool.Name, previewArgumentsJson, previewResult);
+        previewReceipt.Should().NotBeNull();
+        previewReceipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        previewReceipt.Effect.Should().Be(AgentToolReceiptEffect.ReadOnly);
         mountPort.Requests.Should().ContainSingle();
         mountPort.Requests[0].ScopeId.Should().Be("scope-alpha");
         mountPort.Requests[0].CallerId.Should().Be("nyx-user-alpha");
-        mountPort.Requests[0].NyxIdAccessToken.Should().Be("token-a");
+        mountPort.Requests[0].SourceReadableNyxIdAccessToken.Should().Be("token-a");
         mountPort.Requests[0].Workflows.Should().ContainSingle(x => x.WorkflowId == "summary-report");
 
+        using var previewDocument = JsonDocument.Parse(previewResult);
+        previewDocument.RootElement.GetProperty("workflow_mount").GetProperty("status")
+            .GetString().Should().Be("confirmation_required");
+
+        const string mountArgumentsJson = """
+            {
+              "skill": "workflow-skill",
+              "mount_workflows": true,
+              "workflow_mount_confirmations": [
+                {
+                  "workflow_id": "summary-report",
+                  "revision_id": "rev-1",
+                  "workflow_bundle_digest": "sha256:test",
+                  "explicit_requests": []
+                }
+              ]
+            }
+            """;
+        var result = await tool.ExecuteAsync(mountArgumentsJson);
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-mount", tool.Name, mountArgumentsJson, result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.Effect.Should().Be(AgentToolReceiptEffect.Mutating);
+        mountPort.Requests.Should().HaveCount(2);
+        mountPort.Requests[1].Confirmations.Should().ContainSingle();
         using var document = JsonDocument.Parse(result);
         var workflowMount = document.RootElement.GetProperty("workflow_mount");
         workflowMount.GetProperty("status").GetString().Should().Be("mounted");
@@ -294,6 +322,47 @@ public sealed class LocalSkillCatalogTests
         var workflowMount = document.RootElement.GetProperty("workflow_mount");
         workflowMount.GetProperty("status").GetString().Should().Be("missing_scope");
         workflowMount.GetProperty("mounted").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task UseSkillTool_MountWorkflows_PreservesStablePortFailureCodeInReceipt()
+    {
+        var catalog = new LocalSkillCatalog();
+        var mountPort = new RecordingSkillWorkflowMountPort(new SkillWorkflowMountResult(
+            Status: "capability_admission_blocked",
+            Mounted: false,
+            Workflows: [],
+            Message: "The workflow request is not admitted.",
+            FailureCode: "NYXID_REQUEST_SERVICE_NOT_READY"));
+        var tool = new UseSkillTool(catalog, workflowMountPort: mountPort);
+        catalog.Register(MakeSkill(
+            "workflow-skill",
+            workflows:
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = "summary-report",
+                    WorkflowYamls = ["name: summary-report\nsteps: []"],
+                },
+            ]));
+
+        using var _ = BeginMetadataScope(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.ScopeId] = "scope-alpha",
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-a",
+        }, nyxIdUserId: "nyx-user-alpha");
+        const string argumentsJson =
+            """{"skill":"workflow-skill","mount_workflows":true}""";
+
+        var result = await tool.ExecuteAsync(argumentsJson);
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-mount", tool.Name, argumentsJson, result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("NYXID_REQUEST_SERVICE_NOT_READY");
+        receipt.Effect.Should().Be(AgentToolReceiptEffect.ReadOnly);
+        mountPort.Requests.Should().ContainSingle();
     }
 
     [Fact]
@@ -435,7 +504,8 @@ public sealed class LocalSkillCatalogTests
         }
     }
 
-    private sealed class RecordingSkillWorkflowMountPort : ISkillWorkflowMountPort
+    private sealed class RecordingSkillWorkflowMountPort(
+        SkillWorkflowMountResult? fixedResult = null) : ISkillWorkflowMountPort
     {
         public List<SkillWorkflowMountRequest> Requests { get; } = [];
 
@@ -444,6 +514,32 @@ public sealed class LocalSkillCatalogTests
             CancellationToken ct = default)
         {
             Requests.Add(request);
+            if (fixedResult is not null)
+                return Task.FromResult(fixedResult);
+
+            if (request.Confirmations is not { Count: > 0 })
+            {
+                var confirmation = new SkillWorkflowMountConfirmation(
+                    request.Workflows.Single().WorkflowId,
+                    "rev-1",
+                    "sha256:test",
+                    []);
+                return Task.FromResult(new SkillWorkflowMountResult(
+                    Status: "confirmation_required",
+                    Mounted: false,
+                    Workflows: [],
+                    Message: "Review before mounting.",
+                    ConfirmationRequests:
+                    [
+                        new SkillWorkflowMountPreview(
+                            confirmation.WorkflowId,
+                            confirmation.RevisionId,
+                            confirmation.WorkflowBundleDigest,
+                            [],
+                            confirmation),
+                    ]));
+            }
+
             return Task.FromResult(new SkillWorkflowMountResult(
                 Status: "mounted",
                 Mounted: true,
@@ -490,6 +586,17 @@ public sealed class LocalSkillCatalogTests
     {
         var previous = AgentToolRequestContext.Current;
         var context = global::TestAgentToolContexts.FromMetadata(metadata);
+        if (metadata.TryGetValue(LLMRequestMetadataKeys.NyxIdAccessToken, out var accessToken) &&
+            !string.IsNullOrWhiteSpace(accessToken))
+        {
+            context = context with
+            {
+                Credentials = context.Credentials with
+                {
+                    NyxIdCredentialKind = AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+                },
+            };
+        }
         if (!string.IsNullOrWhiteSpace(senderNyxUserId))
         {
             context = context with

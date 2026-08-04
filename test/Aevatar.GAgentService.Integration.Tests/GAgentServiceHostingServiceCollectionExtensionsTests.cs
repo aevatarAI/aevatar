@@ -34,6 +34,7 @@ using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.Workflows;
@@ -133,7 +134,13 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
 
         services.Where(descriptor => descriptor.ServiceType == typeof(ISkillWorkflowMountPort))
             .Should().ContainSingle()
-            .Which.ImplementationType.Should().Be(typeof(SkillWorkflowMountAdapter));
+            .Which.Should().Match<ServiceDescriptor>(descriptor =>
+                descriptor.ImplementationType == typeof(SkillWorkflowMountAdapter) &&
+                descriptor.Lifetime == ServiceLifetime.Singleton);
+        services.Where(descriptor =>
+                descriptor.ServiceType == typeof(IWorkflowExplicitRequestPreviewService))
+            .Should().ContainSingle()
+            .Which.Lifetime.Should().Be(ServiceLifetime.Singleton);
     }
 
     [Fact]

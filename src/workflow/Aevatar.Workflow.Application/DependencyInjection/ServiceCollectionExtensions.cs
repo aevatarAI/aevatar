@@ -63,7 +63,7 @@ public static class ServiceCollectionExtensions
             WorkflowExternalCapabilityAdmissionService>();
         services.TryAddTransient<IWorkflowArtifactCompatibilityPreflight,
             WorkflowArtifactCompatibilityPreflight>();
-        services.TryAddTransient<IWorkflowExplicitRequestPreviewService,
+        services.TryAddSingleton<IWorkflowExplicitRequestPreviewService,
             WorkflowExplicitRequestPreviewService>();
 
         services.AddSingleton<IWorkflowDefinitionCatalog>(_ =>

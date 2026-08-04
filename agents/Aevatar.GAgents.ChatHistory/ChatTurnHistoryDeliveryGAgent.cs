@@ -52,7 +52,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
-        await DispatchPendingTerminalAppendAsync(ct).ConfigureAwait(false);
+        await DispatchPendingTerminalAppendAsync(ct);
     }
 
     [EventHandler]
@@ -75,8 +75,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
                     command.SourceActorId ?? string.Empty,
                     command.SourceCommandId ?? string.Empty,
                     validation.Value.Code,
-                    validation.Value.Summary)
-                .ConfigureAwait(false);
+                    validation.Value.Summary);
             return;
         }
 
@@ -117,7 +116,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             BoundAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         });
 
-        await DispatchPendingTerminalAppendAsync(CancellationToken.None).ConfigureAwait(false);
+        await DispatchPendingTerminalAppendAsync(CancellationToken.None);
     }
 
     [EventHandler]
@@ -150,7 +149,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             Text = ResolveTerminalText(notification),
             ErrorCode = ResolveTerminalErrorCode(notification),
             ObservedAtUnixMs = ResolveTerminalObservedAt(notification),
-        }).ConfigureAwait(false);
+        });
     }
 
     [EventHandler]
@@ -164,7 +163,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             return;
         }
 
-        await HandleSourceTerminalCoreAsync(notification).ConfigureAwait(false);
+        await HandleSourceTerminalCoreAsync(notification);
     }
 
     private async Task HandleSourceTerminalCoreAsync(ChatTurnHistorySourceTerminalNotified notification)
@@ -184,7 +183,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             if (HasSameTerminalFrame(State, terminal))
             {
                 if (State.Status is ChatTurnHistoryDeliveryStatus.Reserved or ChatTurnHistoryDeliveryStatus.Bound)
-                    await DispatchPendingTerminalAppendAsync(CancellationToken.None).ConfigureAwait(false);
+                    await DispatchPendingTerminalAppendAsync(CancellationToken.None);
                 return;
             }
 
@@ -203,7 +202,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
                 ErrorCode = terminal.ErrorCode,
                 ObservedAtUnixMs = terminal.ObservedAtUnixMs,
             });
-            await DispatchPendingTerminalAppendAsync(CancellationToken.None).ConfigureAwait(false);
+            await DispatchPendingTerminalAppendAsync(CancellationToken.None);
             return;
         }
 
@@ -221,7 +220,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             State.TerminalStatus,
             State.Status,
             Stopwatch.GetElapsedTime(terminalFramePersistStarted).TotalMilliseconds);
-        await DispatchPendingTerminalAppendAsync(CancellationToken.None).ConfigureAwait(false);
+        await DispatchPendingTerminalAppendAsync(CancellationToken.None);
     }
 
     private async Task DispatchPendingTerminalAppendAsync(CancellationToken ct)
@@ -248,7 +247,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             State.Status,
             State.TerminalStatus);
         var existsStarted = Stopwatch.GetTimestamp();
-        var conversationExists = await _actorRuntime.ExistsAsync(conversationActorId).ConfigureAwait(false);
+        var conversationExists = await _actorRuntime.ExistsAsync(conversationActorId);
         _logger.LogWarning(
             "Chat turn history delivery conversation exists check completed: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} conversationActorId={ConversationActorId} sourceCommandId={SourceCommandId} exists={Exists} elapsedMs={ElapsedMs}",
             Id,
@@ -266,14 +265,12 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
                         State.SourceActorId,
                         State.SourceCommandId,
                         "conversation_not_found",
-                        "Chat history conversation was not found.")
-                    .ConfigureAwait(false);
+                        "Chat history conversation was not found.");
                 return;
             }
 
             var createStarted = Stopwatch.GetTimestamp();
-            await _actorRuntime.CreateAsync<ChatConversationGAgent>(conversationActorId, ct)
-                .ConfigureAwait(false);
+            await _actorRuntime.CreateAsync<ChatConversationGAgent>(conversationActorId, ct);
             _logger.LogWarning(
                 "Chat turn history delivery conversation create completed: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} conversationActorId={ConversationActorId} sourceCommandId={SourceCommandId} elapsedMs={ElapsedMs}",
                 Id,
@@ -300,8 +297,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             $"chat-history-append:{State.DeliveryId}:{appendAttempt}";
 
         var dispatchStarted = Stopwatch.GetTimestamp();
-        var admission = await _dispatchPort.DispatchAsync(conversationActorId, envelope, ct)
-            .ConfigureAwait(false);
+        var admission = await _dispatchPort.DispatchAsync(conversationActorId, envelope, ct);
         _logger.LogWarning(
             "Chat turn history delivery append dispatch completed: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} conversationActorId={ConversationActorId} sourceCommandId={SourceCommandId} appendAttempt={AppendAttempt} accepted={Accepted} commandId={CommandId} correlationId={CorrelationId} elapsedMs={ElapsedMs}",
             Id,
@@ -320,8 +316,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
                     State.SourceActorId,
                     State.SourceCommandId,
                     "append_dispatch_rejected",
-                    "Chat history append dispatch was rejected.")
-                .ConfigureAwait(false);
+                    "Chat history append dispatch was rejected.");
             return;
         }
 
