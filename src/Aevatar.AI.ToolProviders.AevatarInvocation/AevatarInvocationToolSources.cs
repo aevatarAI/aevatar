@@ -283,7 +283,7 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
         WorkflowRunBackgroundDeliveryReceipt? WorkflowRunDelivery);
 }
 
-internal sealed class ObserveRunTool : IAevatarInvocationReadOnlyTool
+internal sealed class ObserveRunTool : IAevatarInvocationReadOnlyTool, IAgentToolReadOnlyReceiptGate
 {
     private readonly AevatarInvocationDispatcher _dispatcher;
 
@@ -308,6 +308,85 @@ internal sealed class ObserveRunTool : IAevatarInvocationReadOnlyTool
         AevatarInvocationReceiptJson.StringProperty("run_id"),
         AevatarInvocationReceiptJson.StringProperty("status"),
     };
+
+    public bool RequiresCurrentToolRunReceipt(string argumentsJson) =>
+        !string.IsNullOrWhiteSpace(ResolveObservationSubjectId(argumentsJson));
+
+    public bool IsAuthorizedByCurrentToolRunReceipt(string argumentsJson, AgentToolReceipt receipt)
+    {
+        var subjectId = ResolveObservationSubjectId(argumentsJson);
+        if (string.IsNullOrWhiteSpace(subjectId))
+            return false;
+
+        if (!string.Equals(
+                receipt.SubjectKind,
+                AevatarInvocationReceiptJson.InvocationRunSubjectKind,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return string.Equals(receipt.SubjectId, subjectId, StringComparison.Ordinal) ||
+               ReceiptResultContains(receipt.ResultJson, subjectId);
+    }
+
+    private static string? ResolveObservationSubjectId(string argumentsJson)
+    {
+        if (string.IsNullOrWhiteSpace(argumentsJson))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(argumentsJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return null;
+
+            return ReadNestedString(root, "service_run", "run_id") ??
+                   ReadNestedString(root, "gagent_terminal_correlation", "correlation_id") ??
+                   ReadNestedString(root, "gagent_terminal_session", "session_id") ??
+                   ReadNestedString(root, "workflow_current_state", "command_id");
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool ReceiptResultContains(string resultJson, string subjectId)
+    {
+        if (string.IsNullOrWhiteSpace(resultJson))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return false;
+
+            return string.Equals(ReadString(root, "run_id"), subjectId, StringComparison.Ordinal) ||
+                   string.Equals(ReadString(root, "command_id"), subjectId, StringComparison.Ordinal) ||
+                   string.Equals(ReadString(root, "correlation_id"), subjectId, StringComparison.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static string? ReadString(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    private static string? ReadNestedString(JsonElement root, string objectPropertyName, string valuePropertyName)
+    {
+        if (!root.TryGetProperty(objectPropertyName, out var nested) || nested.ValueKind != JsonValueKind.Object)
+            return null;
+
+        return ReadString(nested, valuePropertyName);
+    }
 
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.ObserveRunAsync(argumentsJson, ct);

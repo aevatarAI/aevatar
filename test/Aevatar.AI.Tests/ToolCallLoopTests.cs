@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Reflection;
+using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
@@ -63,6 +64,98 @@ public class ToolCallLoopTests
         messages.Any(m => m.Role == "assistant" && m.ToolCalls?.Count == 1).Should().BeTrue();
         messages.Should().Contain(m => m.Role == "tool" && m.ToolCallId == "tc-1" && m.Content == """RESULT:{"q":"abc"}""");
         messages.Should().Contain(m => m.Role == "assistant" && m.Content == "done");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenReadOnlySubjectWasNotProducedInCurrentRun_ShouldRejectWithoutExecutingTool()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls =
+                [
+                    new ToolCall
+                    {
+                        Id = "tc-observe",
+                        Name = "observe",
+                        ArgumentsJson = """{"run_id":"run-history"}""",
+                    },
+                ],
+            },
+            new LLMResponse { Content = "cannot-observe" },
+        ]);
+        var tools = new ToolManager();
+        var observeTool = new CurrentRunObserveTool();
+        tools.Register(observeTool);
+        var messages = new List<ChatMessage> { ChatMessage.User("execute the workflow") };
+
+        var result = await NewToolCallLoop(tools).ExecuteAsync(
+            provider,
+            messages,
+            new LLMRequest { Messages = [], Tools = [observeTool] },
+            maxRounds: 2,
+            CancellationToken.None);
+
+        result.Should().Be("cannot-observe");
+        observeTool.Executions.Should().Be(0);
+        var toolMessage = messages.Single(message => message.Role == "tool" && message.ToolCallId == "tc-observe");
+        toolMessage.ToolResultView.Should().NotBeNull();
+        toolMessage.ToolResultView!.Failure.Should().NotBeNull();
+        toolMessage.ToolResultView.Failure!.ErrorCode.Should().Be("read_only_subject_not_in_current_tool_run");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenSubjectWasProducedInCurrentRun_ShouldAllowReadOnlyObservation()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls =
+                [
+                    new ToolCall
+                    {
+                        Id = "tc-start",
+                        Name = "start",
+                        ArgumentsJson = "{}",
+                    },
+                ],
+            },
+            new LLMResponse
+            {
+                ToolCalls =
+                [
+                    new ToolCall
+                    {
+                        Id = "tc-observe",
+                        Name = "observe",
+                        ArgumentsJson = """{"run_id":"run-current"}""",
+                    },
+                ],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var tools = new ToolManager();
+        var startTool = new CurrentRunStartTool();
+        var observeTool = new CurrentRunObserveTool();
+        tools.Register([startTool, observeTool]);
+        var messages = new List<ChatMessage> { ChatMessage.User("execute the workflow") };
+
+        var result = await NewToolCallLoop(tools).ExecuteAsync(
+            provider,
+            messages,
+            new LLMRequest { Messages = [], Tools = [startTool, observeTool] },
+            maxRounds: 3,
+            CancellationToken.None);
+
+        result.Should().Be("done");
+        startTool.Executions.Should().Be(1);
+        observeTool.Executions.Should().Be(1);
+        messages.Should().Contain(message =>
+            message.Role == "tool" &&
+            message.ToolCallId == "tc-observe" &&
+            message.Content == """{"run_id":"run-current","status":"completed"}""");
     }
 
     [Fact]
@@ -1278,6 +1371,72 @@ public class ToolCallLoopTests
         {
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(_execute(argumentsJson));
+        }
+    }
+
+    private sealed class CurrentRunStartTool : IAgentTool
+    {
+        public int Executions { get; private set; }
+        public string Name => "start";
+        public string Description => "start";
+        public string ParametersSchema => "{}";
+        public string SideEffectKind => "test.start";
+
+        public AgentToolReceipt? CreateSuccessReceipt(string callId, string toolName, string resultJson) => new()
+        {
+            CallId = callId,
+            ToolName = toolName,
+            Status = AgentToolReceiptStatus.Success,
+            SubjectKind = "test.run",
+            SubjectId = "run-current",
+            ResultJson = resultJson,
+        };
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            Executions++;
+            return Task.FromResult("""{"run_id":"run-current","status":"accepted","actor_id":"actor-current","command_id":"command-current"}""");
+        }
+    }
+
+    private sealed class CurrentRunObserveTool : IAgentTool, IAgentToolReadOnlyReceiptGate
+    {
+        public int Executions { get; private set; }
+        public string Name => "observe";
+        public string Description => "observe";
+        public string ParametersSchema => "{}";
+        public bool IsReadOnly => true;
+
+        public bool RequiresCurrentToolRunReceipt(string argumentsJson) =>
+            !string.IsNullOrWhiteSpace(ReadRunId(argumentsJson));
+
+        public bool IsAuthorizedByCurrentToolRunReceipt(string argumentsJson, AgentToolReceipt receipt) =>
+            receipt.Status == AgentToolReceiptStatus.Success &&
+            string.Equals(receipt.SubjectKind, "test.run", StringComparison.Ordinal) &&
+            string.Equals(receipt.SubjectId, ReadRunId(argumentsJson), StringComparison.Ordinal);
+
+        public AgentToolReceipt? CreateSuccessReceipt(string callId, string toolName, string resultJson) => new()
+        {
+            CallId = callId,
+            ToolName = toolName,
+            Status = AgentToolReceiptStatus.Success,
+            SubjectKind = "test.run",
+            SubjectId = "run-current",
+            ResultJson = resultJson,
+        };
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            Executions++;
+            return Task.FromResult("""{"run_id":"run-current","status":"completed"}""");
+        }
+
+        private static string? ReadRunId(string argumentsJson)
+        {
+            using var document = JsonDocument.Parse(argumentsJson);
+            return document.RootElement.TryGetProperty("run_id", out var runId) && runId.ValueKind == JsonValueKind.String
+                ? runId.GetString()
+                : null;
         }
     }
 
