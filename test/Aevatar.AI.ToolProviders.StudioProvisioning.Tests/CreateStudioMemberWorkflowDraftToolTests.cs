@@ -1,6 +1,8 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Tools;
 using Aevatar.Studio.Application.Provisioning;
 using FluentAssertions;
 using Xunit;
@@ -55,11 +57,133 @@ public sealed class CreateStudioMemberWorkflowDraftToolTests
         tool.IsReadOnly.Should().BeFalse();
         tool.IsDestructive.Should().BeFalse();
         tool.SideEffectKind.Should().Be("studio.workflow_draft.create");
+        tool.Description.Should().Contain("preview_workflow_explicit_requests");
         using var schema = JsonDocument.Parse(tool.ParametersSchema);
         schema.RootElement.GetProperty("additionalProperties").GetBoolean().Should().BeFalse();
         schema.RootElement.GetProperty("required").EnumerateArray()
             .Select(item => item.GetString())
             .Should().BeEquivalentTo("team_id", "display_name", "workflow_yaml");
+    }
+
+    [Fact]
+    public async Task CreateResultReceipt_WhenDraftSaveIsAccepted_ShouldVerifyWorkflowDraftIdentity()
+    {
+        var tool = await DiscoverAsync(new RecordingDraftPort());
+        using var _ = PushContext("scope-alpha");
+        const string arguments = """
+            {
+              "team_id": "team-alpha",
+              "display_name": "X Digest",
+              "workflow_yaml": "name: x_digest\nsteps: []\n",
+              "member_id": "m-alpha",
+              "workflow_id": "wf-alpha"
+            }
+            """;
+
+        var result = await tool.ExecuteAsync(arguments);
+        var receipt = tool.CreateResultReceipt("call-draft", tool.Name, arguments, result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.SideEffectKind.Should().Be("studio.workflow_draft.create");
+        receipt.SubjectKind.Should().Be("studio_workflow_draft");
+        receipt.SubjectId.Should().Be("wf-alpha");
+        receipt.ResultJson.Should().Be(result);
+    }
+
+    [Fact]
+    public async Task StreamingToolExecutor_WhenDraftSaveIsAccepted_ShouldExposeVerifiedDraftResult()
+    {
+        var tool = await DiscoverAsync(new RecordingDraftPort());
+        using var _ = PushContext("scope-alpha");
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var executor = new StreamingToolExecutor(tools);
+        using var state = executor.CreateExecutionState();
+
+        executor.AddTool(state, new ToolCall
+        {
+            Id = "call-draft",
+            Name = tool.Name,
+            ArgumentsJson = """
+                {
+                  "team_id": "team-alpha",
+                  "display_name": "X Digest",
+                  "workflow_yaml": "name: x_digest\nsteps: []\n",
+                  "member_id": "m-alpha",
+                  "workflow_id": "wf-alpha"
+                }
+                """,
+        });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(state, CancellationToken.None))
+            results.Add(result);
+
+        var completion = results.Should().ContainSingle().Subject;
+        completion.IsError.Should().BeFalse();
+        completion.Receipt.Should().NotBeNull();
+        completion.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        completion.Result.Should().Contain("\"member_id\":\"m-alpha\"");
+        completion.Result.Should().Contain("\"workflow_id\":\"wf-alpha\"");
+        completion.Result.Should().NotContain("The tool outcome could not be verified");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenImplicitDraftsDiffer_ShouldExecuteBothMutations()
+    {
+        var port = new RecordingDraftPort();
+        var tool = await DiscoverAsync(port);
+        using var _ = PushContext("scope-alpha");
+
+        await tool.ExecuteAsync("""
+            {
+              "team_id": "team-alpha",
+              "display_name": "X Digest",
+              "workflow_yaml": "name: x_digest\nsteps: []\n"
+            }
+            """);
+        await tool.ExecuteAsync("""
+            {
+              "team_id": "team-alpha",
+              "display_name": "JasonWjp Latest Posts",
+              "workflow_yaml": "name: jasonwjp_latest_posts\nsteps: []\n"
+            }
+            """);
+
+        port.Requests.Select(request => request.DisplayName).Should().Equal(
+            "X Digest",
+            "JasonWjp Latest Posts");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenExactDraftIdentityIsRepeatedWithChangedYaml_ShouldUpdateSameDraft()
+    {
+        var port = new RecordingDraftPort();
+        var tool = await DiscoverAsync(port);
+        using var _ = PushContext("scope-alpha");
+
+        await tool.ExecuteAsync("""
+            {
+              "team_id": "team-alpha",
+              "display_name": "X Digest",
+              "workflow_yaml": "name: x_digest\nsteps: []\n"
+            }
+            """);
+        await tool.ExecuteAsync("""
+            {
+              "team_id": "team-alpha",
+              "display_name": "X Digest",
+              "workflow_yaml": "name: x_digest\ndescription: corrected\nsteps: []\n",
+              "member_id": "m-alpha",
+              "workflow_id": "wf-alpha"
+            }
+            """);
+
+        port.Requests.Should().HaveCount(2);
+        port.Requests[1].MemberId.Should().Be("m-alpha");
+        port.Requests[1].WorkflowId.Should().Be("wf-alpha");
+        port.Requests[1].WorkflowYaml.Should().Contain("description: corrected");
     }
 
     [Theory]
@@ -215,6 +339,7 @@ public sealed class CreateStudioMemberWorkflowDraftToolTests
     private sealed class RecordingDraftPort : IStudioMemberWorkflowDraftProvisioningPort
     {
         public StudioMemberWorkflowDraftProvisioningRequest? Request { get; private set; }
+        public List<StudioMemberWorkflowDraftProvisioningRequest> Requests { get; } = [];
         public Exception? Failure { get; init; }
 
         public Task<StudioMemberWorkflowDraftProvisioningResult> SaveAsync(
@@ -222,6 +347,7 @@ public sealed class CreateStudioMemberWorkflowDraftToolTests
             CancellationToken ct = default)
         {
             Request = request;
+            Requests.Add(request);
             if (Failure is not null)
                 return Task.FromException<StudioMemberWorkflowDraftProvisioningResult>(Failure);
 

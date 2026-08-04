@@ -498,6 +498,7 @@ message ScheduledDispatchDocument {
   string owner_llm_user_service_id = 61;
   string owner_llm_service_slug = 62;
   string owner_llm_model = 63;
+  string service_revision_id = 64;
 }
 
 enum TeamAutomationLifecycleStatusDocument {

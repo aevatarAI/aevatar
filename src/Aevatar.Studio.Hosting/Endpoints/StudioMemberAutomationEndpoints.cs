@@ -593,6 +593,36 @@ internal static class StudioMemberAutomationEndpoints
                 "TEAM_AUTOMATION_AUTHORIZATION_DURABLE_AUTHORIZATION_UNAVAILABLE",
                 "Authorization is temporarily unavailable. Retry this request.",
                 true),
+            ScheduledInvocationAuthorizationFailureCode.DurableAdmissionRequired => (
+                StatusCodes.Status409Conflict,
+                "TEAM_AUTOMATION_DURABLE_ADMISSION_REQUIRED",
+                "The serving workflow revision requires durable admission before it can be scheduled.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.DurableRequestGrantMismatch => (
+                StatusCodes.Status409Conflict,
+                "TEAM_AUTOMATION_DURABLE_REQUEST_GRANT_MISMATCH",
+                "The serving workflow revision does not carry an exact durable request grant.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.NyxIdOperationGrantRequired => (
+                StatusCodes.Status409Conflict,
+                "TEAM_AUTOMATION_NYXID_OPERATION_GRANT_REQUIRED",
+                "NyxID requires an operation-scoped approval grant before this automation can be scheduled.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.NyxIdOperationApprovalRequired => (
+                StatusCodes.Status409Conflict,
+                "TEAM_AUTOMATION_NYXID_OPERATION_APPROVAL_REQUIRED",
+                "NyxID requires per-request approval before this operation can run on a schedule.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.NyxIdOperationDenied => (
+                StatusCodes.Status403Forbidden,
+                "TEAM_AUTOMATION_NYXID_OPERATION_DENIED",
+                "NyxID policy denies this scheduled operation.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.NyxIdOperationAuthorityContractUnavailable => (
+                StatusCodes.Status503ServiceUnavailable,
+                "TEAM_AUTOMATION_NYXID_OPERATION_AUTHORITY_CONTRACT_UNAVAILABLE",
+                "NyxID operation authorization cannot be previewed without executing the external request.",
+                false),
             ScheduledInvocationAuthorizationFailureCode.CatalogProjectionPending => (
                 StatusCodes.Status503ServiceUnavailable,
                 "TEAM_AUTOMATION_AUTHORIZATION_PROJECTION_PENDING",

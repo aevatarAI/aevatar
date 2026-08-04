@@ -28,6 +28,7 @@ using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -944,6 +945,133 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
         host.InteractionService.LastRequest.Headers.Should().ContainKey("channel").WhoseValue.Should().Be("member-tests");
         host.ServiceRunRegistrationPort.RegisterCalls.Should().ContainSingle()
             .Which.ServiceId.Should().Be("svc-alpha");
+    }
+
+    [Fact]
+    public async Task MemberInvokeStreamEndpoint_ShouldCarryResolvedServiceRevisionAdmissionPlan()
+    {
+        const string workflowYaml = "name: status_report\nsteps:\n  - run: echo member";
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.MemberPublishedServiceResolver.Result = new MemberPublishedServiceResolution(
+            "scope-a",
+            "m-alpha",
+            "svc-alpha",
+            IsMemberAuthorityBacked: true);
+        var service = BuildService("scope-a", "svc-alpha", "wf-alpha");
+        host.ServiceCatalogReader.Service = service;
+        host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
+            service.ServiceKey,
+            1,
+            string.Empty,
+            [
+                new ServiceTrafficEndpointSnapshot(
+                    "chat",
+                    [
+                        new ServiceTrafficTargetSnapshot(
+                            "dep-alpha-1",
+                            "rev-alpha-1",
+                            "wf-alpha",
+                            100,
+                            ServiceServingState.Active.ToString()),
+                    ]),
+            ],
+            DateTimeOffset.UtcNow);
+        var admissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
+        await host.RevisionCatalog.UpsertRevisionAsync(
+            service.ServiceKey,
+            "rev-alpha-1",
+            new PreparedServiceRevisionArtifact
+            {
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "scope-a",
+                    AppId = "default",
+                    Namespace = "default",
+                    ServiceId = "svc-alpha",
+                },
+                RevisionId = "rev-alpha-1",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                Endpoints =
+                {
+                    new ServiceEndpointDescriptor
+                    {
+                        EndpointId = "chat",
+                        DisplayName = "chat",
+                        Kind = ServiceEndpointKind.Chat,
+                        RequestTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                        ResponseTypeUrl = Any.Pack(new ChatResponseEvent()).TypeUrl,
+                    },
+                },
+                DeploymentPlan = new ServiceDeploymentPlan
+                {
+                    WorkflowPlan = new WorkflowServiceDeploymentPlan
+                    {
+                        WorkflowName = "status-report",
+                        WorkflowYaml = workflowYaml,
+                        DefinitionActorId = "wf-alpha",
+                        WorkflowId = "workflow-alpha",
+                        RevisionId = "rev-alpha-1",
+                        CapabilityAdmissionPlan = admissionPlan,
+                    },
+                },
+            },
+            CancellationToken.None);
+        host.InteractionService.ResultFactory = async (request, emitAsync, onAcceptedAsync, ct) =>
+        {
+            var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-alpha", "status-report", "cmd-alpha", "corr-alpha");
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(receipt, ct);
+            return WorkflowChatRunInteractionResult
+                .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+        };
+
+        using var request = CreateAuthenticatedJsonRequest(
+            HttpMethod.Post,
+            "/api/scopes/scope-a/members/m-alpha/invoke/chat:stream",
+            new
+            {
+                prompt = "   ",
+                resolvedDefinitionBinding = new
+                {
+                    definitionActorId = "caller-definition",
+                    workflowName = "caller-workflow",
+                    workflowYaml = "name: caller\nsteps: []\n",
+                    scopeId = "caller-scope",
+                    sourceKind = "caller_supplied",
+                    workflowId = "caller-workflow-id",
+                    revisionId = "caller-revision-id",
+                    capabilityAdmissionPlan = new
+                    {
+                        admissionDigest = "caller-digest",
+                    },
+                },
+            },
+            "scope-a");
+
+        var response = await host.Client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
+        host.InteractionService.LastRequest.Should().NotBeNull();
+        var binding = host.InteractionService.LastRequest!.ResolvedDefinitionBinding;
+        binding.Should().NotBeNull();
+        binding!.DefinitionActorId.Should().Be("wf-alpha");
+        binding.WorkflowName.Should().Be("status-report");
+        binding.WorkflowYaml.Should().Be(workflowYaml);
+        binding.ScopeId.Should().Be("scope-a");
+        binding.RunOrigin.Should().Be(WorkflowRunOrigins.ServiceInvoke);
+        binding.SourceKind.Should().Be("service_revision");
+        binding.CapabilityAdmissionPlan.Should().NotBeSameAs(admissionPlan);
+        binding.CapabilityAdmissionPlan!.AdmissionDigest.Should().Be(admissionPlan.AdmissionDigest);
+        binding.WorkflowId.Should().Be("workflow-alpha");
+        binding.RevisionId.Should().Be("rev-alpha-1");
+        binding.DefinitionActorId.Should().NotBe("caller-definition");
+        binding.CapabilityAdmissionPlan!.AdmissionDigest.Should().NotBe("caller-digest");
     }
 
     [Fact]

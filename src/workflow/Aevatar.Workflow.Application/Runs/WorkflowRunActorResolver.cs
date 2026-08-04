@@ -1,4 +1,5 @@
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 
@@ -10,6 +11,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
     private readonly IWorkflowRunProvisioningPort _runProvisioningPort;
     private readonly IWorkflowDefinitionParser _definitionParser;
     private readonly IWorkflowDefinitionCatalog _workflowRegistry;
+    private readonly IWorkflowDraftRunCapabilityAdmissionService? _draftRunCapabilityAdmissionService;
     private readonly WorkflowRunBehaviorOptions _behaviorOptions;
 
     public WorkflowRunActorResolver(
@@ -23,7 +25,26 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         _runProvisioningPort = runProvisioningPort ?? throw new ArgumentNullException(nameof(runProvisioningPort));
         _definitionParser = definitionParser ?? throw new ArgumentNullException(nameof(definitionParser));
         _workflowRegistry = workflowRegistry ?? throw new ArgumentNullException(nameof(workflowRegistry));
+        _draftRunCapabilityAdmissionService = null;
         _behaviorOptions = behaviorOptions ?? new WorkflowRunBehaviorOptions();
+    }
+
+    public WorkflowRunActorResolver(
+        IWorkflowActorBindingReader bindingReader,
+        IWorkflowRunProvisioningPort runProvisioningPort,
+        IWorkflowDefinitionParser definitionParser,
+        IWorkflowDefinitionCatalog workflowRegistry,
+        IWorkflowDraftRunCapabilityAdmissionService draftRunCapabilityAdmissionService,
+        WorkflowRunBehaviorOptions? behaviorOptions = null)
+        : this(
+            bindingReader,
+            runProvisioningPort,
+            definitionParser,
+            workflowRegistry,
+            behaviorOptions)
+    {
+        _draftRunCapabilityAdmissionService = draftRunCapabilityAdmissionService
+            ?? throw new ArgumentNullException(nameof(draftRunCapabilityAdmissionService));
     }
 
     public async Task<WorkflowActorResolutionResult> ResolveOrCreateAsync(
@@ -49,6 +70,19 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         IReadOnlyDictionary<string, string> inlineWorkflowYamlMapForRun =
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
+        if (request.ResolvedDefinitionBinding is { } resolvedDefinitionBinding)
+        {
+            return await ResolveFromResolvedDefinitionBindingAsync(
+                resolvedDefinitionBinding,
+                sourceActorId,
+                hasInlineWorkflowYamls,
+                hasRequestedWorkflowName,
+                requestedWorkflowName,
+                workflowNameForRun,
+                scopeIdForRun,
+                ct);
+        }
+
         if (hasInlineWorkflowYamls)
         {
             var inlineBundle = await _definitionParser.ParseInlineWorkflowBundleAsync(inlineWorkflowDocuments, ct);
@@ -64,7 +98,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
 
             workflowNameForRun = inlineBundle.EntryWorkflowName;
             workflowYamlForRun = inlineBundle.EntryWorkflowYaml;
-            inlineWorkflowYamlMapForRun = inlineBundle.WorkflowYamlsByName;
+            inlineWorkflowYamlMapForRun = ResolveInlineWorkflowYamlsForRun(inlineBundle);
 
             if (hasRequestedWorkflowName &&
                 !string.Equals(requestedWorkflowName, workflowNameForRun, StringComparison.OrdinalIgnoreCase))
@@ -87,6 +121,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 workflowYamlForRun,
                 inlineWorkflowYamlMapForRun,
                 scopeIdForRun,
+                request,
                 ct);
         }
 
@@ -99,6 +134,23 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             workflowYamlForRun = registryDefinitionForRun.WorkflowYaml;
         }
 
+        var draftAdmission = hasInlineWorkflowYamls
+            ? await PrepareDraftRunCapabilityAdmissionAsync(
+                request,
+                workflowYamlForRun,
+                inlineWorkflowYamlMapForRun,
+                scopeIdForRun,
+                ct)
+            : DraftRunCapabilityAdmissionPreparation.NotApplicable;
+        if (draftAdmission.FailureDetail is not null)
+        {
+            return new WorkflowActorResolutionResult(
+                null,
+                workflowNameForRun,
+                WorkflowChatRunStartError.InvalidWorkflowYaml,
+                draftAdmission.FailureDetail);
+        }
+
         var createdRun = await CreateRunActorAsync(
             new WorkflowDefinitionBinding(
                 registryDefinitionForRun?.DefinitionActorId ?? string.Empty,
@@ -106,7 +158,11 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 workflowYamlForRun,
                 inlineWorkflowYamlMapForRun,
                 scopeIdForRun,
-                hasInlineWorkflowYamls ? WorkflowRunOrigins.Draft : WorkflowRunOrigins.AdHocChat),
+                hasInlineWorkflowYamls ? WorkflowRunOrigins.Draft : WorkflowRunOrigins.AdHocChat,
+                SourceKind: draftAdmission.Admission?.SourceKind ?? string.Empty,
+                CapabilityAdmissionPlan: draftAdmission.Admission?.CapabilityAdmissionPlan.Clone(),
+                WorkflowId: draftAdmission.Admission?.WorkflowId ?? string.Empty,
+                RevisionId: draftAdmission.Admission?.RevisionId ?? string.Empty),
             wrapAsFallbackTrigger: !hasInlineWorkflowYamls,
             ct);
 
@@ -125,6 +181,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         string workflowYamlForRun,
         IReadOnlyDictionary<string, string> inlineWorkflowYamlMapForRun,
         string scopeIdHint,
+        WorkflowChatRunRequest request,
         CancellationToken ct)
     {
         var sourceBinding = await _bindingReader.GetAsync(actorId, ct);
@@ -147,14 +204,34 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                     WorkflowChatRunStartError.WorkflowBindingMismatch);
             }
 
+            var scopeIdForRun = ResolveScopeId(sourceBinding.ScopeId, scopeIdHint);
+            var draftAdmission = await PrepareDraftRunCapabilityAdmissionAsync(
+                request,
+                workflowYamlForRun,
+                inlineWorkflowYamlMapForRun,
+                scopeIdForRun,
+                ct);
+            if (draftAdmission.FailureDetail is not null)
+            {
+                return new WorkflowActorResolutionResult(
+                    null,
+                    workflowNameForRun,
+                    WorkflowChatRunStartError.InvalidWorkflowYaml,
+                    draftAdmission.FailureDetail);
+            }
+
             var inlineRunActor = await CreateRunActorAsync(
                 new WorkflowDefinitionBinding(
                     string.Empty,
                     workflowNameForRun,
                     workflowYamlForRun,
                     inlineWorkflowYamlMapForRun,
-                    ResolveScopeId(sourceBinding.ScopeId, scopeIdHint),
-                    WorkflowRunOrigins.Draft),
+                    scopeIdForRun,
+                    WorkflowRunOrigins.Draft,
+                    SourceKind: draftAdmission.Admission?.SourceKind ?? string.Empty,
+                    CapabilityAdmissionPlan: draftAdmission.Admission?.CapabilityAdmissionPlan.Clone(),
+                    WorkflowId: draftAdmission.Admission?.WorkflowId ?? string.Empty,
+                    RevisionId: draftAdmission.Admission?.RevisionId ?? string.Empty),
                 wrapAsFallbackTrigger: false,
                 ct);
             return new WorkflowActorResolutionResult(
@@ -197,8 +274,88 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 workflowYamlFromSource,
                 sourceBinding.InlineWorkflowYamls,
                 ResolveScopeId(sourceBinding.ScopeId, scopeIdHint),
-                WorkflowRunOrigins.AdHocChat),
+                WorkflowRunOrigins.AdHocChat,
+                SourceKind: sourceBinding.SourceKind,
+                CapabilityAdmissionPlan: sourceBinding.CapabilityAdmissionPlan?.Clone(),
+                WorkflowId: sourceBinding.WorkflowId,
+                RevisionId: sourceBinding.RevisionId),
             wrapAsFallbackTrigger: true,
+            ct);
+
+        return new WorkflowActorResolutionResult(
+            runActor,
+            boundWorkflowName,
+            WorkflowChatRunStartError.None);
+    }
+
+    private async Task<WorkflowActorResolutionResult> ResolveFromResolvedDefinitionBindingAsync(
+        WorkflowDefinitionBinding resolvedDefinitionBinding,
+        string? sourceActorId,
+        bool hasInlineWorkflowYamls,
+        bool hasRequestedWorkflowName,
+        string requestedWorkflowName,
+        string workflowNameForRun,
+        string scopeIdHint,
+        CancellationToken ct)
+    {
+        if (hasInlineWorkflowYamls)
+            throw new InvalidOperationException(
+                "Resolved workflow definition binding cannot be combined with inline workflow YAML.");
+
+        var definitionActorId = resolvedDefinitionBinding.DefinitionActorId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(definitionActorId))
+        {
+            return new WorkflowActorResolutionResult(
+                null,
+                workflowNameForRun,
+                WorkflowChatRunStartError.AgentNotFound);
+        }
+
+        var requestedSourceActorId = sourceActorId?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(requestedSourceActorId) &&
+            !string.Equals(requestedSourceActorId, definitionActorId, StringComparison.Ordinal))
+        {
+            return new WorkflowActorResolutionResult(
+                null,
+                workflowNameForRun,
+                WorkflowChatRunStartError.WorkflowBindingMismatch);
+        }
+
+        var boundWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(resolvedDefinitionBinding.WorkflowName);
+        if (string.IsNullOrWhiteSpace(boundWorkflowName) || !HasDefinitionPayload(resolvedDefinitionBinding))
+        {
+            return new WorkflowActorResolutionResult(
+                null,
+                workflowNameForRun,
+                WorkflowChatRunStartError.AgentWorkflowNotConfigured);
+        }
+
+        if (hasRequestedWorkflowName &&
+            !string.Equals(requestedWorkflowName, boundWorkflowName, StringComparison.OrdinalIgnoreCase))
+        {
+            return new WorkflowActorResolutionResult(
+                null,
+                boundWorkflowName,
+                WorkflowChatRunStartError.WorkflowBindingMismatch);
+        }
+
+        var runActor = await CreateRunActorAsync(
+            new WorkflowDefinitionBinding(
+                definitionActorId,
+                boundWorkflowName,
+                resolvedDefinitionBinding.WorkflowYaml ?? string.Empty,
+                resolvedDefinitionBinding.InlineWorkflowYamls
+                    ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ResolveScopeId(resolvedDefinitionBinding.ScopeId, scopeIdHint),
+                string.IsNullOrWhiteSpace(resolvedDefinitionBinding.RunOrigin)
+                    ? WorkflowRunOrigins.AdHocChat
+                    : resolvedDefinitionBinding.RunOrigin.Trim(),
+                resolvedDefinitionBinding.ScheduleId?.Trim() ?? string.Empty,
+                SourceKind: resolvedDefinitionBinding.SourceKind?.Trim() ?? string.Empty,
+                CapabilityAdmissionPlan: resolvedDefinitionBinding.CapabilityAdmissionPlan?.Clone(),
+                WorkflowId: resolvedDefinitionBinding.WorkflowId?.Trim() ?? string.Empty,
+                RevisionId: resolvedDefinitionBinding.RevisionId?.Trim() ?? string.Empty),
+            wrapAsFallbackTrigger: false,
             ct);
 
         return new WorkflowActorResolutionResult(
@@ -293,4 +450,59 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             ? sourceScopeId.Trim()
             : scopeIdHint?.Trim() ?? string.Empty;
 
+    private async Task<DraftRunCapabilityAdmissionPreparation> PrepareDraftRunCapabilityAdmissionAsync(
+        WorkflowChatRunRequest request,
+        string workflowYaml,
+        IReadOnlyDictionary<string, string> inlineWorkflowYamls,
+        string scopeId,
+        CancellationToken ct)
+    {
+        if (_draftRunCapabilityAdmissionService is null)
+            return DraftRunCapabilityAdmissionPreparation.NotApplicable;
+
+        try
+        {
+            var admission = await _draftRunCapabilityAdmissionService.PrepareAsync(
+                new WorkflowDraftRunCapabilityAdmissionRequest(
+                    scopeId,
+                    request.CommandIdSeed ?? string.Empty,
+                    request.CallerCredential,
+                    workflowYaml,
+                    inlineWorkflowYamls),
+                ct);
+            return new DraftRunCapabilityAdmissionPreparation(admission, null);
+        }
+        catch (WorkflowExternalCapabilityAdmissionException ex)
+        {
+            return new DraftRunCapabilityAdmissionPreparation(
+                null,
+                WorkflowChatRunStartFailureDetail.Create(
+                    WorkflowChatRunStartError.InvalidWorkflowYaml,
+                    ex.Message,
+                    ex.Readiness));
+        }
+    }
+
+    private static IReadOnlyDictionary<string, string> ResolveInlineWorkflowYamlsForRun(
+        WorkflowInlineYamlBundleParseResult inlineBundle) =>
+        inlineBundle.WorkflowYamlsByName
+            .Where(entry => !string.Equals(
+                entry.Key,
+                inlineBundle.EntryWorkflowName,
+                StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(
+                static entry => entry.Key,
+                static entry => entry.Value,
+                StringComparer.OrdinalIgnoreCase);
+
+    private static bool HasDefinitionPayload(WorkflowDefinitionBinding binding) =>
+        !string.IsNullOrWhiteSpace(binding.WorkflowYaml) ||
+        binding.InlineWorkflowYamls is { Count: > 0 };
+
+    private sealed record DraftRunCapabilityAdmissionPreparation(
+        WorkflowDraftRunCapabilityAdmissionResult? Admission,
+        WorkflowChatRunStartFailureDetail? FailureDetail)
+    {
+        public static DraftRunCapabilityAdmissionPreparation NotApplicable { get; } = new(null, null);
+    }
 }

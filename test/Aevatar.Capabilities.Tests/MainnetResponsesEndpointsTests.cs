@@ -3376,7 +3376,7 @@ public sealed class MainnetResponsesEndpointsTests
             ResponsesWebSearchBoundaryInput input,
             CancellationToken ct) =>
             Task.FromResult(new ResponsesWebSearchBoundaryResult(
-                new ResponsesWebSearchToolOutput()));
+                ResponsesWebResultMigration.FromSearch(new ResponsesWebSearchToolOutput())));
     }
 
     private sealed class StubAgentTool : IAgentTool

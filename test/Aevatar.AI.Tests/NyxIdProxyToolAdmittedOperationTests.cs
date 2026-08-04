@@ -576,7 +576,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Fact]
-    public async Task ExecuteWithOutcomeAsync_ShouldNotReceiptRejectedProofArguments()
+    public async Task ExecuteWithOutcomeAsync_ShouldReceiptRejectedProofArgumentsWithExactError()
     {
         var handler = new RecordingHandler();
         var tool = CreateTool(handler);
@@ -588,7 +588,34 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             """{"path":"/forged"}""");
 
         outcome.ResultJson.Should().Contain("NYXID_OPERATION_ARGUMENT_NOT_SUPPORTED");
-        outcome.Receipt.Should().BeNull();
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        outcome.Receipt.ErrorCode.Should().Be("NYXID_OPERATION_ARGUMENT_NOT_SUPPORTED");
+        outcome.Receipt.SubjectKind.Should().Be("nyxid.user-service");
+        outcome.Receipt.SubjectId.Should().Be("us-calendar-alpha");
+        outcome.Receipt.ResultJson.Should().Be(outcome.ResultJson);
+        handler.RequestCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ShouldReceiptInvalidPublishedResponseModeWithExactError()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission());
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-invalid-response-mode",
+            tool.Name,
+            """{"query":{"container_id":"oc_1"},"response_mode":"json"}""");
+
+        outcome.ResultJson.Should().Contain("NYXID_OPERATION_RESPONSE_MODE_INVALID");
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        outcome.Receipt.ErrorCode.Should().Be("NYXID_OPERATION_RESPONSE_MODE_INVALID");
+        outcome.Receipt.SubjectKind.Should().Be("nyxid.user-service");
+        outcome.Receipt.SubjectId.Should().Be("us-lark-alpha");
+        outcome.Receipt.ResultJson.Should().Be(outcome.ResultJson);
         handler.RequestCount.Should().Be(0);
     }
 
@@ -1164,7 +1191,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Fact]
-    public void GetCallSafety_ShouldUseTheTypedProofPolicy()
+    public void GetCallSafety_ShouldSkipGenericApprovalOnlyForProofBoundWorkflowCalls()
     {
         var tool = CreateTool(new RecordingHandler());
 
@@ -1180,10 +1207,67 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         using (PushContext(CreateApprovalAdmission()))
         {
             tool.GetCallSafety("{}").Should().Be(new AgentToolCallSafety(
+                RequiresApproval: false,
+                IsReadOnly: false,
+                IsDestructive: false));
+        }
+
+        using (PushContext(CreateApprovalAdmission() with
+               {
+                   ExecutionPolicy = DestructivePolicy(),
+               }))
+        {
+            tool.GetCallSafety("{}").Should().Be(new AgentToolCallSafety(
+                RequiresApproval: false,
+                IsReadOnly: false,
+                IsDestructive: true));
+        }
+
+        using (PushContext(
+                   CreateApprovalAdmission(),
+                   invocationSurface: AgentToolInvocationSurface.HumanSession))
+        {
+            tool.GetCallSafety("{}").Should().Be(new AgentToolCallSafety(
                 RequiresApproval: true,
                 IsReadOnly: false,
                 IsDestructive: false));
         }
+    }
+
+    [Fact]
+    public async Task ProofBoundWorkflowWrite_ShouldBypassMissingGenericApprovalHandlerAndReachNyxId()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(CreateApprovalAdmission());
+        const string argumentsJson = """{"body":{"approval_code":"AC-1","form":"{}"}}""";
+        var context = new ToolCallContext
+        {
+            Tool = tool,
+            ToolName = tool.Name,
+            ToolCallId = "call-proof-bound-write",
+            ArgumentsJson = argumentsJson,
+            CancellationToken = CancellationToken.None,
+            ExecutionContext = AgentToolRequestContext.Current,
+        };
+        var middlewares = ToolCallMiddlewareChainFactory.ForAgentRuntime([], null, null);
+
+        await MiddlewarePipeline.RunToolCallAsync(middlewares, context, async () =>
+        {
+            var outcome = await tool.ExecuteWithOutcomeAsync(
+                context.ToolCallId,
+                context.ToolName,
+                context.ArgumentsJson,
+                context.CancellationToken);
+            context.Result = outcome.ResultJson;
+            context.Receipt = outcome.Receipt;
+        });
+
+        context.Terminate.Should().BeFalse();
+        context.Result.Should().NotContain("approval-gated tools cannot run here");
+        var request = handler.ProxyRequests.Should().ContainSingle().Subject;
+        request.Method.Should().Be("POST");
+        request.Path.Should().Be("/api/v1/proxy/s/api-lark-bot-2/open-apis/approval/v4/instances");
     }
 
     [Fact]
@@ -1203,6 +1287,25 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
 
         result.Should().Contain("NYXID_OPERATION_ADMISSION_REQUIRED");
         handler.RequestCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldAcceptProofBoundDurableWritePolicyInEnforceMode()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(
+            handler,
+            managedWorkflowAdmissionMode: NyxIdManagedWorkflowAdmissionMode.Enforce);
+        using var scope = PushContext(AuthoredRequestAdmission() with
+        {
+            ExecutionPolicy = DurableWritePolicy(),
+        });
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"event_id":"evt-runtime"},"body":{"title":"Planning"}}""");
+
+        result.Should().NotContain("NYXID_OPERATION_ADMISSION_REQUIRED");
+        handler.ProxyRequests.Should().ContainSingle();
     }
 
     private static AgentToolOperationAdmission MessageResourceAdmission() =>
@@ -1478,6 +1581,20 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             AgentToolOperationEnforcementOwner.Aevatar,
             [AgentToolOperationExecutionMode.Interactive]);
 
+    private static AgentToolOperationExecutionPolicy DurableWritePolicy() =>
+        new(
+            AgentToolOperationRisk.Write,
+            AgentToolOperationApproval.Required,
+            AgentToolOperationEnforcementOwner.Aevatar,
+            [AgentToolOperationExecutionMode.Interactive, AgentToolOperationExecutionMode.Durable]);
+
+    private static AgentToolOperationExecutionPolicy DestructivePolicy() =>
+        new(
+            AgentToolOperationRisk.Destructive,
+            AgentToolOperationApproval.Required,
+            AgentToolOperationEnforcementOwner.Aevatar,
+            [AgentToolOperationExecutionMode.Interactive]);
+
     private static AgentToolOperationParameter PathParameter(string name) =>
         new(name, AgentToolOperationParameterLocation.Path, true, AgentToolOperationValueSchema.Text);
 
@@ -1514,7 +1631,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
 
     private static AgentToolContextScope PushContext(
         AgentToolOperationAdmission admission,
-        string? organizationToken = null) =>
+        string? organizationToken = null,
+        AgentToolInvocationSurface invocationSurface = AgentToolInvocationSurface.WorkflowToolCall) =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             AgentToolRequestIdentity.Empty,
             new AgentToolCredentials("user-token", organizationToken, null),
@@ -1535,7 +1653,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                 "step-alpha",
                 "run-alpha",
                 1),
-            InvocationSurface = AgentToolInvocationSurface.WorkflowToolCall,
+            InvocationSurface = invocationSurface,
         });
 
     private static AgentToolContextScope PushProoflessManagedContext() =>

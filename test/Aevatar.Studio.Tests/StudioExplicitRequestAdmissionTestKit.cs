@@ -35,10 +35,12 @@ internal static class StudioExplicitRequestAdmissionTestKit
         """;
 
     public static StudioWorkflowCapabilityAdmissionTestService CreateAdmissionService(
-        NyxIdOperationRisk currentRisk = NyxIdOperationRisk.ReadOnly)
+        NyxIdOperationRisk currentRisk = NyxIdOperationRisk.ReadOnly,
+        string ownerSubject = CallerId,
+        long sourceVersion = 23)
     {
         var readiness = new ExternalWorkflowCapabilityReadinessService(
-            [new ExplicitRequestSource(currentRisk)]);
+            [new ExplicitRequestSource(currentRisk, ownerSubject, sourceVersion)]);
         var inner = new WorkflowExternalCapabilityAdmissionService(
             new RealWorkflowDefinitionParser(),
             readiness,
@@ -143,7 +145,10 @@ internal static class StudioExplicitRequestAdmissionTestKit
             throw new NotSupportedException();
     }
 
-    private sealed class ExplicitRequestSource(NyxIdOperationRisk currentRisk) :
+    private sealed class ExplicitRequestSource(
+        NyxIdOperationRisk currentRisk,
+        string ownerSubject,
+        long sourceVersion) :
         IExternalWorkflowCapabilitySource
     {
         public ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind =>
@@ -196,8 +201,8 @@ internal static class StudioExplicitRequestAdmissionTestKit
             result.Sources.Add(new ExternalCapabilitySourceStamp
             {
                 SourceKind = ExternalCapabilitySourceKind.NyxIdUserServices,
-                SourceId = $"nyxid-keys:caller:{CallerId}",
-                SourceVersion = 23,
+                SourceId = $"nyxid-keys:caller:{ownerSubject}",
+                SourceVersion = sourceVersion,
                 ObservedAt = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now),
                 FreshUntil = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now.AddMinutes(5)),
                 ContentDigest = "keys-digest-alpha",
@@ -209,9 +214,9 @@ internal static class StudioExplicitRequestAdmissionTestKit
                 {
                     Authority = NyxIdAuthorizationAuthorities.NyxId,
                     OwnerKind = AuthorizationOwnerKind.Personal,
-                    OwnerSubject = CallerId,
+                    OwnerSubject = ownerSubject,
                 }),
-                SourceVersion = 23,
+                SourceVersion = sourceVersion,
                 ObservedAt = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now),
                 FreshUntil = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now.AddMinutes(5)),
                 ContentDigest = "catalog-digest-alpha",

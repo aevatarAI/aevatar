@@ -26,6 +26,7 @@ public sealed class BindingAgentToolSource : IAgentToolSource
     private readonly IScopeWorkflowQueryPort? _scopeWorkflowQueryPort;
     private readonly IExternalWorkflowCapabilityListPort? _externalCapabilityListPort;
     private readonly IExternalWorkflowCapabilityReadinessPort? _externalCapabilityReadinessPort;
+    private readonly IWorkflowExplicitRequestPreviewService? _explicitRequestPreviewService;
     private readonly ILogger _logger;
 
     public BindingAgentToolSource(
@@ -38,6 +39,7 @@ public sealed class BindingAgentToolSource : IAgentToolSource
         IScopeWorkflowQueryPort? scopeWorkflowQueryPort = null,
         IExternalWorkflowCapabilityListPort? externalCapabilityListPort = null,
         IExternalWorkflowCapabilityReadinessPort? externalCapabilityReadinessPort = null,
+        IWorkflowExplicitRequestPreviewService? explicitRequestPreviewService = null,
         ILogger<BindingAgentToolSource>? logger = null)
     {
         _options = options;
@@ -49,6 +51,7 @@ public sealed class BindingAgentToolSource : IAgentToolSource
         _scopeWorkflowQueryPort = scopeWorkflowQueryPort;
         _externalCapabilityListPort = externalCapabilityListPort;
         _externalCapabilityReadinessPort = externalCapabilityReadinessPort;
+        _explicitRequestPreviewService = explicitRequestPreviewService;
         _logger = logger ?? NullLogger<BindingAgentToolSource>.Instance;
     }
 
@@ -56,7 +59,8 @@ public sealed class BindingAgentToolSource : IAgentToolSource
     {
         if (_commandPort == null && _queryAdapter == null &&
             _scopeWorkflowCommandPort == null && _scopeWorkflowQueryPort == null &&
-            _externalCapabilityListPort == null && _externalCapabilityReadinessPort == null)
+            _externalCapabilityListPort == null && _externalCapabilityReadinessPort == null &&
+            _explicitRequestPreviewService == null)
         {
             _logger.LogDebug("Binding adapter implementations not registered, skipping binding tools");
             return Task.FromResult<IReadOnlyList<IAgentTool>>([]);
@@ -92,10 +96,15 @@ public sealed class BindingAgentToolSource : IAgentToolSource
         }
 
         if (_externalCapabilityListPort != null)
-            tools.Add(new ListExternalWorkflowCapabilitiesTool(_externalCapabilityListPort, _options));
+            tools.Add(new ListExternalWorkflowCapabilitiesTool(
+                _externalCapabilityListPort,
+                _options));
 
         if (_externalCapabilityReadinessPort != null)
             tools.Add(new InspectExternalWorkflowCapabilityReadinessTool(_externalCapabilityReadinessPort));
+
+        if (_explicitRequestPreviewService != null)
+            tools.Add(new PreviewWorkflowExplicitRequestsTool(_explicitRequestPreviewService));
 
         _logger.LogInformation("Binding tools registered ({Count} tools)", tools.Count);
         return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);

@@ -431,6 +431,8 @@ public sealed record ScheduledDispatchSummary(
 
     public string OwnerLLMModel { get; init; } = string.Empty;
 
+    public string ServiceRevisionId { get; init; } = string.Empty;
+
     public string NyxIdRevocationStatus { get; init; } = string.Empty;
 
     public string VaultRevocationStatus { get; init; } = string.Empty;

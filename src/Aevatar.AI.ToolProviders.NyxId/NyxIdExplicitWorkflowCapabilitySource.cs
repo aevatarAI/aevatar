@@ -69,7 +69,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
         try
         {
             inventory = NyxIdApiAccessResponseParser.ParseUserServices(
-                await client.ListServicesAsync(sourceReadableBearerToken, cancellationToken));
+                await client.ListUserServicesAsync(sourceReadableBearerToken, cancellationToken));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -119,16 +119,6 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
         var capability = BuildCapability(request, service.Slug);
         if (executionMode == ExternalCapabilityExecutionMode.Durable)
         {
-            if (capability.NyxIdUserRequest.ExecutionPolicy.Risk != NyxIdOperationRisk.ReadOnly ||
-                !capability.NyxIdUserRequest.ExecutionPolicy.AllowedExecutionModes.Contains(
-                    ExternalCapabilityExecutionMode.Durable))
-            {
-                return Failure(
-                    selector, executionMode, ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
-                    "NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED",
-                    "This explicit request can only be admitted for interactive execution.", source, capability);
-            }
-
             var durableAuthorizationSource = await _durableAuthorizationCatalog.InspectAsync(
                 access,
                 request.UserServiceId,
@@ -196,8 +186,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
             EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
         };
         policy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
-        if (risk == NyxIdOperationRisk.ReadOnly)
-            policy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Durable);
+        policy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Durable);
 
         var requestDigest = WorkflowCapabilityAdmissionPlanIntegrity
             .ComputeNyxIdRequestContractDigest(request);

@@ -122,7 +122,6 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
     [InlineData("modes_duplicate")]
     [InlineData("modes_without_interactive")]
     [InlineData("modes_unknown")]
-    [InlineData("durable_write")]
     public void Create_ShouldRejectMalformedNyxIdExecutionPolicy(string malformedCase)
     {
         var capability = NyxIdCapability();
@@ -156,10 +155,6 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
                 break;
             case "modes_unknown":
                 policy.AllowedExecutionModes.Add((ExternalCapabilityExecutionMode)99);
-                break;
-            case "durable_write":
-                policy.Risk = NyxIdOperationRisk.Write;
-                policy.Approval = NyxIdOperationApproval.Required;
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(malformedCase));
@@ -404,7 +399,7 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
     [InlineData("grant_request_contract_digest", "*explicit request grant scope is invalid*")]
     [InlineData("grant_owner_kind", "*explicit request grant digest is invalid*")]
     [InlineData("grant_owner_subject", "*explicit request grant digest is invalid*")]
-    [InlineData("grant_risk", "*explicit request proof policy does not match its grant*")]
+    [InlineData("grant_risk", "*explicit request grant risk*")]
     [InlineData("grant_modes", "*explicit request proof policy does not match its grant*")]
     [InlineData("proof_contract_digest", "*explicit request proof digest is invalid*")]
     [InlineData("proof_grant_digest", "*explicit request grant digest is invalid*")]
@@ -566,11 +561,38 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
     }
 
     [Theory]
+    [InlineData(NyxIdRequestMethod.Get, NyxIdOperationRisk.Write)]
+    [InlineData(NyxIdRequestMethod.Get, NyxIdOperationRisk.Destructive)]
+    [InlineData(NyxIdRequestMethod.Head, NyxIdOperationRisk.Write)]
+    [InlineData(NyxIdRequestMethod.Options, NyxIdOperationRisk.Destructive)]
+    public void Create_ShouldRejectExplicitGrantThatDoesNotMatchCanonicalMethodRisk(
+        NyxIdRequestMethod method,
+        NyxIdOperationRisk grantedRisk)
+    {
+        var admission = ExplicitAdmissionFor(
+            method,
+            grantedRisk,
+            ExternalCapabilityExecutionMode.Interactive);
+
+        var act = () => WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: explicit-workflow\nsteps: []\n",
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            [admission],
+            [ExplicitSource()],
+            workflowId: ExplicitWorkflowId,
+            revisionId: ExplicitRevisionId);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*risk*");
+    }
+
+    [Theory]
     [InlineData(NyxIdRequestMethod.Post, NyxIdOperationRisk.Write)]
     [InlineData(NyxIdRequestMethod.Put, NyxIdOperationRisk.Write)]
     [InlineData(NyxIdRequestMethod.Patch, NyxIdOperationRisk.Write)]
     [InlineData(NyxIdRequestMethod.Delete, NyxIdOperationRisk.Destructive)]
-    public void Create_ShouldRejectDurableExplicitWriteOrDestructiveGrant(
+    public void Create_ShouldAcceptDurableExplicitWriteOrDestructiveGrant(
         NyxIdRequestMethod method,
         NyxIdOperationRisk grantedRisk)
     {
@@ -585,12 +607,12 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Durable,
             [admission],
-            [ExplicitSource()],
+            [ExplicitSource(), DurableCatalogSource()],
+            DurableOwner(),
             workflowId: ExplicitWorkflowId,
             revisionId: ExplicitRevisionId);
 
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*durable*read-only*");
+        act.Should().NotThrow();
     }
 
     [Fact]

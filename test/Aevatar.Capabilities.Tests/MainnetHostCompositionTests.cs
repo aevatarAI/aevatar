@@ -115,6 +115,25 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void AddAevatarMainnetHost_ShouldConfigureWebSearchBackendOnFirstWebToolRegistration()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var options = app.Services.GetRequiredService<WebToolOptions>();
+
+        options.NyxIdBaseUrl.Should().Be("https://nyx-api.chrono-ai.fun");
+        options.NyxIdSearchSlug.Should().Be("api-firecrawl");
+    }
+
+    [Fact]
     public void GAgentServiceAndStudioCapabilities_ShouldOwnTheirCompositionDependencies()
     {
         using var home = new TemporaryAevatarHomeScope();

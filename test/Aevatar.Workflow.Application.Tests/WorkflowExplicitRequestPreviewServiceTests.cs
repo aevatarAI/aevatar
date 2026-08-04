@@ -10,6 +10,41 @@ namespace Aevatar.Workflow.Application.Tests;
 public sealed class WorkflowExplicitRequestPreviewServiceTests
 {
     [Fact]
+    public async Task PreviewAsync_WhenRevisionIdIsMissing_ShouldAllocateOpaqueServerRevisionIdentity()
+    {
+        var selector = RequestSelector("/records/{id}", NyxIdRequestMethod.Get, bodyRequired: false);
+        selector.BodyMode = NyxIdRequestBodyMode.None;
+        var parser = new StubParser(new ExternalToolInvocationSpec
+        {
+            CallSiteId = "wf-alpha/read-record",
+            ToolName = "nyxid_proxy",
+            Selector = new ExternalWorkflowCapabilitySelector { NyxIdRequest = selector },
+        });
+        var service = new WorkflowExplicitRequestPreviewService(
+            parser,
+            new RecordingReadinessPort(CanonicalReadiness(
+                selector,
+                "slug-preview-secret",
+                NyxIdOperationRisk.ReadOnly)));
+
+        var result = await service.PreviewAsync(new WorkflowExplicitRequestPreviewRequest(
+            new ExternalWorkflowCapabilityAccessContext(
+                "scope-alpha",
+                "authenticated-owner-alpha",
+                NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                    "bearer-preview-secret")),
+            "name: wf-alpha",
+            null,
+            ExternalCapabilityExecutionMode.Interactive,
+            WorkflowId: "wf-alpha",
+            RevisionId: null));
+
+        result.WorkflowId.Should().Be("wf-alpha");
+        result.RevisionId.Should().StartWith("rev-");
+        result.RevisionId.Should().NotBe(result.WorkflowId);
+    }
+
+    [Fact]
     public async Task PreviewAsync_ShouldReturnOnlyCanonicalConfirmationFieldsWithoutCreatingGrant()
     {
         const string bearer = "bearer-preview-secret";
@@ -111,6 +146,46 @@ public sealed class WorkflowExplicitRequestPreviewServiceTests
             .Equal(ExternalCapabilityExecutionMode.Interactive);
     }
 
+    [Theory]
+    [InlineData(NyxIdRequestMethod.Post, NyxIdOperationRisk.Write)]
+    [InlineData(NyxIdRequestMethod.Delete, NyxIdOperationRisk.Destructive)]
+    public async Task PreviewAsync_ForDurableMutatingRequest_ShouldExposeDurableMode(
+        NyxIdRequestMethod method,
+        NyxIdOperationRisk risk)
+    {
+        var selector = RequestSelector("/records/{id}", method, bodyRequired: method != NyxIdRequestMethod.Delete);
+        if (method == NyxIdRequestMethod.Delete)
+            selector.BodyMode = NyxIdRequestBodyMode.None;
+        var parser = new StubParser(new ExternalToolInvocationSpec
+        {
+            CallSiteId = "wf-alpha/request-alpha",
+            ToolName = "nyxid_proxy",
+            Selector = new ExternalWorkflowCapabilitySelector { NyxIdRequest = selector },
+        });
+        var service = new WorkflowExplicitRequestPreviewService(
+            parser,
+            new RecordingReadinessPort(CanonicalReadiness(
+                selector,
+                "slug-preview-secret",
+                risk)));
+
+        var result = await service.PreviewAsync(new WorkflowExplicitRequestPreviewRequest(
+            new ExternalWorkflowCapabilityAccessContext(
+                "scope-alpha",
+                "authenticated-owner-alpha",
+                NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                    "bearer-preview-secret")),
+            "name: wf-alpha",
+            null,
+            ExternalCapabilityExecutionMode.Durable,
+            WorkflowId: "wf-alpha",
+            RevisionId: "rev-alpha"));
+
+        result.Items.Should().ContainSingle().Which.AllowedExecutionModes.Should().Equal(
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable);
+    }
+
     private static NyxIdRequestSelector RequestSelector(
         string pathTemplate,
         NyxIdRequestMethod method,
@@ -157,14 +232,14 @@ public sealed class WorkflowExplicitRequestPreviewServiceTests
         };
     }
 
-    private sealed class StubParser(ExternalToolInvocationSpec invocation) : IWorkflowDefinitionParser
+    private sealed class StubParser(params ExternalToolInvocationSpec[] invocations) : IWorkflowDefinitionParser
     {
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
             string workflowYaml,
             CancellationToken ct = default)
         {
             var dependencies = new WorkflowAuthorizationDependencies();
-            dependencies.ExternalInvocations.Add(invocation);
+            dependencies.ExternalInvocations.Add(invocations.Select(static invocation => invocation.Clone()));
             return Task.FromResult(WorkflowYamlParseResult.Success("wf-alpha", dependencies));
         }
 

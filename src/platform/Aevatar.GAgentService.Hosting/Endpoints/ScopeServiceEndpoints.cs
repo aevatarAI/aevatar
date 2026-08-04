@@ -37,6 +37,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
+using WorkflowRunOrigins = Aevatar.Workflow.Abstractions.WorkflowRunOrigins;
 using WorkflowSagaStatus = Aevatar.Workflow.Abstractions.WorkflowSagaStatus;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
@@ -1913,6 +1914,10 @@ public static class ScopeServiceEndpoints
             {
                 case ServiceImplementationKind.Workflow:
                     EnsureWorkflowStreamTarget(target, invocationRequest);
+                    var resolvedDefinitionBinding = BuildWorkflowStreamDefinitionBinding(
+                        target,
+                        invocationRequest,
+                        scopeId);
                     var inputParts = MapInputParts(request.InputParts);
                     if (requestInput.MultipartForm is { HasFiles: true } multipartForm)
                     {
@@ -1959,7 +1964,8 @@ public static class ScopeServiceEndpoints
                             correlationId: receipt.CorrelationId,
                             targetActorId: receipt.ActorId,
                             token),
-                        allowEmptyInputForResolvedMemberWorkflow: allowEmptyInputForResolvedMemberWorkflow);
+                        allowEmptyInputForResolvedMemberWorkflow: allowEmptyInputForResolvedMemberWorkflow,
+                        resolvedDefinitionBinding: resolvedDefinitionBinding);
                     break;
 
                 case ServiceImplementationKind.Static:
@@ -3683,6 +3689,43 @@ const response = await fetch("{{invokePath}}", {
 
         if (string.IsNullOrWhiteSpace(target.Service.PrimaryActorId))
             throw new InvalidOperationException("Workflow service has no active definition actor.");
+    }
+
+    private static WorkflowDefinitionBinding BuildWorkflowStreamDefinitionBinding(
+        ServiceInvocationResolvedTarget target,
+        ServiceInvocationRequest request,
+        string scopeId)
+    {
+        var plan = target.Artifact.DeploymentPlan?.WorkflowPlan
+            ?? throw new InvalidOperationException("Workflow service deployment plan is required.");
+        var bindingIdentity = WorkflowServiceDeploymentPlanIntegrity.ResolveBindingIdentity(
+            target.Artifact,
+            target.Service.RevisionId);
+        return new WorkflowDefinitionBinding(
+            ResolveWorkflowServiceDefinitionActorId(target, plan),
+            plan.WorkflowName,
+            plan.WorkflowYaml,
+            plan.InlineWorkflowYamls,
+            scopeId.Trim(),
+            string.IsNullOrWhiteSpace(request.RunOrigin)
+                ? WorkflowRunOrigins.ServiceInvoke
+                : request.RunOrigin.Trim(),
+            request.ScheduleId?.Trim() ?? string.Empty,
+            SourceKind: "service_revision",
+            CapabilityAdmissionPlan: plan.CapabilityAdmissionPlan?.Clone(),
+            WorkflowId: bindingIdentity.WorkflowId,
+            RevisionId: bindingIdentity.RevisionId);
+    }
+
+    private static string ResolveWorkflowServiceDefinitionActorId(
+        ServiceInvocationResolvedTarget target,
+        WorkflowServiceDeploymentPlan plan)
+    {
+        var serviceDefinitionActorId = target.Service.PrimaryActorId?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(serviceDefinitionActorId))
+            return serviceDefinitionActorId;
+
+        return plan.DefinitionActorId?.Trim() ?? string.Empty;
     }
 
     private static Dictionary<string, string> BuildScopedHeaders(

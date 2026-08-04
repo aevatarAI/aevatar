@@ -52,7 +52,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
             ExternalCapabilityExecutionMode.Durable);
         result.Sources.Should().ContainSingle().Which.SourceKind.Should()
             .Be(ExternalCapabilitySourceKind.NyxIdUserServices);
-        handler.Requests.Should().Equal(new RequestRecord("/api/v1/keys", "caller-credential"));
+        handler.Requests.Should().Equal(new RequestRecord("/api/v1/user-services", "caller-credential"));
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
         result.Sources.Single(static source =>
                 source.SourceKind == ExternalCapabilitySourceKind.DurableAuthorizationCatalog)
             .SourceId.Should().Be(NyxIdAuthorizationCatalogActorIds.Build(expectedOwner));
-        handler.Requests.Should().Equal(new RequestRecord("/api/v1/keys", "caller-credential"));
+        handler.Requests.Should().Equal(new RequestRecord("/api/v1/user-services", "caller-credential"));
     }
 
     [Theory]
@@ -202,7 +202,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
     [InlineData(NyxIdRequestMethod.Put, NyxIdOperationRisk.Write)]
     [InlineData(NyxIdRequestMethod.Patch, NyxIdOperationRisk.Write)]
     [InlineData(NyxIdRequestMethod.Delete, NyxIdOperationRisk.Destructive)]
-    public async Task InspectAsync_ShouldKeepMutatingDurableRequestsInteractiveOnly(
+    public async Task InspectAsync_ShouldAdmitMutatingDurableRequestsFromExactCatalogGrant(
         NyxIdRequestMethod method,
         NyxIdOperationRisk expectedRisk)
     {
@@ -212,15 +212,21 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
         var result = await source.InspectAsync(
             Access(), Selector(method), ExternalCapabilityExecutionMode.Durable, CancellationToken.None);
 
-        result.Status.Should().Be(ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable);
-        result.Blockers.Should().ContainSingle().Which.Code.Should()
-            .Be("NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED");
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
+        result.Blockers.Should().BeEmpty();
         result.SelectedCapability.NyxIdUserRequest.ExecutionPolicy.Risk.Should().Be(expectedRisk);
         result.SelectedCapability.NyxIdUserRequest.ExecutionPolicy.Approval.Should()
             .Be(NyxIdOperationApproval.Required);
         result.SelectedCapability.NyxIdUserRequest.ExecutionPolicy.AllowedExecutionModes.Should()
-            .Equal(ExternalCapabilityExecutionMode.Interactive);
-        catalog.ReadCount.Should().Be(0);
+            .Equal(
+                ExternalCapabilityExecutionMode.Interactive,
+                ExternalCapabilityExecutionMode.Durable);
+        result.Sources.Select(static source => source.SourceKind).Should().BeEquivalentTo(new[]
+        {
+            ExternalCapabilitySourceKind.NyxIdUserServices,
+            ExternalCapabilitySourceKind.DurableAuthorizationCatalog,
+        });
+        catalog.ReadCount.Should().Be(1);
     }
 
     [Theory]
@@ -361,7 +367,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
                 request.RequestUri?.AbsolutePath ?? string.Empty,
                 request.Headers.Authorization?.Parameter ?? string.Empty);
             Requests.Add(record);
-            if (record.Path != "/api/v1/keys")
+            if (record.Path != "/api/v1/user-services")
                 throw new InvalidOperationException($"Unexpected explicit admission request: {record.Path}");
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {

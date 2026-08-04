@@ -2,6 +2,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
@@ -95,6 +96,57 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         contract.StreamFrameFormat.Should().Be("workflow-run-event");
         contract.InvocationReadiness.CanInvoke.Should().BeTrue();
         contract.InvocationReadiness.Status.Should().Be(StudioMemberInvocationReadinessStatusNames.Ready);
+    }
+
+    [Fact]
+    public async Task InvocationReadinessQueryPort_ShouldReturnBackendResolvedServiceAndRevision()
+    {
+        var detail = NewDetail();
+        var lifecycle = new InMemoryServiceLifecycleQueryPort
+        {
+            Service = NewService(
+                endpoints:
+                [
+                    new ServiceEndpointSnapshot(
+                        EndpointId: "chat",
+                        DisplayName: "Chat",
+                        Kind: "chat",
+                        RequestTypeUrl: "type.googleapis.com/x.Request",
+                        ResponseTypeUrl: "type.googleapis.com/x.Response",
+                        Description: string.Empty),
+                ]),
+            Revisions = NewRevisions(
+                ServiceImplementationKind.Workflow,
+                [
+                    new ServiceEndpointSnapshot(
+                        EndpointId: "chat",
+                        DisplayName: "Chat",
+                        Kind: "chat",
+                        RequestTypeUrl: "type.googleapis.com/x.Request",
+                        ResponseTypeUrl: "type.googleapis.com/x.Response",
+                        Description: string.Empty),
+                ]),
+        };
+        var memberService = new StudioMemberService(
+            new InertMemberCommandPort(),
+            new InMemoryMemberQueryPort(detail),
+            new InertBindingRunQueryPort(),
+            new InertTeamQueryPort(),
+            lifecycle,
+            new ReadyScopeBindingReadinessQueryPort(),
+            new RecordingServiceCommandPort(),
+            new StudioWorkflowCapabilityAdmissionTestService());
+        var port = new StudioMemberInvocationReadinessQueryPort(memberService);
+
+        var result = await port.GetAsync(ScopeId, MemberId, "chat", CancellationToken.None);
+
+        result.Should().NotBeNull();
+        result!.ScopeId.Should().Be(ScopeId);
+        result.MemberId.Should().Be(MemberId);
+        result.PublishedServiceId.Should().Be(PublishedServiceId);
+        result.RevisionId.Should().Be("rev-1");
+        result.CanInvoke.Should().BeTrue();
+        lifecycle.LastIdentity!.ServiceId.Should().Be(PublishedServiceId);
     }
 
     [Fact]

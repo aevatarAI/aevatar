@@ -27,6 +27,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
     private const string CreateMemberWorkflowDraftToolName = "aevatar_create_member_workflow_draft";
     private const string ListMembersToolName = "aevatar_list_members";
     private const string GetMemberToolName = "aevatar_get_member";
+    private const string GetMemberInvocationReadinessToolName = "aevatar_get_member_invocation_readiness";
     private const string ListWorkflowsToolName = "aevatar_list_workflows";
     private const string ListSchedulesToolName = "aevatar_list_schedules";
     private const string GetScheduleToolName = "aevatar_get_schedule";
@@ -77,6 +78,8 @@ public sealed class ProvisionWorkflowScheduleToolTests
         services.AddSingleton<IStudioMemberProvisioningPort, RecordingMemberProvisioningPort>();
         services.AddSingleton<IStudioMemberWorkflowDraftProvisioningPort, RecordingMemberWorkflowDraftProvisioningPort>();
         services.AddSingleton<IStudioMemberQueryPort, RecordingMemberQueryPort>();
+        services.AddSingleton<IStudioMemberInvocationReadinessQueryPort,
+            RecordingMemberInvocationReadinessQueryPort>();
         services.AddSingleton<IStudioMemberAutomationQueryPort, RecordingMemberAutomationQueryPort>();
         services.AddSingleton<IStudioMemberWorkflowBindingPort, RecordingMemberWorkflowBindingPort>();
         services.AddSingleton<IStudioMemberWorkflowSchedulePort, RecordingMemberWorkflowSchedulePort>();
@@ -99,6 +102,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         toolNames.Should().Contain(CreateMemberWorkflowDraftToolName);
         toolNames.Should().Contain(ListMembersToolName);
         toolNames.Should().Contain(GetMemberToolName);
+        toolNames.Should().Contain(GetMemberInvocationReadinessToolName);
         toolNames.Should().Contain(ListWorkflowsToolName);
         toolNames.Should().Contain(ListSchedulesToolName);
         toolNames.Should().Contain(GetScheduleToolName);
@@ -164,6 +168,28 @@ public sealed class ProvisionWorkflowScheduleToolTests
     public async Task ToolSource_WhenMemberQueryPortMissing_ShouldNotDiscoverMemberQueryTools()
     {
         var source = new StudioMemberQueryToolSource();
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ToolSource_WhenMemberInvocationReadinessPortRegistered_ShouldDiscoverReadOnlyTool()
+    {
+        var source = new StudioMemberInvocationReadinessToolSource(
+            new RecordingMemberInvocationReadinessQueryPort());
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().ContainSingle().Which.Name.Should().Be(GetMemberInvocationReadinessToolName);
+        tools.Should().OnlyContain(static tool => tool.IsReadOnly && !tool.IsDestructive);
+    }
+
+    [Fact]
+    public async Task ToolSource_WhenMemberInvocationReadinessPortMissing_ShouldNotDiscoverTool()
+    {
+        var source = new StudioMemberInvocationReadinessToolSource();
 
         var tools = await source.DiscoverToolsAsync();
 
@@ -567,7 +593,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
-    public async Task CreateMemberWorkflowDraft_CreateResultReceipt_WithAcceptedDraftAck_ShouldReturnNull()
+    public async Task CreateMemberWorkflowDraft_CreateResultReceipt_WithAcceptedDraftAck_ShouldReturnSuccessReceipt()
     {
         var tool = await DiscoverCreateMemberWorkflowDraftToolAsync(new RecordingMemberWorkflowDraftProvisioningPort());
 
@@ -577,7 +603,12 @@ public sealed class ProvisionWorkflowScheduleToolTests
             "{}",
             """{"status":"draft_save_accepted","runnable":false,"binding_status":"not_bound","scope_id":"scope-current","team_id":"team-alpha","member_id":"member-alpha","workflow_id":"workflow-alpha","studio_url":"/studio/workflows/workflow-alpha","command_id":"command-alpha","ack_stage":"dispatch_accepted","actor_id":"actor-alpha","workspace_id":"workspace-alpha","acked_at_utc":"2026-07-01T00:00:00Z","readiness":{"readable":true,"stage":"draft_saved","message":"Draft saved."},"blockers":[]}""");
 
-        receipt.Should().BeNull();
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.SideEffectKind.Should().Be("studio.workflow_draft.create");
+        receipt.SubjectKind.Should().Be("studio_workflow_draft");
+        receipt.SubjectId.Should().Be("workflow-alpha");
+        receipt.ResultJson.Should().Contain("\"member_id\":\"member-alpha\"");
     }
 
     [Fact]
@@ -1010,6 +1041,44 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task GetMemberInvocationReadiness_ShouldUseMemberIdentityAndReturnReadModelFacts()
+    {
+        var port = new RecordingMemberInvocationReadinessQueryPort();
+        var tool = await DiscoverGetMemberInvocationReadinessToolAsync(port);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""{"member_id":"m-alpha"}""");
+
+        port.LastScopeId.Should().Be("scope-current");
+        port.LastMemberId.Should().Be("m-alpha");
+        port.LastEndpointId.Should().Be("chat");
+
+        using var document = JsonDocument.Parse(output);
+        var root = document.RootElement;
+        root.GetProperty("scope_id").GetString().Should().Be("scope-current");
+        root.GetProperty("member_id").GetString().Should().Be("m-alpha");
+        root.GetProperty("published_service_id").GetString().Should().Be("svc-alpha");
+        root.GetProperty("endpoint_id").GetString().Should().Be("chat");
+        root.GetProperty("revision_id").GetString().Should().Be("rev-alpha");
+        root.GetProperty("can_invoke").GetBoolean().Should().BeTrue();
+        root.GetProperty("status").GetString().Should().Be(StudioMemberInvocationReadinessStatusNames.Ready);
+        root.GetProperty("reason_code").GetString().Should().Be(StudioMemberInvocationReadinessStatusNames.Ready);
+    }
+
+    [Fact]
+    public async Task GetMemberInvocationReadiness_WhenReadModelHasNoEndpoint_ShouldFailClosed()
+    {
+        var port = new RecordingMemberInvocationReadinessQueryPort { Result = null };
+        var tool = await DiscoverGetMemberInvocationReadinessToolAsync(port);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""{"member_id":"m-alpha","endpoint_id":"diagnose"}""");
+
+        ErrorCode(output).Should().Be("member_invocation_readiness_unavailable");
+        port.LastEndpointId.Should().Be("diagnose");
+    }
+
+    [Fact]
     public async Task ListSchedules_ShouldCallReadPortWithCallerScopeTeamMemberAndPage()
     {
         var port = new RecordingMemberAutomationQueryPort();
@@ -1268,6 +1337,56 @@ public sealed class ProvisionWorkflowScheduleToolTests
         root.GetProperty("workflow_id").GetString().Should().Be("workflow-alpha");
         root.TryGetProperty("revision_id", out _).Should().BeFalse();
         root.TryGetProperty("service_id", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task BindMemberWorkflow_ShouldCarryPreviewConfirmationAndDurableRevision()
+    {
+        var bindingPort = new RecordingMemberWorkflowBindingPort();
+        var tool = await DiscoverBindMemberWorkflowToolAsync(bindingPort);
+
+        using var context = PushContext(
+            scopeId: "scope-alpha",
+            ownerSubject: "owner-alpha",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "m-alpha",
+              "workflow_yaml": "name: wf-alpha\nsteps: []\n",
+              "workflow_id": "wf-alpha",
+              "revision_id": "rev-alpha",
+              "execution_mode": "durable",
+              "explicit_request_confirmations": [
+                {
+                  "call_site_id": "wf-alpha/create-item",
+                  "request_contract_digest": "request-digest-alpha",
+                  "attested_risk": "write",
+                  "workflow_id": "wf-alpha",
+                  "revision_id": "rev-alpha"
+                }
+              ]
+            }
+            """);
+
+        using var document = JsonDocument.Parse(output);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+        bindingPort.LastRequest.Should().NotBeNull();
+        bindingPort.LastRequest!.WorkflowId.Should().Be("wf-alpha");
+        bindingPort.LastRequest.RevisionId.Should().Be("rev-alpha");
+        bindingPort.LastRequest.CapabilityAdmission.Should().NotBeNull();
+        bindingPort.LastRequest.CapabilityAdmission!.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Durable);
+        var confirmation = bindingPort.LastRequest.CapabilityAdmission
+            .ExplicitRequestConfirmations.Should().ContainSingle().Subject;
+        confirmation.CallSiteId.Should().Be("wf-alpha/create-item");
+        confirmation.RequestContractDigest.Should().Be("request-digest-alpha");
+        confirmation.AttestedRisk.Should().Be(NyxIdOperationRisk.Write);
+        confirmation.WorkflowId.Should().Be("wf-alpha");
+        confirmation.RevisionId.Should().Be("rev-alpha");
+        tool.ParametersSchema.Should().Contain("revision_id");
+        tool.ParametersSchema.Should().Contain("execution_mode");
+        tool.ParametersSchema.Should().Contain("explicit_request_confirmations");
     }
 
     [Fact]
@@ -1776,6 +1895,244 @@ public sealed class ProvisionWorkflowScheduleToolTests
         ErrorCode(output).Should().Be(nameof(ScheduledInvocationAuthorizationFailureCode.SnapshotStale));
         ErrorMessage(output).Should().Be("nyxid_catalog_snapshot_stale");
         schedulePort.CreateCallCount.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(ScheduledInvocationAuthorizationFailureCode.DurableAdmissionRequired)]
+    [InlineData(ScheduledInvocationAuthorizationFailureCode.DurableRequestGrantMismatch)]
+    public async Task ScheduleMemberWorkflow_WhenDurableRevisionIsAccepted_ShouldReturnPropagatingWithoutCreatingSchedule(
+        ScheduledInvocationAuthorizationFailureCode failureCode)
+    {
+        var calls = new List<string>();
+        var schedulePort = new RecordingMemberWorkflowSchedulePort { CallLog = calls };
+        schedulePort.WritePreflightResults.Enqueue(new StudioMemberWorkflowAuthorizationResult(
+            false,
+            null,
+            failureCode,
+            failureCode == ScheduledInvocationAuthorizationFailureCode.DurableAdmissionRequired
+                ? "durable_admission_required"
+                : "durable_request_grant_mismatch"));
+        var durableAdmissionPort = new RecordingMemberWorkflowDurableAdmissionPort
+        {
+            CallLog = calls,
+            Result = DurableAdmissionResult(StudioMemberWorkflowDurableAdmissionStatus.RevisionAccepted),
+        };
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort, durableAdmissionPort: durableAdmissionPort);
+        tool.Description.Should().Contain("durable_revision_propagating");
+        tool.Description.Should().Contain("not invoke-ready evidence");
+
+        using var _ = PushContext(
+            scopeId: "scope-alpha",
+            ownerSubject: "owner-alpha",
+            accessToken: "access-token-alpha",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
+        var output = await tool.ExecuteAsync(
+            """{"member_id":"m-alpha","schedule_cron":"0 9 * * *","schedule_timezone":"Asia/Shanghai"}""");
+
+        calls.Should().Equal("preflight", "durable_admission");
+        schedulePort.WritePreflightRequests.Should().ContainSingle();
+        schedulePort.CreateRequests.Should().BeEmpty();
+        var admissionRequest = durableAdmissionPort.Requests.Should().ContainSingle().Subject;
+        admissionRequest.ScopeId.Should().Be("scope-alpha");
+        admissionRequest.MemberId.Should().Be("m-alpha");
+        admissionRequest.CapabilityAdmission.CallerId.Should().Be("nyx-user-alpha");
+        admissionRequest.CapabilityAdmission.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Durable);
+        admissionRequest.CapabilityAdmission.NyxIdCallerCredential?.SourceReadableUserBearerToken
+            .Should().Be("access-token-alpha");
+        admissionRequest.CapabilityAdmission.NyxIdOrganizationBearerToken.Should().Be("org-token");
+
+        using var document = JsonDocument.Parse(output);
+        var error = document.RootElement.GetProperty("error");
+        error.GetProperty("code").GetString().Should().Be("durable_revision_propagating");
+        error.GetProperty("scope_id").GetString().Should().Be("scope-alpha");
+        error.GetProperty("team_id").GetString().Should().Be("team-alpha");
+        error.GetProperty("member_id").GetString().Should().Be("m-alpha");
+        error.GetProperty("workflow_id").GetString().Should().Be("wf-alpha");
+        error.GetProperty("published_service_id").GetString().Should().Be("svc-alpha");
+        error.GetProperty("serving_revision_id").GetString().Should().Be("rev-interactive-alpha");
+        error.GetProperty("target_revision_id").GetString().Should().Be("rev-durable-alpha");
+        error.GetProperty("binding_operation").GetString().Should().Be("save_and_bind");
+        error.GetProperty("binding_status").GetString().Should().Be("accepted");
+        error.GetProperty("message").GetString().Should().Contain("not yet visible");
+    }
+
+    [Theory]
+    [InlineData(StudioMemberWorkflowDurableAdmissionStatus.RevisionReady)]
+    [InlineData(StudioMemberWorkflowDurableAdmissionStatus.AlreadyDurable)]
+    public async Task ScheduleMemberWorkflow_WhenDurableRevisionIsReady_ShouldRepreflightExactTargetBeforeCreate(
+        StudioMemberWorkflowDurableAdmissionStatus status)
+    {
+        var targetRevisionId = status == StudioMemberWorkflowDurableAdmissionStatus.AlreadyDurable
+            ? "rev-interactive-alpha"
+            : "rev-durable-alpha";
+        var calls = new List<string>();
+        var schedulePort = new RecordingMemberWorkflowSchedulePort { CallLog = calls };
+        schedulePort.WritePreflightResults.Enqueue(new StudioMemberWorkflowAuthorizationResult(
+            false,
+            null,
+            ScheduledInvocationAuthorizationFailureCode.DurableAdmissionRequired,
+            "durable_admission_required"));
+        schedulePort.WritePreflightResults.Enqueue(SuccessfulSchedulePreflight(
+            "scope-alpha",
+            "team-alpha",
+            "m-alpha",
+            "wf-alpha",
+            "svc-alpha",
+            targetRevisionId));
+        var durableAdmissionPort = new RecordingMemberWorkflowDurableAdmissionPort
+        {
+            CallLog = calls,
+            Result = DurableAdmissionResult(status) with { TargetRevisionId = targetRevisionId },
+        };
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort, durableAdmissionPort: durableAdmissionPort);
+
+        using var _ = PushContext(
+            scopeId: "scope-alpha",
+            ownerSubject: "owner-alpha",
+            accessToken: "access-token-alpha",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
+        var output = await tool.ExecuteAsync(
+            """{"member_id":"m-alpha","schedule_cron":"0 9 * * *","schedule_timezone":"Asia/Shanghai","prompt":"run durable digest","display_name":"Durable digest"}""");
+
+        ErrorCode(output).Should().BeNull();
+        calls.Should().Equal("preflight", "durable_admission", "preflight", "create");
+        schedulePort.WritePreflightRequests.Should().HaveCount(2);
+        durableAdmissionPort.Requests.Should().ContainSingle();
+        var originalRequest = schedulePort.WritePreflightRequests[0];
+        var pinnedRequest = schedulePort.WritePreflightRequests[1];
+        pinnedRequest.AcceptedBinding.Should().NotBeNull();
+        var acceptedBinding = pinnedRequest.AcceptedBinding!;
+        acceptedBinding.TeamId.Should().Be("team-alpha");
+        acceptedBinding.WorkflowId.Should().Be("wf-alpha");
+        acceptedBinding.PublishedServiceId.Should().Be("svc-alpha");
+        acceptedBinding.WorkflowRevisionId.Should().Be(targetRevisionId);
+        pinnedRequest.TeamId.Should().Be("team-alpha");
+        pinnedRequest.ScheduleCron.Should().Be(originalRequest.ScheduleCron);
+        pinnedRequest.ScheduleTimezone.Should().Be(originalRequest.ScheduleTimezone);
+        pinnedRequest.Prompt.Should().Be(originalRequest.Prompt);
+        pinnedRequest.DisplayName.Should().Be(originalRequest.DisplayName);
+        pinnedRequest.Enabled.Should().Be(originalRequest.Enabled);
+        pinnedRequest.ScheduleMode.Should().Be(originalRequest.ScheduleMode);
+        pinnedRequest.OneShotFireAt.Should().Be(originalRequest.OneShotFireAt);
+        pinnedRequest.OperationId.Should().Be(originalRequest.OperationId);
+        pinnedRequest.IdempotencyKey.Should().Be(originalRequest.IdempotencyKey);
+        pinnedRequest.CredentialProvisioningKind.Should().Be(originalRequest.CredentialProvisioningKind);
+        pinnedRequest.ProvisioningBearerToken.Should().Be(originalRequest.ProvisioningBearerToken);
+        pinnedRequest.AuthenticatedOwner.Should().BeSameAs(originalRequest.AuthenticatedOwner);
+
+        var createRequest = schedulePort.CreateRequests.Should().ContainSingle().Subject;
+        createRequest.AcceptedBinding.Should().BeSameAs(acceptedBinding);
+        createRequest.TeamId.Should().Be(pinnedRequest.TeamId);
+        createRequest.ScheduleCron.Should().Be(pinnedRequest.ScheduleCron);
+        createRequest.ScheduleTimezone.Should().Be(pinnedRequest.ScheduleTimezone);
+        createRequest.Prompt.Should().Be(pinnedRequest.Prompt);
+        createRequest.DisplayName.Should().Be(pinnedRequest.DisplayName);
+        createRequest.Enabled.Should().Be(pinnedRequest.Enabled);
+        createRequest.ScheduleMode.Should().Be(pinnedRequest.ScheduleMode);
+        createRequest.OneShotFireAt.Should().Be(pinnedRequest.OneShotFireAt);
+        createRequest.OperationId.Should().Be(pinnedRequest.OperationId);
+        createRequest.IdempotencyKey.Should().Be(pinnedRequest.IdempotencyKey);
+        createRequest.CredentialProvisioningKind.Should().Be(pinnedRequest.CredentialProvisioningKind);
+        createRequest.ProvisioningBearerToken.Should().Be(pinnedRequest.ProvisioningBearerToken);
+        createRequest.AuthenticatedOwner.Should().BeSameAs(pinnedRequest.AuthenticatedOwner);
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_WhenReadyRepreflightTargetsDifferentRevision_ShouldFailBeforeCreate()
+    {
+        var calls = new List<string>();
+        var schedulePort = new RecordingMemberWorkflowSchedulePort { CallLog = calls };
+        schedulePort.WritePreflightResults.Enqueue(new StudioMemberWorkflowAuthorizationResult(
+            false,
+            null,
+            ScheduledInvocationAuthorizationFailureCode.DurableRequestGrantMismatch,
+            "durable_request_grant_mismatch"));
+        schedulePort.WritePreflightResults.Enqueue(SuccessfulSchedulePreflight(
+            "scope-alpha",
+            "team-other",
+            "m-alpha",
+            "wf-other",
+            "svc-other",
+            "rev-other"));
+        var durableAdmissionPort = new RecordingMemberWorkflowDurableAdmissionPort
+        {
+            CallLog = calls,
+            Result = DurableAdmissionResult(StudioMemberWorkflowDurableAdmissionStatus.RevisionReady),
+        };
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort, durableAdmissionPort: durableAdmissionPort);
+
+        using var _ = PushContext(
+            scopeId: "scope-alpha",
+            ownerSubject: "owner-alpha",
+            accessToken: "access-token-alpha",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
+        var output = await tool.ExecuteAsync(
+            """{"member_id":"m-alpha","schedule_cron":"0 9 * * *","schedule_timezone":"Asia/Shanghai"}""");
+
+        ErrorCode(output).Should().Be("durable_revision_target_mismatch");
+        calls.Should().Equal("preflight", "durable_admission", "preflight");
+        schedulePort.CreateRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_WhenDurableAdmissionReturnsDifferentMember_ShouldFailBeforeRepreflight()
+    {
+        var calls = new List<string>();
+        var schedulePort = new RecordingMemberWorkflowSchedulePort { CallLog = calls };
+        schedulePort.WritePreflightResults.Enqueue(new StudioMemberWorkflowAuthorizationResult(
+            false,
+            null,
+            ScheduledInvocationAuthorizationFailureCode.DurableAdmissionRequired,
+            "durable_admission_required"));
+        var durableAdmissionPort = new RecordingMemberWorkflowDurableAdmissionPort
+        {
+            CallLog = calls,
+            Result = DurableAdmissionResult(StudioMemberWorkflowDurableAdmissionStatus.RevisionReady) with
+            {
+                MemberId = "m-other",
+            },
+        };
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort, durableAdmissionPort: durableAdmissionPort);
+
+        using var _ = PushContext(
+            scopeId: "scope-alpha",
+            ownerSubject: "owner-alpha",
+            accessToken: "access-token-alpha",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
+        var output = await tool.ExecuteAsync(
+            """{"member_id":"m-alpha","schedule_cron":"0 9 * * *","schedule_timezone":"Asia/Shanghai"}""");
+
+        ErrorCode(output).Should().Be("durable_admission_identity_mismatch");
+        calls.Should().Equal("preflight", "durable_admission");
+        schedulePort.WritePreflightRequests.Should().ContainSingle();
+        schedulePort.CreateRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_WhenDurableAdmissionPortMissing_ShouldKeepOriginalPreflightFailure()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort
+        {
+            PreflightResult = new StudioMemberWorkflowAuthorizationResult(
+                false,
+                null,
+                ScheduledInvocationAuthorizationFailureCode.DurableAdmissionRequired,
+                "durable_admission_required"),
+        };
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(
+            scopeId: "scope-alpha",
+            ownerSubject: "owner-alpha",
+            accessToken: "access-token-alpha",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
+        var output = await tool.ExecuteAsync(
+            """{"member_id":"m-alpha","schedule_cron":"0 9 * * *","schedule_timezone":"Asia/Shanghai"}""");
+
+        ErrorCode(output).Should().Be(nameof(ScheduledInvocationAuthorizationFailureCode.DurableAdmissionRequired));
+        schedulePort.WritePreflightRequests.Should().ContainSingle();
+        schedulePort.CreateRequests.Should().BeEmpty();
     }
 
     [Theory]
@@ -2482,6 +2839,14 @@ public sealed class ProvisionWorkflowScheduleToolTests
         return tools.Single(tool => tool.Name == GetMemberToolName);
     }
 
+    private static async Task<IAgentTool> DiscoverGetMemberInvocationReadinessToolAsync(
+        IStudioMemberInvocationReadinessQueryPort readinessQueryPort)
+    {
+        var source = new StudioMemberInvocationReadinessToolSource(readinessQueryPort);
+        var tools = await source.DiscoverToolsAsync();
+        return tools.Single(tool => tool.Name == GetMemberInvocationReadinessToolName);
+    }
+
     private static async Task<IAgentTool> DiscoverListWorkflowsToolAsync(IStudioMemberQueryPort memberQueryPort)
     {
         var source = new StudioWorkflowQueryToolSource(memberQueryPort);
@@ -2514,12 +2879,15 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
     private static async Task<IAgentTool> DiscoverScheduleMemberWorkflowToolAsync(
         IStudioMemberWorkflowSchedulePort schedulePort,
-        ILogger<ScheduleStudioMemberWorkflowTool>? logger = null)
+        ILogger<ScheduleStudioMemberWorkflowTool>? logger = null,
+        IStudioMemberWorkflowDurableAdmissionPort? durableAdmissionPort = null)
     {
         if (logger is not null)
             return new ScheduleStudioMemberWorkflowTool(schedulePort, logger);
 
-        var source = new ScheduleStudioMemberWorkflowToolSource(schedulePort);
+        var source = new ScheduleStudioMemberWorkflowToolSource(
+            schedulePort,
+            durableAdmissionPort);
         var tools = await source.DiscoverToolsAsync();
         return tools.Single(tool => tool.Name == ScheduleMemberWorkflowToolName);
     }
@@ -2575,6 +2943,52 @@ public sealed class ProvisionWorkflowScheduleToolTests
         }));
         ErrorCode(output).Should().BeNull();
     }
+
+    private static StudioMemberWorkflowAuthorizationResult SuccessfulSchedulePreflight(
+        string scopeId,
+        string teamId,
+        string memberId,
+        string workflowId,
+        string publishedServiceId,
+        string revisionId) =>
+        new(
+            true,
+            new ScheduledInvocationAuthorizationPlan
+            {
+                InvocationTarget = new ScheduledInvocationTarget
+                {
+                    StudioMember = new StudioMemberInvocationTarget
+                    {
+                        ScopeId = scopeId,
+                        TeamId = teamId,
+                        MemberId = memberId,
+                        DraftWorkflowId = workflowId,
+                        PublishedServiceId = publishedServiceId,
+                        WorkflowRevisionId = revisionId,
+                    },
+                },
+                PermissionDigest = "permission-digest-alpha",
+                CredentialPolicy = new ScheduledInvocationCredentialPolicy
+                {
+                    PolicyVersion = RecordingMemberWorkflowSchedulePort.PolicyVersion,
+                },
+            },
+            ScheduledInvocationAuthorizationFailureCode.Unspecified,
+            string.Empty);
+
+    private static StudioMemberWorkflowDurableAdmissionResult DurableAdmissionResult(
+        StudioMemberWorkflowDurableAdmissionStatus status) =>
+        new(
+            status,
+            ScopeId: "scope-alpha",
+            TeamId: "team-alpha",
+            MemberId: "m-alpha",
+            WorkflowId: "wf-alpha",
+            PublishedServiceId: "svc-alpha",
+            ServingRevisionId: "rev-interactive-alpha",
+            TargetRevisionId: "rev-durable-alpha",
+            BindingOperation: "save_and_bind",
+            BindingStatus: "accepted");
 
     private static AgentToolContextScope PushContext(
         string? scopeId,
@@ -3054,6 +3468,56 @@ public sealed class ProvisionWorkflowScheduleToolTests
         }
     }
 
+    private sealed class RecordingMemberInvocationReadinessQueryPort :
+        IStudioMemberInvocationReadinessQueryPort
+    {
+        public string? LastScopeId { get; private set; }
+        public string? LastMemberId { get; private set; }
+        public string? LastEndpointId { get; private set; }
+        public StudioMemberInvocationReadinessQueryResult? Result { get; init; } = new(
+            ScopeId: "scope-current",
+            MemberId: "m-alpha",
+            PublishedServiceId: "svc-alpha",
+            EndpointId: "chat",
+            RevisionId: "rev-alpha",
+            CanInvoke: true,
+            Status: StudioMemberInvocationReadinessStatusNames.Ready,
+            ReasonCode: StudioMemberInvocationReadinessStatusNames.Ready,
+            Message: "Member endpoint is ready for invocation.",
+            DeploymentId: "dep-alpha",
+            ObservedAtUtc: DateTimeOffset.Parse("2026-08-02T00:00:00Z"));
+
+        public Task<StudioMemberInvocationReadinessQueryResult?> GetAsync(
+            string scopeId,
+            string memberId,
+            string endpointId,
+            CancellationToken ct = default)
+        {
+            LastScopeId = scopeId;
+            LastMemberId = memberId;
+            LastEndpointId = endpointId;
+            return Task.FromResult(Result);
+        }
+    }
+
+    private sealed class RecordingMemberWorkflowDurableAdmissionPort :
+        IStudioMemberWorkflowDurableAdmissionPort
+    {
+        public List<StudioMemberWorkflowDurableAdmissionRequest> Requests { get; } = [];
+        public List<string>? CallLog { get; init; }
+        public StudioMemberWorkflowDurableAdmissionResult Result { get; init; } =
+            DurableAdmissionResult(StudioMemberWorkflowDurableAdmissionStatus.RevisionReady);
+
+        public Task<StudioMemberWorkflowDurableAdmissionResult> AdmitAsync(
+            StudioMemberWorkflowDurableAdmissionRequest request,
+            CancellationToken ct = default)
+        {
+            CallLog?.Add("durable_admission");
+            Requests.Add(request);
+            return Task.FromResult(Result);
+        }
+    }
+
     private sealed class RecordingMemberWorkflowSchedulePort : IStudioMemberWorkflowSchedulePort
     {
         private const string PermissionDigest = "permission-digest-alpha";
@@ -3065,8 +3529,10 @@ public sealed class ProvisionWorkflowScheduleToolTests
         public StudioMemberWorkflowScheduleRequest? LastRequest =>
             CreateRequests.LastOrDefault() ?? WritePreflightRequests.LastOrDefault() ?? PreflightRequests.LastOrDefault();
         public int CreateCallCount { get; private set; }
+        public List<string>? CallLog { get; init; }
         public Exception? WritePreflightException { get; init; }
         public Exception? CreateException { get; init; }
+        public Queue<StudioMemberWorkflowAuthorizationResult> WritePreflightResults { get; } = new();
         public StudioMemberWorkflowAuthorizationResult PreflightResult { get; init; } =
             new(
                 true,
@@ -3093,12 +3559,16 @@ public sealed class ProvisionWorkflowScheduleToolTests
             StudioMemberWorkflowScheduleRequest request,
             CancellationToken ct = default)
         {
+            CallLog?.Add("preflight");
             WritePreflightRequests.Add(request);
             PreflightRequests.Add(request);
             if (WritePreflightException is not null)
                 return Task.FromException<StudioMemberWorkflowAuthorizationResult>(WritePreflightException);
 
-            return Task.FromResult(PreflightResult);
+            return Task.FromResult(
+                WritePreflightResults.Count > 0
+                    ? WritePreflightResults.Dequeue()
+                    : PreflightResult);
         }
 
         public Task<StudioMemberWorkflowScheduleResult> CreateAsync(
@@ -3161,6 +3631,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
             string confirmedPermissionDigest)
         {
             CreateCallCount++;
+            CallLog?.Add("create");
             if (CreateException is not null)
                 return Task.FromException<StudioMemberWorkflowScheduleResult>(CreateException);
 

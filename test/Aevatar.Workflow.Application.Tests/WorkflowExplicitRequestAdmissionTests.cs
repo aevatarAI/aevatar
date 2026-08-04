@@ -243,11 +243,12 @@ public sealed class WorkflowExplicitRequestAdmissionTests
     [InlineData("PUT", NyxIdOperationRisk.Write)]
     [InlineData("PATCH", NyxIdOperationRisk.Write)]
     [InlineData("DELETE", NyxIdOperationRisk.Destructive)]
-    public async Task AdmitAsync_WithDurableApprovalRequiredExplicitRequest_ShouldRequireInteractive(
+    public async Task AdmitAsync_WithExactCatalogAndConfirmation_ShouldAdmitDurableMutatingRequest(
         string method,
         NyxIdOperationRisk risk)
     {
-        var service = CreateService();
+        var handler = new UserServicesHandler();
+        var service = CreateService(CreateRealSource(handler, ReadyCatalogSnapshot()));
         var workflowYaml = MutatingWorkflowYaml(method);
         var confirmation = new NyxIdExplicitRequestConfirmation
         {
@@ -259,15 +260,21 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             RevisionId = "rev-alpha",
         };
 
-        Func<Task> act = async () => await service.AdmitAsync(Request(
+        var plan = await service.AdmitAsync(Request(
             workflowYaml,
             ExternalCapabilityExecutionMode.Durable,
             [confirmation]));
 
-        var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
-        exception.Which.Readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.ContractDrift);
-        exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
-            .Be("NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED");
+        var admission = plan.InvocationAdmissions.Should().ContainSingle().Subject;
+        admission.NyxIdExplicitRequestGrant.Risk.Should().Be(risk);
+        admission.NyxIdExplicitRequestGrant.AllowedExecutionModes.Should().Equal(
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable);
+        admission.Capability.NyxIdUserRequest.ExecutionPolicy.Risk.Should().Be(risk);
+        admission.Capability.NyxIdUserRequest.ExecutionPolicy.AllowedExecutionModes.Should().Equal(
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable);
+        handler.Paths.Should().Equal("/api/v1/user-services");
     }
 
     [Theory]
@@ -332,7 +339,7 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             .AllowedExecutionModes.Should().Equal(
                 ExternalCapabilityExecutionMode.Interactive,
                 ExternalCapabilityExecutionMode.Durable);
-        handler.Paths.Should().Equal("/api/v1/keys");
+        handler.Paths.Should().Equal("/api/v1/user-services");
     }
 
     [Theory]
@@ -370,7 +377,7 @@ public sealed class WorkflowExplicitRequestAdmissionTests
     [InlineData("HEAD", NyxIdOperationRisk.Destructive)]
     [InlineData("OPTIONS", NyxIdOperationRisk.Write)]
     [InlineData("OPTIONS", NyxIdOperationRisk.Destructive)]
-    public async Task AdmitAsync_WithDurableElevatedRiskSafeRequest_ShouldRequireInteractive(
+    public async Task AdmitAsync_WithDurableElevatedRiskSafeRequest_ShouldReturnRiskMismatch(
         string method,
         NyxIdOperationRisk currentRisk)
     {
@@ -385,7 +392,7 @@ public sealed class WorkflowExplicitRequestAdmissionTests
         var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
         exception.Which.Readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.ContractDrift);
         exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
-            .Be("NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED");
+            .Be("NYXID_EXPLICIT_REQUEST_CONFIRMATION_RISK_MISMATCH");
     }
 
     [Theory]
@@ -792,7 +799,7 @@ public sealed class WorkflowExplicitRequestAdmissionTests
         {
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;
             Paths.Add(path);
-            if (path != "/api/v1/keys")
+            if (path != "/api/v1/user-services")
                 throw new InvalidOperationException($"Unexpected explicit admission request: {path}");
             const string body = "{\"services\":[{\"id\":\"usvc-alpha\",\"slug\":\"shared-slug\",\"label\":\"Example service\",\"catalog_service_name\":null,\"is_active\":true,\"credential_source\":{\"type\":\"personal\"}}]}";
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)

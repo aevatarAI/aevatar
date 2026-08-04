@@ -46,14 +46,30 @@ public sealed class WorkflowChatRunRequestSeedTests
             CompletionNotificationTarget: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCompletionNotificationTarget(
                 ActorId: "delivery-actor-1",
                 DeliveryId: "delivery-1",
-                ExpiresAtUnixMs: 1710000000000));
+                ExpiresAtUnixMs: 1710000000000),
+            ResolvedDefinitionBinding: new WorkflowDefinitionBinding(
+                "definition-internal",
+                "direct",
+                "name: direct\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                SourceKind: "service_revision",
+                CapabilityAdmissionPlan: new WorkflowCapabilityAdmissionPlan
+                {
+                    AdmissionDigest = "internal-digest",
+                },
+                WorkflowId: "workflow-internal",
+                RevisionId: "revision-internal"));
 
         var json = JsonSerializer.Serialize(request);
 
         json.Should().NotContain("TargetSeed");
         json.Should().NotContain("CompletionNotificationTarget");
+        json.Should().NotContain("ResolvedDefinitionBinding");
         json.Should().NotContain("run-1");
         json.Should().NotContain("delivery-actor-1");
+        json.Should().NotContain("definition-internal");
+        json.Should().NotContain("internal-digest");
+        json.Should().NotContain("workflow-internal");
     }
 
     [Fact]

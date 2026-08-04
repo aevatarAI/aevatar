@@ -107,11 +107,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         member.BindRequest.CapabilityAdmission.ExplicitRequestConfirmations.Should().BeEmpty();
         plan.ToString().Should().NotContain(StudioExplicitRequestAdmissionTestKit.CallerBearer);
         plan.ToString().Should().NotContain(StudioExplicitRequestAdmissionTestKit.OrganizationBearer);
-        var workflowEvidence = schedule.LastCreateRequest!.AcceptedBinding!.WorkflowEvidence;
-        workflowEvidence.Should().NotBeNull();
-        workflowEvidence!.ServiceGrantRequirement.Should().Be(AuthorizationGrantRequirement.Required);
-        workflowEvidence.ExternalCapabilities.Should().ContainSingle()
-            .Which.NyxIdUserRequest.Request.UserServiceId.Should().Be("usvc-alpha");
+        schedule.LastCreateRequest!.AcceptedBinding.Should().BeNull();
     }
 
     [Fact]
@@ -433,19 +429,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
         owner!.ScopeId.Should().Be(ScopeId);
         owner.TeamId.Should().Be(TeamId);
         owner.MemberId.Should().Be("m-alpha");
-        var acceptedBinding = schedule.LastCreateRequest!.AcceptedBinding;
-        acceptedBinding.Should().NotBeNull();
-        acceptedBinding!.PublishedServiceId.Should().Be("svc-alpha");
-        acceptedBinding.WorkflowId.Should().Be("wf-alpha");
-        acceptedBinding.WorkflowRevisionId.Should().Be("rev-alpha");
-        acceptedBinding.WorkflowEvidence.Should().NotBeNull();
-        acceptedBinding.WorkflowEvidence!.ServiceGrantRequirement.Should()
-            .Be(AuthorizationGrantRequirement.NotRequired);
-        acceptedBinding.WorkflowEvidence.ExternalCapabilities.Should().BeEmpty();
         var preflightRequest = schedule.PreflightRequests.Should().ContainSingle().Which;
         preflightRequest.Should().BeSameAs(schedulePort.LastPreflightRequest);
         preflightRequest.MemberId.Should().Be("m-alpha");
-        preflightRequest.AcceptedBinding.Should().BeEquivalentTo(acceptedBinding);
+        preflightRequest.AcceptedBinding.Should().BeNull();
         schedulePort.LastCreateRequest.Should().BeSameAs(schedule.LastCreateRequest);
         schedulePort.LastResult!.MemberId.Should().Be("m-alpha");
         schedulePort.LastResult.PublishedServiceId.Should().Be("svc-alpha");
@@ -1172,8 +1159,6 @@ public sealed class StudioWorkflowProvisioningServiceTests
             string confirmedPermissionDigest,
             CancellationToken ct = default)
         {
-            var acceptedBinding = request.AcceptedBinding
-                ?? throw new InvalidOperationException("Accepted binding context is required.");
             LastCreateRequest = request;
             _schedule.LastCreateRequest = request;
             var scheduleId = request.ScheduleId ?? "schedule-test";
@@ -1181,7 +1166,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             var receipt = await _schedule.EnsureAsync(
                 new ScheduledDispatchConfiguration(
                     ScheduleId: scheduleId,
-                    DisplayName: request.DisplayName ?? $"provision-{acceptedBinding.PublishedServiceId}",
+                    DisplayName: request.DisplayName ?? $"provision-{PublishedServiceId}",
                     Target: new ScheduledDispatchTargetDescriptor(
                         ScheduledDispatchTargetKind.ServiceInvocation,
                         ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
@@ -1190,7 +1175,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
                                 TenantId = request.ScopeId,
                                 AppId = ScopeServiceIdentityDefaults.ServiceAppId,
                                 Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
-                                ServiceId = acceptedBinding.PublishedServiceId,
+                                ServiceId = PublishedServiceId,
                             },
                             EndpointId: "chat",
                             Payload: Any.Pack(new ChatRequestEvent
@@ -1225,7 +1210,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 request.ScopeId,
                 request.MemberId,
                 receipt.ScheduleId,
-                acceptedBinding.PublishedServiceId,
+                PublishedServiceId,
                 "/workflow/observatory",
                 "pending");
             return LastResult;
