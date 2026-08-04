@@ -62,6 +62,7 @@ public sealed class ActorBackedChatHistoryStoreTests
     [InlineData(ChatHistoryTurnTerminalStatus.Failed, ChatTurnTerminalStatus.Failed)]
     [InlineData(ChatHistoryTurnTerminalStatus.Stopped, ChatTurnTerminalStatus.Stopped)]
     [InlineData(ChatHistoryTurnTerminalStatus.Blocked, ChatTurnTerminalStatus.Blocked)]
+    [InlineData(ChatHistoryTurnTerminalStatus.OutcomeUncertain, ChatTurnTerminalStatus.OutcomeUncertain)]
     public async Task NotifyTurnTerminalAsync_ShouldUseSourcePublisherAndMapStatus(
         ChatHistoryTurnTerminalStatus status,
         ChatTurnTerminalStatus expectedStatus)
@@ -258,6 +259,82 @@ public sealed class ActorBackedChatHistoryStoreTests
     }
 
     [Fact]
+    public async Task OutcomeUncertainTurn_ShouldRoundTripWithoutBecomingFailed()
+    {
+        var actorId = ChatHistoryActorIds.Conversation("scope-a", "conversation-a");
+        var actor = new StubActor(actorId);
+        var dispatch = new RecordingDispatchService();
+        var reader = new RecordingDocumentReader
+        {
+            Documents =
+            {
+                [actorId] = new ChatConversationCurrentStateDocument
+                {
+                    Id = actorId,
+                    ActorId = actor.Id,
+                    ScopeId = "scope-a",
+                    ConversationId = "conversation-a",
+                    StateVersion = 8,
+                    Turns =
+                    {
+                        new ChatConversationTurnDocument
+                        {
+                            TurnId = "turn-uncertain",
+                            Sequence = 1,
+                            UserText = "perform side effect",
+                            AssistantText = "The outcome could not be confirmed.",
+                            TerminalStatus = "outcome_uncertain",
+                            SanitizedError = "SESSION_OUTCOME_UNCERTAIN",
+                        },
+                    },
+                },
+            },
+        };
+        var store = new ActorBackedChatHistoryStore(
+            new RecordingBootstrap(actor),
+            new StudioActorCommandDispatch(dispatch),
+            reader,
+            new RecordingDeliveryDocumentReader());
+        var now = DateTimeOffset.Parse("2026-08-02T08:00:00Z");
+
+        await store.SaveMessagesAsync(
+            "scope-a",
+            "conversation-a",
+            new ConversationMeta(
+                "conversation-a",
+                "Uncertain operation",
+                "service-a",
+                "nyxid-chat",
+                now,
+                now,
+                2),
+            [
+                new StoredChatMessage(
+                    "turn-uncertain-user",
+                    "user",
+                    "perform side effect",
+                    now.ToUnixTimeMilliseconds(),
+                    "completed",
+                    TurnId: "turn-uncertain"),
+                new StoredChatMessage(
+                    "turn-uncertain-assistant",
+                    "assistant",
+                    "The outcome could not be confirmed.",
+                    now.ToUnixTimeMilliseconds(),
+                    "outcome_uncertain",
+                    Error: "SESSION_OUTCOME_UNCERTAIN",
+                    TurnId: "turn-uncertain"),
+            ]);
+
+        var append = dispatch.Payloads.Should().ContainSingle().Which.Should()
+            .BeOfType<AppendChatTurnCommand>().Subject;
+        append.Turn.TerminalStatus.Should().Be(ChatTurnTerminalStatus.OutcomeUncertain);
+        var messages = (await store.GetMessagesAsync("scope-a", "conversation-a")).Messages;
+        messages[1].Status.Should().Be("outcome_uncertain");
+        messages[1].Error.Should().Be("SESSION_OUTCOME_UNCERTAIN");
+    }
+
+    [Fact]
     public async Task GetMessagesAsync_ShouldRejectLegacyCollisionDocument_WhenStoredTupleDoesNotMatchRequest()
     {
         var legacyActorId = ChatHistoryActorIds.LegacyConversation("tenant", "admin-c1");
@@ -319,6 +396,36 @@ public sealed class ActorBackedChatHistoryStoreTests
 
         result.Status.Should().Be(ChatHistoryDeleteResultStatus.NotFound);
         dispatch.Payloads.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DeleteConversationAsync_ShouldDispatchTypedDeleteCommandToResolvedActor()
+    {
+        var actorId = ChatHistoryActorIds.Conversation("scope-a", "conversation-a");
+        var reader = new RecordingDocumentReader();
+        reader.Documents[actorId] = new ChatConversationCurrentStateDocument
+        {
+            Id = actorId,
+            ActorId = actorId,
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+        };
+        var bootstrap = new RecordingBootstrap(new StubActor(actorId));
+        var dispatch = new RecordingDispatchService();
+        var store = new ActorBackedChatHistoryStore(
+            bootstrap,
+            new StudioActorCommandDispatch(dispatch),
+            reader,
+            new RecordingDeliveryDocumentReader());
+
+        var result = await store.DeleteConversationAsync("scope-a", "conversation-a");
+
+        result.Status.Should().Be(ChatHistoryDeleteResultStatus.Accepted);
+        bootstrap.ActorIds.Should().ContainSingle(actorId);
+        var command = dispatch.Payloads.Should().ContainSingle().Which.Should()
+            .BeOfType<DeleteConversationCommand>().Subject;
+        command.ScopeId.Should().Be("scope-a");
+        command.ConversationId.Should().Be("conversation-a");
     }
 
     [Fact]

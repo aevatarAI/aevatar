@@ -44,7 +44,7 @@ public sealed class WorkflowGAgentReplayContractTests : WorkflowGAgentTestBase
 
             WorkflowGAgent agent1 = CreateDefinitionAgent(eventStore);
             await agent1.ActivateAsync();
-            await agent1.BindWorkflowDefinitionAsync(
+            await BindInteractiveWorkflowDefinitionAsync(agent1,
                 BuildValidWorkflowYaml("role_a", "RoleA"),
                 "wf_replay",
                 inlineWorkflowYamls);
@@ -71,7 +71,7 @@ public sealed class WorkflowGAgentReplayContractTests : WorkflowGAgentTestBase
             var agent1 = CreateRunAgent(eventStore: eventStore);
             agent1.EventPublisher = publisher;
             await agent1.ActivateAsync();
-            await agent1.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent1,
                 "definition-1",
                 BuildValidWorkflowYaml("role_a", "RoleA"),
                 "wf_replay",
@@ -114,7 +114,7 @@ public sealed class WorkflowGAgentReplayContractTests : WorkflowGAgentTestBase
             SetAgentId(agent1, "workflow-run-context-replay");
 
             await agent1.ActivateAsync();
-            await agent1.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent1,
                 "definition-1",
                 BuildValidWorkflowYaml("role_a", "RoleA"),
                 "wf_context_replay",
@@ -180,7 +180,7 @@ public sealed class WorkflowGAgentReplayContractTests : WorkflowGAgentTestBase
                 packs: [pack],
                 eventStore: eventStore);
             await agent1.ActivateAsync();
-            await agent1.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent1,
                 "definition-1",
                 BuildValidWorkflowYaml("role_a", "RoleA"),
                 "wf_activate",

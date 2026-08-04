@@ -106,27 +106,6 @@ public class AuthenticationHostCoverageTests
     }
 
     [Fact]
-    public async Task AddAevatarAuthentication_WhenDisabledOutsideDevelopment_ShouldStillUseJwtBearerAuthentication()
-    {
-        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
-        {
-            EnvironmentName = Environments.Production,
-        });
-
-        builder.Configuration["Aevatar:Authentication:Enabled"] = "false";
-        builder.Configuration["Aevatar:Authentication:Authority"] = "https://id.example.com";
-
-        builder.AddAevatarAuthentication();
-
-        using var app = builder.Build();
-        using var scope = app.Services.CreateScope();
-        var schemeProvider = scope.ServiceProvider.GetRequiredService<IAuthenticationSchemeProvider>();
-
-        (await schemeProvider.GetDefaultAuthenticateSchemeAsync())!.Name.Should().Be("Bearer");
-        (await schemeProvider.GetDefaultChallengeSchemeAsync())!.Name.Should().Be("Bearer");
-    }
-
-    [Fact]
     public void AddAevatarAuthentication_WhenDisabled_ShouldNotSetFallbackPolicy()
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions

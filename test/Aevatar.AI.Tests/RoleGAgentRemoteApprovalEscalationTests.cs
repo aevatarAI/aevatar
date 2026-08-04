@@ -220,8 +220,8 @@ public sealed class RoleGAgentRemoteApprovalEscalationTests
         agent.State.Sessions["session-a"].RunContext.Should().BeEquivalentTo(runContext);
         var sent = publisher.Sends.Should().ContainSingle().Subject;
         sent.TargetActorId.Should().Be(runContext.CompletionNotificationActorId);
-        sent.Options!.Delivery!.DeduplicationOperationId.Should()
-            .Be("role-chat-terminal:run-1:command-1");
+        sent.Options!.Delivery!.OperationId.Should()
+            .Be("role-chat-terminal:run-1:command-1:outcome:2");
         var terminal = sent.Event.Should().BeOfType<RoleChatSessionCompletedEvent>().Subject;
         terminal.ActorId.Should().Be("role-status-cancelled-run");
         terminal.RunContext.Should().BeEquivalentTo(runContext);
@@ -279,6 +279,7 @@ public sealed class RoleGAgentRemoteApprovalEscalationTests
         IRemoteToolApprovalPort remoteToolApprovalPort,
         IRemoteToolApprovalNotificationPort remoteToolApprovalNotificationPort)
         : RoleGAgent(
+            toolExecutionPort: TestAgentToolExecutionPort.Instance,
             llmProviderFactory: null,
             toolSources: [],
             remoteToolApprovalPort: remoteToolApprovalPort,

@@ -94,6 +94,29 @@ Generic schedules and Team automations are isolated in both directions:
 - Team automations use `ScheduledDispatchScheduleKind.Workflow` and a server-derived workflow service target;
 - `ScheduledDispatchScheduleKind.Generic` is not a fallback for Team automation, and the retired SkillRunner kind is not recreated.
 
+## Public Schedule Target Boundary
+
+The public `/api/schedules` contract accepts only a catalog-resolved typed
+`serviceInvocation` target. The server resolves that target from the service
+and revision catalogs; a browser or other external caller cannot supply an
+actor address, an `EventEnvelope`, or an equivalent raw dispatch payload.
+
+The authenticated request scope must equal the resolved target tenant. A
+target in another tenant is rejected before Application admission, even when
+the caller can name that service. `actorId` is an opaque runtime address and
+raw `EventEnvelope` is an internal transport shape; the public schedule target
+input does not accept either as a caller-supplied value.
+
+Legacy persisted envelope schedules remain readable only by the actor and
+projection paths needed to retire them. Application hides those rows from
+public get/list results and treats public lifecycle mutations as not found.
+When activation encounters an envelope schedule without the required marker,
+the actor durably disables it and purges its scheduled callbacks before it can
+fire. The Protobuf `TrustedInternal` marker is a strongly typed, actor-only
+contract for the narrow internal envelope protocol. Hosting and Application do
+not expose it, and it does not create an administrator or public
+raw-envelope-scheduling escape hatch.
+
 ## Admission Receipts And Projected State
 
 Mutation endpoints return `202 Accepted` with a typed receipt containing `accepted`, `status`, `scheduleId`, `operationId`, and `commandId`. Receipt status `accepted` or `pending` describes command/effect admission only. It does not prove that credential provisioning or revocation finished, that the schedule is active, or that the read model has observed the new authoritative version.
@@ -198,6 +221,21 @@ The refresh port constructs its deterministic Projection Pipeline lease before e
 Create, reauthorize, and update mutations share one refresh-aware revalidation path with at most one opportunistic second read. Every second-read result, including authorization success, is gated by the committed refresh version. If the catalog replica has not reached that version, the typed `CatalogProjectionPending` result maps to retryable HTTP `503` with `requiredStateVersion`. Transient provider, observation-timeout, and refresh-infrastructure failures map to a sanitized retryable `503`; HTTP `409` remains reserved for actual plan drift or reauthorization semantics. If a concurrent refresh supersedes the mutation's refresh and the first observed replica version is already at or beyond that committed version, Studio returns a distinct retryable refresh-superseded `503`. Preflight remains one pure planner read with no refresh, projection priming, or polling.
 
 Both GAgentService and standalone Studio call the idempotent `AddNyxIdAuthorizationCatalogHosting` composition entrypoint. It installs the catalog actor, authorization planner/revalidator, NyxID adapter, refresh observation session, committed-state projector, and read-model provider on the single shared GAgentService Projection Pipeline; repeated full or scheduled capability composition does not duplicate these registrations.
+
+## Workflow admission rejection and rollout
+
+Scheduled workflow compatibility is decided before workflow actor lifecycle and before service-run registration. The invocation adapter maps the bounded workflow admission outcome into a schedule-owned typed failure. `ScheduledDispatchGAgent` commits one failed fire, increments `fireCount` and `failureCount` once, stores the safe message in `lastError`, stores the stable code in `lastErrorCode` and the fire record, and keeps the schedule enabled for operator repair. It creates zero Run artifacts and adds no second failure store.
+
+| Stable code | Operator meaning | Remediation |
+| --- | --- | --- |
+| `WORKFLOW_DEFINITION_INVALID` | Root or inline workflow structure is invalid. | Update the definition and rebind. |
+| `NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED` | The workflow uses a retired NyxID authoring contract. | Replace the authoring contract and rebind. |
+| `CAPABILITY_ADMISSION_REBIND_REQUIRED` | The persisted plan is absent, legacy, mismatched, or has the wrong `ExpectedExecutionMode`. | Rebuild admission and rebind. |
+| `scheduled_dispatch_failed` | Dispatch failed outside the bounded workflow admission contract. | Inspect the sanitized schedule failure and retry only after repair. |
+
+Deployment order is: shared protobuf contracts; actor validation and state; projectors and query mapping; catalog composition; UserConfig/settings/channel atomic writers; durable planner/runtime exact-match enforcement; workflow preflight; then scheduled fires. Deploy these as one compatible release before enabling unattended execution.
+
+Rollout begins with a read-only audit of active UserConfig selections, authorization catalog evidence, workflow artifacts, and schedules. There is no automatic production migration, rerun, pause, delete, repair, replay, or backfill. Operators explicitly reselect unavailable LLM targets, rebuild incompatible admission plans, and reauthorize affected schedules. The rollout rejects empty-list-as-open-catalog, accepted-ACK-as-active, silent Gateway fallback, query-time catalog reads, and invocation-time `RevalidatePersistedAsync`.
 
 ## Catalog Projection Version-Regression Recovery
 

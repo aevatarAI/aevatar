@@ -12,6 +12,8 @@ public sealed record AuditTrailQuery
 
     public string? AuditActorId { get; init; }
 
+    public IReadOnlyList<string>? AuditActorIds { get; init; }
+
     public AuditActorKind? ActorKind { get; init; }
 
     public string? IdentityKeyId { get; init; }
@@ -25,6 +27,12 @@ public sealed record AuditTrailQuery
     public AuditLifecyclePhase? LifecyclePhase { get; init; }
 
     public AuditTerminalOutcome? TerminalOutcome { get; init; }
+
+    public bool RequireChatProvenance { get; init; }
+
+    public AuditChatSurface? ChatSurface { get; init; }
+
+    public string? ChatConversationId { get; init; }
 
     public AuditSensitivityLevel? SensitivityLevel { get; init; }
 

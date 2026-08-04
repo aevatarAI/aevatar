@@ -72,7 +72,10 @@ implementation. This is bounded migration cleanup, not the new scheduling path.
 
 The canonical path is:
 
-1. `HealthProbeStartupService` dispatches the typed configuration command.
+1. `HealthProbeStartupService` dispatches the typed configuration command at
+   startup and reconciles the same command once per minute. The reconcile pass
+   executes no probe and owns no target runtime state; it reactivates actors
+   whose process-local tick was lost during a rolling deployment.
 2. A changed descriptor commits one `HealthProbeConfigured` event; an
    unchanged descriptor commits nothing.
 3. Actor activation initializes an empty operational snapshot from the
@@ -85,7 +88,8 @@ The canonical path is:
 7. `HealthStatusQueryPort` reads snapshots for the current manifest slugs.
 
 Normal sampling never publishes `CommittedStateEventPublished`, never starts
-or advances a projection scope, and never registers a durable callback.
+or advances a projection scope, and never registers a durable callback. An
+unchanged periodic configure commits no event.
 
 ## Compatibility And Cleanup
 

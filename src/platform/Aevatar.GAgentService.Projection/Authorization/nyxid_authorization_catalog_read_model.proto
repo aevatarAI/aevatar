@@ -34,4 +34,5 @@ message NyxIdAuthorizationCatalogDocument {
   string contract_version = 23;
   string policy_version = 24;
   google.protobuf.Timestamp evaluated_at_utc_value = 25;
+  aevatar.gagentservice.schedules.authorization.NyxIdAuthorizationLLMTargetEvidence gateway_llm_target = 26;
 }

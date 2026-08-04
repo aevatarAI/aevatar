@@ -1,6 +1,7 @@
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.GAgentService.Infrastructure.Adapters;
@@ -51,7 +52,8 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort
                 {
                     CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
                         request.CallerId.Trim(),
-                        request.NyxIdAccessToken),
+                        NyxIdCallerCredentialSelection.SourceReadableUserBearerOrNull(
+                            request.NyxIdAccessToken)),
                 },
                 ct);
 

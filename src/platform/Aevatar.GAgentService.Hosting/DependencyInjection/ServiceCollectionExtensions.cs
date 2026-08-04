@@ -133,7 +133,8 @@ public static class ServiceCollectionExtensions
                     providerFactory,
                     sp.GetServices<IResponsesToolProvider>(),
                     sp.GetRequiredService<IToolSetRegistry>(),
-                    sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<LlmRunCore>>());
+                    sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<LlmRunCore>>(),
+                    sp.GetRequiredService<Aevatar.AI.Abstractions.ToolProviders.IAgentToolExecutionPort>());
         });
         services.TryAddSingleton<LlmRunExecutor>();
         services.TryAddSingleton<ILlmRunExecutor>(sp => sp.GetRequiredService<LlmRunExecutor>());
@@ -156,6 +157,7 @@ public static class ServiceCollectionExtensions
             sp.GetService<IScriptRuntimeCommandPort>(),
             sp.GetRequiredService<IWorkflowRunProvisioningPort>(),
             sp.GetRequiredService<IServiceRunRegistrationPort>(),
+            sp.GetRequiredService<IWorkflowArtifactCompatibilityPreflight>(),
             sp.GetService<Microsoft.Extensions.Logging.ILogger<DefaultServiceInvocationDispatcher>>()));
         services.TryAddSingleton<IExecutionActivityScopeResolver, ExecutionActivityScopeResolver>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<Aevatar.Foundation.Abstractions.Hooks.IGAgentExecutionHook, ExecutionActivityPublisherHook>());
@@ -243,6 +245,7 @@ public static class ServiceCollectionExtensions
             sp.GetService<IScriptRuntimeCommandPort>(),
             sp.GetRequiredService<IWorkflowRunProvisioningPort>(),
             sp.GetRequiredService<IServiceRunRegistrationPort>(),
+            sp.GetRequiredService<IWorkflowArtifactCompatibilityPreflight>(),
             sp.GetService<Microsoft.Extensions.Logging.ILogger<DefaultServiceInvocationDispatcher>>()));
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
         services.TryAddSingleton<IScheduledServiceInvocationDispatchPort, ScheduledServiceInvocationDispatchPort>();
@@ -287,6 +290,9 @@ public static class ServiceCollectionExtensions
 
         if (documentProvider.ElasticsearchEnabled)
         {
+            TryAddElasticsearchDocumentProjectionStore<AgentProfileCatalogReadModel>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<AgentProfileManagementReadModel>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<AgentProfileExecutionReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ServiceCatalogReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ServiceRevisionCatalogReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ServiceDeploymentCatalogReadModel>(services, configuration, static readModel => readModel.Id);
@@ -316,6 +322,9 @@ public static class ServiceCollectionExtensions
         }
         else
         {
+            TryAddInMemoryDocumentProjectionStore<AgentProfileCatalogReadModel>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<AgentProfileManagementReadModel>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<AgentProfileExecutionReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ServiceCatalogReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ServiceRevisionCatalogReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ServiceDeploymentCatalogReadModel>(services, static readModel => readModel.Id);
@@ -342,6 +351,9 @@ public static class ServiceCollectionExtensions
         ProjectionDocumentProviderKind providerKind)
     {
         return HasProjectionDocumentReaderForProvider<ServiceCatalogReadModel>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<AgentProfileCatalogReadModel>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<AgentProfileManagementReadModel>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<AgentProfileExecutionReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ServiceRevisionCatalogReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ServiceDeploymentCatalogReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ServiceServingSetReadModel>(services, providerKind)

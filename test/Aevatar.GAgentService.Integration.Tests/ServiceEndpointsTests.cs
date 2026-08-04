@@ -271,16 +271,65 @@ public sealed class ServiceEndpointsTests
     }
 
     [Fact]
+    public async Task CreateRevisionAsync_WhenExplicitRequestAdmissionFails_ShouldReturnBadRequestWithoutDispatch()
+    {
+        var readiness = new ExternalCapabilityReadiness
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+        };
+        readiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+            Code = "NYXID_EXPLICIT_REQUEST_CONFIRMATION_STALE",
+            SafeMessage = "Explicit request confirmation no longer matches the current contract.",
+        });
+        await using var host = await EndpointTestHost.StartAsync(
+            new WorkflowExternalCapabilityAdmissionException(readiness));
+
+        var response = await host.Client.PostAsJsonAsync(
+            "/api/services/svc-alpha/revisions",
+            new ServiceEndpoints.CreateRevisionHttpRequest(
+                "tenant-alpha",
+                "app-alpha",
+                "ns-alpha",
+                "rev-alpha",
+                "workflow",
+                null,
+                null,
+                new ServiceEndpoints.WorkflowRevisionHttpRequest(
+                    "wf-alpha",
+                    "name: wf-alpha",
+                    "workflow-definition-alpha",
+                    null),
+                [new NyxIdExplicitRequestConfirmationInput(
+                    "wf-alpha/request-alpha",
+                    "stale-digest",
+                    "read_only")]));
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        host.CapabilityAdmission.Requests.Should().ContainSingle();
+        host.CommandPort.CreateRevisionCommand.Should().BeNull();
+    }
+
+    [Fact]
     public async Task CreateRevisionAsync_ForWorkflow_ShouldAdmitExactBundleWithTransientHttpAuthority()
     {
+        const string publishedServiceId = "svc-published-alpha";
+        const string workflowId = "wf-draft-alpha";
+        const string revisionId = "rev-alpha";
+        new[] { publishedServiceId, workflowId, revisionId }
+            .Distinct(StringComparer.Ordinal).Should().HaveCount(3);
         await using var host = await EndpointTestHost.StartAsync();
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/services/orders/revisions")
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/services/{publishedServiceId}/revisions")
         {
             Content = JsonContent.Create(new ServiceEndpoints.CreateRevisionHttpRequest(
                 "spoof-tenant",
                 "spoof-app",
                 "spoof-ns",
-                "rev-workflow",
+                revisionId,
                 "workflow",
                 null,
                 null,
@@ -291,7 +340,8 @@ public sealed class ServiceEndpointsTests
                     new Dictionary<string, string>
                     {
                         ["child"] = "name: child",
-                    }))),
+                    },
+                    workflowId))),
         };
         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
             "Bearer",
@@ -308,16 +358,131 @@ public sealed class ServiceEndpointsTests
         var admissionRequest = host.CapabilityAdmission.Requests.Should().ContainSingle().Which;
         admissionRequest.Access.ScopeId.Should().Be("tenant-claim");
         admissionRequest.Access.CallerId.Should().Be("caller-alpha");
-        admissionRequest.Access.NyxIdCallerBearerToken.Should().Be("runtime-caller-credential");
+        admissionRequest.Access.NyxIdCallerCredential?.SourceReadableUserBearerToken
+            .Should().Be("runtime-caller-credential");
         admissionRequest.WorkflowYaml.Should().Be("name: approval");
         admissionRequest.InlineWorkflowYamls.Should().Contain("child", "name: child");
         admissionRequest.SourceKind.Should().Be("service_revision");
         admissionRequest.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
+        admissionRequest.WorkflowId.Should().Be(workflowId);
+        admissionRequest.RevisionId.Should().Be(revisionId);
         host.CommandPort.CreateRevisionCommand!.Spec.WorkflowSpec.CapabilityAdmissionPlan.Should().NotBeNull();
+        host.CommandPort.CreateRevisionCommand.Spec.WorkflowSpec.WorkflowId.Should().Be(workflowId);
         host.CommandPort.CreateRevisionCommand.Spec.WorkflowSpec.CapabilityAdmissionPlan.ExecutionMode.Should()
             .Be(ExternalCapabilityExecutionMode.Durable);
         host.CommandPort.CreateRevisionCommand.Spec.WorkflowSpec.ExpectedExecutionMode.Should()
             .Be(ExternalCapabilityExecutionMode.Durable);
+    }
+
+    [Fact]
+    public async Task CreateRevisionAsync_ForWorkflow_ShouldMapExplicitRequestConfirmationWithoutCallerSuppliedGrantor()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/services/svc-alpha/revisions")
+        {
+            Content = JsonContent.Create(new ServiceEndpoints.CreateRevisionHttpRequest(
+                "spoof-tenant",
+                "spoof-app",
+                "spoof-ns",
+                "rev-alpha",
+                "workflow",
+                null,
+                null,
+                new ServiceEndpoints.WorkflowRevisionHttpRequest(
+                    "wf-alpha",
+                    "name: wf-alpha",
+                    "workflow-definition-alpha",
+                    null),
+                [
+                    new NyxIdExplicitRequestConfirmationInput(
+                        "wf-alpha/request-alpha",
+                        "digest-alpha",
+                        "read_only"),
+                ])),
+        };
+        request.Headers.Add("X-Test-Authenticated", "true");
+        request.Headers.Add("X-Test-Tenant-Id", "tenant-claim");
+        request.Headers.Add("X-Test-App-Id", "app-claim");
+        request.Headers.Add("X-Test-Namespace", "ns-claim");
+        request.Headers.Add("X-Test-Caller-Id", "authenticated-owner-alpha");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var admission = host.CapabilityAdmission.Requests.Should().ContainSingle().Which;
+        admission.Access.CallerId.Should().Be("authenticated-owner-alpha");
+        admission.ExplicitRequestConfirmations.Should().ContainSingle().Which.Should()
+            .BeEquivalentTo(new NyxIdExplicitRequestConfirmation
+            {
+                CallSiteId = "wf-alpha/request-alpha",
+                RequestContractDigest = "digest-alpha",
+                AttestedRisk = NyxIdOperationRisk.ReadOnly,
+            });
+        host.CommandPort.CreateRevisionCommand.Should().NotBeNull();
+        host.CommandPort.CreateRevisionCommand!.ToString().Should().NotContain("attested_risk");
+    }
+
+    [Fact]
+    public async Task CreateRevisionAsync_WithNullExplicitRequestConfirmation_ShouldReturnTypedBadRequestWithoutAdmissionOrDispatch()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync(
+            "/api/services/svc-alpha/revisions",
+            new ServiceEndpoints.CreateRevisionHttpRequest(
+                "tenant-alpha",
+                "app-alpha",
+                "ns-alpha",
+                "rev-alpha",
+                "workflow",
+                null,
+                null,
+                new ServiceEndpoints.WorkflowRevisionHttpRequest(
+                    "wf-alpha",
+                    "name: wf-alpha",
+                    "workflow-definition-alpha",
+                    null),
+                [null!]));
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await response.Content.ReadAsStringAsync()).Should()
+            .Contain("INVALID_EXPLICIT_REQUEST_CONFIRMATION");
+        host.CapabilityAdmission.Requests.Should().BeEmpty();
+        host.CommandPort.CreateRevisionCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateRevisionAsync_WithMalformedAuthorizationAndDelegation_ShouldRejectBeforeAdmissionOrDispatch()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/services/svc-alpha/revisions")
+        {
+            Content = JsonContent.Create(new ServiceEndpoints.CreateRevisionHttpRequest(
+                "tenant-alpha",
+                "app-alpha",
+                "ns-alpha",
+                "rev-alpha",
+                "workflow",
+                null,
+                null,
+                new ServiceEndpoints.WorkflowRevisionHttpRequest(
+                    "wf-alpha",
+                    "name: wf-alpha\nsteps: []\n",
+                    "definition-alpha",
+                    null))),
+        };
+        request.Headers.TryAddWithoutValidation("Authorization", "Bearer token with spaces");
+        request.Headers.TryAddWithoutValidation("X-NyxID-Delegation-Token", "delegation-token");
+
+        var response = await host.Client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().Contain("INVALID_WORKFLOW_CALLER_CREDENTIAL");
+        body.Should().NotContain("token with spaces");
+        body.Should().NotContain("delegation-token");
+        host.CapabilityAdmission.Requests.Should().BeEmpty();
+        host.CommandPort.CreateRevisionCommand.Should().BeNull();
     }
 
     [Fact]

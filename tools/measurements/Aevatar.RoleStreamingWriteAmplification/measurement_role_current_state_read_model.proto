@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package aevatar.role_streaming_write_amplification;
+
+option csharp_namespace = "Aevatar.RoleStreamingWriteAmplification";
+
+import "google/protobuf/timestamp.proto";
+
+// Measurement-only current-state sink. RoleGAgent has no production query
+// consumer for this shape, so this contract must not be registered by a host.
+message MeasurementRoleCurrentStateReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  string state_root_sha256 = 6;
+  int32 tracked_session_count = 7;
+  int32 terminal_session_count = 8;
+  int32 completed_session_count = 9;
+  int32 failed_session_count = 10;
+  int32 blocked_session_count = 11;
+  int64 max_progress_sequence = 12;
+  string session_id = 13;
+  string final_content_sha256 = 14;
+  string usage_sha256 = 15;
+}

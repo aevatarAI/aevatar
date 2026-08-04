@@ -1104,6 +1104,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
                 WorkflowYaml = workflowYaml,
                 RunId = runId,
                 ScopeId = "scope-1",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }));
         }
 

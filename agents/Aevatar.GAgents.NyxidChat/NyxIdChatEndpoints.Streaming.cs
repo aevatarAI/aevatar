@@ -1,14 +1,15 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.Capabilities;
 using Aevatar.AGUI.Contracts;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
-using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Serialization;
@@ -56,11 +57,13 @@ public static partial class NyxIdChatEndpoints
     {
         var logger = loggerFactory.CreateLogger("Aevatar.NyxId.Chat.Endpoints");
         var accessToken = string.Empty;
+        var credentials = AgentToolCredentials.Empty;
         var prompt = string.Empty;
         var streamType = request.Type?.Trim() ?? string.Empty;
         var clientRequestId = ResolveClientRequestId(http, request.ClientRequestId);
         var turnId = CreateTurnId(actorId, clientRequestId);
         var ownerSubject = string.Empty;
+        AgentProfileReference? agentProfileReference = null;
         IReadOnlyList<NyxIdChatActionReport> actionReports = [];
 
         try
@@ -71,14 +74,14 @@ public static partial class NyxIdChatEndpoints
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
-            accessToken = ExtractNyxIdAccessToken(http);
+            credentials = ExtractNyxIdCredentials(http) ?? AgentToolCredentials.Empty;
+            accessToken = credentials.NyxIdAccessToken ?? string.Empty;
             if (string.IsNullOrWhiteSpace(accessToken))
             {
                 http.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 return;
             }
-            ownerSubject = ResolveAuthenticatedOwnerSubject(http) ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(ownerSubject))
+            if (!AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(http.User, out ownerSubject))
             {
                 http.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 return;
@@ -89,7 +92,9 @@ public static partial class NyxIdChatEndpoints
                 prompt = request.Prompt?.Trim() ?? string.Empty;
                 if ((string.IsNullOrWhiteSpace(prompt) && request.InputParts is not { Count: > 0 }) ||
                     !string.IsNullOrWhiteSpace(request.OriginTurnId) ||
-                    request.Actions is { Count: > 0 })
+                    request.Actions is { Count: > 0 } ||
+                    (request.AgentProfile is not null &&
+                     (!createIfMissing || !TryMapAgentProfileReference(request.AgentProfile, out agentProfileReference))))
                 {
                     http.Response.StatusCode = StatusCodes.Status400BadRequest;
                     return;
@@ -102,6 +107,7 @@ public static partial class NyxIdChatEndpoints
                     string.IsNullOrWhiteSpace(ownerSubject) ||
                     !string.IsNullOrWhiteSpace(request.Prompt) ||
                     request.InputParts is { Count: > 0 } ||
+                    request.AgentProfile is not null ||
                     !TryMapActionReports(request.Actions, originTurnId, out actionReports))
                 {
                     http.Response.StatusCode = string.IsNullOrWhiteSpace(ownerSubject)
@@ -194,6 +200,13 @@ public static partial class NyxIdChatEndpoints
             CommandInteractionResult<NyxIdChatAcceptedReceipt, NyxIdChatStartError, NyxIdChatCompletionStatus> result;
             if (string.Equals(streamType, "action.continue", StringComparison.Ordinal))
             {
+                var commandId = NyxIdChatPublicIdentity.CreateActionContinuationCommandId(
+                    actorId,
+                    scopeId,
+                    ownerSubject,
+                    clientRequestId!,
+                    request.OriginTurnId?.Trim() ?? string.Empty,
+                    actionReports);
                 interactionTask = actionContinuationInteractionService.ExecuteAsync(
                     new NyxIdActionContinuationCommand(
                         actorId,
@@ -202,7 +215,9 @@ public static partial class NyxIdChatEndpoints
                         turnId,
                         ownerSubject,
                         clientRequestId!,
-                        actionReports),
+                        actionReports,
+                        CommandId: commandId,
+                        CorrelationId: commandId),
                     EmitAsync,
                     null,
                     interactionCancellation.Token);
@@ -211,6 +226,15 @@ public static partial class NyxIdChatEndpoints
             {
                 var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
                 var llmControl = await BuildLlmControlAsync(http, accessToken, ct);
+                var commandId = NyxIdChatPublicIdentity.CreateChatCommandId(
+                    actorId,
+                    scopeId,
+                    ownerSubject,
+                    clientRequestId,
+                    turnId,
+                    prompt,
+                    request.InputParts?.Select(static part => part.ToProto()) ?? [],
+                    agentProfileReference);
 
                 // Streaming endpoints do not pre-read runtime state before command dispatch.
                 // The shared CQRS resolver owns actor lookup and attach-existing observation.
@@ -224,9 +248,13 @@ public static partial class NyxIdChatEndpoints
                         request.InputParts,
                         metadata,
                         llmControl,
+                        CommandId: commandId,
+                        CorrelationId: commandId,
                         ClientRequestId: clientRequestId,
                         CreateIfMissing: createIfMissing,
-                        OwnerSubject: ownerSubject),
+                        OwnerSubject: ownerSubject,
+                        AgentProfileReference: agentProfileReference,
+                        NyxIdCredentialKind: credentials.NyxIdCredentialKind),
                     EmitAsync,
                     null,
                     interactionCancellation.Token);
@@ -578,16 +606,27 @@ public static partial class NyxIdChatEndpoints
         return string.IsNullOrWhiteSpace(headerValue) ? null : headerValue.Trim();
     }
 
-    private static string? ResolveAuthenticatedOwnerSubject(HttpContext http)
+    private static bool TryMapAgentProfileReference(
+        NyxIdChatAgentProfileReferenceDto input,
+        out AgentProfileReference? reference)
     {
-        foreach (var claimType in new[] { "uid", "sub", ClaimTypes.NameIdentifier, "user_id" })
+        reference = null;
+        var profileSlug = input.ProfileSlug?.Trim() ?? string.Empty;
+        var ownerKind = input.OwnerKind?.Trim().ToLowerInvariant() switch
         {
-            var value = http.User.FindFirst(claimType)?.Value?.Trim();
-            if (!string.IsNullOrWhiteSpace(value))
-                return value;
-        }
+            "caller" => AgentProfileReferenceOwnerKind.Caller,
+            "system" => AgentProfileReferenceOwnerKind.System,
+            _ => AgentProfileReferenceOwnerKind.Unspecified,
+        };
+        if (ownerKind == AgentProfileReferenceOwnerKind.Unspecified || profileSlug.Length == 0)
+            return false;
 
-        return null;
+        reference = new AgentProfileReference
+        {
+            OwnerKind = ownerKind,
+            ProfileSlug = profileSlug,
+        };
+        return true;
     }
 
     private static bool TryMapActionReports(
@@ -969,7 +1008,13 @@ public static partial class NyxIdChatEndpoints
         string? ClientRequestId = null,
         string? Type = null,
         string? OriginTurnId = null,
-        IReadOnlyList<NyxIdChatActionReportDto>? Actions = null);
+        IReadOnlyList<NyxIdChatActionReportDto>? Actions = null,
+        NyxIdChatAgentProfileReferenceDto? AgentProfile = null);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    public sealed record NyxIdChatAgentProfileReferenceDto(
+        string? OwnerKind,
+        string? ProfileSlug);
 
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     public sealed record NyxIdChatActionReportDto(

@@ -30,7 +30,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Request.Should().BeEquivalentTo(
             new WorkflowChatRunRequest(
                 "hello",
-                WorkflowChatSource.InlineYamlBundle(["name: inline"], "auto"),
+                WorkflowChatSource.InlineYamlBundle(["name: inline"], "auto"), Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode.Interactive,
                 SessionId: "session-1",
                 Metadata: new Dictionary<string, string>()));
     }
@@ -50,7 +50,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Request.Should().BeEquivalentTo(
             new WorkflowChatRunRequest(
                 "hello",
-                WorkflowChatSource.InlineYamlBundle(["name: inline"]),
+                WorkflowChatSource.InlineYamlBundle(["name: inline"]), Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode.Interactive,
                 SessionId: null,
                 Metadata: new Dictionary<string, string>()));
     }
@@ -100,7 +100,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Request.Should().BeEquivalentTo(
             new WorkflowChatRunRequest(
                 "hello",
-                WorkflowChatSource.Direct(),
+                WorkflowChatSource.Direct(), Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode.Interactive,
                 Metadata: new Dictionary<string, string>(),
                 LlmControl: null));
     }
@@ -637,7 +637,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Request.Should().BeEquivalentTo(
             new WorkflowChatRunRequest(
                 "describe this",
-                WorkflowChatSource.Direct(),
+                WorkflowChatSource.Direct(), Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode.Interactive,
                 InputParts:
                 [
                     new WorkflowChatInputPart

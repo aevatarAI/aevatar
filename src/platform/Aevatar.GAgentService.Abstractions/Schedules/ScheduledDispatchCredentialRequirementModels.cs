@@ -174,6 +174,13 @@ public static class ScheduledDispatchCredentialRequirementRequests
         if (!string.IsNullOrWhiteSpace(chatRequest.ConnectorHttpAuthorization))
             return new ScheduledDispatchPayloadCredentialSignal(true, nameof(ChatRequestEvent.ConnectorHttpAuthorization));
 
+        if (!string.IsNullOrWhiteSpace(chatRequest.CallerSourceReadableNyxIdBearerToken))
+        {
+            return new ScheduledDispatchPayloadCredentialSignal(
+                true,
+                nameof(ChatRequestEvent.CallerSourceReadableNyxIdBearerToken));
+        }
+
         if (!string.IsNullOrWhiteSpace(chatRequest.LlmControl?.NyxIdAccessToken) ||
             !string.IsNullOrWhiteSpace(chatRequest.LlmControl?.NyxIdOrgToken) ||
             !string.IsNullOrWhiteSpace(chatRequest.LlmControl?.SenderNyxIdAccessToken))
@@ -183,7 +190,9 @@ public static class ScheduledDispatchCredentialRequirementRequests
 
         if (!string.IsNullOrWhiteSpace(chatRequest.ToolContext?.Credentials?.NyxIdAccessToken) ||
             !string.IsNullOrWhiteSpace(chatRequest.ToolContext?.Credentials?.NyxIdOrgToken) ||
-            !string.IsNullOrWhiteSpace(chatRequest.ToolContext?.Credentials?.SenderNyxIdAccessToken))
+            !string.IsNullOrWhiteSpace(chatRequest.ToolContext?.Credentials?.SenderNyxIdAccessToken) ||
+            !string.IsNullOrWhiteSpace(
+                chatRequest.ToolContext?.Credentials?.SourceReadableNyxIdAccessToken))
         {
             return new ScheduledDispatchPayloadCredentialSignal(true, "ToolContext.Credentials");
         }

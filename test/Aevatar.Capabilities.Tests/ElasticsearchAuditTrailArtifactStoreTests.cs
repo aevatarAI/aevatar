@@ -62,6 +62,25 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
             .GetString()
             .Should()
             .Be("keyword");
+        var chatProperties = artifactProperties.GetProperty("record")
+            .GetProperty("properties")
+            .GetProperty("provenance")
+            .GetProperty("properties")
+            .GetProperty("chat")
+            .GetProperty("properties");
+        foreach (var field in new[]
+                 {
+                     "surface",
+                     "conversation_id",
+                     "turn_id",
+                     "task_id",
+                     "step_id",
+                     "action_request_id",
+                 })
+        {
+            chatProperties.GetProperty(field).GetProperty("type").GetString()
+                .Should().Be("keyword");
+        }
         createPayload.RootElement.GetProperty("aliases")
             .TryGetProperty("audit-tests-audit-trail-current", out _)
             .Should()
@@ -333,6 +352,52 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
         incompatibleSchemaFilter.Should().Contain(AuditContractSemantics.CurrentSchemaVersion);
         incompatibleSchemaFilter.Should().Contain("artifact.schema_version");
         incompatibleSchemaFilter.Should().NotContain("artifact.schema_version.keyword");
+    }
+
+    [Fact]
+    public async Task QueryAsync_WithChatFilters_ShouldUseOneTermsFilterBeforePagination()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"hits":{"hits":[]}}"""));
+        using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions(), handler);
+
+        _ = await ((IAuditTrailQueryPort)store).QueryAsync(new AuditTrailQuery
+        {
+            AuditActorIds = [" actor-key-2 ", "actor-key-1", "actor-key-2", " "],
+            RequireChatProvenance = true,
+            ChatSurface = AuditChatSurface.WorkflowChat,
+            ChatConversationId = " conversation-alpha ",
+            TerminalOutcome = AuditTerminalOutcome.Failed,
+            Take = 1,
+        });
+
+        using var requestBody = JsonDocument.Parse(handler.CapturedRequests.Single().Body);
+        var filters = requestBody.RootElement
+            .GetProperty("query")
+            .GetProperty("bool")
+            .GetProperty("filter");
+        var termsFilters = filters.EnumerateArray()
+            .Where(static filter => filter.TryGetProperty("terms", out _))
+            .ToArray();
+
+        termsFilters.Should().ContainSingle();
+        termsFilters[0].GetProperty("terms")
+            .GetProperty("artifact.audit_actor_id.keyword")
+            .EnumerateArray()
+            .Select(static value => value.GetString())
+            .Should().Equal("actor-key-2", "actor-key-1");
+        filters.EnumerateArray().Any(static filter =>
+            filter.TryGetProperty("exists", out var exists) &&
+            exists.GetProperty("field").GetString() == "artifact.record.provenance.chat.surface")
+            .Should().BeTrue();
+        filters.GetRawText().Should().ContainAll(
+            "artifact.record.provenance.chat.surface",
+            "AUDIT_CHAT_SURFACE_WORKFLOW_CHAT",
+            "artifact.record.provenance.chat.conversation_id",
+            "conversation-alpha",
+            "artifact.terminal_outcome.keyword",
+            "AUDIT_TERMINAL_OUTCOME_FAILED");
+        requestBody.RootElement.GetProperty("size").GetInt32().Should().Be(2);
     }
 
     [Fact]

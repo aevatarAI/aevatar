@@ -16,6 +16,10 @@ internal static class NyxIdChatConversationAguiFrameBuilder
     public const string ActionRequestEventName = "nyxid.action.request";
     public const string ContinuationChangedEventName = "nyxid.continuation.changed";
     public const string StepControlChangedEventName = "nyxid.step.control.changed";
+    public const string InputRequestEventName = "nyxid.input.request";
+    public const string InputChangedEventName = "nyxid.input.changed";
+    public const string ApprovalRequestEventName = "nyxid.approval.request";
+    public const string ApprovalChangedEventName = "nyxid.approval.changed";
 
     private const string TerminalStateConflictCode = "NYXID_CHAT_TERMINAL_STATE_CONFLICT";
     private const string TerminalStateConflictMessage =
@@ -109,6 +113,13 @@ internal static class NyxIdChatConversationAguiFrameBuilder
             state.ActiveTask,
             changedSteps,
             reconciled.ProgressSequence);
+        if (state.PendingApproval is not null)
+        {
+            frames.Insert(0, Custom(
+                ApprovalRequestEventName,
+                state.PendingApproval,
+                reconciled.ProgressSequence));
+        }
         AppendOperationEvidence(frames, reconciled, turnId);
 
         if (state.ActiveTurn.Status == NyxIdChatTurnStatus.Active &&
@@ -160,6 +171,39 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         frames.Insert(0, Custom(ActionRequestEventName, wirePayload, sequence));
         AppendTerminalIfNeeded(frames, actorId, turnId, committed.Task, committed.OriginTurn, sequence);
         return frames;
+    }
+
+    public static IReadOnlyList<AGUIEvent> BuildInputRequested(
+        NyxIdChatInputRequestedEvent committed)
+    {
+        ArgumentNullException.ThrowIfNull(committed);
+        var sequence = committed.State?.ProgressSequence ?? 0;
+        if (committed.PendingInput is null || sequence <= 0)
+            return [];
+
+        return [Custom(InputRequestEventName, committed.PendingInput, sequence)];
+    }
+
+    public static IReadOnlyList<AGUIEvent> BuildInputChanged(
+        NyxIdChatInputResolutionCommittedEvent committed)
+    {
+        ArgumentNullException.ThrowIfNull(committed);
+        var sequence = committed.State?.ProgressSequence ?? 0;
+        if (committed.Resolution is null || sequence <= 0)
+            return [];
+
+        return [Custom(InputChangedEventName, committed.Resolution, sequence)];
+    }
+
+    public static IReadOnlyList<AGUIEvent> BuildApprovalChanged(
+        NyxIdChatApprovalResolutionCommittedEvent committed)
+    {
+        ArgumentNullException.ThrowIfNull(committed);
+        var sequence = committed.State?.ProgressSequence ?? 0;
+        if (committed.Resolution is null || sequence <= 0)
+            return [];
+
+        return [Custom(ApprovalChangedEventName, committed.Resolution, sequence)];
     }
 
     private static NyxIdAssistantActionRequestWirePayload? MapActionRequestWirePayload(
@@ -463,7 +507,7 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         frames.Add(BuildTerminal(actorId, turnId, state, sequence));
     }
 
-    private static AGUIEvent BuildTerminal(
+    internal static AGUIEvent BuildTerminal(
         string actorId,
         string turnId,
         NyxIdChatConversationGAgentState state,

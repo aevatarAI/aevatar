@@ -1,4 +1,7 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.LlmCatalog;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
@@ -54,27 +57,36 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
         AuthorizationOwnerIdentity owner,
         string bearerToken,
         CancellationToken ct = default) =>
-        RefreshAsync(owner, bearerToken, requiredServiceIds: null, ct);
+        RefreshAsync(owner, bearerToken, requiredServiceIds: null, llmTarget: null, ct);
 
     public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
         AuthorizationOwnerIdentity owner,
         string bearerToken,
-        IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices,
+        NyxIdAuthorizationCatalogRefreshRequest request,
         CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(requiredServices);
-        var requiredServiceIds = NormalizeRequiredServiceIds(requiredServices);
-        return requiredServiceIds.Count == 0
+        ArgumentNullException.ThrowIfNull(request);
+        var requiredServiceIds = NormalizeRequiredServiceIds(request.RequiredServices);
+        var llmTarget = NormalizeLLMTarget(request.LLMTarget);
+        if (llmTarget?.RouteKind == LLMRouteKind.NyxIdUserService)
+        {
+            requiredServiceIds = new SortedSet<string>(
+                [llmTarget.NyxIdUserServiceId],
+                StringComparer.Ordinal);
+        }
+
+        return requiredServiceIds.Count == 0 && llmTarget == null
             ? Task.FromResult(new NyxIdAuthorizationCatalogRefreshResult(
                 NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable,
                 "nyxid_exact_service_identity_unavailable"))
-            : RefreshAsync(owner, bearerToken, requiredServiceIds, ct);
+            : RefreshAsync(owner, bearerToken, requiredServiceIds, llmTarget, ct);
     }
 
     private async Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
         AuthorizationOwnerIdentity owner,
         string bearerToken,
         IReadOnlySet<string>? requiredServiceIds,
+        ScheduledInvocationLLMRefreshRequirement? llmTarget,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(owner);
@@ -108,6 +120,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
                 refreshId,
                 startedAt,
                 requiredServiceIds,
+                llmTarget,
                 (refreshId, startedAt, dispatchCancellation) =>
                     _commandPort.BeginRefreshAsync(
                         normalizedOwner,
@@ -120,12 +133,49 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
     }
 
     private static IReadOnlySet<string> NormalizeRequiredServiceIds(
-        IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices) =>
+        IReadOnlyList<NyxIdUserServiceCapabilityRef>? requiredServices) =>
         new SortedSet<string>(
-            requiredServices
+            (requiredServices ?? [])
                 .Select(static service => service.UserServiceId?.Trim() ?? string.Empty)
                 .Where(static serviceId => !string.IsNullOrWhiteSpace(serviceId)),
             StringComparer.Ordinal);
+
+    private static ScheduledInvocationLLMRefreshRequirement? NormalizeLLMTarget(
+        ScheduledInvocationLLMRefreshRequirement? target)
+    {
+        if (target == null)
+            return null;
+        if (target.UserConfigStateVersion <= 0)
+            throw new InvalidOperationException("LLM refresh requires a positive UserConfig state version.");
+
+        var serviceId = target.NyxIdUserServiceId?.Trim() ?? string.Empty;
+        var serviceSlug = target.ServiceSlugSnapshot?.Trim() ?? string.Empty;
+        var explicitModelId = target.ExplicitModelId ?? string.Empty;
+        var selection = new LLMSelection
+        {
+            RouteKind = target.RouteKind,
+            RouteValue = target.RouteKind switch
+            {
+                LLMRouteKind.Gateway => LLMSelectionPolicy.GatewayRoute,
+                LLMRouteKind.NyxIdUserService => $"{ScheduledInvocationOwnerLLMSelectionPolicy.NyxIdProxyRoutePrefix}{serviceSlug}",
+                _ => string.Empty,
+            },
+            NyxIdUserServiceId = serviceId,
+            ServiceSlugSnapshot = serviceSlug,
+            ModelSelection = new LLMModelSelection
+            {
+                Kind = LLMModelSelectionKind.ExplicitModel,
+                ModelId = explicitModelId,
+            },
+        };
+        LLMSelectionPolicy.ValidateSelection(selection);
+        return target with
+        {
+            RouteValue = selection.RouteValue,
+            NyxIdUserServiceId = serviceId,
+            ServiceSlugSnapshot = serviceSlug,
+        };
+    }
 
     private static AuthorizationOwnerIdentity PersonalOwner(string verifiedOwnerSubject) => new()
     {
@@ -144,6 +194,11 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
 
     private const string CatalogMismatchFailureCode = "nyxid_scope_plan_catalog_mismatch";
     private const string ProviderTimedOutFailureCode = "nyxid_catalog_refresh_provider_timed_out";
+    private const string LLMModelsTransportFailureCode = "nyxid_llm_models_transport_failure";
+    private const string LLMTargetInventoryMismatchFailureCode = "nyxid_llm_target_inventory_mismatch";
+    private const string LLMModelsContractVersion = "openai-models/v1";
+    private const string LLMModelsPolicyVersion = "nyxid-exact-route-models/v1";
+    private const long MaxLLMModelsResponseBytes = 1024 * 1024;
 
     private readonly INyxIdAuthorizationCatalogCommandPort _commandPort;
     private readonly INyxIdApiClientFactory _nyxClientFactory;
@@ -178,6 +233,7 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         string refreshId,
         DateTimeOffset startedAt,
         IReadOnlySet<string>? requiredServiceIds,
+        ScheduledInvocationLLMRefreshRequirement? llmTarget,
         Func<string, DateTimeOffset, CancellationToken, Task> beginRefresh,
         CancellationToken ct)
     {
@@ -230,6 +286,7 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
                         bearerToken,
                         refreshId,
                         requiredServiceIds,
+                        llmTarget,
                         sink,
                         ct)
                     .ConfigureAwait(false);
@@ -253,6 +310,7 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         string bearerToken,
         string refreshId,
         IReadOnlySet<string>? requiredServiceIds,
+        ScheduledInvocationLLMRefreshRequirement? llmTarget,
         EventChannel<NyxIdAuthorizationCatalogRefreshCommittedOutcome> sink,
         CancellationToken ct)
     {
@@ -267,6 +325,7 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
                 bearerToken,
                 refreshId,
                 requiredServiceIds,
+                llmTarget,
                 providerCancellation.Token);
             var completed = await Task.WhenAny(terminalTask, providerTask).ConfigureAwait(false);
             if (ReferenceEquals(completed, terminalTask))
@@ -380,9 +439,23 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         string bearerToken,
         string refreshId,
         IReadOnlySet<string>? requiredServiceIds,
+        ScheduledInvocationLLMRefreshRequirement? llmTarget,
         CancellationToken ct)
     {
         var client = _nyxClientFactory.CreateClient();
+        if (llmTarget?.RouteKind == LLMRouteKind.Gateway && requiredServiceIds?.Count == 0)
+        {
+            await RefreshGatewayTargetOnlyAsync(
+                normalizedOwner,
+                bearerToken,
+                refreshId,
+                llmTarget,
+                client,
+                requiredServiceIds,
+                ct).ConfigureAwait(false);
+            return;
+        }
+
         string inventoryResponse;
         try
         {
@@ -408,6 +481,19 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
             .Where(IsEligible)
             .OrderBy(static service => service.Id, StringComparer.Ordinal)
             .ToArray();
+        if (llmTarget?.RouteKind == LLMRouteKind.NyxIdUserService &&
+            !eligibleServices.Any(service =>
+                string.Equals(service.Id, llmTarget.NyxIdUserServiceId, StringComparison.Ordinal) &&
+                string.Equals(service.Slug, llmTarget.ServiceSlugSnapshot, StringComparison.Ordinal)))
+        {
+            await RecordCatalogUnstableRefreshAsync(
+                normalizedOwner,
+                refreshId,
+                LLMTargetInventoryMismatchFailureCode,
+                ct).ConfigureAwait(false);
+            return;
+        }
+
         if (requiredServiceIds is not null)
         {
             var missingRequiredServiceId = requiredServiceIds
@@ -439,6 +525,7 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
                 NyxIdApiAccessResponseParser.ScopePlanPolicyVersion,
                 [],
                 requiredServiceIds,
+                gatewayLLMTarget: null,
                 ct).ConfigureAwait(false);
             return;
         }
@@ -492,6 +579,42 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
                 scopePlan.ContractVersion,
                 scopePlan.PolicyVersion))
             .ToArray();
+        NyxIdAuthorizationLLMTargetEvidence? gatewayLLMTarget = null;
+        if (llmTarget != null)
+        {
+            var targetResult = await ReadLLMTargetAsync(
+                client,
+                bearerToken,
+                llmTarget,
+                ct).ConfigureAwait(false);
+            if (targetResult.FailureCode != null)
+            {
+                await RecordLLMProviderFailureAsync(
+                    normalizedOwner,
+                    refreshId,
+                    targetResult.FailureCode,
+                    ct).ConfigureAwait(false);
+                return;
+            }
+
+            var targetEvidence = BuildLLMTargetEvidence(
+                llmTarget,
+                targetResult.ModelCatalog!,
+                observedAt);
+            if (llmTarget.RouteKind == LLMRouteKind.Gateway)
+            {
+                gatewayLLMTarget = targetEvidence;
+            }
+            else
+            {
+                var service = services.Single(service => string.Equals(
+                    service.UserServiceId,
+                    llmTarget.NyxIdUserServiceId,
+                    StringComparison.Ordinal));
+                service.LlmTarget = targetEvidence;
+            }
+        }
+
         await ObserveCatalogAsync(
             normalizedOwner,
             refreshId,
@@ -501,9 +624,146 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
             scopePlan.PolicyVersion,
             services,
             requiredServiceIds,
+            gatewayLLMTarget,
             ct).ConfigureAwait(false);
-
     }
+
+    private async Task RefreshGatewayTargetOnlyAsync(
+        AuthorizationOwnerIdentity owner,
+        string bearerToken,
+        string refreshId,
+        ScheduledInvocationLLMRefreshRequirement target,
+        NyxIdApiClient client,
+        IReadOnlySet<string> requiredServiceIds,
+        CancellationToken ct)
+    {
+        var targetResult = await ReadLLMTargetAsync(client, bearerToken, target, ct).ConfigureAwait(false);
+        if (targetResult.FailureCode != null)
+        {
+            await RecordLLMProviderFailureAsync(owner, refreshId, targetResult.FailureCode, ct)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        var observedAt = _timeProvider.GetUtcNow();
+        var evidence = BuildLLMTargetEvidence(target, targetResult.ModelCatalog!, observedAt);
+        await ObserveCatalogAsync(
+            owner,
+            refreshId,
+            observedAt,
+            observedAt,
+            LLMModelsContractVersion,
+            LLMModelsPolicyVersion,
+            [],
+            requiredServiceIds,
+            evidence,
+            ct).ConfigureAwait(false);
+    }
+
+    private async Task<LLMTargetReadResult> ReadLLMTargetAsync(
+        NyxIdApiClient client,
+        string bearerToken,
+        ScheduledInvocationLLMRefreshRequirement target,
+        CancellationToken ct)
+    {
+        NyxIdProxyTextResponse response;
+        try
+        {
+            response = await client.GetLlmRouteModelsBoundedAsync(
+                bearerToken,
+                target.RouteKind,
+                target.RouteKind == LLMRouteKind.NyxIdUserService
+                    ? target.NyxIdUserServiceId
+                    : null,
+                target.RouteKind == LLMRouteKind.NyxIdUserService
+                    ? target.ServiceSlugSnapshot
+                    : null,
+                MaxLLMModelsResponseBytes,
+                ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return LLMTargetReadResult.Failed(ProviderTimedOutFailureCode);
+        }
+
+        if (response.Succeeded)
+        {
+            return LLMTargetReadResult.Observed(
+                NyxIdLlmServiceCatalogParser.ParseOpenAIModelsResponse(response.Content));
+        }
+
+        if (response.Detail is "content_length_exceeds_max_bytes" or "content_exceeds_max_bytes")
+        {
+            return LLMTargetReadResult.Observed(new LLMModelCatalog
+            {
+                Certainty = LLMModelCatalogCertainty.NotVerifiable,
+                DiagnosticKind = LLMModelCatalogDiagnosticKind.ResponseTooLarge,
+            });
+        }
+
+        if (response.HttpStatus is 401 or 403)
+        {
+            return LLMTargetReadResult.Observed(new LLMModelCatalog
+            {
+                Certainty = LLMModelCatalogCertainty.Unavailable,
+                DiagnosticKind = LLMModelCatalogDiagnosticKind.AccessDenied,
+            });
+        }
+
+        if (response.HttpStatus is > 0 and < 500 && response.HttpStatus != 429)
+        {
+            return LLMTargetReadResult.Observed(new LLMModelCatalog
+            {
+                Certainty = LLMModelCatalogCertainty.Unavailable,
+                DiagnosticKind = LLMModelCatalogDiagnosticKind.RouteNotReady,
+            });
+        }
+
+        return LLMTargetReadResult.Failed(LLMModelsTransportFailureCode);
+    }
+
+    private async Task RecordLLMProviderFailureAsync(
+        AuthorizationOwnerIdentity owner,
+        string refreshId,
+        string failureCode,
+        CancellationToken ct)
+    {
+        await _commandPort.RecordRefreshFailureAsync(
+            owner,
+            refreshId,
+            _timeProvider.GetUtcNow(),
+            failureCode,
+            ct: ct).ConfigureAwait(false);
+        LogWithoutThrowing(
+            LogLevel.Warning,
+            "NyxID LLM catalog target refresh failed. ownerKind={OwnerKind} failureCode={FailureCode}",
+            owner.OwnerKind,
+            failureCode);
+    }
+
+    private static NyxIdAuthorizationLLMTargetEvidence BuildLLMTargetEvidence(
+        ScheduledInvocationLLMRefreshRequirement target,
+        LLMModelCatalog modelCatalog,
+        DateTimeOffset observedAt) => new()
+    {
+        RouteKind = target.RouteKind,
+        RouteValue = target.RouteKind == LLMRouteKind.Gateway
+            ? LLMSelectionPolicy.GatewayRoute
+            : $"{ScheduledInvocationOwnerLLMSelectionPolicy.NyxIdProxyRoutePrefix}{target.ServiceSlugSnapshot}",
+        NyxIdUserServiceId = target.RouteKind == LLMRouteKind.NyxIdUserService
+            ? target.NyxIdUserServiceId
+            : string.Empty,
+        ServiceSlugSnapshot = target.RouteKind == LLMRouteKind.NyxIdUserService
+            ? target.ServiceSlugSnapshot
+            : string.Empty,
+        ModelCatalog = modelCatalog.Clone(),
+        ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(observedAt),
+        FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+            observedAt.Add(CatalogFreshnessLifetime)),
+        EvaluatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(observedAt),
+        AuthorityContractVersion = LLMModelsContractVersion,
+        AuthorityPolicyVersion = LLMModelsPolicyVersion,
+    };
 
     private async Task ObserveCatalogAsync(
         AuthorizationOwnerIdentity owner,
@@ -514,13 +774,14 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         string policyVersion,
         IReadOnlyList<NyxIdAuthorizationServiceEvidence> services,
         IReadOnlySet<string>? requiredServiceIds,
+        NyxIdAuthorizationLLMTargetEvidence? gatewayLLMTarget,
         CancellationToken ct)
     {
         var coverage = requiredServiceIds is null
             ? NyxIdAuthorizationCatalogObservationCoverage.FullOwner
             : NyxIdAuthorizationCatalogObservationCoverage.RequiredServiceSubset;
         var contentDigest = coverage == NyxIdAuthorizationCatalogObservationCoverage.FullOwner
-            ? NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(owner, services)
+            ? NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(owner, services, gatewayLLMTarget)
             : string.Empty;
         await _commandPort.ObserveAsync(new NyxIdAuthorizationCatalogObservation(
             owner,
@@ -533,7 +794,17 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
             contentDigest,
             services,
             coverage,
-            requiredServiceIds?.ToArray()), ct).ConfigureAwait(false);
+            requiredServiceIds?.ToArray(),
+            gatewayLLMTarget), ct).ConfigureAwait(false);
+    }
+
+    private sealed record LLMTargetReadResult(
+        LLMModelCatalog? ModelCatalog,
+        string? FailureCode)
+    {
+        public static LLMTargetReadResult Observed(LLMModelCatalog catalog) => new(catalog, null);
+
+        public static LLMTargetReadResult Failed(string failureCode) => new(null, failureCode);
     }
 
     private async Task RecordProviderTimeoutAsync(

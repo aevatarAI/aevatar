@@ -79,7 +79,7 @@ internal sealed class ChatRoutePolicyCommandPort : IChatRoutePolicyCommandPort
             },
             Runtime = new EnvelopeRuntime
             {
-                Deduplication = new DeliveryDeduplication
+                DeliveryIdentity = new DeliveryIdentity
                 {
                     OperationId = commandId,
                 },

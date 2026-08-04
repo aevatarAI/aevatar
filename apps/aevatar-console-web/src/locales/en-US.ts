@@ -808,6 +808,8 @@ const enUSMessages = {
   'teams.automations.authorization.error': 'Authorization could not continue',
   'teams.automations.authorization.exactAccess': 'Exact access',
   'teams.automations.authorization.expiry': 'Credential expiry',
+  'teams.automations.authorization.noExternalGrants': 'No external NyxID service or owner LLM model grant is required.',
+  'teams.automations.authorization.noOwnerLLMGrant': 'No owner LLM model grant is required for this workflow.',
   'teams.automations.authorization.preparing': 'Preparing authorization review',
   'teams.automations.authorization.review': 'Review authorization',
   'teams.automations.authorization.reviewAgain': 'Review again',
@@ -1034,6 +1036,10 @@ const enUSMessages = {
     'This member is the Team entry member. Deleting it removes the member authority and clears it from the Team roster; published service artifacts, revisions, and historical runs stay intact.',
   'teams.members.delete.failed': 'Failed to delete member.',
   'teams.members.delete.keep': 'Keep member',
+  'teams.members.delete.notConfirmed':
+    'Deletion was not confirmed. The member remains in the list; refresh and retry.',
+  'teams.members.delete.submitted':
+    'Deletion submitted. Waiting for confirmation.',
   'teams.members.delete.success': 'Deleted member {member}.',
   'teams.members.delete.title': 'Delete member',
   'teams.members.delete.warning':
@@ -1134,6 +1140,23 @@ const enUSMessages = {
     'Workflow draft could not be loaded.',
   'teamMemberWorkflowStudio.common.close': 'Close',
   'teamMemberWorkflowStudio.executionPanel.consoleAria': 'Draft run console',
+  'teamMemberWorkflowStudio.explicitRequest.approval': 'Approval',
+  'teamMemberWorkflowStudio.explicitRequest.body': 'Request body',
+  'teamMemberWorkflowStudio.explicitRequest.cancel': 'Cancel',
+  'teamMemberWorkflowStudio.explicitRequest.confirm': 'Confirm and publish',
+  'teamMemberWorkflowStudio.explicitRequest.description':
+    'Review each external request before publishing this workflow.',
+  'teamMemberWorkflowStudio.explicitRequest.executionModes':
+    'Allowed execution modes',
+  'teamMemberWorkflowStudio.explicitRequest.interactiveUnavailable':
+    'An external request is not available for interactive publication.',
+  'teamMemberWorkflowStudio.explicitRequest.methodPath': 'Method and path',
+  'teamMemberWorkflowStudio.explicitRequest.notRequired': 'Not required',
+  'teamMemberWorkflowStudio.explicitRequest.required': 'Required',
+  'teamMemberWorkflowStudio.explicitRequest.response': 'Response',
+  'teamMemberWorkflowStudio.explicitRequest.risk': 'Risk',
+  'teamMemberWorkflowStudio.explicitRequest.service': 'Service',
+  'teamMemberWorkflowStudio.explicitRequest.title': 'Review external requests',
   'teamMemberWorkflowStudio.executionPanel.duration': 'Duration',
   'teamMemberWorkflowStudio.executionPanel.clear': 'Clear logs',
   'teamMemberWorkflowStudio.executionPanel.copyAll': 'Copy all logs',

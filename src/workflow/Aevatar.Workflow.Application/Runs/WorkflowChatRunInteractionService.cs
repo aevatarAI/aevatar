@@ -109,9 +109,11 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
                 WorkflowChatRunStartError.ProjectionDisabled,
                 WorkflowChatRunStartFailureDetail.Create(WorkflowChatRunStartError.ProjectionDisabled));
 
-        if (Aevatar.Workflow.Abstractions.WorkflowCallerCredentialTokens
-            .ParseOptional(request.CallerCredential?.BearerToken)
-            .IsInvalid)
+        if (Aevatar.Workflow.Abstractions.WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
+                request.CallerCredential?.BearerToken,
+                request.CallerCredential?.Kind ??
+                Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.Unspecified,
+                request.CallerCredential?.SourceReadableUserBearerToken))
             return AttemptStartResult.Failure(
                 WorkflowChatRunStartError.InvalidCallerCredential,
                 WorkflowChatRunStartFailureDetail.Create(WorkflowChatRunStartError.InvalidCallerCredential));
@@ -405,9 +407,11 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
             return WorkflowChatRunStartError.ChatHistoryReservationUnavailable;
         }
 
-        return Aevatar.Workflow.Abstractions.WorkflowCallerCredentialTokens
-            .ParseOptional(request.CallerCredential?.BearerToken)
-            .IsInvalid
+        return Aevatar.Workflow.Abstractions.WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
+                request.CallerCredential?.BearerToken,
+                request.CallerCredential?.Kind ??
+                Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.Unspecified,
+                request.CallerCredential?.SourceReadableUserBearerToken)
             ? WorkflowChatRunStartError.InvalidCallerCredential
             : WorkflowChatRunStartError.None;
     }

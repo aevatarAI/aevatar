@@ -13,6 +13,7 @@ using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -53,11 +54,11 @@ public sealed class NyxIdChatGAgent : RoleGAgent
 
     public NyxIdChatGAgent(
         IBuiltInPromptFloorProvider builtInPromptFloorProvider,
+        IAgentToolExecutionPort toolExecutionPort,
         ISystemSkillOverlayProvider? systemSkillOverlayProvider = null,
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
-        IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
         LocalSkillCatalog? localSkillCatalog = null,
@@ -65,11 +66,15 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort = null,
         NyxIdRelayOptions? relayOptions = null,
         TimeProvider? timeProvider = null,
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer = null)
-        : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources,
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer = null,
+        RoleChatExecutionOptions? chatExecutionOptions = null,
+        ISecretVault? chatToolRecoverySecretVault = null)
+        : base(toolExecutionPort, llmProviderFactory, additionalHooks, agentMiddlewares, llmMiddlewares, toolSources,
                remoteToolApprovalPort: remoteToolApprovalPort,
                remoteToolApprovalNotificationPort: remoteToolApprovalNotificationPort,
-               timeProvider: timeProvider)
+               timeProvider: timeProvider,
+               chatExecutionOptions: chatExecutionOptions,
+               chatToolRecoverySecretVault: chatToolRecoverySecretVault)
     {
         _builtInPromptFloorProvider = builtInPromptFloorProvider ??
                                       throw new ArgumentNullException(nameof(builtInPromptFloorProvider));
@@ -97,6 +102,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         }
 
         await base.OnActivateAsync(ct);
+        await RequestPendingDirectChatHistoryDeliveryAsync(ct);
     }
 
     protected override string DecorateSystemPrompt(
@@ -395,7 +401,6 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         try
         {
             await base.HandleChatRequest(request);
-            await SaveDirectChatCompletionAsync(request, CancellationToken.None);
         }
         finally
         {
@@ -465,31 +470,101 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         return initializeEvent;
     }
 
-    private async Task SaveDirectChatCompletionAsync(ChatRequestEvent request, CancellationToken ct)
+    protected override async Task OnRoleChatSessionTerminalCommittedAsync(
+        string sessionId,
+        CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(request.ScopeId) ||
-            string.IsNullOrWhiteSpace(request.SessionId) ||
+        await TryRequestDirectChatHistoryDeliveryAsync(sessionId, ct);
+    }
+
+    private async Task RequestPendingDirectChatHistoryDeliveryAsync(CancellationToken ct)
+    {
+        var pendingSessionIds = State.Sessions
+            .Where(static entry =>
+                entry.Value.Completed &&
+                entry.Value.HistoryDeliveryStatus == RoleChatHistoryDeliveryStatus.Prepared)
+            .OrderBy(static entry => entry.Value.Sequence)
+            .Select(static entry => entry.Key)
+            .ToArray();
+
+        foreach (var sessionId in pendingSessionIds)
+            await TryRequestDirectChatHistoryDeliveryAsync(sessionId, ct);
+    }
+
+    private async Task TryRequestDirectChatHistoryDeliveryAsync(string sessionId, CancellationToken ct)
+    {
+        try
+        {
+            await RequestDirectChatHistoryDeliveryAsync(sessionId, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning(
+                exception,
+                "NyxID direct-chat history delivery request remains pending. actor={ActorId} session={SessionId}",
+                Id,
+                sessionId);
+        }
+    }
+
+    private Task RequestDirectChatHistoryDeliveryAsync(string sessionId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId) ||
+            !State.Sessions.TryGetValue(sessionId, out var session) ||
+            session.HistoryDeliveryStatus != RoleChatHistoryDeliveryStatus.Prepared)
+        {
+            return Task.CompletedTask;
+        }
+
+        return PublishAsync(new NyxIdDirectChatHistoryDeliveryRequested
+        {
+            SessionId = sessionId,
+            DeliveryId = session.HistoryDeliveryId,
+            ExpectedAttempt = session.HistoryDeliveryAttempt,
+        }, TopologyAudience.Self, ct);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleDirectChatHistoryDeliveryRequestedAsync(
+        NyxIdDirectChatHistoryDeliveryRequested request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.SessionId) ||
             !State.Sessions.TryGetValue(request.SessionId, out var completedSession) ||
-            !completedSession.Completed)
+            !completedSession.Completed ||
+            completedSession.HistoryDeliveryStatus != RoleChatHistoryDeliveryStatus.Prepared ||
+            string.IsNullOrWhiteSpace(completedSession.ScopeId) ||
+            string.IsNullOrWhiteSpace(completedSession.HistoryDeliveryId) ||
+            !string.Equals(completedSession.HistoryDeliveryId, request.DeliveryId, StringComparison.Ordinal) ||
+            completedSession.HistoryDeliveryAttempt != request.ExpectedAttempt)
         {
             return;
         }
 
-        var prompt = request.Prompt ?? completedSession.Prompt ?? string.Empty;
+        var sessionId = request.SessionId;
+        var prompt = completedSession.Prompt ?? string.Empty;
         var completion = completedSession.FinalContent ?? string.Empty;
         var assistantStatus = completedSession.Outcome switch
         {
             RoleChatSessionOutcome.Blocked => "blocked",
             RoleChatSessionOutcome.Failed => "error",
+            RoleChatSessionOutcome.OutcomeUncertain => "outcome_uncertain",
             _ => "completed",
         };
         var safeError = completedSession.Outcome switch
         {
             RoleChatSessionOutcome.Blocked => completedSession.AuthorizationRequired?.SafeMessage,
-            RoleChatSessionOutcome.Failed => completedSession.SafeMessage,
+            RoleChatSessionOutcome.Failed or RoleChatSessionOutcome.OutcomeUncertain => completedSession.SafeMessage,
             _ => null,
         };
-        var archivedCompletion = completedSession.Outcome is RoleChatSessionOutcome.Blocked or RoleChatSessionOutcome.Failed
+        var archivedCompletion = completedSession.Outcome is
+            RoleChatSessionOutcome.Blocked or
+            RoleChatSessionOutcome.Failed or
+            RoleChatSessionOutcome.OutcomeUncertain
             ? string.IsNullOrWhiteSpace(safeError)
                 ? "The chat request failed. Please try again."
                 : safeError
@@ -499,14 +574,14 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         var messages = new[]
         {
             new StoredChatMessage(
-                Id: $"{request.SessionId}-user",
+                Id: $"{sessionId}-user",
                 Role: "user",
                 Content: prompt,
                 Timestamp: timestamp,
                 Status: "completed",
-                TurnId: request.SessionId),
+                TurnId: sessionId),
             new StoredChatMessage(
-                Id: $"{request.SessionId}-assistant",
+                Id: $"{sessionId}-assistant",
                 Role: "assistant",
                 Content: archivedCompletion,
                 Timestamp: timestamp,
@@ -515,7 +590,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
                 Thinking: string.IsNullOrWhiteSpace(completedSession.FinalReasoningContent)
                     ? null
                     : completedSession.FinalReasoningContent,
-                TurnId: request.SessionId),
+                TurnId: sessionId),
         };
         var meta = new ConversationMeta(
             Id: Id,
@@ -528,9 +603,28 @@ public sealed class NyxIdChatGAgent : RoleGAgent
             LlmRoute: NyxIdChatServiceDefaults.ProviderName,
             LlmModel: string.IsNullOrWhiteSpace(completedSession.Model) ? null : completedSession.Model);
 
-        await Services.GetRequiredService<IChatHistoryCommandPort>()
-            .SaveMessagesAsync(request.ScopeId, Id, meta, messages, ct)
-            .ConfigureAwait(false);
+        try
+        {
+            await Services.GetRequiredService<IChatHistoryCommandPort>()
+                .SaveMessagesAsync(completedSession.ScopeId, Id, meta, messages, CancellationToken.None)
+                .ConfigureAwait(false);
+
+            await PersistDomainEventAsync(new NyxIdDirectChatHistoryDispatchedEvent
+            {
+                SessionId = sessionId,
+                DeliveryId = completedSession.HistoryDeliveryId,
+                Attempt = NextHistoryDeliveryAttempt(completedSession.HistoryDeliveryAttempt),
+                DispatchedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            }, CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning(
+                exception,
+                "NyxID direct-chat history delivery remains pending. actor={ActorId} session={SessionId}",
+                Id,
+                sessionId);
+        }
     }
 
     private static string BuildConversationTitle(string prompt, string completion, string fallback)
@@ -548,8 +642,14 @@ public sealed class NyxIdChatGAgent : RoleGAgent
 
     protected override RoleGAgentState TransitionState(RoleGAgentState current, IMessage evt)
     {
+        var next = base.TransitionState(current, evt);
+        if (StateTransitionMatcher.TryExtract<RoleChatSessionCompletedEvent>(evt, out var completed))
+            next = PrepareDirectChatHistoryDelivery(current, next, completed);
+        if (StateTransitionMatcher.TryExtract<NyxIdDirectChatHistoryDispatchedEvent>(evt, out var dispatched))
+            next = ApplyDirectChatHistoryDispatched(next, dispatched);
+
         if (!StateTransitionMatcher.TryExtract<AgentProfileBoundEvent>(evt, out var profileBound))
-            return base.TransitionState(current, evt);
+            return next;
 
         if (profileBound.Profile is null)
             throw new InvalidOperationException("Agent profile binding events require a complete snapshot.");
@@ -557,15 +657,74 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         if (!AgentProfileSnapshotCodec.Verify(profileBound.Profile))
             throw new InvalidOperationException("Agent profile binding events require a valid digest.");
 
-        if (current.AgentProfile is not null)
+        if (next.AgentProfile is not null)
         {
-            if (!AgentProfileSnapshotCodec.ByteEquivalent(current.AgentProfile, profileBound.Profile))
+            if (!AgentProfileSnapshotCodec.ByteEquivalent(next.AgentProfile, profileBound.Profile))
                 throw new InvalidOperationException("Committed agent profile bindings cannot be replaced.");
-            return current;
+            return next;
         }
 
-        var next = current.Clone();
-        next.AgentProfile = profileBound.Profile.Clone();
+        var profileNext = next.Clone();
+        profileNext.AgentProfile = profileBound.Profile.Clone();
+        return profileNext;
+    }
+
+    private RoleGAgentState PrepareDirectChatHistoryDelivery(
+        RoleGAgentState current,
+        RoleGAgentState next,
+        RoleChatSessionCompletedEvent completed)
+    {
+        var sessionId = completed.SessionId;
+        if (string.IsNullOrWhiteSpace(sessionId) ||
+            !next.Sessions.TryGetValue(sessionId, out var session) ||
+            string.IsNullOrWhiteSpace(session.ScopeId))
+        {
+            return next;
+        }
+
+        var hasPrevious = current.Sessions.TryGetValue(sessionId, out var previous);
+        var isInitialTerminal = previous is not { Completed: true };
+        var isExplicitReconciliation = previous is
+            {
+                Completed: true,
+                Outcome: RoleChatSessionOutcome.OutcomeUncertain,
+                HistoryDeliveryStatus: RoleChatHistoryDeliveryStatus.Dispatched,
+            } &&
+            session.Outcome is RoleChatSessionOutcome.Completed or RoleChatSessionOutcome.Failed;
+        if (!isInitialTerminal && !isExplicitReconciliation)
+            return next;
+
+        var prepared = next.Clone();
+        var nextSession = prepared.Sessions[sessionId];
+        nextSession.HistoryDeliveryStatus = RoleChatHistoryDeliveryStatus.Prepared;
+        if (!hasPrevious || string.IsNullOrWhiteSpace(nextSession.HistoryDeliveryId))
+            nextSession.HistoryDeliveryId = BuildDirectChatHistoryDeliveryId(sessionId);
+        return prepared;
+    }
+
+    private static RoleGAgentState ApplyDirectChatHistoryDispatched(
+        RoleGAgentState state,
+        NyxIdDirectChatHistoryDispatchedEvent dispatched)
+    {
+        if (string.IsNullOrWhiteSpace(dispatched.SessionId) ||
+            !state.Sessions.TryGetValue(dispatched.SessionId, out var session) ||
+            session.HistoryDeliveryStatus != RoleChatHistoryDeliveryStatus.Prepared ||
+            !string.Equals(session.HistoryDeliveryId, dispatched.DeliveryId, StringComparison.Ordinal) ||
+            dispatched.Attempt != NextHistoryDeliveryAttempt(session.HistoryDeliveryAttempt))
+        {
+            return state;
+        }
+
+        var next = state.Clone();
+        var nextSession = next.Sessions[dispatched.SessionId];
+        nextSession.HistoryDeliveryStatus = RoleChatHistoryDeliveryStatus.Dispatched;
+        nextSession.HistoryDeliveryAttempt = dispatched.Attempt;
         return next;
     }
+
+    private string BuildDirectChatHistoryDeliveryId(string sessionId) =>
+        $"nyxid-direct-chat-history:{Id}:{sessionId}";
+
+    private static int NextHistoryDeliveryAttempt(int currentAttempt) =>
+        currentAttempt == int.MaxValue ? int.MaxValue : currentAttempt + 1;
 }

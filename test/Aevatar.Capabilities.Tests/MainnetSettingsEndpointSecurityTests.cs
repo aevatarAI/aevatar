@@ -5,6 +5,8 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Audit.Core.Identity;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Configuration;
@@ -107,7 +109,14 @@ public sealed class MainnetSettingsEndpointSecurityTests
             HttpMethod.Put,
             $"/api/user-config/llm?scopeId={CrossScopeHint}",
             ownerAToken,
-            new { routeValue = "gateway", model = OwnerAModel });
+            new
+            {
+                action = "select_gateway",
+                gateway = new
+                {
+                    model = new { kind = "explicit_model", modelId = OwnerAModel },
+                },
+            });
         using var llmWriteResponse = await host.Client.SendAsync(llmWrite);
         llmWriteResponse.StatusCode.Should().Be(
             HttpStatusCode.Accepted,
@@ -131,8 +140,10 @@ public sealed class MainnetSettingsEndpointSecurityTests
             host.Client,
             $"/api/user-config/llm?scopeId={CrossScopeHint}",
             ownerBToken);
-        ownerALlm.RootElement.GetProperty("defaultModel").GetString().Should().Be(OwnerAModel);
-        ownerBLlm.RootElement.GetProperty("defaultModel").GetString().Should().BeEmpty();
+        var ownerASelection = ownerALlm.RootElement.GetProperty("savedSelection");
+        ownerASelection.GetProperty("routeKind").GetString().Should().Be("gateway");
+        ownerASelection.GetProperty("modelSelection").GetProperty("modelId").GetString().Should().Be(OwnerAModel);
+        ownerBLlm.RootElement.TryGetProperty("savedSelection", out _).Should().BeFalse();
 
         using var ownerARuntime = await GetJsonAsync(
             host.Client,
@@ -255,6 +266,7 @@ public sealed class MainnetSettingsEndpointSecurityTests
             ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
             ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
             ["Aevatar:NyxId:Authority"] = "https://nyxid.example.test",
+            ["Aevatar:NyxId:AssistantActions:Enabled"] = "false",
             [$"LLMProviders:Providers:{ProviderName}:ApiKey"] = RawHostSecret,
         });
         return builder;
@@ -333,7 +345,7 @@ public sealed class MainnetSettingsEndpointSecurityTests
                 builder.Services.Replace(ServiceDescriptor.Singleton<IUserConfigCommandService>(serviceProvider =>
                     serviceProvider.GetRequiredService<OwnerScopedUserConfigPort>()));
                 builder.Services.Replace(ServiceDescriptor.Singleton<IUserLlmCatalogPort>(
-                    new EmptyUserLlmCatalogPort()));
+                    new SecurityTestUserLlmCatalogPort()));
 
                 var app = builder.Build();
                 app.MapAevatarMainnetHost();
@@ -422,10 +434,16 @@ public sealed class MainnetSettingsEndpointSecurityTests
         {
             ct.ThrowIfCancellationRequested();
             var current = _configs.GetValueOrDefault(resource) ?? new UserConfig(string.Empty);
+            var selection = update.LlmSelection ?? current.LlmSelection;
             _configs[resource] = current with
             {
-                DefaultModel = update.DefaultModel ?? current.DefaultModel,
-                LlmSelection = update.LlmSelection ?? current.LlmSelection,
+                DefaultModel = update.LlmSelection is null
+                    ? current.DefaultModel
+                    : LLMSelectionPolicy.CompatibilityDefaultModel(update.LlmSelection),
+                PreferredLlmRoute = update.LlmSelection is null
+                    ? current.PreferredLlmRoute
+                    : LLMSelectionPolicy.CompatibilityRoute(update.LlmSelection),
+                LlmSelection = selection,
                 RuntimeMode = update.RuntimeMode ?? current.RuntimeMode,
                 LocalRuntimeBaseUrl = update.LocalRuntimeBaseUrl ?? current.LocalRuntimeBaseUrl,
                 RemoteRuntimeBaseUrl = update.RemoteRuntimeBaseUrl ?? current.RemoteRuntimeBaseUrl,
@@ -446,10 +464,31 @@ public sealed class MainnetSettingsEndpointSecurityTests
             UserConfigResourceKey.ForOwnerScope(scopeResolver.ResolveScopeIdOrDefault());
     }
 
-    private sealed class EmptyUserLlmCatalogPort : IUserLlmCatalogPort
+    private sealed class SecurityTestUserLlmCatalogPort : IUserLlmCatalogPort
     {
         public Task<NyxIdLlmServicesResult> GetServicesAsync(string bearerToken, CancellationToken ct) =>
-            Task.FromResult(new NyxIdLlmServicesResult([], SetupHint: null));
+            Task.FromResult(new NyxIdLlmServicesResult(
+                [
+                    new NyxIdLlmService(
+                        CatalogEntryId: null,
+                        ServiceSlug: "gateway",
+                        DisplayName: "Gateway",
+                        RouteValue: UserConfigLlmRouteDefaults.Gateway,
+                        ModelCatalog: new LLMModelCatalog
+                        {
+                            Certainty = LLMModelCatalogCertainty.Enumerated,
+                            DefaultModelId = OwnerAModel,
+                            ModelIds = { OwnerAModel },
+                        },
+                        Status: UserLlmRouteStatus.Ready,
+                        Source: UserLlmRouteSource.GatewayProvider,
+                        Allowed: true,
+                        Description: null),
+                ],
+                SetupHint: null));
+
+        public Task<NyxIdLlmServicesResult> GetFreshServicesAsync(string bearerToken, CancellationToken ct) =>
+            GetServicesAsync(bearerToken, ct);
 
         public Task<NyxIdLlmService> ProvisionAsync(
             string bearerToken,

@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -47,7 +48,7 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
         if (document is null)
             return CreateDefaultConfig();
 
-        var llmSelection = MapSelection(document.LlmSelection);
+        var llmSelection = document.LlmSelection?.Clone();
         return new UserConfig(
             DefaultModel: document.DefaultModel,
             PreferredLlmRoute: UserLlmSelectionRoute.Resolve(llmSelection) ?? string.Empty,
@@ -74,26 +75,6 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
             RemoteRuntimeBaseUrl: _defaultRemoteRuntimeBaseUrl,
             GithubUsername: null,
             LlmSelection: null);
-
-    private static UserLlmSelectionValue? MapSelection(UserLlmSelection? selection)
-    {
-        if (selection is null)
-            return null;
-
-        var kind = selection.RouteKind switch
-        {
-            UserLlmRouteKind.Unspecified => UserLlmSelectionKind.Unspecified,
-            UserLlmRouteKind.Gateway => UserLlmSelectionKind.Gateway,
-            UserLlmRouteKind.NyxIdUserService => UserLlmSelectionKind.NyxIdUserService,
-            _ => throw new ArgumentOutOfRangeException(nameof(selection)),
-        };
-
-        return new UserLlmSelectionValue(
-            kind,
-            selection.RouteValue,
-            selection.NyxIdUserServiceId,
-            selection.ServiceSlugSnapshot);
-    }
 
     private static string? NormalizeOptional(string? value)
     {

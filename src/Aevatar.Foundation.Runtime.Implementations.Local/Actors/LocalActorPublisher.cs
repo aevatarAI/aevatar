@@ -123,8 +123,10 @@ public sealed class LocalActorPublisher : IEventPublisher, ICommittedStateEventP
     {
         var envelope = new EventEnvelope
         {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Id = string.IsNullOrWhiteSpace(evt.StateEvent?.EventId)
+                ? Guid.NewGuid().ToString("N")
+                : evt.StateEvent.EventId,
+            Timestamp = evt.StateEvent?.Timestamp?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
             Route = EnvelopeRouteSemantics.CreateObserverPublication(_actorId, audience),
         };

@@ -81,12 +81,46 @@ public sealed class WorkflowDocumentNormalizer
             TargetRole = NormalizeText(step.TargetRole),
             UsedRoleAlias = false,
             AllowedTools = NormalizeAllowedTools(step.AllowedTools),
+            Capability = NormalizeCapability(step.Capability),
             Parameters = normalizedParameters,
             Next = NormalizeText(step.Next),
             Branches = step.Branches
                 .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
                 .ToDictionary(pair => pair.Key.Trim(), pair => pair.Value.Trim(), StringComparer.Ordinal),
             Children = step.Children.Select(NormalizeStep).ToList(),
+        };
+    }
+
+    private static StepCapability? NormalizeCapability(StepCapability? capability)
+    {
+        if (capability is null)
+            return null;
+
+        return capability with
+        {
+            NyxIdOperation = capability.NyxIdOperation is null
+                ? null
+                : capability.NyxIdOperation with
+                {
+                    UserServiceId = capability.NyxIdOperation.UserServiceId.Trim(),
+                    EndpointId = capability.NyxIdOperation.EndpointId.Trim(),
+                },
+            NyxIdRequest = capability.NyxIdRequest is null
+                ? null
+                : capability.NyxIdRequest with
+                {
+                    UserServiceId = capability.NyxIdRequest.UserServiceId.Trim(),
+                    Method = capability.NyxIdRequest.Method.Trim(),
+                    PathTemplate = capability.NyxIdRequest.PathTemplate.Trim(),
+                    QueryParameters = capability.NyxIdRequest.QueryParameters
+                        .Select(static value => value.Trim())
+                        .ToList(),
+                    HeaderParameters = capability.NyxIdRequest.HeaderParameters
+                        .Select(static value => value.Trim())
+                        .ToList(),
+                    BodyMode = capability.NyxIdRequest.BodyMode.Trim(),
+                    ResponseMode = capability.NyxIdRequest.ResponseMode.Trim(),
+                },
         };
     }
 

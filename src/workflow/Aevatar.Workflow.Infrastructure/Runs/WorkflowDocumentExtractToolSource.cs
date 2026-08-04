@@ -11,6 +11,7 @@ using System.IO.Compression;
 using UglyToad.PdfPig;
 using ProtoWorkflowFileRef = Aevatar.Workflow.Abstractions.WorkflowFileRef;
 using ProtoWorkflowFileSourceKind = Aevatar.Workflow.Abstractions.WorkflowFileSourceKind;
+using ProtoWorkflowLlmControlContext = Aevatar.Workflow.Abstractions.WorkflowLlmControlContext;
 
 namespace Aevatar.Workflow.Infrastructure.Runs;
 
@@ -78,6 +79,7 @@ public sealed class WorkflowDocumentExtractToolSource(
                         if (arguments.RequestKind == DocumentExtractionRequestKind.SchemaBoundJson)
                         {
                             return await ExtractImageSchemaBoundJsonAsync(
+                                request,
                                 artifact.Content,
                                 descriptor,
                                 mediaType,
@@ -86,6 +88,7 @@ public sealed class WorkflowDocumentExtractToolSource(
                         }
 
                         return await ExtractImageTextAsync(
+                            request,
                             artifact.Content,
                             descriptor,
                             mediaType,
@@ -104,6 +107,7 @@ public sealed class WorkflowDocumentExtractToolSource(
                     if (arguments.RequestKind == DocumentExtractionRequestKind.SchemaBoundJson)
                     {
                         return await ExtractSchemaBoundJsonAsync(
+                            request,
                             extracted.Text,
                             descriptor,
                             mediaType,
@@ -142,6 +146,7 @@ public sealed class WorkflowDocumentExtractToolSource(
         }
 
         private async Task<WorkflowToolExecutionResult> ExtractImageSchemaBoundJsonAsync(
+            WorkflowToolExecutionRequest request,
             Stream content,
             FileArtifactRef descriptor,
             string mediaType,
@@ -162,6 +167,7 @@ public sealed class WorkflowDocumentExtractToolSource(
             }
 
             return await ExtractSchemaBoundJsonAsync(
+                request,
                 extractedText: null,
                 descriptor,
                 mediaType,
@@ -171,6 +177,7 @@ public sealed class WorkflowDocumentExtractToolSource(
         }
 
         private async Task<WorkflowToolExecutionResult> ExtractSchemaBoundJsonAsync(
+            WorkflowToolExecutionRequest request,
             string? extractedText,
             FileArtifactRef descriptor,
             string mediaType,
@@ -206,6 +213,7 @@ public sealed class WorkflowDocumentExtractToolSource(
             {
                 var providerJson = await ExtractSchemaBoundJsonWithProviderAsync(
                     schemaProvider,
+                    request,
                     extractedText,
                     imageBytes,
                     descriptor,
@@ -240,6 +248,7 @@ public sealed class WorkflowDocumentExtractToolSource(
         }
 
         private async Task<WorkflowToolExecutionResult> ExtractImageTextAsync(
+            WorkflowToolExecutionRequest request,
             Stream content,
             FileArtifactRef descriptor,
             string mediaType,
@@ -280,6 +289,7 @@ public sealed class WorkflowDocumentExtractToolSource(
             {
                 var extracted = await ExtractImageTextWithProviderAsync(
                     imageProvider,
+                    request,
                     imageBytes,
                     descriptor,
                     mediaType,
@@ -541,6 +551,7 @@ public sealed class WorkflowDocumentExtractToolSource(
 
         private async Task<string> ExtractSchemaBoundJsonWithProviderAsync(
             ILLMProvider provider,
+            WorkflowToolExecutionRequest workflowRequest,
             string? extractedText,
             byte[]? imageBytes,
             FileArtifactRef descriptor,
@@ -552,6 +563,8 @@ public sealed class WorkflowDocumentExtractToolSource(
             {
                 Messages = BuildSchemaBoundMessages(extractedText, imageBytes, descriptor, mediaType, schemaContract),
                 RequestId = $"document_extract:{descriptor.FileId ?? descriptor.ArtifactId ?? "schema"}",
+                CallerContext = ToCallerContext(workflowRequest),
+                LlmControl = ToLlmControl(workflowRequest.LlmControl),
                 ResponseFormat = LLMResponseFormat.ForJsonSchema(
                     schemaContract.Schema,
                     schemaContract.Name,
@@ -626,6 +639,7 @@ public sealed class WorkflowDocumentExtractToolSource(
 
         private async Task<ExtractedText> ExtractImageTextWithProviderAsync(
             ILLMProvider imageProvider,
+            WorkflowToolExecutionRequest workflowRequest,
             byte[] imageBytes,
             FileArtifactRef descriptor,
             string mediaType,
@@ -646,6 +660,8 @@ public sealed class WorkflowDocumentExtractToolSource(
                     ]),
                 ],
                 RequestId = $"document_extract:{descriptor.FileId ?? descriptor.ArtifactId ?? "image"}",
+                CallerContext = ToCallerContext(workflowRequest),
+                LlmControl = ToLlmControl(workflowRequest.LlmControl),
             };
 
             var builder = new StringBuilder(capacity: Math.Min(maxChars, 4096));
@@ -661,6 +677,31 @@ public sealed class WorkflowDocumentExtractToolSource(
 
             return new ExtractedText(builder.ToString(), truncated);
         }
+
+        private static LLMRequestCallerContext ToCallerContext(WorkflowToolExecutionRequest request)
+        {
+            var scopeId = Normalize(request.ScopeId) ?? string.Empty;
+            var bearer = Normalize(request.CallerCredential?.BearerToken);
+            return new LLMRequestCallerContext(
+                scopeId,
+                scopeId,
+                ResponseId: null,
+                bearer is null ? null : new LLMRequestCallerCredentials(bearer));
+        }
+
+        private static LLMControlContext? ToLlmControl(ProtoWorkflowLlmControlContext? source) =>
+            source is null
+                ? null
+                : new LLMControlContext(
+                    NyxIdAccessToken: null,
+                    NyxIdOrgToken: null,
+                    SenderNyxIdAccessToken: Normalize(source.SenderNyxIdAccessToken),
+                    ModelOverride: Normalize(source.ModelOverride),
+                    NyxIdRoutePreference: Normalize(source.RoutePreference),
+                    MaxToolRoundsOverride: source.HasMaxToolRoundsOverride
+                        ? source.MaxToolRoundsOverride
+                        : null,
+                    UserMemoryPrompt: Normalize(source.UserMemoryPrompt));
 
         private static async Task<byte[]> ReadCappedImageBytesAsync(
             Stream content,

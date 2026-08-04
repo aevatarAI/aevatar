@@ -50,7 +50,7 @@ public sealed class ResponsesDirectToolPlanService(
         if (forwardToModel.ToolSetRef is not null &&
             !string.IsNullOrWhiteSpace(forwardToModel.ToolSetRef.Name))
         {
-            var toolSet = toolSetRegistry.Resolve(forwardToModel.ToolSetRef);
+            var toolSet = toolSetRegistry.Resolve(forwardToModel.ToolSetRef.Name);
             if (!toolSet.IsSuccess)
             {
                 var error = toolSet.Error!;

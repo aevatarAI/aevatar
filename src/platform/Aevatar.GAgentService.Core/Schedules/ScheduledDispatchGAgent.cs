@@ -26,6 +26,10 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     private static readonly TimeSpan OverdueFireGracePeriod = TimeSpan.FromMinutes(10);
     private const string LegacyDurableSenderBearerBlockedError =
         "Scheduled service invocation contains legacy durable bearer auth; reconfigure the schedule with senderNyxId or scopeOwnerNyxId.";
+    private const string LegacyUnmarkedEnvelopeRetiredError =
+        "Scheduled dispatch envelope target is retired because it lacks trusted internal authority.";
+    private const string LegacyUnmarkedEnvelopeRetiredReason =
+        "legacy_unmarked_envelope_target_retired";
     private static readonly TimeSpan MaxNextFireCallbackHop = TimeSpan.FromDays(7);
     internal static readonly TimeSpan TeamAutomationEffectAttemptLeaseDuration = TimeSpan.FromMinutes(5);
     private readonly IActorDispatchPort _dispatchPort;
@@ -55,6 +59,9 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             await PurgeDurableCallbacksAsync(ct);
             return;
         }
+
+        if (await RetireUnmarkedEnvelopeTargetAsync(ct))
+            return;
 
         await RecoverTeamCredentialExpiryAsync(ct);
         if (CanScheduleAutomaticFire())
@@ -956,6 +963,9 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         }
 
         EnsureConfiguredForWrite(command.Manual ? "manual fire" : "fire");
+        if (await RetireUnmarkedEnvelopeTargetAsync(ct, rejectManualFire: command.Manual))
+            return;
+
         if (command.Manual)
             EnsureTeamAutomationOwnerAccess(command.TeamAutomationOwner, "manual fire");
 
@@ -1070,6 +1080,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 await PersistFireFailedAsync(
                     scheduledFireAt,
                     idempotencyKey,
+                    "scheduled_dispatch_failed",
                     "Scheduled dispatch was not accepted.",
                     command.Manual,
                     ct);
@@ -1117,10 +1128,30 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 previousCredentialExpiryLease,
                 CancellationToken.None);
         }
+        catch (ScheduledWorkflowAdmissionException ex)
+        {
+            Logger.LogWarning(
+                "Scheduled dispatch {ActorId} workflow admission failed. errorCode={ErrorCode}",
+                Id,
+                ex.StableCode);
+            await PersistFireFailedAsync(
+                scheduledFireAt,
+                idempotencyKey,
+                ex.StableCode,
+                ex.SafeMessage,
+                command.Manual,
+                CancellationToken.None);
+        }
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Scheduled dispatch {ActorId} dispatch failed.", Id);
-            await PersistFireFailedAsync(scheduledFireAt, idempotencyKey, ex.Message, command.Manual, CancellationToken.None);
+            await PersistFireFailedAsync(
+                scheduledFireAt,
+                idempotencyKey,
+                "scheduled_dispatch_failed",
+                ex.Message,
+                command.Manual,
+                CancellationToken.None);
         }
 
         if (!command.Manual)
@@ -1215,6 +1246,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     private async Task PersistFireFailedAsync(
         DateTimeOffset scheduledFireAt,
         string idempotencyKey,
+        string errorCode,
         string error,
         bool manual,
         CancellationToken ct)
@@ -1225,6 +1257,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             FailedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             IdempotencyKey = idempotencyKey,
             Error = string.IsNullOrWhiteSpace(error) ? "Scheduled dispatch failed." : error.Trim(),
+            ErrorCode = string.IsNullOrWhiteSpace(errorCode) ? "scheduled_dispatch_failed" : errorCode.Trim(),
             Manual = manual,
         }, ct);
     }
@@ -1588,8 +1621,44 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         !State.Completed &&
         !State.Deleted &&
         IsConfigured() &&
+        !HasEnvelopeTargetWithoutTrustedInternalAuthority() &&
         (!HasTeamCredentialLifecycle() ||
          HasUsableActiveTeamCredential(_timeProvider.GetUtcNow()));
+
+    private async Task<bool> RetireUnmarkedEnvelopeTargetAsync(
+        CancellationToken ct,
+        bool rejectManualFire = false)
+    {
+        if (!HasEnvelopeTargetWithoutTrustedInternalAuthority())
+            return false;
+        if (rejectManualFire)
+            throw new InvalidOperationException(LegacyUnmarkedEnvelopeRetiredError);
+
+        if (State.Enabled)
+        {
+            await PersistDomainEventAsync(new ScheduledDispatchDisabledEvent
+            {
+                Reason = LegacyUnmarkedEnvelopeRetiredReason,
+                DisabledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            }, ct);
+        }
+
+        await PurgeDurableCallbacksAsync(ct);
+        Logger.LogWarning(
+            "Scheduled dispatch {ActorId} retired an envelope target without trusted internal authority. scheduleId={ScheduleId}",
+            Id,
+            ResolveScheduleId());
+        return true;
+    }
+
+    private bool HasEnvelopeTargetWithoutTrustedInternalAuthority() =>
+        IsConfigured() &&
+        ResolveTargetKind() == ScheduledDispatchTargetKindState.Envelope &&
+        !HasTrustedInternalEnvelopeAuthority(State.Target);
+
+    private static bool HasTrustedInternalEnvelopeAuthority(ScheduledDispatchTargetState? target) =>
+        target?.Kind == ScheduledDispatchTargetKindState.Envelope &&
+        target.EnvelopeAuthority == ScheduledDispatchEnvelopeAuthorityState.TrustedInternal;
 
     private async Task RecoverTeamCredentialExpiryAsync(CancellationToken ct)
     {
@@ -2856,7 +2925,16 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     {
         if (triggerEnvelope == null || triggerEnvelope.Payload == null)
             throw new ArgumentException("Trigger envelope with payload is required.", nameof(triggerEnvelope));
-        _ = NormalizeTarget(target, scheduleKind);
+        if (target == null || target.Kind == ScheduledDispatchTargetKindState.Unspecified)
+            throw new ArgumentException("Scheduled dispatch typed target is required.", nameof(target));
+        var normalizedTarget = NormalizeTarget(target, scheduleKind);
+        if (normalizedTarget.Kind == ScheduledDispatchTargetKindState.Envelope &&
+            !HasTrustedInternalEnvelopeAuthority(normalizedTarget))
+        {
+            throw new ArgumentException(
+                "Scheduled dispatch envelope target requires trusted internal authority.",
+                nameof(target));
+        }
         _ = NormalizeRequired(targetActorId, nameof(targetActorId));
 
         var normalizedMode = NormalizeScheduleMode(scheduleMode);
@@ -2905,6 +2983,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 Kind = ScheduledDispatchTargetKindState.Envelope,
                 ActorId = NormalizeOptional(target.ActorId),
                 Envelope = target.Envelope == null ? null : NormalizeTriggerEnvelope(target.Envelope),
+                EnvelopeAuthority = target.EnvelopeAuthority,
                 CredentialRequirementTargetKind = ResolveCredentialRequirementTargetKind(
                     target.CredentialRequirementTargetKind,
                     ScheduledDispatchTargetKindState.Envelope,
@@ -2915,6 +2994,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 Kind = ScheduledDispatchTargetKindState.Envelope,
                 ActorId = NormalizeOptional(target.ActorId),
                 Envelope = target.Envelope == null ? null : NormalizeTriggerEnvelope(target.Envelope),
+                EnvelopeAuthority = target.EnvelopeAuthority,
                 CredentialRequirementTargetKind = ResolveCredentialRequirementTargetKind(
                     target.CredentialRequirementTargetKind,
                     ScheduledDispatchTargetKindState.Envelope,
@@ -3533,6 +3613,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 FailedAt = evt.OccurredAt?.Clone(),
                 IdempotencyKey = evt.IdempotencyKey,
                 Error = evt.ErrorCode ?? string.Empty,
+                ErrorCode = evt.ErrorCode ?? string.Empty,
                 Manual = evt.Manual,
             });
         }
@@ -3593,6 +3674,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         var next = current.Clone();
         next.LastFireAt = evt.ScheduledFireAt?.ToDateTimeOffset();
         next.LastError = string.Empty;
+        next.LastErrorCode = string.Empty;
         next.UpdatedAt = evt.StartedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
         UpsertFireRecord(next, evt.IdempotencyKey, new ScheduledDispatchFireRecordState
         {
@@ -3615,6 +3697,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         next.LastCommandId = evt.CommandId ?? string.Empty;
         next.LastCorrelationId = evt.CorrelationId ?? string.Empty;
         next.LastError = string.Empty;
+        next.LastErrorCode = string.Empty;
         next.FireCount++;
         next.UpdatedAt = evt.DispatchedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
         UpsertFireRecord(next, evt.IdempotencyKey, new ScheduledDispatchFireRecordState
@@ -3638,6 +3721,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         var next = current.Clone();
         next.LastFireAt = evt.ScheduledFireAt?.ToDateTimeOffset();
         next.LastError = evt.Error ?? string.Empty;
+        next.LastErrorCode = evt.ErrorCode ?? string.Empty;
         next.FireCount++;
         next.FailureCount++;
         next.UpdatedAt = evt.FailedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
@@ -3647,6 +3731,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             CompletedAt = evt.FailedAt?.Clone(),
             IdempotencyKey = evt.IdempotencyKey ?? string.Empty,
             Error = evt.Error ?? string.Empty,
+            ErrorCode = evt.ErrorCode ?? string.Empty,
             Manual = evt.Manual,
             Status = ScheduledDispatchFireStatusState.Failed,
         });

@@ -182,7 +182,7 @@ public class VoicePresenceEventPolicyTests
         {
             envelope.Runtime = new EnvelopeRuntime
             {
-                Deduplication = new DeliveryDeduplication
+                DeliveryIdentity = new DeliveryIdentity
                 {
                     OperationId = operationId,
                 },

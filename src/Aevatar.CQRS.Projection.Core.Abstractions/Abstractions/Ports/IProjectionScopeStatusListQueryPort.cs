@@ -2,7 +2,7 @@ namespace Aevatar.CQRS.Projection.Core.Abstractions;
 
 // Read-model LIST companion to IProjectionScopeWatermarkQueryPort (which reads a single scope's
 // watermark). This lists every materialized projection-scope status so an operations surface can
-// render per-scope health (version lag = observed - successful, active flag, failure count).
+// render per-scope processing and unresolved-failure health without subtracting unrelated actor versions.
 //
 // Query path reads the materialized ProjectionScopeStatusDocument read-model ONLY: it never replays
 // event streams, rebuilds state, or touches IEventStore (the same invariant as the single-scope port).
@@ -20,13 +20,19 @@ public sealed record ProjectionScopeStatusListQuery
 }
 
 // Read-side projection of a single ProjectionScopeStatusDocument, shaped for the operations surface.
-// ScopeActorId is the scope/actor key; Observed/Successful are the last observed/successful versions;
-// Lag is the derived backlog (never negative). UpdatedAt exposes the read-model's freshness watermark.
+// A version gap is exposed only when the scope contains exactly one authoritative source actor axis.
 public sealed record ProjectionScopeStatusSnapshot(
     string ScopeActorId,
     bool Active,
-    long LastObservedVersion,
-    long LastSuccessfulVersion,
-    int FailureCount,
-    long Lag,
+    long ReceivedEnvelopeTotal,
+    long AttemptedEnvelopeTotal,
+    long SuccessfulMaterializationTotal,
+    long FailedAttemptTotal,
+    long RetryExhaustedTotal,
+    int RetryExhaustedFailureCount,
+    int UnresolvedFailureCount,
+    DateTimeOffset? OldestUnresolvedFailureAt,
+    long FailureDiagnosticDroppedTotal,
+    int SourceActorCount,
+    long? SingleSourceVersionGap,
     DateTimeOffset UpdatedAt);

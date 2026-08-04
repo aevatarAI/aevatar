@@ -144,7 +144,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         upsert.CapabilityAdmission.Should().NotBeNull();
         var admission = upsert.CapabilityAdmission!;
         admission.CallerId.Should().BeEmpty();
-        admission.NyxIdCallerBearerToken.Should().BeNull();
+        admission.NyxIdCallerCredential.Should().BeNull();
         admission.NyxIdOrganizationBearerToken.Should().BeNull();
         admission.ExistingPlan.Should().NotBeNull();
         admission.ExistingPlan.Should().NotBeSameAs(submittedPlan);

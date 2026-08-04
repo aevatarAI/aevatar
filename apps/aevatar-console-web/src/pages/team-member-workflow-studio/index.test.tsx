@@ -1,4 +1,5 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { Modal } from "antd";
 import React from "react";
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
@@ -11,6 +12,16 @@ import {
   renderWithQueryClient,
 } from "../../../tests/reactQueryTestUtils";
 import TeamMemberWorkflowStudioPage from "./index";
+
+jest.mock("antd", () => {
+  const actual = jest.requireActual("antd");
+  return {
+    ...actual,
+    Modal: Object.assign(actual.Modal, {
+      confirm: jest.fn(),
+    }),
+  };
+});
 
 jest.mock("@/shared/graphs/GraphCanvas", () => ({
   __esModule: true,
@@ -138,6 +149,7 @@ jest.mock("@/shared/studio/api", () => {
       listWorkflows: jest.fn(),
       listExecutions: jest.fn(),
       parseYaml: jest.fn(),
+      previewExplicitRequests: jest.fn(),
       getPublishedWorkflow: jest.fn(),
       saveAndBindWorkflow: jest.fn(),
       saveWorkflow: jest.fn(),
@@ -551,6 +563,14 @@ describe("TeamMemberWorkflowStudioPage", () => {
     mockTeam();
     mockSerializeYaml();
     mockParseYaml();
+    (studioApi.previewExplicitRequests as jest.Mock).mockImplementation(
+      (input: { workflowId: string; revisionId: string }) => ({
+        workflowId: input.workflowId,
+        revisionId: input.revisionId,
+        items: [],
+      }),
+    );
+    (Modal.confirm as jest.Mock).mockClear();
     (studioApi.listWorkflows as jest.Mock).mockResolvedValue([]);
     (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValue([]);
     (studioApi.updateMemberDisplayName as jest.Mock).mockResolvedValue({
@@ -6199,7 +6219,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
   });
 
-  it("publishes an existing workflow member through save, bind, and binding-run observation only", async () => {
+  it("requires a fresh explicit-request confirmation before publishing an existing workflow member", async () => {
     window.history.replaceState(
       {},
       "",
@@ -6266,6 +6286,27 @@ describe("TeamMemberWorkflowStudioPage", () => {
       stateVersion: 2,
       updatedAt: "2026-06-08T00:00:02Z",
     });
+    (studioApi.previewExplicitRequests as jest.Mock).mockImplementation(
+      (input: { workflowId: string; revisionId: string }) => ({
+        workflowId: input.workflowId,
+        revisionId: input.revisionId,
+        items: [
+          {
+            callSiteId: "wf-alpha/request-alpha",
+            requestContractDigest: "digest-alpha",
+            userServiceId: "usvc-alpha",
+            method: "post",
+            pathTemplate: "/records/{id}",
+            bodyMode: "json",
+            bodyRequired: true,
+            responseMode: "text",
+            effectiveRisk: "write",
+            approvalRequired: true,
+            allowedExecutionModes: ["interactive"],
+          },
+        ],
+      }),
+    );
 
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
@@ -6277,6 +6318,43 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
     expect(screen.queryByRole("switch")).toBeNull();
     clickPublishAction();
+
+    await waitFor(() => {
+      expect(studioApi.previewExplicitRequests).toHaveBeenCalledWith({
+        executionMode: "interactive",
+        inlineWorkflowYamls: {},
+        revisionId: expect.stringMatching(/^rev-/),
+        scopeId: "scope-1",
+        workflowId: "workflow-alpha",
+        workflowYaml: expect.stringContaining("name: Workflow Alpha Published"),
+      });
+      expect(Modal.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Review external requests",
+        }),
+      );
+    });
+    expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
+
+    const confirmationConfig = (Modal.confirm as jest.Mock).mock.calls[0]?.[0];
+    await act(async () => {
+      confirmationConfig.onCancel();
+    });
+    await waitFor(() => {
+      expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Publish" })).toBeEnabled();
+    });
+
+    clickPublishAction();
+    await waitFor(() => {
+      expect(Modal.confirm).toHaveBeenCalledTimes(2);
+    });
+    const secondPreviewInput = (studioApi.previewExplicitRequests as jest.Mock).mock
+      .calls[1]?.[0];
+    const reconfirmationConfig = (Modal.confirm as jest.Mock).mock.calls[1]?.[0];
+    await act(async () => {
+      await reconfirmationConfig.onOk();
+    });
 
     await waitFor(() => {
       expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
@@ -6296,7 +6374,17 @@ describe("TeamMemberWorkflowStudioPage", () => {
         memberId: "m-alpha",
         scopeId: "scope-1",
         workflowId: "workflow-alpha",
+        revisionId: secondPreviewInput.revisionId,
         workflowYamls: [expect.stringContaining("name: Workflow Alpha Published")],
+        explicitRequestConfirmations: [
+          {
+            workflowId: "workflow-alpha",
+            revisionId: secondPreviewInput.revisionId,
+            callSiteId: "wf-alpha/request-alpha",
+            requestContractDigest: "digest-alpha",
+            attestedRisk: "write",
+          },
+        ],
       });
       expect(studioApi.getMemberBindingRun).toHaveBeenCalledWith(
         "scope-1",
@@ -6308,6 +6396,15 @@ describe("TeamMemberWorkflowStudioPage", () => {
       expect(screen.getByText("Published")).toBeTruthy();
       expect(screen.getByTitle(/Published member workflow is serviceable/)).toBeTruthy();
     });
+    const memberBindingInput = (studioApi.bindMemberWorkflow as jest.Mock).mock
+      .calls[0]?.[0];
+    expect(memberBindingInput.revisionId).toBe(secondPreviewInput.revisionId);
+    expect(memberBindingInput.explicitRequestConfirmations[0]?.revisionId).toBe(
+      secondPreviewInput.revisionId,
+    );
+    expect(memberBindingInput.workflowYamls).toEqual([
+      secondPreviewInput.workflowYaml,
+    ]);
     expect(studioApi.setTeamEntryMember).not.toHaveBeenCalled();
   });
 
@@ -6964,10 +7061,16 @@ describe("TeamMemberWorkflowStudioPage", () => {
         scopeId: "scope-1",
         serviceId: "svc-alpha",
         workflowId: "wf-alpha",
+        revisionId: expect.stringMatching(/^rev-/),
         workflowName: "Workflow Alpha v2",
         workflowYaml: expect.stringContaining("name: Workflow Alpha v2"),
       });
     });
+    const previewInput = (studioApi.previewExplicitRequests as jest.Mock).mock.calls[0]?.[0];
+    const saveAndBindInput = (studioApi.saveAndBindWorkflow as jest.Mock).mock.calls[0]?.[0];
+    expect(previewInput.revisionId).not.toBe("rev-1");
+    expect(saveAndBindInput.revisionId).toBe(previewInput.revisionId);
+    expect(Modal.confirm).not.toHaveBeenCalled();
     expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
     expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
     expect(studioApi.getMemberBindingRun).not.toHaveBeenCalled();
@@ -6986,7 +7089,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
   });
 
-  it("surfaces failed save-and-bind while an older member binding remains serviceable", async () => {
+  it("surfaces an explicit-request preview failure without publishing", async () => {
     window.history.replaceState(
       {},
       "",
@@ -7031,8 +7134,8 @@ describe("TeamMemberWorkflowStudioPage", () => {
       document: mockWorkflowDocument,
       updatedAtUtc: "2026-06-08T00:00:00Z",
     });
-    (studioApi.saveAndBindWorkflow as jest.Mock).mockRejectedValue(
-      new StudioApiError("Latest workflow draft failed to bind.", 500),
+    (studioApi.previewExplicitRequests as jest.Mock).mockRejectedValue(
+      new StudioApiError("Latest workflow preview failed.", 500),
     );
 
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
@@ -7048,19 +7151,17 @@ describe("TeamMemberWorkflowStudioPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Latest workflow draft failed to bind.")).toBeTruthy();
+      expect(screen.getByText("Latest workflow preview failed.")).toBeTruthy();
     });
-    expect(studioApi.saveAndBindWorkflow).toHaveBeenCalledWith({
-      appId: "studio",
-      displayName: "Workflow Alpha v2",
-      exposureDesired: true,
+    expect(studioApi.previewExplicitRequests).toHaveBeenCalledWith({
+      executionMode: "interactive",
       inlineWorkflowYamls: {},
+      revisionId: expect.stringMatching(/^rev-/),
       scopeId: "scope-1",
-      serviceId: "svc-alpha",
       workflowId: "wf-alpha",
-      workflowName: "Workflow Alpha v2",
       workflowYaml: expect.stringContaining("name: Workflow Alpha v2"),
     });
+    expect(studioApi.saveAndBindWorkflow).not.toHaveBeenCalled();
     expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
     expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
   });
@@ -7391,6 +7492,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
         memberId: "m-alpha",
         scopeId: "scope-1",
         workflowId: "wf-alpha",
+        revisionId: expect.stringMatching(/^rev-/),
         workflowYamls: [expect.stringContaining("name: Workflow Alpha")],
       });
       expect(screen.getByText("Published")).toBeTruthy();

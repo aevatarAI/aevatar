@@ -30,7 +30,7 @@ public sealed class ChannelRemoteSkillAccessTokenResolver : IRemoteSkillAccessTo
         var context = AgentToolRequestContext.Current;
         var bindingId = Normalize(context?.SenderBinding.BindingId);
         if (bindingId is null)
-            return Normalize(context?.Credentials.NyxIdAccessToken);
+            return AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(context?.Credentials);
 
         var senderToken = Normalize(context!.Credentials.SenderNyxIdAccessToken);
         if (senderToken is not null)

@@ -14,6 +14,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
 using System.Text.Encodings.Web;
 
 namespace Aevatar.Authentication.Hosting;
@@ -54,6 +55,13 @@ public static class AevatarAuthenticationHostExtensions
             return builder;
         }
 
+        var apiAudience = ResolveApiAudience(options.Audience, builder.Environment);
+        if (scopeTokenOptions.Enabled && string.IsNullOrWhiteSpace(scopeTokenOptions.Audience))
+        {
+            throw new InvalidOperationException(
+                "Aevatar:Authentication:ScopeServiceTokens:Audience is required when scope service tokens are enabled.");
+        }
+
         if (scopeTokenOptions.Enabled)
             builder.Services.AddScopeServiceTokens(builder.Configuration);
 
@@ -67,8 +75,8 @@ public static class AevatarAuthenticationHostExtensions
                 jwt.Authority = options.Authority;
                 jwt.RequireHttpsMetadata = options.RequireHttpsMetadata;
 
-                jwt.TokenValidationParameters.ValidAudience = options.Audience;
-                jwt.TokenValidationParameters.ValidateAudience = !string.IsNullOrWhiteSpace(options.Audience);
+                jwt.TokenValidationParameters.ValidAudience = apiAudience;
+                jwt.TokenValidationParameters.ValidateAudience = apiAudience != null;
 
                 // Pin the accepted signing algorithms to block alg=none and downgrade attacks.
                 // Default is a safe superset covering every algorithm actually accepted; when
@@ -130,7 +138,7 @@ public static class AevatarAuthenticationHostExtensions
         {
             builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
                 .Configure<IScopeServiceTokenKeyProvider>((jwt, keyProvider) =>
-                    ConfigureScopeServiceTokenValidation(jwt, options, keyProvider));
+                    ConfigureScopeServiceTokenValidation(jwt, options, apiAudience, keyProvider));
         }
 
         // DPoP (RFC 9449) sender-constraint validation. Hosts enabling it must replace the
@@ -139,12 +147,6 @@ public static class AevatarAuthenticationHostExtensions
         builder.Services.TryAddSingleton<IDPoPReplayGuard, NoOpDPoPReplayGuard>();
         builder.Services.TryAddSingleton<DPoPProofValidator>();
         builder.Services.AddHostedService<DPoPReplayGuardStartupValidator>();
-
-        // Audience defense: warn (never fail closed) when audience validation is silently off
-        // outside Development. Emitted once at startup via a hosted service so a real logger is
-        // available; ValidateAudience itself stays config-driven.
-        if (string.IsNullOrWhiteSpace(options.Audience) && !builder.Environment.IsDevelopment())
-            builder.Services.AddHostedService<AudienceValidationDisabledWarning>();
 
         // When authentication is enabled, endpoints default to requiring an authenticated caller.
         // Public endpoints must opt out with [AllowAnonymous] / .AllowAnonymous().
@@ -162,6 +164,7 @@ public static class AevatarAuthenticationHostExtensions
     private static void ConfigureScopeServiceTokenValidation(
         JwtBearerOptions jwt,
         AevatarAuthenticationOptions options,
+        string? apiAudience,
         IScopeServiceTokenKeyProvider keyProvider)
     {
         var issuers = new List<string>();
@@ -196,15 +199,39 @@ public static class AevatarAuthenticationHostExtensions
         jwt.TokenValidationParameters.IssuerValidatorUsingConfiguration = resolver.ValidateIssuer;
         jwt.TokenValidationParameters.ValidateIssuer = true;
 
-        if (!string.IsNullOrWhiteSpace(keyProvider.Audience))
-        {
-            jwt.TokenValidationParameters.ValidAudiences = string.IsNullOrWhiteSpace(options.Audience)
-                ? [keyProvider.Audience]
-                : [options.Audience, keyProvider.Audience];
-            jwt.TokenValidationParameters.ValidateAudience = true;
-        }
+        jwt.TokenValidationParameters.ValidAudience = null;
+        jwt.TokenValidationParameters.ValidAudiences = null;
+        jwt.TokenValidationParameters.AudienceValidator = (audiences, securityToken, _) =>
+            ValidateAudienceForIssuer(
+                audiences,
+                securityToken,
+                apiAudience,
+                keyProvider.Issuer,
+                keyProvider.Audience);
+        jwt.TokenValidationParameters.ValidateAudience = true;
 
         jwt.TokenValidationParameters.ClockSkew = keyProvider.ClockSkew;
+    }
+
+    private static bool ValidateAudienceForIssuer(
+        IEnumerable<string> audiences,
+        SecurityToken securityToken,
+        string? apiAudience,
+        string scopeIssuer,
+        string? scopeAudience)
+    {
+        var isScopeIssuer = string.Equals(
+            securityToken?.Issuer,
+            scopeIssuer,
+            StringComparison.Ordinal);
+        if (isScopeIssuer)
+        {
+            return scopeAudience != null &&
+                   audiences.Contains(scopeAudience, StringComparer.Ordinal);
+        }
+
+        return apiAudience == null ||
+               audiences.Contains(apiAudience, StringComparer.Ordinal);
     }
 
     // Asymmetric OIDC algorithms every legitimate NyxID/OIDC token may be signed with. Kept a
@@ -313,6 +340,21 @@ public static class AevatarAuthenticationHostExtensions
 
         return enabled;
     }
+
+    private static string? ResolveApiAudience(string? configuredAudience, IHostEnvironment environment)
+    {
+        var audience = string.IsNullOrWhiteSpace(configuredAudience)
+            ? null
+            : configuredAudience.Trim();
+        if (audience == null && !environment.IsDevelopment())
+        {
+            throw new InvalidOperationException(
+                $"{AevatarAuthenticationOptions.SectionName}:Audience is required when " +
+                "authentication is enabled outside Development.");
+        }
+
+        return audience;
+    }
 }
 
 internal sealed class DPoPReplayGuardStartupValidator : IHostedService
@@ -337,32 +379,6 @@ internal sealed class DPoPReplayGuardStartupValidator : IHostedService
                 "Configure an atomic TTL-backed replay guard before starting the host.");
         }
 
-        return Task.CompletedTask;
-    }
-
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-}
-
-/// <summary>
-/// Emits a single startup WARNING when JWT audience validation is disabled (empty
-/// <c>Audience</c>) outside Development. Advisory only — the host does not fail closed; it
-/// surfaces that any audience-scoped token is accepted so the operator can decide.
-/// </summary>
-internal sealed class AudienceValidationDisabledWarning : IHostedService
-{
-    private readonly ILogger<AudienceValidationDisabledWarning> _logger;
-
-    public AudienceValidationDisabledWarning(ILogger<AudienceValidationDisabledWarning> logger)
-    {
-        _logger = logger;
-    }
-
-    public Task StartAsync(CancellationToken cancellationToken)
-    {
-        _logger.LogWarning(
-            "JWT audience validation is disabled: {SectionName}:Audience is empty. Tokens minted " +
-            "for any audience will be accepted. Set an Audience to enforce audience binding.",
-            AevatarAuthenticationOptions.SectionName);
         return Task.CompletedTask;
     }
 

@@ -73,8 +73,9 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         CancellationToken ct)
     {
         var tokens = new List<string>();
-        if (!string.IsNullOrWhiteSpace(access.NyxIdCallerBearerToken))
-            tokens.Add(access.NyxIdCallerBearerToken);
+        var sourceReadableBearerToken = access.NyxIdCallerCredential?.SourceReadableUserBearerToken;
+        if (!string.IsNullOrWhiteSpace(sourceReadableBearerToken))
+            tokens.Add(sourceReadableBearerToken);
         if (!string.IsNullOrWhiteSpace(access.NyxIdOrganizationBearerToken) &&
             !tokens.Contains(access.NyxIdOrganizationBearerToken, StringComparer.Ordinal))
         {
@@ -181,7 +182,15 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         }
 
         if (status == ExternalCapabilityReadinessStatus.Ready && !blocked)
-            return null;
+        {
+            return new AgentToolReceipt
+            {
+                CallId = callId ?? string.Empty,
+                ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+                Status = AgentToolReceiptStatus.Success,
+                ResultJson = resultJson,
+            };
+        }
 
         if (status != ExternalCapabilityReadinessStatus.ServiceRegistrationRequired ||
             !blocked ||
@@ -268,7 +277,9 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         access = new ExternalWorkflowCapabilityAccessContext(
             scopeId,
             callerId,
-            AgentToolRequestContext.NyxIdAccessToken,
+            NyxIdCallerCredentialSelection.SourceReadableUserBearerOrNull(
+                AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
+                    AgentToolRequestContext.Current?.Credentials)),
             AgentToolRequestContext.NyxIdOrgToken);
         error = null;
         return true;

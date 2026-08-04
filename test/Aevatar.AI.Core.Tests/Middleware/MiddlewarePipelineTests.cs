@@ -94,60 +94,6 @@ public class MiddlewarePipelineTests
         capturedMessage.Should().Be("HELLO");
     }
 
-    // ─── Tool Call Middleware ───
-
-    [Fact]
-    public async Task RunToolCallAsync_Chain_ExecutesInOrder()
-    {
-        var order = new List<string>();
-        var mw = new DelegateToolCallMiddleware(async (ctx, next) =>
-        {
-            order.Add("before");
-            await next();
-            order.Add("after");
-        });
-
-        var tool = new FakeTool("test");
-        var ctx = new ToolCallContext
-        {
-            Tool = tool, ToolName = "test", ToolCallId = "id1", ArgumentsJson = "{}",
-        };
-
-        await MiddlewarePipeline.RunToolCallAsync([mw], ctx, () =>
-        {
-            order.Add("core");
-            ctx.Result = "result";
-            return Task.CompletedTask;
-        });
-
-        order.Should().Equal("before", "core", "after");
-        ctx.Result.Should().Be("result");
-    }
-
-    [Fact]
-    public async Task RunToolCallAsync_MiddlewareCanOverrideResult()
-    {
-        var mw = new DelegateToolCallMiddleware(async (ctx, next) =>
-        {
-            await next();
-            ctx.Result = "overridden";
-        });
-
-        var tool = new FakeTool("test");
-        var ctx = new ToolCallContext
-        {
-            Tool = tool, ToolName = "test", ToolCallId = "id1", ArgumentsJson = "{}",
-        };
-
-        await MiddlewarePipeline.RunToolCallAsync([mw], ctx, () =>
-        {
-            ctx.Result = "original";
-            return Task.CompletedTask;
-        });
-
-        ctx.Result.Should().Be("overridden");
-    }
-
     // ─── LLM Call Middleware ───
 
     [Fact]
@@ -240,25 +186,10 @@ public class MiddlewarePipelineTests
         public Task InvokeAsync(AgentRunContext context, Func<Task> next) => handler(context, next);
     }
 
-    private sealed class DelegateToolCallMiddleware(
-        Func<ToolCallContext, Func<Task>, Task> handler) : IToolCallMiddleware
-    {
-        public Task InvokeAsync(ToolCallContext context, Func<Task> next) => handler(context, next);
-    }
-
     private sealed class DelegateLLMCallMiddleware(
         Func<LLMCallContext, Func<Task>, Task> handler) : ILLMCallMiddleware
     {
         public Task InvokeAsync(LLMCallContext context, Func<Task> next) => handler(context, next);
-    }
-
-    private sealed class FakeTool(string name) : Aevatar.AI.Abstractions.ToolProviders.IAgentTool
-    {
-        public string Name => name;
-        public string Description => "fake";
-        public string ParametersSchema => "{}";
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct) =>
-            Task.FromResult("fake-result");
     }
 
     private sealed class FakeLLMProvider : Aevatar.AI.Abstractions.LLMProviders.ILLMProvider

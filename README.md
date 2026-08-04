@@ -346,6 +346,7 @@ sequenceDiagram
 - **底层设计**： [docs/canon/architecture.md](docs/canon/architecture.md) — 事件模型与 Pipeline。
 - **系统架构总览**： [docs/canon/overview.md](docs/canon/overview.md) — 分层、能力装配、宿主边界。
 - **CQRS 架构**： [docs/canon/cqrs-projection.md](docs/canon/cqrs-projection.md) — 写侧/读侧、统一投影链路、接入约束。
+- **Conversation 与 Memory 语义**： [docs/canon/conversation-context-and-memory.md](docs/canon/conversation-context-and-memory.md) — transcript、execution state、prompt context 与 user memory 的所有权和 retention。
 - **CQRS 投影架构**： [src/Aevatar.CQRS.Projection.Core/README.md](src/Aevatar.CQRS.Projection.Core/README.md) / [src/workflow/Aevatar.Workflow.Projection/README.md](src/workflow/Aevatar.Workflow.Projection/README.md) — 统一 Projection Lifecycle、Coordinator 与 ReadModel。
 - **Role 与 Connector**： [docs/canon/role-model.md](docs/canon/role-model.md) — Workflow YAML 中的角色、Connector 配置、把 MCP/CLI/API 当角色能力。
 - **Event Sourcing**： [docs/canon/event-sourcing.md](docs/canon/event-sourcing.md) — 如何开启事件溯源。

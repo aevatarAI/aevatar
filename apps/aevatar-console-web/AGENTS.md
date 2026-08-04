@@ -52,8 +52,11 @@
 2. Make the smallest coherent change that completes the requested workflow.
    Preserve the existing information architecture and navigation model unless
    the user explicitly requests a redesign.
-3. Add or update tests for changed observable behavior. Select the narrowest
-   meaningful tests using `docs/testing-policy.md`.
+3. Decide whether the changed risk warrants new tests, then choose the
+   highest-value test layer that directly protects that risk using
+   `docs/testing-policy.md`. Do not default to unit tests when the behavior is
+   created by multiple modules or browser-facing integration. After selecting
+   the right tests, use the narrowest meaningful command to run them.
 4. Run the relevant static checks and build checks for the changed surface.
    Report the exact commands and explicitly state any validation not run.
 
@@ -170,7 +173,9 @@ pnpm --dir apps/aevatar-console-web build
 
 - The requested frontend behavior is complete across success, loading, empty,
   failure, and retry states that are relevant to the workflow.
-- Changed behavior has focused tests following `docs/testing-policy.md`.
+- The testing decision follows `docs/testing-policy.md`: changed risks have
+  high-value coverage at the appropriate layer, or the no-new-test decision
+  satisfies the policy's explicit exception.
 - Relevant type checks, lint checks, and bundling checks pass.
 - Generated output and unrelated files remain untouched.
 - The final report lists exact validation commands and states that the full

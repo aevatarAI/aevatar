@@ -60,12 +60,17 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     where TState : class, IMessage<TState>, new()
 {
     private readonly ILLMProviderFactory _llmProviderFactory;
+    private readonly IAgentToolExecutionPort _toolExecutionPort;
     private readonly IReadOnlyList<IAIGAgentExecutionHook> _additionalHooks;
     private readonly IReadOnlyList<IAgentRunMiddleware> _agentMiddlewares;
-    private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
     private readonly IReadOnlyList<IAgentToolSource> _toolSources;
-    private readonly IToolApprovalHandler? _approvalHandler;
+
+    protected virtual AgentToolApprovalContinuationMode ToolApprovalContinuationMode =>
+        AgentToolApprovalContinuationMode.None;
+
+    protected virtual IChatToolCheckpointPort ChatToolCheckpointPort =>
+        NoOpChatToolCheckpointPort.Instance;
 
     // ─── 组合的组件（各做一件事） ───
     /// <summary>工具管理器。</summary>
@@ -81,21 +86,19 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     private ChatRuntime? _chat;
 
     protected AIGAgentBase(
+        IAgentToolExecutionPort toolExecutionPort,
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
-        IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
-        IEnumerable<IAgentToolSource>? toolSources = null,
-        IToolApprovalHandler? approvalHandler = null)
+        IEnumerable<IAgentToolSource>? toolSources = null)
     {
+        _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         _llmProviderFactory = llmProviderFactory ?? NullLLMProviderFactory.Instance;
         _additionalHooks = (additionalHooks ?? []).ToArray();
         _agentMiddlewares = (agentMiddlewares ?? []).ToArray();
-        _toolMiddlewares = (toolMiddlewares ?? []).ToArray();
         _llmMiddlewares = (llmMiddlewares ?? []).ToArray();
         _toolSources = (toolSources ?? []).ToArray();
-        _approvalHandler = approvalHandler;
     }
 
     // ─── 初始化 ───
@@ -271,6 +274,32 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             ct);
     }
 
+    protected IAsyncEnumerable<LLMStreamChunk> ContinueChatStreamAsync(
+        IReadOnlyList<ContentPart> userContent,
+        IReadOnlyList<ChatMessage> committedToolTranscript,
+        string? requestId,
+        LLMControlContext? llmControl,
+        AgentToolExecutionContext? toolContext,
+        AgentProfileTurnCatalog? turnCatalog,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        CancellationToken ct = default)
+    {
+        EnsureRuntime();
+        var maxRounds = llmControl?.MaxToolRoundsOverride
+                        ?? toolContext?.Routing.MaxToolRoundsOverride
+                        ?? EffectiveConfig.MaxToolRounds;
+        return _chat!.ContinueChatStreamAsync(
+            userContent,
+            committedToolTranscript,
+            maxRounds,
+            requestId,
+            llmControl,
+            toolContext,
+            turnCatalog,
+            metadata,
+            ct);
+    }
+
     protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         IReadOnlyList<ContentPart> userContent,
         string? requestId,
@@ -335,14 +364,14 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             _foundationHooksRegistered = true;
         }
 
-        // 构建 Tool Call Middleware 链（审批中间件在最前面，不可绕过）
-        var effectiveToolMiddlewares = ToolCallMiddlewareChainFactory.ForAgentRuntime(
-            _toolMiddlewares,
-            _approvalHandler,
-            _hooks);
-
         // 构建 Chat Runtime
-        var toolLoop = new ToolCallLoop(Tools, _hooks, effectiveToolMiddlewares, _llmMiddlewares, History.Budget);
+        var toolLoop = new ToolCallLoop(
+            Tools,
+            _hooks,
+            _llmMiddlewares,
+            History.Budget,
+            _toolExecutionPort,
+            ToolApprovalContinuationMode);
         var compressionConfig = new Chat.ContextCompressionConfig(
             MaxPromptTokenBudget: EffectiveConfig.MaxPromptTokenBudget,
             CompressionThreshold: EffectiveConfig.CompressionThreshold,
@@ -357,7 +386,8 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             llmMiddlewares: _llmMiddlewares,
             agentId: Id,
             agentName: GetType().Name,
-            compressionConfig: compressionConfig);
+            compressionConfig: compressionConfig,
+            toolCheckpointPort: ChatToolCheckpointPort);
     }
 
     private ILLMProvider GetLLMProvider()
@@ -393,6 +423,12 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         Messages = History.BuildMessages(DecorateSystemPrompt(EffectiveConfig.SystemPrompt, turnCatalog)),
         RequestId = null,
         Metadata = null,
+        ToolContext = AgentToolExecutionContext.Empty with
+        {
+            ExecutionOwner = string.IsNullOrWhiteSpace(Id)
+                ? new AgentToolExecutionOwner()
+                : AgentToolExecutionOwners.Actor(Id),
+        },
         Tools = BuildValidTools(),
         Model = EffectiveConfig.Model,
         Temperature = EffectiveConfig.Temperature,
@@ -439,15 +475,22 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             try
             {
                 var tools = await source.DiscoverToolsAsync(ct);
+                ct.ThrowIfCancellationRequested();
                 foreach (var tool in tools)
                     discoveredTools[tool.Name] = tool;
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
+                ct.ThrowIfCancellationRequested();
                 Logger.LogWarning(ex, "Tool source discovery failed: {Source}", source.GetType().Name);
             }
         }
 
+        ct.ThrowIfCancellationRequested();
         RefreshSourceTools(discoveredTools.Values);
     }
 

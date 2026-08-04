@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
@@ -21,8 +23,7 @@ public sealed class NyxIdResponsesModelsAggregatorTests
             ServiceSlug: "anthropic",
             DisplayName: "Anthropic",
             RouteValue: "/api/v1/llm/anthropic/v1",
-            DefaultModel: null,
-            Models: [],
+            ModelCatalog: EmptyCatalog(),
             Status: "ready",
             Source: NyxIdLlmProviderSource.GatewayProvider,
             Allowed: true,
@@ -47,8 +48,7 @@ public sealed class NyxIdResponsesModelsAggregatorTests
             ServiceSlug: "chrono-llm",
             DisplayName: "Chrono LLM",
             RouteValue: "/api/v1/proxy/s/chrono-llm",
-            DefaultModel: null,
-            Models: [],
+            ModelCatalog: EmptyCatalog(),
             Status: "ready",
             Source: NyxIdLlmProviderSource.ProxyService,
             Allowed: true,
@@ -193,12 +193,17 @@ public sealed class NyxIdResponsesModelsAggregatorTests
             ServiceSlug: slug,
             DisplayName: slug,
             RouteValue: routeValue,
-            DefaultModel: null,
-            Models: [],
+            ModelCatalog: EmptyCatalog(),
             Status: "ready",
             Source: source,
             Allowed: true,
             Description: null);
+
+    private static LLMModelCatalog EmptyCatalog() =>
+        LLMSelectionPolicy.NormalizeCatalog(
+            [],
+            null,
+            LLMModelCatalogDiagnosticKind.NotPublished);
 
 
     [Theory]

@@ -69,6 +69,9 @@ public sealed class StudioAuditTranslatorTests
                 typeof(UserConfigGithubUsernameUpdatedAuditTranslator),
                 typeof(MemoryEntriesClearedAuditTranslator),
                 typeof(ConversationDeletedAuditTranslator),
+                typeof(NyxIdChatActionRequestedAuditTranslator),
+                typeof(NyxIdChatActionContinuationResolvedAuditTranslator),
+                typeof(NyxIdChatActionPostconditionResolvedAuditTranslator),
             ]);
     }
 

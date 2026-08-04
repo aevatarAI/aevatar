@@ -11,6 +11,8 @@ using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.GAgentService.Infrastructure.Schedules;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -68,6 +70,31 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
+    public async Task PrepareAsync_ShouldRejectRawEnvelopeTarget()
+    {
+        var service = new ScheduledDispatchTargetPreparationService();
+        var rawEnvelopeConfiguration = new ScheduledDispatchConfiguration(
+            "schedule-raw-envelope",
+            string.Empty,
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.Envelope,
+                ActorId: "actor-cross-owner",
+                Envelope: new EventEnvelope { Payload = Any.Pack(new Empty()) }),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>());
+
+        var act = () => service.PrepareAsync(
+            rawEnvelopeConfiguration,
+            "cmd-raw-envelope",
+            "corr-raw-envelope");
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*raw envelope*not supported*");
+    }
+
+    [Fact]
     public async Task PrepareAsync_ShouldPreserveDurableLlmControlAndStripCredentials()
     {
         var service = new ScheduledDispatchTargetPreparationService();
@@ -83,6 +110,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
                     {
                         Prompt = "hello",
                         ConnectorHttpAuthorization = "Bearer stored-connector-token",
+                        CallerSourceReadableNyxIdBearerToken = "source-readable-secret",
                         Headers =
                         {
                             [ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey] = "Bearer header-token",
@@ -105,6 +133,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
                                 NyxIdAccessToken = "tool-owner-secret",
                                 NyxIdOrgToken = "tool-org-secret",
                                 SenderNyxIdAccessToken = "tool-sender-secret",
+                                SourceReadableNyxIdAccessToken = "tool-source-secret",
                             },
                             Routing = new LLMRequestRoutingContextPayload
                             {
@@ -135,6 +164,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
         var request = prepared.TriggerEnvelope.Payload.Unpack<ServiceInvocationRequest>();
         var persistedChat = request.Payload.Unpack<ChatRequestEvent>();
         persistedChat.ConnectorHttpAuthorization.Should().BeEmpty();
+        persistedChat.CallerSourceReadableNyxIdBearerToken.Should().BeEmpty();
         persistedChat.Headers.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
         persistedChat.Headers.Should().Contain("client", "kept");
         persistedChat.Metadata.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
@@ -152,12 +182,14 @@ public sealed class ScheduledDispatchServiceInvocationTests
         persistedChat.ToolContext.Credentials.NyxIdAccessToken.Should().BeEmpty();
         persistedChat.ToolContext.Credentials.NyxIdOrgToken.Should().BeEmpty();
         persistedChat.ToolContext.Credentials.SenderNyxIdAccessToken.Should().BeEmpty();
+        persistedChat.ToolContext.Credentials.SourceReadableNyxIdAccessToken.Should().BeEmpty();
         persistedChat.ToolContext.Routing.ModelOverride.Should().Be("tool-model");
         persistedChat.ToolContext.Routing.NyxIdRoutePreference.Should().Be("tool-route");
         persistedChat.ToolContext.Routing.MaxToolRoundsOverride.Should().Be(5);
         persistedChat.ToolContext.Routing.UserMemoryPrompt.Should().Be("tool memory");
         var descriptorChat = prepared.Descriptor.ServiceInvocation!.Payload.Unpack<ChatRequestEvent>();
         descriptorChat.ConnectorHttpAuthorization.Should().BeEmpty();
+        descriptorChat.CallerSourceReadableNyxIdBearerToken.Should().BeEmpty();
         descriptorChat.Headers.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
         descriptorChat.Metadata.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
         descriptorChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
@@ -165,6 +197,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
         descriptorChat.CallerDurableCredential.Should().BeNull();
         descriptorChat.LlmControl.ModelOverride.Should().Be("sonnet");
         descriptorChat.ToolContext.Credentials.SenderNyxIdAccessToken.Should().BeEmpty();
+        descriptorChat.ToolContext.Credentials.SourceReadableNyxIdAccessToken.Should().BeEmpty();
         descriptorChat.ToolContext.Routing.ModelOverride.Should().Be("tool-model");
     }
 
@@ -250,20 +283,8 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
-    public void ScheduledDispatchHttpRequest_ShouldRejectExternalCallerDurableCredential()
+    public void ScheduledDispatchServiceInvocationHttpRequest_ShouldRejectExternalCallerDurableCredential()
     {
-        var envelopeTarget = new ScheduledDispatchEnvelopeTargetHttpRequest
-        {
-            ActorId = "target",
-            Envelope = new EventEnvelope
-            {
-                Payload = Any.Pack(new ChatRequestEvent
-                {
-                    Prompt = "hello",
-                    CallerDurableCredential = CreateDurableCallerCredentialRef(),
-                }),
-            },
-        };
         var serviceTarget = new ScheduledDispatchServiceInvocationTargetHttpRequest
         {
             Identity = new ServiceIdentity { TenantId = "tenant", ServiceId = "svc" },
@@ -271,10 +292,6 @@ public sealed class ScheduledDispatchServiceInvocationTests
             PayloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
         };
 
-        FluentActions.Invoking(() => envelopeTarget.ToTarget())
-            .Should()
-            .Throw<ArgumentException>()
-            .WithMessage("*caller_durable_credential*trusted-only*");
         FluentActions.Invoking(() => serviceTarget.ToTarget(
                 Any.Pack(new ChatRequestEvent
                 {
@@ -322,6 +339,44 @@ public sealed class ScheduledDispatchServiceInvocationTests
         receipt.CommandId.Should().Be("cmd-invoke");
         receipt.CorrelationId.Should().Be("corr-invoke");
         receipt.TargetActorId.Should().Be("service-actor");
+    }
+
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithWorkflowAdmissionFailure_ShouldExposeSafeScheduleFailure()
+    {
+        var workflowFailure = new WorkflowExternalCapabilityAdmissionException(
+            new ExternalCapabilityReadiness
+            {
+                Status = ExternalCapabilityReadinessStatus.ContractDrift,
+                Blockers =
+                {
+                    new ExternalCapabilityBlocker
+                    {
+                        Status = ExternalCapabilityReadinessStatus.ContractDrift,
+                        Code = "CAPABILITY_ADMISSION_REBIND_REQUIRED",
+                        SafeMessage = "Workflow capability binding must be refreshed.",
+                    },
+                },
+            });
+        var invocationPort = new RecordingServiceInvocationPort(workflowFailure);
+        var port = new ScheduledServiceInvocationDispatchPort(
+            invocationPort,
+            new RecordingScheduledServiceInvocationCredentialExchangePort());
+
+        var act = () => port.DispatchAsync(
+            new ScheduledServiceInvocationDispatchRequest(
+                new ServiceInvocationRequest
+                {
+                    CommandId = "cmd-admission",
+                    CorrelationId = "corr-admission",
+                    Payload = Any.Pack(new StringValue { Value = "invoke" }),
+                },
+                ScheduleId: "schedule-admission"));
+
+        var failure = await act.Should().ThrowAsync<ScheduledWorkflowAdmissionException>();
+        failure.Which.StableCode.Should().Be("CAPABILITY_ADMISSION_REBIND_REQUIRED");
+        failure.Which.SafeMessage.Should().Be("Workflow capability binding must be refreshed.");
+        invocationPort.Requests.Should().ContainSingle();
     }
 
     [Fact]
@@ -1839,7 +1894,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 "malformed-selection",
                 dispatch => ReplaceOwnerLLMSelection(dispatch, new ScheduledInvocationOwnerLLMSelection
                 {
-                    RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+                    RouteKind = LLMRouteKind.NyxIdUserService,
                     RouteValue = $" {OwnerLLMRoute}",
                     NyxIdUserServiceId = OwnerLLMServiceId,
                     ServiceSlugSnapshot = "chrono-llm-public",
@@ -1892,8 +1947,19 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 dispatch => ReplaceOwnerLLMPayload(dispatch, "/api/v1/proxy/s/other-llm", OwnerLLMModel)
             },
             {
+                "gateway-route-mismatch",
+                dispatch => ReplaceOwnerLLMPayload(
+                    dispatch,
+                    ScheduledInvocationOwnerLLMSelectionPolicy.GatewayRoute,
+                    OwnerLLMModel)
+            },
+            {
                 "model-mismatch",
                 dispatch => ReplaceOwnerLLMPayload(dispatch, OwnerLLMRoute, "gpt-other")
+            },
+            {
+                "case-different-model-mismatch",
+                dispatch => ReplaceOwnerLLMPayload(dispatch, OwnerLLMRoute, OwnerLLMModel.ToUpperInvariant())
             },
             {
                 "route-present-without-owner-llm-source-stamp",
@@ -1990,7 +2056,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
 
     private static ScheduledInvocationOwnerLLMSelection CreateOwnerLLMSelection() => new()
     {
-        RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+        RouteKind = LLMRouteKind.NyxIdUserService,
         RouteValue = OwnerLLMRoute,
         NyxIdUserServiceId = OwnerLLMServiceId,
         ServiceSlugSnapshot = "chrono-llm-public",

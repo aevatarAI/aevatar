@@ -444,6 +444,29 @@ public sealed class SkillWorkflowsWiringTests
         output.Should().NotContain("strongly consistent");
     }
 
+    [Theory]
+    [InlineData(AgentToolNyxIdCredentialKind.ProxyDelegation)]
+    [InlineData(AgentToolNyxIdCredentialKind.Unspecified)]
+    public async Task UseSkillTool_MountWorkflowsTrue_WhenCredentialIsNotSourceReadable_ShouldOmitCallerCredential(
+        AgentToolNyxIdCredentialKind credentialKind)
+    {
+        using var _ = BeginContextScope(
+            scopeId: "scope-alpha",
+            token: "caller-token",
+            ownerSubject: "owner-alpha",
+            nyxIdUserId: "nyx-user-alpha",
+            credentialKind: credentialKind);
+        var commandPort = new RecordingScopeWorkflowCommandPort();
+        var tool = new UseSkillTool(CreateCatalogWithWorkflowSkill(), scopeWorkflowCommandPort: commandPort);
+
+        await tool.ExecuteAsync("""{"skill":"translator","mount_workflows":true}""");
+
+        commandPort.Requests.Should().HaveCount(2);
+        commandPort.Requests.Should().OnlyContain(request =>
+            request.CapabilityAdmission != null &&
+            request.CapabilityAdmission.NyxIdCallerCredential == null);
+    }
+
     [Fact]
     public async Task UseSkillTool_MountWorkflowsTrue_PreservesDescriptorWorkflowIdAndLetsCommandPortParseYamlName()
     {
@@ -590,7 +613,8 @@ public sealed class SkillWorkflowsWiringTests
         string? scopeId = null,
         string? token = null,
         string? ownerSubject = null,
-        string? nyxIdUserId = null)
+        string? nyxIdUserId = null,
+        AgentToolNyxIdCredentialKind credentialKind = AgentToolNyxIdCredentialKind.SourceReadableUserBearer)
     {
         var metadata = new Dictionary<string, string>();
         if (!string.IsNullOrWhiteSpace(scopeId))
@@ -600,6 +624,13 @@ public sealed class SkillWorkflowsWiringTests
         if (!string.IsNullOrWhiteSpace(ownerSubject))
             metadata[LLMRequestMetadataKeys.OwnerSubject] = ownerSubject;
         var context = global::TestAgentToolContexts.FromMetadata(metadata);
+        context = context with
+        {
+            Credentials = context.Credentials with
+            {
+                NyxIdCredentialKind = credentialKind,
+            },
+        };
         if (!string.IsNullOrWhiteSpace(nyxIdUserId))
         {
             context = context with

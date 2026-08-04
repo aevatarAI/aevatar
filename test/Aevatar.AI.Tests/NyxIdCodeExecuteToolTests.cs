@@ -1,4 +1,5 @@
 using System.Net;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -127,6 +128,72 @@ public class NyxIdCodeExecuteToolTests
         {
             ClearMetadata();
         }
+    }
+
+    [Fact]
+    public void CreateResultReceipt_Http401_ShouldReturnTypedFailure()
+    {
+        var tool = new NyxIdCodeExecuteTool(CreateDummyClient());
+        const string result = """{"error":true,"status":401,"body":"unauthorized"}""";
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-401",
+            tool.Name,
+            """{"language":"python","code":"print(1)"}""",
+            result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("NYXID_PROXY_UNAUTHORIZED");
+        receipt.ResultJson.Should().NotContain("unauthorized");
+    }
+
+    [Fact]
+    public void CreateResultReceipt_SandboxResult_ShouldReturnTypedSuccess()
+    {
+        var tool = new NyxIdCodeExecuteTool(CreateDummyClient());
+        const string result = """{"stdout":"1\n","stderr":"","exit_code":0}""";
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-success",
+            tool.Name,
+            """{"language":"python","code":"print(1)"}""",
+            result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+    }
+
+    [Fact]
+    public void CreateResultReceipt_ErrorJsonWithoutException_ShouldReturnTypedFailure()
+    {
+        var tool = new NyxIdCodeExecuteTool(CreateDummyClient());
+        const string result = """{"error":"sandbox unavailable: provider-secret"}""";
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-error",
+            tool.Name,
+            """{"language":"python","code":"print(1)"}""",
+            result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("CODE_EXECUTE_FAILED");
+        receipt.ResultJson.Should().NotContain("provider-secret");
+    }
+
+    [Fact]
+    public void CreateResultReceipt_UnrecognizedJson_ShouldLeaveOutcomeUnverified()
+    {
+        var tool = new NyxIdCodeExecuteTool(CreateDummyClient());
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-unknown",
+            tool.Name,
+            """{"language":"python","code":"print(1)"}""",
+            "{}");
+
+        receipt.Should().BeNull();
     }
 
     private static NyxIdApiClient CreateDummyClient()

@@ -215,7 +215,7 @@ only transcript authority.
 
 The delivery actor does not redefine task state; it materializes only a
 controller-committed terminal fact. Reservation, terminal notification, and
-append all use stable deduplication identities. This does not claim a
+append all use stable delivery operation identities. This does not claim a
 cross-actor atomic transaction: it provides at-least-once delivery with an
 idempotent receiver.
 

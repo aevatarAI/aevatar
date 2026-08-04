@@ -87,6 +87,7 @@ public sealed class AevatarInvocationDispatcher
     private readonly IGAgentRunTerminalQueryPort _terminalQueryPort;
     private readonly IWorkflowExecutionQueryApplicationService _workflowQueryService;
     private readonly IWorkflowRunBackgroundDeliveryRegistrationPort? _workflowRunDeliveryRegistrationPort;
+    private readonly IScopeWorkflowQueryPort? _scopeWorkflowQueryPort;
     private readonly ILogger<AevatarInvocationDispatcher> _logger;
 
     public AevatarInvocationDispatcher(
@@ -103,7 +104,8 @@ public sealed class AevatarInvocationDispatcher
         IGAgentRunTerminalQueryPort terminalQueryPort,
         IWorkflowExecutionQueryApplicationService workflowQueryService,
         IWorkflowRunBackgroundDeliveryRegistrationPort? workflowRunDeliveryRegistrationPort = null,
-        ILogger<AevatarInvocationDispatcher>? logger = null)
+        ILogger<AevatarInvocationDispatcher>? logger = null,
+        IScopeWorkflowQueryPort? scopeWorkflowQueryPort = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _actorRegistryQueryPort = actorRegistryQueryPort ?? throw new ArgumentNullException(nameof(actorRegistryQueryPort));
@@ -118,6 +120,7 @@ public sealed class AevatarInvocationDispatcher
         _terminalQueryPort = terminalQueryPort ?? throw new ArgumentNullException(nameof(terminalQueryPort));
         _workflowQueryService = workflowQueryService ?? throw new ArgumentNullException(nameof(workflowQueryService));
         _workflowRunDeliveryRegistrationPort = workflowRunDeliveryRegistrationPort;
+        _scopeWorkflowQueryPort = scopeWorkflowQueryPort;
         _logger = logger ?? NullLogger<AevatarInvocationDispatcher>.Instance;
     }
 
@@ -425,9 +428,10 @@ public sealed class AevatarInvocationDispatcher
                 ct);
         }
 
-        var scope = ResolveChannelAwareInvocationScope();
-        if (scope.Error != null)
-            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(scope.Error), scope.Error);
+        var workflowScope = ResolveWorkflowInvocationScope(AgentToolRequestContext.Current);
+        if (workflowScope.Error != null)
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(workflowScope.Error), workflowScope.Error);
+        var scope = workflowScope.Value!;
 
         var backgroundDelivery = ResolveWorkflowBackgroundDelivery(AgentToolRequestContext.Current);
         if (backgroundDelivery.Error != null)
@@ -446,18 +450,24 @@ public sealed class AevatarInvocationDispatcher
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(callerCredential.Error), callerCredential.Error);
 
         var metadata = BuildPayloadHeaders(request.Inputs.Headers);
-        var source = workflowYamls is { Length: > 0 }
-            ? WorkflowChatSource.InlineYamlBundle(workflowYamls, workflowName, actorId)
-            : string.IsNullOrWhiteSpace(actorId)
-                ? WorkflowChatSource.CatalogWorkflow(workflowName)
-                : WorkflowChatSource.DefinitionActor(actorId, workflowName);
+        var sourceResolution = await ResolveWorkflowStartSourceAsync(
+                scope.ScopeId,
+                workflowName,
+                actorId,
+                workflowYamls,
+                ct)
+            .ConfigureAwait(false);
+        if (sourceResolution.Error != null)
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(sourceResolution.Error), sourceResolution.Error);
+
         var command = new WorkflowChatRunRequest(
             Prompt: request.Inputs.Prompt,
-            Source: source,
+            Source: sourceResolution.Source!,
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             SessionId: ResolveSessionId(),
             InputParts: ToWorkflowInputParts(request.Inputs),
             Metadata: metadata,
-            ScopeId: scope.Value!.ScopeId,
+            ScopeId: scope.ScopeId,
             LlmControl: ToWorkflowLlmControl(AgentToolRequestContext.Current),
             CallerCredential: callerCredential.Value);
 
@@ -465,9 +475,71 @@ public sealed class AevatarInvocationDispatcher
             chatRunRequest,
             command,
             wait,
-            scope.Value!.ScopeId,
+            scope.ScopeId,
             backgroundDelivery,
             ct);
+    }
+
+    private async ValueTask<WorkflowStartSourceResolution> ResolveWorkflowStartSourceAsync(
+        string scopeId,
+        string workflowName,
+        string? actorId,
+        string[]? workflowYamls,
+        CancellationToken ct)
+    {
+        if (workflowYamls is { Length: > 0 })
+            return WorkflowStartSourceResolution.Success(
+                WorkflowChatSource.InlineYamlBundle(workflowYamls, workflowName, actorId));
+
+        if (!string.IsNullOrWhiteSpace(actorId))
+            return WorkflowStartSourceResolution.Success(
+                WorkflowChatSource.DefinitionActor(actorId, workflowName));
+
+        var scopeWorkflow = await TryResolveScopeWorkflowAsync(scopeId, workflowName, ct).ConfigureAwait(false);
+        if (scopeWorkflow.Error != null)
+            return scopeWorkflow;
+
+        if (scopeWorkflow.Workflow is not null)
+        {
+            var resolvedWorkflowName = string.IsNullOrWhiteSpace(scopeWorkflow.Workflow.WorkflowName)
+                ? null
+                : scopeWorkflow.Workflow.WorkflowName.Trim();
+            return WorkflowStartSourceResolution.Success(
+                WorkflowChatSource.DefinitionActor(scopeWorkflow.Workflow.ActorId.Trim(), resolvedWorkflowName));
+        }
+
+        return WorkflowStartSourceResolution.Success(WorkflowChatSource.CatalogWorkflow(workflowName));
+    }
+
+    private async ValueTask<WorkflowStartSourceResolution> TryResolveScopeWorkflowAsync(
+        string scopeId,
+        string workflowId,
+        CancellationToken ct)
+    {
+        if (_scopeWorkflowQueryPort is null)
+            return WorkflowStartSourceResolution.NotResolved();
+
+        try
+        {
+            var lookup = await _scopeWorkflowQueryPort.LookupByWorkflowIdAsync(scopeId, workflowId, ct)
+                .ConfigureAwait(false);
+            if (lookup.IsRunnable && !string.IsNullOrWhiteSpace(lookup.Workflow!.ActorId))
+                return WorkflowStartSourceResolution.Resolved(lookup.Workflow);
+
+            if (lookup.Status == ScopeWorkflowLookupStatus.NotFound)
+                return WorkflowStartSourceResolution.Failed(ScopeWorkflowNotFoundError(scopeId, workflowId, lookup));
+
+            return WorkflowStartSourceResolution.Failed(ScopeWorkflowUnavailableError(scopeId, workflowId, lookup));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Scope workflow lookup failed before workflow start: scopeId={ScopeId} workflowId={WorkflowId}",
+                scopeId,
+                workflowId);
+            return WorkflowStartSourceResolution.Failed(ScopeWorkflowLookupFailedError(scopeId, workflowId));
+        }
     }
 
     private async Task<ChatRunToolCompletionRequest> DispatchWorkflowForChatRunAsync(
@@ -488,8 +560,7 @@ public sealed class AevatarInvocationDispatcher
                     workflowCommandIdSeed,
                     backgroundDelivery.WorkflowResultDeliveryCredential!,
                     AgentToolRequestContext.Current,
-                    ct)
-                .ConfigureAwait(false);
+                    ct);
             if (reservation.Error != null)
             {
                 return ToChatRunRequest(
@@ -515,6 +586,15 @@ public sealed class AevatarInvocationDispatcher
         }
         catch (Exception ex)
         {
+            _logger.LogWarning(
+                ex,
+                "Workflow start dispatch threw before acceptance: scopeId={ScopeId} sourceKind={SourceKind} workflowName={WorkflowName} workflowActorId={WorkflowActorId} commandId={CommandId} deliveryActorId={DeliveryActorId}",
+                scopeId,
+                command.Source.Kind,
+                command.Source.WorkflowName ?? string.Empty,
+                command.Source.ActorId ?? string.Empty,
+                deliveryReservation?.Reservation.ExpectedWorkflowCommandId ?? command.CommandIdSeed ?? string.Empty,
+                deliveryReservation?.Receipt.DeliveryActorId ?? string.Empty);
             await TryAbandonWorkflowRunBackgroundDeliveryAsync(
                     deliveryReservation,
                     $"workflow dispatch threw before acceptance: {ex.GetType().Name}")
@@ -523,6 +603,15 @@ public sealed class AevatarInvocationDispatcher
         }
         if (!result.Succeeded || result.Receipt == null)
         {
+            _logger.LogWarning(
+                "Workflow start dispatch was not accepted: error={Error} scopeId={ScopeId} sourceKind={SourceKind} workflowName={WorkflowName} workflowActorId={WorkflowActorId} commandId={CommandId} deliveryActorId={DeliveryActorId}",
+                result.Error,
+                scopeId,
+                command.Source.Kind,
+                command.Source.WorkflowName ?? string.Empty,
+                command.Source.ActorId ?? string.Empty,
+                deliveryReservation?.Reservation.ExpectedWorkflowCommandId ?? command.CommandIdSeed ?? string.Empty,
+                deliveryReservation?.Receipt.DeliveryActorId ?? string.Empty);
             await TryAbandonWorkflowRunBackgroundDeliveryAsync(
                     deliveryReservation,
                     $"workflow dispatch was not accepted: {result.Error}")
@@ -539,6 +628,15 @@ public sealed class AevatarInvocationDispatcher
         var receipt = result.Receipt;
         if (result.Admission is { Accepted: false })
         {
+            _logger.LogWarning(
+                "Workflow start dispatch admission was rejected after receipt creation: scopeId={ScopeId} sourceKind={SourceKind} workflowName={WorkflowName} workflowActorId={WorkflowActorId} actorId={ActorId} commandId={CommandId} deliveryActorId={DeliveryActorId}",
+                scopeId,
+                command.Source.Kind,
+                command.Source.WorkflowName ?? string.Empty,
+                command.Source.ActorId ?? string.Empty,
+                receipt.ActorId,
+                receipt.CommandId,
+                deliveryReservation?.Receipt.DeliveryActorId ?? string.Empty);
             await TryAbandonWorkflowRunBackgroundDeliveryAsync(
                     deliveryReservation,
                     "workflow dispatch admission was rejected")
@@ -624,6 +722,10 @@ public sealed class AevatarInvocationDispatcher
                 : workflowRuntimeContext.RootRunId.Trim(),
             RequestedDepth = Math.Max(0, workflowRuntimeContext.Depth) + 1,
         };
+        managedStart.InputFileRefs.Add(request.Inputs.InputParts
+            .Select(static part => ToWorkflowEventFileRef(part.FileRef))
+            .Where(static fileRef => fileRef != null)
+            .Select(static fileRef => fileRef!.Clone()));
 
         if (workflowYamls is { Count: > 0 })
         {
@@ -826,8 +928,7 @@ public sealed class AevatarInvocationDispatcher
                     commandId,
                     backgroundDelivery.WorkflowResultDeliveryCredential!,
                     AgentToolRequestContext.Current,
-                    ct)
-                .ConfigureAwait(false);
+                    ct);
             if (reservation.Error != null)
             {
                 return ToChatRunRequest(
@@ -1206,14 +1307,22 @@ public sealed class AevatarInvocationDispatcher
         if (deliveryReservation is null || _workflowRunDeliveryRegistrationPort is null)
             return;
 
+        var abandonmentReason = string.IsNullOrWhiteSpace(reason)
+            ? "workflow dispatch did not complete registration"
+            : reason;
         try
         {
             await _workflowRunDeliveryRegistrationPort
                 .AbandonAsync(
                     deliveryReservation.Receipt,
-                    string.IsNullOrWhiteSpace(reason) ? "workflow dispatch did not complete registration" : reason,
+                    abandonmentReason,
                     CancellationToken.None)
                 .ConfigureAwait(false);
+            _logger.LogInformation(
+                "Workflow run background delivery abandonment request accepted: deliveryActorId={DeliveryActorId} commandId={CommandId} reason={Reason}",
+                deliveryReservation.Receipt.DeliveryActorId,
+                deliveryReservation.Receipt.WorkflowCommandId,
+                abandonmentReason);
         }
         catch (Exception ex)
         {
@@ -1356,6 +1465,30 @@ public sealed class AevatarInvocationDispatcher
                 ExpiresAtUnixMs = deliveryReservation.Reservation.ExpiresAtUnixMs,
             };
 
+    private static InvocationToolError ScopeWorkflowNotFoundError(
+        string scopeId,
+        string workflowId,
+        ScopeWorkflowLookupResult lookup) =>
+        Error(
+            "scope_workflow_not_found",
+            $"Current-scope workflow '{workflowId}' was not found in scope '{scopeId}': {lookup.Reason}. List current scope workflows, choose one runnable descriptor, and retry with its exact workflow_id.",
+            "workflow_id");
+
+    private static InvocationToolError ScopeWorkflowUnavailableError(
+        string scopeId,
+        string workflowId,
+        ScopeWorkflowLookupResult lookup) =>
+        Error(
+            "scope_workflow_not_runnable",
+            $"Current-scope workflow '{workflowId}' in scope '{scopeId}' is {lookup.Status} and cannot be started yet: {lookup.Reason}. List current scope workflows and retry when the descriptor is runnable.",
+            "workflow_id");
+
+    private static InvocationToolError ScopeWorkflowLookupFailedError(string scopeId, string workflowId) =>
+        Error(
+            "scope_workflow_lookup_failed",
+            $"Current-scope workflow '{workflowId}' in scope '{scopeId}' could not be verified. List current scope workflows and retry when the descriptor is available.",
+            "workflow_id");
+
     private static InvocationToolError ChannelWorkflowDeliveryUnavailableError() =>
         Error(
             AgentToolFailureCodes.ChannelWorkflowResultDeliveryUnavailable,
@@ -1464,6 +1597,21 @@ public sealed class AevatarInvocationDispatcher
             return;
 
         chatRequest.ConnectorHttpAuthorization = ToConnectorHttpAuthorization(callerCredential);
+        chatRequest.CallerSourceReadableNyxIdBearerToken =
+            callerCredential?.SourceReadableUserBearerToken?.Trim() ?? string.Empty;
+        chatRequest.CallerNyxIdCredentialKind = callerCredential?.Kind switch
+        {
+            NyxIdCallerCredentialKind.SourceReadableUserBearer =>
+                AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
+            NyxIdCallerCredentialKind.ProxyDelegation =>
+                AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+            _ => AgentToolNyxIdCredentialKindPayload.Unspecified,
+        };
+        if (!string.IsNullOrWhiteSpace(callerCredential?.SourceReadableUserBearerToken) &&
+            chatRequest.LlmControl != null)
+        {
+            chatRequest.LlmControl.SenderNyxIdAccessToken = string.Empty;
+        }
         invocationRequest.Payload = Any.Pack(chatRequest);
     }
 
@@ -1810,17 +1958,36 @@ public sealed class AevatarInvocationDispatcher
 
     private static WorkflowCallerCredentialResolution ResolveWorkflowCallerCredential(AgentToolExecutionContext? context)
     {
-        var parsed = WorkflowCallerCredentialTokens.ParseOptional(context?.Credentials.NyxIdAccessToken);
-        if (parsed.IsInvalid)
+        var credentialKind = context?.Credentials.NyxIdCredentialKind switch
+        {
+            AgentToolNyxIdCredentialKind.SourceReadableUserBearer =>
+                NyxIdCallerCredentialKind.SourceReadableUserBearer,
+            AgentToolNyxIdCredentialKind.ProxyDelegation =>
+                NyxIdCallerCredentialKind.ProxyDelegation,
+            _ => NyxIdCallerCredentialKind.Unspecified,
+        };
+        if (WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
+                context?.Credentials.NyxIdAccessToken,
+                credentialKind,
+                context?.Credentials.SourceReadableNyxIdAccessToken))
         {
             return WorkflowCallerCredentialResolution.Failed(Error(
                 WorkflowChatRunStartError.InvalidCallerCredential.ToString(),
                 "Caller credential is invalid."));
         }
 
-        return WorkflowCallerCredentialResolution.Success(parsed.IsMissing
-            ? null
-            : new WorkflowRunCallerCredential(parsed.NormalizedBearerToken));
+        var parsed = WorkflowCallerCredentialTokens.ParseOptional(context?.Credentials.NyxIdAccessToken);
+        if (parsed.IsMissing)
+            return WorkflowCallerCredentialResolution.Success(null);
+
+        var sourceReadableUserBearerToken = credentialKind == NyxIdCallerCredentialKind.ProxyDelegation
+            ? AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(context?.Credentials)
+            : null;
+        return WorkflowCallerCredentialResolution.Success(
+            new WorkflowRunCallerCredential(
+                parsed.NormalizedBearerToken,
+                Kind: credentialKind,
+                SourceReadableUserBearerToken: sourceReadableUserBearerToken));
     }
 
     private static bool TryGetManagedWorkflowRuntimeContext(
@@ -1831,71 +1998,46 @@ public sealed class AevatarInvocationDispatcher
         return workflowRuntimeContext.HasManagedParent;
     }
 
-    private CallerScopeResolution ResolveCallerScope(bool requireOwner = true)
+    private CallerScopeResolution ResolveCallerScope(bool requireOwner = true) =>
+        ResolveCallerScope(ReadInvocationScopeContext(AgentToolRequestContext.Current), requireOwner);
+
+    private static CallerScopeResolution ResolveCallerScope(
+        InvocationScopeContext scopeContext,
+        bool requireOwner = true)
     {
-        var scopeId = Normalize(AgentToolRequestContext.ScopeId);
-        var ownerSubject = Normalize(AgentToolRequestContext.OwnerSubject);
-        var responseId = Normalize(AgentToolRequestContext.ResponseId)
-                         ?? Normalize(AgentToolRequestContext.RequestId)
-                         ?? Normalize(AgentToolRequestContext.CallId);
-        if (scopeId == null || responseId == null || (requireOwner && ownerSubject == null))
+        if (scopeContext.EffectiveScopeId == null || scopeContext.ResponseId == null ||
+            (requireOwner && scopeContext.EffectiveOwnerSubject == null))
         {
             return CallerScopeResolution.Failed(Error(
                 "caller_scope_unavailable",
                 requireOwner
-                    ? "scope_id, owner_subject, and response_id/request_id are required in AgentToolRequestContext."
-                    : "scope_id and response_id/request_id are required in AgentToolRequestContext."));
+                    ? "scope_id/owner_scope_id, owner_subject, and response_id/request_id are required in AgentToolRequestContext."
+                    : "scope_id/owner_scope_id and response_id/request_id are required in AgentToolRequestContext."));
         }
 
         return CallerScopeResolution.Success(new InvocationCallerScope(
-            scopeId,
-            ownerSubject ?? string.Empty,
-            responseId));
+            scopeContext.EffectiveScopeId,
+            scopeContext.EffectiveOwnerSubject ?? string.Empty,
+            scopeContext.ResponseId));
     }
 
     private CallerScopeResolution ResolveChannelAwareInvocationScope() =>
-        ResolveLarkOwnerInvocationScope() ?? ResolveCallerScope();
-
-    private CallerScopeResolution? ResolveLarkOwnerInvocationScope()
-    {
-        var context = AgentToolRequestContext.Current;
-        if (!IsLarkChannel(context) || Normalize(context?.Caller.OwnerScopeId) is not { } ownerScopeId)
-            return null;
-
-        var baseScope = ResolveCallerScope(requireOwner: false);
-        if (baseScope.Error != null)
-            return baseScope;
-
-        return CallerScopeResolution.Success(baseScope.Value! with
-        {
-            ScopeId = ownerScopeId,
-            OwnerSubject = ownerScopeId,
-        });
-    }
-
-    private static bool IsLarkChannel(AgentToolExecutionContext? context)
-    {
-        var platform = Normalize(context?.Channel.Platform);
-        return string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase);
-    }
+        ResolveCallerScope(ReadInvocationScopeContext(AgentToolRequestContext.Current));
 
     private CallerScopeResolution ResolveTeamInvocationScope()
     {
-        var baseScope = ResolveCallerScope();
+        var scopeContext = ReadInvocationScopeContext(AgentToolRequestContext.Current);
+        var baseScope = ResolveCallerScope(scopeContext);
         if (baseScope.Error != null)
             return baseScope;
 
-        var context = AgentToolRequestContext.Current;
-        var senderNyxUserId = Normalize(context?.SenderBinding.NyxUserId) ??
-                              Normalize(context?.Caller.OwnerScopeId);
-        if (senderNyxUserId == null)
+        if (scopeContext.SenderNyxUserId == null)
             return baseScope;
 
         return CallerScopeResolution.Success(baseScope.Value! with
         {
-            ScopeId = senderNyxUserId,
-            OwnerSubject = senderNyxUserId,
+            ScopeId = scopeContext.SenderNyxUserId,
+            OwnerSubject = scopeContext.SenderNyxUserId,
         });
     }
 
@@ -1905,6 +2047,7 @@ public sealed class AevatarInvocationDispatcher
             Kind = part.Kind switch
             {
                 InvocationContentPartKind.Text => ChatContentPartKind.Text,
+                InvocationContentPartKind.File => ChatContentPartKind.Text,
                 InvocationContentPartKind.Image => ChatContentPartKind.Image,
                 InvocationContentPartKind.Audio => ChatContentPartKind.Audio,
                 InvocationContentPartKind.Video => ChatContentPartKind.Video,
@@ -1915,6 +2058,7 @@ public sealed class AevatarInvocationDispatcher
             MediaType = part.MediaType,
             Uri = part.Uri,
             Name = part.Name,
+            FileRef = part.FileRef?.Clone(),
         }).ToArray();
 
     private static IReadOnlyList<GAgentDraftRunInputPart>? ToGAgentInputParts(InvocationPayload payload)
@@ -1927,6 +2071,7 @@ public sealed class AevatarInvocationDispatcher
             Kind = part.Kind switch
             {
                 InvocationContentPartKind.Text => GAgentDraftRunInputPartKind.Text,
+                InvocationContentPartKind.File => GAgentDraftRunInputPartKind.Text,
                 InvocationContentPartKind.Image => GAgentDraftRunInputPartKind.Image,
                 InvocationContentPartKind.Audio => GAgentDraftRunInputPartKind.Audio,
                 InvocationContentPartKind.Video => GAgentDraftRunInputPartKind.Video,
@@ -1937,6 +2082,7 @@ public sealed class AevatarInvocationDispatcher
             MediaType = EmptyToNull(part.MediaType),
             Uri = EmptyToNull(part.Uri),
             Name = EmptyToNull(part.Name),
+            FileRef = part.FileRef?.Clone(),
         }).ToArray();
     }
 
@@ -1950,6 +2096,7 @@ public sealed class AevatarInvocationDispatcher
             Kind = part.Kind switch
             {
                 InvocationContentPartKind.Text => Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Text,
+                InvocationContentPartKind.File => Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.File,
                 InvocationContentPartKind.Image => Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Image,
                 InvocationContentPartKind.Audio => Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Audio,
                 InvocationContentPartKind.Video => Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Video,
@@ -1960,7 +2107,70 @@ public sealed class AevatarInvocationDispatcher
             MediaType = EmptyToNull(part.MediaType),
             Uri = EmptyToNull(part.Uri),
             Name = EmptyToNull(part.Name),
+            FileRef = ToWorkflowFileRef(part.FileRef),
         }).ToArray();
+    }
+
+    private static FileArtifactRef? ToWorkflowFileRef(Aevatar.AI.Abstractions.ChatFileRef? fileRef) =>
+        fileRef is null || !HasFileRefIdentity(fileRef)
+            ? null
+            : new FileArtifactRef
+            {
+                FileId = EmptyToNull(fileRef.FileId),
+                ArtifactId = EmptyToNull(fileRef.ArtifactId),
+                SourceKind = fileRef.SourceKind switch
+                {
+                    Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput => FileArtifactSourceKind.ChatInput,
+                    Aevatar.AI.Abstractions.ChatFileSourceKind.FormUpload => FileArtifactSourceKind.FormUpload,
+                    Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource => FileArtifactSourceKind.ConnectedServiceResource,
+                    Aevatar.AI.Abstractions.ChatFileSourceKind.ExternalResource => FileArtifactSourceKind.ExternalResource,
+                    Aevatar.AI.Abstractions.ChatFileSourceKind.Generated => FileArtifactSourceKind.Generated,
+                    _ => FileArtifactSourceKind.Unspecified,
+                },
+                SourceMessageId = EmptyToNull(fileRef.SourceMessageId),
+                SourceResourceKey = EmptyToNull(fileRef.SourceResourceKey),
+                FileName = EmptyToNull(fileRef.FileName),
+                MediaType = EmptyToNull(fileRef.MediaType),
+                SizeBytes = fileRef.SizeBytes,
+                Sha256 = EmptyToNull(fileRef.Sha256),
+                CreatedAtUnixMs = fileRef.CreatedAtUnixMs,
+                ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs,
+                OwnerRunId = EmptyToNull(fileRef.OwnerRunId),
+                OwnerScopeId = EmptyToNull(fileRef.OwnerScopeId),
+            };
+
+    private static bool HasFileRefIdentity(Aevatar.AI.Abstractions.ChatFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
+
+    private static Aevatar.Workflow.Abstractions.WorkflowFileRef? ToWorkflowEventFileRef(
+        Aevatar.AI.Abstractions.ChatFileRef? fileRef) =>
+        fileRef is null || !HasFileRefIdentity(fileRef)
+            ? null
+            : new Aevatar.Workflow.Abstractions.WorkflowFileRef
+            {
+                FileId = fileRef.FileId ?? string.Empty,
+                ArtifactId = fileRef.ArtifactId ?? string.Empty,
+                SourceKind = ToWorkflowFileSourceKind(fileRef.SourceKind),
+                SourceMessageId = fileRef.SourceMessageId ?? string.Empty,
+                SourceResourceKey = fileRef.SourceResourceKey ?? string.Empty,
+                FileName = fileRef.FileName ?? string.Empty,
+                MediaType = fileRef.MediaType ?? string.Empty,
+                SizeBytes = fileRef.SizeBytes,
+                Sha256 = fileRef.Sha256 ?? string.Empty,
+                CreatedAtUnixMs = fileRef.CreatedAtUnixMs,
+                ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs,
+                OwnerRunId = fileRef.OwnerRunId ?? string.Empty,
+                OwnerScopeId = fileRef.OwnerScopeId ?? string.Empty,
+            };
+
+    private static Aevatar.Workflow.Abstractions.WorkflowFileSourceKind ToWorkflowFileSourceKind(
+        Aevatar.AI.Abstractions.ChatFileSourceKind sourceKind)
+    {
+        var sourceKindValue = (int)sourceKind;
+        return System.Enum.IsDefined(typeof(Aevatar.Workflow.Abstractions.WorkflowFileSourceKind), sourceKindValue)
+            ? (Aevatar.Workflow.Abstractions.WorkflowFileSourceKind)sourceKindValue
+            : Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Unspecified;
     }
 
     private static InvocationWaitMode ResolveWait(InvocationWaitMode wait) =>
@@ -2012,10 +2222,72 @@ public sealed class AevatarInvocationDispatcher
 
     private sealed record InvocationCallerScope(string ScopeId, string OwnerSubject, string ResponseId);
 
+    private sealed record InvocationScopeContext(
+        string? ScopeId,
+        string? OwnerSubject,
+        string? ResponseId,
+        string? OwnerScopeId,
+        string? SenderNyxUserId)
+    {
+        public string? EffectiveScopeId => OwnerScopeId ?? ScopeId;
+
+        public string? EffectiveOwnerSubject => OwnerScopeId ?? OwnerSubject;
+    }
+
+    private static InvocationScopeContext ReadInvocationScopeContext(AgentToolExecutionContext? context)
+    {
+        context ??= AgentToolExecutionContext.Empty;
+        return new InvocationScopeContext(
+            Normalize(context.Caller.ScopeId),
+            Normalize(context.Caller.OwnerSubject),
+            Normalize(context.Caller.ResponseId) ??
+            Normalize(context.Request.RequestId) ??
+            Normalize(context.Request.CallId),
+            Normalize(context.Caller.OwnerScopeId),
+            Normalize(context.SenderBinding.NyxUserId));
+    }
+
+    private static CallerScopeResolution ResolveWorkflowInvocationScope(AgentToolExecutionContext? context)
+    {
+        var scopeContext = ReadInvocationScopeContext(context);
+        if (scopeContext.EffectiveScopeId is null || scopeContext.ResponseId is null)
+        {
+            return CallerScopeResolution.Failed(Error(
+                "caller_scope_unavailable",
+                "scope_id/owner_scope_id and response_id/request_id are required in AgentToolRequestContext."));
+        }
+
+        if (scopeContext.EffectiveOwnerSubject is null)
+        {
+            return CallerScopeResolution.Failed(Error(
+                "caller_scope_unavailable",
+                "owner_subject is required in AgentToolRequestContext for caller-scope workflow invocation."));
+        }
+
+        return CallerScopeResolution.Success(new InvocationCallerScope(
+            scopeContext.EffectiveScopeId,
+            scopeContext.EffectiveOwnerSubject,
+            scopeContext.ResponseId));
+    }
+
     private sealed record PublishedServiceInvocationTarget(
         string ScopeId,
         string MemberId,
         string PublishedServiceId);
+
+    private sealed record WorkflowStartSourceResolution(
+        WorkflowChatSource? Source,
+        ScopeWorkflowSummary? Workflow,
+        InvocationToolError? Error)
+    {
+        public static WorkflowStartSourceResolution Success(WorkflowChatSource source) => new(source, null, null);
+
+        public static WorkflowStartSourceResolution Resolved(ScopeWorkflowSummary workflow) => new(null, workflow, null);
+
+        public static WorkflowStartSourceResolution NotResolved() => new(null, null, null);
+
+        public static WorkflowStartSourceResolution Failed(InvocationToolError error) => new(null, null, error);
+    }
 
     private sealed record CallerScopeResolution(InvocationCallerScope? Value, InvocationToolError? Error)
     {

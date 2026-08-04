@@ -365,6 +365,57 @@ public sealed class NyxIdRelayTransportTests
     }
 
     [Fact]
+    public void Parse_ShouldDeduplicateLarkResourceUrlAndRawFileKeyAttachments()
+    {
+        var body = """
+            {
+              "message_id": "msg-lark-file-dedupe",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "group" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": {
+                "type": "file",
+                "text": "   ",
+                "attachments": [
+                  {
+                    "content_type": "file",
+                    "url": "https://open.larksuite.com/open-apis/im/v1/messages/om_file_1/resources/file_v3_abc?type=file",
+                    "filename": "report.pdf",
+                    "mime_type": "application/pdf"
+                  }
+                ]
+              },
+              "raw_platform_data": {
+                "event": {
+                  "message": {
+                    "message_id": "om_file_1",
+                    "chat_id": "oc_group_1",
+                    "chat_type": "group",
+                    "message_type": "file",
+                    "content": {
+                      "file_key": "file_v3_abc",
+                      "file_name": "report.pdf",
+                      "mime_type": "application/pdf"
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Content.Text.Should().BeEmpty();
+        parsed.Activity.Content.Attachments.Should().ContainSingle();
+        var attachment = parsed.Activity.Content.Attachments.Single();
+        attachment.AttachmentId.Should().Be("https://open.larksuite.com/open-apis/im/v1/messages/om_file_1/resources/file_v3_abc?type=file");
+        attachment.Kind.Should().Be(AttachmentKind.File);
+        attachment.ExternalUrl.Should().Be("https://open.larksuite.com/open-apis/im/v1/messages/om_file_1/resources/file_v3_abc?type=file");
+    }
+
+    [Fact]
     public void Parse_ShouldIgnorePayload_WhenAttachmentIdentifiersAreMissing()
     {
         var body = """

@@ -93,6 +93,19 @@ enum AuditRetryability {
   AUDIT_RETRYABILITY_NOT_RETRYABLE = 3;
 }
 
+enum AuditChatSurface {
+  AUDIT_CHAT_SURFACE_UNSPECIFIED = 0;
+  AUDIT_CHAT_SURFACE_NYXID_ASSISTANT = 1;
+  AUDIT_CHAT_SURFACE_WORKFLOW_CHAT = 2;
+}
+
+enum AuditToolExecutionPhase {
+  AUDIT_TOOL_EXECUTION_PHASE_UNSPECIFIED = 0;
+  AUDIT_TOOL_EXECUTION_PHASE_RUNNING = 1;
+  AUDIT_TOOL_EXECUTION_PHASE_WAITING_APPROVAL = 2;
+  AUDIT_TOOL_EXECUTION_PHASE_TERMINAL = 3;
+}
+
 message AuditTarget {
   string kind = 1;
   string id = 2;
@@ -130,6 +143,15 @@ message AuditFailure {
   string sanitized_message = 5;
 }
 
+message AuditChatProvenance {
+  AuditChatSurface surface = 1;
+  string conversation_id = 2;
+  string turn_id = 3;
+  string task_id = 4;
+  string step_id = 5;
+  string action_request_id = 6;
+}
+
 message AuditExecutionProvenance {
   string scope_id = 1;
   string team_id = 2;
@@ -142,12 +164,19 @@ message AuditExecutionProvenance {
   string actor_id = 9;
   int64 actor_state_version = 10;
   string actor_event_id = 11;
+  AuditChatProvenance chat = 12;
 }
 
 message AuditRedaction {
   string policy = 1;
   repeated string omitted_fields = 2;
   bool values_sanitized = 3;
+}
+
+message AuditToolExecution {
+  string arguments_sha256 = 1;
+  AuditToolExecutionPhase execution_phase = 2;
+  bool is_mutation = 3;
 }
 
 message AuditRecord {
@@ -181,6 +210,7 @@ message AuditRecord {
   AuditFailure failure = 28;
   AuditExecutionProvenance provenance = 29;
   AuditRedaction redaction = 30;
+  AuditToolExecution tool_execution = 31;
 }
 
 message AuditTrailDocument {
@@ -215,4 +245,7 @@ message AuditTrailDocument {
   string subject = 29;
   string source = 30;
   string trace_id = 31;
+  string tool_arguments_sha256 = 32;
+  bool tool_is_mutation = 33;
+  AuditToolExecutionPhase tool_execution_phase = 34;
 }

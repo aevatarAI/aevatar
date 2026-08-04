@@ -312,6 +312,9 @@ internal sealed class NyxIdChatSseWriter
             "NYX_ID_CHAT_TASK_STATUS_",
             "NYX_ID_CHAT_STEP_STATUS_",
             "NYX_ID_CHAT_STEP_KIND_",
+            "NYX_ID_CHAT_ATTENTION_KIND_",
+            "NYX_ID_CHAT_APPROVAL_REVERSIBILITY_",
+            "NYX_ID_CHAT_NEEDS_YOU_RESOLUTION_OUTCOME_",
         ];
         foreach (var prefix in prefixes)
         {

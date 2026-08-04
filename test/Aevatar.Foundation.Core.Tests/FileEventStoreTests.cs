@@ -53,6 +53,32 @@ public class FileEventStoreTests
     }
 
     [Fact]
+    public async Task AppendAsync_WhenCanceledBeforeAdmission_ShouldCommitNothing()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var store = new FileEventStore(new FileEventStoreOptions { RootDirectory = root });
+            using var deadline = new CancellationTokenSource();
+            deadline.Cancel();
+
+            var append = () => store.AppendAsync(
+                "agent-1",
+                [new StateEvent { EventId = "e1", Version = 1, AgentId = "agent-1" }],
+                expectedVersion: 0,
+                deadline.Token);
+
+            await append.ShouldThrowAsync<OperationCanceledException>();
+            (await store.GetVersionAsync("agent-1")).ShouldBe(0);
+            (await store.GetEventsAsync("agent-1")).ShouldBeEmpty();
+        }
+        finally
+        {
+            SafeDelete(root);
+        }
+    }
+
+    [Fact]
     public async Task AppendAsync_WithVersionConflict_ShouldThrow()
     {
         var root = CreateTempRoot();

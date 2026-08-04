@@ -22,6 +22,9 @@ namespace Aevatar.AI.Tests;
 /// </summary>
 public sealed class NyxIdProxyToolAdmittedOperationTests
 {
+    private const string CatalogDigest =
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
     [Fact]
     public void ParametersSchema_ShouldDescribeProofBoundSlotsWithoutRequiringLegacyRouting()
     {
@@ -36,6 +39,185 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         properties.TryGetProperty("body", out _).Should().BeTrue();
         properties.TryGetProperty("response_mode", out _).Should().BeTrue();
         root.TryGetProperty("required", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public void AdmittedRequestBuilder_ShouldBuildAuthoredRequestOnlyFromDeclaredValues()
+    {
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            AuthoredRequestAdmission(),
+            """{"path_params":{"event_id":"evt alpha"},"query":{"notify":"owner"},"headers":{"If-Match":"etag-alpha"},"body":{"title":"Planning"}}""");
+
+        result.Succeeded.Should().BeTrue();
+        result.Failure.Should().BeNull();
+        result.Request.Should().BeEquivalentTo(new NyxIdOperationRequest(
+            "us-calendar-alpha",
+            "calendar-alpha",
+            "POST",
+            "/events/evt%20alpha?notify=owner",
+            """{"title":"Planning"}""",
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["If-Match"] = "etag-alpha",
+            },
+            false));
+    }
+
+    [Fact]
+    public void AdmittedRequestBuilder_ShouldDeriveAuthoredFileArtifactModeFromAdmission()
+    {
+        var admission = AuthoredRequestAdmission() with
+        {
+            HttpMethod = "GET",
+            RequestBody = null,
+            ResponsePolicy = new AgentToolOperationResponsePolicy(false, true, []),
+        };
+
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            admission,
+            """{"path_params":{"event_id":"evt-alpha"}}""");
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.FileArtifact.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("text")]
+    [InlineData("file_artifact")]
+    public void AdmittedRequestBuilder_ShouldRejectAuthoredResponseModeOverride(string responseMode)
+    {
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            AuthoredRequestAdmission(),
+            JsonSerializer.Serialize(new
+            {
+                path_params = new { event_id = "evt-alpha" },
+                response_mode = responseMode,
+            }));
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure!.Code.Should().Be("NYXID_OPERATION_ARGUMENT_NOT_SUPPORTED");
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public void AdmittedRequestBuilder_ShouldRejectAmbiguousAuthoredResponsePolicy(
+        bool textAllowed,
+        bool fileArtifactAllowed)
+    {
+        var admission = AuthoredRequestAdmission() with
+        {
+            ResponsePolicy = new AgentToolOperationResponsePolicy(
+                textAllowed,
+                fileArtifactAllowed,
+                []),
+        };
+
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            admission,
+            """{"path_params":{"event_id":"evt-alpha"}}""");
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure!.Code.Should().Be("NYXID_OPERATION_RESPONSE_POLICY_INVALID");
+    }
+
+    [Theory]
+    [InlineData("""{"service_id":"us-override"}""")]
+    [InlineData("""{"slug":"slug-override"}""")]
+    [InlineData("""{"endpoint_id":"endpoint-override"}""")]
+    [InlineData("""{"request_contract_digest":"sha256:override"}""")]
+    [InlineData("""{"method":"DELETE"}""")]
+    [InlineData("""{"path":"/override"}""")]
+    [InlineData("""{"path_template":"/override/{id}"}""")]
+    [InlineData("""{"response_policy":{"text_allowed":true}}""")]
+    [InlineData("""{"execution_policy":{"risk":"read_only"}}""")]
+    public void AdmittedRequestBuilder_ShouldRejectAuthoredRouteIdentityOrPolicyOverride(
+        string argumentsJson)
+    {
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            AuthoredRequestAdmission(),
+            argumentsJson);
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure!.Code.Should().Be("NYXID_OPERATION_ARGUMENT_NOT_SUPPORTED");
+    }
+
+    [Theory]
+    [InlineData("""{"path_params":{"event_id":"evt-alpha","other":"blocked"}}""", "NYXID_OPERATION_PATH_PARAMETER_UNKNOWN")]
+    [InlineData("""{"path_params":{"event_id":"evt-alpha"},"query":{"other":"blocked"}}""", "NYXID_OPERATION_QUERY_PARAMETER_UNKNOWN")]
+    [InlineData("""{"path_params":{"event_id":"evt-alpha"},"headers":{"other":"blocked"}}""", "NYXID_OPERATION_HEADER_NOT_DECLARED")]
+    public void AdmittedRequestBuilder_ShouldRejectUndeclaredAuthoredValueSlot(
+        string argumentsJson,
+        string errorCode)
+    {
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            AuthoredRequestAdmission(),
+            argumentsJson);
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure!.Code.Should().Be(errorCode);
+    }
+
+    [Theory]
+    [InlineData("../secret")]
+    [InlineData("%2fsecret")]
+    [InlineData("evt%20alpha")]
+    public void AdmittedRequestBuilder_ShouldRejectUnsafeOrPreEncodedAuthoredPathSegment(
+        string eventId)
+    {
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            AuthoredRequestAdmission(),
+            JsonSerializer.Serialize(new { path_params = new { event_id = eventId } }));
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure!.Code.Should().Be("NYXID_OPERATION_PATH_PARAMETER_INVALID");
+    }
+
+    [Theory]
+    [InlineData("""{"path_params":{"event_id":"evt-alpha"},"query":{"notify":7}}""", "NYXID_OPERATION_QUERY_PARAMETER_INVALID")]
+    [InlineData("""{"path_params":{"event_id":"evt-alpha"},"headers":{"If-Match":false}}""", "NYXID_OPERATION_HEADER_INVALID")]
+    public void AdmittedRequestBuilder_ShouldRejectNonStringAuthoredQueryOrHeader(
+        string argumentsJson,
+        string errorCode)
+    {
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            AuthoredRequestAdmission(),
+            argumentsJson);
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure!.Code.Should().Be(errorCode);
+    }
+
+    [Theory]
+    [InlineData(
+        AgentToolOperationParameterLocation.Query,
+        AgentToolOperationValueKind.Integer,
+        """{"path_params":{"event_id":"evt-alpha"},"query":{"notify":7}}""",
+        "NYXID_OPERATION_QUERY_PARAMETER_INVALID")]
+    [InlineData(
+        AgentToolOperationParameterLocation.Header,
+        AgentToolOperationValueKind.Boolean,
+        """{"path_params":{"event_id":"evt-alpha"},"headers":{"If-Match":true}}""",
+        "NYXID_OPERATION_HEADER_INVALID")]
+    public void AdmittedRequestBuilder_ShouldRejectNonStringAuthoredQueryOrHeader_WhenSchemaMatchesScalar(
+        AgentToolOperationParameterLocation location,
+        AgentToolOperationValueKind kind,
+        string argumentsJson,
+        string errorCode)
+    {
+        var admission = AuthoredRequestAdmission();
+        admission = admission with
+        {
+            Parameters = admission.Parameters.Select(parameter =>
+                parameter.Location == location
+                    ? parameter with { Schema = ScalarSchema(kind) }
+                    : parameter).ToArray(),
+        };
+
+        var result = NyxIdAdmittedRequestBuilder.Build(admission, argumentsJson);
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure!.Code.Should().Be(errorCode);
     }
 
     [Theory]
@@ -97,37 +279,6 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             """{"service_id":"us-service-alpha","slug":"calendar-alpha","path":"/events/evt-alpha"}""");
 
         result.Should().NotContain("NYXID_OPERATION_ADMISSION_REQUIRED");
-        handler.ProxyRequests.Should().ContainSingle();
-    }
-
-    [Fact]
-    public async Task ToolApprovalMiddleware_ShouldKeepOrdinaryHumanRawProxyOnNyxIdOwnedApprovalPath()
-    {
-        var handler = new RecordingHandler();
-        var tool = CreateTool(
-            handler,
-            managedWorkflowAdmissionMode: NyxIdManagedWorkflowAdmissionMode.Enforce);
-        var approvalHandler = new RecordingApprovalHandler();
-        using var scope = PushHumanContext();
-        const string arguments =
-            """{"service_id":"us-service-alpha","slug":"calendar-alpha","path":"/events/evt-alpha"}""";
-        var context = new ToolCallContext
-        {
-            Tool = tool,
-            ToolName = tool.Name,
-            ToolCallId = "call-human-alpha",
-            ArgumentsJson = arguments,
-        };
-
-        var nextExecuted = false;
-        await new ToolApprovalMiddleware(approvalHandler).InvokeAsync(context, async () =>
-        {
-            nextExecuted = true;
-            context.Result = await tool.ExecuteAsync(arguments);
-        });
-
-        nextExecuted.Should().BeTrue();
-        approvalHandler.Requests.Should().BeEmpty();
         handler.ProxyRequests.Should().ContainSingle();
     }
 
@@ -346,6 +497,345 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         handler.McpConfigRequests.Should().ContainSingle();
         handler.ProxyRequests.Should().ContainSingle();
         handler.AuthorizationBearers.Should().OnlyContain(static bearer => bearer == "user-token");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldDispatchAuthoredTextThroughExactRouteWithoutCatalogReads()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(AuthoredRequestAdmission());
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"event_id":"evt-runtime"},"query":{"notify":"owner"},"body":{"title":"Planning"}}""");
+
+        result.Should().NotContain("error_code");
+        handler.RequestCount.Should().Be(1);
+        handler.McpConfigRequests.Should().BeEmpty();
+        handler.RequestUris.Should().OnlyContain(uri =>
+            !uri.Contains("/api/v1/keys", StringComparison.Ordinal) &&
+            !uri.Contains("/api/v1/mcp/", StringComparison.Ordinal));
+        var request = handler.ProxyRequests.Should().ContainSingle().Subject;
+        request.Method.Should().Be("POST");
+        request.Path.Should().Be("/api/v1/proxy/s/calendar-alpha/events/evt-runtime");
+        request.Query.Should().Be("?_nyxid_via=us-calendar-alpha&notify=owner");
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ShouldReceiptPublishedTextSuccessWithExactService()
+    {
+        var handler = new RecordingHandler
+        {
+            ProxyStatusCode = HttpStatusCode.OK,
+            ProxyResponseBody = """{"error":true,"status":503,"body":"domain payload"}""",
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission());
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-published",
+            tool.Name,
+            """{"query":{"container_id":"oc_1"}}""");
+
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        outcome.Receipt.SubjectKind.Should().Be("nyxid.user-service");
+        outcome.Receipt.SubjectId.Should().Be("us-lark-alpha");
+        handler.ProxyRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ShouldNotReceiptRejectedProofArguments()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(AuthoredRequestAdmission());
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-rejected",
+            tool.Name,
+            """{"path":"/forged"}""");
+
+        outcome.ResultJson.Should().Contain("NYXID_OPERATION_ARGUMENT_NOT_SUPPORTED");
+        outcome.Receipt.Should().BeNull();
+        handler.RequestCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldDispatchAuthoredFileThroughExactRouteWithoutCatalogReads()
+    {
+        var handler = new RecordingHandler(binaryResponse: true);
+        var ingress = new RecordingFileArtifactIngress();
+        var tool = CreateTool(handler, ingress);
+        var admission = AuthoredRequestAdmission() with
+        {
+            HttpMethod = "GET",
+            RequestBody = null,
+            ResponsePolicy = new AgentToolOperationResponsePolicy(false, true, []),
+            ExecutionPolicy = ReadOnlyPolicy(),
+        };
+        using var scope = PushContext(admission);
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"event_id":"evt-runtime"}}""");
+
+        result.Should().Contain("\"success\":true");
+        handler.RequestCount.Should().Be(1);
+        handler.McpConfigRequests.Should().BeEmpty();
+        handler.RequestUris.Should().OnlyContain(uri =>
+            !uri.Contains("/api/v1/keys", StringComparison.Ordinal) &&
+            !uri.Contains("/api/v1/mcp/", StringComparison.Ordinal));
+        handler.ProxyRequests.Should().ContainSingle().Which.Query
+            .Should().Be("?_nyxid_via=us-calendar-alpha");
+        ingress.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ShouldReceiptAuthoredFileSuccessWithExactService()
+    {
+        var handler = new RecordingHandler(binaryResponse: true);
+        var ingress = new RecordingFileArtifactIngress();
+        var tool = CreateTool(handler, ingress);
+        var admission = AuthoredRequestAdmission() with
+        {
+            HttpMethod = "GET",
+            RequestBody = null,
+            ResponsePolicy = new AgentToolOperationResponsePolicy(false, true, []),
+            ExecutionPolicy = ReadOnlyPolicy(),
+        };
+        using var scope = PushContext(admission);
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-file",
+            tool.Name,
+            """{"path_params":{"event_id":"evt-runtime"}}""");
+
+        outcome.ResultJson.Should().Contain("\"success\":true");
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        outcome.Receipt.SubjectKind.Should().Be("nyxid.user-service");
+        outcome.Receipt.SubjectId.Should().Be("us-calendar-alpha");
+        ingress.Requests.Should().ContainSingle();
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest, "bad_request", 1000, "Bad request: _nyxid_via UserService 'us-calendar-alpha' has slug 'calendar-beta', but the route requested 'calendar-alpha'", "NYXID_OPERATION_AUTHORITY_DRIFT")]
+    [InlineData(HttpStatusCode.NotFound, "not_found", 1003, "Not found: UserService 'us-calendar-alpha' not found", "NYXID_OPERATION_AUTHORITY_DRIFT")]
+    [InlineData(HttpStatusCode.Forbidden, "org_role_insufficient", 8103, "Organization role insufficient: you do not have proxy access to this service", "NYXID_OPERATION_AUTHORITY_ACCESS_DENIED")]
+    public async Task ExecuteAsync_ShouldMapAuthoredExactRouteAuthorityFailureWithoutFallback(
+        HttpStatusCode status,
+        string error,
+        int errorCode,
+        string message,
+        string expectedOperationErrorCode)
+    {
+        var handler = new RecordingHandler
+        {
+            ProxyStatusCode = status,
+            ProxyResponseBody = JsonSerializer.Serialize(new
+            {
+                error,
+                error_code = errorCode,
+                message,
+            }),
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(AuthoredRequestAdmission());
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"event_id":"evt-runtime"},"body":{"title":"Planning"}}""");
+
+        result.Should().Contain(expectedOperationErrorCode);
+        handler.RequestCount.Should().Be(1);
+        handler.McpConfigRequests.Should().BeEmpty();
+        handler.ProxyRequests.Should().ContainSingle().Which.Query
+            .Should().Be("?_nyxid_via=us-calendar-alpha");
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ShouldReceiptAuthoredExactRouteAuthorityFailure()
+    {
+        var handler = new RecordingHandler
+        {
+            ProxyStatusCode = HttpStatusCode.NotFound,
+            ProxyResponseBody = JsonSerializer.Serialize(new
+            {
+                error = "not_found",
+                error_code = 1003,
+                message = "Not found: UserService 'us-calendar-alpha' not found",
+            }),
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(AuthoredRequestAdmission());
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-authority-drift",
+            tool.Name,
+            """{"path_params":{"event_id":"evt-runtime"},"body":{"title":"Planning"}}""");
+
+        outcome.ResultJson.Should().Contain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        outcome.Receipt.ErrorCode.Should().Be("NYXID_OPERATION_AUTHORITY_DRIFT");
+        outcome.Receipt.SubjectKind.Should().Be("nyxid.user-service");
+        outcome.Receipt.SubjectId.Should().Be("us-calendar-alpha");
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest, "bad_request", 1000, "downstream request was invalid")]
+    [InlineData(HttpStatusCode.NotFound, "not_found", 1003, "downstream resource was not found")]
+    [InlineData(HttpStatusCode.NotFound, "not_found", 1003, "Not found: UserService 'us-other' not found")]
+    [InlineData(HttpStatusCode.BadRequest, "bad_request", 1000, "Bad request: _nyxid_via UserService 'us-calendar-alpha' has slug 'calendar-beta', but the route requested 'calendar-other'")]
+    [InlineData(HttpStatusCode.BadRequest, "bad_request", 1000, "Bad request: _nyxid_via UserService 'us-calendar-alpha' has slug 'calendar-beta', but the route requested 'calendar-alpha' unexpected suffix")]
+    public async Task ExecuteAsync_ShouldNotMapOrdinaryAuthoredDownstreamTextFailure(
+        HttpStatusCode status,
+        string error,
+        int errorCode,
+        string message)
+    {
+        var handler = new RecordingHandler
+        {
+            ProxyStatusCode = status,
+            ProxyResponseBody = JsonSerializer.Serialize(new { error, error_code = errorCode, message }),
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(AuthoredRequestAdmission());
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"event_id":"evt-runtime"},"body":{"title":"Planning"}}""");
+
+        result.Should().NotContain("NYXID_OPERATION_AUTHORITY_");
+        result.Should().Contain($"\"status\": {(int)status}");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldNotMapSuccessfulAuthoredDownstreamTextBody()
+    {
+        const string downstreamBody = """{"error":"not_found","error_code":1003,"message":"Not found: UserService 'us-calendar-alpha' not found"}""";
+        var handler = new RecordingHandler
+        {
+            ProxyStatusCode = HttpStatusCode.OK,
+            ProxyResponseBody = downstreamBody,
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(AuthoredRequestAdmission());
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"event_id":"evt-runtime"},"body":{"title":"Planning"}}""");
+
+        result.Equals(downstreamBody, StringComparison.Ordinal).Should().BeTrue();
+        result.Should().NotContain("NYXID_OPERATION_AUTHORITY_");
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ShouldNotMapSuccessfulAuthoredProxyShapedPayload()
+    {
+        const string downstreamBody =
+            """{"error":true,"status":404,"body":"{\"error\":\"not_found\",\"error_code\":1003,\"message\":\"Not found: UserService 'us-calendar-alpha' not found\"}"}""";
+        var handler = new RecordingHandler
+        {
+            ProxyStatusCode = HttpStatusCode.OK,
+            ProxyResponseBody = downstreamBody,
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(AuthoredRequestAdmission());
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-domain-payload",
+            tool.Name,
+            """{"path_params":{"event_id":"evt-runtime"},"body":{"title":"Planning"}}""");
+
+        outcome.ResultJson.Equals(downstreamBody, StringComparison.Ordinal).Should().BeTrue();
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        outcome.Receipt.SubjectId.Should().Be("us-calendar-alpha");
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest, "bad_request", 1000, "Bad request: _nyxid_via UserService 'us-calendar-alpha' has slug 'calendar-beta', but the route requested 'calendar-alpha'", "NYXID_OPERATION_AUTHORITY_DRIFT")]
+    [InlineData(HttpStatusCode.NotFound, "not_found", 1003, "Not found: UserService 'us-calendar-alpha' not found", "NYXID_OPERATION_AUTHORITY_DRIFT")]
+    [InlineData(HttpStatusCode.Forbidden, "org_role_insufficient", 8103, "Organization role insufficient: you do not have proxy access to this service", "NYXID_OPERATION_AUTHORITY_ACCESS_DENIED")]
+    public async Task ExecuteAsync_ShouldKeepAuthoredFileExactRouteAuthorityFailureOutOfArtifactIngress(
+        HttpStatusCode status,
+        string error,
+        int errorCode,
+        string message,
+        string expectedOperationErrorCode)
+    {
+        var handler = new RecordingHandler(binaryResponse: true)
+        {
+            ProxyStatusCode = status,
+            ProxyResponseBody = JsonSerializer.Serialize(new { error, error_code = errorCode, message }),
+        };
+        var ingress = new RecordingFileArtifactIngress();
+        var tool = CreateTool(handler, ingress);
+        var admission = AuthoredRequestAdmission() with
+        {
+            HttpMethod = "GET",
+            RequestBody = null,
+            ResponsePolicy = new AgentToolOperationResponsePolicy(false, true, []),
+            ExecutionPolicy = ReadOnlyPolicy(),
+        };
+        using var scope = PushContext(admission);
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"event_id":"evt-runtime"}}""");
+
+        result.Should().Contain(expectedOperationErrorCode);
+        handler.RequestCount.Should().Be(1);
+        handler.McpConfigRequests.Should().BeEmpty();
+        handler.ProxyRequests.Should().ContainSingle().Which.Query
+            .Should().Be("?_nyxid_via=us-calendar-alpha");
+        ingress.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldKeepAuthoredFileDownstreamFailureOnArtifactPolicy()
+    {
+        var handler = new RecordingHandler(binaryResponse: true)
+        {
+            ProxyStatusCode = HttpStatusCode.NotFound,
+            ProxyResponseBody = """{"error":"not_found","error_code":1003,"message":"downstream resource was not found"}""",
+        };
+        var ingress = new RecordingFileArtifactIngress();
+        var tool = CreateTool(handler, ingress);
+        var admission = AuthoredRequestAdmission() with
+        {
+            HttpMethod = "GET",
+            RequestBody = null,
+            ResponsePolicy = new AgentToolOperationResponsePolicy(false, true, []),
+            ExecutionPolicy = ReadOnlyPolicy(),
+        };
+        using var scope = PushContext(admission);
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"event_id":"evt-runtime"}}""");
+
+        result.Should().Contain("provider_binary_download_failed");
+        result.Should().NotContain("NYXID_OPERATION_AUTHORITY_");
+        ingress.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldKeepPublishedFileAuthorityFailureOnArtifactPolicy()
+    {
+        var handler = new RecordingHandler(binaryResponse: true)
+        {
+            ProxyStatusCode = HttpStatusCode.NotFound,
+            ProxyResponseBody = """{"error":"not_found","error_code":1003,"message":"UserService not found"}""",
+        };
+        var ingress = new RecordingFileArtifactIngress();
+        var tool = CreateTool(handler, ingress);
+        using var scope = PushContext(MessageResourceAdmission());
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"message_id":"om-runtime","file_key":"file-runtime"},"response_mode":"file_artifact"}""");
+
+        result.Should().Contain("provider_binary_download_failed");
+        result.Should().NotContain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        handler.McpConfigRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().ContainSingle();
+        ingress.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -688,7 +1178,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         new(
             "us-lark-alpha",
             "api-lark-bot-2",
-            "lark_get_message_resource",
+            new AgentToolOperationIdentity.PublishedEndpoint("lark_get_message_resource"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
             "GET",
             "/open-apis/im/v1/messages/{message_id}/resources/{file_key}",
             "sha256:message-resource",
@@ -700,12 +1191,45 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             new AgentToolOperationResponsePolicy(false, true, ["application/octet-stream"]),
             ReadOnlyPolicy());
 
+    private static AgentToolOperationAdmission AuthoredRequestAdmission() =>
+        new(
+            "us-calendar-alpha",
+            "calendar-alpha",
+            new AgentToolOperationIdentity.AuthoredRequest(
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            AgentToolOperationAuthorizationBasis.ExplicitRequest,
+            "POST",
+            "/events/{event_id}",
+            "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            [
+                PathParameter("event_id"),
+                QueryParameter("notify", required: false),
+                new AgentToolOperationParameter(
+                    "If-Match",
+                    AgentToolOperationParameterLocation.Header,
+                    false,
+                    AgentToolOperationValueSchema.Text),
+            ],
+            new AgentToolOperationRequestBody(
+                false,
+                "application/json",
+                new AgentToolOperationValueSchema(
+                    AgentToolOperationValueKind.Object,
+                    [],
+                    new HashSet<string>(StringComparer.Ordinal),
+                    null,
+                    [],
+                    true)),
+            AgentToolOperationResponsePolicy.TextOnly,
+            WritePolicy());
+
     private static AgentToolOperationAdmission ListMessagesAdmission()
     {
         var admission = new AgentToolOperationAdmission(
             "us-lark-alpha",
             "api-lark-bot-2",
-            "lark_list_messages",
+            new AgentToolOperationIdentity.PublishedEndpoint("lark_list_messages"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
             "GET",
             "/open-apis/im/v1/messages",
             "sha256:list-messages",
@@ -730,6 +1254,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     private static string McpConfig(AgentToolOperationAdmission admission) =>
         JsonSerializer.Serialize(new
         {
+            contract_version = "1.0",
+            catalog_digest = CatalogDigest,
             user_id = "nyx-user-alpha",
             services = new[]
             {
@@ -744,8 +1270,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                     {
                         new
                         {
-                            endpoint_id = admission.OperationId,
-                            name = admission.OperationId,
+                            endpoint_id = PublishedEndpointId(admission),
+                            name = PublishedEndpointId(admission),
                             method = admission.HttpMethod,
                             path = admission.PathTemplate,
                             parameters = admission.Parameters.Select(static parameter => new
@@ -760,6 +1286,15 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                                 : SchemaJson(admission.RequestBody.Schema),
                             request_content_type = admission.RequestBody?.MediaType,
                             request_body_required = admission.RequestBody?.Required ?? false,
+                            response = new
+                            {
+                                content_types = admission.ResponsePolicy.MediaTypes,
+                                binary_artifact = admission.ResponsePolicy.FileArtifactAllowed
+                                    ? true
+                                    : admission.ResponsePolicy.TextAllowed
+                                        ? false
+                                        : (bool?)null,
+                            },
                         },
                     },
                 },
@@ -811,7 +1346,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         new(
             "us-lark-alpha",
             "api-lark-bot-2",
-            "lark_create_approval_instance",
+            new AgentToolOperationIdentity.PublishedEndpoint("lark_create_approval_instance"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
             "POST",
             "/open-apis/approval/v4/instances",
             "sha256:create-approval",
@@ -836,7 +1372,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         new(
             "us-lark-alpha",
             "api-lark-bot-2",
-            "lark_get_approval_instance",
+            new AgentToolOperationIdentity.PublishedEndpoint("lark_get_approval_instance"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
             "GET",
             "/open-apis/approval/v4/instances/{instance_code}",
             "sha256:get-approval-instance",
@@ -849,7 +1386,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         new(
             "us-items-alpha",
             "items-alpha",
-            "get_item",
+            new AgentToolOperationIdentity.PublishedEndpoint("get_item"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
             "GET",
             "/items/{item_id}",
             "sha256:get-item",
@@ -878,6 +1416,11 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             null,
             AgentToolOperationResponsePolicy.TextOnly,
             ReadOnlyPolicy());
+
+    private static string PublishedEndpointId(AgentToolOperationAdmission admission) =>
+        admission.Identity is AgentToolOperationIdentity.PublishedEndpoint published
+            ? published.EndpointId
+            : throw new InvalidOperationException("Published endpoint admission expected.");
 
     private static AgentToolOperationValueSchema ValueSchema(
         AgentToolOperationValueKind kind,
@@ -952,7 +1495,9 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             AgentSkillRecoveryContext.Empty,
             new Dictionary<string, string>(StringComparer.Ordinal))
         {
-            OperationAdmission = WithLiveDigest(admission),
+            OperationAdmission = admission.Identity is AgentToolOperationIdentity.PublishedEndpoint
+                ? WithLiveDigest(admission)
+                : admission,
             WorkflowRuntime = new AgentWorkflowRuntimeContext(
                 "workflow-run-actor-alpha",
                 "run-alpha",
@@ -991,6 +1536,10 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     private sealed class RecordingHandler(bool binaryResponse = false) : HttpMessageHandler
     {
         public string? McpConfigJson { get; init; }
+
+        public HttpStatusCode? ProxyStatusCode { get; init; }
+
+        public string? ProxyResponseBody { get; init; }
 
         public int RequestCount { get; private set; }
 
@@ -1035,6 +1584,17 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                     request.RequestUri.AbsolutePath,
                     request.RequestUri.Query,
                     body));
+
+                if (ProxyStatusCode is { } proxyStatusCode)
+                {
+                    return new HttpResponseMessage(proxyStatusCode)
+                    {
+                        Content = new StringContent(
+                            ProxyResponseBody ?? string.Empty,
+                            Encoding.UTF8,
+                            "application/json"),
+                    };
+                }
             }
 
             var response = new HttpResponseMessage(HttpStatusCode.OK)
@@ -1075,17 +1635,4 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         }
     }
 
-    private sealed class RecordingApprovalHandler : IToolApprovalHandler
-    {
-        public List<ToolApprovalRequest> Requests { get; } = [];
-
-        public Task<ToolApprovalResult> RequestApprovalAsync(
-            ToolApprovalRequest request,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Requests.Add(request);
-            return Task.FromResult(ToolApprovalResult.Denied("unexpected local approval"));
-        }
-    }
 }

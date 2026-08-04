@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.ChatHistory;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -31,6 +32,7 @@ public sealed class ChatConversationGAgentAppendTests
         agent.State.Title.Should().Be("Initial title");
         agent.State.CreatedAtMs.Should().Be(ConversationCreatedAt.ToUnixTimeMilliseconds());
         agent.State.UpdatedAtMs.Should().Be(ConversationCreatedAt.ToUnixTimeMilliseconds());
+        agent.State.NextTurnSequence.Should().Be(1);
         agent.State.Turns.Should().BeEmpty();
         var persisted = await eventStore.GetEventsAsync(ActorId);
         persisted.Count(evt => evt.EventData.Is(ChatConversationInitializedEvent.Descriptor))
@@ -132,6 +134,7 @@ public sealed class ChatConversationGAgentAppendTests
         agent.State.Turns[1].TurnId.Should().Be("turn-2");
         agent.State.Turns[1].Sequence.Should().Be(2);
         agent.State.Turns[1].TerminalStatus.Should().Be(ChatTurnTerminalStatus.Failed);
+        agent.State.NextTurnSequence.Should().Be(3);
     }
 
     [Fact]
@@ -235,39 +238,117 @@ public sealed class ChatConversationGAgentAppendTests
         agent.State.LastRejectedAppend!.Reason.Should().Be(ChatTurnAppendRejectionReason.Conflict);
     }
 
-    [Fact]
-    public async Task AppendChatTurnCommand_ShouldRejectTurnAfterMaxTurnsWithoutTrimmingExistingTurns()
+    [Theory]
+    [InlineData(ChatTurnTerminalStatus.Completed)]
+    [InlineData(ChatTurnTerminalStatus.Failed)]
+    public async Task AppendChatTurnCommand_ShouldReconcileOutcomeUncertainExactlyOnce(
+        ChatTurnTerminalStatus reconciledStatus)
     {
-        var agent = await CreateAgentAsync();
-        for (var i = 1; i <= ChatConversationGAgent.MaxTurns; i++)
-        {
-            await agent.HandleEventAsync(Envelope(CreateAppend($"turn-{i}", $"user-{i}", $"assistant-{i}", ChatTurnTerminalStatus.Completed)));
-        }
+        var eventStore = new RecordingEventStore();
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+        var uncertain = CreateAppend(
+            "turn-uncertain",
+            "perform side effect",
+            "The outcome could not be confirmed.",
+            ChatTurnTerminalStatus.OutcomeUncertain);
+        uncertain.Turn.SanitizedError = "SESSION_OUTCOME_UNCERTAIN";
+        var reconciled = CreateAppend(
+            "turn-uncertain",
+            "perform side effect",
+            reconciledStatus == ChatTurnTerminalStatus.Completed ? "confirmed result" : string.Empty,
+            reconciledStatus);
+        reconciled.Turn.SanitizedError = reconciledStatus == ChatTurnTerminalStatus.Failed
+            ? "CONFIRMED_FAILURE"
+            : string.Empty;
 
-        await agent.HandleEventAsync(Envelope(CreateAppend("turn-251", "overflow", "overflow", ChatTurnTerminalStatus.Completed)));
+        await agent.HandleEventAsync(Envelope(uncertain));
+        await agent.HandleEventAsync(Envelope(reconciled));
+        await agent.HandleEventAsync(Envelope(reconciled.Clone()));
 
-        agent.State.Turns.Should().HaveCount(ChatConversationGAgent.MaxTurns);
-        agent.State.Turns[0].TurnId.Should().Be("turn-1");
-        agent.State.Turns[^1].TurnId.Should().Be("turn-250");
-        agent.State.LastRejectedAppend.Should().NotBeNull();
-        agent.State.LastRejectedAppend!.Reason.Should().Be(ChatTurnAppendRejectionReason.MaxTurnsExceeded);
+        var turn = agent.State.Turns.Should().ContainSingle().Which;
+        turn.TurnId.Should().Be("turn-uncertain");
+        turn.Sequence.Should().Be(1);
+        turn.TerminalStatus.Should().Be(reconciledStatus);
+        turn.AssistantText.Should().Be(reconciled.Turn.AssistantText);
+        turn.SanitizedError.Should().Be(reconciled.Turn.SanitizedError);
+        agent.State.LastRejectedAppend.Should().BeNull();
+        var persisted = await eventStore.GetEventsAsync(ActorId);
+        persisted.Count(stateEvent => stateEvent.EventData.Is(ChatTurnAppendedEvent.Descriptor))
+            .Should().Be(1);
+        persisted.Count(stateEvent => stateEvent.EventData.Is(ChatTurnTerminalReconciledEvent.Descriptor))
+            .Should().Be(1);
     }
 
     [Fact]
-    public async Task AppendChatTurnCommand_WhenRejectedWithDeliveryActor_ShouldDispatchAppendResult()
+    public async Task AppendChatTurnCommand_ShouldRejectReconciliationAfterAbsorbingTerminal()
     {
-        var dispatch = new RecordingActorDispatchPort();
-        var agent = await CreateAgentAsync(dispatch);
-        for (var i = 1; i <= ChatConversationGAgent.MaxTurns; i++)
+        var eventStore = new RecordingEventStore();
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+        await agent.HandleEventAsync(Envelope(CreateAppend(
+            "turn-terminal",
+            "perform work",
+            "completed",
+            ChatTurnTerminalStatus.Completed)));
+
+        await agent.HandleEventAsync(Envelope(CreateAppend(
+            "turn-terminal",
+            "perform work",
+            string.Empty,
+            ChatTurnTerminalStatus.Failed)));
+
+        agent.State.Turns.Should().ContainSingle().Which.TerminalStatus
+            .Should().Be(ChatTurnTerminalStatus.Completed);
+        agent.State.LastRejectedAppend!.Reason.Should().Be(ChatTurnAppendRejectionReason.Conflict);
+        (await eventStore.GetEventsAsync(ActorId)).Should().NotContain(stateEvent =>
+            stateEvent.EventData.Is(ChatTurnTerminalReconciledEvent.Descriptor));
+    }
+
+    [Fact]
+    public async Task AppendChatTurnCommand_ShouldRemainAppendableBeyondFormerTurnLimit()
+    {
+        var agent = await CreateAgentAsync();
+        for (var i = 1; i <= 250; i++)
         {
             await agent.HandleEventAsync(Envelope(CreateAppend($"turn-{i}", $"user-{i}", $"assistant-{i}", ChatTurnTerminalStatus.Completed)));
         }
 
-        var overflow = CreateAppend("turn-251", "overflow", "overflow", ChatTurnTerminalStatus.Completed);
-        overflow.DeliveryActorId = "delivery-actor";
+        await agent.HandleEventAsync(Envelope(CreateAppend("turn-251", "continued", "continued", ChatTurnTerminalStatus.Completed)));
 
-        await agent.HandleEventAsync(Envelope(overflow));
+        agent.State.Turns.Should().HaveCount(251);
+        agent.State.Turns[0].TurnId.Should().Be("turn-1");
+        agent.State.Turns[^1].TurnId.Should().Be("turn-251");
+        agent.State.Turns[^1].Sequence.Should().Be(251);
+        agent.State.NextTurnSequence.Should().Be(252);
+        agent.State.LastRejectedAppend.Should().BeNull();
+    }
 
+    [Fact]
+    public async Task AppendChatTurnCommand_AfterReactivationAndDuplicate_ShouldKeepSequenceMonotonic()
+    {
+        var eventStore = new RecordingEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = await CreateAgentAsync(dispatch, eventStore);
+        for (var i = 1; i <= 251; i++)
+        {
+            await agent.HandleEventAsync(Envelope(CreateAppend($"turn-{i}", $"user-{i}", $"assistant-{i}", ChatTurnTerminalStatus.Completed)));
+        }
+
+        var repeated = CreateAppend("turn-251", "user-251", "assistant-251", ChatTurnTerminalStatus.Completed);
+        repeated.DeliveryActorId = "delivery-actor";
+        var reactivated = await CreateAgentAsync(dispatch, eventStore);
+
+        await reactivated.HandleEventAsync(Envelope(repeated));
+        await reactivated.HandleEventAsync(Envelope(CreateAppend(
+            "turn-252",
+            "user-252",
+            "assistant-252",
+            ChatTurnTerminalStatus.Completed)));
+
+        reactivated.State.Turns.Should().HaveCount(252);
+        reactivated.State.Turns[^1].Sequence.Should().Be(252);
+        reactivated.State.NextTurnSequence.Should().Be(253);
+        var persisted = await eventStore.GetEventsAsync(ActorId);
+        persisted.Count(evt => evt.EventData.Is(ChatTurnAppendedEvent.Descriptor)).Should().Be(252);
         dispatch.Calls.Should().ContainSingle();
         var call = dispatch.Calls.Single();
         call.ActorId.Should().Be("delivery-actor");
@@ -275,8 +356,147 @@ public sealed class ChatConversationGAgentAppendTests
         result.DeliveryActorId.Should().Be("delivery-actor");
         result.ConversationId.Should().Be("conversation-a");
         result.TurnId.Should().Be("turn-251");
-        result.Accepted.Should().BeFalse();
-        result.RejectionReason.Should().Be(ChatTurnAppendRejectionReason.MaxTurnsExceeded);
+        result.Accepted.Should().BeTrue();
+        result.RejectionReason.Should().Be(ChatTurnAppendRejectionReason.Unspecified);
+    }
+
+    [Fact]
+    public async Task AppendChatTurnCommand_WhenReplayingLegacyTurn_ShouldRecoverSequenceWatermark()
+    {
+        var eventStore = new RecordingEventStore();
+        var legacyTurn = CreateAppend(
+            "turn-250",
+            "legacy-user",
+            "legacy-assistant",
+            ChatTurnTerminalStatus.Completed).Turn;
+        legacyTurn.Sequence = 250;
+        await eventStore.AppendAsync(
+            ActorId,
+            [
+                new StateEvent
+                {
+                    EventId = "legacy-turn-event",
+                    EventType = ChatTurnAppendedEvent.Descriptor.FullName,
+                    EventData = Any.Pack(new ChatTurnAppendedEvent
+                    {
+                        ScopeId = "scope-a",
+                        ConversationId = "conversation-a",
+                        Turn = legacyTurn,
+                    }),
+                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-16T00:00:00Z")),
+                },
+            ],
+            expectedVersion: 0);
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+
+        agent.State.NextTurnSequence.Should().Be(251);
+        await agent.HandleEventAsync(Envelope(CreateAppend(
+            "turn-251",
+            "new-user",
+            "new-assistant",
+            ChatTurnTerminalStatus.Completed)));
+
+        agent.State.Turns.Should().HaveCount(2);
+        agent.State.Turns[^1].Sequence.Should().Be(251);
+        agent.State.NextTurnSequence.Should().Be(252);
+    }
+
+    [Fact]
+    public async Task DeleteConversationCommand_AfterReactivation_ShouldReplayTheCommittedDeletionTimeExactly()
+    {
+        var eventStore = new RecordingEventStore();
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+        await agent.HandleEventAsync(Envelope(CreateInitialize()));
+
+        await agent.HandleEventAsync(Envelope(CreateDelete()));
+
+        var persisted = await eventStore.GetEventsAsync(ActorId);
+        var deletedEvent = persisted
+            .Should().ContainSingle(evt => evt.EventData.Is(ConversationDeletedEvent.Descriptor))
+            .Which.EventData.Unpack<ConversationDeletedEvent>();
+        deletedEvent.DeletedAt.Should().NotBeNull();
+        agent.State.Deleted.Should().BeTrue();
+        agent.State.UpdatedAtMs.Should().Be(deletedEvent.DeletedAt.ToDateTimeOffset().ToUnixTimeMilliseconds());
+        var committedStateRoot = agent.State.ToByteString();
+
+        var reactivated = await CreateAgentAsync(eventStore: eventStore);
+
+        reactivated.State.ToByteString().Should().Equal(committedStateRoot);
+        reactivated.State.UpdatedAtMs.Should().Be(deletedEvent.DeletedAt.ToDateTimeOffset().ToUnixTimeMilliseconds());
+    }
+
+    [Fact]
+    public async Task LegacyConversationDeletedEvent_WithoutDeletionTime_ShouldReplayWithoutReadingTheClock()
+    {
+        var eventStore = new RecordingEventStore();
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+        await agent.HandleEventAsync(Envelope(CreateInitialize()));
+        await eventStore.AppendAsync(
+            ActorId,
+            [
+                new StateEvent
+                {
+                    EventId = "legacy-delete-event",
+                    EventType = ConversationDeletedEvent.Descriptor.FullName,
+                    EventData = Any.Pack(new ConversationDeletedEvent
+                    {
+                        ScopeId = "scope-a",
+                        ConversationId = "conversation-a",
+                    }),
+                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-17T00:00:00Z")),
+                },
+            ],
+            expectedVersion: 1);
+
+        var firstReplay = await CreateAgentAsync(eventStore: eventStore);
+        var firstStateRoot = firstReplay.State.ToByteString();
+        var secondReplay = await CreateAgentAsync(eventStore: eventStore);
+
+        firstReplay.State.Deleted.Should().BeTrue();
+        firstReplay.State.UpdatedAtMs.Should().Be(ConversationCreatedAt.ToUnixTimeMilliseconds());
+        secondReplay.State.ToByteString().Should().Equal(firstStateRoot);
+    }
+
+    [Fact]
+    public async Task DeleteConversationCommand_WhenExactlyRepeated_ShouldNotPersistOrChangeStateAgain()
+    {
+        var eventStore = new RecordingEventStore();
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+        await agent.HandleEventAsync(Envelope(CreateInitialize()));
+        var command = CreateDelete();
+
+        await agent.HandleEventAsync(Envelope(command));
+        var stateAfterDelete = agent.State.ToByteString();
+        await agent.HandleEventAsync(Envelope(command.Clone()));
+
+        agent.State.ToByteString().Should().Equal(stateAfterDelete);
+        var persisted = await eventStore.GetEventsAsync(ActorId);
+        persisted.Count(evt => evt.EventData.Is(ConversationDeletedEvent.Descriptor)).Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData("scope-b", "conversation-a")]
+    [InlineData("scope-a", "conversation-b")]
+    public async Task DeleteConversationCommand_WhenBoundIdentityDiffers_ShouldFailClosed(
+        string scopeId,
+        string conversationId)
+    {
+        var eventStore = new RecordingEventStore();
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+        await agent.HandleEventAsync(Envelope(CreateInitialize()));
+        var command = new DeleteConversationCommand
+        {
+            ScopeId = scopeId,
+            ConversationId = conversationId,
+        };
+
+        var act = () => agent.HandleEventAsync(Envelope(command));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*deletion conflicts*");
+        agent.State.Deleted.Should().BeFalse();
+        var persisted = await eventStore.GetEventsAsync(ActorId);
+        persisted.Should().NotContain(evt => evt.EventData.Is(ConversationDeletedEvent.Descriptor));
     }
 
     private static AppendChatTurnCommand CreateAppend(
@@ -310,6 +530,13 @@ public sealed class ChatConversationGAgentAppendTests
             ServiceKind = "nyxid.chat",
             CreatedAt = Timestamp.FromDateTimeOffset(ConversationCreatedAt),
             InitialTitle = "Initial title",
+        };
+
+    private static DeleteConversationCommand CreateDelete() =>
+        new()
+        {
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
         };
 
     private static InitializeChatConversationCommand Changed(

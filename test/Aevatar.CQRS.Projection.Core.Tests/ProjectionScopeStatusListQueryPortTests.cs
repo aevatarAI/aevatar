@@ -78,72 +78,89 @@ public sealed class ProjectionScopeStatusListQueryPortTests
         {
             ScopeActorId = "scope-a",
             Active = true,
-            LastObservedVersion = 30,
-            LastSuccessfulVersion = 25,
-            FailureCount = 2,
+            ReceivedEnvelopeTotal = 31,
+            AttemptedEnvelopeTotal = 30,
+            SuccessfulMaterializationTotal = 25,
+            FailedAttemptTotal = 5,
+            RetryExhaustedTotal = 1,
+            RetryExhaustedFailureCount = 1,
+            UnresolvedFailureCount = 2,
+            FailureDiagnosticDroppedTotal = 3,
+            OldestUnresolvedFailureAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 5, 20, 3, 0, 0, TimeSpan.Zero)),
             UpdatedAt = updated,
         };
+        document.SourceVersions.Add(new ProjectionSourceVersionStatus
+        {
+            SourceActorId = "actor-alpha",
+            HighestSeenVersion = 30,
+            LastSuccessfulVersion = 25,
+            VersionGap = 5,
+        });
         var sut = new ProjectionScopeStatusListQueryPort(new CapturingReader(document));
 
         var snapshot = (await sut.ListAsync(new ProjectionScopeStatusListQuery())).Should().ContainSingle().Subject;
 
         snapshot.ScopeActorId.Should().Be("scope-a");
         snapshot.Active.Should().BeTrue();
-        snapshot.LastObservedVersion.Should().Be(30);
-        snapshot.LastSuccessfulVersion.Should().Be(25);
-        snapshot.FailureCount.Should().Be(2);
-        snapshot.Lag.Should().Be(5);
+        snapshot.ReceivedEnvelopeTotal.Should().Be(31);
+        snapshot.AttemptedEnvelopeTotal.Should().Be(30);
+        snapshot.SuccessfulMaterializationTotal.Should().Be(25);
+        snapshot.FailedAttemptTotal.Should().Be(5);
+        snapshot.RetryExhaustedTotal.Should().Be(1);
+        snapshot.RetryExhaustedFailureCount.Should().Be(1);
+        snapshot.UnresolvedFailureCount.Should().Be(2);
+        snapshot.OldestUnresolvedFailureAt.Should().Be(
+            new DateTimeOffset(2026, 5, 20, 3, 0, 0, TimeSpan.Zero));
+        snapshot.FailureDiagnosticDroppedTotal.Should().Be(3);
+        snapshot.SourceActorCount.Should().Be(1);
+        snapshot.SingleSourceVersionGap.Should().Be(5);
         snapshot.UpdatedAt.Should().Be(updated);
     }
 
     [Fact]
-    public async Task ListAsync_ComputesLagAsObservedMinusSuccessful()
+    public async Task ListAsync_ExposesVersionGapForOneAuthoritativeActorAxis()
     {
-        var document = new ProjectionScopeStatusDocument
+        var document = new ProjectionScopeStatusDocument { ScopeActorId = "scope-single-axis" };
+        document.SourceVersions.Add(new ProjectionSourceVersionStatus
         {
-            ScopeActorId = "scope-lag",
-            LastObservedVersion = 100,
+            SourceActorId = "actor-alpha",
+            HighestSeenVersion = 100,
             LastSuccessfulVersion = 60,
-        };
+            VersionGap = 40,
+        });
         var sut = new ProjectionScopeStatusListQueryPort(new CapturingReader(document));
 
         var snapshot = (await sut.ListAsync(new ProjectionScopeStatusListQuery())).Single();
 
-        snapshot.Lag.Should().Be(40);
+        snapshot.SourceActorCount.Should().Be(1);
+        snapshot.SingleSourceVersionGap.Should().Be(40);
     }
 
     [Fact]
-    public async Task ListAsync_ClampsNegativeLagToZeroWhenSuccessfulLeadsObserved()
+    public async Task ListAsync_DoesNotSubtractVersionsAcrossActors()
     {
-        // Successful ahead of observed (e.g. a fresh observation watermark not yet recorded) must not
-        // surface as a negative backlog.
-        var document = new ProjectionScopeStatusDocument
+        var document = new ProjectionScopeStatusDocument { ScopeActorId = "scope-multi-axis" };
+        document.SourceVersions.Add(new ProjectionSourceVersionStatus
         {
-            ScopeActorId = "scope-ahead",
-            LastObservedVersion = 10,
-            LastSuccessfulVersion = 17,
-        };
-        var sut = new ProjectionScopeStatusListQueryPort(new CapturingReader(document));
-
-        var snapshot = (await sut.ListAsync(new ProjectionScopeStatusListQuery())).Single();
-
-        snapshot.Lag.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task ListAsync_ReturnsZeroLagWhenObservedEqualsSuccessful()
-    {
-        var document = new ProjectionScopeStatusDocument
+            SourceActorId = "actor-alpha",
+            HighestSeenVersion = 100,
+            LastSuccessfulVersion = 60,
+            VersionGap = 40,
+        });
+        document.SourceVersions.Add(new ProjectionSourceVersionStatus
         {
-            ScopeActorId = "scope-caught-up",
-            LastObservedVersion = 12,
+            SourceActorId = "actor-beta",
+            HighestSeenVersion = 12,
             LastSuccessfulVersion = 12,
-        };
+            VersionGap = 0,
+        });
         var sut = new ProjectionScopeStatusListQueryPort(new CapturingReader(document));
 
         var snapshot = (await sut.ListAsync(new ProjectionScopeStatusListQuery())).Single();
 
-        snapshot.Lag.Should().Be(0);
+        snapshot.SourceActorCount.Should().Be(2);
+        snapshot.SingleSourceVersionGap.Should().BeNull();
     }
 
     [Fact]

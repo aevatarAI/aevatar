@@ -21,10 +21,32 @@ public sealed class ProjectionScopeStatusProjectorTests
             Mode = ProjectionScopeMode.DurableMaterialization,
             Active = true,
             ObservationAttached = true,
-            LastObservedVersion = 12,
+            HighestSeenVersion = 12,
             LastSuccessfulVersion = 11,
+            ReceivedEnvelopeTotal = 13,
+            AttemptedEnvelopeTotal = 12,
+            SuccessfulMaterializationTotal = 11,
+            FailedAttemptTotal = 1,
+            RetryExhaustedTotal = 2,
+            FailureDiagnosticDroppedTotal = 4,
         };
-        state.Failures.Add(new ProjectionScopeFailure { FailureId = "failure-1" });
+        state.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-1",
+            RetryExhausted = true,
+            OccurredAtUtc = Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 5, 20, 2, 0, 0, TimeSpan.Zero)),
+        });
+        state.HighestSeenVersionsByActor["actor-alpha"] = 12;
+        state.LastSuccessfulVersionsByActor["actor-alpha"] = 11;
+        state.RecentObservedEnvelopes.Add(new ProjectionObservedEnvelopeMetadata
+        {
+            EventId = "source-event-12",
+            TypeUrl = "type.googleapis.com/aevatar.SourceEvent",
+            StateVersion = 12,
+            TimestampUtc = Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 5, 20, 3, 4, 5, TimeSpan.Zero)),
+        });
 
         await sut.ProjectAsync(
             new ProjectionScopeStatusMaterializationContext { RootActorId = "root-actor" },
@@ -44,9 +66,19 @@ public sealed class ProjectionScopeStatusProjectorTests
         document.Active.Should().BeTrue();
         document.ObservationAttached.Should().BeTrue();
         document.Released.Should().BeFalse();
-        document.LastObservedVersion.Should().Be(12);
+        document.HighestSeenVersion.Should().Be(12);
         document.LastSuccessfulVersion.Should().Be(11);
-        document.FailureCount.Should().Be(1);
+        document.UnresolvedFailureCount.Should().Be(1);
+        document.OldestUnresolvedFailureAtUtc.Should().Be(state.Failures[0].OccurredAtUtc);
+        document.ReceivedEnvelopeTotal.Should().Be(13);
+        document.AttemptedEnvelopeTotal.Should().Be(12);
+        document.SuccessfulMaterializationTotal.Should().Be(11);
+        document.FailedAttemptTotal.Should().Be(1);
+        document.RetryExhaustedTotal.Should().Be(2);
+        document.RetryExhaustedFailureCount.Should().Be(1);
+        document.FailureDiagnosticDroppedTotal.Should().Be(4);
+        document.SourceVersions.Should().ContainSingle().Which.VersionGap.Should().Be(1);
+        document.RecentObservedEnvelopes.Should().BeEquivalentTo(state.RecentObservedEnvelopes);
     }
 
     [Fact]
@@ -102,7 +134,7 @@ public sealed class ProjectionScopeStatusProjectorTests
     }
 
     [Fact]
-    public async Task ProjectAsync_MapsFailuresToFailureCountOnly()
+    public async Task ProjectAsync_MapsDurableFailuresToUnresolvedCountOnly()
     {
         var dispatcher = new RecordingStatusDispatcher();
         var sut = new ProjectionScopeStatusProjector(dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
@@ -121,7 +153,7 @@ public sealed class ProjectionScopeStatusProjectorTests
             CreateCommittedEnvelope(state, version: 5, eventId: "state-event-5"));
 
         var document = dispatcher.Upserts.Should().ContainSingle().Which;
-        document.FailureCount.Should().Be(2);
+        document.UnresolvedFailureCount.Should().Be(2);
         typeof(ProjectionScopeStatusDocument).GetProperty("Failures").Should().BeNull();
     }
 

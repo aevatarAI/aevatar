@@ -36,7 +36,7 @@ owner: eanzhao
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
     CFG["Aevatar:Status 配置"] --> MAN["StatusDashboardManifest"]
-    MAN --> START["HealthProbeStartupService"]
+    MAN --> START["HealthProbeStartupService 启动 + 每分钟 reconcile"]
     START --> DISPATCH["IActorDispatchPort"]
     DISPATCH --> ACT["HealthProbeTargetGAgent"]
     ACT --> TICK["Ephemeral delayed self-message"]
@@ -64,14 +64,14 @@ flowchart LR
 7. Mainnet Host 按 document provider 将 snapshot store 替换为 Elasticsearch adapter，或显式保留 InMemory adapter。
 8. Elasticsearch 分支把 dedicated alias 注册为 startup reconcile target；actor 读写路径不执行 index lifecycle。
 
-`HealthProbeStartupService` 在 host 启动时读取 manifest。每个有效 target 会执行：
+`HealthProbeStartupService` 在 host 启动时读取 manifest，并每分钟对有效 target 重申一次同一份配置。每个有效 target 会执行：
 
 1. 用 `HealthProbeStoreCommands.BuildActorId(slug)` 得到稳定 actor id。
 2. 仅在旧 health projection scope 已存在时直接投递 typed release command；通过 typed attach-existing lease lookup 清理其嵌套 `projection-scope-status` scope。迁移清理绝不创建新 scope，集合同时覆盖当前 manifest 与 `RetiredStatusProbeTargets`。
-3. 通过 `HealthProbeStoreCommands.DispatchConfigureAsync(...)` 创建或获取 `HealthProbeTargetGAgent`，再投递 `HealthProbeConfigureCommand`。
+3. 通过 `HealthProbeStoreCommands.DispatchConfigureAsync(...)` 创建或获取 `HealthProbeTargetGAgent`，再投递 `HealthProbeConfigureCommand`；周期 reconcile 只重复这一步。
 4. actor activation best-effort 清理旧实现遗留的 durable callbacks，然后启动新的 ephemeral tick 链。
 
-启动服务只负责一次性历史清理与 startup configure dispatch，不拥有长期调度状态。正常路径不注册 health projection hook、materialization runtime 或 readmodel descriptor。
+启动 pass 负责一次性历史清理与 configure dispatch；周期 reconcile 不执行探针、不缓存 target 运行态，只用幂等 configure 在滚动发布后重新激活丢失进程内 tick 的 actor。Actor 仍独占长期探测调度和采样状态。正常路径不注册 health projection hook、materialization runtime 或 readmodel descriptor。
 
 ## 5. Probe Actor
 
@@ -91,7 +91,7 @@ Actor 处理两类消息：
 
 | 消息 | 来源 | 行为 |
 |---|---|---|
-| `HealthProbeConfigureCommand` | startup service | 持久化 `HealthProbeConfigured`，并安排下一次 self tick |
+| `HealthProbeConfigureCommand` | startup / reconcile service | descriptor 变化时持久化 `HealthProbeConfigured`；actor 激活时安排下一次 self tick |
 | `HealthProbeTickRequested` | ephemeral delayed continuation | 在 actor turn 中登记 active execution 并调用 executor |
 | `HealthProbeCompletedEvent` | executor completion continuation | 按 `operation_id` 对账、更新 runtime state、覆盖 snapshot、安排下一次 tick |
 | `HealthProbeTimeoutFiredEvent` | ephemeral delayed continuation | 按 `operation_id` 对账 timeout、覆盖 snapshot、安排下一次 tick |

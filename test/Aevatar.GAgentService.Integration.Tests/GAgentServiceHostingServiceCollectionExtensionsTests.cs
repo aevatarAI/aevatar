@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -35,6 +36,7 @@ using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
+using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Core.Models;
@@ -142,6 +144,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             .AddInMemoryCollection(new Dictionary<string, string?>())
             .Build();
         services.AddSingleton<ILLMProviderFactory>(new ThrowingLlmProviderFactory());
+        services.AddSingleton<IAgentToolExecutionPort, UnusedAgentToolExecutionPort>();
 
         services.AddGAgentServiceCapability(configuration);
 
@@ -387,6 +390,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         endpoints.Should().Contain("/api/services/{serviceId}/policies");
         endpoints.Should().Contain("/api/scopes/{scopeId}/binding");
         endpoints.Should().Contain("/api/scopes/{scopeId}/workflows:save-and-bind");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/workflows:explicit-request-preview");
         endpoints.Should().Contain("/api/scopes/{scopeId}/binding/revisions/{revisionId}:activate");
         endpoints.Should().Contain("/api/scopes/{scopeId}/revisions");
         endpoints.Should().Contain("/api/scopes/{scopeId}/revisions/{revisionId}");
@@ -445,7 +449,9 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             options.AutoMapCapabilities = false;
         });
         builder.Services.AddSingleton<ILLMProviderFactory, UnusedLlmProviderFactory>();
+        builder.Services.AddSingleton<IAgentToolExecutionPort, UnusedAgentToolExecutionPort>();
         builder.AddGAgentServiceCapabilityBundle();
+        UseRepositoryWorkflowDefinitions(builder.Services);
 
         await using var app = builder.Build();
         app.MapAevatarCapabilities();
@@ -497,7 +503,9 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             options.EnableScriptingCapability = false;
         });
         builder.Services.AddSingleton<ILLMProviderFactory, UnusedLlmProviderFactory>();
+        builder.Services.AddSingleton<IAgentToolExecutionPort, UnusedAgentToolExecutionPort>();
         builder.AddGAgentServiceCapabilityBundle();
+        UseRepositoryWorkflowDefinitions(builder.Services);
 
         await using var app = builder.Build();
         app.MapAevatarCapabilities();
@@ -780,6 +788,15 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
                    argument.Name.Contains(typeName, StringComparison.Ordinal));
     }
 
+    private static void UseRepositoryWorkflowDefinitions(IServiceCollection services)
+    {
+        services.Configure<WorkflowDefinitionFileSourceOptions>(options =>
+        {
+            options.WorkflowDirectories.Clear();
+            options.WorkflowDirectories.Add(Path.Combine(Directory.GetCurrentDirectory(), "workflows"));
+        });
+    }
+
     private static void AssertNoWorkflowCapabilitiesStartupArtifactServices(IServiceCollection services)
     {
         // Refactor (iter161-cluster-001 #1257-first):
@@ -809,6 +826,14 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             throw new InvalidOperationException("The hosting startup test must not execute LLM requests.");
 
         public IReadOnlyList<string> GetAvailableProviders() => [];
+    }
+
+    private sealed class UnusedAgentToolExecutionPort : IAgentToolExecutionPort
+    {
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("The hosting composition test must not execute agent tools.");
     }
 
     private sealed class UnusedExternalIdentityBindingQueryPort : IExternalIdentityBindingQueryPort

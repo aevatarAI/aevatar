@@ -33,6 +33,9 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Transient<
             IExternalWorkflowCapabilitySource,
             NyxIdExternalWorkflowCapabilitySource>());
+        services.TryAddEnumerable(ServiceDescriptor.Transient<
+            IExternalWorkflowCapabilitySource,
+            NyxIdExplicitWorkflowCapabilitySource>());
         services.Replace(ServiceDescriptor.Singleton<
             IWorkflowFileMultipartUploadPort,
             NyxIdWorkflowFileMultipartUploadPort>());

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.Channel.Abstractions;
 
@@ -43,6 +44,55 @@ public sealed class ReplyWithInteractionTool : IAgentTool
 
     public bool IsDestructive => false;
 
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return null;
+
+            if (root.TryGetProperty("status", out var status) &&
+                string.Equals(status.GetString(), "queued", StringComparison.Ordinal) &&
+                !root.TryGetProperty("error", out _))
+            {
+                return Receipt(callId, toolName, AgentToolReceiptStatus.Success, resultJson);
+            }
+
+            if (root.TryGetProperty("error", out var error) &&
+                error.ValueKind == JsonValueKind.String &&
+                !string.IsNullOrWhiteSpace(error.GetString()))
+            {
+                var code = error.GetString()!.Trim();
+                if (code is not ("invalid_arguments" or
+                    "empty_interaction" or
+                    "no_active_interactive_scope"))
+                {
+                    return null;
+                }
+                const string message = "The interactive reply failed.";
+                return Receipt(
+                    callId,
+                    toolName,
+                    AgentToolReceiptStatus.Error,
+                    JsonSerializer.Serialize(new { error = code, message }),
+                    code,
+                    message);
+            }
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        return null;
+    }
+
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         ReplyWithInteractionArguments? arguments;
@@ -73,6 +123,24 @@ public sealed class ReplyWithInteractionTool : IAgentTool
 
         return Task.FromResult("""{"status":"queued"}""");
     }
+
+    private AgentToolReceipt Receipt(
+        string callId,
+        string toolName,
+        AgentToolReceiptStatus status,
+        string resultJson,
+        string errorCode = "",
+        string errorMessage = "") =>
+        new()
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+            Status = status,
+            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            ResultJson = resultJson ?? string.Empty,
+            ErrorCode = errorCode ?? string.Empty,
+            ErrorMessage = errorMessage ?? string.Empty,
+        };
 
     private const string ParametersSchemaJson = """
         {

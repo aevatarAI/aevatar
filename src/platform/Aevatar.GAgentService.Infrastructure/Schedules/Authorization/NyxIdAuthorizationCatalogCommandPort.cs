@@ -46,6 +46,8 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
             CoverageKind = ToCoverageKindState(observation.Coverage),
         };
         command.Services.Add(observation.Services.Select(static service => service.Clone()));
+        if (observation.GatewayLLMTarget != null)
+            command.GatewayLlmTarget = observation.GatewayLLMTarget.Clone();
         command.CoveredUserServiceIds.Add((observation.CoveredUserServiceIds ?? [])
             .Select(static serviceId => serviceId?.Trim() ?? string.Empty)
             .Where(static serviceId => serviceId.Length > 0)

@@ -75,6 +75,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         IReadOnlyList<AgentToolChannelIdentityHint> IdentityHints);
 
     private readonly IServiceProvider _toolServiceProvider;
+    private readonly IAgentToolExecutionPort _toolExecutionPort;
     private readonly IChannelBotRegistrationQueryPort _registrationQueryPort;
     private readonly IChannelBotRegistrationQueryByNyxIdentityPort? _registrationQueryByNyxIdentityPort;
     private readonly IEnumerable<IPlatformAdapter> _platformAdapters;
@@ -109,6 +110,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         NyxIdRelayOutboundPort relayOutboundPort,
         IInteractiveReplyDispatcher? interactiveReplyDispatcher,
         ILogger<ChannelConversationTurnRunner> logger,
+        IAgentToolExecutionPort toolExecutionPort,
         IOwnerLlmConfigSource? ownerLlmConfigSource = null,
         IExternalIdentityBindingQueryPort? identityBindingQueryPort = null,
         ChannelSlashCommandRegistry? slashCommandRegistry = null,
@@ -128,6 +130,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
+        _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
         _registrationQueryByNyxIdentityPort = registrationQueryByNyxIdentityPort;
         _platformAdapters = platformAdapters ?? throw new ArgumentNullException(nameof(platformAdapters));
@@ -850,18 +853,24 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 if (string.IsNullOrWhiteSpace(action.Value))
                     return new MessageContent { Text = "缺少要切换的 LLM service,请重新发送 /models。" };
 
-                await selectionService.SetByServiceAsync(selectionContext, action.Value.Trim(), modelOverride: null, ct)
+                var picked = (await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false))
+                    .Available.FirstOrDefault(option =>
+                        option.Identity is
+                        {
+                            Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                        } identity &&
+                        string.Equals(identity.NyxIdUserServiceId, action.Value.Trim(), StringComparison.Ordinal));
+                await selectionService.SetByServiceAsync(
+                        selectionContext,
+                        action.Value.Trim(),
+                        new LLMModelSelection { Kind = LLMModelSelectionKind.ProviderDefault },
+                        ct)
                     .ConfigureAwait(false);
-                var updated = await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false);
-                var picked = updated.Current ?? updated.Available.FirstOrDefault(option =>
-                    option.Identity is
-                    {
-                        Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory,
-                    } identity &&
-                    string.Equals(identity.NyxIdUserServiceId, action.Value.Trim(), StringComparison.Ordinal));
                 return picked is null
-                    ? new MessageContent { Text = "已切换 LLM service。下一条消息会用新的设置回复。" }
-                    : renderer.RenderSelectionConfirm(picked, picked.DefaultModel);
+                    ? new MessageContent { Text = "LLM 选择更新已提交；观察到更新后的设置后生效。" }
+                    : renderer.RenderSelectionConfirm(
+                        picked,
+                        new LLMModelSelection { Kind = LLMModelSelectionKind.ProviderDefault });
             }
 
             if (string.Equals(action.Action, TextUserLlmOptionsRenderer.ApplyPresetAction, StringComparison.Ordinal))
@@ -870,10 +879,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     return new MessageContent { Text = "缺少要应用的 LLM preset,请重新发送 /models。" };
 
                 await selectionService.ApplyPresetAsync(selectionContext, action.Value.Trim(), ct).ConfigureAwait(false);
-                var updated = await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false);
-                return updated.Current is null
-                    ? new MessageContent { Text = $"已应用 preset **{action.Value.Trim()}**。下一条消息会用新的 LLM 设置回复。" }
-                    : renderer.RenderSelectionConfirm(updated.Current, updated.Current.DefaultModel);
+                return new MessageContent
+                {
+                    Text = $"LLM preset **{action.Value.Trim()}** 更新已提交；观察到更新后的设置后生效。",
+                };
             }
 
             if (string.Equals(action.Action, TextUserLlmOptionsRenderer.ListPageAction, StringComparison.Ordinal))
@@ -882,7 +891,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 return renderer.RenderOptions(updated, action.DisplayMode, action.Page);
             }
 
-            return new MessageContent { Text = "未识别的模型设置操作,请重新发送 /models。" };
+            return new MessageContent { Text = "这张模型设置卡片已失效，请重新发送 /models 获取最新选项。" };
         }
         catch (AevatarOAuthClientNotProvisionedException)
         {
@@ -1111,6 +1120,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 TextUserLlmOptionsRenderer.ApplyPresetActionId => TextUserLlmOptionsRenderer.ApplyPresetAction,
                 TextUserLlmOptionsRenderer.ListPageActionId => TextUserLlmOptionsRenderer.ListPageAction,
                 TextUserLlmOptionsRenderer.LegacySelectServiceActionId => TextUserLlmOptionsRenderer.SelectServiceAction,
+                TextUserLlmOptionsRenderer.LegacySelectModelActionId => TextUserLlmOptionsRenderer.LegacySelectModelAction,
                 TextUserLlmOptionsRenderer.LegacyApplyPresetActionId => TextUserLlmOptionsRenderer.ApplyPresetAction,
                 _ => string.Empty,
             };
@@ -1493,19 +1503,28 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     inboundEvent,
                     runtimeContext,
                     ct);
-            using (AgentToolContextScope.Push(BuildAgentBuilderToolContext(
-                       inboundEvent,
-                       activity,
-                       registration,
-                       ResolveUserAccessToken(activity, runtimeContext),
-                       senderBinding,
-                       channelContext.Metadata,
-                       channelContext.IdentityHints)))
+            var executionContext = BuildAgentBuilderToolContext(
+                    inboundEvent,
+                    activity,
+                    registration,
+                    ResolveUserAccessToken(activity, runtimeContext),
+                    senderBinding,
+                    channelContext.Metadata,
+                    channelContext.IdentityHints)
+                .WithCallId($"{inboundEvent.MessageId}:agent-builder") with
             {
-                var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
-                var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
-                replyContent = AgentBuilderCardFlow.FormatToolResult(decision, toolResult);
-            }
+                ExecutionOwner = AgentToolExecutionOwners.ChannelRegistration(registration.Id),
+            };
+            var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
+            var outcome = await _toolExecutionPort.ExecuteAsync(
+                new AgentToolExecutionRequest(
+                    tool,
+                    decision.ToolArgumentsJson!,
+                    executionContext,
+                    AgentToolApprovalContinuationMode.None,
+                    null),
+                ct).ConfigureAwait(false);
+            replyContent = AgentBuilderCardFlow.FormatToolResult(decision, outcome.ResultJson);
         }
 
         var inbound = ToInboundMessage(activity);

@@ -19,11 +19,16 @@ public sealed class BackendConsoleAssetService(IOptions<BackendConsoleOptions> o
     private readonly IOptions<BackendConsoleOptions> _options =
         options ?? throw new ArgumentNullException(nameof(options));
     private readonly ConcurrentDictionary<string, string> _resourceCache = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, BackendConsoleRenderedAsset> _renderedCache = new(StringComparer.Ordinal);
 
     public IResult Serve(BackendConsoleAsset asset)
     {
-        var content = Render(asset);
-        return Results.Text(content, asset.ContentType, Encoding.UTF8);
+        ArgumentNullException.ThrowIfNull(asset);
+
+        var rendered = _renderedCache.GetOrAdd(
+            CacheKey(asset.Assembly, asset.ResourceSuffix),
+            _ => BackendConsoleRenderedAsset.Create(Render(asset), asset.ContentType));
+        return new BackendConsoleAssetResult(rendered);
     }
 
     public string Render(BackendConsoleAsset asset)

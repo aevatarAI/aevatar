@@ -285,6 +285,19 @@ public sealed class GAgentApprovalInteractionTests
             .Should().BeTrue();
         failedCompletion.Should().Be(GAgentApprovalCompletionStatus.Failed);
 
+        policy.TryResolve(
+                new AGUIEvent
+                {
+                    RunError = new RunErrorEvent
+                    {
+                        Code = GAgentRunFailureCodes.OutcomeUncertain,
+                        Message = "The interrupted session may have produced side effects.",
+                    },
+                },
+                out var uncertainCompletion)
+            .Should().BeTrue();
+        uncertainCompletion.Should().Be(GAgentApprovalCompletionStatus.OutcomeUncertain);
+
         policy.TryResolve(new AGUIEvent(), out var unknownCompletion).Should().BeFalse();
         unknownCompletion.Should().Be(GAgentApprovalCompletionStatus.Unknown);
         policy.IncompleteCompletion.Should().Be(GAgentApprovalCompletionStatus.Unknown);
@@ -353,6 +366,34 @@ public sealed class GAgentApprovalInteractionTests
             true,
             GAgentApprovalCompletionStatus.Failed));
         queryPort.CorrelationCalls.Should().ContainSingle(x => x.actorId == "actor-1" && x.correlationId == "corr-1");
+    }
+
+    [Fact]
+    public async Task DurableCompletionResolver_ShouldResolveOutcomeUncertainAsCompleted()
+    {
+        var queryPort = new ApprovalTerminalQueryPort
+        {
+            CorrelationSnapshot = new GAgentRunTerminalSnapshot(
+                "actor-1",
+                "session-1",
+                "corr-1",
+                GAgentRunTerminalInteractionKind.Approval,
+                GAgentRunTerminalStatus.OutcomeUncertain,
+                GAgentRunFailureCodes.OutcomeUncertain,
+                "The interrupted session may have produced side effects.",
+                3,
+                "evt-uncertain",
+                DateTimeOffset.UtcNow),
+        };
+        var resolver = new GAgentApprovalDurableCompletionResolver(queryPort);
+
+        var result = await resolver.ResolveAsync(
+            new GAgentApprovalAcceptedReceipt("actor-1", "cmd-1", "corr-1", "session-1"),
+            CancellationToken.None);
+
+        result.Should().Be(new CommandDurableCompletionObservation<GAgentApprovalCompletionStatus>(
+            true,
+            GAgentApprovalCompletionStatus.OutcomeUncertain));
     }
 
     [Fact]

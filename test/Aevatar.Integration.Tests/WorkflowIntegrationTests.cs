@@ -17,6 +17,7 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.AI.Core;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core;
@@ -80,6 +81,8 @@ public class WorkflowIntegrationTests
 
         // 注册 Workflow 核心模块 pack 与统一模块工厂
         services.AddAevatarWorkflow();
+        services.AddSingleton<IAgentToolExecutionPort>(
+            WorkflowGAgentTestBase.UnexpectedAgentToolExecutionPort.Instance);
         services.AddAevatarAgentKindRegistry(RegisterAssistantRoleKind);
 
         var sp = services.BuildServiceProvider();
@@ -229,6 +232,7 @@ public class WorkflowIntegrationTests
             {
                 WorkflowYaml = ResearchWorkflowYaml,
                 WorkflowName = "research_workflow",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
@@ -247,6 +251,7 @@ public class WorkflowIntegrationTests
                 WorkflowYaml = ResearchWorkflowYaml,
                 WorkflowName = "research_workflow",
                 RunId = runActorId,
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
@@ -323,6 +328,7 @@ public class WorkflowIntegrationTests
             {
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "public_alias_workflow",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation { CorrelationId = Guid.NewGuid().ToString("N") },
@@ -337,6 +343,7 @@ public class WorkflowIntegrationTests
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "public_alias_workflow",
                 RunId = runActorId,
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation { CorrelationId = Guid.NewGuid().ToString("N") },

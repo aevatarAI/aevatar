@@ -1,10 +1,15 @@
+using System.Net;
 using System.Runtime.CompilerServices;
+using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
+using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
@@ -234,6 +239,203 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task NyxIdCatalogTool_ThroughNyxIdChatTurnExecutor_ShouldAcceptCurrentEntriesEnvelope()
+    {
+        var handler = new StaticResponseHandler("""{"entries":[{"slug":"api-github"}]}""");
+        using var httpClient = new HttpClient(handler);
+        using var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            httpClient);
+        var tool = new NyxIdCatalogTool(client);
+        var generationExecutor = CreateToolEnabledExecutor(
+            tool,
+            new ToolCallProvider(tool.Name),
+            toolContext: AgentToolExecutionContext.Empty with
+            {
+                Credentials = AgentToolCredentials.Empty with
+                {
+                    NyxIdAccessToken = "token-1",
+                },
+            });
+        var executor = new NyxIdChatTurnOperationExecutor(generationExecutor);
+        var session = new NyxIdChatTransientExecutionSession();
+        var llmExecution = await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = BuildOperationKey("step-llm", "operation-llm"),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    Request = new ChatRequestEvent
+                    {
+                        Prompt = "connect GitHub",
+                        SessionId = "turn-1",
+                    },
+                },
+            },
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+        var call = llmExecution.Result.Llm.ToolCalls.Should().ContainSingle().Which;
+
+        var toolExecution = await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = BuildOperationKey("step-tool", "operation-tool"),
+                Tool = new NyxIdChatToolOperationInput
+                {
+                    CallId = call.CallId,
+                    ToolName = call.ToolName,
+                    ArgumentsJson = call.ArgumentsJson,
+                    MayChangeExternalState = call.Safety.MayChangeExternalState,
+                },
+            },
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        toolExecution.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Tool,
+            "catalog GET is read-only and must not require an outcome receipt");
+        call.Safety.IsReadOnly.Should().BeTrue();
+        call.Safety.MayChangeExternalState.Should().BeFalse();
+        toolExecution.Result.Tool.ResultJson.Should().Contain("api-github");
+        toolExecution.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
+        toolExecution.Result.Tool.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
+        handler.Method.Should().Be(HttpMethod.Get);
+        handler.Path.Should().Be("/api/v1/catalog");
+    }
+
+    [Fact]
+    public async Task NyxIdChatTurnExecutor_ShouldMergeDirectInputPartFileRefsIntoInitialPlanningToolContext()
+    {
+        var generationExecutor = new RecordingTurnGenerationExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(generationExecutor);
+        var session = new NyxIdChatTransientExecutionSession();
+        var baseContext = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("request-direct", "call-direct"),
+            Caller = new AgentToolCallerContext("scope-direct", "owner-direct", "response-direct"),
+            InputFileRefs =
+            [
+                new Aevatar.AI.Abstractions.ChatFileRef
+                {
+                    FileId = "file-existing",
+                    ArtifactId = "workflow-file://file-existing",
+                    SourceKind = Aevatar.AI.Abstractions.ChatFileSourceKind.Generated,
+                    FileName = "existing.txt",
+                    MediaType = "text/plain",
+                },
+            ],
+        };
+
+        await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = BuildOperationKey("step-llm", "operation-llm"),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    Request = new ChatRequestEvent
+                    {
+                        Prompt = "summarize files",
+                        ToolContext = baseContext.ToPayload(),
+                        InputParts =
+                        {
+                            new ChatContentPart
+                            {
+                                Kind = ChatContentPartKind.Text,
+                                Text = "see direct file",
+                                FileRef = new Aevatar.AI.Abstractions.ChatFileRef
+                                {
+                                    FileId = "file-direct",
+                                    ArtifactId = "workflow-file://file-direct",
+                                    SourceKind = Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput,
+                                    SourceMessageId = "om_direct",
+                                    SourceResourceKey = "file_key_direct",
+                                    FileName = "direct.pdf",
+                                    MediaType = "application/pdf",
+                                    SizeBytes = 123,
+                                },
+                            },
+                            new ChatContentPart
+                            {
+                                Kind = ChatContentPartKind.Text,
+                                Text = "duplicate",
+                                FileRef = new Aevatar.AI.Abstractions.ChatFileRef
+                                {
+                                    FileId = "file-direct-copy",
+                                    ArtifactId = "workflow-file://file-direct",
+                                    SourceKind = Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput,
+                                    FileName = "direct-copy.pdf",
+                                    MediaType = "application/pdf",
+                                },
+                            },
+                            new ChatContentPart
+                            {
+                                Kind = ChatContentPartKind.Text,
+                                Text = "file id only",
+                                FileRef = new Aevatar.AI.Abstractions.ChatFileRef
+                                {
+                                    FileId = "file-only",
+                                    SourceKind = Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput,
+                                    FileName = "file-only.txt",
+                                    MediaType = "text/plain",
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        generationExecutor.InitialRequest.Should().NotBeNull();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(generationExecutor.InitialRequest!.ToolContext);
+        toolContext.Request.RequestId.Should().Be("request-direct");
+        toolContext.Caller.ScopeId.Should().Be("scope-direct");
+        toolContext.InputFileRefs.Select(static fileRef => fileRef.FileId)
+            .Should().Equal("file-existing", "file-direct", "file-only");
+        toolContext.InputFileRefs.Select(static fileRef => fileRef.ArtifactId)
+            .Should().Equal("workflow-file://file-existing", "workflow-file://file-direct", string.Empty);
+        toolContext.InputFileRefs[1].SourceMessageId.Should().Be("om_direct");
+        toolContext.InputFileRefs[1].SourceResourceKey.Should().Be("file_key_direct");
+        toolContext.InputFileRefs[1].SizeBytes.Should().Be(123);
+    }
+
+    [Fact]
+    public void NyxIdCatalogTool_HttpErrorEnvelope_ShouldReturnTypedFailureReceipt()
+    {
+        using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example" });
+        var tool = new NyxIdCatalogTool(client);
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-1",
+            tool.Name,
+            "{}",
+            "{\"error\":true,\"status\":401,\"body\":\"secret upstream body\"}");
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("NYXID_CATALOG_HTTP_401");
+        receipt.ResultJson.Should().NotContain("secret upstream body");
+    }
+
+    [Fact]
+    public void NyxIdCatalogTool_UnrecognizedJson_ShouldLeaveOutcomeUnverified()
+    {
+        using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example" });
+        var tool = new NyxIdCatalogTool(client);
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-1",
+            tool.Name,
+            "{}",
+            "{}");
+
+        receipt.Should().BeNull();
+    }
+
+    [Fact]
     public async Task BuildLlmStepContinuation_WhenMiddlewareRemovesTools_ShouldRejectFabricatedToolCall()
     {
         var tool = new CountingTool("use_skill");
@@ -256,8 +458,53 @@ public sealed class AgentRunReplyGenerationExecutorTests
         rejected.Content.Should().Be("{\"error\":\"The tool request failed.\"}");
         var receipt = continuation.ToolStepResult.ToolReceipts.Should().ContainSingle().Which;
         receipt.Status.Should().Be(AgentToolReceiptStatus.Error);
-        receipt.ErrorCode.Should().Be("tool_execution_exception");
+        receipt.ErrorCode.Should().Be("tool_execution_error");
         tool.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BuildToolStepContinuation_WithExactChatOperation_ShouldExposeTypedChatContext()
+    {
+        var tool = new ChatContextCapturingTool("use_skill");
+        var executor = CreateToolEnabledExecutor(
+            tool,
+            new ToolCallProvider(tool.Name),
+            toolContext: AgentToolExecutionContext.Empty with
+            {
+                Chat = new AgentChatInvocationContext(
+                    AgentChatInvocationSurface.NyxIdAssistant,
+                    "conversation-alpha",
+                    "turn-alpha",
+                    "task-planning",
+                    null,
+                    null),
+            });
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var execution = await executor.BuildLlmStepExecutionAsync(llmWorkItem, CancellationToken.None);
+        var toolWorkItem = BuildToolStepWorkItem(llmWorkItem, execution.Continuation);
+
+        await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            execution.AuthorizedToolStep!.WithChatOperation(new NyxIdChatOperationKey
+            {
+                ConversationActorId = "conversation-alpha",
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                StepId = "step-alpha",
+                OperationId = "operation-alpha",
+                OperationGeneration = 1,
+            }),
+            CancellationToken.None);
+
+        tool.SeenChat.Should().Be(new AgentChatInvocationContext(
+            AgentChatInvocationSurface.NyxIdAssistant,
+            "conversation-alpha",
+            "turn-alpha",
+            "task-alpha",
+            "step-alpha",
+            null));
+        tool.SeenExternalMetadata.Keys.Should().NotContain(
+            ["conversation_id", "turn_id", "task_id", "step_id"]);
     }
 
     [Fact]
@@ -286,7 +533,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         result.ResultMessages.Select(static message => message.ToolCallId)
             .Should().Equal("call-1", "call-2");
         result.ResultMessages.Should().OnlyContain(static message =>
-            message.Content.Contains("not found", StringComparison.Ordinal));
+            message.Content.Contains("not authorized", StringComparison.Ordinal));
         registeredTool.ExecuteCount.Should().Be(0);
     }
 
@@ -324,7 +571,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         result.Should().NotBeNull();
         result!.ResultMessages.Should().HaveCount(toolWorkItem.StepState.PendingToolCalls.Count);
         result.ResultMessages.Should().OnlyContain(static message =>
-            message.Content.Contains("not found", StringComparison.Ordinal));
+            message.Content.Contains("not authorized", StringComparison.Ordinal));
         registeredTool.ExecuteCount.Should().Be(0);
     }
 
@@ -359,14 +606,17 @@ public sealed class AgentRunReplyGenerationExecutorTests
     private static AgentRunReplyGenerationExecutor CreateToolEnabledExecutor(
         IAgentTool tool,
         ILLMProvider provider,
-        IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null)
+        IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
+        AgentToolExecutionContext? toolContext = null)
     {
         var tools = new ToolManager();
         tools.Register(tool);
         var runtime = new ChatRuntime(
             () => provider,
             new ChatHistory(),
-            new ToolCallLoop(tools),
+            new ToolCallLoop(
+                tools,
+                toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort()),
             hooks: null,
             requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() },
             llmMiddlewares: llmMiddlewares);
@@ -374,7 +624,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             runtime.CreateStepExecutor(turnCatalog: null),
             new Dictionary<string, string>(),
             LLMControlContext.Empty,
-            AgentToolExecutionContext.Empty,
+            toolContext ?? AgentToolExecutionContext.Empty,
             InitialMessages: [],
             MaxToolRounds: 1);
         return new AgentRunReplyGenerationExecutor(
@@ -454,6 +704,17 @@ public sealed class AgentRunReplyGenerationExecutorTests
             stepState);
     }
 
+    private static NyxIdChatOperationKey BuildOperationKey(string stepId, string operationId) =>
+        new()
+        {
+            ConversationActorId = "conversation-1",
+            TurnId = "turn-1",
+            TaskId = "task-1",
+            StepId = stepId,
+            OperationId = operationId,
+            OperationGeneration = 1,
+        };
+
     private static AgentRunReplyStepExecutionRequest BuildToolStepWorkItem(
         AgentRunReplyStepExecutionRequest llmWorkItem,
         AgentRunNextLlmStepRequestedEvent continuation)
@@ -516,6 +777,53 @@ public sealed class AgentRunReplyGenerationExecutorTests
         }
 
         return workItem with { StepState = stepState };
+    }
+
+    private sealed class RecordingTurnGenerationExecutor : IAgentRunReplyGenerationExecutorPort
+    {
+        public NeedsLlmReplyEvent? InitialRequest { get; private set; }
+
+        public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
+            AgentRunReplyGenerationExecutionRequest request,
+            CancellationToken ct)
+        {
+            InitialRequest = request.Request.Clone();
+            return Task.FromResult(new AgentRunReplyStepState
+            {
+                RunId = request.RunId,
+                CorrelationId = request.Request.CorrelationId,
+                TargetActorId = request.Request.TargetActorId,
+                Attempt = request.Attempt,
+                NextStepIndex = 1,
+                MaxToolRounds = 1,
+                ToolContext = request.Request.ToolContext?.Clone(),
+                LlmControl = request.Request.LlmControl?.Clone(),
+            });
+        }
+
+        public Task<AgentRunLlmStepExecution> BuildLlmStepExecutionAsync(
+            AgentRunReplyStepExecutionRequest request,
+            CancellationToken ct) =>
+            Task.FromResult(new AgentRunLlmStepExecution(
+                new AgentRunNextLlmStepRequestedEvent
+                {
+                    RunId = request.RunId,
+                    CorrelationId = request.Request.CorrelationId,
+                    TargetActorId = request.Request.TargetActorId,
+                    Attempt = request.Attempt,
+                    StepIndex = request.StepIndex + 1,
+                    LlmStepResult = new AgentRunLlmStepResult
+                    {
+                        FinishReason = "stop",
+                    },
+                },
+                AuthorizedToolStep: null));
+
+        public Task<AgentRunNextToolStepRequestedEvent> BuildToolStepContinuationAsync(
+            AgentRunReplyStepExecutionRequest request,
+            AgentRunAuthorizedToolStep? authorizedToolStep,
+            CancellationToken ct) =>
+            throw new NotSupportedException();
     }
 
     private sealed class RecordingProvider : ILLMProvider
@@ -594,6 +902,24 @@ public sealed class AgentRunReplyGenerationExecutorTests
         }
     }
 
+    private sealed class ChatContextCapturingTool(string name) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => name;
+        public string ParametersSchema => "{}";
+        public AgentChatInvocationContext SeenChat { get; private set; } = AgentChatInvocationContext.Empty;
+        public IReadOnlyDictionary<string, string> SeenExternalMetadata { get; private set; } =
+            new Dictionary<string, string>(StringComparer.Ordinal);
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            SeenChat = AgentToolRequestContext.Current?.Chat ?? AgentChatInvocationContext.Empty;
+            SeenExternalMetadata = AgentToolRequestContext.Current?.ExternalMetadata
+                ?? new Dictionary<string, string>(StringComparer.Ordinal);
+            return Task.FromResult("{}");
+        }
+    }
+
     private sealed class EffectClassifiedTool(string name) : IAgentTool
     {
         public string Name => name;
@@ -614,6 +940,25 @@ public sealed class AgentRunReplyGenerationExecutorTests
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult("{}");
+    }
+
+    private sealed class StaticResponseHandler(string body) : HttpMessageHandler
+    {
+        public HttpMethod? Method { get; private set; }
+        public string? Path { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Method = request.Method;
+            Path = request.RequestUri?.AbsolutePath;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            });
+        }
     }
 
     public enum AuthorizedToolStepMutation
@@ -638,7 +983,8 @@ public sealed class AgentRunReplyGenerationExecutorTests
             IReadOnlyList<ConversationHistoryEntry>? priorHistory,
             ChatAttachmentInputContext? attachmentContext,
             bool forceDisableTools,
-            CancellationToken ct) =>
+            CancellationToken ct,
+            AgentProfileTurnCatalog? turnCatalog = null) =>
             Task.FromResult(plan);
 
         public Task<ConversationReplyResult> GenerateReplyAsync(

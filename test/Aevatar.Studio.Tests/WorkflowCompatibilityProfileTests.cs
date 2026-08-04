@@ -1,3 +1,4 @@
+using System.Text;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Domain.Studio.Compatibility;
 using Aevatar.Studio.Domain.Studio.Models;
@@ -65,6 +66,73 @@ public sealed class WorkflowCompatibilityProfileTests
             string.Equals(finding.Code, "unknown_field", StringComparison.OrdinalIgnoreCase) &&
             finding.Path == $"/{rootField}");
         parserParse.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Parse_WhenChildrenDepthIsBelowResourceLimit_ShouldCreateDocument()
+    {
+        var service = new YamlWorkflowDocumentService(_profile);
+
+        var result = service.Parse(BuildNestedWorkflowYaml(childLinks: 30));
+
+        result.Document.Should().NotBeNull();
+        result.Findings.Should().NotContain(finding => finding.Code == "yaml_resource_limit");
+    }
+
+    [Fact]
+    public void Parse_WhenChildrenDepthExceedsResourceLimit_ShouldRejectBeforeLoadingDocument()
+    {
+        var service = new YamlWorkflowDocumentService(_profile);
+
+        var result = service.Parse(BuildNestedWorkflowYaml(childLinks: 31));
+
+        result.Document.Should().BeNull();
+        result.Findings.Should().ContainSingle(finding =>
+            finding.Path == "/" && finding.Code == "yaml_resource_limit");
+    }
+
+    [Fact]
+    public void Parse_WhenCollectionAliasCreatesCycle_ShouldRejectBeforeLoadingDocument()
+    {
+        var service = new YamlWorkflowDocumentService(_profile);
+        const string yaml = """
+                            name: cyclic
+                            roles: []
+                            steps: &steps
+                              - id: loop
+                                type: assign
+                                children: *steps
+                            """;
+
+        var result = service.Parse(yaml);
+
+        result.Document.Should().BeNull();
+        result.Findings.Should().ContainSingle(finding =>
+            finding.Path == "/" && finding.Code == "yaml_resource_limit");
+    }
+
+    [Fact]
+    public void Parse_WhenForwardCollectionAliasesCreateCycle_ShouldRejectBeforeLoadingDocument()
+    {
+        var service = new YamlWorkflowDocumentService(_profile);
+        const string yaml = """
+                            name: forward-cycle
+                            steps: *a
+                            roles: &a
+                              - id: a
+                                type: assign
+                                children: *b
+                            configuration: &b
+                              - id: b
+                                type: assign
+                                children: *a
+                            """;
+
+        var result = service.Parse(yaml);
+
+        result.Document.Should().BeNull();
+        result.Findings.Should().ContainSingle(finding =>
+            finding.Path == "/" && finding.Code == "yaml_resource_limit");
     }
 
     [Fact]
@@ -228,6 +296,26 @@ public sealed class WorkflowCompatibilityProfileTests
                 """,
             _ => throw new ArgumentOutOfRangeException(nameof(rootField), rootField, null),
         };
+
+    private static string BuildNestedWorkflowYaml(int childLinks)
+    {
+        var yaml = new StringBuilder()
+            .AppendLine("name: nested")
+            .AppendLine("roles: []")
+            .AppendLine("steps:");
+
+        for (var index = 0; index <= childLinks; index++)
+        {
+            var itemIndent = new string(' ', 2 + (index * 4));
+            var propertyIndent = new string(' ', 4 + (index * 4));
+            yaml.Append(itemIndent).Append("- id: step_").AppendLine(index.ToString());
+            yaml.Append(propertyIndent).AppendLine("type: assign");
+            if (index < childLinks)
+                yaml.Append(propertyIndent).AppendLine("children:");
+        }
+
+        return yaml.ToString();
+    }
 
     [Theory]
     [InlineData("llm", "llm_call")]

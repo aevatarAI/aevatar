@@ -43,7 +43,9 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
                     spec.WorkflowYaml,
                     spec.InlineWorkflowYamls,
                     "service_revision_prepare",
-                    expectedExecutionMode),
+                    expectedExecutionMode,
+                    spec.WorkflowId,
+                    request.Spec.RevisionId),
                 ct)
             : await _capabilityAdmissionService.AdmitAsync(
                 new WorkflowExternalCapabilityAdmissionRequest(

@@ -82,7 +82,7 @@ public sealed class WorkspaceControllerWorkflowDraftCreateTests
             new WorkspaceService(workspaceQueryPort, workspaceCommandPort, yamlDocumentService),
             new AppScopedWorkflowService(
                 yamlDocumentService,
-                new StudioWorkflowCapabilityAdmissionTestService(),
+                new StubWorkflowDefinitionParser(),
                 workspaceQueryPort,
                 workspaceCommandPort),
             new StubAppScopeResolver(scopeContext),
@@ -149,6 +149,20 @@ public sealed class WorkspaceControllerWorkflowDraftCreateTests
 
             return null;
         }
+    }
+
+    private sealed class StubWorkflowDefinitionParser : IWorkflowDefinitionParser
+    {
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
+            string workflowYaml,
+            CancellationToken ct = default) =>
+            Task.FromResult(WorkflowYamlParseResult.Success(
+                workflowYaml.Split('\n')[0][5..].Trim()));
+
+        public Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
 }

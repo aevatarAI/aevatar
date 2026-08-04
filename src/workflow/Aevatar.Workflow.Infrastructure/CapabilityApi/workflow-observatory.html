@@ -46,6 +46,7 @@
 
     --list-w: 320px;
     --topbar-h: 56px;
+    --workspacebar-h: 46px;
     color-scheme: dark;
   }
 
@@ -236,6 +237,29 @@
     padding: 4px 6px; border-radius: var(--r-sm);
   }
   .linkbtn:hover { text-decoration: underline; }
+  .workspacebar {
+    display:flex; align-items:center; gap:10px; height:var(--workspacebar-h); padding:7px 16px;
+    border-bottom:1px solid var(--border); background:var(--panel);
+  }
+  .workspace-context { min-width:0; display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12.5px; }
+  .workspace-context b { max-width:min(48vw,620px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg-strong); font-weight:650; }
+  .workspace-actions { margin-left:auto; display:flex; align-items:center; gap:7px; }
+  .workspace-action {
+    min-height:32px; display:inline-flex; align-items:center; gap:6px; padding:0 10px;
+    border:1px solid var(--border); border-radius:var(--r); background:var(--panel-2); color:var(--fg);
+    font-size:12px; font-weight:600;
+  }
+  .workspace-action:hover { border-color:var(--muted-2); background:var(--panel-3); }
+  .workspace-action:disabled { opacity:.55; cursor:not-allowed; }
+  .admin-tools { position:relative; }
+  .admin-tools > summary { list-style:none; }
+  .admin-tools > summary::-webkit-details-marker { display:none; }
+  .admin-tools[open] > summary { border-color:var(--accent-line); color:var(--accent); }
+  .admin-tools-panel {
+    position:absolute; z-index:20; top:38px; right:0; width:min(680px,calc(100vw - 24px));
+    border:1px solid var(--border); border-radius:var(--r); background:var(--panel); box-shadow:var(--shadow);
+  }
+  .admin-tools-panel .adminbar { border:0; border-radius:inherit; }
 
   /* =========================================================================
      Admin cross-scope bar (06-20-observatory-admin-cross-scope)
@@ -264,6 +288,12 @@
   .adminbar .ab-msg { font-size: 12px; color: var(--err); }
   .adminbar .ab-cands { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; }
   .adminbar .ab-hint { flex-basis: 100%; font-size: 11.5px; color: var(--muted); margin-top: 1px; }
+  body.observatory-immersive { --topbar-h:0px; }
+  body.observatory-immersive .topbar,
+  body.observatory-immersive .list-pane,
+  body.observatory-immersive .admin-tools { display:none !important; }
+  body.observatory-immersive .shell { grid-template-columns:1fr; }
+  body.observatory-immersive .detail-inner { max-width:1400px; }
 
   /* =========================================================================
      Run-list filter bar (06-23-observatory-run-coverage-filter)
@@ -367,10 +397,10 @@
   .shell {
     display: grid;
     grid-template-columns: var(--list-w) 1fr;
-    height: calc(100dvh - var(--topbar-h));
+    height: calc(100dvh - var(--topbar-h) - var(--workspacebar-h));
     min-height: 0;
   }
-  .shell.has-banner { height: auto; min-height: calc(100dvh - var(--topbar-h)); }
+  .shell.has-banner { height: auto; min-height: calc(100dvh - var(--topbar-h) - var(--workspacebar-h)); }
 
   /* ---- Runs list -------------------------------------------------------- */
   .list-pane {
@@ -512,6 +542,21 @@
     font-family: var(--mono); font-size: 12px; line-height: 1.55; color: var(--fg);
     white-space: pre-wrap; word-break: break-word;
   }
+  .narrative { display:grid; gap:9px; margin-top:12px; }
+  .narrative details { border:1px solid var(--border); border-radius:var(--r); background:var(--panel); overflow:hidden; }
+  .narrative summary { cursor:pointer; padding:10px 13px; color:var(--fg); font-weight:650; }
+  .narrative .issue-pre { margin:0; border-width:1px 0 0; border-radius:0; }
+  .cross-links { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+  .step-list { display:grid; gap:9px; }
+  .step-card { display:grid; gap:7px; padding:12px 14px; border:1px solid var(--border); border-radius:var(--r); background:var(--panel); }
+  .step-card > .mono, .step-card small { color:var(--muted); font-size:11.5px; }
+  .approval-panel { margin-top:14px; padding:14px; border:1px solid color-mix(in oklab,var(--warn) 45%,var(--border)); border-radius:var(--r); background:var(--warn-soft); }
+  .approval-head, .approval-actions { display:flex; align-items:center; flex-wrap:wrap; gap:9px; }
+  .approval-head span { margin-left:auto; color:var(--muted); font-size:12px; }
+  .approval-content { max-height:260px; margin:10px 0; padding:10px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--bg); white-space:pre-wrap; word-break:break-word; }
+  .approval-feedback { width:100%; margin:10px 0; padding:9px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--panel); color:var(--fg); }
+  .approval-error { margin-top:8px; color:var(--err); }
+  .approval-actions .btn-primary { width:auto; padding:7px 12px; }
 
   /* ---- Tabs ------------------------------------------------------------- */
   .tabs { display: inline-flex; gap: 3px; padding: 3px; margin: 20px 0 0; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-pill); }
@@ -883,6 +928,10 @@
        (e.g. "已暂停"/"切换账户" stacking one glyph per line); let the brand truncate instead. */
     .topbar { gap: 8px; }
     .brand-name { overflow: hidden; text-overflow: ellipsis; }
+    .workspacebar { padding:7px 10px; }
+    .workspace-context span { display:none; }
+    .workspace-action span { display:none; }
+    .workspace-action { width:34px; padding:0; justify-content:center; }
     /* release the fixed brand width on narrow screens so the nav reclaims the space */
     .brand { flex: 1 1 auto; width: auto; } .brand, .brand > div { min-width: 0; }
     .pill-ro, .live, .iconbtn, .account, .linkbtn { flex-shrink: 0; }
@@ -959,6 +1008,8 @@ const CFG = {
 };
 const TOKEN_KEY = CFG.storageKey + ":token";
 const PKCE_KEY  = CFG.storageKey + ":pkce";
+const OBSERVATORY_VIEW_KEY = CFG.storageKey + ":observatory:view";
+const OBSERVATORY_IMMERSIVE_KEY = CFG.storageKey + ":observatory:immersive";
 
 function b64url(buf){ return btoa(String.fromCharCode.apply(null, new Uint8Array(buf))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
 async function sha256(text){ return b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))); }
@@ -973,13 +1024,19 @@ function notifyAdminShellAuth(type, reason){
   window.parent.postMessage({ source:"aevatar-backend-console-suite", type, reason: reason || "" }, location.origin);
   return true;
 }
+function navigateAdminShell(module, query){
+  const message={source:"aevatar-backend-console-suite",type:"navigate",module,query:query||{}};
+  if(isEmbeddedInAdmin()){ window.parent.postMessage(message,location.origin); return; }
+  const p=new URLSearchParams(); Object.entries(query||{}).forEach(([key,value])=>{if(value)p.set(key,value);});
+  location.assign("/admin#/"+module+(p.toString()?"?"+p:""));
+}
 
 async function beginLogin(){
   if(notifyAdminShellAuth("login-request")) return;
   const verifier = randomString(64);
   const st = randomString(32);
   const challenge = await sha256(verifier);
-  sessionStorage.setItem(PKCE_KEY, JSON.stringify({ verifier, state: st, returnTo: location.pathname }));
+  sessionStorage.setItem(PKCE_KEY, JSON.stringify({ verifier, state: st, returnTo: location.pathname + location.search }));
   const u = new URL(CFG.authority + "/oauth/authorize");
   u.searchParams.set("response_type", "code");
   u.searchParams.set("client_id", CFG.clientId);
@@ -998,7 +1055,7 @@ async function completeLoginIfCallback(){
   if(!code) return false;
   const returnedState = params.get("state");
   const pending = JSON.parse(sessionStorage.getItem(PKCE_KEY) || "null");
-  history.replaceState({}, "", "/workflow/observatory");
+  history.replaceState({}, "", (pending && pending.returnTo) || "/workflow/observatory");
   if(!pending || pending.state !== returnedState){ console.warn("observatory: login state mismatch"); return false; }
   const form = new URLSearchParams();
   form.set("grant_type", "authorization_code");
@@ -1024,14 +1081,23 @@ async function fetchUserInfo(){
 }
 function toAccount(info){ return info ? { label: info.email || info.preferred_username || info.sub || "已登录" } : null; }
 
-async function api(path){
+async function apiRequest(path, options){
   const token = getToken(); if(!token) throw new Error("not-authenticated");
-  const res = await fetch(path, { headers:{ Authorization:"Bearer " + token.access_token } });
+  options = options || {};
+  const headers = Object.assign({}, options.headers || {}, { Authorization:"Bearer " + token.access_token });
+  const res = await fetch(path, Object.assign({}, options, { headers }));
   if(res.status === 401){ signOutSilent(); throw new Error("unauthorized"); }
   if(res.status === 404) return null;
-  if(!res.ok) throw new Error("api-error-" + res.status);
-  return await res.json();
+  if(!res.ok){
+    let reason = "api-error-" + res.status;
+    try { const body = await res.json(); reason = body.message || body.error || body.code || reason; } catch(e){}
+    throw new Error(reason);
+  }
+  if(res.status === 204) return null;
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
 }
+async function api(path){ return apiRequest(path); }
 
 /* client cache backing the synchronous render contract */
 const cache = { account:null, runs:[], details:{}, graphs:{} };
@@ -1054,6 +1120,15 @@ function runScopeParam(runId){
   const scope = run ? run.scopeId : ((adminState.currentScope && adminState.currentScope !== ALL_SCOPES) ? adminState.currentScope : "");
   return (scope && scope !== adminState.ownScope) ? "?scope=" + encodeURIComponent(scope) : "";
 }
+function runDetailRequestPath(runId, admin, runs, graph){
+  const run=(runs||[]).find(item=>item.runId===runId);
+  const suffix=graph?"/graph":"";
+  if(admin.isAdmin&&(admin.currentScope==="__all__"||(!admin.currentScope&&!run))) return "/api/workflow/observatory/admin/runs/"+encodeURIComponent(runId)+suffix;
+  const scope=run?run.scopeId:((admin.currentScope&&admin.currentScope!=="__all__")?admin.currentScope:"");
+  const query=(scope&&scope!==admin.ownScope)?"?scope="+encodeURIComponent(scope):"";
+  return "/api/workflow/observatory/runs/"+encodeURIComponent(runId)+suffix+query;
+}
+function runGraphRequestPath(runId, admin, runs){ return runDetailRequestPath(runId,admin,runs,true); }
 
 /* ---------------------------------------------------------------------------
    nyxid user directory (admin-only): resolve a run's scopeId (≈ nyxid user id)
@@ -1113,35 +1188,100 @@ const ORIGIN_OPTIONS = [
 const ORIGIN_LABEL = Object.fromEntries(ORIGIN_OPTIONS.map(([v,l]) => [v,l]));
 const STATUS_VALUES = new Set(STATUS_OPTIONS.map(o => o[0]));
 const ORIGIN_VALUES = new Set(ORIGIN_OPTIONS.map(o => o[0]));
+function readObservatoryRoute(search, hash){
+  const query = new URLSearchParams(String(search || "").replace(/^\?/, ""));
+  const legacyScope = /(?:^#|&)scope=([^&]+)/.exec(hash || "");
+  const statusValues = new Set(["running","completed","failed","timed_out","stopped"]);
+  const tabValues = new Set(["timeline","steps","diagnostics","logs","artifacts","graph"]);
+  const status = (query.get("status") || "").trim();
+  const tab = (query.get("tab") || "").trim();
+  return {
+    scope: (query.get("scope") || (legacyScope ? decodeURIComponent(legacyScope[1]) : "mine")).trim() || "mine",
+    status: statusValues.has(status) ? status : "",
+    origin: (query.get("origin") || "").trim(),
+    definition: (query.get("definition") || "").trim(),
+    schedule: (query.get("schedule") || "").trim(),
+    from: (query.get("from") || "").trim(),
+    to: (query.get("to") || "").trim(),
+    run: (query.get("run") || "").trim(),
+    tab: tabValues.has(tab) ? tab : "timeline"
+  };
+}
+function writeObservatoryRoute(patch){
+  const previous=readObservatoryRoute(location.search,location.hash);
+  const route = Object.assign(readObservatoryRoute(location.search, location.hash), patch || {});
+  if(previous.tab!==route.tab) pendingDetailScrollReset=true;
+  const query = new URLSearchParams();
+  ["scope","status","origin","definition","schedule","from","to","run","tab"].forEach(key => {
+    const value = route[key];
+    if(value && !(key === "scope" && value === "mine") && !(key === "tab" && value === "timeline")) query.set(key, value);
+  });
+  history.replaceState(null, "", location.pathname + (query.toString() ? "?" + query : ""));
+  if(isEmbeddedInAdmin()) window.parent.postMessage({source:"aevatar-backend-console-suite",type:"observatory-route",query:route},location.origin);
+  return route;
+}
+function observatoryRouteKey(route){
+  const r=route||{};
+  return ["scope","status","origin","definition","schedule","from","to","run","tab"]
+    .map(key=>key+"="+encodeURIComponent(r[key]||"")).join("&");
+}
+function readObservatoryViewState(storage,key,route){
+  try {
+    const all=JSON.parse(storage.getItem(key)||"{}");
+    const value=all[observatoryRouteKey(route)]||{};
+    return {list:Math.max(0,Number(value.list)||0),detail:Math.max(0,Number(value.detail)||0)};
+  } catch(e){ return {list:0,detail:0}; }
+}
+function writeObservatoryViewState(storage,key,route,position){
+  try {
+    let all={};
+    try { all=JSON.parse(storage.getItem(key)||"{}")||{}; } catch(e){}
+    const keys=Object.keys(all);
+    if(keys.length>40) keys.slice(0,keys.length-40).forEach(existing=>delete all[existing]);
+    all[observatoryRouteKey(route)]={list:Math.max(0,Number(position&&position.list)||0),detail:Math.max(0,Number(position&&position.detail)||0)};
+    storage.setItem(key,JSON.stringify(all));
+  } catch(e){}
+}
+function paneScrollPosition(pane,saved){
+  const fallback=Math.max(0,Number(saved)||0);
+  if(!pane) return fallback;
+  const live=Math.max(0,Number(pane.scrollTop)||0);
+  return live===0&&Number(pane.scrollHeight)<=Number(pane.clientHeight)?fallback:live;
+}
+function applyPaneScrollState(list,detail,position){
+  if(list) list.scrollTop=Math.max(0,Number(position&&position.list)||0);
+  if(detail) detail.scrollTop=Math.max(0,Number(position&&position.detail)||0);
+}
+const initialRoute = readObservatoryRoute(location.search, location.hash);
 /* list filters seeded from the URL query so a shared/bookmarked link reopens the same view; only
    canonical status/origin values are accepted (anything else falls back to "all") so the select and
    the outgoing query never disagree. */
 const filterState = (function(){
-  const q = new URLSearchParams(location.search);
-  const pick = (k, allowed) => { const v = (q.get(k) || "").trim(); return allowed.has(v) ? v : ""; };
-  const date = (k) => { const v = (q.get(k) || "").trim(); const ms = v ? Date.parse(v) : NaN; return isNaN(ms) ? "" : new Date(ms).toISOString().slice(0,10); };
+  const pick = (value, allowed) => allowed.has(value) ? value : "";
+  const timestamp = value => value && !isNaN(Date.parse(value)) ? value : "";
   // panel open/closed survives re-renders (and bookmarks via ?filters=1); collapsed by default.
-  const open = (q.get("filters") || "").trim() === "1";
+  const open = new URLSearchParams(location.search).get("filters") === "1";
   // schedule is a deep-link-only filter (opaque scheduleId, no <select>); empty = not filtered.
-  return { status: pick("status", STATUS_VALUES), origin: pick("origin", ORIGIN_VALUES), schedule: (q.get("schedule")||"").trim(), from: date("from"), to: date("to"), open };
+  return { status: pick(initialRoute.status, STATUS_VALUES), origin: initialRoute.origin, definition: initialRoute.definition, schedule: initialRoute.schedule, from: timestamp(initialRoute.from), to: timestamp(initialRoute.to), open };
 })();
 function originLabel(o){ return o ? (ORIGIN_LABEL[o] || o) : ""; }
-/* compose the runs LIST query: existing scope axis + the four filter dimensions. Empty filters are
-   skipped; date inputs (yyyy-mm-dd) are widened to a full ISO instant for the updated-at window. */
+/* compose the runs LIST query: exact deep-link instants remain exact; native date input changes are
+   normalized before reaching this function. */
 function listQueryParams(){
   const p = new URLSearchParams();
   if(adminState.isAdmin && adminState.currentScope) p.set("scope", adminState.currentScope);
   if(filterState.status) p.set("status", filterState.status);
   if(filterState.origin) p.set("origin", filterState.origin);
+  if(filterState.definition) p.set("definition", filterState.definition);
   if(filterState.schedule) p.set("schedule", filterState.schedule);
-  if(filterState.from){ const d = new Date(filterState.from + "T00:00:00"); if(!isNaN(d)) p.set("from", d.toISOString()); }
-  if(filterState.to){ const d = new Date(filterState.to + "T23:59:59.999"); if(!isNaN(d)) p.set("to", d.toISOString()); }
+  if(filterState.from) p.set("from", filterState.from);
+  if(filterState.to) p.set("to", filterState.to);
   const s = p.toString();
   return s ? "?" + s : "";
 }
-function hasActiveFilters(){ return !!(filterState.status || filterState.origin || filterState.schedule || filterState.from || filterState.to); }
+function hasActiveFilters(){ return !!(filterState.status || filterState.origin || filterState.definition || filterState.schedule || filterState.from || filterState.to); }
 /* count of active filter dimensions — drives the collapsed-header badge. */
-function activeFilterCount(){ return (filterState.status?1:0) + (filterState.origin?1:0) + (filterState.schedule?1:0) + (filterState.from?1:0) + (filterState.to?1:0); }
+function activeFilterCount(){ return (filterState.status?1:0) + (filterState.origin?1:0) + (filterState.definition?1:0) + (filterState.schedule?1:0) + (filterState.from?1:0) + (filterState.to?1:0); }
 /* persist the filter-panel open state into the URL (best-effort) so it survives reload/bookmarks
    without disturbing the existing scope hash or other query params. */
 function persistFilterOpen(){
@@ -1171,15 +1311,9 @@ function applyFilterChange(){
   cache.runs = []; cache.details = {}; cache.graphs = {};
   lastRunsSig = "";
   state.scenario = "listLoading";
+  writeObservatoryRoute({ status:filterState.status, origin:filterState.origin, definition:filterState.definition, schedule:filterState.schedule, from:filterState.from, to:filterState.to, run:"" });
   render();
   (async () => { await refreshRuns(); lastRunsSig = runsSig(cache.runs); render(); })();
-}
-function readScopeHash(){ const m = /(?:^#|&)scope=([^&]+)/.exec(location.hash || ""); return m ? decodeURIComponent(m[1]) : null; }
-function writeScopeHash(){
-  try {
-    if(adminState.currentScope) location.hash = "scope=" + encodeURIComponent(adminState.currentScope);
-    else if(location.hash) history.replaceState(null, "", location.pathname + location.search);
-  } catch(e){ /* hash persistence is best-effort */ }
 }
 function clearSession(){
   cache.account=null; cache.runs=[]; cache.details={}; cache.graphs={};
@@ -1371,12 +1505,14 @@ function stepTypeIcon(t){ return t==="llm"?ICON.chat : t==="tool"?ICON.tool : t=
 const state = {
   signedIn: false,
   scenario: "login",   // login | listLoading | empty | globalError | detailLoading | notFound | normal
-  selectedRunId: null,
-  activeTab: "timeline",
+  selectedRunId: initialRoute.run || null,
+  activeTab: initialRoute.tab,
   expanded: new Set(),  // tool-call ids expanded by default for the running run
   theme: localStorage.getItem("wro-theme") || null, // null = follow system
   selectedNodeId: null, // graph node whose detail drawer is open
   graphView: { zoom: 1, panX: 0, panY: 0, fitted: false }, // pan/zoom transform, survives polling re-renders
+  immersive: sessionStorage.getItem(OBSERVATORY_IMMERSIVE_KEY) === "1",
+  refreshing: false,
 };
 function nowMs(){ return Date.now(); }
 
@@ -1388,6 +1524,39 @@ function applyTheme(){
 function effectiveDark(){
   if(state.theme) return state.theme === "dark";
   return !window.matchMedia || !window.matchMedia("(prefers-color-scheme: light)").matches;
+}
+function setImmersive(enabled){
+  state.immersive=!!enabled;
+  sessionStorage.setItem(OBSERVATORY_IMMERSIVE_KEY,state.immersive?"1":"0");
+  document.body.classList.toggle("observatory-immersive",state.immersive);
+  if(isEmbeddedInAdmin()) window.parent.postMessage({source:"aevatar-backend-console-suite",type:"observatory-immersive",enabled:state.immersive},location.origin);
+}
+function toggleImmersive(){ setImmersive(!state.immersive); render(); }
+async function refreshObservatory(){
+  if(state.refreshing) return;
+  state.refreshing=true;
+  try {
+    await refreshRuns();
+    lastRunsSig=runsSig(cache.runs);
+    if(state.selectedRunId){ await refreshDetail(state.selectedRunId); lastDetailSig=detailSig(cache.details[state.selectedRunId]); }
+  } finally { state.refreshing=false; render(); }
+}
+function renderWorkspaceBar(){
+  const bar=el("div",{class:"workspacebar",role:"region","aria-label":"观测工作区"});
+  const detail=currentDetail(),summary=detail&&detail.summary;
+  const scope=adminState.currentScope===ALL_SCOPES?"全部 scope":(adminState.currentScope||adminState.ownScope||"我的 scope");
+  bar.appendChild(el("div",{class:"workspace-context"},`<span>${esc(scope)}</span><b title="${esc(summary&&summary.runId||"")}">${esc(summary&&summary.workflowName||summary&&summary.runId||"选择运行查看详情")}</b>`));
+  const actions=el("div",{class:"workspace-actions"});
+  const refresh=el("button",{class:"workspace-action",type:"button","aria-label":"刷新数据",title:"刷新数据"},`↻ <span>${state.refreshing?"刷新中…":"刷新数据"}</span>`);
+  refresh.disabled=state.refreshing; refresh.addEventListener("click",refreshObservatory); actions.appendChild(refresh);
+  if(adminState.isAdmin){
+    const tools=el("details",{class:"admin-tools"});
+    tools.appendChild(el("summary",{class:"workspace-action",role:"button"},`${ICON.shield}<span>管理员工具</span>`));
+    const panel=el("div",{class:"admin-tools-panel"}); panel.appendChild(renderAdminBar()); tools.appendChild(panel); actions.appendChild(tools);
+  }
+  const immersive=el("button",{class:"workspace-action",type:"button","aria-label":state.immersive?"退出沉浸观测":"进入沉浸观测",title:state.immersive?"退出沉浸观测（Esc）":"沉浸观测"},`${state.immersive?"×":"⛶"} <span>${state.immersive?"退出沉浸":"沉浸观测"}</span>`);
+  immersive.addEventListener("click",toggleImmersive); actions.appendChild(immersive);
+  bar.appendChild(actions); return bar;
 }
 
 /* ===========================================================================
@@ -1501,7 +1670,7 @@ function renderSelect(id, label, options, value, onPick){
 function renderDate(id, label, value, onPick){
   const field = el("div", { class:"fb-field" });
   field.appendChild(el("label", { class:"fb-label", for: id }, label));
-  const inp = el("input", { class:"fb-date", id, type:"date", "aria-label": label, value: value || "" });
+  const inp = el("input", { class:"fb-date", id, type:"date", "aria-label": label, value: value ? value.slice(0,10) : "" });
   inp.addEventListener("change", e => onPick(e.target.value));
   field.appendChild(inp);
   return field;
@@ -1527,7 +1696,7 @@ function renderFilterBar(){
     const clr = el("button", { class:"fb-tclear", type:"button", "aria-label":"清除全部筛选" }, "清除");
     clr.addEventListener("click", (e) => {
       e.stopPropagation();
-      filterState.status=""; filterState.origin=""; filterState.schedule=""; filterState.from=""; filterState.to="";
+      filterState.status=""; filterState.origin=""; filterState.definition=""; filterState.schedule=""; filterState.from=""; filterState.to="";
       applyFilterChange();
     });
     toggle.appendChild(clr);
@@ -1552,14 +1721,19 @@ function renderFilterBar(){
     v => { filterState.status = v; applyFilterChange(); }));
   bar.appendChild(renderSelect("flt-origin", "来源", ORIGIN_OPTIONS, filterState.origin,
     v => { filterState.origin = v; applyFilterChange(); }));
+  const definition = el("div", { class:"fb-field" });
+  definition.appendChild(el("label", { class:"fb-label", for:"flt-definition" }, "定义"));
+  const definitionInput = el("input", { class:"fb-date", id:"flt-definition", type:"search", "aria-label":"工作流定义", value:filterState.definition, placeholder:"definition id" });
+  definitionInput.addEventListener("change", e => { filterState.definition = e.target.value.trim(); applyFilterChange(); });
+  definition.appendChild(definitionInput); bar.appendChild(definition);
   bar.appendChild(renderDate("flt-from", "起始（更新于）", filterState.from,
-    v => { filterState.from = v; applyFilterChange(); }));
+    v => { filterState.from = v ? new Date(v + "T00:00:00Z").toISOString() : ""; applyFilterChange(); }));
   bar.appendChild(renderDate("flt-to", "截止（更新于）", filterState.to,
-    v => { filterState.to = v; applyFilterChange(); }));
+    v => { filterState.to = v ? new Date(v + "T23:59:59.999Z").toISOString() : ""; applyFilterChange(); }));
   bar.appendChild(el("div", { class:"fb-spacer" }));
   if(hasActiveFilters()){
     const reset = el("button", { class:"fb-reset", type:"button" }, "清除筛选");
-    reset.addEventListener("click", () => { filterState.status=""; filterState.origin=""; filterState.from=""; filterState.to=""; applyFilterChange(); });
+    reset.addEventListener("click", () => { filterState.status=""; filterState.origin=""; filterState.definition=""; filterState.schedule=""; filterState.from=""; filterState.to=""; applyFilterChange(); });
     bar.appendChild(reset);
   }
   wrap.appendChild(bar);
@@ -1688,7 +1862,10 @@ function renderDetail(){
 
   const inner = el("div", { class:"detail-inner" });
   inner.appendChild(renderRunHeader(detail));
+  inner.appendChild(renderApprovalPanel(detail));
   inner.appendChild(renderDiagnosticStrip(detail));
+  inner.appendChild(renderNarrative(detail));
+  if(adminState.isAdmin) inner.appendChild(renderCrossLinks(detail));
   inner.appendChild(renderTabs());
 
   const tp = el("div", {});
@@ -1696,16 +1873,31 @@ function renderDetail(){
   timelinePanel.appendChild(renderTimeline(detail));
   if(state.activeTab !== "timeline") timelinePanel.hidden = true;
 
+  const stepsPanel = el("div", { class:"tabpanel", id:"panel-steps", role:"tabpanel", "aria-labelledby":"tab-steps", tabindex:"0" });
+  stepsPanel.appendChild(renderSteps(detail));
+  if(state.activeTab !== "steps") stepsPanel.hidden = true;
+
   const diagnosticsPanel = el("div", { class:"tabpanel", id:"panel-diagnostics", role:"tabpanel", "aria-labelledby":"tab-diagnostics", tabindex:"0" });
   diagnosticsPanel.appendChild(renderDiagnostics(detail));
   if(state.activeTab !== "diagnostics") diagnosticsPanel.hidden = true;
+
+  const logsPanel = el("div", { class:"tabpanel", id:"panel-logs", role:"tabpanel", "aria-labelledby":"tab-logs", tabindex:"0" });
+  logsPanel.appendChild(renderLogs(detail));
+  if(state.activeTab !== "logs") logsPanel.hidden = true;
+
+  const artifactsPanel = el("div", { class:"tabpanel", id:"panel-artifacts", role:"tabpanel", "aria-labelledby":"tab-artifacts", tabindex:"0" });
+  artifactsPanel.appendChild(renderArtifacts(detail));
+  if(state.activeTab !== "artifacts") artifactsPanel.hidden = true;
 
   const graphPanel = el("div", { class:"tabpanel", id:"panel-graph", role:"tabpanel", "aria-labelledby":"tab-graph", tabindex:"0" });
   graphPanel.appendChild(renderGraph(detail));
   if(state.activeTab !== "graph") graphPanel.hidden = true;
 
   tp.appendChild(timelinePanel);
+  tp.appendChild(stepsPanel);
   tp.appendChild(diagnosticsPanel);
+  tp.appendChild(logsPanel);
+  tp.appendChild(artifactsPanel);
   tp.appendChild(graphPanel);
   inner.appendChild(tp);
 
@@ -1879,18 +2071,118 @@ function renderDiagnostics(detail){
   wrap.appendChild(el("pre", { class:"issue-pre scroll" }, esc(issuePayload(detail))));
   return wrap;
 }
+function renderNarrative(detail){
+  const wrap=el("div",{class:"narrative"});
+  const input=el("details",{},`<summary>输入 · input</summary><pre class="issue-pre scroll">${esc(detail.input||"无输入")}</pre>`); input.open=true; wrap.appendChild(input);
+  const output=detail.finalOutput||(detail.summary.status==="running"?"运行尚未完成，最终输出尚未物化":"无最终输出");
+  const final=el("details",{},`<summary>最终输出 · finalOutput</summary><pre class="issue-pre scroll">${esc(output)}</pre>`); final.open=true; wrap.appendChild(final);
+  if(detail.finalError) wrap.appendChild(el("pre",{class:"issue-pre scroll"},esc(detail.finalError)));
+  return wrap;
+}
+function renderCrossLinks(detail){
+  const links=el("div",{class:"cross-links"});
+  const cqrs=el("button",{class:"chip",type:"button"},"投影健康 · scope"); cqrs.addEventListener("click",()=>navigateAdminShell("cqrs",{owner:detail.summary.scopeId})); links.appendChild(cqrs);
+  const audit=el("button",{class:"chip",type:"button"},"审计 · run"); audit.addEventListener("click",()=>navigateAdminShell("audit",{run:detail.summary.runId})); links.appendChild(audit);
+  return links;
+}
+function renderSteps(detail){
+  const wrap=el("div",{class:"step-list"}), events=detail.timeline||[];
+  if(!(detail.steps||[]).length) return el("div",{class:"detail-empty"},'<div class="dt">暂无步骤</div>');
+  detail.steps.forEach((step,index)=>{
+    const related=events.filter(event=>event.stepId===step.stepId);
+    const card=el("article",{class:"step-card"});
+    card.innerHTML=`<b>${esc(step.stepId||"step "+(index+1))}</b><span class="mono">${esc(step.stepType||"unknown")}${step.targetRole?" · @"+esc(step.targetRole):""}</span>
+      <div>${esc(step.requestedAtUtc||"—")} → ${esc(step.completedAtUtc||"进行中")}</div>
+      ${step.error?`<div class="diag-msg">${esc(step.error)}</div>`:""}${step.outputPreview?`<div>${esc(step.outputPreview)}</div><small>outputPreview 为 240 字预览；完整 role/tool 输出见 Timeline</small>`:""}
+      <small>关联 timeline 事件 ${related.length}</small>`;
+    wrap.appendChild(card);
+  });
+  return wrap;
+}
+function renderLogs(detail){
+  const lines=[];
+  (detail.diagnostics||[]).forEach(d=>lines.push(`${d.timestampUtc||"—"} DIAGNOSTIC ${(d.severity||"info").toUpperCase()} [${d.code||"diagnostic"}] ${d.message||""}`));
+  (detail.timeline||[]).forEach(event=>{const message=event.content||event.message||(event.toolCall&&(event.toolCall.error||event.toolCall.toolName));if(message)lines.push(`${event.timestampUtc||"—"} ${event.stage?"["+event.stage+"] ":""}${message}`);});
+  if(detail.finalError) lines.push("FINAL ERROR "+detail.finalError);
+  const wrap=el("div",{}); wrap.appendChild(el("p",{class:"diag-hint"},"派生视图：由 diagnostics + committed timeline 组装；不是独立日志事实源。"));
+  wrap.appendChild(el("pre",{class:"issue-pre scroll"},esc(lines.join("\n")||"暂无可派生日志"))); return wrap;
+}
+function renderArtifacts(detail){
+  const wrap=el("div",{});
+  if(!detail.finalOutput){ wrap.appendChild(el("div",{class:"detail-empty"},'<div class="dt">暂无产出</div><div class="ds">当前详情契约没有正式 artifact 集合。</div>')); return wrap; }
+  wrap.appendChild(el("p",{class:"diag-hint"},"派生下载：内容来自 finalOutput；不是正式 artifact read model。"));
+  const button=el("button",{class:"chip",type:"button"},"下载 finalOutput"); button.addEventListener("click",()=>{const url=URL.createObjectURL(new Blob([detail.finalOutput],{type:"text/plain;charset=utf-8"}));const a=document.createElement("a");a.href=url;a.download="finalOutput.txt";a.click();URL.revokeObjectURL(url);}); wrap.appendChild(button); return wrap;
+}
 
+function findActiveApproval(detail){
+  return ((detail && detail.steps) || []).filter(step =>
+    !step.completedAtUtc && String(step.suspensionType || "").toLowerCase() === "human_approval").slice(-1)[0] || null;
+}
+function canApproveRun(detail, ownerScope){
+  return !!(detail && detail.summary && ownerScope && detail.summary.scopeId === ownerScope);
+}
+function buildApprovalRequest(detail, approval, approved, feedback){
+  const body = { stepId:approval.stepId, approved:!!approved };
+  if(!approved) body.userInput = String(feedback || "").trim();
+  return {
+    path:"/api/scopes/" + encodeURIComponent(detail.summary.scopeId) + "/runs/" + encodeURIComponent(detail.summary.runId) + ":resume",
+    body
+  };
+}
+const approvalState = { key:"", rejecting:false, feedback:"", submitting:false, accepted:false, error:"" };
+function renderApprovalPanel(detail){
+  const approval = findActiveApproval(detail);
+  if(!approval) return document.createDocumentFragment();
+  const key = [detail.summary.runId, approval.stepId, approval.requestedAtUtc || "", detail.summary.stateVersion].join("\n");
+  if(approvalState.key !== key) Object.assign(approvalState, { key, rejecting:false, feedback:"", submitting:false, accepted:false, error:"" });
+  const owner = canApproveRun(detail, adminState.ownScope);
+  const box = el("section", { class:"approval-panel", "aria-label":"需要审批" });
+  box.innerHTML = `<div class="approval-head"><b>需要审批</b>${approval.suspensionTimeoutSeconds!=null?`<span>审批时限 ${esc(approval.suspensionTimeoutSeconds)} 秒</span>`:""}</div>
+    ${approval.suspensionPrompt?`<p>${esc(approval.suspensionPrompt)}</p>`:""}
+    <pre class="approval-content scroll" tabindex="0">${esc(approval.suspensionContent || "（无待审内容）")}</pre>`;
+  const actions = el("div", { class:"approval-actions" });
+  if(!owner) actions.appendChild(el("span", {}, "该 Run 属于其他 scope；管理员观测为只读"));
+  else if(approvalState.accepted) actions.appendChild(el("span", {}, "决定已接受（202），等待 committed 状态更新"));
+  else {
+    const submit = async approved => {
+      const feedback = approvalState.feedback.trim();
+      if(!approved && !feedback){ approvalState.error="请填写驳回反馈"; render(); return; }
+      if(approvalState.submitting) return;
+      approvalState.submitting=true; approvalState.error=""; render();
+      const request=buildApprovalRequest(detail,approval,approved,feedback);
+      try { await apiRequest(request.path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(request.body)}); approvalState.accepted=true; approvalState.rejecting=false; }
+      catch(e){ approvalState.error=e.message||"审批提交失败"; }
+      finally { approvalState.submitting=false; render(); }
+    };
+    const approve=el("button",{class:"btn-primary",type:"button",disabled:approvalState.submitting?"disabled":null},"批准并继续");
+    approve.addEventListener("click",()=>submit(true)); actions.appendChild(approve);
+    const reject=el("button",{class:"chip",type:"button",disabled:approvalState.submitting?"disabled":null},"驳回");
+    reject.addEventListener("click",()=>{approvalState.rejecting=true;render();}); actions.appendChild(reject);
+    if(approvalState.rejecting){
+      const feedback=el("textarea",{class:"approval-feedback",rows:"3",placeholder:"驳回反馈（必填）"},esc(approvalState.feedback));
+      feedback.addEventListener("input",e=>{approvalState.feedback=e.target.value;}); box.appendChild(feedback);
+      const rejectSubmit=el("button",{class:"btn-primary",type:"button"},"提交驳回"); rejectSubmit.addEventListener("click",()=>submit(false)); actions.appendChild(rejectSubmit);
+    }
+    if(approvalState.error) box.appendChild(el("div",{class:"approval-error",role:"alert"},esc(approvalState.error)));
+  }
+  box.appendChild(actions); return box;
+}
+
+function detailTabIds(){ return ["timeline","steps","diagnostics","logs","artifacts","graph"]; }
 function renderTabs(){
   const tablist = el("div", { class:"tabs", role:"tablist", "aria-label":"详情视图" });
-  [["timeline","时间线",ICON.step],["diagnostics","诊断",ICON.alert],["graph","拓扑图",'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="5" cy="6" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="12" r="2.2"/><path d="M7 6.6 17 11M7 17.4 17 13"/></svg>']].forEach(([id,lab,ic]) => {
+  const labels={timeline:["时间线",ICON.step],steps:["Steps",ICON.list],diagnostics:["诊断",ICON.alert],logs:["Logs",ICON.inbox],artifacts:["产出",ICON.flag],graph:["拓扑图",'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="5" cy="6" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="12" r="2.2"/><path d="M7 6.6 17 11M7 17.4 17 13"/></svg>']};
+  detailTabIds().forEach(id => {
+    const [lab,ic]=labels[id];
     const t = el("button", { class:"tab", id:"tab-"+id, role:"tab", "aria-selected": String(state.activeTab===id), "aria-controls":"panel-"+id, tabindex: state.activeTab===id?"0":"-1" }, `${ic}<span>${lab}</span>`);
-    t.addEventListener("click", () => { state.activeTab = id; if(id === "graph") loadGraph(state.selectedRunId); render(); });
+    t.addEventListener("click", () => { state.activeTab = id; writeObservatoryRoute({tab:id}); if(id === "graph") loadGraph(state.selectedRunId); render(); });
     t.addEventListener("keydown", (e) => {
       if(e.key==="ArrowRight"||e.key==="ArrowLeft"){
         e.preventDefault();
-        const order=["timeline","diagnostics","graph"];
+        const order=detailTabIds();
         const delta=e.key==="ArrowRight"?1:-1;
         state.activeTab = order[(order.indexOf(state.activeTab)+delta+order.length)%order.length];
+        writeObservatoryRoute({tab:state.activeTab});
         if(state.activeTab === "graph") loadGraph(state.selectedRunId);
         render(); $("#tab-"+state.activeTab)?.focus();
       }
@@ -2434,13 +2726,25 @@ function renderGraph(detail){
    =========================================================================== */
 // Filter / scope changes opt into a run-list scroll reset; selection and polling preserve the position.
 let pendingListScrollReset = false;
+let pendingDetailScrollReset = false;
+let renderedObservatoryRoute = null;
 
 function render(){
   const app = $("#app");
-  // Preserve the run-list scroll across the wholesale rebuild so selecting a run lower in the list (or a
-  // poll refresh) doesn't snap the list back to the top.
-  const prevListScroll = pendingListScrollReset ? 0 : (app.querySelector(".runlist")?.scrollTop || 0);
+  const oldList=app.querySelector(".runlist"),oldDetail=app.querySelector(".detail-pane");
+  const previousRoute=renderedObservatoryRoute;
+  if((oldList||oldDetail)&&previousRoute){
+    const previousSaved=readObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute);
+    writeObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute,{list:paneScrollPosition(oldList,previousSaved.list),detail:paneScrollPosition(oldDetail,previousSaved.detail)});
+  }
+  const route=readObservatoryRoute(location.search,location.hash);
+  const saved=readObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route);
+  const sameRoute=previousRoute&&observatoryRouteKey(previousRoute)===observatoryRouteKey(route);
+  const prevListScroll=pendingListScrollReset?0:(sameRoute?paneScrollPosition(oldList,saved.list):saved.list);
+  const prevDetailScroll=pendingDetailScrollReset?0:(sameRoute?paneScrollPosition(oldDetail,saved.detail):saved.detail);
   pendingListScrollReset = false;
+  pendingDetailScrollReset = false;
+  renderedObservatoryRoute=route;
   app.innerHTML = "";
   app.appendChild(renderTopbar());
 
@@ -2452,24 +2756,26 @@ function render(){
     return;
   }
 
-  if(adminState.isAdmin) app.appendChild(renderAdminBar());
+  app.appendChild(renderWorkspaceBar());
 
   const shell = el("div", { class:"shell"+(showBanner?" has-banner":"") });
   shell.appendChild(renderList());
   shell.appendChild(renderDetail());
   app.appendChild(shell);
 
-  const listEl = app.querySelector(".runlist");
-  if(listEl) listEl.scrollTop = prevListScroll;
+  applyPaneScrollState(app.querySelector(".runlist"),app.querySelector(".detail-pane"),{list:prevListScroll,detail:prevDetailScroll});
+  writeObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route,{list:prevListScroll,detail:prevDetailScroll});
 }
 
 /* ===========================================================================
    Selection + data loading (real fetch; near-live via polling)
    =========================================================================== */
 function selectRun(runId){
+  pendingDetailScrollReset = true;
   state.selectedRunId = runId;
   state.scenario = "detailLoading";
   state.activeTab = "timeline";
+  writeObservatoryRoute({ run:runId, tab:"timeline" });
   state.selectedNodeId = null;
   state.graphView = { zoom: 1, panX: 0, panY: 0, fitted: false };
   document.body.setAttribute("data-mobile-view","detail");
@@ -2489,11 +2795,12 @@ function setScope(scope){
   adminState.currentScope = scope;       // null = my runs · ALL_SCOPES · or a concrete scope id
   adminState.candidates = null; adminState.message = ""; adminState.inputDraft = "";
   pendingListScrollReset = true;         // new scope → fresh list, start at the top
+  pendingDetailScrollReset = true;
   state.selectedRunId = null;
   cache.runs = []; cache.details = {}; cache.graphs = {};
   lastRunsSig = ""; lastDetailSig = "";
   state.scenario = "listLoading";
-  writeScopeHash();
+  writeObservatoryRoute({ scope:scope===ALL_SCOPES?"all":(scope||"mine"), run:"" });
   render();
   (async () => { await refreshRuns(); lastRunsSig = runsSig(cache.runs); render(); })();
 }
@@ -2578,9 +2885,7 @@ async function refreshRuns(){
 
 async function refreshDetail(runId){
   try {
-    const detailUrl = adminState.isAdmin
-      ? "/api/workflow/observatory/admin/runs/" + encodeURIComponent(runId)
-      : "/api/workflow/observatory/runs/" + encodeURIComponent(runId) + runScopeParam(runId);
+    const detailUrl = runDetailRequestPath(runId,adminState,cache.runs,false);
     const detail = await api(detailUrl);
     if(detail === null){
       delete cache.details[runId];
@@ -2606,9 +2911,7 @@ async function loadDetail(runId){
 async function loadGraph(runId){
   if(!runId || cache.graphs[runId]) return;
   try {
-    const graphUrl = adminState.isAdmin
-      ? "/api/workflow/observatory/admin/runs/" + encodeURIComponent(runId) + "/graph"
-      : "/api/workflow/observatory/runs/" + encodeURIComponent(runId) + "/graph" + runScopeParam(runId);
+    const graphUrl = runGraphRequestPath(runId,adminState,cache.runs);
     const g = await api(graphUrl);
     if(g){
       g.nodeStatus = deriveNodeStatus(g, cache.details[runId]);
@@ -2665,6 +2968,20 @@ document.addEventListener("visibilitychange", () => { if(!document.hidden) poll(
    Init
    =========================================================================== */
 applyTheme();
+setImmersive(state.immersive);
+document.addEventListener("keydown", event => {
+  if(event.key !== "Escape") return;
+  if(state.selectedNodeId){ closeNodeDetail(); return; }
+  const tools=document.querySelector(".admin-tools[open]");
+  if(tools){ tools.removeAttribute("open"); return; }
+  if(state.immersive){ setImmersive(false); render(); }
+});
+window.addEventListener("pagehide", () => {
+  const list=document.querySelector(".runlist"),detail=document.querySelector(".detail-pane");
+  const route=readObservatoryRoute(location.search,location.hash);
+  const saved=readObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route);
+  writeObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route,{list:paneScrollPosition(list,saved.list),detail:paneScrollPosition(detail,saved.detail)});
+});
 (async function init(){
   try { await completeLoginIfCallback(); }
   catch(e){ console.warn("observatory: login callback failed", e); }
@@ -2674,9 +2991,10 @@ applyTheme();
   render();
   cache.account = toAccount(await fetchUserInfo()) || cache.account;
   await fetchMe();
-  if(adminState.isAdmin){ const h = readScopeHash(); if(h) adminState.currentScope = h; }
+  if(adminState.isAdmin) adminState.currentScope = initialRoute.scope === "all" ? ALL_SCOPES : (initialRoute.scope === "mine" ? null : initialRoute.scope);
   await refreshRuns();
   lastRunsSig = runsSig(cache.runs);
+  if(state.selectedRunId) await loadDetail(state.selectedRunId);
   render();
   // Admin-only: resolve scopeIds to nyxid display names in the background, then re-render so the
   // names appear in cross-scope rows and the run-detail scope chip without delaying the runs list.

@@ -7,8 +7,11 @@ internal sealed class OrnnTestHttpMessageHandler : HttpMessageHandler
 {
     private readonly Queue<Func<HttpRequestMessage, HttpResponseMessage>> _responses = new();
     private readonly bool _hangUntilCanceled;
+    private readonly TaskCompletionSource _requestStarted =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public List<CapturedHttpRequest> Requests { get; } = [];
+    public Task RequestStarted => _requestStarted.Task;
 
     public OrnnTestHttpMessageHandler(params Func<HttpRequestMessage, HttpResponseMessage>[] responses)
         : this(hangUntilCanceled: false, responses)
@@ -41,6 +44,7 @@ internal sealed class OrnnTestHttpMessageHandler : HttpMessageHandler
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         Requests.Add(await CapturedHttpRequest.FromAsync(request, cancellationToken));
+        _requestStarted.TrySetResult();
 
         if (_hangUntilCanceled)
         {

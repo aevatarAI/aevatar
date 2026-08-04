@@ -175,7 +175,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             string.Empty,
             "auto",
             "name: auto",
-            new Dictionary<string, string>());
+            new Dictionary<string, string>(), ExternalCapabilityExecutionMode.Interactive);
         var run = new WorkflowActorBinding(
             WorkflowActorKind.Run,
             "run-1",
@@ -186,7 +186,8 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             new Dictionary<string, string>
             {
                 ["helper"] = "name: helper",
-            });
+            },
+            ExternalCapabilityExecutionMode.Interactive);
 
         unsupported.IsWorkflowCapable.Should().BeFalse();
         unsupported.HasWorkflowName.Should().BeFalse();
@@ -405,7 +406,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
                     string.Empty,
                     "auto",
                     "yaml",
-                    new Dictionary<string, string>())));
+                    new Dictionary<string, string>(), ExternalCapabilityExecutionMode.Interactive)));
 
         var result = await resolver.ResolveAsync(
             new WorkflowResumeCommand("actor-1", "run-1", "step-1", "cmd-1", true, "approved"),
@@ -428,7 +429,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
                     " ",
                     "auto",
                     "yaml",
-                    new Dictionary<string, string>())));
+                    new Dictionary<string, string>(), ExternalCapabilityExecutionMode.Interactive)));
 
         var result = await resolver.ResolveAsync(
             new WorkflowSignalCommand("actor-1", "run-1", "approve", "cmd-1", "yes"),
@@ -585,7 +586,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             new FakeWorkflowRunActorPort(),
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
 
-        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("auto")), CancellationToken.None);
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("auto"), ExternalCapabilityExecutionMode.Interactive), CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.AgentNotFound);
@@ -609,7 +610,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
 
         var context = new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>());
         var act = async () => await lifecycle.BindAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("workflow-1")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("workflow-1"), ExternalCapabilityExecutionMode.Interactive),
             new CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>
             {
                 Target = target,

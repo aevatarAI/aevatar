@@ -1,5 +1,6 @@
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
@@ -177,19 +178,19 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
     private readonly IActorRuntime _actorRuntime;
     private readonly IChatRoutePolicyQueryPort _routeQueryPort;
     private readonly ChatRouteResolver _routeResolver;
-    private readonly INyxIdChatAgentProfileSnapshotSource _agentProfileSnapshotSource;
+    private readonly INyxIdChatAgentProfileResolver _agentProfileResolver;
 
     public NyxIdChatConversationCreateCommandTargetResolver(
         IActorRuntime actorRuntime,
         IChatRoutePolicyQueryPort routeQueryPort,
         ChatRouteResolver routeResolver,
-        INyxIdChatAgentProfileSnapshotSource agentProfileSnapshotSource)
+        INyxIdChatAgentProfileResolver agentProfileResolver)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _routeQueryPort = routeQueryPort ?? throw new ArgumentNullException(nameof(routeQueryPort));
         _routeResolver = routeResolver ?? throw new ArgumentNullException(nameof(routeResolver));
-        _agentProfileSnapshotSource = agentProfileSnapshotSource ??
-                                      throw new ArgumentNullException(nameof(agentProfileSnapshotSource));
+        _agentProfileResolver = agentProfileResolver ??
+                                throw new ArgumentNullException(nameof(agentProfileResolver));
     }
 
     public async Task<CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>> ResolveAsync(
@@ -217,9 +218,27 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
         var actorId = string.IsNullOrWhiteSpace(command.RequestedActorId)
             ? NyxIdChatServiceDefaults.GenerateActorId()
             : command.RequestedActorId.Trim();
-        var agentProfile = _agentProfileSnapshotSource.GetSnapshotForNewConversation(actorId);
-        if (agentProfile is not null)
+        var profileResolution = await _agentProfileResolver.ResolveAsync(
+            new NyxIdChatAgentProfileSelectionRequest(
+                command.ScopeId.Trim(),
+                actorId,
+                command.AgentProfileReference?.Clone()),
+            ct);
+        if (profileResolution.IsFailure)
         {
+            return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
+                NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
+        }
+
+        var agentProfile = profileResolution.Profile;
+        if (profileResolution.IsSelected)
+        {
+            if (agentProfile is null || !AgentProfileSnapshotCodec.Verify(agentProfile))
+            {
+                return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
+                    NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
+            }
+
             var routeToolSetName = decision.Action.ForwardToModel?.ToolSetRef?.Name;
             if (!string.Equals(routeToolSetName, agentProfile.RouteToolSetRef, StringComparison.Ordinal))
             {

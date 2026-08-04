@@ -31,7 +31,7 @@ public sealed class WorkflowRunBackgroundDeliveryRegistrationPortTests
         DeliveryActorId.Should().StartWith("workflow-run-delivery:").And.NotBe(DeliveryId);
         var call = dispatch.Dispatches.Should().ContainSingle().Which;
         call.ActorId.Should().Be(DeliveryActorId);
-        call.Envelope.Runtime.Deduplication.OperationId.Should().Be($"workflow-run-delivery-reserve:{DeliveryActorId}");
+        call.Envelope.Runtime.DeliveryIdentity.OperationId.Should().Be($"workflow-run-delivery-reserve:{DeliveryActorId}");
         var command = call.Envelope.Payload.Unpack<WorkflowRunDeliveryReserveRequested>();
         command.DeliveryId.Should().Be(DeliveryId);
         command.ExpectedWorkflowCommandId.Should().Be(WorkflowCommandId);

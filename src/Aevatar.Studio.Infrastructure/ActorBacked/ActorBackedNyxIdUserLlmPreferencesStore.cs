@@ -37,7 +37,10 @@ internal sealed class ActorBackedNyxIdUserLlmPreferencesStore : INyxIdUserLlmPre
 
     private static NyxIdUserLlmPreferences Project(UserConfig config)
         => new(
-            config.DefaultModel,
-            UserLlmSelectionRoute.Resolve(config.LlmSelection) ?? string.Empty,
+            config.LlmSelection?.Clone() ?? LLMSelectionPolicy.SystemDefaultSelection(),
+            LLMSelectionPolicy.ClassifyPersisted(
+                config.LlmSelection,
+                config.PreferredLlmRoute,
+                config.DefaultModel),
             config.MaxToolRounds);
 }

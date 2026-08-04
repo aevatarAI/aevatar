@@ -25,7 +25,8 @@ public sealed record ScopeWorkflowSaveAndBindRequest(
     IReadOnlyDictionary<string, string>? InlineWorkflowYamls = null,
     string? AppId = null,
     string? ServiceId = null,
-    bool? ExposureDesired = null)
+    bool? ExposureDesired = null,
+    string? RevisionId = null)
 {
     [JsonIgnore]
     public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }

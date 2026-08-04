@@ -1,9 +1,11 @@
 using System.Text.Json;
 using Aevatar.Capabilities;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -167,14 +169,26 @@ internal static class StudioMemberEndpoints
         {
             var admittedRequest = request with
             {
+                ExplicitRequestConfirmations = null,
                 CapabilityAdmission = StudioWorkflowCapabilityAdmissionHttpContext.Create(
                     http,
-                    ExternalCapabilityExecutionMode.Interactive),
+                    ExternalCapabilityExecutionMode.Interactive,
+                    request.ExplicitRequestConfirmations),
             };
             var receipt = await memberService.BindAsync(scopeId, memberId, admittedRequest, ct);
             return Results.Accepted(
                 $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}/binding-runs/{Uri.EscapeDataString(receipt.BindingRunId)}",
                 receipt);
+        }
+        catch (NyxIdExplicitRequestConfirmationInputException ex)
+        {
+            return BadRequest(NyxIdExplicitRequestConfirmationInputException.ErrorCode, ex.Message);
+        }
+        catch (WorkflowCallerCredentialSelectionException)
+        {
+            return BadRequest(
+                WorkflowCallerCredentialSelectionException.ErrorCode,
+                WorkflowCallerCredentialSelectionException.SafeMessage);
         }
         catch (WorkflowExternalCapabilityAdmissionException ex)
         {

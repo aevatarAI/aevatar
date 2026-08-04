@@ -192,6 +192,9 @@ public static class ServiceCollectionExtensions
                 transportOptions.TopicName = options.KafkaTopicName;
                 transportOptions.ConsumerGroup = options.KafkaConsumerGroup;
                 transportOptions.TopicPartitionCount = options.OrleansQueueCount;
+                transportOptions.ReceiverBufferCapacity = options.KafkaReceiverBufferCapacity;
+                transportOptions.ReceiverBufferHighWatermark = options.KafkaReceiverBufferHighWatermark;
+                transportOptions.ReceiverBufferLowWatermark = options.KafkaReceiverBufferLowWatermark;
             });
             return services;
         }

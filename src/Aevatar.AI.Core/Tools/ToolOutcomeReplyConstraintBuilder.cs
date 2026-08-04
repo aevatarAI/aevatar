@@ -42,7 +42,7 @@ internal static class ToolOutcomeReplyConstraintBuilder
 
         return toolOutcomes.Any(static outcome =>
             outcome.Succeeded &&
-            (outcome.Receipt?.Status is null or AgentToolReceiptStatus.Success) &&
+            outcome.Receipt?.Status == AgentToolReceiptStatus.Success &&
             outcome.Tool is not null &&
             IsMutatingTool(outcome.Tool, outcome.ArgumentsJson));
     }

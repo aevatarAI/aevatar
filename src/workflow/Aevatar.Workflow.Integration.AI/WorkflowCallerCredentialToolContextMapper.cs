@@ -15,12 +15,21 @@ internal static class WorkflowCallerCredentialToolContextMapper
         AgentWorkflowRuntimeContext workflowRuntimeContext)
     {
         var token = WorkflowCallerCredentialTokens.ParseOptional(credential?.BearerToken);
-        if (token.IsInvalid)
+        var supplementalSourceReadableToken = WorkflowCallerCredentialTokens.ParseOptional(
+            credential?.SourceReadableUserBearerToken);
+        if (WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
+                credential?.BearerToken,
+                credential?.Kind ?? NyxIdCallerCredentialKind.Unspecified,
+                credential?.SourceReadableUserBearerToken))
             throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(credential));
 
         var context = AgentToolExecutionContext.Empty with
         {
             WorkflowRuntime = workflowRuntimeContext,
+            Caller = AgentToolCallerContext.Empty with
+            {
+                OwnerSubject = Normalize(credential?.NyxIdAuthority?.ExternalUserId),
+            },
             NyxIdAuthority = credential?.NyxIdAuthority == null
                 ? AgentToolNyxIdAuthorityContext.Empty
                 : new AgentToolNyxIdAuthorityContext(
@@ -39,13 +48,36 @@ internal static class WorkflowCallerCredentialToolContextMapper
         if (token.IsMissing)
             return context;
 
+        var credentialKind = credential!.Kind switch
+        {
+            NyxIdCallerCredentialKind.SourceReadableUserBearer =>
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+            NyxIdCallerCredentialKind.ProxyDelegation =>
+                AgentToolNyxIdCredentialKind.ProxyDelegation,
+            _ => AgentToolNyxIdCredentialKind.Unspecified,
+        };
+        var sourceReadableToken = supplementalSourceReadableToken.IsValid
+            ? supplementalSourceReadableToken.NormalizedBearerToken
+            : credentialKind == AgentToolNyxIdCredentialKind.SourceReadableUserBearer
+                ? token.NormalizedBearerToken
+                : null;
+
         return context with
         {
             Credentials = context.Credentials with
             {
                 NyxIdAccessToken = token.NormalizedBearerToken,
-                NyxIdOrgToken = token.NormalizedBearerToken,
-                SenderNyxIdAccessToken = token.NormalizedBearerToken,
+                NyxIdOrgToken = credentialKind == AgentToolNyxIdCredentialKind.SourceReadableUserBearer
+                    ? sourceReadableToken
+                    : null,
+                SenderNyxIdAccessToken =
+                    credentialKind == AgentToolNyxIdCredentialKind.SourceReadableUserBearer
+                        ? sourceReadableToken
+                        : null,
+                NyxIdCredentialKind = credentialKind,
+                SourceReadableNyxIdAccessToken = supplementalSourceReadableToken.IsValid
+                    ? supplementalSourceReadableToken.NormalizedBearerToken
+                    : null,
             },
         };
     }
@@ -70,7 +102,6 @@ internal static class WorkflowRunScopeToolContextMapper
             {
                 ScopeId = Fill(toolContext.Caller.ScopeId, scopeId),
                 OwnerScopeId = Fill(toolContext.Caller.OwnerScopeId, scopeId),
-                OwnerSubject = Fill(toolContext.Caller.OwnerSubject, scopeId),
             },
         };
     }

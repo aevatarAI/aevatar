@@ -15,9 +15,16 @@ import {
   type ScheduledDispatchOwner,
 } from "./scheduledDispatchApi";
 
-export type TeamAutomationRoute = {
+type TeamAutomationTeamRoute = {
   readonly scopeId: string;
   readonly teamId: string;
+};
+
+export type TeamAutomationListRoute = TeamAutomationTeamRoute & {
+  readonly memberId?: string;
+};
+
+export type TeamAutomationRoute = TeamAutomationTeamRoute & {
   readonly memberId: string;
 };
 
@@ -37,9 +44,11 @@ type TeamAutomationGrantBase = {
 
 export type TeamAutomationNodeRole = "primary" | "fallback";
 
+export type TeamAutomationGrantRequirement = "required" | "not_required";
+
 export type TeamAutomationServiceGrant = TeamAutomationGrantBase & {
   readonly kind: "service";
-  readonly nodeGrantRequirement: "required" | "not_required";
+  readonly nodeGrantRequirement: TeamAutomationGrantRequirement;
   readonly nodeIds: readonly string[];
   readonly serviceSlug: string | null;
 };
@@ -74,6 +83,8 @@ export type TeamAutomationCredentialPlan = {
   readonly allowAllServices: false;
   readonly allowAllNodes: false;
   readonly expiresAt: string;
+  readonly serviceGrantRequirement: TeamAutomationGrantRequirement;
+  readonly nodeGrantRequirement: TeamAutomationGrantRequirement;
 };
 
 export type TeamAutomationPermissionReview = {
@@ -83,13 +94,15 @@ export type TeamAutomationPermissionReview = {
   readonly credentialPlan: TeamAutomationCredentialPlan;
   readonly serviceGrants: readonly TeamAutomationServiceGrant[];
   readonly nodeGrants: readonly TeamAutomationNodeGrant[];
-  readonly ownerLLMSelection: {
-    readonly model: string;
-    readonly nyxIdUserServiceId: string;
-    readonly routeKind: "gateway" | "nyx_id_user_service";
-    readonly routeValue: string;
-    readonly serviceSlugSnapshot: string;
-  };
+  readonly ownerLLMSelection:
+    | {
+        readonly model: string;
+        readonly nyxIdUserServiceId: string;
+        readonly routeKind: "gateway" | "nyx_id_user_service";
+        readonly routeValue: string;
+        readonly serviceSlugSnapshot: string;
+      }
+    | null;
   readonly disclosures: readonly TeamAutomationDisclosure[];
   readonly warning?: string;
 };
@@ -373,23 +386,23 @@ function normalizeDisclosure(value: unknown): TeamAutomationDisclosure {
   }
 }
 
-function normalizeNodeGrantRequirement(
+function normalizeGrantRequirement(
   value: unknown,
-): TeamAutomationServiceGrant["nodeGrantRequirement"] {
-  const normalized = String(value ?? "").trim().toLowerCase();
+  label: string,
+): TeamAutomationGrantRequirement {
   if (
-    normalized === "1" ||
-    normalized === "authorization_grant_requirement_required"
+    value === 1 ||
+    value === "AUTHORIZATION_GRANT_REQUIREMENT_REQUIRED"
   ) {
     return "required";
   }
   if (
-    normalized === "2" ||
-    normalized === "authorization_grant_requirement_not_required"
+    value === 2 ||
+    value === "AUTHORIZATION_GRANT_REQUIREMENT_NOT_REQUIRED"
   ) {
     return "not_required";
   }
-  throw new Error(`Unknown NyxID node grant requirement: ${String(value)}.`);
+  throw new Error(`Unknown ${label} grant requirement: ${String(value)}.`);
 }
 
 function normalizeOwnerLLMRouteKind(value: unknown): "gateway" | "nyx_id_user_service" {
@@ -461,6 +474,24 @@ function assertRouteMatches(
   }
 }
 
+function assertListRouteMatches(
+  actual: TeamAutomationRoute,
+  expected: TeamAutomationListRoute,
+  label: string,
+): void {
+  if (
+    actual.scopeId !== expected.scopeId ||
+    actual.teamId !== expected.teamId ||
+    (expected.memberId !== undefined && actual.memberId !== expected.memberId)
+  ) {
+    throw new Error(
+      expected.memberId
+        ? `${label} does not belong to the requested Team member route.`
+        : `${label} does not belong to the requested Team automation collection.`,
+    );
+  }
+}
+
 function decodePermissionReview(
   value: unknown,
   label = "StudioMemberWorkflowAuthorizationResult",
@@ -492,16 +523,12 @@ function decodePermissionReview(
           allowAllServices: false,
           allowAllNodes: false,
           expiresAt: "",
+          serviceGrantRequirement: "not_required",
+          nodeGrantRequirement: "not_required",
         },
         serviceGrants: [],
         nodeGrants: [],
-        ownerLLMSelection: {
-          model: "",
-          nyxIdUserServiceId: "",
-          routeKind: "gateway",
-          routeValue: "",
-          serviceSlugSnapshot: "",
-        },
+        ownerLLMSelection: null,
         disclosures: [],
         warning: detail || failureCode,
       };
@@ -543,6 +570,22 @@ function decodePermissionReview(
     field(plan, "credentialPolicy", "CredentialPolicy"),
     `${label}.plan.credentialPolicy`,
   );
+  const serviceGrantRequirement = normalizeGrantRequirement(
+    field(
+      credentialPolicy,
+      "serviceGrantRequirement",
+      "ServiceGrantRequirement",
+    ),
+    "Team automation service",
+  );
+  const nodeGrantRequirement = normalizeGrantRequirement(
+    field(
+      credentialPolicy,
+      "nodeGrantRequirement",
+      "NodeGrantRequirement",
+    ),
+    "Team automation node",
+  );
   const serviceGrants = readOptionalArray(
     plan,
     ["nyxIdServiceGrants", "NyxIdServiceGrants"],
@@ -555,8 +598,9 @@ function decodePermissionReview(
         `${grantLabel}.userServiceId`,
       );
       const serviceSlug = optionalString(grant, ["serviceSlug", "ServiceSlug"]);
-      const nodeGrantRequirement = normalizeNodeGrantRequirement(
+      const nodeGrantRequirement = normalizeGrantRequirement(
         field(grant, "nodeGrantRequirement", "NodeGrantRequirement"),
+        "NyxID node",
       );
       const nodeIds = readOptionalArray(
         grant,
@@ -569,6 +613,13 @@ function decodePermissionReview(
           return nodeId.trim();
         },
       );
+      if (
+        (nodeGrantRequirement === "required") !== (nodeIds.length > 0)
+      ) {
+        throw new Error(
+          "Team Automation authorization node grant requirement does not match per-service node grants.",
+        );
+      }
       return {
         grantId: `service:${targetId}`,
         kind: "service" as const,
@@ -590,18 +641,63 @@ function decodePermissionReview(
       userServiceId: grant.targetId,
     })),
   );
-  const ownerLLM = expectRecord(
-    field(plan, "ownerLlmSelection", "OwnerLlmSelection", "ownerLLMSelection", "OwnerLLMSelection"),
-    `${label}.plan.ownerLlmSelection`,
+  if (
+    (serviceGrantRequirement === "required") !== (serviceGrants.length > 0)
+  ) {
+    throw new Error(
+      "Team Automation authorization service grant requirement does not match exact service grants.",
+    );
+  }
+  if (
+    (nodeGrantRequirement === "required") !==
+      serviceGrants.some(
+        (grant) => grant.nodeGrantRequirement === "required",
+      )
+  ) {
+    throw new Error(
+      "Team Automation authorization node grant requirement does not match exact service grants.",
+    );
+  }
+  const ownerLLMValue = field(
+    plan,
+    "ownerLlmSelection",
+    "OwnerLlmSelection",
+    "ownerLLMSelection",
+    "OwnerLLMSelection",
   );
-  const ownerLLMSelection = {
-    routeKind: normalizeOwnerLLMRouteKind(field(ownerLLM, "routeKind", "RouteKind")),
-    routeValue: requiredString(ownerLLM, ["routeValue", "RouteValue"], `${label}.plan.ownerLlmSelection.routeValue`),
-    nyxIdUserServiceId: optionalString(ownerLLM, ["nyxIdUserServiceId", "NyxIdUserServiceId"]),
-    serviceSlugSnapshot: optionalString(ownerLLM, ["serviceSlugSnapshot", "ServiceSlugSnapshot"]),
-    model: requiredString(ownerLLM, ["model", "Model"], `${label}.plan.ownerLlmSelection.model`),
-  };
-  if (ownerLLMSelection.routeKind === "nyx_id_user_service") {
+  const ownerLLMSelection: TeamAutomationPermissionReview["ownerLLMSelection"] =
+    ownerLLMValue === undefined || ownerLLMValue === null
+      ? null
+      : (() => {
+          const ownerLLM = expectRecord(
+            ownerLLMValue,
+            `${label}.plan.ownerLlmSelection`,
+          );
+          return {
+            routeKind: normalizeOwnerLLMRouteKind(
+              field(ownerLLM, "routeKind", "RouteKind"),
+            ),
+            routeValue: requiredString(
+              ownerLLM,
+              ["routeValue", "RouteValue"],
+              `${label}.plan.ownerLlmSelection.routeValue`,
+            ),
+            nyxIdUserServiceId: optionalString(
+              ownerLLM,
+              ["nyxIdUserServiceId", "NyxIdUserServiceId"],
+            ),
+            serviceSlugSnapshot: optionalString(
+              ownerLLM,
+              ["serviceSlugSnapshot", "ServiceSlugSnapshot"],
+            ),
+            model: requiredString(
+              ownerLLM,
+              ["model", "Model"],
+              `${label}.plan.ownerLlmSelection.model`,
+            ),
+          };
+        })();
+  if (ownerLLMSelection?.routeKind === "nyx_id_user_service") {
     const matchingGrant = serviceGrants.find(
       (grant) => grant.targetId === ownerLLMSelection.nyxIdUserServiceId,
     );
@@ -677,6 +773,8 @@ function decodePermissionReview(
         field(credentialPolicy, "expiresAt", "ExpiresAt"),
         `${label}.plan.credentialPolicy.expiresAt`,
       ),
+      serviceGrantRequirement,
+      nodeGrantRequirement,
     },
     serviceGrants,
     nodeGrants,
@@ -695,6 +793,33 @@ function decodeView(value: unknown, label = "ScheduledDispatchSummary"): TeamAut
   if (!teamOwned) {
     throw new Error(`${label} is not a Team-owned automation schedule.`);
   }
+  const ownerLLMRouteKind = requiredString(
+    record,
+    ["ownerLlmRouteKind", "OwnerLlmRouteKind", "ownerLLMRouteKind", "OwnerLLMRouteKind"],
+    `${label}.ownerLlmRouteKind`,
+  );
+  const ownerLLMRoute = ownerLLMRouteKind === "unspecified"
+    ? readString(
+        record,
+        ["ownerLlmRoute", "OwnerLlmRoute", "ownerLLMRoute", "OwnerLLMRoute"],
+        `${label}.ownerLlmRoute`,
+      ).trim()
+    : requiredString(
+        record,
+        ["ownerLlmRoute", "OwnerLlmRoute", "ownerLLMRoute", "OwnerLLMRoute"],
+        `${label}.ownerLlmRoute`,
+      );
+  const ownerLLMModel = ownerLLMRouteKind === "unspecified"
+    ? readString(
+        record,
+        ["ownerLlmModel", "OwnerLlmModel", "ownerLLMModel", "OwnerLLMModel"],
+        `${label}.ownerLlmModel`,
+      ).trim()
+    : requiredString(
+        record,
+        ["ownerLlmModel", "OwnerLlmModel", "ownerLLMModel", "OwnerLLMModel"],
+        `${label}.ownerLlmModel`,
+      );
 
   return {
     scopeId: requiredString(
@@ -771,16 +896,8 @@ function decodeView(value: unknown, label = "ScheduledDispatchSummary"): TeamAut
     vaultRevocationStatus: normalizeRevocationTrack(
       field(record, "vaultRevocationStatus", "VaultRevocationStatus"),
     ),
-    ownerLLMRouteKind: requiredString(
-      record,
-      ["ownerLlmRouteKind", "OwnerLlmRouteKind", "ownerLLMRouteKind", "OwnerLLMRouteKind"],
-      `${label}.ownerLlmRouteKind`,
-    ),
-    ownerLLMRoute: requiredString(
-      record,
-      ["ownerLlmRoute", "OwnerLlmRoute", "ownerLLMRoute", "OwnerLLMRoute"],
-      `${label}.ownerLlmRoute`,
-    ),
+    ownerLLMRouteKind,
+    ownerLLMRoute,
     ownerLLMUserServiceId: readString(
       record,
       ["ownerLlmUserServiceId", "OwnerLlmUserServiceId", "ownerLLMUserServiceId", "OwnerLLMUserServiceId"],
@@ -791,11 +908,7 @@ function decodeView(value: unknown, label = "ScheduledDispatchSummary"): TeamAut
       ["ownerLlmServiceSlug", "OwnerLlmServiceSlug", "ownerLLMServiceSlug", "OwnerLLMServiceSlug"],
       `${label}.ownerLlmServiceSlug`,
     ),
-    ownerLLMModel: requiredString(
-      record,
-      ["ownerLlmModel", "OwnerLlmModel", "ownerLLMModel", "OwnerLLMModel"],
-      `${label}.ownerLlmModel`,
-    ),
+    ownerLLMModel,
     stateVersion: requiredNonNegativeInteger(
       record,
       ["stateVersion", "StateVersion"],
@@ -862,6 +975,20 @@ function normalizeRoute(route: TeamAutomationRoute): TeamAutomationRoute {
   return normalized;
 }
 
+function normalizeListRoute(route: TeamAutomationListRoute): TeamAutomationListRoute {
+  const scopeId = route.scopeId.trim();
+  const teamId = route.teamId.trim();
+  const memberId = route.memberId?.trim();
+  if (!scopeId || !teamId) {
+    throw new Error("Team automation list route requires scopeId and teamId.");
+  }
+  return {
+    scopeId,
+    teamId,
+    ...(memberId ? { memberId } : {}),
+  };
+}
+
 function scheduleOwner(route: TeamAutomationRoute): ScheduledDispatchOwner {
   const normalized = normalizeRoute(route);
   return {
@@ -873,11 +1000,15 @@ function scheduleOwner(route: TeamAutomationRoute): ScheduledDispatchOwner {
 }
 
 function scheduleCollectionPath(
-  route: TeamAutomationRoute,
+  route: TeamAutomationListRoute,
   query?: { readonly cursor?: string; readonly take?: number },
 ): string {
+  const normalized = normalizeListRoute(route);
   return withQuery("/api/schedules", {
-    ...encodeScheduledDispatchOwnerQuery(scheduleOwner(route)),
+    ownerKind: "studio_member_automation",
+    ownerScopeId: normalized.scopeId,
+    ownerTeamId: normalized.teamId,
+    ownerMemberId: normalized.memberId,
     cursor: query?.cursor,
     includeTotalCount: true,
     take: query?.take,
@@ -951,17 +1082,18 @@ function decodeViewForRoute(
 
 function decodeListForRoute(
   value: unknown,
-  expectedRoute: TeamAutomationRoute,
+  expectedRoute: TeamAutomationListRoute,
   label?: string,
 ): TeamAutomationListResult {
   const result = decodeList(value, label);
-  result.items.forEach((item, index) =>
-    assertRouteMatches(
+  const normalizedRoute = normalizeListRoute(expectedRoute);
+  result.items.forEach((item, index) => {
+    assertListRouteMatches(
       item,
-      normalizeRoute(expectedRoute),
+      normalizedRoute,
       `${label ?? "ScheduledDispatchListResult"}.items[${index}]`,
-    ),
-  );
+    );
+  });
   return result;
 }
 
@@ -992,7 +1124,7 @@ async function requestTeamAutomation<T>(
 }
 
 function listTeamAutomations(
-  route: TeamAutomationRoute,
+  route: TeamAutomationListRoute,
   query?: { readonly cursor?: string; readonly take?: number },
 ): Promise<TeamAutomationListResult> {
   return requestTeamAutomation(
@@ -1002,7 +1134,7 @@ function listTeamAutomations(
 }
 
 async function listAllTeamAutomations(
-  route: TeamAutomationRoute,
+  route: TeamAutomationListRoute,
   query?: { readonly cursor?: string; readonly take?: number },
 ): Promise<TeamAutomationListResult> {
   const items: TeamAutomationView[] = [];

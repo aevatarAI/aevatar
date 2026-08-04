@@ -102,6 +102,9 @@ public static class ScheduledDispatchEndpoints
             {
                 TeamAutomationOwner = owner,
             };
+            var targetScopeId = configuration.Target.ServiceInvocation?.Identity.TenantId;
+            if (TryCreateOwnerScopeAccessDeniedResult(http, targetScopeId, out denied))
+                return denied;
         }
         catch (Exception ex) when (TryMapScheduleConfigurationError(ex, out var result))
         {
@@ -149,6 +152,9 @@ public static class ScheduledDispatchEndpoints
             {
                 TeamAutomationOwner = owner,
             };
+            var targetScopeId = configuration.Target.ServiceInvocation?.Identity.TenantId;
+            if (TryCreateOwnerScopeAccessDeniedResult(http, targetScopeId, out denied))
+                return denied;
         }
         catch (Exception ex) when (TryMapScheduleConfigurationError(ex, out var result))
         {
@@ -342,19 +348,17 @@ public static class ScheduledDispatchEndpoints
         ScheduledDispatchListQuery query;
         try
         {
-            var owner = ResolveOwnerFromQuery(ownerKind, ownerScopeId, ownerTeamId, ownerMemberId);
-            if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
+            query = ResolveListQueryFromOwnerQuery(
+                ownerKind,
+                ownerScopeId,
+                ownerTeamId,
+                ownerMemberId,
+                take,
+                cursor,
+                includeTotalCount);
+            var queryScopeId = query.TeamAutomationOwner?.ScopeId ?? query.TeamAutomationScopeId;
+            if (TryCreateOwnerScopeAccessDeniedResult(http, queryScopeId, out var denied))
                 return denied;
-            query = owner == null
-                ? new ScheduledDispatchListQuery(
-                    Take: take,
-                    Cursor: cursor,
-                    IncludeTotalCount: includeTotalCount)
-                : new ScheduledDispatchListQuery(
-                    Take: take,
-                    Cursor: cursor,
-                    IncludeTotalCount: includeTotalCount,
-                    TeamAutomationOwner: owner);
         }
         catch (ArgumentException ex)
         {
@@ -453,6 +457,20 @@ public static class ScheduledDispatchEndpoints
         return AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, owner.ScopeId, out denied);
     }
 
+    private static bool TryCreateOwnerScopeAccessDeniedResult(
+        HttpContext http,
+        string? scopeId,
+        out IResult denied)
+    {
+        if (string.IsNullOrWhiteSpace(scopeId))
+        {
+            denied = Results.Empty;
+            return false;
+        }
+
+        return AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId.Trim(), out denied);
+    }
+
     private static string BuildScheduleLocation(string scheduleId, TeamMemberAutomationOwner? owner)
     {
         var encodedScheduleId = Uri.EscapeDataString(scheduleId);
@@ -515,6 +533,60 @@ public static class ScheduledDispatchEndpoints
         !string.IsNullOrWhiteSpace(scopeId) ||
         !string.IsNullOrWhiteSpace(teamId) ||
         !string.IsNullOrWhiteSpace(memberId);
+
+    private static ScheduledDispatchListQuery ResolveListQueryFromOwnerQuery(
+        string? ownerKind,
+        string? ownerScopeId,
+        string? ownerTeamId,
+        string? ownerMemberId,
+        int take,
+        string? cursor,
+        bool includeTotalCount)
+    {
+        if (string.IsNullOrWhiteSpace(ownerKind) &&
+            string.IsNullOrWhiteSpace(ownerScopeId) &&
+            string.IsNullOrWhiteSpace(ownerTeamId) &&
+            string.IsNullOrWhiteSpace(ownerMemberId))
+        {
+            return new ScheduledDispatchListQuery(
+                Take: take,
+                Cursor: cursor,
+                IncludeTotalCount: includeTotalCount);
+        }
+
+        if (!string.Equals(ownerKind, ScheduledDispatchOwnerKinds.StudioMemberAutomation, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Unsupported scheduled dispatch owner kind '{ownerKind ?? string.Empty}'.",
+                nameof(ownerKind));
+        }
+
+        var normalizedScopeId = NormalizeOptional(ownerScopeId)
+            ?? throw new ArgumentException("Owner scopeId is required.", nameof(ownerScopeId));
+        var normalizedTeamId = NormalizeOptional(ownerTeamId)
+            ?? throw new ArgumentException("Owner teamId is required.", nameof(ownerTeamId));
+        var normalizedMemberId = NormalizeOptional(ownerMemberId);
+        if (normalizedMemberId is not null)
+        {
+            return new ScheduledDispatchListQuery(
+                Take: take,
+                Cursor: cursor,
+                IncludeTotalCount: includeTotalCount,
+                TeamAutomationOwner: new TeamMemberAutomationOwner(
+                    normalizedScopeId,
+                    normalizedMemberId,
+                    normalizedTeamId));
+        }
+
+        return new ScheduledDispatchListQuery(
+            Take: take,
+            Cursor: cursor,
+            IncludeTotalCount: includeTotalCount,
+            TeamAutomationScopeId: normalizedScopeId,
+            TeamAutomationTeamId: normalizedTeamId,
+            TeamAutomationMemberId: null,
+            ExcludeCompletedTeamAutomationDeletions: true);
+    }
 
     private static TeamMemberAutomationOwner? ResolveOwnerFromQuery(
         string? ownerKind,
@@ -717,7 +789,6 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
     public bool Enabled { get; init; } = true;
     public IReadOnlyDictionary<string, string>? Headers { get; init; }
     public ScheduledDispatchOwnerHttpRequest? Owner { get; init; }
-    public ScheduledDispatchEnvelopeTargetHttpRequest? Envelope { get; init; }
     public ScheduledDispatchServiceInvocationTargetHttpRequest? ServiceInvocation { get; init; }
 
     public async Task<ScheduledDispatchConfiguration> ToConfigurationAsync(
@@ -753,20 +824,14 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
         ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject,
         CancellationToken ct)
     {
-        var targetCount = (Envelope == null ? 0 : 1) +
-                          (ServiceInvocation == null ? 0 : 1);
-        if (targetCount != 1)
-            throw new ArgumentException("Exactly one scheduled dispatch target is required.");
+        if (ServiceInvocation == null)
+            throw new ArgumentException("A service invocation scheduled dispatch target is required.");
 
-        if (Envelope != null)
-        {
-            return new ResolvedScheduledDispatchTarget(
-                Envelope.ToTarget(),
-                IsWorkflowServiceTarget: false,
-                ScheduledDispatchCredentialRequirementTargetKind.Envelope);
-        }
-
-        return await ServiceInvocation!.ToResolvedTargetAsync(catalogReader, revisionCatalogReader, authenticatedOwnerSubject, ct);
+        return await ServiceInvocation.ToResolvedTargetAsync(
+            catalogReader,
+            revisionCatalogReader,
+            authenticatedOwnerSubject,
+            ct);
     }
 
     private ScheduledDispatchScheduleKind ResolveScheduleKind(ResolvedScheduledDispatchTarget resolvedTarget)
@@ -829,25 +894,6 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
         ScheduledDispatchTargetDescriptor Target,
         bool IsWorkflowServiceTarget,
         ScheduledDispatchCredentialRequirementTargetKind CredentialRequirementTargetKind);
-}
-
-[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record ScheduledDispatchEnvelopeTargetHttpRequest
-{
-    public string? ActorId { get; init; }
-    public required EventEnvelope Envelope { get; init; }
-
-    public ScheduledDispatchTargetDescriptor ToTarget() =>
-        CreateTarget(Envelope);
-
-    private ScheduledDispatchTargetDescriptor CreateTarget(EventEnvelope envelope)
-    {
-        ScheduledDispatchEndpoints.RejectExternalCallerDurableCredential(envelope.Payload);
-        return new(
-            ScheduledDispatchTargetKind.Envelope,
-            ActorId: ActorId,
-            Envelope: envelope);
-    }
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]

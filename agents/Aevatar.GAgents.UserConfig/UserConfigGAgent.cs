@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -16,8 +17,6 @@ namespace Aevatar.GAgents.UserConfig;
 [GAgent("user.config")]
 public sealed class UserConfigGAgent : GAgentBase<UserConfigGAgentState>, IProjectedActor
 {
-    private const string GatewayRoute = "/api/v1/llm/gateway/v1";
-
     public static string ProjectionKind => "user-config";
 
     [EventHandler(EndpointName = "updateConfigDelta")]
@@ -49,15 +48,19 @@ public sealed class UserConfigGAgent : GAgentBase<UserConfigGAgentState>, IProje
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(command);
         if (command.LlmSelection is not null)
-            ValidateSelection(command.LlmSelection);
+            LLMSelectionPolicy.ValidateSelection(command.LlmSelection);
 
         var selection = command.LlmSelection?.Clone() ?? state.LlmSelection?.Clone();
+        var defaultModel = command.LlmSelection is null
+            ? state.DefaultModel
+            : LLMSelectionPolicy.CompatibilityDefaultModel(command.LlmSelection);
+        var preferredRoute = command.LlmSelection is null
+            ? state.PreferredLlmRoute
+            : LLMSelectionPolicy.CompatibilityRoute(command.LlmSelection);
         var evt = new UserConfigUpdatedEvent
         {
-            DefaultModel = command.HasDefaultModel ? command.DefaultModel : state.DefaultModel,
-            PreferredLlmRoute = command.LlmSelection is null
-                ? state.PreferredLlmRoute
-                : command.LlmSelection.RouteValue,
+            DefaultModel = defaultModel,
+            PreferredLlmRoute = preferredRoute,
             RuntimeMode = command.HasRuntimeMode ? command.RuntimeMode : state.RuntimeMode,
             LocalRuntimeBaseUrl = command.HasLocalRuntimeBaseUrl
                 ? command.LocalRuntimeBaseUrl
@@ -71,32 +74,6 @@ public sealed class UserConfigGAgent : GAgentBase<UserConfigGAgentState>, IProje
         if (selection is not null)
             evt.LlmSelection = selection;
         return evt;
-    }
-
-    private static void ValidateSelection(Aevatar.GAgents.UserConfig.UserLlmSelection selection)
-    {
-        var rawRoute = selection.RouteValue ?? string.Empty;
-        var rawId = selection.NyxIdUserServiceId ?? string.Empty;
-        var rawSlug = selection.ServiceSlugSnapshot ?? string.Empty;
-        var route = rawRoute.Trim();
-        var id = rawId.Trim();
-        var slug = rawSlug.Trim();
-        if (route != rawRoute || id != rawId || slug != rawSlug)
-            throw new InvalidOperationException("user_llm_selection_not_canonical");
-
-        switch (selection.RouteKind)
-        {
-            case UserLlmRouteKind.Gateway when route == GatewayRoute && id.Length == 0 && slug.Length == 0:
-                return;
-            case UserLlmRouteKind.NyxIdUserService
-                when id.Length > 0 &&
-                     slug.Length > 0 &&
-                     !slug.Contains('/') &&
-                     string.Equals(route, $"/api/v1/proxy/s/{slug}", StringComparison.Ordinal):
-                return;
-            default:
-                throw new InvalidOperationException("user_llm_selection_invalid");
-        }
     }
 
     private static UserConfigGAgentState ApplyConfigUpdated(

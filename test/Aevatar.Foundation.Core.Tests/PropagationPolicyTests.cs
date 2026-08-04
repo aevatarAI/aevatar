@@ -70,19 +70,19 @@ public sealed class PropagationPolicyTests
     }
 
     [Fact]
-    public void Apply_ShouldNotPropagateRuntimeDedupOriginMetadata()
+    public void Apply_ShouldNotPropagateRuntimeDeliveryOperationIdentity()
     {
         var inbound = new EventEnvelope
         {
-            Id = "evt-in-dedup",
+            Id = "evt-in-delivery",
             Payload = Any.Pack(new PingEvent { Message = "in" }),
             Propagation = new EnvelopePropagation
             {
-                CorrelationId = "corr-dedup",
+                CorrelationId = "corr-delivery",
             },
             Runtime = new EnvelopeRuntime
             {
-                Deduplication = new DeliveryDeduplication
+                DeliveryIdentity = new DeliveryIdentity
                 {
                     OperationId = "dispatch-op-1",
                 },
@@ -92,7 +92,7 @@ public sealed class PropagationPolicyTests
 
         var outbound = new EventEnvelope
         {
-            Id = "evt-out-dedup",
+            Id = "evt-out-delivery",
             Payload = Any.Pack(new PongEvent { Reply = "out" }),
         };
 
@@ -100,8 +100,8 @@ public sealed class PropagationPolicyTests
 
         outbound.Runtime.ShouldBeNull();
         outbound.Propagation.Baggage["tenant"].ShouldBe("acme");
-        outbound.Propagation.CausationEventId.ShouldBe("evt-in-dedup");
-        outbound.Propagation.CorrelationId.ShouldBe("corr-dedup");
+        outbound.Propagation.CausationEventId.ShouldBe("evt-in-delivery");
+        outbound.Propagation.CorrelationId.ShouldBe("corr-delivery");
     }
 
     [Fact]

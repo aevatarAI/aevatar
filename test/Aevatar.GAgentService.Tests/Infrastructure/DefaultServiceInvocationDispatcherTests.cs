@@ -7,6 +7,7 @@ using Aevatar.GAgentService.Infrastructure.Dispatch;
 using Aevatar.GAgentService.Tests.TestSupport;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -23,7 +24,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             dispatchPort,
             new RecordingScriptRuntimeCommandPort(),
             new RecordingWorkflowRunActorPort(),
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(ServiceImplementationKind.Static, endpointId: "run");
         var request = new ServiceInvocationRequest
         {
@@ -55,7 +57,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             dispatchPort,
             new RecordingScriptRuntimeCommandPort(),
             new RecordingWorkflowRunActorPort(),
-            registry);
+            registry,
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Static,
             endpointId: "chat",
@@ -101,7 +104,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             dispatchPort,
             new RecordingScriptRuntimeCommandPort(),
             new RecordingWorkflowRunActorPort(),
-            registry);
+            registry,
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Static,
             endpointId: "chat",
@@ -156,7 +160,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             new RecordingDispatchPort(),
             scriptPort,
             new RecordingWorkflowRunActorPort(),
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Scripting,
             endpointId: "run",
@@ -208,7 +213,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             new RecordingDispatchPort(),
             scriptPort,
             new RecordingWorkflowRunActorPort(),
-            registry);
+            registry,
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Scripting,
             endpointId: "run",
@@ -267,7 +273,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             dispatchPort,
             new RecordingScriptRuntimeCommandPort(),
             workflowPort,
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
@@ -275,13 +282,14 @@ public sealed class DefaultServiceInvocationDispatcherTests
         var capabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
             "name: wf",
             new Dictionary<string, string> { ["child"] = "name: child" },
-            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable,
             [],
             []);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
             InlineWorkflowYamls =
             {
                 ["child"] = "name: child",
@@ -322,7 +330,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             dispatchPort,
             new RecordingScriptRuntimeCommandPort(),
             workflowPort,
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
@@ -331,6 +340,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         var receipt = await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -360,6 +374,39 @@ public sealed class DefaultServiceInvocationDispatcherTests
         dispatchPort.Calls.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("WORKFLOW_DEFINITION_INVALID", "Workflow definition is invalid.")]
+    [InlineData("NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED", "Workflow uses a retired NyxID tool contract.")]
+    [InlineData("CAPABILITY_ADMISSION_REBIND_REQUIRED", "Saved workflow and capability admission no longer match.")]
+    public async Task DispatchAsync_WithRequestedWorkflowRunAndRejectedPreflight_ShouldCreateNoRunArtifacts(
+        string code,
+        string safeMessage)
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var registry = new RecordingServiceRunRegistrationPort();
+        var preflight = new RejectingArtifactCompatibilityPreflight(code, safeMessage);
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            new RecordingDispatchPort(),
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            registry,
+            preflight);
+        var target = CreateExplicitWorkflowTarget("r1", "r1", "r1");
+        var request = CreateWorkflowInvocationRequest();
+        request.RequestedRunId = "run-alpha";
+
+        var act = () => dispatcher.DispatchAsync(target, request);
+
+        var error = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        error.Which.StableCode.Should().Be(code);
+        error.Which.SafeMessage.Should().Be(safeMessage);
+        preflight.Calls.Should().ContainSingle();
+        workflowPort.CreateRunCalls.Should().BeEmpty();
+        workflowPort.EnsureRunCalls.Should().BeEmpty();
+        workflowPort.EnsureAndDispatchCalls.Should().BeEmpty();
+        registry.Calls.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task DispatchAsync_ShouldMapTypedWorkflowCompletionNotificationTarget()
     {
@@ -369,7 +416,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             dispatchPort,
             new RecordingScriptRuntimeCommandPort(),
             workflowPort,
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
@@ -378,6 +426,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -425,7 +478,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             dispatchPort,
             new RecordingScriptRuntimeCommandPort(),
             workflowPort,
-            registry);
+            registry,
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
@@ -434,6 +488,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
         var request = new ServiceInvocationRequest
         {
@@ -466,7 +525,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             dispatchPort,
             new RecordingScriptRuntimeCommandPort(),
             workflowPort,
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
@@ -475,6 +535,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -506,7 +571,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldMapConnectorAuthorizationToWorkflowCallerCredential()
+    public async Task DispatchAsync_ShouldMapChatInputFileRefToWorkflowChatRequest()
     {
         var workflowPort = new RecordingWorkflowRunActorPort();
         var dispatchPort = new RecordingDispatchPort();
@@ -514,7 +579,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             dispatchPort,
             new RecordingScriptRuntimeCommandPort(),
             workflowPort,
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
@@ -523,6 +589,157 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
+        };
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-file-ref",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                InputParts =
+                {
+                    new ChatContentPart
+                    {
+                        Kind = ChatContentPartKind.Text,
+                        Text = "see attachment",
+                        MediaType = "application/pdf",
+                        FileRef = new ChatFileRef
+                        {
+                            FileId = "file-1",
+                            ArtifactId = "artifact-1",
+                            SourceKind = ChatFileSourceKind.ConnectedServiceResource,
+                            SourceMessageId = "om_1",
+                            SourceResourceKey = "file_key_1",
+                            FileName = "invoice.pdf",
+                            MediaType = "application/pdf",
+                            SizeBytes = 1234,
+                            Sha256 = "abc",
+                            CreatedAtUnixMs = 1710000000000,
+                            ExpiresAtUnixMs = 1710003600000,
+                            OwnerRunId = "run-1",
+                            OwnerScopeId = "scope-1",
+                        },
+                    },
+                },
+            }),
+        });
+
+        var inputPart = dispatchPort.Calls.Should().ContainSingle().Which
+            .envelope.Payload.Unpack<WorkflowChatRequestEvent>()
+            .InputParts.Should().ContainSingle().Which;
+        inputPart.Kind.Should().Be(Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.File);
+        inputPart.FileRef.Should().NotBeNull();
+        inputPart.FileRef.FileId.Should().Be("file-1");
+        inputPart.FileRef.ArtifactId.Should().Be("artifact-1");
+        inputPart.FileRef.SourceKind.Should().Be(WorkflowFileSourceKind.ConnectedServiceResource);
+        inputPart.FileRef.SourceMessageId.Should().Be("om_1");
+        inputPart.FileRef.SourceResourceKey.Should().Be("file_key_1");
+        inputPart.FileRef.FileName.Should().Be("invoice.pdf");
+        inputPart.FileRef.MediaType.Should().Be("application/pdf");
+        inputPart.FileRef.SizeBytes.Should().Be(1234);
+        inputPart.FileRef.Sha256.Should().Be("abc");
+        inputPart.FileRef.CreatedAtUnixMs.Should().Be(1710000000000);
+        inputPart.FileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
+        inputPart.FileRef.OwnerRunId.Should().Be("run-1");
+        inputPart.FileRef.OwnerScopeId.Should().Be("scope-1");
+    }
+
+    [Theory]
+    [InlineData("image/png", Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Image)]
+    [InlineData("audio/mpeg", Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Audio)]
+    [InlineData("video/mp4", Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Video)]
+    public async Task DispatchAsync_ShouldResolveWorkflowFileInputKindFromMediaType(
+        string mediaType,
+        Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind expectedKind)
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
+        };
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = $"cmd-{expectedKind}",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                InputParts =
+                {
+                    new ChatContentPart
+                    {
+                        Kind = ChatContentPartKind.Text,
+                        MediaType = mediaType,
+                        FileRef = new ChatFileRef
+                        {
+                            FileId = $"file-{expectedKind}",
+                            SourceKind = ChatFileSourceKind.FormUpload,
+                            MediaType = mediaType,
+                        },
+                    },
+                },
+            }),
+        });
+
+        var inputPart = dispatchPort.Calls.Should().ContainSingle().Which
+            .envelope.Payload.Unpack<WorkflowChatRequestEvent>()
+            .InputParts.Should().ContainSingle().Which;
+        inputPart.Kind.Should().Be(expectedKind);
+        inputPart.FileRef.Should().NotBeNull();
+        inputPart.FileRef.SourceKind.Should().Be(WorkflowFileSourceKind.FormUpload);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldMapConnectorAuthorizationToWorkflowCallerCredential()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -533,13 +750,155 @@ public sealed class DefaultServiceInvocationDispatcherTests
             Payload = Any.Pack(new ChatRequestEvent
             {
                 Prompt = "hello",
-                ConnectorHttpAuthorization = "Bearer connector-token",
+                ConnectorHttpAuthorization = "Bearer delegation-alpha",
+                CallerNyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+                CallerSourceReadableNyxIdBearerToken = "source-alpha",
+                LlmControl = new LLMControlContextPayload
+                {
+                    SenderNyxIdAccessToken = "llm-sender-alpha",
+                },
             }),
         });
 
         var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
             .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
-        workflowRequest.CallerCredential.BearerToken.Should().Be("connector-token");
+        workflowRequest.CallerCredential.BearerToken.Should().Be("delegation-alpha");
+        workflowRequest.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        workflowRequest.CallerCredential.SourceReadableUserBearerToken.Should().Be("source-alpha");
+        workflowRequest.LlmControl.SenderNyxIdAccessToken.Should().Be("llm-sender-alpha");
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldPreserveTypedProxyDelegationWithoutSupplementalSourceCredential()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
+        };
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-delegation-only",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                ConnectorHttpAuthorization = "Bearer delegation-only",
+                CallerNyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+            }),
+        });
+
+        var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
+            .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+        workflowRequest.CallerCredential.BearerToken.Should().Be("delegation-only");
+        workflowRequest.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        workflowRequest.CallerCredential.SourceReadableUserBearerToken.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldRejectSupplementalSourceCredentialWithoutExecutionCredential()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
+        };
+
+        var act = () => dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-source-only",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                CallerNyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+                CallerSourceReadableNyxIdBearerToken = "source-alpha",
+            }),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>();
+        dispatchPort.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldRejectSupplementalSourceCredentialForSourceReadableExecutionKind()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
+        };
+
+        var act = () => dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-invalid-source-kind",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                ConnectorHttpAuthorization = "Bearer source-alpha",
+                CallerNyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
+                CallerSourceReadableNyxIdBearerToken = "source-alpha",
+            }),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>();
+        dispatchPort.Calls.Should().BeEmpty();
     }
 
     [Fact]
@@ -551,7 +910,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             dispatchPort,
             new RecordingScriptRuntimeCommandPort(),
             workflowPort,
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
@@ -560,6 +920,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -595,7 +960,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             dispatchPort,
             new RecordingScriptRuntimeCommandPort(),
             workflowPort,
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
@@ -604,6 +970,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -634,7 +1005,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             dispatchPort,
             new RecordingScriptRuntimeCommandPort(),
             workflowPort,
-            registry);
+            registry,
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
@@ -643,6 +1015,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -700,7 +1077,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             dispatchPort,
             new RecordingScriptRuntimeCommandPort(),
             workflowPort,
-            registry);
+            registry,
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
@@ -709,6 +1087,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
         var request = new ServiceInvocationRequest
         {
@@ -751,7 +1134,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             dispatchPort,
             new RecordingScriptRuntimeCommandPort(),
             workflowPort,
-            registry);
+            registry,
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
@@ -760,6 +1144,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
         var chatRequest = new ChatRequestEvent
         {
@@ -798,7 +1187,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             new RecordingDispatchPort(),
             new RecordingScriptRuntimeCommandPort(),
             workflowPort,
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
@@ -807,6 +1197,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
         var request = new ServiceInvocationRequest
         {
@@ -838,7 +1233,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             new RecordingDispatchPort(),
             new RecordingScriptRuntimeCommandPort(),
             workflowPort,
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
@@ -847,6 +1243,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
         var request = new ServiceInvocationRequest
         {
@@ -883,7 +1284,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             new RecordingDispatchPort(),
             new RecordingScriptRuntimeCommandPort(),
             workflowPort,
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
@@ -892,6 +1294,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         var dispatch = async () => await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -928,7 +1335,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             new RecordingDispatchPort(),
             new RecordingScriptRuntimeCommandPort(),
             workflowPort,
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
@@ -937,6 +1345,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         var dispatch = async () => await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -966,7 +1379,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             new RecordingDispatchPort(),
             new RecordingScriptRuntimeCommandPort(),
             new RecordingWorkflowRunActorPort(),
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Static,
             endpointId: "run",
@@ -992,7 +1406,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             dispatchPort,
             new RecordingScriptRuntimeCommandPort(),
             new RecordingWorkflowRunActorPort(),
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(ServiceImplementationKind.Static, endpointId: "run");
 
         var receipt = await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -1016,7 +1431,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             new RecordingDispatchPort(),
             new RecordingScriptRuntimeCommandPort(),
             new RecordingWorkflowRunActorPort(),
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(ServiceImplementationKind.Static, endpointId: "run");
 
         var act = () => dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -1036,7 +1452,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             new RecordingDispatchPort(),
             new RecordingScriptRuntimeCommandPort(),
             new RecordingWorkflowRunActorPort(),
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
@@ -1045,6 +1462,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         var act = () => dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -1065,7 +1487,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             new RecordingDispatchPort(),
             scriptPort,
             new RecordingWorkflowRunActorPort(),
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Scripting,
             endpointId: "run",
@@ -1099,7 +1522,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             new RecordingDispatchPort(),
             new RecordingScriptRuntimeCommandPort(),
             new RecordingWorkflowRunActorPort(),
-            registry);
+            registry,
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(ServiceImplementationKind.Static, endpointId: "run");
         var request = new ServiceInvocationRequest
         {
@@ -1130,7 +1554,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             new RecordingDispatchPort(),
             new RecordingScriptRuntimeCommandPort(),
             new RecordingWorkflowRunActorPort(),
-            registry);
+            registry,
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Scripting,
             endpointId: "run",
@@ -1165,11 +1590,13 @@ public sealed class DefaultServiceInvocationDispatcherTests
             new RecordingDispatchPort(),
             new RecordingScriptRuntimeCommandPort(),
             workflowPort,
-            registry);
+            registry,
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
-            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl,
+            revisionId: "rev-artifact-alpha");
         var request = new ServiceInvocationRequest
         {
             Identity = GAgentServiceTestKit.CreateIdentity(),
@@ -1182,7 +1609,14 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "artifact-wf",
             WorkflowYaml = "name: artifact-wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
             DefinitionActorId = "artifact-definition-actor",
+            WorkflowId = "wf-artifact-alpha",
+            RevisionId = "rev-artifact-alpha",
             InlineWorkflowYamls =
             {
                 ["helper"] = "name: helper",
@@ -1204,9 +1638,59 @@ public sealed class DefaultServiceInvocationDispatcherTests
         workflowPort.CreateRunCalls[0].WorkflowName.Should().Be("artifact-wf");
         workflowPort.CreateRunCalls[0].WorkflowYaml.Should().Be("name: artifact-wf");
         workflowPort.CreateRunCalls[0].InlineWorkflowYamls.Should().Contain("helper", "name: helper");
+        workflowPort.CreateRunCalls[0].WorkflowId.Should().Be("wf-artifact-alpha");
+        workflowPort.CreateRunCalls[0].RevisionId.Should().Be("rev-artifact-alpha");
         // 06-24: scheduleId must ride from the service-invocation request into the run binding so the
         // observatory can filter this schedule's runs (previously dropped on the workflow branch).
         workflowPort.CreateRunCalls[0].ScheduleId.Should().Be("schedule-wf");
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldRejectWorkflowArtifactRevisionMismatch()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var registry = new RecordingServiceRunRegistrationPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            new RecordingDispatchPort(),
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            registry,
+            new AcceptingArtifactCompatibilityPreflight());
+        var target = CreateExplicitWorkflowTarget(
+            resolvedRevisionId: "rev-resolved-alpha",
+            artifactRevisionId: "rev-artifact-beta",
+            planRevisionId: "rev-resolved-alpha");
+
+        var act = () => dispatcher.DispatchAsync(target, CreateWorkflowInvocationRequest());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*artifact revision_id*");
+        workflowPort.CreateRunCalls.Should().BeEmpty();
+        registry.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldRejectWorkflowPlanRevisionMismatch()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var registry = new RecordingServiceRunRegistrationPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            new RecordingDispatchPort(),
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            registry,
+            new AcceptingArtifactCompatibilityPreflight());
+        var target = CreateExplicitWorkflowTarget(
+            resolvedRevisionId: "rev-resolved-alpha",
+            artifactRevisionId: "rev-resolved-alpha",
+            planRevisionId: "rev-plan-beta");
+
+        var act = () => dispatcher.DispatchAsync(target, CreateWorkflowInvocationRequest());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*workflow plan revision_id*");
+        workflowPort.CreateRunCalls.Should().BeEmpty();
+        registry.Calls.Should().BeEmpty();
     }
 
     [Fact]
@@ -1217,7 +1701,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             new RecordingDispatchPort(),
             new RecordingScriptRuntimeCommandPort(),
             workflowPort,
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
@@ -1227,6 +1712,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "artifact-wf",
             WorkflowYaml = "name: artifact-wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
             DefinitionActorId = "artifact-definition-actor",
         };
         var request = new ServiceInvocationRequest
@@ -1250,7 +1740,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             new RecordingDispatchPort(),
             new RecordingScriptRuntimeCommandPort(),
             new RecordingWorkflowRunActorPort(),
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(ServiceImplementationKind.Static, endpointId: "run");
         target.Artifact.ImplementationKind = ServiceImplementationKind.Unspecified;
 
@@ -1269,11 +1760,12 @@ public sealed class DefaultServiceInvocationDispatcherTests
         ServiceImplementationKind implementationKind,
         string endpointId,
         string requestTypeUrl = "",
-        string primaryActorId = "primary-actor")
+        string primaryActorId = "primary-actor",
+        string revisionId = "r1")
     {
         var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(
             GAgentServiceTestKit.CreateIdentity(),
-            "r1",
+            revisionId,
             GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: endpointId, requestTypeUrl: requestTypeUrl));
         artifact.ImplementationKind = implementationKind;
         if (artifact.DeploymentPlan.PlanSpecCase == ServiceDeploymentPlan.PlanSpecOneofCase.StaticPlan &&
@@ -1285,7 +1777,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
         return new ServiceInvocationResolvedTarget(
             new ServiceInvocationResolvedService(
                 "tenant:app:default:svc",
-                "r1",
+                revisionId,
                 "dep-1",
                 primaryActorId,
                 ServiceDeploymentStatus.Active.ToString(),
@@ -1299,6 +1791,45 @@ public sealed class DefaultServiceInvocationDispatcherTests
                 RequestTypeUrl = requestTypeUrl,
             });
     }
+
+    private static ServiceInvocationResolvedTarget CreateExplicitWorkflowTarget(
+        string resolvedRevisionId,
+        string artifactRevisionId,
+        string planRevisionId)
+    {
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl,
+            revisionId: resolvedRevisionId);
+        var admissionPlan = new WorkflowCapabilityAdmissionPlan();
+        admissionPlan.ExecutionMode = ExternalCapabilityExecutionMode.Durable;
+        admissionPlan.InvocationAdmissions.Add(new WorkflowCapabilityInvocationAdmission
+        {
+            CallSiteId = "workflow/request-alpha",
+            NyxIdExplicitRequestGrant = new NyxIdExplicitRequestGrant(),
+        });
+        target.Artifact.RevisionId = artifactRevisionId;
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "workflow",
+            WorkflowYaml = "name: workflow",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            WorkflowId = "wf-dispatch-alpha",
+            RevisionId = planRevisionId,
+            CapabilityAdmissionPlan = admissionPlan,
+        };
+        return target;
+    }
+
+    private static ServiceInvocationRequest CreateWorkflowInvocationRequest() =>
+        new()
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-workflow-identity",
+            Payload = Any.Pack(new ChatRequestEvent { Prompt = "hi" }),
+        };
 
     private static DurableCallerCredentialRef CreateDurableCallerCredentialRef() =>
         new()
@@ -1327,6 +1858,46 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             StatusUpdates.Add((runActorId, runId, status));
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class AcceptingArtifactCompatibilityPreflight : IWorkflowArtifactCompatibilityPreflight
+    {
+        public Task ValidateAsync(
+            WorkflowArtifactCompatibilityRequest request,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RejectingArtifactCompatibilityPreflight(string code, string safeMessage)
+        : IWorkflowArtifactCompatibilityPreflight
+    {
+        public List<WorkflowArtifactCompatibilityRequest> Calls { get; } = [];
+
+        public Task ValidateAsync(
+            WorkflowArtifactCompatibilityRequest request,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ct.ThrowIfCancellationRequested();
+            Calls.Add(request with { CapabilityAdmissionPlan = request.CapabilityAdmissionPlan?.Clone() });
+            throw new WorkflowExternalCapabilityAdmissionException(new ExternalCapabilityReadiness
+            {
+                Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+                Blockers =
+                {
+                    new ExternalCapabilityBlocker
+                    {
+                        Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+                        Code = code,
+                        SafeMessage = safeMessage,
+                    },
+                },
+            });
         }
     }
 
@@ -1478,10 +2049,13 @@ public sealed class DefaultServiceInvocationDispatcherTests
             string actorId,
             string workflowYaml,
             string workflowName,
-            IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
-            string? scopeId = null,
-            string? sourceKind = null,
-            WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
+            IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+            string? scopeId,
+            string? sourceKind,
+            WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+            string? workflowId,
+            string? revisionId,
+            ExternalCapabilityExecutionMode expectedExecutionMode,
             CancellationToken ct = default) => Task.CompletedTask;
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>

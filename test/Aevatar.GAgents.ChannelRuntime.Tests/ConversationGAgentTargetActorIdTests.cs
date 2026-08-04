@@ -1,6 +1,8 @@
 using System.Reflection;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -68,7 +70,14 @@ public sealed class ConversationGAgentTargetActorIdTests
         var eventStore = new InMemoryEventStore();
         var runner = new DeferredWorkflowDraftRunTurnRunner();
         var dispatcher = new RecordingWorkflowDraftRunInteractionPort();
-        var agent = await CreateAgentAsync(actorId, runner, new RecordingLlmReplyRunDispatcher(), dispatcher, eventStore);
+        var runtimeSecretStore = new InMemoryRuntimeSecretStore();
+        var agent = await CreateAgentAsync(
+            actorId,
+            runner,
+            new RecordingLlmReplyRunDispatcher(),
+            dispatcher,
+            eventStore,
+            runtimeSecretStore: runtimeSecretStore);
         var activity = BuildInboundActivity("msg-workflow-1");
         activity.OutboundDelivery = new OutboundDeliveryContext
         {
@@ -101,6 +110,8 @@ public sealed class ConversationGAgentTargetActorIdTests
         persisted.ReplyTokenExpiresAtUnixMs.Should().Be(0);
         persisted.NyxUserAccessToken.Should().BeEmpty();
         persisted.Activity.TransportExtras.NyxUserAccessToken.Should().BeEmpty();
+        persisted.RelayReplyTokenRef.Ref.Should().NotBeNullOrWhiteSpace();
+        persisted.RelayUserAccessTokenRef.Ref.Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]
@@ -408,7 +419,8 @@ public sealed class ConversationGAgentTargetActorIdTests
         IChannelLlmReplyRunDispatcher dispatcher,
         IChannelWorkflowDraftRunInteractionPort? workflowDispatcher = null,
         InMemoryEventStore? eventStore = null,
-        RecordingEventPublisher? eventPublisher = null)
+        RecordingEventPublisher? eventPublisher = null,
+        IRuntimeSecretStore? runtimeSecretStore = null)
     {
         eventStore ??= new InMemoryEventStore();
         var servicesCollection = new ServiceCollection()
@@ -421,6 +433,8 @@ public sealed class ConversationGAgentTargetActorIdTests
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         if (workflowDispatcher is not null)
             servicesCollection.AddSingleton(workflowDispatcher);
+        if (runtimeSecretStore is not null)
+            servicesCollection.AddSingleton(runtimeSecretStore);
 
         var services = servicesCollection.BuildServiceProvider();
 

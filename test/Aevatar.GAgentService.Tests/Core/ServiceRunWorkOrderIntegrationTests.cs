@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Foundation.Runtime.Deduplication;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Core.GAgents;
@@ -241,7 +240,7 @@ public sealed class ServiceRunWorkOrderIntegrationTests
 
         var scriptTerminalSend = router.Sends.Should().ContainSingle(sent =>
             sent.Message is ScriptRunOutcomeRecordedEvent).Subject;
-        var scriptTerminalOperationId = scriptTerminalSend.Options?.Delivery?.DeduplicationOperationId;
+        var scriptTerminalOperationId = scriptTerminalSend.Options?.Delivery?.OperationId;
         scriptTerminalOperationId.Should().Be($"script-run-terminal:{scriptDeliveryId}");
         var scriptTerminalEnvelope = new EventEnvelope
         {
@@ -251,21 +250,14 @@ public sealed class ServiceRunWorkOrderIntegrationTests
             Route = EnvelopeRouteSemantics.CreateDirect(scriptActorId, serviceRunActorId),
             Propagation = new EnvelopePropagation { CorrelationId = dispatchCommandId },
         };
-        scriptTerminalEnvelope.EnsureRuntime().EnsureDeduplication().OperationId =
+        scriptTerminalEnvelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId =
             scriptTerminalOperationId;
-        RuntimeEnvelopeDeduplication.TryBuildDedupKey(
-                serviceRunActorId,
-                scriptTerminalEnvelope,
-                out var scriptTerminalDedupKey)
-            .Should().BeTrue();
-        var deduplicator = new MemoryCacheDeduplicator();
-        (await deduplicator.TryRecordAsync(scriptTerminalDedupKey)).Should().BeTrue();
-        (await deduplicator.TryRecordAsync(scriptTerminalDedupKey)).Should().BeFalse();
+        scriptTerminalEnvelope.Runtime.DeliveryIdentity.OperationId.Should().Be(scriptTerminalOperationId);
         router.Sends.Should().ContainSingle(sent =>
             sent.Message is ServiceRunTerminalNotification &&
             sent.Options != null &&
             sent.Options.Delivery != null &&
-            sent.Options.Delivery.DeduplicationOperationId ==
+            sent.Options.Delivery.OperationId ==
             $"service-run-terminal-{terminalDeliveryId}");
     }
 

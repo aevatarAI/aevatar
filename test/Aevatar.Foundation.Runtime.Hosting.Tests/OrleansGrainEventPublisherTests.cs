@@ -36,6 +36,7 @@ public class OrleansGrainEventPublisherTests
             {
                 StateEvent = new StateEvent
                 {
+                    EventId = "committed-event-observe",
                     EventData = Any.Pack(new StringValue { Value = "committed" }),
                 },
             },
@@ -43,6 +44,7 @@ public class OrleansGrainEventPublisherTests
             CancellationToken.None);
 
         var delivered = streams.GetProduced("actor-observe").Should().ContainSingle().Subject;
+        delivered.Id.Should().Be("committed-event-observe");
         delivered.Payload!.Unpack<CommittedStateEventPublished>()
             .StateEvent.EventData.Unpack<StringValue>().Value.Should().Be("committed");
         delivered.Route!.IsObserverPublication().Should().BeTrue();

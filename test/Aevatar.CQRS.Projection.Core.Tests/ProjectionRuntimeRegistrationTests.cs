@@ -386,14 +386,15 @@ public sealed class ProjectionRuntimeRegistrationTests
     [Fact]
     public void ProjectionFailureRetentionPolicy_ShouldTrimOldestFailures()
     {
-        var failures = new Google.Protobuf.Collections.RepeatedField<ProjectionScopeFailure>();
-        failures.Add(new ProjectionScopeFailure { FailureId = "f1" });
-        failures.Add(new ProjectionScopeFailure { FailureId = "f2" });
-        failures.Add(new ProjectionScopeFailure { FailureId = "f3" });
+        var failures = new Google.Protobuf.Collections.RepeatedField<ProjectionFailureDiagnostic>();
+        failures.Add(new ProjectionFailureDiagnostic { FailureId = "f1" });
+        failures.Add(new ProjectionFailureDiagnostic { FailureId = "f2" });
+        failures.Add(new ProjectionFailureDiagnostic { FailureId = "f3" });
 
-        ProjectionFailureRetentionPolicy.Trim(failures, 2);
+        var dropped = ProjectionFailureRetentionPolicy.Trim(failures, 2);
 
         failures.Select(x => x.FailureId).Should().Equal("f2", "f3");
+        dropped.Select(x => x.FailureId).Should().Equal("f1");
     }
 
     [Fact]
@@ -401,6 +402,7 @@ public sealed class ProjectionRuntimeRegistrationTests
     {
         var sink = new LoggingProjectionFailureAlertSink();
         var alert = new ProjectionFailureAlert(
+            ProjectionFailureAlertKind.FailureRecorded,
             new ProjectionRuntimeScopeKey("actor-4", "projection-d", ProjectionRuntimeMode.DurableMaterialization),
             "failure-1",
             "projection-execution",
@@ -409,6 +411,9 @@ public sealed class ProjectionRuntimeRegistrationTests
             9,
             "boom",
             1,
+            0,
+            [],
+            0,
             DateTimeOffset.UtcNow);
 
         Func<Task> nullAct = () => sink.PublishAsync(null!);

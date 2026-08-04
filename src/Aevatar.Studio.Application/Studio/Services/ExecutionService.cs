@@ -239,7 +239,7 @@ public sealed class ExecutionService
             StartedAtUtc: run.CreatedAt,
             CompletedAtUtc: IsTerminalServiceRunStatus(run.Status) ? run.UpdatedAt : null,
             ActorId: run.TargetActorId,
-            Error: run.Status == ServiceRunStatus.Failed ? "service run failed" : null,
+            Error: ResolveServiceRunError(run.Status),
             Frames: []);
     }
 
@@ -253,7 +253,7 @@ public sealed class ExecutionService
             StartedAtUtc: run.CreatedAt,
             CompletedAtUtc: IsTerminalServiceRunStatus(run.Status) ? run.UpdatedAt : null,
             ActorId: run.TargetActorId,
-            Error: run.Status == ServiceRunStatus.Failed ? "service run failed" : null);
+            Error: ResolveServiceRunError(run.Status));
     }
 
     private async Task<string> ResolveRuntimeBaseUrlAsync(CancellationToken ct)
@@ -288,16 +288,28 @@ public sealed class ExecutionService
         ServiceRunStatus.Completed => "completed",
         ServiceRunStatus.Failed => "failed",
         ServiceRunStatus.Stopped => "stopped",
+        ServiceRunStatus.OutcomeUncertain => "outcome_uncertain",
         _ => "unknown",
     };
 
     private static bool IsTerminalServiceRunStatus(ServiceRunStatus status) =>
-        status is ServiceRunStatus.Completed or ServiceRunStatus.Failed or ServiceRunStatus.Stopped;
+        status is ServiceRunStatus.Completed or
+            ServiceRunStatus.Failed or
+            ServiceRunStatus.Stopped or
+            ServiceRunStatus.OutcomeUncertain;
+
+    private static string? ResolveServiceRunError(ServiceRunStatus status) => status switch
+    {
+        ServiceRunStatus.Failed => "service run failed",
+        ServiceRunStatus.OutcomeUncertain => "service run outcome is uncertain",
+        _ => null,
+    };
 
     private static bool IsTerminalExecutionStatus(string status) =>
         string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(status, "stopped", StringComparison.OrdinalIgnoreCase);
+        string.Equals(status, "stopped", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, "outcome_uncertain", StringComparison.OrdinalIgnoreCase);
 
     private static string NormalizeRequired(string value, string fieldName)
     {
