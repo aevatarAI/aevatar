@@ -69,26 +69,16 @@ public sealed class NyxIdCodeExecuteTool : INyxIdBuiltInTool
             if (root.ValueKind != JsonValueKind.Object)
                 return null;
 
+            if (root.TryGetProperty("success", out var success))
+                return CreateChronoSandboxReceipt(callId, toolName, root, success);
+
             var hasError = root.TryGetProperty("error", out _);
             var exitCodeValue = 0;
             var hasExitCode = root.TryGetProperty("exit_code", out var exitCode) &&
                               exitCode.TryGetInt32(out exitCodeValue);
             var nonZeroExit = hasExitCode && exitCodeValue != 0;
             if (hasError || nonZeroExit)
-            {
-                const string errorCode = "CODE_EXECUTE_FAILED";
-                const string errorMessage = "Code execution failed.";
-                return new AgentToolReceipt
-                {
-                    CallId = callId ?? string.Empty,
-                    ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
-                    Status = AgentToolReceiptStatus.Error,
-                    ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
-                    ErrorCode = errorCode,
-                    ErrorMessage = errorMessage,
-                    ResultJson = "{\"error\":\"CODE_EXECUTE_FAILED\",\"message\":\"Code execution failed.\"}",
-                };
-            }
+                return CreateFailureReceipt(callId, toolName);
 
             if (!hasExitCode)
                 return null;
@@ -98,14 +88,58 @@ public sealed class NyxIdCodeExecuteTool : INyxIdBuiltInTool
             return null;
         }
 
-        return new AgentToolReceipt
+        return CreateSuccessReceipt(callId, toolName);
+    }
+
+    private AgentToolReceipt? CreateChronoSandboxReceipt(
+        string callId,
+        string toolName,
+        JsonElement root,
+        JsonElement success)
+    {
+        if (success.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
+            !root.TryGetProperty("output", out var output) ||
+            output.ValueKind != JsonValueKind.Object ||
+            !output.TryGetProperty("exit_code", out var exitCode) ||
+            !exitCode.TryGetInt32(out var exitCodeValue))
+        {
+            return null;
+        }
+
+        if (success.GetBoolean())
+        {
+            return exitCodeValue == 0 && !root.TryGetProperty("error", out _)
+                ? CreateSuccessReceipt(callId, toolName)
+                : null;
+        }
+
+        return exitCodeValue != 0 &&
+               root.TryGetProperty("error", out var error) &&
+               error.ValueKind == JsonValueKind.Object
+            ? CreateFailureReceipt(callId, toolName)
+            : null;
+    }
+
+    private AgentToolReceipt CreateSuccessReceipt(string callId, string toolName) =>
+        new()
         {
             CallId = callId ?? string.Empty,
             ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
             Status = AgentToolReceiptStatus.Success,
             ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
         };
-    }
+
+    private AgentToolReceipt CreateFailureReceipt(string callId, string toolName) =>
+        new()
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+            Status = AgentToolReceiptStatus.Error,
+            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            ErrorCode = "CODE_EXECUTE_FAILED",
+            ErrorMessage = "Code execution failed.",
+            ResultJson = "{\"error\":\"CODE_EXECUTE_FAILED\",\"message\":\"Code execution failed.\"}",
+        };
 
     public string ParametersSchema => """
         {
