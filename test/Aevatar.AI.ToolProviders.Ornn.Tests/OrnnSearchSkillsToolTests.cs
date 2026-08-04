@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Skills;
@@ -25,6 +26,71 @@ public sealed class OrnnSearchSkillsToolTests
         // The model-facing `scope` knob is intentionally gone: a discovery-for-use tool must never
         // let the model narrow visibility and hide skills it can actually use. Always searches mixed.
         schema.RootElement.GetProperty("properties").TryGetProperty("scope", out _).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(
+        """
+        {
+          "result_type": "skill_search",
+          "status": "success",
+          "matches": [{ "skill_name": "invoice-approval" }],
+          "text": "Found 1 skill"
+        }
+        """)]
+    [InlineData(
+        """{"result_type":"skill_search","status":"no_match","matches":[],"text":"No skills found"}""")]
+    public void CreateResultReceipt_WithCompletedSearchOutcome_ReturnsVerifiedSuccess(string resultJson)
+    {
+        var tool = CreateTool(OrnnTestHttpMessageHandler.ReturningJson("""{ "data": { "items": [] } }"""));
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt("call-search", tool.Name, "{}", resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.ResultJson.Should().Be(resultJson);
+    }
+
+    [Fact]
+    public void CreateResultReceipt_WithSearchError_ReturnsTypedFailure()
+    {
+        var tool = CreateTool(OrnnTestHttpMessageHandler.ReturningJson("""{ "data": { "items": [] } }"""));
+        const string resultJson =
+            """
+            {
+              "result_type": "skill_search",
+              "status": "error",
+              "error": "upstream unavailable",
+              "matches": [],
+              "text": "Search failed"
+            }
+            """;
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt("call-search", tool.Name, "{}", resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("ORNN_SKILL_SEARCH_FAILED");
+        receipt.ResultJson.Should().Be(resultJson);
+    }
+
+    [Theory]
+    [InlineData("not-json")]
+    [InlineData("""{"result_type":"skill_search","status":"success","matches":[]}""")]
+    [InlineData(
+        """
+        {"result_type":"skill_search","status":"success","error":"failed","matches":[{"skill_name":"invoice-approval"}]}
+        """)]
+    [InlineData("""{"result_type":1,"status":"success","matches":[{"skill_name":"invoice-approval"}]}""")]
+    [InlineData("""{"result_type":"skill_search","status":"unknown","matches":[]}""")]
+    [InlineData("""{"result_type":"other","status":"success","matches":[]}""")]
+    public void CreateResultReceipt_WithUnverifiedPayload_ReturnsNull(string resultJson)
+    {
+        var tool = CreateTool(OrnnTestHttpMessageHandler.ReturningJson("""{ "data": { "items": [] } }"""));
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt("call-search", tool.Name, "{}", resultJson);
+
+        receipt.Should().BeNull();
     }
 
     [Fact]

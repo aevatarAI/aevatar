@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Skills;
@@ -56,6 +57,57 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
     public bool IsReadOnly => true;
 
     public string SideEffectKind => "";
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("result_type", out var resultType) ||
+                resultType.ValueKind != JsonValueKind.String ||
+                !string.Equals(resultType.GetString(), "skill_search", StringComparison.Ordinal) ||
+                !root.TryGetProperty("status", out var statusValue) ||
+                statusValue.ValueKind != JsonValueKind.String ||
+                !root.TryGetProperty("matches", out var matches) ||
+                matches.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            var status = statusValue.GetString();
+            if (HasNoError(root) &&
+                ((string.Equals(status, "success", StringComparison.Ordinal) && HasNamedMatch(matches)) ||
+                 (string.Equals(status, "no_match", StringComparison.Ordinal) && matches.GetArrayLength() == 0)))
+            {
+                return Receipt(callId, toolName, AgentToolReceiptStatus.Success, resultJson);
+            }
+
+            if (string.Equals(status, "error", StringComparison.Ordinal) &&
+                matches.GetArrayLength() == 0 &&
+                HasNonEmptyString(root, "error"))
+            {
+                return Receipt(
+                    callId,
+                    toolName,
+                    AgentToolReceiptStatus.Error,
+                    resultJson,
+                    "ORNN_SKILL_SEARCH_FAILED",
+                    "Ornn skill search failed.");
+            }
+
+            return null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
@@ -151,6 +203,49 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
             httpStatus: null,
             text: string.Join("\n", lines));
     }
+
+    private static bool HasNamedMatch(JsonElement matches)
+    {
+        foreach (var match in matches.EnumerateArray())
+        {
+            if (match.ValueKind == JsonValueKind.Object && HasNonEmptyString(match, "skill_name"))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool HasNonEmptyString(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var value) &&
+        value.ValueKind == JsonValueKind.String &&
+        !string.IsNullOrWhiteSpace(value.GetString());
+
+    private static bool HasNoError(JsonElement root)
+    {
+        if (!root.TryGetProperty("error", out var error) || error.ValueKind == JsonValueKind.Null)
+            return true;
+
+        return error.ValueKind == JsonValueKind.String && string.IsNullOrWhiteSpace(error.GetString());
+    }
+
+    private AgentToolReceipt Receipt(
+        string callId,
+        string toolName,
+        AgentToolReceiptStatus status,
+        string resultJson,
+        string errorCode = "",
+        string errorMessage = "") =>
+        new()
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+            Status = status,
+            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            IsDestructive = false,
+            ResultJson = resultJson ?? string.Empty,
+            ErrorCode = errorCode,
+            ErrorMessage = errorMessage,
+        };
 
     private static string BuildStructuredResult(
         string status,
