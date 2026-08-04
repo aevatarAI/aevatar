@@ -65,9 +65,13 @@ public sealed class UseSkillTool : IAgentTool
               "type": "boolean",
               "description": "When true, mount the skill's workflow YAML bundles into the current scope as callable workflows. Omit or set false to load instructions without changing workflows."
             },
+            "workflow_mount_confirmation_token": {
+              "type": "string",
+              "description": "Exact opaque confirmation_token returned by a prior read-only mount preview. Supplying it with mount_workflows=true makes the call approval-gated; prefer this over copying confirmation objects."
+            },
             "workflow_mount_confirmations": {
               "type": "array",
-              "description": "Exact confirmation objects returned by a prior read-only mount preview. Supplying these makes the call approval-gated and, after approval, mounts only the matching workflow revisions.",
+              "description": "Legacy exact confirmation objects returned by a prior read-only mount preview. New calls should use workflow_mount_confirmation_token.",
               "items": {
                 "type": "object",
                 "additionalProperties": false,
@@ -137,14 +141,13 @@ public sealed class UseSkillTool : IAgentTool
     public bool? RequiresApproval(string argumentsJson)
     {
         var arguments = ParseArguments(argumentsJson);
-        return arguments.MountWorkflows == true && arguments.WorkflowMountConfirmations.Count > 0;
+        return arguments.MountWorkflows == true && arguments.HasMountConfirmation;
     }
 
     public AgentToolCallSafety GetCallSafety(string argumentsJson)
     {
         var arguments = ParseArguments(argumentsJson);
-        var approvedMountRequested = arguments.MountWorkflows == true &&
-                                     arguments.WorkflowMountConfirmations.Count > 0;
+        var approvedMountRequested = arguments.MountWorkflows == true && arguments.HasMountConfirmation;
         return new AgentToolCallSafety(
             RequiresApproval: approvedMountRequested,
             IsReadOnly: !approvedMountRequested,
@@ -158,8 +161,7 @@ public sealed class UseSkillTool : IAgentTool
         string resultJson)
     {
         var arguments = ParseArguments(argumentsJson);
-        var sideEffectKind = arguments.MountWorkflows == true &&
-                             arguments.WorkflowMountConfirmations.Count > 0
+        var sideEffectKind = arguments.MountWorkflows == true && arguments.HasMountConfirmation
             ? "workflow.mount"
             : string.Empty;
         try
@@ -270,6 +272,7 @@ public sealed class UseSkillTool : IAgentTool
                 text: BuildSkillResponse(skill, args),
                 skill: skill,
                 mountWorkflows: ShouldMountWorkflows(requestedMountWorkflows),
+                workflowMountConfirmationToken: arguments.WorkflowMountConfirmationToken,
                 workflowMountConfirmations: arguments.WorkflowMountConfirmations,
                 ct: ct);
 
@@ -315,6 +318,7 @@ public sealed class UseSkillTool : IAgentTool
                         text: BuildSkillResponse(skill, args),
                         skill: skill,
                         mountWorkflows: ShouldMountWorkflows(requestedMountWorkflows),
+                        workflowMountConfirmationToken: arguments.WorkflowMountConfirmationToken,
                         workflowMountConfirmations: arguments.WorkflowMountConfirmations,
                         ct: ct);
                 }
@@ -337,6 +341,7 @@ public sealed class UseSkillTool : IAgentTool
         string text,
         SkillDefinition? skill,
         bool mountWorkflows,
+        string workflowMountConfirmationToken,
         IReadOnlyList<SkillWorkflowMountConfirmation> workflowMountConfirmations,
         CancellationToken ct)
     {
@@ -346,6 +351,7 @@ public sealed class UseSkillTool : IAgentTool
         {
             var mountRenderResult = await BuildWorkflowMountRenderResultAsync(
                 skill,
+                workflowMountConfirmationToken,
                 workflowMountConfirmations,
                 ct);
             workflowMount = mountRenderResult.Payload;
@@ -364,11 +370,13 @@ public sealed class UseSkillTool : IAgentTool
 
     private async Task<WorkflowMountRenderResult> BuildWorkflowMountRenderResultAsync(
         SkillDefinition? skill,
+        string workflowMountConfirmationToken,
         IReadOnlyList<SkillWorkflowMountConfirmation> workflowMountConfirmations,
         CancellationToken ct)
     {
         var workflowMount = await TryMountWorkflowsAsync(
             skill,
+            workflowMountConfirmationToken,
             workflowMountConfirmations,
             ct);
         return new WorkflowMountRenderResult(
@@ -378,6 +386,7 @@ public sealed class UseSkillTool : IAgentTool
 
     private async Task<SkillWorkflowMountResult> TryMountWorkflowsAsync(
         SkillDefinition? skill,
+        string workflowMountConfirmationToken,
         IReadOnlyList<SkillWorkflowMountConfirmation> workflowMountConfirmations,
         CancellationToken ct)
     {
@@ -431,6 +440,7 @@ public sealed class UseSkillTool : IAgentTool
                     workflowMountConfirmations)
                 {
                     CallerId = callerId.Trim(),
+                    ConfirmationToken = workflowMountConfirmationToken,
                 },
                 ct);
         }
@@ -461,13 +471,14 @@ public sealed class UseSkillTool : IAgentTool
         string skillName = "";
         string args = "";
         bool? mountWorkflows = null;
+        string workflowMountConfirmationToken = "";
         IReadOnlyList<SkillWorkflowMountConfirmation> workflowMountConfirmations = [];
 
         try
         {
             using var doc = JsonDocument.Parse(argumentsJson);
             if (doc.RootElement.ValueKind != JsonValueKind.Object)
-                return new UseSkillArguments("", "", null, []);
+                return new UseSkillArguments("", "", null, "", []);
 
             if (doc.RootElement.TryGetProperty("skill", out var s) && s.ValueKind == JsonValueKind.String)
                 skillName = s.GetString() ?? "";
@@ -477,6 +488,11 @@ public sealed class UseSkillTool : IAgentTool
                 (m.ValueKind == JsonValueKind.True || m.ValueKind == JsonValueKind.False))
             {
                 mountWorkflows = m.GetBoolean();
+            }
+            if (doc.RootElement.TryGetProperty("workflow_mount_confirmation_token", out var token) &&
+                token.ValueKind == JsonValueKind.String)
+            {
+                workflowMountConfirmationToken = token.GetString()?.Trim() ?? string.Empty;
             }
             if (doc.RootElement.TryGetProperty("workflow_mount_confirmations", out var confirmations) &&
                 confirmations.ValueKind == JsonValueKind.Array)
@@ -489,13 +505,14 @@ public sealed class UseSkillTool : IAgentTool
         }
         catch (JsonException)
         {
-            return new UseSkillArguments("", "", null, []);
+            return new UseSkillArguments("", "", null, "", []);
         }
 
         return new UseSkillArguments(
             skillName,
             args,
             mountWorkflows,
+            workflowMountConfirmationToken,
             workflowMountConfirmations);
     }
 
@@ -751,7 +768,12 @@ public sealed class UseSkillTool : IAgentTool
         string SkillName,
         string Args,
         bool? MountWorkflows,
-        IReadOnlyList<SkillWorkflowMountConfirmation> WorkflowMountConfirmations);
+        string WorkflowMountConfirmationToken,
+        IReadOnlyList<SkillWorkflowMountConfirmation> WorkflowMountConfirmations)
+    {
+        public bool HasMountConfirmation =>
+            !string.IsNullOrWhiteSpace(WorkflowMountConfirmationToken) || WorkflowMountConfirmations.Count > 0;
+    }
 
     private static readonly JsonSerializerOptions SnakeCaseJson = new()
     {

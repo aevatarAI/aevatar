@@ -20,6 +20,8 @@ public sealed record SkillWorkflowMountRequest(
 {
     public string CallerId { get; init; } = string.Empty;
 
+    public string ConfirmationToken { get; init; } = string.Empty;
+
     public override string ToString() =>
         $"{nameof(SkillWorkflowMountRequest)} {{ ScopeId = {ScopeId}, CallerId = {CallerId}, Credentials = [REDACTED], Workflows = [REDACTED], WorkflowCount = {Workflows.Count} }}";
 }
@@ -30,7 +32,8 @@ public sealed record SkillWorkflowMountResult(
     IReadOnlyList<MountedSkillWorkflow> Workflows,
     string? Message = null,
     IReadOnlyList<SkillWorkflowMountPreview>? ConfirmationRequests = null,
-    string? FailureCode = null);
+    string? FailureCode = null,
+    string? ConfirmationToken = null);
 
 public sealed record SkillWorkflowMountConfirmation(
     string WorkflowId,

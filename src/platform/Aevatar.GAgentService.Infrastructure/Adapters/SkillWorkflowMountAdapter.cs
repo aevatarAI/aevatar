@@ -75,8 +75,13 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort
         CancellationToken ct)
     {
         var confirmations = request.Confirmations ?? [];
-        var confirmationStage = confirmations.Count > 0;
-        if (confirmationStage && confirmations.Count != request.Workflows.Count)
+        var suppliedToken = request.ConfirmationToken?.Trim() ?? string.Empty;
+        var tokenStage = !string.IsNullOrWhiteSpace(suppliedToken);
+        var legacyConfirmationStage = confirmations.Count > 0;
+        var confirmationStage = tokenStage || legacyConfirmationStage;
+        if (tokenStage && legacyConfirmationStage)
+            return ConfirmationMismatch("Use one workflow confirmation contract, not both.");
+        if (legacyConfirmationStage && confirmations.Count != request.Workflows.Count)
             return ConfirmationMismatch("Workflow confirmation count does not match the skill workflow count.");
         if (confirmations.Any(static confirmation => confirmation is null))
             return ConfirmationMismatch("Workflow confirmations cannot contain null values.");
@@ -107,7 +112,7 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort
                 throw new InvalidOperationException($"Skill workflow '{workflowId}' is duplicated.");
 
             SkillWorkflowMountConfirmation? suppliedConfirmation = null;
-            if (confirmationStage &&
+            if (legacyConfirmationStage &&
                 !confirmationByWorkflowId.TryGetValue(workflowId, out suppliedConfirmation))
             {
                 return ConfirmationMismatch("A workflow confirmation does not match this skill package.");
@@ -116,7 +121,7 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort
             var bundle = await ParseBundleAsync(workflow, ct);
             var bundleDigest = ComputeWorkflowBundleDigest(workflow.WorkflowYamls);
             var revisionId = CreateRevisionId(bundleDigest);
-            if (confirmationStage &&
+            if (legacyConfirmationStage &&
                 !string.Equals(suppliedConfirmation!.RevisionId, revisionId, StringComparison.Ordinal))
                 return ConfirmationMismatch("Workflow confirmation revision identity is invalid.");
 
@@ -131,7 +136,7 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort
                     workflow.WorkflowYamls),
                 ct);
             var expectedConfirmation = BuildConfirmation(preview, bundleDigest);
-            if (confirmationStage && !MatchesConfirmation(suppliedConfirmation!, expectedConfirmation))
+            if (legacyConfirmationStage && !MatchesConfirmation(suppliedConfirmation!, expectedConfirmation))
                 return ConfirmationMismatch("Workflow content or external request confirmation changed after review.");
 
             prepared.Add(new PreparedWorkflowMount(
@@ -141,14 +146,19 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort
                 BuildPreview(preview, bundleDigest, expectedConfirmation)));
         }
 
+        var expectedToken = ComputeConfirmationToken(prepared.Select(static item => item.Confirmation));
+        if (tokenStage && !FixedTimeEquals(suppliedToken, expectedToken))
+            return ConfirmationMismatch("Workflow content or external request confirmation changed after review.");
+
         if (!confirmationStage)
         {
             return new SkillWorkflowMountResult(
                 Status: "confirmation_required",
                 Mounted: false,
                 Workflows: [],
-                Message: "Review every confirmation request, then call use_skill again with the same skill, mount_workflows=true, and workflow_mount_confirmations set to each confirmation_requests[].confirmation. The second call requires durable approval before any workflow is changed.",
-                ConfirmationRequests: prepared.Select(static item => item.Preview).ToArray());
+                Message: "Review every confirmation request, then call use_skill again with the same skill, mount_workflows=true, and workflow_mount_confirmation_token set to the exact confirmation_token. The second call requires durable approval before any workflow is changed.",
+                ConfirmationRequests: prepared.Select(static item => item.Preview).ToArray(),
+                ConfirmationToken: expectedToken);
         }
 
         var mounted = new List<MountedSkillWorkflow>(prepared.Count);
@@ -327,6 +337,35 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort
         var canonicalBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(workflowYamls));
         return $"sha256:{Convert.ToHexString(SHA256.HashData(canonicalBytes)).ToLowerInvariant()}";
     }
+
+    private static string ComputeConfirmationToken(IEnumerable<SkillWorkflowMountConfirmation> confirmations)
+    {
+        var canonical = confirmations
+            .OrderBy(static confirmation => confirmation.WorkflowId, StringComparer.Ordinal)
+            .Select(static confirmation => new
+            {
+                confirmation.WorkflowId,
+                confirmation.RevisionId,
+                confirmation.WorkflowBundleDigest,
+                ExplicitRequests = confirmation.ExplicitRequests
+                    .OrderBy(static item => item.CallSiteId, StringComparer.Ordinal)
+                    .Select(static item => new
+                    {
+                        item.CallSiteId,
+                        item.RequestContractDigest,
+                        AttestedRisk = item.AttestedRisk.ToString(),
+                    })
+                    .ToArray(),
+            })
+            .ToArray();
+        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(canonical));
+        return $"sha256:{Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant()}";
+    }
+
+    private static bool FixedTimeEquals(string supplied, string expected) =>
+        CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(supplied),
+            Encoding.UTF8.GetBytes(expected));
 
     private static string CreateRevisionId(string bundleDigest)
     {

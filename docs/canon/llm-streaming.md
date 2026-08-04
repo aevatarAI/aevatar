@@ -451,7 +451,7 @@ LLM 文本不是外部写操作结果的事实源。只有同一 turn 内 `Statu
 | `Success` | 仅在 tool、side effect 与 typed subject 同样匹配时，允许支撑对应动作的成功声明。 |
 | `Error` / `ApprovalRequired` / `Denied` / `AuthorizationRequired` / `Unspecified` | 用 deterministic receipt text 替换模型成功叙述，并同时写入 streaming snapshot、reply、outbound intent 与本 turn assistant history；必须保持用户可见。`ApprovalRequired` 的确定性文案保留 approval request evidence。 |
 
-Assistant tool-call history 中与 blocking receipt 匹配的 narrative 必须清空，同时保留 tool call/result pairing，避免下一 turn 重放虚假成功。Read-only failure 可以追加为用户可见诊断，但不替换一个其他方面有效的回答；追加后的实际可见文本也必须同步进 retained history。`use_skill` 省略 `mount_workflows` 时只是 read-only 的 skill/instruction load，该成功回执不能证明 workflow mount；`mount_workflows=true` 是单独的 mutating operation，只有其 matching successful mutating receipt 才能证明挂载完成。
+Assistant tool-call history 中与 blocking receipt 匹配的 narrative 必须清空，同时保留 tool call/result pairing，避免下一 turn 重放虚假成功。Read-only failure 可以追加为用户可见诊断，但不替换一个其他方面有效的回答；追加后的实际可见文本也必须同步进 retained history。`use_skill` 省略 `mount_workflows` 时只是 read-only 的 skill/instruction load，该成功回执不能证明 workflow mount；首次 `mount_workflows=true` 仍是 read-only preview，返回服务端可重算的 `workflow_mount_confirmation_token`。携带该 token 的二次调用才是 approval-gated mutating operation，批准后必须重算全部 workflow/capability confirmation 并校验 token；只有其 matching successful mutating receipt 才能证明挂载完成。
 
 ### 8.2 WorkflowRunEvent（输出统一事件）
 

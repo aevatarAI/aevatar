@@ -140,6 +140,63 @@ public sealed class SkillWorkflowMountAdapterTests
         result.Workflows[0].EndpointId.Should().Be("chat");
     }
 
+    [Fact]
+    public async Task MountAsync_WithOpaquePreviewToken_MountsServerRecomputedConfirmations()
+    {
+        const string yaml = "name: guarded_workflow\nsteps: []";
+        var commandPort = new RecordingScopeWorkflowCommandPort();
+        var adapter = new SkillWorkflowMountAdapter(
+            commandPort,
+            new StubWorkflowDefinitionParser(new Dictionary<string, string>
+            {
+                [yaml] = "guarded_workflow",
+            }),
+            new RecordingWorkflowExplicitRequestPreviewService(
+            [
+                ExplicitRequestPreview(),
+            ]));
+        var request = MountRequest("guarded_workflow", yaml);
+
+        var preview = await adapter.MountAsync(request);
+        var result = await adapter.MountAsync(request with
+        {
+            ConfirmationToken = preview.ConfirmationToken!,
+        });
+
+        preview.Status.Should().Be("confirmation_required");
+        preview.ConfirmationToken.Should().StartWith("sha256:").And.HaveLength(71);
+        result.Status.Should().Be("mounted");
+        commandPort.Requests.Should().ContainSingle();
+        commandPort.Requests[0].CapabilityAdmission!.ExplicitRequestConfirmations.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task MountAsync_WithChangedOpaquePreviewToken_RejectsBeforeUpsert()
+    {
+        const string yaml = "name: guarded_workflow\nsteps: []";
+        var commandPort = new RecordingScopeWorkflowCommandPort();
+        var adapter = new SkillWorkflowMountAdapter(
+            commandPort,
+            new StubWorkflowDefinitionParser(new Dictionary<string, string>
+            {
+                [yaml] = "guarded_workflow",
+            }),
+            new RecordingWorkflowExplicitRequestPreviewService(
+            [
+                ExplicitRequestPreview(),
+            ]));
+        var request = MountRequest("guarded_workflow", yaml);
+
+        var result = await adapter.MountAsync(request with
+        {
+            ConfirmationToken = "sha256:forged",
+        });
+
+        result.Status.Should().Be("confirmation_mismatch");
+        result.FailureCode.Should().Be("USE_SKILL_MOUNT_CONFIRMATION_MISMATCH");
+        commandPort.Requests.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData("revision")]
     [InlineData("bundle")]

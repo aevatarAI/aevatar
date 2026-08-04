@@ -259,6 +259,13 @@ public sealed class SkillWorkflowsWiringTests
     public void UseSkillTool_MountPreviewIsReadOnly_AndConfirmedMountRequiresApproval()
     {
         var tool = new UseSkillTool(new LocalSkillCatalog());
+        const string tokenMount = """
+            {
+              "skill": "translator",
+              "mount_workflows": true,
+              "workflow_mount_confirmation_token": "sha256:alpha"
+            }
+            """;
 
         const string confirmedMount = """
             {
@@ -282,12 +289,19 @@ public sealed class SkillWorkflowsWiringTests
                 RequiresApproval: false,
                 IsReadOnly: true,
                 IsDestructive: false));
+        tool.RequiresApproval(tokenMount).Should().BeTrue();
+        ((IAgentTool)tool).GetCallSafety(tokenMount).Should().Be(
+            new AgentToolCallSafety(
+                RequiresApproval: true,
+                IsReadOnly: false,
+                IsDestructive: false));
         tool.RequiresApproval(confirmedMount).Should().BeTrue();
         ((IAgentTool)tool).GetCallSafety(confirmedMount).Should().Be(
             new AgentToolCallSafety(
                 RequiresApproval: true,
                 IsReadOnly: false,
                 IsDestructive: false));
+        tool.ParametersSchema.Should().Contain("workflow_mount_confirmation_token");
     }
 
     [Fact]
@@ -477,6 +491,25 @@ public sealed class SkillWorkflowsWiringTests
         output.Should().Contain("## Mounted Workflows");
         output.Should().Contain("\"status\": \"confirmation_required\"");
         output.Should().Contain("\"confirmation_requests\"");
+    }
+
+    [Fact]
+    public async Task UseSkillTool_ConfirmedMount_PassesOpaqueConfirmationTokenWithoutMutation()
+    {
+        using var _ = BeginContextScope(
+            scopeId: "scope-alpha",
+            token: "token-alpha",
+            ownerSubject: "owner-alpha",
+            nyxIdUserId: "nyx-user-alpha");
+        var mountPort = new RecordingSkillWorkflowMountPort();
+        var tool = new UseSkillTool(CreateCatalogWithWorkflowSkill(), workflowMountPort: mountPort);
+
+        await tool.ExecuteAsync(
+            """{"skill":"translator","mount_workflows":true,"workflow_mount_confirmation_token":"sha256:opaque-alpha"}""");
+
+        mountPort.Requests.Should().ContainSingle();
+        mountPort.Requests[0].ConfirmationToken.Should().Be("sha256:opaque-alpha");
+        mountPort.Requests[0].Confirmations.Should().BeEmpty();
     }
 
     [Theory]
