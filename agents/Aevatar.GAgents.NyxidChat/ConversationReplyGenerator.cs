@@ -337,10 +337,11 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             replyPlan.Primary,
             replyPlan.PrimaryControl,
             replyPlan.PrimaryToolContext);
+        var isChannelRelayTurn = IsChannelRelayTurn(toolContext);
         var tools = turnCatalog is null
             ? await BuildTurnToolsAsync(
                 disableTools,
-                IsChannelRelayTurn(toolContext),
+                isChannelRelayTurn,
                 effectiveToolContext,
                 ct)
             : BuildProfileTools(disableTools, turnCatalog);
@@ -353,6 +354,16 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         var inputFileRefs = CollectInputFileRefs(input.Parts);
         effectiveToolContext = WithInputFileRefs(effectiveToolContext, inputFileRefs);
         var ownerFallbackToolContext = WithInputFileRefs(replyPlan.OwnerFallbackToolContext, inputFileRefs);
+        LogChannelLlmToolPlan(
+            "actor-step",
+            isChannelRelayTurn,
+            forceDisableTools,
+            replyPlan.DisableTools,
+            disableTools,
+            turnCatalog,
+            effectiveToolContext,
+            inputFileRefs,
+            tools);
 
         var runtime = BuildRuntime(
             activity,
@@ -399,6 +410,40 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         if (!disableTools)
             tools.Register(turnCatalog.RouteOwnedTools.Values);
         return tools;
+    }
+
+    private void LogChannelLlmToolPlan(
+        string surface,
+        bool isChannelRelayTurn,
+        bool forceDisableTools,
+        bool replyPlanDisableTools,
+        bool disableTools,
+        AgentProfileTurnCatalog? turnCatalog,
+        AgentToolExecutionContext toolContext,
+        IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef> inputFileRefs,
+        ToolManager tools)
+    {
+        var isNyxIdChatTurn = IsNyxIdChatTurn(toolContext);
+        if (!isChannelRelayTurn && !isNyxIdChatTurn)
+            return;
+
+        var validTools = FilterValidTools(tools) ?? [];
+        _logger.LogWarning(
+            "Channel LLM tool plan prepared. surface={Surface} isChannelRelayTurn={IsChannelRelayTurn} isNyxIdChatTurn={IsNyxIdChatTurn} forceDisableTools={ForceDisableTools} replyPlanDisableTools={ReplyPlanDisableTools} disableTools={DisableTools} turnCatalogPresent={TurnCatalogPresent} profileAllowedToolCount={ProfileAllowedToolCount} profileAllowedTools={ProfileAllowedTools} routeOwnedToolCount={RouteOwnedToolCount} routeOwnedTools={RouteOwnedTools} finalToolCount={FinalToolCount} finalTools={FinalTools} inputFileRefCount={InputFileRefCount}",
+            surface,
+            isChannelRelayTurn,
+            isNyxIdChatTurn,
+            forceDisableTools,
+            replyPlanDisableTools,
+            disableTools,
+            turnCatalog is not null,
+            turnCatalog?.FinalAllowedToolNames.Count ?? 0,
+            FormatToolNames(turnCatalog?.FinalAllowedToolNames ?? Enumerable.Empty<string>()),
+            turnCatalog?.RouteOwnedTools.Count ?? 0,
+            FormatToolNames(turnCatalog?.RouteOwnedTools.Values.Select(static tool => tool.Name) ?? Enumerable.Empty<string>()),
+            validTools.Count,
+            FormatToolNames(validTools.Select(static tool => tool.Name)),
+            inputFileRefs.Count);
     }
 
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
@@ -474,7 +519,18 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 ct)
             .ConfigureAwait(false);
         input = await MaterializeUserInputPartsAsync(input, ct).ConfigureAwait(false);
-        toolContext = WithInputFileRefs(toolContext, CollectInputFileRefs(input.Parts));
+        var inputFileRefs = CollectInputFileRefs(input.Parts);
+        toolContext = WithInputFileRefs(toolContext, inputFileRefs);
+        LogChannelLlmToolPlan(
+            "direct-reply",
+            IsChannelRelayTurn(toolContext),
+            forceDisableTools: false,
+            replyPlanDisableTools: false,
+            disableTools: false,
+            turnCatalog: null,
+            toolContext,
+            inputFileRefs,
+            tools);
 
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
         //   Old pattern: NyxID reply construction passed stream_buffer_capacity into ChatRuntime after the stream loop moved to Task.Run + Channel.
