@@ -202,6 +202,53 @@ message AgentRunPendingToolAuthorization {
   string tool_definition_fingerprint = 7;
 }
 
+enum AgentRunToolResultViewStatus {
+  AGENT_RUN_TOOL_RESULT_VIEW_STATUS_UNKNOWN = 0;
+  AGENT_RUN_TOOL_RESULT_VIEW_STATUS_SUCCESS = 1;
+  AGENT_RUN_TOOL_RESULT_VIEW_STATUS_NO_MATCH = 2;
+  AGENT_RUN_TOOL_RESULT_VIEW_STATUS_NOT_FOUND = 3;
+  AGENT_RUN_TOOL_RESULT_VIEW_STATUS_ERROR = 4;
+}
+
+message AgentRunSkillSearchMatchView {
+  string skill_name = 1;
+  string description = 2;
+  bool is_private = 3;
+  string category = 4;
+  repeated string tags = 5;
+}
+
+message AgentRunSkillSearchToolResultView {
+  AgentRunToolResultViewStatus status = 1;
+  bool has_matches = 2;
+  repeated AgentRunSkillSearchMatchView matches = 3;
+  string error = 4;
+  optional int32 http_status = 5;
+  string display_text = 6;
+}
+
+message AgentRunSkillLoadToolResultView {
+  AgentRunToolResultViewStatus status = 1;
+  string skill_name = 2;
+  bool loaded = 3;
+  string error = 4;
+  optional int32 http_status = 5;
+  string display_text = 6;
+}
+
+message AgentRunToolFailureResultView {
+  aevatar.ai.AgentToolReceiptStatus status = 1;
+  string error_code = 2;
+  string safe_message = 3;
+}
+
+message AgentRunToolResultView {
+  string tool_name = 1;
+  AgentRunSkillSearchToolResultView skill_search = 2;
+  AgentRunSkillLoadToolResultView skill_load = 3;
+  AgentRunToolFailureResultView failure = 4;
+}
+
 message AgentRunChatMessage {
   string role = 1;
   string content = 2;
@@ -209,6 +256,7 @@ message AgentRunChatMessage {
   repeated aevatar.ai.ChatContentPart content_parts = 4;
   string tool_call_id = 5;
   repeated AgentRunToolCall tool_calls = 6;
+  AgentRunToolResultView tool_result_view = 7;
 }
 
 message AgentRunReplyStepState {

@@ -260,7 +260,9 @@ public sealed class ChatRuntimeStepExecutor
                 finalContent,
                 searchAttempts,
                 request.ToolContext?.Request.CallId ?? request.RequestId,
-                primarySkillAttempted: false,
+                primarySkillAttempted: SkillRecoveryPlanner.HasPrimarySkillAttempt(
+                    recoveryMessages,
+                    recovery.PrimarySkillName),
                 out var directive) ||
             directive.ToolCall is null)
         {

@@ -339,6 +339,11 @@ internal static class SkillRecoveryPlanner
         messages.Any(message =>
             message.ToolCalls?.Any(call => IsTool(call, UseSkillToolName) && ToolCallUsesSkill(call, skillName)) == true);
 
+    internal static bool HasPrimarySkillAttempt(
+        IReadOnlyList<ChatMessage> messages,
+        string? skillName) =>
+        !string.IsNullOrWhiteSpace(skillName) && HasUseSkillFor(messages, skillName);
+
     private static bool ToolCallUsesSkill(ToolCall call, string skillName)
     {
         if (string.IsNullOrWhiteSpace(skillName))

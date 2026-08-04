@@ -500,6 +500,139 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task BuildLlmStepContinuation_WithPersistedSuccessfulSkillLoad_ShouldIgnoreFailureWordsInInstructions()
+    {
+        var useSkill = new CountingTool("use_skill");
+        var searchSkills = new CountingTool("ornn_search_skills");
+        var provider = new RecordingProvider("workflow completed");
+        var recovery = new AgentSkillRecoveryContext(
+            RequireInitialOrnnSearch: false,
+            RequireOrnnSearchOnBlocker: true,
+            CommandName: "invoice-ocr-policy-review",
+            OriginalCommand: "使用精确名称为 invoice-ocr-policy-review 的 skill",
+            PrimarySkillName: "invoice-ocr-policy-review",
+            MaxOrnnSearchAttempts: 2,
+            CommandArguments: "提取发票并运行 workflow");
+        var toolContext = AgentToolExecutionContext.Empty with { SkillRecovery = recovery };
+        var executor = CreateToolEnabledExecutor(
+            [useSkill, searchSkills],
+            provider,
+            toolContext: toolContext);
+        var workItem = BuildToolEnabledWorkItem();
+        workItem.StepState.ToolContext = toolContext.ToPayload();
+        var call = new ToolCall
+        {
+            Id = "call-load-invoice-skill",
+            Name = "use_skill",
+            ArgumentsJson = "{\"skill\":\"invoice-ocr-policy-review\"}",
+        };
+        var assistant = AgentRunReplyStepMappers.ToProto(new ChatMessage
+        {
+            Role = "assistant",
+            ToolCalls = [call],
+        });
+        var result = AgentRunReplyStepMappers.ToProto(ToolCallLoop.BuildToolResultMessage(
+            call.Id,
+            call.Name,
+            "# invoice-ocr-policy-review\n\nIf extraction failed, return a typed error artifact."));
+        workItem.StepState.Messages.Add(assistant);
+        workItem.StepState.Messages.Add(result);
+        workItem.StepState.PendingHistoryMessages.Add(assistant.Clone());
+        workItem.StepState.PendingHistoryMessages.Add(result.Clone());
+
+        var roundTripped = AgentRunReplyStepMappers.FromProto(result);
+        roundTripped.ToolResultView!.SkillLoad!.Status.Should().Be(ToolResultViewStatus.Success);
+
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        provider.Requests.Should().ContainSingle();
+        execution.Continuation.LlmStepResult.Content.Should().Be("workflow completed");
+        execution.Continuation.LlmStepResult.ToolCalls.Should().BeEmpty();
+        execution.AuthorizedToolStep.Should().BeNull();
+        searchSkills.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WithPersistedStructuredSearch_ShouldLoadMatchedSkillWithoutProvider()
+    {
+        var useSkill = new CountingTool("use_skill");
+        var provider = new RecordingProvider();
+        var recovery = new AgentSkillRecoveryContext(
+            RequireInitialOrnnSearch: true,
+            RequireOrnnSearchOnBlocker: true,
+            CommandName: "invoice-review",
+            OriginalCommand: "查找并运行发票审核 skill",
+            PrimarySkillName: null,
+            MaxOrnnSearchAttempts: 2,
+            CommandArguments: "提取发票并运行 workflow");
+        var toolContext = AgentToolExecutionContext.Empty with { SkillRecovery = recovery };
+        var executor = CreateToolEnabledExecutor(useSkill, provider, toolContext: toolContext);
+        var workItem = BuildToolEnabledWorkItem();
+        workItem.StepState.ToolContext = toolContext.ToPayload();
+        var call = new ToolCall
+        {
+            Id = "call-search-invoice-skill",
+            Name = "ornn_search_skills",
+            ArgumentsJson = "{\"query\":\"invoice\",\"scope\":\"mixed\"}",
+        };
+        var assistant = AgentRunReplyStepMappers.ToProto(new ChatMessage
+        {
+            Role = "assistant",
+            ToolCalls = [call],
+        });
+        var result = AgentRunReplyStepMappers.ToProto(ToolCallLoop.BuildToolResultMessage(
+            call.Id,
+            call.Name,
+            """
+            {"result_type":"skill_search","status":"success","matches":[{"skill_name":"invoice-ocr-policy-review","description":"Review invoices","is_private":false,"category":"finance","tags":["invoice"]}],"http_status":200,"text":"one match"}
+            """));
+        workItem.StepState.Messages.Add(assistant);
+        workItem.StepState.Messages.Add(result);
+        workItem.StepState.PendingHistoryMessages.Add(assistant.Clone());
+        workItem.StepState.PendingHistoryMessages.Add(result.Clone());
+
+        var roundTripped = AgentRunReplyStepMappers.FromProto(result);
+        var search = roundTripped.ToolResultView!.SkillSearch!;
+        search.Status.Should().Be(ToolResultViewStatus.Success);
+        search.HttpStatus.Should().Be(200);
+        search.Matches.Should().ContainSingle().Which.SkillName.Should().Be("invoice-ocr-policy-review");
+
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        provider.Requests.Should().BeEmpty();
+        var planned = execution.Continuation.LlmStepResult.ToolCalls.Should().ContainSingle().Which;
+        planned.Name.Should().Be("use_skill");
+        planned.ArgumentsJson.Should().Contain("invoice-ocr-policy-review");
+        execution.AuthorizedToolStep.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AgentRunChatMessage_WithTypedFailure_ShouldRoundTripFailureFacts()
+    {
+        var source = new ChatMessage
+        {
+            Role = "tool",
+            ToolCallId = "call-failed",
+            Content = "safe failure",
+            ToolResultView = new ToolResultView(
+                "use_skill",
+                SkillSearch: null,
+                SkillLoad: null,
+                Failure: new ToolFailureResultView(
+                    AgentToolReceiptStatus.AuthorizationRequired,
+                    "AUTHORIZATION_REQUIRED",
+                    "Authorize Ornn access.")),
+        };
+
+        var roundTripped = AgentRunReplyStepMappers.FromProto(
+            AgentRunReplyStepMappers.ToProto(source));
+
+        roundTripped.ToolResultView.Should().NotBeNull();
+        roundTripped.ToolResultView!.ToolName.Should().Be("use_skill");
+        roundTripped.ToolResultView.Failure.Should().BeEquivalentTo(source.ToolResultView.Failure);
+    }
+
+    [Fact]
     public async Task NyxIdChatTurnExecutor_WithExactSkillRecovery_ShouldAdvanceUseThenSearchWithoutCallingProvider()
     {
         var useSkill = new CountingTool("use_skill");

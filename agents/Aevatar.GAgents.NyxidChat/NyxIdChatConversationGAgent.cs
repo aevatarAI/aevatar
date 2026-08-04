@@ -2971,6 +2971,7 @@ public sealed class NyxIdChatConversationGAgent
             command.ClientRequestId.Trim(),
             sourceCommandId,
             command.Prompt,
+            NormalizeOptional(command.InputPartsFingerprint) ??
             BuildInputPartsFingerprint(command.InputParts));
 
     private static string BuildInputPartsFingerprint(

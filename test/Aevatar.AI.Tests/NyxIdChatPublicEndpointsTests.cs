@@ -11,6 +11,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -127,6 +128,76 @@ public sealed class NyxIdChatPublicEndpointsTests
     }
 
     [Fact]
+    public async Task FirstText_WithInlineImage_ShouldIngestArtifactAndDispatchTypedFileRef()
+    {
+        var chat = new RecordingInteraction<NyxIdChatCommand>();
+        var ingress = new RecordingFileArtifactIngressPort();
+        var context = CreateContext("scope-alpha", services => services
+            .AddSingleton<ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(chat)
+            .AddSingleton<ICommandInteractionService<NyxIdActionContinuationCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(new RecordingInteraction<NyxIdActionContinuationCommand>())
+            .AddSingleton<IScopeResourceAdmissionPort>(new RecordingAdmissionPort())
+            .AddSingleton<IFileArtifactIngressPort>(ingress));
+        context.Request.Headers.Authorization = "Bearer delegated-token";
+        context.Response.Body = new MemoryStream();
+        var rawPart = new NyxIdChatEndpoints.ContentPartDto(
+            Type: "image",
+            DataBase64: "c3ludGhldGljLWludm9pY2U=",
+            MediaType: "image/png",
+            Name: "synthetic-invoice.png");
+
+        await NyxIdChatEndpoints.HandlePublicChatAsync(context, Parse("""
+            {
+              "type": "text",
+              "clientRequestId": "invoice-request",
+              "prompt": "Review this invoice",
+              "inputParts": [{
+                "type": "image",
+                "dataBase64": "c3ludGhldGljLWludm9pY2U=",
+                "mediaType": "image/png",
+                "name": "synthetic-invoice.png"
+              }]
+            }
+            """));
+
+        var request = ingress.Requests.Should().ContainSingle().Which;
+        request.Content.ToArray().Should().Equal("synthetic-invoice"u8.ToArray());
+        request.SourceKind.Should().Be(FileArtifactSourceKind.ChatInput);
+        request.OwnerScopeId.Should().Be("scope-alpha");
+
+        var command = chat.Commands.Should().ContainSingle().Which;
+        var inputPart = command.InputParts.Should().ContainSingle().Which;
+        inputPart.Kind.Should().Be(ChatContentPartKind.Image);
+        inputPart.DataBase64.Should().BeEmpty();
+        inputPart.FileRef.Should().NotBeNull();
+        inputPart.FileRef!.ArtifactId.Should().Be("workflow-file://inline-1");
+        inputPart.FileRef.SourceKind.Should().Be(ChatFileSourceKind.ChatInput);
+        inputPart.FileRef.OwnerScopeId.Should().Be("scope-alpha");
+        command.CommandId.Should().Be(NyxIdChatPublicIdentity.CreateChatCommandId(
+            command.ActorId,
+            command.ScopeId,
+            command.OwnerSubject!,
+            command.ClientRequestId,
+            command.TurnId,
+            command.Prompt,
+            [rawPart.ToProto()],
+            command.AgentProfileReference));
+        command.InputPartsFingerprint.Should().Be(
+            NyxIdChatPublicIdentity.CreateInputPartsFingerprint([rawPart.ToProto()]));
+
+        var envelope = new NyxIdChatCommandEnvelopeFactory().CreateEnvelope(
+            command,
+            new CommandContext(
+                command.ActorId,
+                command.CommandId!,
+                command.CorrelationId!,
+                new Dictionary<string, string>()));
+        var start = envelope.Payload.Unpack<NyxIdChatConversationCreateCommand>().FirstTurn;
+        start.InputParts.Should().ContainSingle().Which.FileRef.ArtifactId
+            .Should().Be("workflow-file://inline-1");
+        start.InputPartsFingerprint.Should().Be(command.InputPartsFingerprint);
+    }
+
+    [Fact]
     public void CommandEnvelope_WithCase13MultimodalPrompt_ShouldCarryExactSkillRecovery()
     {
         const string prompt =
@@ -144,7 +215,7 @@ public sealed class NyxIdChatPublicEndpointsTests
                 Type: "image",
                 DataBase64: "c3ludGhldGljLWludm9pY2U=",
                 MediaType: "image/png",
-                Name: "synthetic-invoice.png")],
+                Name: "synthetic-invoice.png").ToProto()],
             Metadata: null,
             OwnerSubject: "user-alpha");
 
@@ -853,6 +924,34 @@ public sealed class NyxIdChatPublicEndpointsTests
         {
             Targets.Add(target);
             return Task.FromResult(ScopeResourceAdmissionResult.Allowed());
+        }
+    }
+
+    private sealed class RecordingFileArtifactIngressPort : IFileArtifactIngressPort
+    {
+        public List<FileArtifactIngressRequest> Requests { get; } = [];
+
+        public ValueTask<FileArtifactIngressResult> IngestAsync(
+            FileArtifactIngressRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return ValueTask.FromResult(new FileArtifactIngressResult(new FileArtifactRef
+            {
+                FileId = "inline-1",
+                ArtifactId = "workflow-file://inline-1",
+                SourceKind = request.SourceKind,
+                SourceMessageId = request.SourceMessageId,
+                SourceResourceKey = request.SourceResourceKey,
+                FileName = request.FileName,
+                MediaType = request.MediaType,
+                SizeBytes = request.Content.Length,
+                Sha256 = "sha-alpha",
+                CreatedAtUnixMs = 1,
+                ExpiresAtUnixMs = 2,
+                OwnerScopeId = request.OwnerScopeId,
+            }));
         }
     }
 

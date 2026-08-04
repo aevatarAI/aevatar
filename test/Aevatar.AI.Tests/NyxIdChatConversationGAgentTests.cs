@@ -505,6 +505,20 @@ public sealed class NyxIdChatConversationGAgentTests
         AssignActorId(agent, conversationActorId);
         await agent.ActivateAsync();
         var command = CreateStartTurnCommand();
+        command.InputPartsFingerprint = "raw-inline-input-fingerprint";
+        command.InputParts.Add(new ChatContentPart
+        {
+            Kind = ChatContentPartKind.Image,
+            MediaType = "image/png",
+            Name = "invoice.png",
+            FileRef = new Aevatar.AI.Abstractions.ChatFileRef
+            {
+                FileId = "artifact-file-first",
+                ArtifactId = "workflow-file://artifact-file-first",
+                SourceKind = Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput,
+                Sha256 = "content-sha",
+            },
+        });
         await agent.HandleEventAsync(CreateEnvelope(conversationActorId, command));
         var stateAfterFirst = agent.State.ToByteArray();
         var operationsAfterFirst = operations.ToArray();
@@ -514,7 +528,10 @@ public sealed class NyxIdChatConversationGAgentTests
         var linkCountAfterFirst = runtime.LinkCalls.Count;
         var dispatchCountAfterFirst = dispatch.Calls.Count;
 
-        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, command.Clone()));
+        var replay = command.Clone();
+        replay.InputParts[0].FileRef.FileId = "artifact-file-retry";
+        replay.InputParts[0].FileRef.ArtifactId = "workflow-file://artifact-file-retry";
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, replay));
 
         (await eventStore.GetEventsAsync(conversationActorId)).Should()
             .HaveCount(eventCountAfterFirst);

@@ -836,7 +836,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         foreach (var toolResult in results)
         {
             toolStepResult.ResultMessages.Add(AgentRunReplyStepMappers.ToProto(
-                ToolCallLoop.BuildToolResultMessage(toolResult.CallId, toolResult.ToolName, toolResult.Result)));
+                ToolCallLoop.BuildToolResultMessage(
+                    toolResult.CallId,
+                    toolResult.ToolName,
+                    toolResult.Result,
+                    toolResult.Receipt)));
             if (toolResult.Receipt is not null)
                 toolStepResult.ToolReceipts.Add(toolResult.Receipt.Clone());
         }

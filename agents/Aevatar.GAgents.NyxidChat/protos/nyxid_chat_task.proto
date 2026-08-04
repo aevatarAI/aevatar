@@ -1003,6 +1003,9 @@ message NyxIdChatStartTurnCommand {
   repeated aevatar.ai.ChatContentPart input_parts = 9;
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 10;
   aevatar.ai.LLMControlContextPayload llm_control = 11;
+  // Stable fingerprint of the caller-supplied input parts before inline bytes
+  // are replaced by storage-assigned file artifact identities.
+  string input_parts_fingerprint = 12;
 }
 
 message NyxIdChatStopCommand {
