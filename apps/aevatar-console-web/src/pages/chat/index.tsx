@@ -4,7 +4,6 @@ import {
   MessageOutlined,
   PlusOutlined,
   ReloadOutlined,
-  SendOutlined,
 } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -466,10 +465,6 @@ function formatStatusLabel(status: LocalChatStatus): string {
       return t("pages.chat.index.status.draft", "Draft");
     case "streaming":
       return t("pages.chat.index.status.streaming", "Streaming");
-    case "needs_confirmation":
-      return t("pages.chat.index.status.needsConfirmation", "Needs confirmation");
-    case "creating":
-      return t("pages.chat.index.status.creating", "Creating");
     case "completed_with_studio_target":
       return t("pages.chat.index.status.studioReady", "Studio ready");
     case "completed_text":
@@ -483,13 +478,10 @@ function formatStatusLabel(status: LocalChatStatus): string {
 
 function resolveStatusTone(
   status: LocalChatStatus
-): "default" | "processing" | "success" | "warning" | "error" {
+): "default" | "processing" | "success" | "error" {
   switch (status) {
     case "streaming":
-    case "creating":
       return "processing";
-    case "needs_confirmation":
-      return "warning";
     case "completed_with_studio_target":
     case "completed_text":
       return "success";
@@ -498,21 +490,6 @@ function resolveStatusTone(
     default:
       return "default";
   }
-}
-
-function shouldAskForConfirmation(content: string): boolean {
-  const normalized = content.toLowerCase();
-  if (!normalized.trim()) {
-    return false;
-  }
-
-  return (
-    normalized.includes("confirm") ||
-    normalized.includes("approval") ||
-    normalized.includes("approve") ||
-    normalized.includes("确认") ||
-    normalized.includes("同意")
-  );
 }
 
 function resolveStudioJump(target: ChatStudioTarget | undefined): StudioJump | null {
@@ -698,9 +675,7 @@ const ChatPage: React.FC = () => {
   const conversations = (conversationsQuery.data ?? []).filter(
     (conversation) => !scopedDeletedConversationIds.has(conversation.id)
   );
-  const isStreaming =
-    activeConversation?.status === "streaming" ||
-    activeConversation?.status === "creating";
+  const isStreaming = activeConversation?.status === "streaming";
   const studioJump = resolveStudioJump(activeConversation?.target);
   const visibleConversations = useMemo<ConversationListItem[]>(() => {
     const activeConversationId = activeConversation?.conversationId;
@@ -1227,8 +1202,6 @@ const ChatPage: React.FC = () => {
         conversation.title === t("pages.chat.index.newChat", "New chat")
           ? trimTitle(trimmedInput)
           : conversation.title;
-      const nextStatus: LocalChatStatus =
-        conversation.status === "needs_confirmation" ? "creating" : "streaming";
       const createCommandId = conversation.conversationId
         ? undefined
         : !conversation.createRequestPrompt ||
@@ -1243,7 +1216,7 @@ const ChatPage: React.FC = () => {
           : trimmedInput,
         latestTurnId: undefined,
         messages: [...conversation.messages, userMessage, assistantMessage],
-        status: nextStatus,
+        status: "streaming",
         title,
       };
       const rawFrames: unknown[] = [];
@@ -1451,14 +1424,11 @@ const ChatPage: React.FC = () => {
           : "complete";
         const finalTarget = artifacts.target || streamingConversation.target;
         const finalUsage = artifacts.usage || streamingConversation.usage;
-        const finalContent = accumulator.finalOutput || accumulator.assistantText;
         const finalStatus: LocalChatStatus = accumulator.errorText
           ? "error"
           : resolveStudioJump(finalTarget)
             ? "completed_with_studio_target"
-            : shouldAskForConfirmation(finalContent)
-              ? "needs_confirmation"
-              : "completed_text";
+            : "completed_text";
         const finalConversation: ConversationState = {
           ...streamingConversation,
           messages: streamingConversation.messages.map((message) =>
@@ -1664,17 +1634,6 @@ const ChatPage: React.FC = () => {
     void runChat(conversation, prompt);
   }, [activeConversation, prompt, runChat]);
 
-  const handleConfirmCreate = useCallback(() => {
-    if (!activeConversation) {
-      return;
-    }
-
-    void runChat(
-      activeConversation,
-      t("pages.chat.index.confirmPrompt", "Confirm. Please create it now.")
-    );
-  }, [activeConversation, runChat]);
-
   const handleStop = useCallback(() => {
     abortControllerRef.current?.abort();
   }, []);
@@ -1871,8 +1830,7 @@ const ChatPage: React.FC = () => {
                                 "pages.chat.index.historySavePendingShort",
                                 "Saving history"
                               )
-                            : conversation.liveStatus === "streaming" ||
-                              conversation.liveStatus === "creating"
+                            : conversation.liveStatus === "streaming"
                             ? formatStatusLabel(conversation.liveStatus)
                             : formatTurnCount(conversation.messageCount)}
                         </span>
@@ -2214,35 +2172,6 @@ const ChatPage: React.FC = () => {
                 {activeConversation?.messages.map((message) => (
                   <ChatMessageEntry key={message.id} message={message} />
                 ))}
-                {activeConversation?.status === "needs_confirmation" ? (
-                  <div
-                    style={{
-                      background: token.colorWarningBg,
-                      border: `1px solid ${token.colorWarningBorder}`,
-                      borderRadius: token.borderRadius,
-                      marginLeft: 34,
-                      maxWidth: 760,
-                      padding: 12,
-                    }}
-                  >
-                    <Space direction="vertical" size={10}>
-                      <Typography.Text strong>
-                        {t(
-                          "pages.chat.index.reviewPlan",
-                          "Review the plan before creating resources."
-                        )}
-                      </Typography.Text>
-                      <Button
-                        disabled={isConversationActionDisabled}
-                        icon={<SendOutlined />}
-                        onClick={handleConfirmCreate}
-                        type="primary"
-                      >
-                        {t("pages.chat.index.confirmAndCreate", "Confirm and create")}
-                      </Button>
-                    </Space>
-                  </div>
-                ) : null}
               </Space>
             )}
             <div ref={scrollAnchorRef} />

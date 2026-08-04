@@ -56,8 +56,6 @@ export type ChatStudioTarget = {
 export type LocalChatStatus =
   | "draft"
   | "streaming"
-  | "needs_confirmation"
-  | "creating"
   | "completed_text"
   | "completed_with_studio_target"
   | "error";

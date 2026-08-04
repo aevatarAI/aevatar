@@ -1174,7 +1174,7 @@ describe("ChatPage server-backed history", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
-  it("keeps every chat action disabled until reconciliation observes a positive Conversation watermark", async () => {
+  it("keeps Team selection in the composer until reconciliation observes a positive Conversation watermark", async () => {
     let resolveZeroDetail: (
       detail: ReturnType<typeof conversationDetail>
     ) => void = () => undefined;
@@ -1195,11 +1195,13 @@ describe("ChatPage server-backed history", () => {
       ...serverConversation,
       id: "server-confirm",
       messageCount: 1,
-      title: "Confirmation plan",
+      title: "Weekly report Team selection",
     };
+    const teamSelectionPrompt =
+      "请再确认具体使用哪个 Team（当前有两个 active Team）。\n确认后我会立即创建周报 workflow。";
     const projectedMessages = [
       {
-        content: "Please confirm this plan.",
+        content: teamSelectionPrompt,
         id: "turn-confirm:assistant",
         role: "assistant" as const,
         status: "complete" as const,
@@ -1235,7 +1237,7 @@ describe("ChatPage server-backed history", () => {
           chatContextFrame("server-confirm", "turn-confirm", "scope-a", 7),
           {
             runFinished: {
-              result: { output: "Please confirm this plan." },
+              result: { output: teamSelectionPrompt },
             },
           },
         ])
@@ -1250,40 +1252,42 @@ describe("ChatPage server-backed history", () => {
     renderWithQueryClient(<ChatPage />);
     await sendPrompt("Draft a workflow plan");
 
-    const confirmButton = await screen.findByRole("button", {
-      name: "Confirm and create",
-    });
+    expect(
+      await screen.findByText(
+        "请再确认具体使用哪个 Team（当前有两个 active Team）。"
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("确认后我会立即创建周报 workflow。")
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Confirm and create" })
+    ).toBeNull();
+    expect(screen.queryByText("Needs confirmation")).toBeNull();
     await waitFor(() =>
       expect(chatHistoryApi.loadConversation).toHaveBeenCalledTimes(1)
     );
-    expect(confirmButton).toBeDisabled();
     expect(screen.getByRole("textbox")).toBeDisabled();
 
     act(() => resolveZeroDetail(conversationDetail(projectedMessages, 0)));
     await waitFor(() =>
       expect(chatHistoryApi.loadConversation).toHaveBeenCalledTimes(2)
     );
-    expect(confirmButton).toBeDisabled();
     expect(screen.getByRole("textbox")).toBeDisabled();
 
     act(() =>
       resolveRegressedDetail(conversationDetail(projectedMessages, 6))
     );
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Confirm and create" })
-      ).toBeEnabled()
-    );
-    expect(screen.getByRole("textbox")).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("textbox")).toBeEnabled());
 
-    fireEvent.click(screen.getByRole("button", { name: "Confirm and create" }));
+    await sendPrompt("使用 Team team-weekly-report");
     await waitFor(() => expect(chatRequestBodies()).toHaveLength(2));
     expect(chatRequestBodies()[1]).toMatchObject({
       conversation: {
         conversationId: "server-confirm",
         minimumStateVersion: 6,
       },
-      prompt: "Confirm. Please create it now.",
+      prompt: "使用 Team team-weekly-report",
     });
   });
 
