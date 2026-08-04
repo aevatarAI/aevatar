@@ -403,6 +403,19 @@ public sealed class AevatarInvocationDispatcher
         var workflowInputParts = request.Inputs == null || isManagedWorkflowRuntime
             ? null
             : ToWorkflowInputParts(request.Inputs, toolContext);
+        var firstWorkflowInputFileRef = FirstWorkflowInputFileRef(workflowInputParts);
+        _logger.LogWarning(
+            "Start workflow input file refs resolved: workflowId={WorkflowId} managedRuntime={ManagedRuntime} explicitInputPartCount={ExplicitInputPartCount} explicitInputFileRefCount={ExplicitInputFileRefCount} ambientToolContextFileRefCount={AmbientToolContextFileRefCount} workflowInputPartCount={WorkflowInputPartCount} workflowInputFileRefCount={WorkflowInputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+            request.WorkflowId ?? string.Empty,
+            isManagedWorkflowRuntime,
+            request.Inputs?.InputParts.Count ?? 0,
+            CountExplicitInputFileRefs(request.Inputs),
+            toolContext?.InputFileRefs.Count ?? 0,
+            workflowInputParts?.Count ?? 0,
+            CountWorkflowInputFileRefs(workflowInputParts),
+            firstWorkflowInputFileRef?.FileId ?? string.Empty,
+            firstWorkflowInputFileRef?.ArtifactId ?? string.Empty,
+            firstWorkflowInputFileRef?.MediaType ?? string.Empty);
         var error = ProtoToolArguments.Require(request.WorkflowId, "workflow_id", "workflow_id is required.") ??
                     (isManagedWorkflowRuntime
                         ? ProtoToolArguments.RequirePayload(request.Inputs, "inputs")
@@ -734,6 +747,18 @@ public sealed class AevatarInvocationDispatcher
             .Select(static part => ToWorkflowEventFileRef(part.FileRef))
             .Where(static fileRef => fileRef != null)
             .Select(static fileRef => fileRef!.Clone()));
+        var firstManagedFileRef = managedStart.InputFileRefs.FirstOrDefault();
+        _logger.LogWarning(
+            "Managed sub-workflow input file refs resolved: workflowId={WorkflowId} parentRunId={ParentRunId} parentStepId={ParentStepId} commandId={CommandId} explicitInputPartCount={ExplicitInputPartCount} managedInputFileRefCount={ManagedInputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+            workflowName,
+            parentRunId,
+            parentStepId,
+            commandId,
+            request.Inputs.InputParts.Count,
+            managedStart.InputFileRefs.Count,
+            firstManagedFileRef?.FileId ?? string.Empty,
+            firstManagedFileRef?.ArtifactId ?? string.Empty,
+            firstManagedFileRef?.MediaType ?? string.Empty);
 
         if (workflowYamls is { Count: > 0 })
         {
@@ -2166,6 +2191,17 @@ public sealed class AevatarInvocationDispatcher
     private static bool HasExplicitFileRef(InvocationPayload payload) =>
         payload.InputParts.Any(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef));
 
+    private static int CountExplicitInputFileRefs(InvocationPayload? payload) =>
+        payload?.InputParts.Count(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef)) ?? 0;
+
+    private static int CountWorkflowInputFileRefs(IReadOnlyList<WorkflowChatInputPart>? inputParts) =>
+        inputParts?.Count(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef)) ?? 0;
+
+    private static FileArtifactRef? FirstWorkflowInputFileRef(IReadOnlyList<WorkflowChatInputPart>? inputParts) =>
+        inputParts?
+            .Select(static part => part.FileRef)
+            .FirstOrDefault(static fileRef => fileRef is not null && HasFileRefIdentity(fileRef));
+
     private static IReadOnlyList<WorkflowChatInputPart>? ToAmbientWorkflowFileInputParts(
         AgentToolExecutionContext? toolContext)
     {
@@ -2229,6 +2265,10 @@ public sealed class AevatarInvocationDispatcher
             };
 
     private static bool HasFileRefIdentity(Aevatar.AI.Abstractions.ChatFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
+
+    private static bool HasFileRefIdentity(FileArtifactRef fileRef) =>
         !string.IsNullOrWhiteSpace(fileRef.FileId) ||
         !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
 

@@ -1230,9 +1230,10 @@ public class WorkflowRoleGAgent(
         streamCt.ThrowIfCancellationRequested();
         var turnCatalog = await BuildRequestToolCatalogAsync(intent.AgentToolScope, toolContext, streamCt);
         streamCt.ThrowIfCancellationRequested();
+        var firstIntentFileRef = intent.InputFileRefs.FirstOrDefault();
         var firstToolContextFileRef = toolContext.InputFileRefs.FirstOrDefault();
         Logger.LogWarning(
-            "Workflow LLM request tool catalog resolved. runId={RunId} stepId={StepId} sessionId={SessionId} intentInputFileRefCount={IntentInputFileRefCount} requestInputPartCount={RequestInputPartCount} toolContextInputFileRefCount={ToolContextInputFileRefCount} toolSetRefCount={ToolSetRefCount} routeOwnedToolCount={RouteOwnedToolCount} routeOwnedToolNames={RouteOwnedToolNames} firstToolContextFileId={FirstToolContextFileId} firstToolContextArtifactId={FirstToolContextArtifactId} firstToolContextMediaType={FirstToolContextMediaType}",
+            "Workflow LLM request tool catalog resolved. runId={RunId} stepId={StepId} sessionId={SessionId} intentInputFileRefCount={IntentInputFileRefCount} requestInputPartCount={RequestInputPartCount} toolContextInputFileRefCount={ToolContextInputFileRefCount} toolSetRefCount={ToolSetRefCount} routeOwnedToolCount={RouteOwnedToolCount} routeOwnedToolNames={RouteOwnedToolNames} firstIntentFileId={FirstIntentFileId} firstIntentArtifactId={FirstIntentArtifactId} firstIntentMediaType={FirstIntentMediaType} firstToolContextFileId={FirstToolContextFileId} firstToolContextArtifactId={FirstToolContextArtifactId} firstToolContextMediaType={FirstToolContextMediaType}",
             intent.RunId ?? string.Empty,
             intent.StepId ?? string.Empty,
             intent.SessionId ?? string.Empty,
@@ -1242,6 +1243,9 @@ public class WorkflowRoleGAgent(
             intent.AgentToolScope?.ToolSetRefs.Count ?? 0,
             turnCatalog?.RouteOwnedTools.Count ?? 0,
             turnCatalog is null ? string.Empty : string.Join(',', turnCatalog.RouteOwnedTools.Keys),
+            firstIntentFileRef?.FileId ?? string.Empty,
+            firstIntentFileRef?.ArtifactId ?? string.Empty,
+            firstIntentFileRef?.MediaType ?? string.Empty,
             firstToolContextFileRef?.FileId ?? string.Empty,
             firstToolContextFileRef?.ArtifactId ?? string.Empty,
             firstToolContextFileRef?.MediaType ?? string.Empty);
