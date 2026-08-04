@@ -83,8 +83,8 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     /// The role carries an <c>allowed_tools</c> allowlist (parsed by <c>WorkflowParser</c> →
     /// <c>RoleDefinition.AgentToolScope</c>, intersected with any step scope by the execution kernel →
     /// <c>ToolVisibility</c>). It INCLUDES Studio team/member/draft creation, web authoring research, member workflow binding,
-    /// direct Aevatar invocation, <c>aevatar_provision_workflow_schedule</c> + the observe tools and EXCLUDES
-    /// both the Lark <c>scheduled_agent_creator</c> and the hanging loose-definition tools
+    /// Studio managed-runtime-safe Aevatar invocation, <c>aevatar_provision_workflow_schedule</c> + the observe tools and EXCLUDES
+    /// both the Lark <c>scheduled_agent_creator</c>, unmanaged workflow starts, and the hanging loose-definition tools
     /// (<c>workflow_create_def</c>/<c>update</c>/<c>read</c>/<c>list_defs</c>);
     /// the allowlist is the lever that keeps those out of the studio surface entirely (prompt steering alone is
     /// unreliable while a tool is visible).
@@ -356,7 +356,6 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - aevatar_invoke_gagent
               - aevatar_invoke_team
               - aevatar_invoke_member
-              - aevatar_start_workflow
               - aevatar_observe_run
               - aevatar_read_workflow_run_artifact
               - web_search

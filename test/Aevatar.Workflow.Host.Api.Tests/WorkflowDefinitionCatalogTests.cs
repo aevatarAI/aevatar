@@ -16,13 +16,13 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public class WorkflowDefinitionCatalogTests
 {
-    private static readonly string[] DirectChannelAevatarInvocationToolNames =
+    private static readonly string[] StudioManagedRuntimeAevatarInvocationToolNames =
     [
         "aevatar_invoke_gagent",
         "aevatar_invoke_team",
         "aevatar_invoke_member",
-        "aevatar_start_workflow",
         "aevatar_observe_run",
+        "aevatar_read_workflow_run_artifact",
     ];
 
     [Fact]
@@ -282,8 +282,9 @@ public class WorkflowDefinitionCatalogTests
         role.SystemPrompt.Should().NotContain("workflow_create_def");
         role.SystemPrompt.Should().NotContain("aevatar_start_workflow");
 
-        // The allowlist is the lever that keeps hanging loose-definition tools out of the studio surface,
-        // while keeping the direct run/invoke permissions aligned with the Lark bot surface.
+        // The allowlist is the lever that keeps hanging loose-definition and unmanaged workflow-start
+        // tools out of the studio surface, while admitting the direct invocation tools that are safe
+        // under the Studio managed workflow runtime.
         role.AgentToolScope.Should().NotBeNull();
         var allowed = role.AgentToolScope!.AllowedToolNames;
         allowed.Should().Contain("aevatar_list_teams");
@@ -302,8 +303,7 @@ public class WorkflowDefinitionCatalogTests
         allowed.Should().Contain("aevatar_bind_member_workflow");
         allowed.Should().Contain("aevatar_schedule_member_workflow");
         allowed.Should().Contain("aevatar_provision_workflow_schedule");
-        allowed.Should().Contain(DirectChannelAevatarInvocationToolNames);
-        allowed.Should().Contain("aevatar_read_workflow_run_artifact");
+        allowed.Should().Contain(StudioManagedRuntimeAevatarInvocationToolNames);
         allowed.Should().Contain("web_search");
         allowed.Should().Contain("web_fetch");
         // The loose-definition path (file-only create + run-by-name) hangs 30s on an unprovisioned
@@ -312,6 +312,7 @@ public class WorkflowDefinitionCatalogTests
         allowed.Should().NotContain("workflow_update_def");
         allowed.Should().NotContain("workflow_read_def");
         allowed.Should().NotContain("workflow_list_defs");
+        allowed.Should().NotContain("aevatar_start_workflow");
         allowed.Should().NotContain("scheduled_agent_creator");
         // Studio is workflow-first: publishing a prose skill is not the deliverable.
         allowed.Should().NotContain("ornn_publish_skill");
