@@ -1475,7 +1475,7 @@ public sealed class AevatarInvocationToolSourceTests
                     "file_ref": {
                       "file_id": "file-lark-1",
                       "artifact_id": "workflow-file://file-lark-1",
-                      "source_kind": 3,
+                      "source_kind": "chat_file_source_kind_connected_service_resource",
                       "source_message_id": "om_lark_1",
                       "source_resource_key": "file_key_1",
                       "file_name": "invoice.pdf",
