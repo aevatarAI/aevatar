@@ -6,6 +6,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Workflow.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.ChatHistory;
 
@@ -18,15 +19,18 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
     private const string ConversationAppendPublisherId = "chat-history-turn-delivery";
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _dispatchPort;
+    private readonly ILogger<ChatTurnHistoryDeliveryGAgent> _logger;
     private readonly TimeProvider _timeProvider;
 
     public ChatTurnHistoryDeliveryGAgent(
         IActorRuntime actorRuntime,
         IActorDispatchPort dispatchPort,
+        ILogger<ChatTurnHistoryDeliveryGAgent> logger,
         TimeProvider? timeProvider = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -120,6 +124,16 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
     {
         ArgumentNullException.ThrowIfNull(notification);
         var publisherActorId = ActiveInboundEnvelope?.Route?.PublisherActorId?.Trim() ?? string.Empty;
+        _logger.LogWarning(
+            "Chat turn history delivery workflow terminal notification received: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} sourceActorId={SourceActorId} publisherActorId={PublisherActorId} sourceCommandId={SourceCommandId} status={TerminalStatus} currentStatus={CurrentStatus} terminalStatus={CurrentTerminalStatus}",
+            Id,
+            notification.DeliveryId,
+            notification.WorkflowActorId,
+            publisherActorId,
+            notification.WorkflowCommandId,
+            notification.Status,
+            State.Status,
+            State.TerminalStatus);
         if (!IsValidNotificationEnvelope(notification, publisherActorId) ||
             !IsCurrentSource(notification.DeliveryId, notification.WorkflowActorId, notification.WorkflowCommandId))
         {
@@ -196,6 +210,14 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             return;
 
         await PersistDomainEventAsync(terminal);
+        _logger.LogWarning(
+            "Chat turn history delivery terminal frame persisted: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} sourceActorId={SourceActorId} sourceCommandId={SourceCommandId} status={TerminalStatus} currentStatus={CurrentStatus}",
+            Id,
+            State.DeliveryId,
+            State.SourceActorId,
+            State.SourceCommandId,
+            State.TerminalStatus,
+            State.Status);
         await DispatchPendingTerminalAppendAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
@@ -211,6 +233,17 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
 
         var appendCommand = BuildAppendCommandFromState();
         var conversationActorId = ChatHistoryActorIds.Conversation(State.ScopeId, State.ConversationId);
+        var appendAttempt = Math.Max(1, State.AppendAttempt + 1);
+        _logger.LogWarning(
+            "Chat turn history delivery append dispatch starting: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} conversationActorId={ConversationActorId} sourceActorId={SourceActorId} sourceCommandId={SourceCommandId} appendAttempt={AppendAttempt} currentStatus={CurrentStatus} terminalStatus={TerminalStatus}",
+            Id,
+            State.DeliveryId,
+            conversationActorId,
+            State.SourceActorId,
+            State.SourceCommandId,
+            appendAttempt,
+            State.Status,
+            State.TerminalStatus);
         if (!await _actorRuntime.ExistsAsync(conversationActorId).ConfigureAwait(false))
         {
             if (!State.CreateConversationIfMissing)
@@ -243,10 +276,20 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             },
         };
         envelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId =
-            $"chat-history-append:{State.DeliveryId}:{Math.Max(1, State.AppendAttempt + 1)}";
+            $"chat-history-append:{State.DeliveryId}:{appendAttempt}";
 
         var admission = await _dispatchPort.DispatchAsync(conversationActorId, envelope, ct)
             .ConfigureAwait(false);
+        _logger.LogWarning(
+            "Chat turn history delivery append dispatch completed: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} conversationActorId={ConversationActorId} sourceCommandId={SourceCommandId} appendAttempt={AppendAttempt} accepted={Accepted} commandId={CommandId} correlationId={CorrelationId}",
+            Id,
+            State.DeliveryId,
+            conversationActorId,
+            State.SourceCommandId,
+            appendAttempt,
+            admission.Accepted,
+            admission.CommandId,
+            admission.CorrelationId);
         if (!admission.Accepted)
         {
             await PersistFailureAsync(
@@ -259,18 +302,32 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             return;
         }
 
+        _logger.LogWarning(
+            "Chat turn history delivery append dispatched event persisting: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} conversationActorId={ConversationActorId} sourceCommandId={SourceCommandId} appendAttempt={AppendAttempt}",
+            Id,
+            State.DeliveryId,
+            conversationActorId,
+            State.SourceCommandId,
+            appendAttempt);
         await PersistDomainEventAsync(new ChatTurnHistoryDeliveryAppendDispatchedEvent
         {
             DeliveryId = State.DeliveryId,
             SourceActorId = State.SourceActorId,
             SourceCommandId = State.SourceCommandId,
-            AppendAttempt = Math.Max(1, State.AppendAttempt + 1),
+            AppendAttempt = appendAttempt,
             TerminalStatus = State.TerminalStatus,
             TerminalText = State.TerminalText,
             TerminalErrorCode = State.TerminalErrorCode,
             TerminalObservedAtUnixMs = State.TerminalObservedAtUnixMs,
             DispatchedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         });
+        _logger.LogWarning(
+            "Chat turn history delivery append dispatched event persisted: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} sourceCommandId={SourceCommandId} appendAttempt={AppendAttempt} currentStatus={CurrentStatus}",
+            Id,
+            State.DeliveryId,
+            State.SourceCommandId,
+            appendAttempt,
+            State.Status);
     }
 
     [EventHandler]

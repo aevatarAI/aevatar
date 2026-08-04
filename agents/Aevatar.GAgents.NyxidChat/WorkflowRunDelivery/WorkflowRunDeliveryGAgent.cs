@@ -184,6 +184,16 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
             return;
 
         var publisherActorId = ActiveInboundEnvelope?.Route?.PublisherActorId?.Trim() ?? string.Empty;
+        _logger.LogWarning(
+            "Workflow run delivery terminal notification received: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} workflowActorId={WorkflowActorId} publisherActorId={PublisherActorId} workflowCommandId={WorkflowCommandId} status={TerminalStatus} currentStatus={CurrentStatus} pendingTerminal={PendingTerminal}",
+            Id,
+            notification.DeliveryId,
+            notification.WorkflowActorId,
+            publisherActorId,
+            notification.WorkflowCommandId,
+            notification.Status,
+            State.Status,
+            State.PendingTerminalNotification is not null);
         if (!IsValidNotificationEnvelope(notification, publisherActorId))
             return;
         if (State.Status is WorkflowRunDeliveryStatus.Reserved or WorkflowRunDeliveryStatus.Started &&
@@ -220,6 +230,13 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
             Notification = notification.Clone(),
             BufferedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         });
+        _logger.LogWarning(
+            "Workflow run delivery terminal notification buffered: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} workflowActorId={WorkflowActorId} workflowCommandId={WorkflowCommandId} currentStatus={CurrentStatus}",
+            Id,
+            State.DeliveryId,
+            State.WorkflowActorId,
+            State.ExpectedWorkflowCommandId,
+            State.Status);
 
         if (State.Status == WorkflowRunDeliveryStatus.Reserved)
             await PromoteReservedTerminalAsync().ConfigureAwait(false);
@@ -291,11 +308,27 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
 
         var attempt = Math.Max(1, State.DeliveryAttempt + 1);
         var observedAt = ResolveTerminalObservedAt(notification);
+        _logger.LogWarning(
+            "Workflow run delivery pending terminal relay starting: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} workflowActorId={WorkflowActorId} workflowCommandId={WorkflowCommandId} attempt={Attempt} terminalStatus={TerminalStatus}",
+            Id,
+            State.DeliveryId,
+            State.WorkflowActorId,
+            State.WorkflowCommandId,
+            attempt,
+            notification.Status);
         var deliveryAgentKey = await ResolveWorkflowResultDeliveryAgentKeyAsync(notification, attempt, observedAt, ct)
             .ConfigureAwait(false);
         if (deliveryAgentKey is null)
             return;
 
+        _logger.LogWarning(
+            "Workflow run delivery outbound relay sending: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} workflowCommandId={WorkflowCommandId} attempt={Attempt} platform={Platform} replyMessageId={ReplyMessageId}",
+            Id,
+            State.DeliveryId,
+            State.WorkflowCommandId,
+            attempt,
+            State.ChannelPlatform,
+            State.ReplyMessageId);
         var result = await _outboundPort.SendWithAgentKeyAsync(
                 State.ChannelPlatform,
                 BuildConversationReference(),
@@ -310,9 +343,25 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
                 deliveryAgentKey,
                 ct)
             .ConfigureAwait(false);
+        _logger.LogWarning(
+            "Workflow run delivery outbound relay completed: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} workflowCommandId={WorkflowCommandId} attempt={Attempt} success={Success} errorCode={ErrorCode} sentActivityId={SentActivityId} platformMessageId={PlatformMessageId}",
+            Id,
+            State.DeliveryId,
+            State.WorkflowCommandId,
+            attempt,
+            result.Success,
+            result.ErrorCode ?? string.Empty,
+            result.SentActivityId ?? string.Empty,
+            result.PlatformMessageId ?? string.Empty);
 
         if (result.Success)
         {
+            _logger.LogWarning(
+                "Workflow run delivery success event persisting: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} workflowCommandId={WorkflowCommandId} attempt={Attempt}",
+                Id,
+                State.DeliveryId,
+                State.WorkflowCommandId,
+                attempt);
             await PersistDomainEventAsync(new WorkflowRunDeliverySucceededEvent
             {
                 DeliveryId = State.DeliveryId,
@@ -327,10 +376,23 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
                 TerminalErrorCode = ResolveTerminalErrorCode(notification),
                 TerminalObservedAtUnixMs = observedAt,
             });
+            _logger.LogWarning(
+                "Workflow run delivery success event persisted: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} workflowCommandId={WorkflowCommandId} attempt={Attempt}",
+                Id,
+                State.DeliveryId,
+                State.WorkflowCommandId,
+                attempt);
             await PurgeDurableCallbacksBestEffortAsync().ConfigureAwait(false);
             return;
         }
 
+        _logger.LogWarning(
+            "Workflow run delivery failure event persisting: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} workflowCommandId={WorkflowCommandId} attempt={Attempt} errorCode={ErrorCode}",
+            Id,
+            State.DeliveryId,
+            State.WorkflowCommandId,
+            attempt,
+            string.IsNullOrWhiteSpace(result.ErrorCode) ? "workflow_run_delivery_failed" : result.ErrorCode);
         await PersistDeliveryFailureAsync(
                 notification,
                 attempt,
