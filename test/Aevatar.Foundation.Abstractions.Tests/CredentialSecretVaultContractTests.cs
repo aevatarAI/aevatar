@@ -131,4 +131,51 @@ public sealed class CredentialSecretVaultContractTests
 
         resolved.Secret.ShouldBeNull();
     }
+
+    [Fact]
+    public async Task InMemorySecretVault_ShouldUseInjectedClockForCreationAndExpiry()
+    {
+        var now = new DateTimeOffset(2026, 8, 2, 8, 0, 0, TimeSpan.Zero);
+        var clock = new ManualTimeProvider(now);
+        var vault = new InMemorySecretVault(clock);
+        var stored = (await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            "scope-a",
+            "key-1",
+            "time-controlled-secret",
+            "capture scheduled invocation key",
+            now.AddMinutes(1)))).Reference;
+
+        stored.CreatedAtUnixMs.ShouldBe(now.ToUnixTimeMilliseconds());
+        var active = await vault.ResolveAsync(new ResolveSecretRequest(
+            stored.Ref,
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            "scope-a",
+            "key-1",
+            "resolve before expiry"));
+        active.Secret.ShouldBe("time-controlled-secret");
+
+        clock.Advance(TimeSpan.FromMinutes(1));
+        var expired = await vault.ResolveAsync(new ResolveSecretRequest(
+            stored.Ref,
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            "scope-a",
+            "key-1",
+            "resolve at expiry"));
+
+        expired.Secret.ShouldBeNull();
+        expired.FailureReason.ShouldBe(SecretResolutionFailureReason.NotFound);
+    }
+
+    private sealed class ManualTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan duration)
+        {
+            _utcNow += duration;
+        }
+    }
 }
