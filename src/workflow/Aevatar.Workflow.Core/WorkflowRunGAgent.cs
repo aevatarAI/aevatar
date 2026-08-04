@@ -560,7 +560,20 @@ public sealed partial class WorkflowRunGAgent
         await EnsureAgentTreeAsync();
 
         inputFileRefs = StampInputFileRefs(inputFileRefs, runId, scopeId);
-        if (!await BindInputFileArtifactsAsync(inputFileRefs, runId, scopeId))
+        var firstInputFileRef = inputFileRefs.FirstOrDefault();
+        Logger.LogWarning(
+            "Workflow chat request input file refs extracted. workflowName={WorkflowName} runId={RunId} commandId={CommandId} correlationId={CorrelationId} scopeId={ScopeId} requestInputPartCount={RequestInputPartCount} inputFileRefCount={InputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+            _compiledWorkflow.Name,
+            runId,
+            commandId,
+            correlationId,
+            scopeId ?? string.Empty,
+            request.InputParts.Count,
+            inputFileRefs.Count,
+            firstInputFileRef?.FileId ?? string.Empty,
+            firstInputFileRef?.ArtifactId ?? string.Empty,
+            firstInputFileRef?.MediaType ?? string.Empty);
+        if (!await BindInputFileArtifactsAsync(inputFileRefs, runId, scopeId ?? string.Empty))
         {
             await HandleWorkflowCompleted(new WorkflowCompletedEvent
             {

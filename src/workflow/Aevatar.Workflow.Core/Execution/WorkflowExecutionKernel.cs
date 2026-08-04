@@ -1151,6 +1151,17 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         try
         {
             var fileRefs = inputFileRefs.Select(static fileRef => fileRef.Clone()).ToArray();
+            var firstFileRef = fileRefs.FirstOrDefault();
+            ctx.Logger.LogWarning(
+                "Workflow step input file refs dispatching. runId={RunId} stepId={StepId} stepType={StepType} dispatchKind={DispatchKind} inputFileRefCount={InputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+                state.RunId,
+                step.Id,
+                WorkflowPrimitiveCatalog.ToCanonicalType(step.Type),
+                dispatchKind,
+                fileRefs.Length,
+                firstFileRef?.FileId ?? string.Empty,
+                firstFileRef?.ArtifactId ?? string.Empty,
+                firstFileRef?.MediaType ?? string.Empty);
             var request = BuildStepRequest(step, input, fileRefs, state, ctx);
             var idempotency = ResolveAndPersistStepIdempotency(step, state);
             request.IdempotencyKey = idempotency.IdempotencyKey;
