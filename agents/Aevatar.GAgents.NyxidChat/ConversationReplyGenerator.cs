@@ -429,7 +429,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
         var validTools = FilterValidTools(tools) ?? [];
         _logger.LogWarning(
-            "Channel LLM tool plan prepared. surface={Surface} isChannelRelayTurn={IsChannelRelayTurn} isNyxIdChatTurn={IsNyxIdChatTurn} forceDisableTools={ForceDisableTools} replyPlanDisableTools={ReplyPlanDisableTools} disableTools={DisableTools} turnCatalogPresent={TurnCatalogPresent} profileAllowedToolCount={ProfileAllowedToolCount} profileAllowedTools={ProfileAllowedTools} routeOwnedToolCount={RouteOwnedToolCount} routeOwnedTools={RouteOwnedTools} finalToolCount={FinalToolCount} finalTools={FinalTools} inputFileRefCount={InputFileRefCount}",
+            "Channel LLM tool plan prepared. surface={Surface} isChannelRelayTurn={IsChannelRelayTurn} isNyxIdChatTurn={IsNyxIdChatTurn} forceDisableTools={ForceDisableTools} replyPlanDisableTools={ReplyPlanDisableTools} disableTools={DisableTools} turnCatalogPresent={TurnCatalogPresent} profileAllowedToolCount={ProfileAllowedToolCount} profileAllowedTools={ProfileAllowedTools} routeOwnedToolCount={RouteOwnedToolCount} routeOwnedTools={RouteOwnedTools} finalToolCount={FinalToolCount} finalTools={FinalTools} inputPartFileRefCount={InputPartFileRefCount} toolContextInputFileRefCount={ToolContextInputFileRefCount}",
             surface,
             isChannelRelayTurn,
             isNyxIdChatTurn,
@@ -443,7 +443,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             FormatToolNames(turnCatalog?.RouteOwnedTools.Values.Select(static tool => tool.Name) ?? Enumerable.Empty<string>()),
             validTools.Count,
             FormatToolNames(validTools.Select(static tool => tool.Name)),
-            inputFileRefs.Count);
+            inputFileRefs.Count,
+            toolContext.InputFileRefs.Count);
     }
 
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
@@ -742,7 +743,24 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     {
         var text = activity.Content?.Text ?? string.Empty;
         var parts = new List<ContentPart> { ContentPart.TextPart(text) };
+        var currentAttachmentCount = activity.Content?.Attachments?.Count ?? 0;
+        var recentAttachmentCount = CountAttachments(attachmentContext?.RecentAttachmentActivities
+            .Where(static entry => entry.Activity?.Content?.Attachments is { Count: > 0 })
+            .Select(static entry => new AttachmentActivity(
+                entry.Activity!,
+                entry.Activity!.Content!.Attachments.Select(static attachment => attachment.Clone()).ToArray())) ?? []);
         var attachments = SelectAttachmentActivities(activity, attachmentContext).ToArray();
+        if (IsLarkActivity(activity) || attachments.Any(static attachment => IsLarkActivity(attachment.Activity)))
+        {
+            _logger.LogWarning(
+                "Channel attachment input selection prepared. activityId={ActivityId} currentAttachmentCount={CurrentAttachmentCount} recentAttachmentCount={RecentAttachmentCount} selectedAttachmentActivityCount={SelectedAttachmentActivityCount} selectedAttachmentCount={SelectedAttachmentCount}",
+                activity.Id,
+                currentAttachmentCount,
+                recentAttachmentCount,
+                attachments.Length,
+                CountAttachments(attachments));
+        }
+
         if (attachments.Length == 0)
             return new UserInputParts(text, parts);
 
@@ -1016,6 +1034,17 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         var instruction = unseenCount > 0
             ? BuildAttachmentVisibilityInstruction(unseenCount, unseenReason)
             : null;
+        if (IsLarkActivity(activity) || attachments.Any(static attachment => IsLarkActivity(attachment.Activity)))
+        {
+            _logger.LogWarning(
+                "Channel attachment input processing completed. activityId={ActivityId} selectedAttachmentCount={SelectedAttachmentCount} outputPartCount={OutputPartCount} outputFileRefPartCount={OutputFileRefPartCount} unseenAttachmentCount={UnseenAttachmentCount} imageInputUnsupportedCount={ImageInputUnsupportedCount}",
+                activity.Id,
+                CountAttachments(attachments),
+                parts.Count,
+                parts.Count(static part => part.FileRef is not null),
+                unseenCount,
+                imageInputUnsupportedCount);
+        }
 
         return new UserInputParts(text, parts, instruction);
     }
