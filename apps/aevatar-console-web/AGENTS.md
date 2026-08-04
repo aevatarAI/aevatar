@@ -176,6 +176,11 @@ pnpm --dir apps/aevatar-console-web build
   `docs/design-baselines/workflow-activity-vnext/README.md` in every vNext
   implementation task and pull request so the Excalidraw hash, contract
   documents, user paths, and real-API-only data-source rule are reviewable.
+- Run
+  `python3 docs/design-baselines/workflow-activity-vnext/verify-baseline.py`
+  from `apps/aevatar-console-web/` before and after changing the baseline. The
+  verifier must confirm the declared hash, deterministic generator output, and
+  exact 17-frame inventory.
 - Keep this feature frontend-only and isolated to its new route namespace.
   Do not change backend code or alter existing Workflow, Run, Settings, Studio,
   Team, member, redirect, or menu behavior to implement it.

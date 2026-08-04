@@ -111,6 +111,9 @@ Authentication and localization:
   presentation may change, behavior may not.
 Production data source:
   Real APIs and API-acknowledged user actions only; no mock fallback.
+Baseline integrity:
+  python3 apps/aevatar-console-web/docs/design-baselines/
+  workflow-activity-vnext/verify-baseline.py
 ```
 
 This declaration makes design drift and mock-data substitution explicit review
@@ -118,12 +121,13 @@ failures rather than undocumented implementation choices.
 
 ## Imported Source
 
-这个目录是根据 2026-08-03 会议结论重新整理的独立版本。`/Users/xiezixin/Downloads/mocks/` 下的原始画板和生成器没有修改。
+这个目录是根据 2026-08-03 会议结论重新整理的独立版本。`/Users/xiezixin/Downloads/mocks/` 下的原始画板、生成器、HTML 和 PNG 作为来源资产逐字节导入，没有修改。仓库额外增加的 `README.md` 和 `verify-baseline.py` 负责说明规范优先级并验证基线完整性，不属于原始原型资产。
 
 ## 文件
 
 - `aevatar-workflow-activity-vnext.excalidraw`：合并后的 Excalidraw，包含 Workflows、Activity 与 Settings，共 17 个 frame。
 - `aevatar-workflow-activity-vnext.gen.py`：画板生成器，内含画框边界、ID 唯一性和废弃术语检查。
+- `verify-baseline.py`：仓库内校验器，验证画板 SHA-256、生成器确定性输出和 17 个 frame 的精确清单。
 - `prototype.html`：可直接在浏览器打开的交互原型，不需要安装依赖或启动服务。
 - `prototype-workflows.png`：Workflows 桌面视图截图。
 - `prototype-activity.png`：Activity 桌面视图截图。
@@ -158,15 +162,24 @@ failures rather than undocumented implementation choices.
 
 原型因此统一采用“节点画布 + 连线 + 按需侧面板”的编辑模式。Describe、Start blank、Import YAML 和 Template 只负责产生不同的初始 Workflow 文档，不再各自发明编辑行为。
 
-## 新语义
+## 原型意图与强制偏差
+
+下面的原型意图只用于理解视觉和交互方向。它不覆盖本文前面的
+Production Data Truth Rule，也不覆盖设计规范中的
+`Excalidraw-To-Backend Deviations`。后续实现必须应用这些强制偏差：
 
 - 用户从 Workflows 直接创建 Workflow 草稿，没有其他资源的创建前置步骤。
 - `Run` 是唯一的常规执行入口。
-- 每次 Run 一开始就创建 Activity 记录，包括当前草稿修订的执行。
-- Activity 记录明确显示 `Current draft · revision N` 或 `Published · vN`。
-- Retry 和 Run again 会创建新记录并链接来源 Run；原记录不被覆盖。
-- Activity 菜单是唯一的 Run 历史入口；需要查看某个 Workflow 时，在 Activity 中应用 Workflow 筛选。
-- 全局导航包含 Workflows、Activity 和 Settings；Settings 是明确新增的配置区域，不改变 Workflow / Activity 的执行语义。
+- Run 请求开始后先显示真实的 Accepted/Running 状态；只有 Observatory
+  返回权威记录后，才能显示为 Activity 记录。
+- `Current draft · revision N`、`Published · vN`、来源、耗时、用量和
+  lineage 都是画板中的视觉意图；对应字段没有出现在真实 API 响应时必须省略。
+- Retry 和 Run again 不修改原 Run，并请求创建新 Run；只有真实 receipt
+  或后续查询提供的关联事实才能显示新旧 Run 的关系。
+- Activity 是 vNext 内唯一的 Run 历史入口；按 Workflow 筛选只使用权威
+  `definitionActorId`，不能按名称或其他 ID 猜测。
+- Workflows、Activity 和 Settings 是隔离 vNext shell 的本地导航。第一期
+  不修改现有全局菜单或旧路由。
 
 ## Excalidraw 阅读顺序
 
@@ -178,11 +191,11 @@ failures rather than undocumented implementation choices.
 4. `04 Start blank - empty Workflow draft`：真实 Studio 的空画布；添加第一个节点之前不能 Publish 或 Run。
 5. `05 Import YAML - imported Workflow draft`：YAML 中的名称和节点类型进入同一套 Studio 画布。
 6. `06 Template - populated Workflow draft`：模板创建独立草稿，并以连接节点显示。
-7. `07 Run - unified execution dialog`：确认修订、输入、连接和外部影响；底部说明本次 Run 会保存在 Activity。
-8. `08 Running draft - Studio canvas and Run console`：仍在同一个节点画布中显示运行状态，底部打开 Run console；Activity 记录已经存在。
+7. `07 Run - unified execution dialog`：确认修订、输入、连接和外部影响；底部文案表达保留本次 Run 的产品意图，生产实现仍需等待真实 Activity 观察结果。
+8. `08 Running draft - Studio canvas and Run console`：仍在同一个节点画布中显示运行状态，底部打开 Run console；画板中的 Activity 记录只表达目标状态，生产实现不得在权威查询返回前声称记录已存在。
 9. `09 Activity - filtered by Workflow`：从 Activity 菜单进入，并用 Workflow 筛选历史。
 10. `10 Activity - all retained Runs`：全局、最新优先的所有 Run 记录。
-11. `11 Run detail - immutable record`：Run 的修订、来源、耗时、用量、步骤时间线与关联记录。
+11. `11 Run detail - immutable record`：展示 Run 详情的信息层级；修订、来源、耗时、用量、步骤时间线与关联记录仅在真实详情响应提供对应字段时显示。
 12. `12 Failed Run - recovery creates a new record`：失败解释和恢复；Retry 预览明确展示新旧 Run 的关系。
 13. `13 Workflows and Activity - states`：空、加载、错误和移动端信息优先级。
 14. `14 Settings - AI defaults`：正常态只保留 Preferred service 与 Default model 两个决策。
@@ -198,12 +211,16 @@ Workflows
   -> direct draft creation
   -> edit connected nodes in Workflow Studio
   -> Run
-  -> Activity record created immediately
+  -> Accepted / Running from a real stream or receipt
+  -> Activity record observed through the real API
   -> Run detail
-  -> Retry / Run again creates a linked record
+  -> Retry / Run again requests a new Run without mutating the source
 ```
 
 ## 原型操作路径
+
+以下步骤只用于操作独立原型。步骤中的 `localStorage`、计时器、示例用户和
+示例记录不是 API 行为，也不是生产实现要求。
 
 1. 打开 `prototype.html`，默认进入 Workflows。
 2. 点击 `New workflow`，分别检查四种方式：描述会生成匹配节点；空白会进入画布空状态；导入会先校验 YAML；模板会先要求选择模板。
@@ -234,4 +251,16 @@ Settings 的功能来源仍然是当前 Aevatar Console，但信息架构已经�
 - `Account`：当前浏览器身份、User ID、roles、groups、会话到期时间、NyxID provider、scope、Sign in / Sign out 和 Manage service access；字段本身足够明确，不再重复配小节说明。
 - `Advanced`：只保留一份 effective request values。Runtime mode 与 base URL 不再同时出现在只读输入和 raw values 两处。
 
-AI 默认值会保存在浏览器 `localStorage`。选择 exact connected service 时，模型列表会跟着服务切换。默认状态保持安静；只有产生修改后，sticky save bar 才出现。保存动作先进入 accepted / confirming saved values，再更新已保存 service。fallback、catalog unavailable 与 provider unavailable 只在异常状态出现。Account 的 Sign in、Sign out 与 service access 也有可见状态变化。
+独立原型会把 AI 默认值保存在浏览器 `localStorage`，仅用于演示重开页面后的交互连续性。生产实现必须通过真实 Settings API 读取、保存并观察 AI 默认值，不能读取这份原型存储。选择 exact connected service 时，模型列表会跟着服务切换。默认状态保持安静；只有产生修改后，sticky save bar 才出现。保存动作先进入 accepted / confirming saved values，再根据权威查询更新已保存 service。fallback、catalog unavailable 与 provider unavailable 只在异常状态出现。Account 的 Sign in、Sign out 与 service access 继续复用现有真实逻辑。
+
+## 基线完整性校验
+
+从仓库根目录运行：
+
+```bash
+python3 apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/verify-baseline.py
+```
+
+校验器会在临时目录运行导入的生成器，不修改仓库文件，并验证生成结果与
+主画板逐字节一致、SHA-256 与声明一致，以及 17 个 frame 的名称和顺序
+完整。任何失败都表示设计基线或声明已经漂移，必须在实现或评审前处理。

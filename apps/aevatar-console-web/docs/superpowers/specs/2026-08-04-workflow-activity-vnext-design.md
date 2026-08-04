@@ -929,6 +929,7 @@ verification in that implementation task.
 For this documentation-only phase:
 
 ```bash
+python3 apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/verify-baseline.py
 bash tools/docs/lint.sh
 git diff --check
 ```
