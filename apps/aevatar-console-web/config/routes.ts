@@ -41,6 +41,41 @@ export default [
     hideInMenu: false,
   },
   {
+    path: "/scopes/:scopeId/workflow-activity-vnext",
+    redirect: "/scopes/:scopeId/workflow-activity-vnext/workflows",
+    hideInMenu: true,
+  },
+  {
+    path: "/scopes/:scopeId/workflow-activity-vnext/workflows",
+    component: "./workflow-activity-vnext",
+    hideInMenu: true,
+  },
+  {
+    path: "/scopes/:scopeId/workflow-activity-vnext/workflows/new",
+    component: "./workflow-activity-vnext",
+    hideInMenu: true,
+  },
+  {
+    path: "/scopes/:scopeId/workflow-activity-vnext/workflows/:workflowId",
+    component: "./workflow-activity-vnext",
+    hideInMenu: true,
+  },
+  {
+    path: "/scopes/:scopeId/workflow-activity-vnext/activity",
+    component: "./workflow-activity-vnext",
+    hideInMenu: true,
+  },
+  {
+    path: "/scopes/:scopeId/workflow-activity-vnext/activity/:runId",
+    component: "./workflow-activity-vnext",
+    hideInMenu: true,
+  },
+  {
+    path: "/scopes/:scopeId/workflow-activity-vnext/settings",
+    component: "./workflow-activity-vnext",
+    hideInMenu: true,
+  },
+  {
     path: "/scopes/:scopeId/teams/new",
     name: "Create Team",
     component: "./teams/new",

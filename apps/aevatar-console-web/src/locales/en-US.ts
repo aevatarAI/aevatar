@@ -1,7 +1,9 @@
 import projectMessages from './projectMessages.en-US';
+import workflowActivityVNextMessages from './workflowActivityVNextMessages.en-US';
 
 const enUSMessages = {
   ...projectMessages,
+  ...workflowActivityVNextMessages,
   'common.appName': 'Aevatar',
   'common.language.english': 'English',
   'common.language.label': 'Language',

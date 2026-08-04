@@ -153,4 +153,40 @@ describe("console routes", () => {
     );
     expect(findRoute(routes, "/settings").name).toBe("Settings");
   });
+
+  it("isolates Workflow Activity vNext under its hidden scoped namespace", () => {
+    const routes = loadRoutes();
+    const namespace = "/scopes/:scopeId/workflow-activity-vnext";
+    const expectedRoutes = [
+      namespace,
+      `${namespace}/workflows`,
+      `${namespace}/workflows/new`,
+      `${namespace}/workflows/:workflowId`,
+      `${namespace}/activity`,
+      `${namespace}/activity/:runId`,
+      `${namespace}/settings`,
+    ];
+
+    for (const path of expectedRoutes) {
+      expect(findRoute(routes, path).hideInMenu).toBe(true);
+    }
+
+    expect(findRoute(routes, namespace).redirect).toBe(
+      `${namespace}/workflows`,
+    );
+    expect(findRoute(routes, `${namespace}/workflows`).component).toBe(
+      "./workflow-activity-vnext",
+    );
+    expect(
+      findRouteIndex(routes, `${namespace}/workflows/new`),
+    ).toBeLessThan(
+      findRouteIndex(routes, `${namespace}/workflows/:workflowId`),
+    );
+
+    expect(findRoute(routes, "/workflows").redirect).toBe(
+      "/runtime/workflows",
+    );
+    expect(findRoute(routes, "/runs").redirect).toBe("/runtime/runs");
+    expect(findRoute(routes, "/").redirect).toBe("/scopes");
+  });
 });
