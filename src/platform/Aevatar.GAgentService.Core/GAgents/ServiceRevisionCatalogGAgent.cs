@@ -39,8 +39,14 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
         EnsureCatalogIdentity(command.Spec.Identity, allowInitialize: true);
 
         var revisionId = command.Spec.RevisionId.Trim();
-        if (State.Revisions.ContainsKey(revisionId))
-            throw new InvalidOperationException($"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(command.Spec.Identity)}'.");
+        if (State.Revisions.TryGetValue(revisionId, out var existing))
+        {
+            if (existing.Spec != null && existing.Spec.Equals(command.Spec))
+                return;
+
+            throw new InvalidOperationException(
+                $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(command.Spec.Identity)}' with a conflicting spec.");
+        }
 
         await PersistDomainEventAsync(new ServiceRevisionCreatedEvent
         {

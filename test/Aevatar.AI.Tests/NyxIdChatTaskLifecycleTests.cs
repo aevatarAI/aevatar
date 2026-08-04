@@ -228,6 +228,8 @@ public sealed class NyxIdChatTaskLifecycleTests
         decision.NextCommand.Should().BeNull();
         decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Active);
         decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
+        decision.State.ActiveTask.ActiveStepId.Should().Be("step-tool-alpha");
+        decision.State.ActiveTask.ActiveOperationId.Should().BeEmpty();
         decision.State.ActiveTask.Steps[0].Status.Should().Be(NyxIdChatStepStatus.Waiting);
         decision.State.ActiveTask.Steps[0].ApprovalRequestId.Should().Be("approval-alpha");
         decision.State.PendingApproval.Should().NotBeNull();
@@ -244,6 +246,27 @@ public sealed class NyxIdChatTaskLifecycleTests
         decision.State.PendingApproval.Presentation.Reversibility.Should()
             .Be(NyxIdChatApprovalReversibility.Irreversible);
         decision.State.PendingApproval.Presentation.GrantBoundary.Should().Be("within_grant");
+
+        var approval = NyxIdChatNeedsYouDecisions.ResolveApproval(
+            decision.State,
+            new NyxIdChatApprovalResolveCommand
+            {
+                ScopeId = "scope-alpha",
+                ConversationActorId = "conversation-alpha",
+                RequestId = "approval-alpha",
+                ClientRequestId = "client-approval-alpha",
+                Approved = true,
+                ExpectedStateVersion = 17,
+            },
+            currentStateVersion: 17,
+            Now);
+        approval.ShouldCommit.Should().BeTrue();
+        approval.State.PendingApproval.Should().BeNull();
+        approval.State.ActiveTask.ActiveStepId.Should().Be("step-tool-alpha");
+        approval.State.ActiveTask.ActiveOperationId.Should().NotBeEmpty();
+        approval.NextCommand.Should().NotBeNull();
+        approval.NextCommand!.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.ToolApprovalContinuation);
     }
 
     [Fact]

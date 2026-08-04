@@ -555,7 +555,7 @@ public sealed class ServiceRevisionCatalogGAgentTests
     }
 
     [Fact]
-    public async Task HandleCreateRevisionAsync_ShouldRejectDuplicateRevision()
+    public async Task HandleCreateRevisionAsync_ShouldBeIdempotentForEquivalentRevision()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var agent = CreateAgent(
@@ -567,14 +567,40 @@ public sealed class ServiceRevisionCatalogGAgentTests
         {
             Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
         });
+        var committedVersion = agent.State.LastAppliedEventVersion;
 
-        var act = () => agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
+        await agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
         {
             Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
         });
 
+        agent.State.LastAppliedEventVersion.Should().Be(committedVersion);
+        agent.State.Revisions.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleCreateRevisionAsync_ShouldRejectConflictingDuplicateRevision()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            new RecordingAdapter(_ => Task.FromResult(GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"))),
+            ServiceActorIds.RevisionCatalog(identity));
+
+        await agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
+        });
+        var conflictingSpec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1");
+        conflictingSpec.StaticSpec.AgentKind = "tests.conflicting-agent";
+
+        var act = () => agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
+        {
+            Spec = conflictingSpec,
+        });
+
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*already exists*");
+            .WithMessage("*conflicting spec*");
     }
 
     [Fact]

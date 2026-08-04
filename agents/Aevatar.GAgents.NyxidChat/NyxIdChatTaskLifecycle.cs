@@ -451,6 +451,8 @@ public static class NyxIdChatTaskLifecycle
 
         step.ApprovalRequestId = receipt.ApprovalRequestId;
         step.UpdatedAt = now.Clone();
+        state.ActiveTask.ActiveStepId = step.StepId;
+        state.ActiveTask.ActiveOperationId = string.Empty;
         state.PendingApproval = new NyxIdChatPendingApprovalState
         {
             ApprovalRequestId = receipt.ApprovalRequestId,
