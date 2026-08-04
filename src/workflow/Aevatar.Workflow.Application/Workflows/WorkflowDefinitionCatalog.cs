@@ -65,8 +65,8 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     /// </para>
     ///
     /// <para>
-    /// It deliberately does NOT steer to the loose <c>workflow_create_def</c> + <c>aevatar_start_workflow &lt;name&gt;</c>
-    /// path: that authors a file-only definition and then runs it by name, which inside the managed workflow
+    /// It deliberately does NOT steer to the loose <c>workflow_create_def</c> + run-by-name path:
+    /// that authors a file-only definition and then runs it by name, which inside the managed workflow
     /// context resolves the target by name against an unprovisioned definition actor and hangs for 30s
     /// (<c>SubWorkflowDefinitionResolution</c> timeout). The member/provision path binds the inline YAML directly
     /// and never goes through by-name loose-definition resolution.
@@ -83,8 +83,9 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     /// The role carries an <c>allowed_tools</c> allowlist (parsed by <c>WorkflowParser</c> →
     /// <c>RoleDefinition.AgentToolScope</c>, intersected with any step scope by the execution kernel →
     /// <c>ToolVisibility</c>). It INCLUDES Studio team/member/draft creation, web authoring research, member workflow binding,
-    /// <c>aevatar_provision_workflow_schedule</c> + the observe tools and EXCLUDES both the Lark <c>scheduled_agent_creator</c> and the hanging loose-definition tools
-    /// (<c>workflow_create_def</c>/<c>update</c>/<c>read</c>/<c>list_defs</c>, <c>aevatar_start_workflow</c>);
+    /// Studio managed-runtime-safe Aevatar invocation, <c>aevatar_provision_workflow_schedule</c> + the observe tools and EXCLUDES
+    /// both the Lark <c>scheduled_agent_creator</c>, unmanaged workflow starts, and the hanging loose-definition tools
+    /// (<c>workflow_create_def</c>/<c>update</c>/<c>read</c>/<c>list_defs</c>);
     /// the allowlist is the lever that keeps those out of the studio surface entirely (prompt steering alone is
     /// unreliable while a tool is visible).
     /// </para>
@@ -352,6 +353,9 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - aevatar_bind_member_workflow
               - aevatar_schedule_member_workflow
               - aevatar_provision_workflow_schedule
+              - aevatar_invoke_gagent
+              - aevatar_invoke_team
+              - aevatar_invoke_member
               - aevatar_observe_run
               - aevatar_read_workflow_run_artifact
               - web_search
