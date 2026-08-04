@@ -1,4 +1,6 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
@@ -811,6 +813,51 @@ public sealed class WorkflowDocumentExtractToolTests
     }
 
     [Fact]
+    public async Task WorkflowFileExtractionAgentTool_ShouldUseAmbientInputFileRef()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-file-extraction-agent-tool-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
+                System.Text.Encoding.UTF8.GetBytes("invoice total 42"),
+                ApplicationFileArtifactSourceKind.ChatInput,
+                FileName: "invoice.txt",
+                MediaType: "text/plain"));
+            var source = new WorkflowFileExtractionAgentToolSource(
+                new WorkflowDocumentExtractToolSource(port),
+                new WorkflowSpreadsheetExtractToolSource(
+                    port,
+                    Microsoft.Extensions.Options.Options.Create(new WorkflowSpreadsheetExtractOptions())));
+            var agentTools = await source.DiscoverToolsAsync();
+            var tool = agentTools.Should().ContainSingle(x => x.Name == "document_extract").Subject;
+            tool.IsReadOnly.Should().BeTrue();
+
+            AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+            {
+                Caller = new AgentToolCallerContext("scope-1", null, null),
+                WorkflowRuntime = new AgentWorkflowRuntimeContext("actor-1", "run-1", "extract", "run-1", 1),
+                InputFileRefs = [ToChatInputFileRef(result.FileRef)],
+            };
+
+            var output = await tool.ExecuteAsync("{}");
+
+            using var document = JsonDocument.Parse(output);
+            var rootElement = document.RootElement;
+            rootElement.GetProperty("extraction_kind").GetString().Should().Be("utf8_text");
+            rootElement.GetProperty("media_type").GetString().Should().Be("text/plain");
+            rootElement.GetProperty("file").GetProperty("file_id").GetString().Should().Be(result.FileRef.FileId);
+            rootElement.GetProperty("text").GetString().Should().Be("invoice total 42");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task WorkflowDocumentExtractTool_ShouldNotTreatAttachmentRefAsFileIdentity()
     {
         var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-attachment-ref-tests", Guid.NewGuid().ToString("N"));
@@ -1260,6 +1307,32 @@ public sealed class WorkflowDocumentExtractToolTests
         var tools = await source.GetToolsAsync();
         return tools.Should().ContainSingle(x => x.Name == "document_extract").Subject;
     }
+
+    private static Aevatar.AI.Abstractions.ChatFileRef ToChatInputFileRef(ApplicationFileArtifactRef fileRef) =>
+        new()
+        {
+            FileId = fileRef.FileId ?? string.Empty,
+            ArtifactId = fileRef.ArtifactId ?? string.Empty,
+            SourceKind = fileRef.SourceKind switch
+            {
+                ApplicationFileArtifactSourceKind.ChatInput => Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.FormUpload => Aevatar.AI.Abstractions.ChatFileSourceKind.FormUpload,
+                ApplicationFileArtifactSourceKind.ConnectedServiceResource => Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource,
+                ApplicationFileArtifactSourceKind.ExternalResource => Aevatar.AI.Abstractions.ChatFileSourceKind.ExternalResource,
+                ApplicationFileArtifactSourceKind.Generated => Aevatar.AI.Abstractions.ChatFileSourceKind.Generated,
+                _ => Aevatar.AI.Abstractions.ChatFileSourceKind.Unspecified,
+            },
+            SourceMessageId = fileRef.SourceMessageId ?? string.Empty,
+            SourceResourceKey = fileRef.SourceResourceKey ?? string.Empty,
+            FileName = fileRef.FileName ?? string.Empty,
+            MediaType = fileRef.MediaType ?? string.Empty,
+            SizeBytes = fileRef.SizeBytes,
+            Sha256 = fileRef.Sha256 ?? string.Empty,
+            CreatedAtUnixMs = fileRef.CreatedAtUnixMs,
+            ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs,
+            OwnerRunId = fileRef.OwnerRunId ?? string.Empty,
+            OwnerScopeId = fileRef.OwnerScopeId ?? string.Empty,
+        };
 
     private static ProtoWorkflowFileRef ToProtoInputFileRef(ApplicationFileArtifactRef fileRef) =>
         new()

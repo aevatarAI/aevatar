@@ -409,6 +409,7 @@ public class WorkflowRoleGAgent(
         toolContext = toolContext with
         {
             InvocationSurface = AgentToolInvocationSurface.WorkflowLlmToolLoop,
+            InputFileRefs = intent.InputFileRefs.Select(ToChatFileRef).ToArray(),
         };
 
         var request = new ChatRequestEvent

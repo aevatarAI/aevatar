@@ -195,6 +195,13 @@ public sealed class WorkflowRoleGAgentMappingTests
         fileRef.Sha256.Should().Be("sha-file-role");
         fileRef.CreatedAtUnixMs.Should().Be(1710000000000);
         fileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
+        provider.LastRequest.ToolContext.Should().NotBeNull();
+        var contextFileRef = provider.LastRequest.ToolContext!.InputFileRefs.Should().ContainSingle().Subject;
+        contextFileRef.FileId.Should().Be("file-role");
+        contextFileRef.ArtifactId.Should().Be("workflow-file://file-role");
+        contextFileRef.SourceKind.Should().Be(Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource);
+        contextFileRef.FileName.Should().Be("file-role.png");
+        contextFileRef.MediaType.Should().Be("image/png");
     }
 
     [Fact]
