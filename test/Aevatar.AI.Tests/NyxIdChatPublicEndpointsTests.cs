@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AGUI.Contracts;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -123,6 +124,46 @@ public sealed class NyxIdChatPublicEndpointsTests
         credentials.NyxIdAccessToken.Should().Be("proxy-delegation");
         credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.ProxyDelegation);
         AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(credentials).Should().BeNull();
+    }
+
+    [Fact]
+    public void CommandEnvelope_WithCase13MultimodalPrompt_ShouldCarryExactSkillRecovery()
+    {
+        const string prompt =
+            "请从这张合成发票图片中提取字段、归一化金额和日期，并检查历史重复。" +
+            "请先通过 Ornn 搜索确认并使用精确名称为 invoice-ocr-policy-review 的 skill，" +
+            "把其中的 workflow 挂载到当前 scope 后实际运行；禁止直接用模型视觉回答，" +
+            "禁止创建审批，结果只以 typed artifact 为准。";
+        var command = new NyxIdChatCommand(
+            "conversation-alpha",
+            "scope-alpha",
+            prompt,
+            "turn-alpha",
+            "delegated-token",
+            [new NyxIdChatEndpoints.ContentPartDto(
+                Type: "image",
+                DataBase64: "c3ludGhldGljLWludm9pY2U=",
+                MediaType: "image/png",
+                Name: "synthetic-invoice.png")],
+            Metadata: null,
+            OwnerSubject: "user-alpha");
+
+        var envelope = new NyxIdChatCommandEnvelopeFactory().CreateEnvelope(
+            command,
+            new CommandContext(
+                command.ActorId,
+                "command-alpha",
+                "correlation-alpha",
+                new Dictionary<string, string>()));
+
+        var start = envelope.Payload.Unpack<NyxIdChatStartTurnCommand>();
+        start.InputParts.Should().ContainSingle().Which.Kind.Should().Be(ChatContentPartKind.Image);
+        var recovery = AgentToolExecutionContextMapper.FromPayload(start.ToolContext).SkillRecovery;
+        recovery.RequireInitialOrnnSearch.Should().BeTrue();
+        recovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
+        recovery.PrimarySkillName.Should().Be("invoice-ocr-policy-review");
+        recovery.OriginalCommand.Should().Be(prompt);
+        recovery.CommandArguments.Should().Be(prompt);
     }
 
     [Fact]

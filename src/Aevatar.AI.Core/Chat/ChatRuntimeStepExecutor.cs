@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Hooks;
+using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.Tools;
 
 namespace Aevatar.AI.Core.Chat;
@@ -87,6 +88,58 @@ public sealed class ChatRuntimeStepExecutor
     }
 
     public ILLMProvider ResolveProvider() => _providerFactory();
+
+    public async Task<ChatRuntimeStepRecoveryToolCall?> TryPlanSkillRecoveryToolCallAsync(
+        LLMRequest request,
+        IReadOnlyList<ChatMessage> recoveryMessages,
+        string? finalContent,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(recoveryMessages);
+        if (!TryPlanSkillRecoveryToolCall(request, recoveryMessages, finalContent, out _))
+            return null;
+
+        var authorizationFence = ChatRuntimeRequestBuilder.CaptureAuthorizationFence(request);
+        var context = new LLMCallContext
+        {
+            Request = authorizationFence.Apply(request, forceCopy: _llmMiddlewares.Count > 0),
+            Provider = ResolveProvider(),
+            CancellationToken = ct,
+            IsStreaming = true,
+        };
+        var reachedCore = false;
+        await MiddlewarePipeline.RunLLMCallAsync(
+                _llmMiddlewares,
+                context,
+                () =>
+                {
+                    reachedCore = true;
+                    return Task.CompletedTask;
+                })
+            .ConfigureAwait(false);
+        if (!reachedCore || context.Terminate)
+            return null;
+
+        var authorizedRequest = authorizationFence.Apply(context.Request);
+        if (!TryPlanSkillRecoveryToolCall(
+                authorizedRequest,
+                recoveryMessages,
+                finalContent,
+                out var toolCall))
+            return null;
+
+        var authorizedTools = authorizedRequest.Tools?
+            .Where(tool => string.Equals(tool.Name, toolCall.Name, StringComparison.Ordinal))
+            .ToArray() ?? [];
+        if (authorizedTools.Length != 1)
+            return null;
+
+        return new ChatRuntimeStepRecoveryToolCall(
+            toolCall,
+            authorizedTools,
+            AgentToolExecutionContextMapper.FromRequest(authorizedRequest));
+    }
 
     public Task<ChatRuntimeStepLlmResult> ExecuteLlmStepAsync(
         ILLMProvider provider,
@@ -188,6 +241,36 @@ public sealed class ChatRuntimeStepExecutor
 
     public void RecordUsage(TokenUsage? usage) => _budgetTracker.RecordUsage(usage);
 
+    private static bool TryPlanSkillRecoveryToolCall(
+        LLMRequest request,
+        IReadOnlyList<ChatMessage> recoveryMessages,
+        string? finalContent,
+        out ToolCall toolCall)
+    {
+        toolCall = default!;
+        var recovery = request.ToolContext?.SkillRecovery ?? AgentSkillRecoveryContext.Empty;
+        var searchAttempts = recoveryMessages.Sum(message =>
+            message.ToolCalls?.Count(call => string.Equals(
+                call.Name,
+                "ornn_search_skills",
+                StringComparison.Ordinal)) ?? 0);
+        if (!SkillRecoveryPlanner.TryPlanNextDirective(
+                recovery,
+                recoveryMessages,
+                finalContent,
+                searchAttempts,
+                request.ToolContext?.Request.CallId ?? request.RequestId,
+                primarySkillAttempted: false,
+                out var directive) ||
+            directive.ToolCall is null)
+        {
+            return false;
+        }
+
+        toolCall = directive.ToolCall;
+        return true;
+    }
+
     private static List<ChatMessage> BuildStepMessages(
         IReadOnlyList<ChatMessage> messages,
         int round,
@@ -211,5 +294,10 @@ public sealed record ChatRuntimeStepLlmResult(
     bool Terminated,
     string? FinishReason,
     TokenUsage? Usage,
+    IReadOnlyList<IAgentTool> AuthorizedTools,
+    AgentToolExecutionContext AuthorizedToolContext);
+
+public sealed record ChatRuntimeStepRecoveryToolCall(
+    ToolCall ToolCall,
     IReadOnlyList<IAgentTool> AuthorizedTools,
     AgentToolExecutionContext AuthorizedToolContext);

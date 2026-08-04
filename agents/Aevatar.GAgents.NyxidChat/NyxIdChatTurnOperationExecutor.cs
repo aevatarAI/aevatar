@@ -856,6 +856,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             assistant.ContentParts.AddRange(outputParts.Select(static part => part.Clone()));
             assistant.ToolCalls.AddRange(result.ToolCalls.Select(static call => call.Clone()));
             next.Messages.Add(assistant);
+            next.PendingHistoryMessages.Add(assistant.Clone());
         }
 
         return next;
@@ -870,6 +871,7 @@ public sealed class NyxIdChatTurnOperationExecutor
         next.NextStepIndex = completedStepIndex;
         next.PendingToolCalls.Clear();
         next.Messages.AddRange(result.ResultMessages.Select(static message => message.Clone()));
+        next.PendingHistoryMessages.AddRange(result.ResultMessages.Select(static message => message.Clone()));
         next.AppendedHistory.AddRange(result.ResultMessages.Select(
             AgentRunReplyStepMappers.ToConversationHistoryEntry));
         next.ToolReceipts.AddRange(result.ToolReceipts.Select(static receipt => receipt.Clone()));
