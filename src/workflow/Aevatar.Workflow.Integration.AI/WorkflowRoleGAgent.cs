@@ -1231,6 +1231,21 @@ public class WorkflowRoleGAgent(
         }
         var turnCatalog = await BuildRequestToolCatalogAsync(intent.AgentToolScope, toolContext, streamCt);
         streamCt.ThrowIfCancellationRequested();
+        var firstToolContextFileRef = toolContext.InputFileRefs.FirstOrDefault();
+        Logger.LogInformation(
+            "Workflow LLM request tool catalog resolved. runId={RunId} stepId={StepId} sessionId={SessionId} intentInputFileRefCount={IntentInputFileRefCount} requestInputPartCount={RequestInputPartCount} toolContextInputFileRefCount={ToolContextInputFileRefCount} toolSetRefCount={ToolSetRefCount} routeOwnedToolCount={RouteOwnedToolCount} routeOwnedToolNames={RouteOwnedToolNames} firstToolContextFileId={FirstToolContextFileId} firstToolContextArtifactId={FirstToolContextArtifactId} firstToolContextMediaType={FirstToolContextMediaType}",
+            intent.RunId ?? string.Empty,
+            intent.StepId ?? string.Empty,
+            intent.SessionId ?? string.Empty,
+            intent.InputFileRefs.Count,
+            inputParts.Count,
+            toolContext.InputFileRefs.Count,
+            intent.AgentToolScope?.ToolSetRefs.Count ?? 0,
+            turnCatalog?.RouteOwnedTools.Count ?? 0,
+            turnCatalog is null ? string.Empty : string.Join(',', turnCatalog.RouteOwnedTools.Keys),
+            firstToolContextFileRef?.FileId ?? string.Empty,
+            firstToolContextFileRef?.ArtifactId ?? string.Empty,
+            firstToolContextFileRef?.MediaType ?? string.Empty);
         if (turnCatalog is not null)
             toolContext = AddRequestToolsToVisibility(toolContext, turnCatalog.RouteOwnedTools.Keys);
         var metadata = request.Metadata.Count > 0

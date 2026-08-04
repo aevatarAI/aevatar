@@ -3,29 +3,40 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Modules;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Infrastructure.Runs;
 
 public sealed class WorkflowFileExtractionAgentToolSource(
     WorkflowDocumentExtractToolSource documentExtractToolSource,
-    WorkflowSpreadsheetExtractToolSource spreadsheetExtractToolSource) : IAgentToolSource
+    WorkflowSpreadsheetExtractToolSource spreadsheetExtractToolSource,
+    ILogger<WorkflowFileExtractionAgentToolSource>? logger = null) : IAgentToolSource
 {
     private readonly WorkflowDocumentExtractToolSource _documentExtractToolSource = documentExtractToolSource;
     private readonly WorkflowSpreadsheetExtractToolSource _spreadsheetExtractToolSource = spreadsheetExtractToolSource;
+    private readonly ILogger<WorkflowFileExtractionAgentToolSource>? _logger = logger;
 
     public async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
         var tools = new List<IAgentTool>();
-        tools.AddRange((await _documentExtractToolSource.GetToolsAsync(ct).ConfigureAwait(false))
-            .Select(static tool => new WorkflowFileExtractionAgentTool(tool)));
-        tools.AddRange((await _spreadsheetExtractToolSource.GetToolsAsync(ct).ConfigureAwait(false))
-            .Select(static tool => new WorkflowFileExtractionAgentTool(tool)));
+        var documentTools = await _documentExtractToolSource.GetToolsAsync(ct).ConfigureAwait(false);
+        tools.AddRange(documentTools.Select(tool => new WorkflowFileExtractionAgentTool(tool, _logger)));
+        var spreadsheetTools = await _spreadsheetExtractToolSource.GetToolsAsync(ct).ConfigureAwait(false);
+        tools.AddRange(spreadsheetTools.Select(tool => new WorkflowFileExtractionAgentTool(tool, _logger)));
+        _logger?.LogInformation(
+            "Workflow file extraction agent tools discovered. documentToolCount={DocumentToolCount} spreadsheetToolCount={SpreadsheetToolCount} toolNames={ToolNames}",
+            documentTools.Count,
+            spreadsheetTools.Count,
+            string.Join(',', tools.Select(static tool => tool.Name)));
         return tools;
     }
 
-    private sealed class WorkflowFileExtractionAgentTool(IWorkflowTool tool) : IAgentTool
+    private sealed class WorkflowFileExtractionAgentTool(
+        IWorkflowTool tool,
+        ILogger<WorkflowFileExtractionAgentToolSource>? logger) : IAgentTool
     {
         private readonly IWorkflowTool _tool = tool;
+        private readonly ILogger<WorkflowFileExtractionAgentToolSource>? _logger = logger;
 
         public string Name => _tool.Name;
 
@@ -71,20 +82,43 @@ public sealed class WorkflowFileExtractionAgentToolSource(
             CancellationToken ct)
         {
             var context = AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty;
-            return await _tool.ExecuteAsync(
-                new WorkflowToolExecutionRequest(
-                    string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson,
-                    Normalize(context.WorkflowRuntime.ParentRunId) ?? Normalize(context.Request.RequestId) ?? string.Empty,
-                    Normalize(context.WorkflowRuntime.ParentStepId) ?? string.Empty,
-                    Normalize(context.Request.IdempotencyKey) ?? Normalize(context.Request.CallId) ?? string.Empty,
-                    Normalize(context.Request.CallId) ?? string.Empty,
-                    Normalize(context.Caller.ScopeId) ?? Normalize(context.Caller.OwnerScopeId) ?? string.Empty,
-                    ToWorkflowCallerCredential(context),
-                    ToWorkflowRuntimeContext(context.WorkflowRuntime),
-                    InputFileRefs: context.InputFileRefs.Select(ToWorkflowFileRef).ToArray(),
-                    IdempotencyKey: Normalize(context.Request.IdempotencyKey) ?? string.Empty,
-                    ScheduleId: Normalize(context.Schedule.ScheduleId) ?? string.Empty),
-                ct).ConfigureAwait(false);
+            var inputFileRefs = context.InputFileRefs.Select(ToWorkflowFileRef).ToArray();
+            var request = new WorkflowToolExecutionRequest(
+                string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson,
+                Normalize(context.WorkflowRuntime.ParentRunId) ?? Normalize(context.Request.RequestId) ?? string.Empty,
+                Normalize(context.WorkflowRuntime.ParentStepId) ?? string.Empty,
+                Normalize(context.Request.IdempotencyKey) ?? Normalize(context.Request.CallId) ?? string.Empty,
+                Normalize(context.Request.CallId) ?? string.Empty,
+                Normalize(context.Caller.ScopeId) ?? Normalize(context.Caller.OwnerScopeId) ?? string.Empty,
+                ToWorkflowCallerCredential(context),
+                ToWorkflowRuntimeContext(context.WorkflowRuntime),
+                InputFileRefs: inputFileRefs,
+                IdempotencyKey: Normalize(context.Request.IdempotencyKey) ?? string.Empty,
+                ScheduleId: Normalize(context.Schedule.ScheduleId) ?? string.Empty);
+            var firstFileRef = inputFileRefs.FirstOrDefault();
+            _logger?.LogInformation(
+                "Workflow file extraction agent tool executing. toolName={ToolName} runId={RunId} stepId={StepId} callId={CallId} scopeId={ScopeId} inputFileRefCount={InputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+                Name,
+                request.RunId,
+                request.StepId,
+                request.CallId,
+                request.ScopeId,
+                inputFileRefs.Length,
+                firstFileRef?.FileId ?? string.Empty,
+                firstFileRef?.ArtifactId ?? string.Empty,
+                firstFileRef?.MediaType ?? string.Empty);
+
+            var result = await _tool.ExecuteAsync(request, ct).ConfigureAwait(false);
+            _logger?.LogInformation(
+                "Workflow file extraction agent tool completed. toolName={ToolName} runId={RunId} stepId={StepId} callId={CallId} resultJsonLength={ResultJsonLength} failureCode={FailureCode} failureMessage={FailureMessage}",
+                Name,
+                request.RunId,
+                request.StepId,
+                request.CallId,
+                result.ResultJson?.Length ?? 0,
+                result.Failure?.ErrorCode ?? string.Empty,
+                result.Failure?.ErrorMessage ?? string.Empty);
+            return result;
         }
 
         private AgentToolReceipt ToReceipt(
