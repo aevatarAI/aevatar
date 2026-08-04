@@ -97,12 +97,19 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task ObserveRunTool_ShouldBeHiddenFromDirectChannelChat()
+    public async Task ObserveRunTool_ShouldRequireCurrentRunReceiptGate()
     {
         var tool = await DiscoverSingleAsync(new ObserveRunToolSource(new Harness().CreateDispatcher()));
 
-        tool.Should().BeAssignableTo<IAgentToolCapabilityDescriptor>()
-            .Which.Capabilities.Should().Contain(AgentToolCapabilities.ExcludeFromDirectChannelChat);
+        tool.Should().BeAssignableTo<IAgentToolReadOnlyReceiptGate>()
+            .Which.RequiresCurrentToolRunReceipt("""
+                {
+                  "service_run": {
+                    "service_id": "service-1",
+                    "run_id": "run-1"
+                  }
+                }
+                """).Should().BeTrue();
     }
 
     [Fact]
@@ -3733,7 +3740,14 @@ public sealed class AevatarInvocationToolSourceTests
                 "command_id": "workflow-command"
               }
             }
-            """);
+            """,
+            [new AgentToolReceipt
+            {
+                Status = AgentToolReceiptStatus.Success,
+                SubjectKind = AevatarInvocationReceiptJson.InvocationRunSubjectKind,
+                SubjectId = "workflow-run",
+                ResultJson = """{"run_id":"workflow-run","command_id":"workflow-command"}""",
+            }]);
 
         result.Result.Should().Contain("\"run_id\":\"workflow-command\"");
         result.Result.Should().Contain("\"status\":\"Completed\"");
@@ -4204,13 +4218,15 @@ public sealed class AevatarInvocationToolSourceTests
         IAgentTool tool,
         string toolCallId,
         string toolName,
-        string argumentsJson)
+        string argumentsJson,
+        IList<AgentToolReceipt>? currentToolRunReceipts = null)
     {
         var tools = new ToolManager();
         tools.Register(tool);
         var executor = new StreamingToolExecutor(
             tools,
-            toolExecutionPort: CreateToolExecutionPort());
+            toolExecutionPort: CreateToolExecutionPort(),
+            currentToolRunReceipts: currentToolRunReceipts);
         using var executionState = executor.CreateExecutionState();
         var prepared = await executor.PrepareBatchAsync(
             $"tool-source-test:{toolCallId}",
