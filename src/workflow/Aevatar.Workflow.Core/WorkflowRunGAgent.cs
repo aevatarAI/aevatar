@@ -1103,11 +1103,12 @@ public sealed partial class WorkflowRunGAgent
             .Select(fileRef =>
             {
                 var clone = fileRef.Clone();
-                if (!string.IsNullOrWhiteSpace(clone.OwnerRunId))
-                    return clone;
+                if (string.IsNullOrWhiteSpace(clone.OwnerRunId))
+                {
+                    clone.OwnerRunId = runId;
+                    clone.OwnerScopeId = scopeId ?? string.Empty;
+                }
 
-                clone.OwnerRunId = runId;
-                clone.OwnerScopeId = scopeId ?? string.Empty;
                 return clone;
             })
             .ToArray();
@@ -1122,15 +1123,12 @@ public sealed partial class WorkflowRunGAgent
 
         foreach (var fileRef in fileRefs)
         {
-            if (!ShouldBindInputFileArtifact(fileRef, runId))
-                continue;
-
             try
             {
                 await _fileArtifactOwnership.BindOwnerAsync(
                     ToApplicationFileArtifactRef(fileRef),
-                    runId,
-                    scopeId,
+                    ResolveInputFileArtifactOwnerRunId(fileRef, runId),
+                    ResolveInputFileArtifactOwnerScopeId(fileRef, scopeId),
                     CancellationToken.None);
             }
             catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FileNotFoundException or IOException or UnauthorizedAccessException)
@@ -1143,8 +1141,11 @@ public sealed partial class WorkflowRunGAgent
         return true;
     }
 
-    private static bool ShouldBindInputFileArtifact(WorkflowFileRef fileRef, string runId) =>
-        string.Equals(fileRef.OwnerRunId?.Trim(), runId, StringComparison.Ordinal);
+    private static string ResolveInputFileArtifactOwnerRunId(WorkflowFileRef fileRef, string runId) =>
+        string.IsNullOrWhiteSpace(fileRef.OwnerRunId) ? runId : fileRef.OwnerRunId.Trim();
+
+    private static string ResolveInputFileArtifactOwnerScopeId(WorkflowFileRef fileRef, string scopeId) =>
+        string.IsNullOrWhiteSpace(fileRef.OwnerScopeId) ? scopeId : fileRef.OwnerScopeId.Trim();
 
     private static ApplicationFileArtifactRef ToApplicationFileArtifactRef(WorkflowFileRef source) =>
         new()

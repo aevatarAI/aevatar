@@ -438,7 +438,7 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
     }
 
     [Fact]
-    public async Task ChatRequest_WhenInputFileRefAlreadyHasOwner_ShouldNotRebindOwner()
+    public async Task ChatRequest_WhenInputFileRefAlreadyHasOwner_ShouldBindWithExistingOwner()
     {
         var runId = "run-file-prebound-" + Guid.NewGuid().ToString("N");
         var ownershipPort = new RecordingWorkflowFileArtifactOwnershipPort();
@@ -463,7 +463,9 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
             envelopeId: "command-1",
             correlationId: "correlation-1"));
 
-        ownershipPort.BindRequests.Should().BeEmpty();
+        var bindRequest = ownershipPort.BindRequests.Should().ContainSingle().Subject;
+        bindRequest.OwnerRunId.Should().Be("source-run");
+        bindRequest.OwnerScopeId.Should().Be("source-scope");
         var fileRef = CommittedEvents<WorkflowRunExecutionStartedEvent>(harness.CommittedPublisher)
             .Should()
             .ContainSingle()
