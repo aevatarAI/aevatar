@@ -886,6 +886,32 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShouldUseSourceReadableCredentialForPublishedAuthorityRevalidation()
+    {
+        var admission = ListMessagesAdmission();
+        var handler = new RecordingHandler();
+        handler.McpConfigJsonByBearer["source-readable-token"] = McpConfig(admission);
+        handler.McpConfigJsonByBearer["proxy-delegation-token"] = McpConfig(
+            admission with { ServiceSlug = "api-lark-bot-v2" });
+        var tool = CreateTool(handler);
+        using var scope = PushContext(
+            admission,
+            userToken: "proxy-delegation-token",
+            credentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation,
+            sourceReadableToken: "source-readable-token");
+
+        var result = await tool.ExecuteAsync(
+            """{"query":{"container_id":"oc_1"}}""");
+
+        result.Should().NotContain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        handler.McpConfigRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().ContainSingle();
+        handler.AuthorizationBearers.Should().Equal(
+            "source-readable-token",
+            "proxy-delegation-token");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldRejectLiveContractDigestDriftBeforeProxyDispatch()
     {
         var handler = new RecordingHandler
@@ -1513,10 +1539,17 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     private static AgentToolContextScope PushContext(
         AgentToolOperationAdmission admission,
         string? organizationToken = null,
-        string? userToken = "user-token") =>
+        string? userToken = "user-token",
+        AgentToolNyxIdCredentialKind credentialKind = AgentToolNyxIdCredentialKind.Unspecified,
+        string? sourceReadableToken = null) =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             AgentToolRequestIdentity.Empty,
-            new AgentToolCredentials(userToken, organizationToken, null),
+            new AgentToolCredentials(
+                userToken,
+                organizationToken,
+                null,
+                credentialKind,
+                sourceReadableToken),
             new AgentToolCallerContext("scope-alpha", null, null),
             AgentToolChannelContext.Empty,
             AgentToolSenderBindingContext.Empty,
@@ -1567,6 +1600,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     {
         public string? McpConfigJson { get; init; }
 
+        public Dictionary<string, string> McpConfigJsonByBearer { get; } = new(StringComparer.Ordinal);
+
         public HttpStatusCode? ProxyStatusCode { get; init; }
 
         public string? ProxyResponseBody { get; init; }
@@ -1593,7 +1628,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             RequestBodies.Add(body);
             RequestUris.Add(request.RequestUri!.ToString());
-            AuthorizationBearers.Add(request.Headers.Authorization?.Parameter ?? string.Empty);
+            var authorizationBearer = request.Headers.Authorization?.Parameter ?? string.Empty;
+            AuthorizationBearers.Add(authorizationBearer);
             if (request.RequestUri!.AbsolutePath == "/api/v1/mcp/config")
             {
                 McpConfigRequests.Add(request.RequestUri.AbsolutePath);
@@ -1601,7 +1637,9 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = new StringContent(
-                        McpConfigJson ?? McpConfig(admission),
+                        McpConfigJsonByBearer.TryGetValue(authorizationBearer, out var bearerConfig)
+                            ? bearerConfig
+                            : McpConfigJson ?? McpConfig(admission),
                         Encoding.UTF8,
                         "application/json"),
                 };

@@ -386,7 +386,11 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 AccessTokenMissingErrorMessage);
         }
 
-        var revalidationFailure = await RevalidateAdmittedOperationAsync(admission, token, ct);
+        // Admission reads the catalog through the source-readable caller authority. Revalidate
+        // against that same view while retaining the delegation token for the exact proxy request.
+        var authorityToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
+                                 AgentToolRequestContext.Current?.Credentials) ?? token;
+        var revalidationFailure = await RevalidateAdmittedOperationAsync(admission, authorityToken, ct);
         if (revalidationFailure is not null)
         {
             return CreateAdmittedFailureOutcome(
