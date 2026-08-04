@@ -391,6 +391,22 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        var firstInputFileRef = request.InputParts
+            .Select(static part => part.FileRef)
+            .FirstOrDefault(HasFileRefIdentity);
+        var firstToolContextFileRef = request.ToolContext?.InputFileRefs.FirstOrDefault(HasFileRefIdentity);
+        Logger.LogWarning(
+            "NyxID chat request input file refs received. actor={ActorId} session={SessionId} inputPartCount={InputPartCount} inputPartFileRefCount={InputPartFileRefCount} toolContextFileRefCount={ToolContextFileRefCount} firstInputFileId={FirstInputFileId} firstInputArtifactId={FirstInputArtifactId} firstToolContextFileId={FirstToolContextFileId} firstToolContextArtifactId={FirstToolContextArtifactId}",
+            Id,
+            request.SessionId ?? string.Empty,
+            request.InputParts.Count,
+            request.InputParts.Count(static part => HasFileRefIdentity(part.FileRef)),
+            request.ToolContext?.InputFileRefs.Count ?? 0,
+            firstInputFileRef?.FileId ?? string.Empty,
+            firstInputFileRef?.ArtifactId ?? string.Empty,
+            firstToolContextFileRef?.FileId ?? string.Empty,
+            firstToolContextFileRef?.ArtifactId ?? string.Empty);
+
         var telemetryContext = State.AgentProfile is { } profile
             ? CreateTelemetryContext(profile)
             : null;
@@ -426,6 +442,10 @@ public sealed class NyxIdChatGAgent : RoleGAgent
             builder.Append("\n\n");
         builder.Append(content.Trim());
     }
+
+    private static bool HasFileRefIdentity(Aevatar.AI.Abstractions.ChatFileRef? fileRef) =>
+        fileRef is not null &&
+        (!string.IsNullOrWhiteSpace(fileRef.FileId) || !string.IsNullOrWhiteSpace(fileRef.ArtifactId));
 
     private bool RequiresNyxIdProviderMigration()
     {
