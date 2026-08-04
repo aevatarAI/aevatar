@@ -131,7 +131,7 @@ public class NyxIdCodeExecuteToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ProxyDelegation_UsesSourceReadableCredentialForSandbox()
+    public async Task ExecuteAsync_ProxyDelegation_UsesExecutionDelegationCredentialForSandbox()
     {
         var handler = new CaptureHandler();
         using var httpClient = new HttpClient(handler);
@@ -153,7 +153,7 @@ public class NyxIdCodeExecuteToolTests
         {
             await tool.ExecuteAsync("""{"language":"python","code":"print(1)"}""");
 
-            handler.AuthorizationBearer.Should().Be("source-readable-alpha");
+            handler.AuthorizationBearer.Should().Be("proxy-delegation-alpha");
         }
         finally
         {
