@@ -252,11 +252,13 @@ remains `chatc-*`, while `action.continue` targets the action-owning
 `nyxid-chat-*` actor.
 
 The action-card fact commits before the Workflow Run dispatches its sanitized
-self-continuation. That continuation follows the normal failed-step and run
-terminal path, so an authorization-blocked turn produces an actionable card and
-still reaches `RUN_ERROR`. If the required action owner cannot be established,
-the run fails closed without fabricating a card and still dispatches the terminal
-continuation.
+self-continuation. Once that handoff is committed, the continuation completes the
+workflow successfully: the card is the interactive turn's delivered result, while
+the action-owning `nyxid-chat-*` actor remains the authority for the blocked action
+and its later continuation. The client therefore observes
+`nyxid.action.request -> RUN_FINISHED`, never a contradictory `RUN_ERROR`. If the
+required action owner cannot be established, the run fails closed without
+fabricating a card and dispatches the failed terminal continuation.
 
 An explicit request to connect, add, or authorize a named NyxID catalog service
 does carry a stronger product contract. Catalog lookup is discovery only: the

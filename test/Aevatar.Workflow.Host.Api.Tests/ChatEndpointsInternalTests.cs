@@ -1758,7 +1758,7 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
-    public async Task HandleChat_ShouldContinueWithActionAndTerminal_AfterUnknownRawObservedPayload()
+    public async Task HandleChat_ShouldContinueWithActionAndRunFinished_AfterUnknownRawObservedPayload()
     {
         var interactionService = new FakeCommandInteractionService
         {
@@ -1787,16 +1787,16 @@ public sealed class ChatEndpointsInternalTests
                 }, ct);
                 await emitAsync(new WorkflowRunEventEnvelope
                 {
-                    RunError = new WorkflowRunErrorEventPayload
+                    RunFinished = new WorkflowRunFinishedEventPayload
                     {
-                        Code = "AUTHORIZATION_REQUIRED",
-                        Message = "Connect Twitter to continue.",
+                        ThreadId = "actor-1",
+                        Result = Any.Pack(new WorkflowRunResultPayload()),
                     },
                 }, ct);
                 return WorkflowChatRunInteractionResult.Success(
                     receipt,
                     new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
-                        WorkflowProjectionCompletionStatus.Failed,
+                        WorkflowProjectionCompletionStatus.Completed,
                         true));
             },
         };
@@ -1811,10 +1811,11 @@ public sealed class ChatEndpointsInternalTests
         var body = await ReadBodyAsync(http.Response);
         var rawIndex = body.IndexOf("event-unknown", StringComparison.Ordinal);
         var actionIndex = body.IndexOf("nyxid.action.request", StringComparison.Ordinal);
-        var terminalIndex = body.IndexOf("AUTHORIZATION_REQUIRED", StringComparison.Ordinal);
+        var terminalIndex = body.IndexOf("runFinished", StringComparison.Ordinal);
         rawIndex.Should().BeGreaterThanOrEqualTo(0);
         actionIndex.Should().BeGreaterThan(rawIndex);
         terminalIndex.Should().BeGreaterThan(actionIndex);
+        body.Should().NotContain("runError");
         body.Should().NotContain("WORKFLOW_REVISION_INCOMPATIBLE");
     }
 

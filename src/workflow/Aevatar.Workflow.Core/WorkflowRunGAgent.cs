@@ -728,15 +728,16 @@ public sealed partial class WorkflowRunGAgent
         if (completed.AuthorizationRequirement is not { } requirement)
             return;
 
-        var terminalContinuation = BuildInteractiveTerminalContinuation(completed, requirement);
+        var terminalFailure = BuildInteractiveTerminalFailure(completed, requirement);
+        var handoffCompletion = BuildInteractiveActionHandoffCompletion(completed);
         if (!TryBuildInteractiveActionHandoff(
                 completed,
                 requirement,
-                terminalContinuation,
+                handoffCompletion,
                 out var handoff,
                 out var command))
         {
-            await PublishInteractiveTerminalContinuationAsync(completed, terminalContinuation);
+            await PublishInteractiveTerminalContinuationAsync(completed, terminalFailure);
             return;
         }
 
@@ -744,9 +745,7 @@ public sealed partial class WorkflowRunGAgent
             string.Equals(candidate.HandoffId, handoff.HandoffId, StringComparison.Ordinal));
         if (existing is not null)
         {
-            if (!existing.Request.ToByteString().Equals(handoff.Request.ToByteString()) ||
-                !existing.TerminalContinuation.ToByteString().Equals(
-                    handoff.TerminalContinuation.ToByteString()))
+            if (!existing.Request.ToByteString().Equals(handoff.Request.ToByteString()))
             {
                 throw new InvalidOperationException(
                     "An interactive action handoff identity was reused with different content.");
@@ -770,7 +769,7 @@ public sealed partial class WorkflowRunGAgent
                 completed.StepId,
                 completed.SessionId,
                 command.Request.ActorId);
-            await PublishInteractiveTerminalContinuationAsync(completed, terminalContinuation);
+            await PublishInteractiveTerminalContinuationAsync(completed, terminalFailure);
             return;
         }
 
@@ -942,7 +941,19 @@ public sealed partial class WorkflowRunGAgent
         }, ct);
     }
 
-    private static WorkflowLlmInvocationCompletedEvent BuildInteractiveTerminalContinuation(
+    private static WorkflowLlmInvocationCompletedEvent BuildInteractiveActionHandoffCompletion(
+        WorkflowLlmInvocationCompletedEvent completed) =>
+        new()
+        {
+            RunId = completed.RunId,
+            StepId = completed.StepId,
+            SessionId = completed.SessionId,
+            RoleActorId = completed.RoleActorId,
+            Success = true,
+            Usage = completed.Usage?.Clone(),
+        };
+
+    private static WorkflowLlmInvocationCompletedEvent BuildInteractiveTerminalFailure(
         WorkflowLlmInvocationCompletedEvent completed,
         WorkflowInteractiveAuthorizationRequirement requirement) =>
         new()

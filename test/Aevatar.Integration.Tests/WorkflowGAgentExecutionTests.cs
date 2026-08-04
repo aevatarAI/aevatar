@@ -179,7 +179,7 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
         }
 
         [Fact]
-        public async Task WorkflowRunGAgent_WhenInteractiveAuthorizationIsRequired_ShouldCommitCardBeforeTerminalContinuation()
+        public async Task WorkflowRunGAgent_WhenInteractiveAuthorizationIsRequired_ShouldCommitCardBeforeSuccessfulTerminalContinuation()
         {
             var eventStore = new InMemoryEventStore();
             var publisher = new RecordingEventPublisher();
@@ -245,6 +245,8 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
             var terminal = continuationPublication.Event
                 .Should().BeOfType<WorkflowLlmInvocationCompletedEvent>().Subject;
             terminal.AuthorizationRequirement.Should().BeNull();
+            terminal.Success.Should().BeTrue();
+            terminal.Error.Should().BeEmpty();
             continuationPublication.Direction.Should().Be(TopologyAudience.Self);
             continuationPublication.Options.Should().NotBeNull();
             continuationPublication.Options!.Delivery.Should().NotBeNull();
