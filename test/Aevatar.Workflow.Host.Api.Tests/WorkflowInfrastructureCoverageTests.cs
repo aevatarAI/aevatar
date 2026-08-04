@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
@@ -97,6 +98,15 @@ public sealed class WorkflowInfrastructureCoverageTests
 
         toolNames.Should().Contain("document_extract");
         toolNames.Should().Contain("spreadsheet_extract");
+        var agentToolNames = new List<string>();
+        foreach (var agentToolSource in provider.GetServices<IAgentToolSource>())
+        {
+            var agentTools = await agentToolSource.DiscoverToolsAsync();
+            agentToolNames.AddRange(agentTools.Select(x => x.Name));
+        }
+
+        agentToolNames.Should().Contain("document_extract");
+        agentToolNames.Should().Contain("spreadsheet_extract");
         provider.GetRequiredService<IOptions<WorkflowSpreadsheetExtractOptions>>()
             .Value.MaxRowsPerSheet.Should().Be(50);
         services.Should().Contain(x =>
