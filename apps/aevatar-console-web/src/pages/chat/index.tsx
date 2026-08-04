@@ -468,7 +468,7 @@ function formatStatusLabel(status: LocalChatStatus): string {
     case "completed_with_studio_target":
       return t("pages.chat.index.status.studioReady", "Studio ready");
     case "completed_text":
-      return t("pages.chat.index.status.completed", "Completed");
+      return t("pages.chat.index.status.completed", "Ready for reply");
     case "error":
       return t("pages.chat.index.status.error", "Error");
     default:

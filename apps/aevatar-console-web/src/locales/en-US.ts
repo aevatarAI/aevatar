@@ -81,7 +81,7 @@ const enUSMessages = {
   'pages.chat.index.scopeMismatch':
     'Requested scope {requestedScopeId} does not match authenticated scope {authenticatedScopeId}. Open Chat from the active workspace or sign in again.',
   'pages.chat.index.scopeValue': 'Scope {scopeId}',
-  'pages.chat.index.status.completed': 'Completed',
+  'pages.chat.index.status.completed': 'Ready for reply',
   'pages.chat.index.status.draft': 'Draft',
   'pages.chat.index.status.error': 'Error',
   'pages.chat.index.status.streaming': 'Streaming',

@@ -4,7 +4,6 @@ Date: 2026-07-01
 Status: Archived historical concept; not a current implementation contract
 Target surface: `apps/aevatar-console-web`
 Related prototype: `../prototypes/2026-07-01-chat-top-entry-prototype.html`
-Related PNG: `../prototypes/2026-07-01-chat-top-entry-prototype.png`
 
 > **Superseded behavior:** The current Chat surface uses backend-backed history
 > and typed runtime events. Assistant prose that asks the user to choose or

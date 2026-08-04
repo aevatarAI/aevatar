@@ -1279,6 +1279,11 @@ describe("ChatPage server-backed history", () => {
       resolveRegressedDetail(conversationDetail(projectedMessages, 6))
     );
     await waitFor(() => expect(screen.getByRole("textbox")).toBeEnabled());
+    expect(screen.getByText("Ready for reply")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Confirm and create" })
+    ).toBeNull();
+    expect(screen.queryByText("Needs confirmation")).toBeNull();
 
     await sendPrompt("使用 Team team-weekly-report");
     await waitFor(() => expect(chatRequestBodies()).toHaveLength(2));

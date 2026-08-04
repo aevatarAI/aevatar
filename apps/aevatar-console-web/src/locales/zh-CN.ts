@@ -75,7 +75,7 @@ const zhCNMessages = {
   'pages.chat.index.scopeMismatch':
     '请求的 scope {requestedScopeId} 与当前认证 scope {authenticatedScopeId} 不一致。请从当前工作区重新打开 Chat，或重新登录。',
   'pages.chat.index.scopeValue': 'Scope {scopeId}',
-  'pages.chat.index.status.completed': '已完成',
+  'pages.chat.index.status.completed': '可继续回复',
   'pages.chat.index.status.draft': '草稿',
   'pages.chat.index.status.error': '错误',
   'pages.chat.index.status.streaming': '生成中',
