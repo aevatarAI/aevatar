@@ -133,6 +133,37 @@ pnpm --dir apps/aevatar-console-web build
 - Do not add or preserve hidden `/teams/:scopeId...` compatibility routes.
   Parse paths by resource name, not by fragile segment indexes.
 
+## Workflow Activity vNext Baseline
+
+- Before changing any route, page, component, hook, query, adapter, model,
+  style, locale, or test for
+  `/scopes/:scopeId/workflow-activity-vnext`, read both
+  `docs/design-baselines/workflow-activity-vnext/README.md` and
+  `docs/superpowers/specs/2026-08-04-workflow-activity-vnext-design.md`
+  completely.
+- Treat
+  `docs/design-baselines/workflow-activity-vnext/aevatar-workflow-activity-vnext.excalidraw`
+  as the primary visual, information-architecture, and interaction reference.
+  Treat the design specification as the normative route, product identity,
+  API, state, and backend-compatibility contract.
+- The PNG and HTML prototypes are reference artifacts, not runtime data
+  sources. Never copy their hard-coded records, `localStorage` persistence,
+  timers, simulated receipts, or successful-looking defaults into production
+  code.
+- Production remote state must come from real API responses or real user
+  actions acknowledged by those APIs. When an API is pending, empty,
+  unavailable, delayed, or failed, render that exact state; do not insert mock
+  or fixture fallback data.
+- Keep mock and fixture data in clearly named test-only files. Production
+  routes, components, hooks, queries, and API adapters must not import them.
+- Include the design-baseline declaration from
+  `docs/design-baselines/workflow-activity-vnext/README.md` in every vNext
+  implementation task and pull request so the Excalidraw hash, contract
+  document, and real-API-only data-source rule are reviewable.
+- Keep this feature frontend-only and isolated to its new route namespace.
+  Do not change backend code or alter existing Workflow, Run, Settings, Studio,
+  Team, member, redirect, or menu behavior to implement it.
+
 ## UI and Interaction
 
 - For page, component, console, playground, or visual-polish work, follow
