@@ -127,10 +127,17 @@ public sealed class ToolProviderHttpClientRegistrationTests
             .Contain("Discovery only")
             .And.Contain("then call nyxid_require_service")
             .And.Contain("do not finish the request with a catalog result");
-        tools.Single(tool => tool is NyxIdRequireServiceTool).Description.Should()
+        var requireService = tools.Single(tool => tool is NyxIdRequireServiceTool);
+        requireService.Description.Should()
             .Contain("Final typed readiness gate")
             .And.Contain("connect, add, or authorize")
+            .And.Contain("current-turn catalog result")
+            .And.Contain("Provider slugs, display names, and remembered values")
             .And.Contain("interactive service.connect handoff");
+        requireService.ParametersSchema.Should()
+            .Contain("Exact catalog service slug copied from nyxid_catalog in this turn")
+            .And.Contain("Do not omit scopes when the entry exposes a scope catalog")
+            .And.Contain("\"required\": [\"service_slug\", \"requested_scopes\"]");
     }
 
     [Fact]
@@ -165,7 +172,134 @@ public sealed class ToolProviderHttpClientRegistrationTests
         }
     }
 
+    [Fact]
+    public async Task NyxIdRequireServiceTool_ShouldRejectUnverifiedCatalogIdentityWithoutCreatingBlocker()
+    {
+        var handler = new StubUserServiceListHandler("""{ "keys": [] }""")
+        {
+            CatalogStatus = System.Net.HttpStatusCode.NotFound,
+        };
+        var tool = CreateRequireServiceTool(handler);
+        const string arguments = """{"service_slug":"github","requested_scopes":["repo"]}""";
+
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext();
+        try
+        {
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, result);
+
+            handler.Requests.Should().Equal("/api/v1/catalog/github");
+            result.Should().Contain("NYXID_REQUIRE_SERVICE_CATALOG_IDENTITY_INVALID");
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+            receipt.ErrorCode.Should().Be("NYXID_REQUIRE_SERVICE_CATALOG_IDENTITY_INVALID");
+            receipt.AuthorizationRequired.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public async Task NyxIdRequireServiceTool_ShouldRejectEmptyScopesWhenCatalogOffersScopes()
+    {
+        var handler = new StubUserServiceListHandler("""{ "keys": [] }""")
+        {
+            CatalogResponseJson =
+                """{"slug":"api-github","scope_catalog":[{"scope":"repo","label":"Repositories","description":"Repository access","sensitive":true}]}""",
+        };
+        var tool = CreateRequireServiceTool(handler);
+        const string arguments = """{"service_slug":"api-github","requested_scopes":[]}""";
+
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext();
+        try
+        {
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, result);
+
+            handler.Requests.Should().Equal("/api/v1/catalog/api-github");
+            result.Should().Contain("NYXID_REQUIRE_SERVICE_SCOPES_REQUIRED");
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+            receipt.ErrorCode.Should().Be("NYXID_REQUIRE_SERVICE_SCOPES_REQUIRED");
+            receipt.AuthorizationRequired.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public async Task NyxIdRequireServiceTool_ShouldFailClosedWhenCatalogIsUnavailable()
+    {
+        var handler = new StubUserServiceListHandler("""{ "keys": [] }""")
+        {
+            CatalogStatus = System.Net.HttpStatusCode.ServiceUnavailable,
+        };
+        var tool = CreateRequireServiceTool(handler);
+        const string arguments = """{"service_slug":"api-github","requested_scopes":["repo"]}""";
+
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext();
+        try
+        {
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, result);
+
+            handler.Requests.Should().Equal(
+                "/api/v1/catalog/api-github",
+                "/api/v1/catalog/api-github");
+            result.Should().Contain("NYXID_REQUIRE_SERVICE_CATALOG_UNAVAILABLE");
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+            receipt.ErrorCode.Should().Be("NYXID_REQUIRE_SERVICE_CATALOG_UNAVAILABLE");
+            receipt.AuthorizationRequired.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public async Task NyxIdRequireServiceTool_ShouldCreateGitHubBlockerFromVerifiedCatalogSlugAndScope()
+    {
+        var handler = new StubUserServiceListHandler("""{ "keys": [] }""")
+        {
+            CatalogResponseJson =
+                """{"slug":"api-github","scope_catalog":[{"scope":"repo","label":"Repositories","description":"Repository access","sensitive":true}]}""",
+        };
+        var tool = CreateRequireServiceTool(handler);
+        const string arguments = """{"service_slug":"api-github","requested_scopes":["repo"]}""";
+
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext();
+        try
+        {
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, result);
+
+            handler.Requests.Should().Equal(
+                "/api/v1/catalog/api-github",
+                "/api/v1/keys",
+                "/api/v1/keys");
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.AuthorizationRequired);
+            receipt.AuthorizationRequired.ServiceSlug.Should().Be("api-github");
+            receipt.AuthorizationRequired.RequestedScopes.Should().Equal("repo");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
     [Theory]
+    [InlineData("{\"service_slug\":\"api-github\"}")]
     [InlineData("{\"service_slug\":\"api-github\",\"requested_scopes\":\"repo\"}")]
     [InlineData("{\"service_slug\":\"api-github\",\"requested_scopes\":[1]}")]
     [InlineData("{\"service_slug\":\"api-github\",\"requested_scopes\":[\"\"]}")]
@@ -190,7 +324,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
     {
         var handler = new StubUserServiceListHandler("""{ "error": true, "status": 503 }""");
         var tool = CreateRequireServiceTool(handler);
-        const string arguments = """{"service_slug":"api-github"}""";
+        const string arguments = """{"service_slug":"api-github","requested_scopes":[]}""";
 
         var previous = AgentToolRequestContext.Current;
         AgentToolRequestContext.Current = CapabilityContext();
@@ -217,7 +351,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
     {
         var handler = new StubUserServiceListHandler("""{ "keys": [{ "id": "us-github-alpha", "slug": "api-github" }] }""");
         var tool = CreateRequireServiceTool(handler);
-        const string arguments = """{"service_slug":"api-github"}""";
+        const string arguments = """{"service_slug":"api-github","requested_scopes":[]}""";
 
         var previous = AgentToolRequestContext.Current;
         AgentToolRequestContext.Current = CapabilityContext();
@@ -251,7 +385,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
 
         try
         {
-            const string arguments = """{"service_slug":"api-github"}""";
+            const string arguments = """{"service_slug":"api-github","requested_scopes":[]}""";
             var result = await tool.ExecuteAsync(arguments);
             var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, result);
 
@@ -288,7 +422,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
 
         try
         {
-            var result = await tool.ExecuteAsync("""{"service_slug":"api-github"}""");
+            var result = await tool.ExecuteAsync("""{"service_slug":"api-github","requested_scopes":[]}""");
 
             result.Should().Contain("NYXID_SOURCE_UNAVAILABLE");
             handler.Requests.Should().BeEmpty();
@@ -312,7 +446,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
 
         try
         {
-            const string arguments = """{"service_slug":"catalog-finops-alpha"}""";
+            const string arguments = """{"service_slug":"catalog-finops-alpha","requested_scopes":[]}""";
             var result = await tool.ExecuteAsync(arguments);
             var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, result);
 
@@ -333,7 +467,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
     public void NyxIdRequireServiceTool_ShouldReturnTypedFailure_WhenReadinessResultIsMalformed()
     {
         var tool = CreateRequireServiceTool(new StubUserServiceListHandler("""{ "keys": [] }"""));
-        const string arguments = """{"service_slug":"catalog-finops-alpha"}""";
+        const string arguments = """{"service_slug":"catalog-finops-alpha","requested_scopes":[]}""";
 
         var receipt = tool.CreateResultReceipt(
             "call-1",
@@ -351,7 +485,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
     public void NyxIdRequireServiceTool_ShouldReturnTypedFailure_WhenReadinessFieldsHaveWrongTypes()
     {
         var tool = CreateRequireServiceTool(new StubUserServiceListHandler("""{ "keys": [] }"""));
-        const string arguments = """{"service_slug":"catalog-finops-alpha"}""";
+        const string arguments = """{"service_slug":"catalog-finops-alpha","requested_scopes":[]}""";
 
         var receipt = tool.CreateResultReceipt(
             "call-1",
@@ -369,7 +503,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
     public void NyxIdRequireServiceTool_ShouldReturnTypedFailure_WhenReadinessStatusIsNumericText()
     {
         var tool = CreateRequireServiceTool(new StubUserServiceListHandler("""{ "keys": [] }"""));
-        const string arguments = """{"service_slug":"catalog-finops-alpha"}""";
+        const string arguments = """{"service_slug":"catalog-finops-alpha","requested_scopes":[]}""";
 
         var receipt = tool.CreateResultReceipt(
             "call-1",
@@ -387,7 +521,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
     public void NyxIdRequireServiceTool_ShouldReturnTypedFailure_WhenResultSlugDoesNotMatchArguments()
     {
         var tool = CreateRequireServiceTool(new StubUserServiceListHandler("""{ "keys": [] }"""));
-        const string arguments = """{"service_slug":"catalog-finops-alpha"}""";
+        const string arguments = """{"service_slug":"catalog-finops-alpha","requested_scopes":[]}""";
         const string result =
             """{"blocked":true,"service_slug":"catalog-finops-beta","readiness_status":"ServiceRegistrationRequired","reason_code":"USER_SERVICE_NOT_VISIBLE","safe_message":"No caller-visible NyxID UserService matches the requested service."}""";
 
@@ -410,14 +544,27 @@ public sealed class ToolProviderHttpClientRegistrationTests
     {
         public List<string> Requests { get; } = [];
 
+        public System.Net.HttpStatusCode CatalogStatus { get; init; } = System.Net.HttpStatusCode.OK;
+
+        public string? CatalogResponseJson { get; init; }
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
-            Requests.Add(request.RequestUri!.AbsolutePath);
-            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            var path = request.RequestUri!.AbsolutePath;
+            Requests.Add(path);
+            var isCatalogRequest = path.StartsWith("/api/v1/catalog/", StringComparison.Ordinal);
+            var response = isCatalogRequest
+                ? CatalogResponseJson ?? System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    slug = Uri.UnescapeDataString(path["/api/v1/catalog/".Length..]),
+                })
+                : responseJson;
+            return Task.FromResult(new HttpResponseMessage(
+                isCatalogRequest ? CatalogStatus : System.Net.HttpStatusCode.OK)
             {
-                Content = new StringContent(responseJson, System.Text.Encoding.UTF8, "application/json"),
+                Content = new StringContent(response, System.Text.Encoding.UTF8, "application/json"),
             });
         }
     }

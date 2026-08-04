@@ -107,7 +107,12 @@ public class NyxIdChatSystemPromptTests
         prompt.Should().Contain("must not fabricate a missing-service blocker");
         prompt.Should().Contain("does not create a pending approval");
         prompt.Should().Contain("catalog definitions are not connected UserServices");
-        prompt.Should().Contain("after resolving its exact catalog slug, call `nyxid_require_service`");
+        prompt.Should().Contain("For every connect, add, or authorize request, call `nyxid_catalog` in the current turn");
+        prompt.Should().Contain("`catalogIdentityCandidate`");
+        prompt.Should().Contain("only the exact `slug` returned by that catalog read may enter");
+        prompt.Should().Contain("Never pass a provider slug, display name, or guessed value");
+        prompt.Should().Contain("for a bare source-code-hosting connection");
+        prompt.Should().Contain("repository access scope instead of omitting scopes");
         prompt.Should().Contain("Never replace this typed handoff with NyxID CLI commands");
         prompt.Should().Contain("credential instructions");
     }

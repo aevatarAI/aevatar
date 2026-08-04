@@ -149,9 +149,13 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - For browsing questions such as "what can I connect", service templates, catalog, or
                 available integrations, call `nyxid_catalog`; pass `slug` only when the user names an
                 exact catalog service.
-              - For a connect, add, or authorize request, `nyxid_catalog` is discovery only. Use it to
-                resolve the exact catalog slug when necessary, then always call `nyxid_require_service`
-                with that slug and any requested scopes. Never end the turn after catalog discovery or
+              - For every connect, add, or authorize request, `nyxid_catalog` is mandatory discovery.
+                Treat a service name from the user as `catalogIdentityCandidate`, never as an exact slug.
+                Resolve it from a current-turn catalog result; only the exact returned `slug` may enter
+                `nyxid_require_service.service_slug`. Never pass a provider slug, display name, or guessed
+                value. Then always call `nyxid_require_service` with that slug and the scopes selected from
+                the same catalog entry. For a bare source-code-hosting connection, select its repository
+                access scope instead of omitting scopes. Never end the turn after catalog discovery or
                 replace the typed readiness result with prose.
               - For LLM-capable services, model availability, LLM routes, or "which models can I use
                 through NyxID", call `nyxid_llm_status`.

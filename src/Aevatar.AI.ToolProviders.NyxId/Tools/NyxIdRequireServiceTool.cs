@@ -10,9 +10,18 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
 {
     private const int MaxRequestedScopes = 64;
     private const string ArgumentsInvalidCode = "NYXID_REQUIRE_SERVICE_ARGUMENTS_INVALID";
+    private const string CatalogIdentityInvalidCode = "NYXID_REQUIRE_SERVICE_CATALOG_IDENTITY_INVALID";
+    private const string CatalogUnavailableCode = "NYXID_REQUIRE_SERVICE_CATALOG_UNAVAILABLE";
     private const string ContextUnavailableCode = "NYXID_REQUIRE_SERVICE_CONTEXT_UNAVAILABLE";
     private const string ResultInvalidCode = "NYXID_REQUIRE_SERVICE_RESULT_INVALID";
+    private const string ScopesRequiredCode = "NYXID_REQUIRE_SERVICE_SCOPES_REQUIRED";
+    private const string CatalogIdentityInvalidMessage =
+        "The requested NyxID catalog service identity could not be verified.";
+    private const string CatalogUnavailableMessage =
+        "The NyxID catalog is currently unavailable.";
     private const string ResultInvalidMessage = "NyxID service readiness returned an invalid result.";
+    private const string ScopesRequiredMessage =
+        "requested_scopes must select the intended capability from the NyxID catalog.";
 
     private readonly NyxIdApiClient _client;
 
@@ -25,7 +34,9 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
 
     public string Description =>
         "Final typed readiness gate for a connect, add, or authorize request after the exact NyxID " +
-        "catalog slug is known. Verify live whether the service is absent, then emit the typed " +
+        "catalog slug and requested scopes have been copied from a current-turn catalog result. " +
+        "Provider slugs, display names, and remembered values are not catalog service identities. " +
+        "Verify live whether the service is absent, then emit the typed " +
         "authorization blocker used for the interactive service.connect handoff only when " +
         "registration is required.";
 
@@ -33,16 +44,21 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         {
           "type": "object",
           "properties": {
-            "service_slug": { "type": "string" },
+            "service_slug": {
+              "type": "string",
+              "description": "Exact catalog service slug copied from nyxid_catalog in this turn; never a provider slug, display name, or guessed value."
+            },
             "service_label": { "type": "string" },
             "resource_uri": { "type": "string" },
             "requested_scopes": {
               "type": "array",
+              "description": "Scopes selected from the current catalog entry for the intended capability. Do not omit scopes when the entry exposes a scope catalog.",
               "items": { "type": "string" },
               "maxItems": 64
             }
           },
-          "required": ["service_slug"]
+          "required": ["service_slug", "requested_scopes"],
+          "additionalProperties": false
         }
         """;
 
@@ -53,13 +69,37 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         ct.ThrowIfCancellationRequested();
         var args = ToolArgs.Parse(argumentsJson);
         var serviceSlug = NormalizeSlug(args.Str("service_slug"));
-        if (args.HasParseError || serviceSlug is null || !TryReadRequestedScopes(args, out _))
+        if (args.HasParseError ||
+            serviceSlug is null ||
+            !TryReadRequestedScopes(args, out var requestedScopes))
+        {
             return ErrorResult(ArgumentsInvalidCode, "service_slug and requested_scopes must be valid");
+        }
 
         if (!TryResolveAccess(out var access, out var error))
             return ErrorResult(ContextUnavailableCode, error!);
 
+        var catalogVerification = await VerifyCatalogServiceAsync(access!, serviceSlug, ct);
+        if (catalogVerification.Status == CatalogVerificationStatus.SourceUnavailable)
+        {
+            var sourceUnavailable = await InspectRegistrationAsync(access!, serviceSlug, ct);
+            return SerializeReadiness(serviceSlug, sourceUnavailable);
+        }
+        if (catalogVerification.Status == CatalogVerificationStatus.Unavailable)
+            return ErrorResult(CatalogUnavailableCode, CatalogUnavailableMessage);
+        if (catalogVerification.Status != CatalogVerificationStatus.Verified)
+            return ErrorResult(CatalogIdentityInvalidCode, CatalogIdentityInvalidMessage);
+        if (catalogVerification.RequiresRequestedScopes && requestedScopes.Count == 0)
+            return ErrorResult(ScopesRequiredCode, ScopesRequiredMessage);
+
         var readiness = await InspectRegistrationAsync(access!, serviceSlug, ct);
+        return SerializeReadiness(serviceSlug, readiness);
+    }
+
+    private static string SerializeReadiness(
+        string serviceSlug,
+        ServiceRegistrationReadiness readiness)
+    {
         var blocker = readiness.Blocker;
         var registrationRequired =
             readiness.Status == ExternalCapabilityReadinessStatus.ServiceRegistrationRequired &&
@@ -76,21 +116,38 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         });
     }
 
+    private async Task<CatalogVerification> VerifyCatalogServiceAsync(
+        ExternalWorkflowCapabilityAccessContext access,
+        string serviceSlug,
+        CancellationToken ct)
+    {
+        var tokens = ResolveSourceTokens(access);
+        if (tokens.Count == 0)
+            return new CatalogVerification(CatalogVerificationStatus.SourceUnavailable, false);
+
+        foreach (var token in tokens)
+        {
+            var response = await _client.GetCatalogEntryAsync(token, serviceSlug, ct);
+            if (TryReadCatalogEntry(response, out var verifiedSlug, out var hasScopeCatalog))
+            {
+                return string.Equals(serviceSlug, verifiedSlug, StringComparison.Ordinal)
+                    ? new CatalogVerification(CatalogVerificationStatus.Verified, hasScopeCatalog)
+                    : new CatalogVerification(CatalogVerificationStatus.Invalid, false);
+            }
+
+            if (TryReadHttpErrorStatus(response, out var status) && status == 404)
+                return new CatalogVerification(CatalogVerificationStatus.Invalid, false);
+        }
+
+        return new CatalogVerification(CatalogVerificationStatus.Unavailable, false);
+    }
+
     private async Task<ServiceRegistrationReadiness> InspectRegistrationAsync(
         ExternalWorkflowCapabilityAccessContext access,
         string serviceSlug,
         CancellationToken ct)
     {
-        var tokens = new List<string>();
-        var sourceReadableBearerToken = access.NyxIdCallerCredential?.SourceReadableUserBearerToken;
-        if (!string.IsNullOrWhiteSpace(sourceReadableBearerToken))
-            tokens.Add(sourceReadableBearerToken);
-        if (!string.IsNullOrWhiteSpace(access.NyxIdOrganizationBearerToken) &&
-            !tokens.Contains(access.NyxIdOrganizationBearerToken, StringComparer.Ordinal))
-        {
-            tokens.Add(access.NyxIdOrganizationBearerToken);
-        }
-
+        var tokens = ResolveSourceTokens(access);
         var sourceUnavailable = tokens.Count == 0;
         foreach (var token in tokens)
         {
@@ -125,6 +182,70 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
                 Code = "USER_SERVICE_NOT_VISIBLE",
                 SafeMessage = "No caller-visible NyxID UserService matches the requested service.",
             });
+    }
+
+    private static List<string> ResolveSourceTokens(ExternalWorkflowCapabilityAccessContext access)
+    {
+        var tokens = new List<string>();
+        var sourceReadableBearerToken = access.NyxIdCallerCredential?.SourceReadableUserBearerToken;
+        if (!string.IsNullOrWhiteSpace(sourceReadableBearerToken))
+            tokens.Add(sourceReadableBearerToken);
+        if (!string.IsNullOrWhiteSpace(access.NyxIdOrganizationBearerToken) &&
+            !tokens.Contains(access.NyxIdOrganizationBearerToken, StringComparer.Ordinal))
+        {
+            tokens.Add(access.NyxIdOrganizationBearerToken);
+        }
+
+        return tokens;
+    }
+
+    private static bool TryReadCatalogEntry(
+        string response,
+        out string serviceSlug,
+        out bool hasScopeCatalog)
+    {
+        serviceSlug = string.Empty;
+        hasScopeCatalog = false;
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("slug", out var slug) ||
+                slug.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            serviceSlug = NormalizeSlug(slug.GetString()) ?? string.Empty;
+            hasScopeCatalog = root.TryGetProperty("scope_catalog", out var scopeCatalog) &&
+                              scopeCatalog.ValueKind == JsonValueKind.Array &&
+                              scopeCatalog.GetArrayLength() > 0;
+            return serviceSlug.Length > 0;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadHttpErrorStatus(string response, out int status)
+    {
+        status = 0;
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            return root.ValueKind == JsonValueKind.Object &&
+                   root.TryGetProperty("error", out var error) &&
+                   error.ValueKind == JsonValueKind.True &&
+                   root.TryGetProperty("status", out var statusElement) &&
+                   statusElement.TryGetInt32(out status);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static bool TryReadServiceSlugs(
@@ -270,7 +391,7 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         requestedScopes = [];
         var element = args.Element("requested_scopes");
         if (element is null)
-            return true;
+            return false;
         if (element.Value.ValueKind != JsonValueKind.Array ||
             element.Value.GetArrayLength() > MaxRequestedScopes)
         {
@@ -363,7 +484,11 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
 
             errorCode = Normalize(code.GetString()) ?? string.Empty;
             errorMessage = Normalize(message.GetString()) ?? string.Empty;
-            return errorCode is ArgumentsInvalidCode or ContextUnavailableCode &&
+            return errorCode is ArgumentsInvalidCode or
+                                CatalogIdentityInvalidCode or
+                                CatalogUnavailableCode or
+                                ContextUnavailableCode or
+                                ScopesRequiredCode &&
                    errorMessage.Length > 0;
         }
         catch (JsonException)
@@ -455,6 +580,18 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
     private sealed record ServiceRegistrationReadiness(
         ExternalCapabilityReadinessStatus Status,
         ExternalCapabilityBlocker? Blocker);
+
+    private sealed record CatalogVerification(
+        CatalogVerificationStatus Status,
+        bool RequiresRequestedScopes);
+
+    private enum CatalogVerificationStatus
+    {
+        Invalid,
+        SourceUnavailable,
+        Unavailable,
+        Verified,
+    }
 
     private static string? NormalizeResourceUri(string? value)
     {

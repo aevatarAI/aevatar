@@ -1778,7 +1778,7 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             using (AgentToolContextScope.Push(tool.ExecutionContext))
             {
                 var result = await requireServiceTool.ExecuteAsync(
-                    """{"service_slug":"api-github"}""");
+                    """{"service_slug":"api-github","requested_scopes":[]}""");
                 result.Should().Contain("NYXID_SOURCE_UNAVAILABLE");
             }
             handler.Requests.Should().Be(0);
