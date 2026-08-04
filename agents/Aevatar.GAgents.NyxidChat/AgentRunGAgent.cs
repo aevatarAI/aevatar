@@ -568,6 +568,14 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 executionRequest,
                 CancellationToken.None);
             _authorizedToolStep = execution.AuthorizedToolStep;
+            _logger.LogWarning(
+                "Agent run LLM step executor completed. runId={RunId} correlation={CorrelationId} step={StepIndex} toolCallCount={ToolCallCount} pendingAuthorizationCount={PendingAuthorizationCount} transientAuthorizationCaptured={TransientAuthorizationCaptured}",
+                executionRequest.RunId,
+                executionRequest.Request.CorrelationId,
+                executionRequest.StepIndex,
+                execution.Continuation.LlmStepResult?.ToolCalls.Count ?? 0,
+                execution.Continuation.LlmStepResult?.PendingToolAuthorizations.Count ?? 0,
+                execution.AuthorizedToolStep is not null);
             await PublishAsync(
                 execution.Continuation,
                 TopologyAudience.Self,
@@ -604,6 +612,18 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 request.Clone(),
                 stepState.Clone())) == true;
         var allowDurableAuthorization = authorizedToolStep is null && durableAuthorizationAvailable;
+        _logger.LogWarning(
+            "Agent run tool step executor dispatching. runId={RunId} correlation={CorrelationId} step={StepIndex} pendingToolCallCount={PendingToolCallCount} pendingAuthorizationCount={PendingAuthorizationCount} pendingAuthorizationConsumed={PendingAuthorizationConsumed} transientAuthorizationPresent={TransientAuthorizationPresent} transientAuthorizationMatched={TransientAuthorizationMatched} durableAuthorizationAvailable={DurableAuthorizationAvailable} durableAuthorizationAllowed={DurableAuthorizationAllowed}",
+            stepState.RunId,
+            stepState.CorrelationId,
+            stepState.NextStepIndex,
+            stepState.PendingToolCalls.Count,
+            stepState.PendingToolAuthorizations.Count,
+            stepState.PendingToolAuthorizationConsumed,
+            authorizedToolStep is not null,
+            matchedTransientAuthorization,
+            durableAuthorizationAvailable,
+            allowDurableAuthorization);
         if (matchedTransientAuthorization || allowDurableAuthorization)
         {
             stepState = MarkPendingToolAuthorizationConsumed(stepState);
@@ -1098,6 +1118,13 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         if (!hasResult)
         {
+            _logger.LogWarning(
+                "Agent run received tool step request. runId={RunId} correlation={CorrelationId} step={StepIndex} pendingToolCallCount={PendingToolCallCount} pendingAuthorizationCount={PendingAuthorizationCount}",
+                stepState.RunId,
+                stepState.CorrelationId,
+                stepState.NextStepIndex,
+                stepState.PendingToolCalls.Count,
+                stepState.PendingToolAuthorizations.Count);
             await DispatchToolStepExecutorAsync(request, stepState);
             return;
         }
