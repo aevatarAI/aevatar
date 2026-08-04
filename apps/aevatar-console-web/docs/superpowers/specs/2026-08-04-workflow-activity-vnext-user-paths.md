@@ -120,8 +120,14 @@ not rewrite it from a display name, remembered selection, or API response.
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TD
-    A["Authenticated scoped entry"] --> B["Workflows catalogue"]
-    B --> C["New workflow"]
+    A["Open protected scoped URL"] --> A1{"Existing session usable?"}
+    A1 -->|"Yes"| B["vNext scoped entry"]
+    A1 -->|"No"| A2["Existing Login route"]
+    A2 --> A3["Existing NyxID redirect"]
+    A3 --> A4["Existing Auth callback"]
+    A4 --> B
+    B --> B1["Workflows catalogue"]
+    B1 --> C["New workflow"]
     C --> D["Describe"]
     C --> E["Start blank"]
     C --> F["Import YAML"]
@@ -130,14 +136,14 @@ flowchart TD
     E --> H
     F --> H
     G --> H
-    B --> I["Open existing Workflow"]
+    B1 --> I["Open existing Workflow"]
     H --> J["Connected-node editor"]
     I --> J
     J --> K["Save and validate"]
     K --> L["Unified Run dialog"]
     L --> M["Accepted or running"]
     M --> N["Observed Activity row"]
-    B --> O["Activity filtered by Workflow"]
+    B1 --> O["Activity filtered by Workflow"]
     N --> P["Immutable Run detail"]
     O --> P
     P --> Q["Retry failed Run"]
@@ -145,7 +151,7 @@ flowchart TD
     Q --> S["New accepted Run"]
     R --> S
     S --> N
-    A --> T["Settings"]
+    B --> T["Settings"]
     T --> U["AI defaults"]
     T --> V["Account"]
     T --> W["Advanced"]
@@ -155,7 +161,7 @@ flowchart TD
 
 | ID | Path | Excalidraw frames | Completion evidence |
 | --- | --- | --- | --- |
-| UP-00 | Enter the scoped workbench | 01, 13 | Real scoped queries begin under the route `scopeId` |
+| UP-00 | Authenticate and enter the scoped workbench | 01, 13 | Existing callback returns to the original vNext URL and real scoped queries begin |
 | UP-01 | Browse and search Workflows | 01, 13 | Authoritative catalogue rows or a truthful empty/error state |
 | UP-02 | Create by Describe | 02, 03 | Draft-create response returns the `workflowId` used by the editor route |
 | UP-03 | Start blank and add the first node | 02, 04 | Persisted draft opens; valid document state controls Save/Run/Publish |
@@ -173,28 +179,56 @@ flowchart TD
 | UP-15 | Inspect Advanced runtime values | 17 | `/api/user-config/runtime` returns the read-only effective values |
 | UP-16 | Complete key jobs on tablet/mobile | 13, 17 | Same API and identity evidence is reachable without desktop-only controls |
 
-## UP-00: Enter The Scoped Workbench
+## UP-00: Authenticate And Enter The Scoped Workbench
 
-**Intent:** Reach the isolated vNext experience without affecting existing
-console routes.
+**Intent:** Reach the isolated vNext experience through Aevatar's existing
+login, callback, session, return-to, and locale behavior without affecting
+other console routes.
 
-**Start:** An authenticated user has an authorized `scopeId` and opens the
-namespace URL directly.
+**Start:** An authenticated or unauthenticated user opens the direct namespace
+URL for an authorized `scopeId`.
 
 **Steps:**
 
-1. The existing application shell authenticates the user and retains current
-   providers.
-2. The namespace entry redirects to the vNext Workflows route only.
-3. The local Workflows, Activity, and Settings navigation appears.
-4. Workflows begins its real scoped queries.
+1. The existing app runtime classifies `/login` and `/auth/callback` as public
+   and the vNext URL as protected.
+2. If a stored or restorable session exists, current
+   `AuthSessionBootstrap`/`ensureActiveAuthSession` behavior restores it.
+3. Without a usable session, `ProtectedRouteRedirectGate` sends the complete
+   scoped path, search, and hash through `sanitizeReturnTo` into the existing
+   `/login?redirect=...` route.
+4. The existing Login page calls
+   `NyxIDAuthClient.loginWithRedirect({ returnTo })`.
+5. NyxID returns through the unchanged `/auth/callback` route.
+6. The existing callback calls `handleRedirectCallback()` and replaces the
+   location with its sanitized `result.returnTo`.
+7. The user returns to the original vNext URL. Only the namespace root
+   redirects within the new namespace to Workflows; a requested child route
+   retains its own path, query, and hash.
+8. The local Workflows, Activity, and Settings navigation appears.
+9. Workflows begins its real scoped queries.
+10. Language and account controls reuse `ConsoleLanguageSwitch` and existing
+    account behavior, even if their placement/style changes in the vNext shell.
 
-**Completion:** The URL contains the original `scopeId`, and the page shows a
-loading, populated, empty, partial-source, or error state derived from real
-requests.
+**Completion:** The callback returns to the original scoped URL, the existing
+session is active, the selected `en-US` or `zh-CN` locale is preserved, and the
+page shows a loading, populated, empty, partial-source, or error state derived
+from real requests.
 
-**Recovery:** Unauthorized, forbidden, missing-scope, and network failure stay
-distinct. No alternate scope or demonstration catalogue is substituted.
+**Recovery:** Login configuration, callback, service-access review,
+unauthorized, forbidden, missing-scope, and network failures retain their
+current distinct retry/back behavior. No alternate scope, second login flow,
+mock user, or demonstration catalogue is substituted.
+
+**Presentation:** Login, callback, language, and account controls adopt vNext
+tokens, density, border, radius, and status styling only. Authentication,
+return, session, language switching, language persistence, and error behavior
+remain the existing Aevatar logic.
+
+The Excalidraw contains no separate Login frame. Login presentation therefore
+inherits only the approved vNext visual direction; it must not introduce new
+auth decisions, fields, providers, or navigation that the design does not
+define.
 
 ## UP-01: Browse And Search Workflows
 
@@ -686,6 +720,8 @@ the mobile editor references in the baseline directory.
   remain accessible.
 - Settings: section navigation, dirty save bar, save observation, Account
   actions, and Advanced values remain operable.
+- Login and callback: the existing NyxID flow remains usable at mobile width,
+  and the existing language switch remains reachable without desktop chrome.
 
 **Completion:** Mobile and desktop reach the same authoritative end states.
 Responsive layout changes presentation, never API source, identity, recovery,
@@ -725,6 +761,8 @@ or completion evidence.
 | Settings catalogue fails | Last real selection | Catalogue unavailable | Retry catalogue |
 | Settings save fails | Dirty selection | Save error | Retry or discard |
 | Auth expires | Non-secret local editing state when safe | Session expired | Existing sign-in flow |
+| Login/callback fails | Sanitized return target and safe error reason | Existing callback recovery | Retry existing NyxID flow/back to Login |
+| Locale catalogue/key is missing | Current locale selection | Explicit development/test failure | Fix both catalogues; never use vNext-local fallback copy |
 
 ## Excalidraw Coverage
 
@@ -755,6 +793,13 @@ Every frame has a corresponding user path:
 - Every `UP-*` path can be traced from its start route to its completion
   evidence without leaving the new namespace, except existing authentication
   and service-access actions.
+- UP-00 uses the existing protected-route guard, Login, NyxID callback,
+  sanitized `returnTo`, session restoration, and locale behavior; only their
+  presentation may change.
+- Login/callback styling remains compatible with all existing protected routes,
+  not only the vNext namespace.
+- Every vNext message ID exists in both `en-US` and `zh-CN`, and language
+  switching uses the existing `ConsoleLanguageSwitch`/Umi locale state.
 - All four creation methods converge on a real persisted draft and the same
   connected-node editor.
 - A real returned `workflowId` is required before editor navigation.

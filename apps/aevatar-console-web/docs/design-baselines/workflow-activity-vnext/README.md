@@ -56,6 +56,38 @@ hard-coded data look as though it came from an API.
 without a server. Those mechanisms have no API or persistence authority and
 must not be copied into the production implementation.
 
+## Existing Authentication And Localization Contract
+
+Workflow Activity vNext reuses Aevatar Console authentication and
+internationalization behavior. It does not create a vNext-specific auth or
+locale system.
+
+- Protected-route handling continues through the current app runtime,
+  `ProtectedRouteRedirectGate`, `/login`, `/auth/callback`,
+  `NyxIDAuthClient`, sanitized `returnTo`, stored/restorable sessions, and
+  existing sign-in, sign-out, callback recovery, and service-access review.
+- The user must return to the original scoped vNext URL after successful login
+  through the existing `redirect`/`returnTo` behavior. No second callback,
+  token cache, session store, or auth provider is allowed.
+- Language behavior continues through the Umi locale plugin,
+  `ConsoleLanguageSwitch`, `setLocale`, `t`/`useIntl`, and the existing
+  `en-US` and `zh-CN` catalogues. New copy must be added to both catalogues.
+- If the vNext shell hides the current global chrome, it must reuse the existing
+  language and account actions inside its own presentation. It must not clone
+  their state or behavior.
+- Login, callback, language, and account controls may receive a visual-only
+  treatment matching the Operational Automation Ledger direction. Route
+  names, redirects, auth protocol, return behavior, session lifecycle, locale
+  keys, language persistence, error recovery, and accessibility behavior stay
+  unchanged.
+
+The existing Login page currently uses a decorative gradient and large rounded
+card. A later visual implementation may replace those presentation choices
+with the vNext dark rail/white work surface, neutral borders, 4-6 px radii,
+compact typography, and restrained status colors. That visual change must not
+alter what starts login, how callback completion works, or where the user
+returns.
+
 ## Required Development And Review Declaration
 
 Every implementation task and pull request for this vNext route should include
@@ -74,6 +106,9 @@ Contract specification:
 User paths:
   apps/aevatar-console-web/docs/superpowers/specs/
   2026-08-04-workflow-activity-vnext-user-paths.md
+Authentication and localization:
+  Existing Aevatar login, callback, session, returnTo, and Umi locale logic;
+  presentation may change, behavior may not.
 Production data source:
   Real APIs and API-acknowledged user actions only; no mock fallback.
 ```

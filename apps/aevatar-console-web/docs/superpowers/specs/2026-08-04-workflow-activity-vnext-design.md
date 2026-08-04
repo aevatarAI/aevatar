@@ -86,6 +86,9 @@ cached, or hard-coded data appear to be an API result.
   latency, and state versions throughout the UI.
 - Reframe current AI defaults, Account, and Advanced settings into the new
   design without changing their backend behavior.
+- Reuse the existing Aevatar authentication, return-to, session, service-access
+  review, and internationalization logic while styling their presentation to
+  match the vNext visual direction.
 - Provide complete loading, empty, error, disabled, accepted, observing,
   observed, and recovery states on desktop and mobile.
 
@@ -93,9 +96,11 @@ cached, or hard-coded data appear to be an API result.
 
 - No backend modification, new endpoint, DTO enrichment, projection change,
   migration, or persistence change.
-- No replacement, redirect, behavior change, or visual rewrite of existing
+- No replacement, redirect, or behavior change of existing
   `/runtime/workflows`, `/runtime/runs`, `/settings`, `/studio`, Team, member,
-  or authentication routes.
+  login, callback, or authentication routes. Login, callback, language, and
+  account presentation may adopt the vNext visual system without changing
+  their behavior.
 - No global navigation change in the first implementation. The vNext routes
   remain hidden from the existing menu and are entered by their explicit URL.
 - No assumption that `memberId`, `workflowId`, `definitionActorId`, or
@@ -183,6 +188,85 @@ Route requirements:
 The first implementation is intentionally discoverable by direct URL only.
 Adding an entry from an existing menu or Team page is a separate, explicit
 product decision because it changes an existing navigation surface.
+
+## Authentication And Localization Reuse Contract
+
+### Existing Login Path
+
+The vNext namespace is protected by the existing application runtime. It must
+not introduce another login page, callback, guard, token cache, or session
+provider.
+
+The preserved flow is:
+
+```text
+Protected vNext URL
+  -> ProtectedRouteRedirectGate
+  -> /login?redirect=<sanitized-vNext-return-path>
+  -> NyxIDAuthClient.loginWithRedirect({ returnTo })
+  -> /auth/callback
+  -> NyxIDAuthClient.handleRedirectCallback()
+  -> window.location.replace(result.returnTo)
+  -> original protected vNext URL
+```
+
+The implementation reuses these current boundaries:
+
+- `src/app.tsx` public-route and auth-session bootstrap behavior;
+- `src/shared/auth/ProtectedRouteRedirectGate.tsx`;
+- `src/pages/login/index.tsx`;
+- `src/pages/auth/callback/index.tsx`;
+- `src/shared/auth/client.ts`, `config.ts`, and `session.ts`;
+- current Account sign-in, sign-out, and service-access review actions.
+
+`sanitizeReturnTo` remains the authority for the redirect target. Restorable
+session handling continues through `hasRestorableAuthSession` and
+`ensureActiveAuthSession`. Login configuration errors, callback errors,
+service-access review errors, retry, and back actions retain their current
+logic and security behavior.
+
+### Login And Auth Presentation
+
+Login, callback progress/error, language, and account controls should look like
+the new workbench while remaining the same functional surfaces.
+
+- Replace the current decorative gradient, oversized radius, and high card
+  shadow with the Operational Automation Ledger palette, neutral borders,
+  4-6 px radii, compact type, and restrained status treatment.
+- Keep Aevatar as the first-viewport brand signal and retain the existing
+  NyxID action, pending state, configuration error, and callback recovery
+  content.
+- Do not add a marketing hero, new credential form, new auth choice, or
+  vNext-only callback route.
+- Preserve keyboard access, visible focus, pending button behavior, live error
+  announcements, and reduced-motion expectations.
+- A visual-only auth change must remain compatible with every existing route
+  that uses `/login` and `/auth/callback`, not only the vNext return path.
+
+### Existing Internationalization Path
+
+The vNext workbench reuses the configured Umi locale system:
+
+- `config/config.ts` remains the locale configuration authority;
+- `getLocale`/`setLocale` and `ConsoleLanguageSwitch` retain language selection
+  and persistence behavior;
+- `normalizeConsoleLocale`, `resolveAntdLocale`, and `resolveProIntl` continue
+  to supply the Ant Design and Pro Components locales;
+- `t`, `T`, `ConsoleMessage`, and `useIntl` remain the message formatting
+  paths;
+- `src/locales/en-US.ts`, `zh-CN.ts`, and their project-message catalogues own
+  all new vNext copy.
+
+The supported product locales remain `en-US` and `zh-CN`. Every new message ID
+must exist in both catalogues and preserve interpolation variables. New pages
+must not use hard-coded visible copy, create a vNext locale context, write a
+second locale storage key, or infer language from scope/user data.
+
+If the vNext display route hides ProLayout header actions, the vNext-local
+shell must render the existing `ConsoleLanguageSwitch` and existing account
+action behavior in a style-compatible location. Reuse may be through the
+current components or a presentation extraction that leaves their public
+behavior and existing consumers intact.
 
 ## Primary Flow
 
@@ -814,6 +898,13 @@ The expected high-value coverage is:
 
 - route/config integration proves all vNext URLs resolve, `new` is not captured
   as a Workflow ID, and legacy routes/redirects are unchanged;
+- auth-route integration proves an unauthenticated vNext URL uses the current
+  sanitized Login redirect and callback return path, while existing Login,
+  callback, retry, service-access review, and other protected routes retain
+  their behavior;
+- localization coverage proves new message IDs exist in `en-US` and `zh-CN`,
+  language switching uses the existing locale system, and the vNext shell does
+  not own a second locale state;
 - Activity adapter tests prove query encoding, scope handling, response
   decoding, unknown status preservation, detail/graph separation, and fork
   receipt decoding;
@@ -890,6 +981,14 @@ are true:
 - All vNext pages resolve only under
   `/scopes/:scopeId/workflow-activity-vnext`; old routes, redirects, menu
   behavior, and legacy page behavior remain intact.
+- Unauthenticated vNext entry uses the existing protected-route redirect,
+  `/login`, `/auth/callback`, sanitized `returnTo`, session restoration, and
+  service-access review behavior, returning to the original scoped URL.
+- Login, callback, language, and account controls use the vNext visual system
+  without changing their shared behavior for any existing route.
+- Every vNext message exists in `en-US` and `zh-CN`, and language selection
+  continues through the existing Umi locale and `ConsoleLanguageSwitch`
+  behavior without a second locale state or storage key.
 - The route `scopeId` is retained across navigation and sent only through
   scope-validating backend contracts.
 - A user can create a persisted draft with all four creation methods and enter

@@ -159,6 +159,19 @@ pnpm --dir apps/aevatar-console-web build
   or fixture fallback data.
 - Keep mock and fixture data in clearly named test-only files. Production
   routes, components, hooks, queries, and API adapters must not import them.
+- Reuse the existing protected-route, `/login`, `/auth/callback`,
+  `NyxIDAuthClient`, sanitized `returnTo`, session restoration, sign-in,
+  sign-out, and service-access review behavior. Do not create a vNext auth
+  route, provider, callback, token cache, session store, or identity fallback.
+- Reuse the existing Umi locale configuration, `ConsoleLanguageSwitch`,
+  `getLocale`/`setLocale`, message helpers, and `en-US`/`zh-CN` catalogues. Add
+  every new vNext message to both catalogues; do not create a vNext locale
+  context, storage key, or hard-coded visible-copy path.
+- Login, callback, language, and account presentation may adopt the vNext
+  visual system, but auth, redirect, callback, session, language, persistence,
+  error, and accessibility behavior must remain unchanged. If vNext hides the
+  global header, reuse its existing language/account actions inside the local
+  shell rather than cloning their logic.
 - Include the design-baseline declaration from
   `docs/design-baselines/workflow-activity-vnext/README.md` in every vNext
   implementation task and pull request so the Excalidraw hash, contract
