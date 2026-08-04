@@ -82,7 +82,6 @@ public sealed class ToolCallLoop
     {
         var lengthRecoveryCount = 0;
         StringBuilder? accumulatedContent = null;
-        var currentToolRunReceipts = new List<AgentToolReceipt>();
 
         for (var round = 0; round < maxRounds; round++)
         {
@@ -168,7 +167,6 @@ public sealed class ToolCallLoop
                             parsed.ToolCalls,
                             messages,
                             baseRequest.RequestId ?? "standalone-tool-loop",
-                            currentToolRunReceipts,
                             ct);
                         accumulatedContent = null;
                         continue;
@@ -223,7 +221,6 @@ public sealed class ToolCallLoop
                 response.ToolCalls!,
                 messages,
                 baseRequest.RequestId ?? "standalone-tool-loop",
-                currentToolRunReceipts,
                 ct);
         }
 
@@ -263,7 +260,6 @@ public sealed class ToolCallLoop
                     finalParsed.ToolCalls,
                     messages,
                     baseRequest.RequestId ?? "standalone-tool-loop",
-                    currentToolRunReceipts,
                     ct);
 
                 // One more LLM call to summarize
@@ -312,7 +308,6 @@ public sealed class ToolCallLoop
             toolCalls,
             messages,
             "standalone-tool-loop",
-            [],
             ct);
     }
 
@@ -624,7 +619,6 @@ public sealed class ToolCallLoop
         IReadOnlyList<ToolCall> toolCalls,
         List<ChatMessage> messages,
         string sessionId,
-        IList<AgentToolReceipt> currentToolRunReceipts,
         CancellationToken ct)
     {
         // Refactor (iter35/cluster-040-streaming-tool-executor):
@@ -634,8 +628,7 @@ public sealed class ToolCallLoop
             tools,
             _hooks,
             toolExecutionPort: _toolExecutionPort,
-            approvalContinuationMode: _approvalContinuationMode,
-            currentToolRunReceipts: currentToolRunReceipts);
+            approvalContinuationMode: _approvalContinuationMode);
         using var executionState = executor.CreateExecutionState();
 
         var prepared = await executor.PrepareBatchAsync(

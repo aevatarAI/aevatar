@@ -35,16 +35,6 @@ public interface IAgentToolOperationReconciler
         CancellationToken ct = default);
 }
 
-public interface IAgentToolReadOnlyReceiptGate
-{
-    bool RequiresCurrentToolRunReceipt(string argumentsJson);
-
-    bool IsAuthorizedByCurrentToolRunReceipt(string argumentsJson, AgentToolReceipt receipt);
-
-    string UnauthorizedCurrentToolRunReceiptMessage =>
-        "This read-only tool can only observe a subject produced earlier in the current tool run.";
-}
-
 /// <summary>Agent 可调用工具接口。LLM 通过 tool_call 触发执行。</summary>
 public interface IAgentTool
 {

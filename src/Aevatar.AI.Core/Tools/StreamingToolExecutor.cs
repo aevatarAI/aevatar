@@ -56,7 +56,6 @@ public sealed class StreamingToolExecutor
     private readonly IChatToolCheckpointPort _checkpointPort;
     private readonly AgentToolApprovalContinuationMode _approvalContinuationMode;
     private readonly AgentToolApprovalGrant? _approvalGrant;
-    private readonly IList<AgentToolReceipt> _currentToolRunReceipts;
     private readonly ILogger _logger;
 
     public StreamingToolExecutor(
@@ -68,7 +67,6 @@ public sealed class StreamingToolExecutor
         IChatToolCheckpointPort? checkpointPort = null,
         AgentToolApprovalContinuationMode approvalContinuationMode = AgentToolApprovalContinuationMode.None,
         AgentToolApprovalGrant? approvalGrant = null,
-        IList<AgentToolReceipt>? currentToolRunReceipts = null,
         ILogger? logger = null)
     {
         // Refactor (issue1574): Old pattern: streaming tool execution promoted request Metadata into tool control.
@@ -79,7 +77,6 @@ public sealed class StreamingToolExecutor
         _checkpointPort = checkpointPort ?? NoOpChatToolCheckpointPort.Instance;
         _approvalContinuationMode = approvalContinuationMode;
         _approvalGrant = approvalGrant;
-        _currentToolRunReceipts = currentToolRunReceipts ?? new List<AgentToolReceipt>();
         _logger = logger ?? NullLogger.Instance;
         _toolContext = toolContext
             ?? AgentToolRequestContext.Current
@@ -275,7 +272,6 @@ public sealed class StreamingToolExecutor
             var normalized = NormalizeFailureReceipt(tracked, result);
             tracked.Result = normalized;
             await _checkpointPort.CommitCompletionAsync(tracked.Operation, normalized, ct);
-            RecordCurrentToolRunReceipt(normalized.Receipt);
             tracked.CompletionCommitted = true;
         }
     }
@@ -395,41 +391,6 @@ public sealed class StreamingToolExecutor
         };
     }
 
-    private bool RejectUnauthorizedReadOnlyReceiptGate(
-        IAgentTool tool,
-        string? argumentsJson,
-        out string message)
-    {
-        message = string.Empty;
-        if (tool is not IAgentToolReadOnlyReceiptGate gate)
-            return false;
-
-        var normalizedArgumentsJson = argumentsJson ?? string.Empty;
-        if (!gate.RequiresCurrentToolRunReceipt(normalizedArgumentsJson))
-            return false;
-
-        if (_currentToolRunReceipts.Any(receipt =>
-                receipt.Status == AgentToolReceiptStatus.Success &&
-                gate.IsAuthorizedByCurrentToolRunReceipt(normalizedArgumentsJson, receipt)))
-        {
-            return false;
-        }
-
-        message = gate.UnauthorizedCurrentToolRunReceiptMessage;
-        return true;
-    }
-
-    private void RecordCurrentToolRunReceipt(AgentToolReceipt? receipt)
-    {
-        if (receipt?.Status != AgentToolReceiptStatus.Success ||
-            string.IsNullOrWhiteSpace(receipt.SubjectId))
-        {
-            return;
-        }
-
-        _currentToolRunReceipts.Add(receipt.Clone());
-    }
-
     private static string BuildSafeFailureResult() =>
         ToolManager.BuildErrorJson(SafeToolFailureMessage);
 
@@ -532,6 +493,7 @@ public sealed class StreamingToolExecutor
             }
 
             var effectiveTool = _tools.Get(effectiveToolName) ?? tracked.Tool ?? new NullAgentTool(call.Name);
+
             if (!string.Equals(effectiveToolName, call.Name, StringComparison.Ordinal) ||
                 !string.Equals(toolCtx.ToolArguments, call.ArgumentsJson, StringComparison.Ordinal))
             {
@@ -542,26 +504,6 @@ public sealed class StreamingToolExecutor
                         ToolManager.BuildErrorJson("A prepared tool operation cannot be rewritten after its intent is committed."),
                         IsError: true),
                     SchedulerFault: true);
-            }
-
-            if (RejectUnauthorizedReadOnlyReceiptGate(effectiveTool, call.ArgumentsJson, out var unauthorizedReadMessage))
-            {
-                var unauthorizedReadResult = ToolManager.BuildErrorJson(unauthorizedReadMessage);
-                return new ToolExecutionCompletion(
-                    new ToolExecutionResult(
-                        call.Id,
-                        call.Name,
-                        unauthorizedReadResult,
-                        IsError: true,
-                        Receipt: AgentToolReceiptFactory.CreateError(
-                            effectiveTool,
-                            call.Id,
-                            call.Name,
-                            effectiveTool.GetCallSafety(call.ArgumentsJson ?? string.Empty),
-                            unauthorizedReadResult,
-                            "read_only_subject_not_in_current_tool_run",
-                            unauthorizedReadMessage)),
-                    SchedulerFault: false);
             }
 
             var executionPort = _toolExecutionPort

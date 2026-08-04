@@ -437,7 +437,6 @@ public sealed class ChatRuntime
         var authorizedTools = ToolCallLoop.CreateRequestToolManager(baseRequest.Tools);
         var skillRecovery = CreateSkillRecoveryOrchestrator(baseRequest, () => authorizedTools);
         var executedToolOutcomes = new List<ToolOutcomeReplyFact>();
-        var currentToolRunReceipts = new List<AgentToolReceipt>();
         var readOnlyFailureCounts = new Dictionary<ReadOnlyFailureKey, int>();
         var toolLoopSuspended = false;
         var toolLoopTerminated = false;
@@ -472,7 +471,6 @@ public sealed class ChatRuntime
                 toolExecutionPort: _toolLoop.ToolExecutionPort,
                 checkpointPort: _toolCheckpointPort,
                 approvalContinuationMode: _toolLoop.ApprovalContinuationMode,
-                currentToolRunReceipts: currentToolRunReceipts,
                 logger: _logger);
             using var streamingToolState = streamingExecutor.CreateExecutionState();
 
@@ -486,7 +484,6 @@ public sealed class ChatRuntime
                     toolExecutionPort: _toolLoop.ToolExecutionPort,
                     checkpointPort: _toolCheckpointPort,
                     approvalContinuationMode: _toolLoop.ApprovalContinuationMode,
-                    currentToolRunReceipts: currentToolRunReceipts,
                     logger: _logger);
             }
 
@@ -652,7 +649,6 @@ public sealed class ChatRuntime
                             toolExecutionPort: _toolLoop.ToolExecutionPort,
                             checkpointPort: _toolCheckpointPort,
                             approvalContinuationMode: _toolLoop.ApprovalContinuationMode,
-                            currentToolRunReceipts: currentToolRunReceipts,
                             logger: _logger);
                         using var textToolState = textToolExecutor.CreateExecutionState();
                         var preparedTextOperations = await textToolExecutor.PrepareBatchAsync(
@@ -879,7 +875,6 @@ public sealed class ChatRuntime
                     toolExecutionPort: _toolLoop.ToolExecutionPort,
                     checkpointPort: _toolCheckpointPort,
                     approvalContinuationMode: _toolLoop.ApprovalContinuationMode,
-                    currentToolRunReceipts: currentToolRunReceipts,
                     logger: _logger);
                 using var finalToolState = finalToolExecutor.CreateExecutionState();
                 var preparedFinalOperations = await finalToolExecutor.PrepareBatchAsync(
@@ -1365,7 +1360,6 @@ public sealed class ChatRuntime
             checkpointPort: _toolCheckpointPort,
             approvalContinuationMode: _toolLoop.ApprovalContinuationMode,
             approvalGrant: approvalGrant,
-            currentToolRunReceipts: [],
             logger: _logger);
         using var toolState = executor.CreateExecutionState();
         var prepared = await executor.PrepareBatchAsync(
