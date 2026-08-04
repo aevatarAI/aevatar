@@ -246,4 +246,5 @@ public sealed record AgentRunReplyStepExecutionRequest(
     AgentRunReplyStepState StepState,
     Func<LLMStreamChunk, CancellationToken, Task>? ReportChunkAsync = null,
     AgentProfileTurnCatalog? TurnCatalog = null,
-    bool AllowDurableToolAuthorization = false);
+    bool AllowDurableToolAuthorization = false,
+    bool? AllowMultipleToolCalls = null);

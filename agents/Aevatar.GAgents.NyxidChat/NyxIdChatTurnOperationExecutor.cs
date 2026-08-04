@@ -255,7 +255,8 @@ public sealed class NyxIdChatTurnOperationExecutor
                         session,
                         reportProgressAsync,
                         token),
-                    session.TurnCatalog),
+                    session.TurnCatalog,
+                    AllowMultipleToolCalls: false),
                 ct)
             .ConfigureAwait(false);
 

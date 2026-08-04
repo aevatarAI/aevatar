@@ -188,7 +188,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             plan.LlmControl,
             workItem.StepState.Round,
             workItem.StepState.FinalNoToolsStep,
-            toolReceipts: workItem.StepState.ToolReceipts);
+            toolReceipts: workItem.StepState.ToolReceipts,
+            allowMultipleToolCalls: workItem.AllowMultipleToolCalls);
         llmRequest = await MaterializeFileRefMessagesAsync(llmRequest, ct).ConfigureAwait(false);
         if (workItem.StepState.FinalNoToolsStep && llmRequest.Tools is { Count: > 0 })
         {
@@ -209,6 +210,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 Model = llmRequest.Model,
                 Temperature = llmRequest.Temperature,
                 MaxTokens = llmRequest.MaxTokens,
+                AllowMultipleToolCalls = llmRequest.AllowMultipleToolCalls,
                 ResponseFormat = llmRequest.ResponseFormat,
             };
         }
@@ -424,6 +426,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             Model = request.Model,
             Temperature = request.Temperature,
             MaxTokens = request.MaxTokens,
+            AllowMultipleToolCalls = request.AllowMultipleToolCalls,
             ResponseFormat = request.ResponseFormat,
         };
     }
@@ -573,7 +576,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             plan.LlmControl,
             workItem.StepState.Round,
             finalNoTools: false,
-            toolReceipts: workItem.StepState.ToolReceipts);
+            toolReceipts: workItem.StepState.ToolReceipts,
+            allowMultipleToolCalls: workItem.AllowMultipleToolCalls);
         var executionToolContext = llmRequest.ToolContext ?? plan.ToolContext ?? AgentToolExecutionContext.Empty;
         var currentCatalog = llmRequest.Tools ?? [];
         if (!TryMatchCurrentCatalog(toolCalls, authorizations, currentCatalog, executionToolContext, out var admittedTools))

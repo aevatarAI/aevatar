@@ -506,6 +506,7 @@ public sealed class ChatRuntime
                 Model = baseRequest.Model,
                 Temperature = baseRequest.Temperature,
                 MaxTokens = baseRequest.MaxTokens,
+                AllowMultipleToolCalls = baseRequest.AllowMultipleToolCalls,
                 ResponseFormat = baseRequest.ResponseFormat,
             };
             var roundScope = new StreamingRoundScope();
@@ -840,6 +841,7 @@ public sealed class ChatRuntime
                 Model = baseRequest.Model,
                 Temperature = baseRequest.Temperature,
                 MaxTokens = baseRequest.MaxTokens,
+                AllowMultipleToolCalls = baseRequest.AllowMultipleToolCalls,
                 ResponseFormat = baseRequest.ResponseFormat,
             };
             var finalScope = new StreamingRoundScope();
@@ -930,6 +932,7 @@ public sealed class ChatRuntime
                         Model = finalRequest.Model,
                         Temperature = finalRequest.Temperature,
                         MaxTokens = finalRequest.MaxTokens,
+                        AllowMultipleToolCalls = finalRequest.AllowMultipleToolCalls,
                         ResponseFormat = finalRequest.ResponseFormat,
                     };
                     var summaryScope = new StreamingRoundScope();

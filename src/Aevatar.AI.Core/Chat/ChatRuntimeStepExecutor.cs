@@ -60,7 +60,8 @@ public sealed class ChatRuntimeStepExecutor
         LLMControlContext? llmControl,
         int round,
         bool finalNoTools,
-        IReadOnlyList<AgentToolReceipt>? toolReceipts = null)
+        IReadOnlyList<AgentToolReceipt>? toolReceipts = null,
+        bool? allowMultipleToolCalls = null)
     {
         var baseRequest = BuildBaseRequest(requestId, metadata, toolContext, llmControl);
         return new LLMRequest
@@ -80,6 +81,7 @@ public sealed class ChatRuntimeStepExecutor
             Model = baseRequest.Model,
             Temperature = baseRequest.Temperature,
             MaxTokens = baseRequest.MaxTokens,
+            AllowMultipleToolCalls = allowMultipleToolCalls ?? baseRequest.AllowMultipleToolCalls,
             ResponseFormat = baseRequest.ResponseFormat,
         };
     }

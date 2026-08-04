@@ -368,6 +368,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
             Model = model,
             Temperature = NormalizeTemperatureForModel(model, request.Temperature),
             MaxTokens = request.MaxTokens,
+            AllowMultipleToolCalls = request.AllowMultipleToolCalls,
             ResponseFormat = request.ResponseFormat,
         };
     }

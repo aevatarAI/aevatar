@@ -315,6 +315,8 @@ public sealed class NyxIdChatTurnGAgentTests
         execution.Result.ResultCase.Should().Be(NyxIdChatOperationResultSignal.ResultOneofCase.Llm);
         execution.Result.Llm.Content.Should().Be("visible text");
         execution.Result.Llm.ReasoningContent.Should().Be("private reasoning");
+        generationExecutor.LlmStepRequests.Should().ContainSingle();
+        generationExecutor.LlmStepRequests.Single().AllowMultipleToolCalls.Should().BeFalse();
         var toolCall = execution.Result.Llm.ToolCalls.Should().ContainSingle().Which;
         toolCall.CallId.Should().Be("call-alpha");
         toolCall.ToolName.Should().Be("tool-alpha");
@@ -888,6 +890,8 @@ public sealed class NyxIdChatTurnGAgentTests
 
         public List<AgentRunReplyStepState> LlmStepStates { get; } = [];
 
+        public List<AgentRunReplyStepExecutionRequest> LlmStepRequests { get; } = [];
+
         public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
             AgentRunReplyGenerationExecutionRequest request,
             CancellationToken ct)
@@ -910,6 +914,7 @@ public sealed class NyxIdChatTurnGAgentTests
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
+            LlmStepRequests.Add(request);
             LlmStepStates.Add(request.StepState.Clone());
             if (request.StepState.Round > 0)
             {

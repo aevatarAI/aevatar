@@ -45,6 +45,8 @@ The conversation controller owns active/latest turns, task and step status, oper
 
 `NyxIdChatTurnGAgent` is short-lived. Its opaque actor address is a server-owned reuse key and has no client-visible meaning. It records only admission/completion/delivery waterlines and safe effect evidence, runs one LLM or tool operation, and reports back to the controller. It never owns conversation truth and never performs a second operation without a new controller authorization.
 
+One NyxID Chat LLM operation admits at most one tool call. The turn executor carries this as the typed `AllowMultipleToolCalls = false` request constraint and provider adapters must preserve it through routing, request copies, and tool-round construction. Providers that support the constraint map it to their native option. The actor still fails closed with `NYXID_CHAT_MULTIPLE_TOOL_CALLS_UNSUPPORTED` if a provider violates the contract; ordinary non-NyxID chat requests leave the nullable option unset and retain their provider default.
+
 The Host authenticates, validates identities, dispatches commands, and maps typed results. It does not decide task transitions. Projection consumes committed controller facts only. Query reads `NyxIdChatConversationCurrentStateDocument` only; it does not activate an actor, read the event store, attach or prime a projection, replay events, or create a turn.
 
 Conversation creation has three deliberately separate authorities:
