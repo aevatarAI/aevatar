@@ -27,6 +27,88 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class AgentRunReplyGenerationExecutorTests
 {
     [Fact]
+    public async Task BuildLlmStepContinuation_WhenToolEnabledFirstRoundHasNoSuccessfulMutatingReceipt_ShouldPassMutationClaimConstraint()
+    {
+        var provider = new RecordingProvider();
+        var executor = CreateToolEnabledExecutor(new CountingTool("submit_invoice"), provider);
+        var workItem = BuildToolEnabledWorkItem(
+            new AgentToolReceipt
+            {
+                Status = AgentToolReceiptStatus.Error,
+                SideEffectKind = "invoice.submit",
+            });
+
+        await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        var request = provider.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().ContainSingle().Which.Name.Should().Be("submit_invoice");
+        request.Messages.Should().ContainSingle(message =>
+            message.Role == "system" &&
+            message.Content != null &&
+            message.Content.Contains("no successful mutating tool execution", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenNonCardTurnHasBlockingReceipt_ShouldSuppressModelStreaming()
+    {
+        var provider = new RecordingProvider();
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
+        var executor = CreateToolEnabledExecutor(
+            new CountingTool("submit_invoice"),
+            provider,
+            actorDispatchPort: dispatchPort,
+            relayOptions: new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                StreamingRepliesEnabled = true,
+                StreamingCardKitEnabled = false,
+            });
+        var workItem = BuildToolEnabledWorkItem(new AgentToolReceipt
+        {
+            CallId = "call-submit",
+            ToolName = "submit_invoice",
+            Status = AgentToolReceiptStatus.Error,
+            Effect = AgentToolReceiptEffect.Mutating,
+        });
+        workItem.Request.Activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "reply-1",
+            CorrelationId = "corr-1",
+        };
+
+        await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        await dispatchPort.DidNotReceiveWithAnyArgs()
+            .DispatchAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenToolEnabledFirstRoundHasSuccessfulMutatingReceipt_ShouldKeepGroundingConstraint()
+    {
+        var provider = new RecordingProvider();
+        var executor = CreateToolEnabledExecutor(new CountingTool("submit_invoice"), provider);
+        var workItem = BuildToolEnabledWorkItem(
+            new AgentToolReceipt
+            {
+                Status = AgentToolReceiptStatus.Success,
+                SideEffectKind = "invoice.submit",
+                Effect = AgentToolReceiptEffect.Mutating,
+            });
+
+        await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        var request = provider.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().ContainSingle().Which.Name.Should().Be("submit_invoice");
+        request.Messages.Should().NotContain(message =>
+            message.Role == "system" &&
+            message.Content != null &&
+            message.Content.Contains("no successful mutating tool execution", StringComparison.Ordinal));
+        request.Messages.Should().ContainSingle(message =>
+            message.Role == "system" &&
+            message.Content != null &&
+            message.Content.Contains("match that exact action", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task BuildLlmStepContinuation_WhenFinalNoToolsHasNoSuccessfulMutatingReceipt_ShouldPassReceiptsToCoreConstraint()
     {
         var provider = new RecordingProvider();
@@ -44,7 +126,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
-    public async Task BuildLlmStepContinuation_WhenFinalNoToolsHasSuccessfulMutatingReceipt_ShouldSuppressCoreConstraint()
+    public async Task BuildLlmStepContinuation_WhenFinalNoToolsHasSuccessfulMutatingReceipt_ShouldKeepGroundingConstraint()
     {
         var provider = new RecordingProvider();
         var executor = CreateExecutor(provider);
@@ -53,6 +135,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             {
                 Status = AgentToolReceiptStatus.Success,
                 SideEffectKind = "definition.update",
+                Effect = AgentToolReceiptEffect.Mutating,
             });
 
         await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
@@ -63,6 +146,10 @@ public sealed class AgentRunReplyGenerationExecutorTests
             .Where(message => message.Role == "system" &&
                               message.Content?.Contains("no successful mutating tool execution") == true)
             .Should().BeEmpty();
+        request.Messages.Should().ContainSingle(message =>
+            message.Role == "system" &&
+            message.Content != null &&
+            message.Content.Contains("match that exact action", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -771,7 +858,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
         IAgentTool tool,
         ILLMProvider provider,
         IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
-        AgentToolExecutionContext? toolContext = null)
+        AgentToolExecutionContext? toolContext = null,
+        IActorDispatchPort? actorDispatchPort = null,
+        Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions = null)
     {
         var tools = new ToolManager();
         tools.Register(tool);
@@ -792,10 +881,10 @@ public sealed class AgentRunReplyGenerationExecutorTests
             InitialMessages: [],
             MaxToolRounds: 1);
         return new AgentRunReplyGenerationExecutor(
-            Substitute.For<IActorDispatchPort>(),
+            actorDispatchPort ?? Substitute.For<IActorDispatchPort>(),
             new StaticStepPlanReplyGenerator(plan),
             interactiveReplyCollector: null,
-            relayOptions: null,
+            relayOptions,
             NullLogger<AgentRunReplyGenerationExecutor>.Instance);
     }
 
@@ -836,7 +925,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             stepState);
     }
 
-    private static AgentRunReplyStepExecutionRequest BuildToolEnabledWorkItem()
+    private static AgentRunReplyStepExecutionRequest BuildToolEnabledWorkItem(params AgentToolReceipt[] receipts)
     {
         var request = new NeedsLlmReplyEvent
         {
@@ -859,6 +948,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             MaxToolRounds = 1,
         };
         stepState.Messages.Add(AgentRunReplyStepMappers.ToProto(ChatMessage.User("run")));
+        stepState.ToolReceipts.AddRange(receipts.Select(receipt => receipt.Clone()));
         return new AgentRunReplyStepExecutionRequest(
             "run-1",
             "channel-agent-run:run-1",

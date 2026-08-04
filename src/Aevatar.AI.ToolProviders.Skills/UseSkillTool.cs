@@ -128,6 +128,8 @@ public sealed class UseSkillTool : IAgentTool
         string argumentsJson,
         string resultJson)
     {
+        var arguments = ParseArguments(argumentsJson);
+        var sideEffectKind = arguments.MountWorkflows == true ? "workflow.mount" : string.Empty;
         try
         {
             using var document = JsonDocument.Parse(resultJson);
@@ -145,10 +147,18 @@ public sealed class UseSkillTool : IAgentTool
 
             var status = statusValue.GetString() ?? string.Empty;
             if (!loadedValue.GetBoolean() || !string.Equals(status, "success", StringComparison.Ordinal))
-                return ErrorReceipt(callId, toolName, LoadFailureCode(status), "The skill could not be loaded.");
+            {
+                return ErrorReceipt(
+                    callId,
+                    toolName,
+                    LoadFailureCode(status),
+                    "The skill could not be loaded.",
+                    arguments.SkillName,
+                    sideEffectKind);
+            }
 
-            if (ParseArguments(argumentsJson).MountWorkflows != true)
-                return SuccessReceipt(callId, toolName);
+            if (arguments.MountWorkflows != true)
+                return SuccessReceipt(callId, toolName, arguments.SkillName);
 
             if (!root.TryGetProperty("workflow_mount", out var workflowMount) ||
                 workflowMount.ValueKind != JsonValueKind.Object)
@@ -157,7 +167,9 @@ public sealed class UseSkillTool : IAgentTool
                     callId,
                     toolName,
                     "USE_SKILL_MOUNT_RESULT_INVALID",
-                    "Skill workflow mounting returned an invalid result.");
+                    "Skill workflow mounting returned an invalid result.",
+                    arguments.SkillName,
+                    sideEffectKind);
             }
 
             var mounted = workflowMount.TryGetProperty("mounted", out var mountedValue) &&
@@ -167,7 +179,7 @@ public sealed class UseSkillTool : IAgentTool
             var succeeded = workflowMount.TryGetProperty("success", out var successValue) &&
                             successValue.ValueKind == JsonValueKind.True;
             if (mounted || accepted && succeeded)
-                return SuccessReceipt(callId, toolName, sideEffectKind: "workflow.mount");
+                return SuccessReceipt(callId, toolName, arguments.SkillName, sideEffectKind);
 
             var mountStatus = workflowMount.TryGetProperty("status", out var mountStatusValue) &&
                               mountStatusValue.ValueKind == JsonValueKind.String
@@ -177,7 +189,9 @@ public sealed class UseSkillTool : IAgentTool
                 callId,
                 toolName,
                 MountFailureCode(mountStatus),
-                "Skill workflow mounting failed.");
+                "Skill workflow mounting failed.",
+                arguments.SkillName,
+                sideEffectKind);
         }
         catch (JsonException)
         {
@@ -758,6 +772,7 @@ public sealed class UseSkillTool : IAgentTool
     private AgentToolReceipt SuccessReceipt(
         string callId,
         string toolName,
+        string skillName,
         string sideEffectKind = "") =>
         new()
         {
@@ -765,20 +780,33 @@ public sealed class UseSkillTool : IAgentTool
             ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
             Status = AgentToolReceiptStatus.Success,
             ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            Effect = string.IsNullOrWhiteSpace(sideEffectKind)
+                ? AgentToolReceiptEffect.ReadOnly
+                : AgentToolReceiptEffect.Mutating,
             SideEffectKind = sideEffectKind,
+            SubjectKind = string.IsNullOrWhiteSpace(skillName) ? string.Empty : "ornn.skill",
+            SubjectId = skillName?.Trim() ?? string.Empty,
         };
 
     private AgentToolReceipt ErrorReceipt(
         string callId,
         string toolName,
         string errorCode,
-        string errorMessage) =>
+        string errorMessage,
+        string skillName,
+        string sideEffectKind) =>
         new()
         {
             CallId = callId ?? string.Empty,
             ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
             Status = AgentToolReceiptStatus.Error,
             ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            Effect = string.IsNullOrWhiteSpace(sideEffectKind)
+                ? AgentToolReceiptEffect.ReadOnly
+                : AgentToolReceiptEffect.Mutating,
+            SideEffectKind = sideEffectKind,
+            SubjectKind = string.IsNullOrWhiteSpace(skillName) ? string.Empty : "ornn.skill",
+            SubjectId = skillName?.Trim() ?? string.Empty,
             ErrorCode = errorCode,
             ErrorMessage = errorMessage,
             ResultJson = JsonSerializer.Serialize(new { error = errorCode, message = errorMessage }),

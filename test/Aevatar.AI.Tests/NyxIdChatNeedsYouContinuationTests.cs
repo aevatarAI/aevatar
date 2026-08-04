@@ -163,6 +163,7 @@ public sealed class NyxIdChatNeedsYouContinuationTests
         denied.Result.Tool.Receipt.ToolName.Should().Be("dangerous_tool");
         denied.Result.Tool.Receipt.ApprovalRequestId.Should().Be("approval-alpha");
         denied.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Denied);
+        denied.Result.Tool.Receipt.Effect.Should().Be(AgentToolReceiptEffect.Mutating);
         denied.Result.Tool.Receipt.ErrorCode.Should().Be("approval_denied");
         denied.Result.Tool.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
         var reconciled = NyxIdChatTaskLifecycle.ApplyOperationResult(

@@ -725,7 +725,7 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
         notification.Status switch
         {
             WorkflowRunTerminalStatus.Completed => string.IsNullOrWhiteSpace(notification.Output)
-                ? "Workflow completed."
+                ? "Workflow run completed without a result to display."
                 : notification.Output.Trim(),
             WorkflowRunTerminalStatus.Stopped => string.IsNullOrWhiteSpace(notification.Error)
                 ? "Workflow stopped."

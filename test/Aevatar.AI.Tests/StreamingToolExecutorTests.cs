@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Tools;
 using Aevatar.Audit;
@@ -910,6 +911,33 @@ public class StreamingToolExecutorTests
         tool.ExecutionCount.Should().Be(1);
     }
 
+    [Fact]
+    public async Task UnclassifiedDiscardFailure_ShouldCommitAndYieldSameBlockingReceipt()
+    {
+        var checkpoint = new RecordingCheckpointPort();
+        var executor = NewStreamingToolExecutor(
+            new ToolManager(),
+            checkpointPort: checkpoint);
+        using var executionState = executor.CreateExecutionState();
+        executor.Discard(executionState);
+        await AddToolAsync(executor, executionState, new ToolCall
+        {
+            Id = "tc-unclassified-discard",
+            Name = "missing_tool",
+            ArgumentsJson = "{}",
+        });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        var yielded = results.Should().ContainSingle().Subject;
+        var committed = checkpoint.Completions.Should().ContainSingle().Subject;
+        yielded.Receipt.Should().NotBeNull();
+        yielded.Receipt!.Effect.Should().Be(AgentToolReceiptEffect.Mutating);
+        committed.Should().Be(yielded);
+    }
+
     // ─── Test helpers ───
 
     private static async Task AddToolAsync(
@@ -930,6 +958,7 @@ public class StreamingToolExecutorTests
         IReadOnlyDictionary<string, string>? requestMetadata = null,
         AgentToolExecutionContext? toolContext = null,
         IAgentToolExecutionPort? toolExecutionPort = null,
+        IChatToolCheckpointPort? checkpointPort = null,
         AgentToolApprovalContinuationMode approvalContinuationMode = AgentToolApprovalContinuationMode.None) =>
         new(
             tools,
@@ -937,8 +966,27 @@ public class StreamingToolExecutorTests
             requestMetadata,
             toolContext,
             toolExecutionPort ?? new TestExecutionPort(),
-            checkpointPort: null,
+            checkpointPort,
             approvalContinuationMode);
+
+    private sealed class RecordingCheckpointPort : IChatToolCheckpointPort
+    {
+        public List<ToolExecutionResult> Completions { get; } = [];
+
+        public Task<IReadOnlyList<PreparedChatToolOperation>> PrepareBatchAsync(
+            ChatToolBatchIntent batch,
+            CancellationToken ct = default) =>
+            NoOpChatToolCheckpointPort.Instance.PrepareBatchAsync(batch, ct);
+
+        public Task CommitCompletionAsync(
+            PreparedChatToolOperation operation,
+            ToolExecutionResult result,
+            CancellationToken ct = default)
+        {
+            Completions.Add(result);
+            return Task.CompletedTask;
+        }
+    }
 
     private sealed class ConcurrencyTrackingTool : IAgentTool
     {

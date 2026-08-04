@@ -6,20 +6,24 @@ namespace Aevatar.GAgents.NyxidChat;
 
 public sealed class AgentToolReceiptRenderer : IAgentToolReceiptRenderer
 {
+    private readonly record struct ToolCallIdentity(string CallId, string ToolName);
+
     public string Render(IReadOnlyList<AgentToolReceipt> receipts, IReadOnlyList<AgentRunToolCall> toolCalls)
     {
         ArgumentNullException.ThrowIfNull(receipts);
         if (receipts.Count == 0)
             return string.Empty;
 
-        var toolCallById = toolCalls
-            .Where(static call => !string.IsNullOrWhiteSpace(call.Id))
-            .GroupBy(static call => call.Id, StringComparer.Ordinal)
-            .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
+        var toolCallByIdentity = toolCalls
+            .Where(static call => Normalize(call.Id) is not null)
+            .GroupBy(static call => new ToolCallIdentity(
+                Normalize(call.Id)!,
+                Normalize(call.Name) ?? string.Empty))
+            .ToDictionary(static group => group.Key, static group => group.Last());
         var builder = new StringBuilder();
         foreach (var receipt in receipts)
         {
-            var line = RenderLine(receipt, toolCallById);
+            var line = RenderLine(receipt, toolCallByIdentity);
             if (string.IsNullOrWhiteSpace(line))
                 continue;
 
@@ -33,22 +37,24 @@ public sealed class AgentToolReceiptRenderer : IAgentToolReceiptRenderer
 
     private static string RenderLine(
         AgentToolReceipt receipt,
-        IReadOnlyDictionary<string, AgentRunToolCall> toolCallById)
+        IReadOnlyDictionary<ToolCallIdentity, AgentRunToolCall> toolCallByIdentity)
     {
         // Success receipts stay typed-only (persisted state, audit trail, model reply
         // constraint); the user-visible line is reserved for statuses the model must
-        // not narrate around: pending approval, denial, failure.
+        // not narrate around: pending approval, authorization, denial, failure, or unknown outcome.
         var status = receipt.Status switch
         {
             AgentToolReceiptStatus.ApprovalRequired => "Approval pending",
             AgentToolReceiptStatus.Denied => "Denied",
             AgentToolReceiptStatus.Error => "Failed",
+            AgentToolReceiptStatus.AuthorizationRequired => "Authorization required",
+            AgentToolReceiptStatus.Unspecified => "Outcome unverified",
             _ => string.Empty,
         };
         if (string.IsNullOrEmpty(status))
             return string.Empty;
 
-        var subject = ResolveSubject(receipt, toolCallById);
+        var subject = ResolveSubject(receipt, toolCallByIdentity);
         var evidence = ResolveEvidence(receipt);
         var builder = new StringBuilder();
         builder.Append("[tool receipt] ");
@@ -66,11 +72,11 @@ public sealed class AgentToolReceiptRenderer : IAgentToolReceiptRenderer
             builder.Append(')');
         }
 
-        if (receipt.Status is AgentToolReceiptStatus.Error or AgentToolReceiptStatus.Denied &&
-            !string.IsNullOrWhiteSpace(receipt.ErrorMessage))
+        var safeMessage = ResolveSafeMessage(receipt);
+        if (!string.IsNullOrWhiteSpace(safeMessage))
         {
             builder.Append(" - ");
-            builder.Append(receipt.ErrorMessage.Trim());
+            builder.Append(safeMessage);
         }
 
         return builder.ToString();
@@ -78,14 +84,17 @@ public sealed class AgentToolReceiptRenderer : IAgentToolReceiptRenderer
 
     private static string ResolveSubject(
         AgentToolReceipt receipt,
-        IReadOnlyDictionary<string, AgentRunToolCall> toolCallById)
+        IReadOnlyDictionary<ToolCallIdentity, AgentRunToolCall> toolCallByIdentity)
     {
         var kind = Normalize(receipt.SubjectKind);
         var id = Normalize(receipt.SubjectId);
         if (kind is not null || id is not null)
             return string.Join(" ", new[] { kind, id }.Where(static value => !string.IsNullOrWhiteSpace(value)));
 
-        if (!toolCallById.TryGetValue(receipt.CallId ?? string.Empty, out var toolCall))
+        var identity = new ToolCallIdentity(
+            Normalize(receipt.CallId) ?? string.Empty,
+            Normalize(receipt.ToolName) ?? string.Empty);
+        if (!toolCallByIdentity.TryGetValue(identity, out var toolCall))
             return Normalize(receipt.ToolName) ?? string.Empty;
 
         return TryGetDisplayNameFromArguments(toolCall.ArgumentsJson) ??
@@ -107,6 +116,22 @@ public sealed class AgentToolReceiptRenderer : IAgentToolReceiptRenderer
         }
 
         return string.Join(", ", parts);
+    }
+
+    private static string? ResolveSafeMessage(AgentToolReceipt receipt)
+    {
+        if (receipt.Status == AgentToolReceiptStatus.AuthorizationRequired &&
+            !string.IsNullOrWhiteSpace(receipt.AuthorizationRequired?.SafeMessage))
+        {
+            return receipt.AuthorizationRequired.SafeMessage.Trim();
+        }
+
+        return receipt.Status is AgentToolReceiptStatus.Error or
+            AgentToolReceiptStatus.Denied or
+            AgentToolReceiptStatus.AuthorizationRequired or
+            AgentToolReceiptStatus.Unspecified
+            ? Normalize(receipt.ErrorMessage)
+            : null;
     }
 
     private static string? TryGetDisplayNameFromArguments(string? argumentsJson)

@@ -719,7 +719,10 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             hasReplyText ? string.Empty : $"Reply generator returned an empty response ({emptyReplyDiagnostics}).",
             stepState.AppendedHistory.ToArray(),
             stepState.ToolReceipts.ToArray(),
-            stepState.PendingToolCalls.ToArray());
+            stepState.AppendedHistory
+                .SelectMany(static message => message.ToolCalls)
+                .Select(AgentRunReplyStepMappers.ToProto)
+                .ToArray());
     }
 
     // When an LLM turn fails terminally, surface an actionable hint for the one failure the user
@@ -1368,24 +1371,30 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         IReadOnlyList<Aevatar.AI.Abstractions.AgentToolReceipt>? toolReceipts = null,
         IReadOnlyList<AgentRunToolCall>? toolCalls = null)
     {
-        var renderedReplyText = RenderReplyWithReceipts(replyText, toolReceipts, toolCalls);
+        var delivery = AgentToolReceiptDeliveryPolicy.Build(
+            replyText,
+            outboundIntent,
+            appendedHistory,
+            toolReceipts,
+            toolCalls,
+            _toolReceiptRenderer);
         await PersistReplyProducedAsync(
             request,
             runId,
-            renderedReplyText,
-            outboundIntent,
+            delivery.ReplyText,
+            delivery.OutboundIntent,
             terminalState,
             errorCode,
             errorSummary,
-            appendedHistory,
+            delivery.AppendedHistory,
             toolReceipts);
 
         if (await TryCompleteCardStreamedReplyAsync(
                 request,
                 runId,
-                renderedReplyText,
-                outboundIntent,
-                appendedHistory ?? []))
+                delivery.ReplyText,
+                delivery.OutboundIntent,
+                delivery.AppendedHistory))
         {
             return;
         }
@@ -1393,12 +1402,12 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         await DispatchReadyEventAsync(
             request,
             runId,
-            renderedReplyText,
-            outboundIntent,
+            delivery.ReplyText,
+            delivery.OutboundIntent,
             terminalState,
             errorCode,
             errorSummary,
-            appendedHistory);
+            delivery.AppendedHistory);
 
         // Past the point of user-visible delivery. State persistence failures and cleanup
         // scheduling failures MUST NOT propagate out — otherwise HandleStartAsync's outer
@@ -1593,24 +1602,6 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 Completion = completion.Clone(),
             },
         ]);
-    }
-
-    private string RenderReplyWithReceipts(
-        string replyText,
-        IReadOnlyList<Aevatar.AI.Abstractions.AgentToolReceipt>? toolReceipts,
-        IReadOnlyList<AgentRunToolCall>? toolCalls)
-    {
-        if (toolReceipts is not { Count: > 0 })
-            return replyText ?? string.Empty;
-
-        var rendered = _toolReceiptRenderer.Render(toolReceipts, toolCalls ?? []);
-        if (string.IsNullOrWhiteSpace(rendered))
-            return replyText ?? string.Empty;
-
-        if (string.IsNullOrWhiteSpace(replyText))
-            return rendered;
-
-        return $"{replyText.TrimEnd()}\n\n{rendered}";
     }
 
     private async Task PersistReplyDispatchedAsync(NeedsLlmReplyEvent request, string runId)

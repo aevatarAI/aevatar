@@ -141,7 +141,12 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         //   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
         //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
         var request = workItem.Request.Clone();
-        using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, workItem.RunActorId, request.TargetActorId);
+        var hasBlockingReceipt = AgentToolReceiptDeliveryPolicy.HasBlockingMutation(
+            AgentToolReceiptDeliveryPolicy.Reconcile(workItem.StepState.ToolReceipts));
+        var suppressTextStreaming = hasBlockingReceipt && _relayOptions?.StreamingCardKitEnabled != true;
+        using TurnStreamingReplySink? streamingSink = suppressTextStreaming
+            ? null
+            : TryBuildStreamingSink(request, workItem.RunActorId, request.TargetActorId);
         var streamingState = TryBuildStreamingReplyState(streamingSink);
         var generator = RequireStepGenerator();
         var stepMetadata = AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata);

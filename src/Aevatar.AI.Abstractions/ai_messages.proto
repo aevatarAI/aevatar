@@ -400,6 +400,12 @@ enum AgentToolReceiptApprovalMode {
   AGENT_TOOL_RECEIPT_APPROVAL_MODE_AUTO = 3;
 }
 
+enum AgentToolReceiptEffect {
+  AGENT_TOOL_RECEIPT_EFFECT_UNSPECIFIED = 0;
+  AGENT_TOOL_RECEIPT_EFFECT_READ_ONLY = 1;
+  AGENT_TOOL_RECEIPT_EFFECT_MUTATING = 2;
+}
+
 message NyxIdAuthorizationRequiredEvent {
   string service_slug = 1;
   optional string service_label = 2;
@@ -428,6 +434,7 @@ message AgentToolReceipt {
   ManagedWorkflowHandoffReceipt managed_workflow_handoff = 15;
   WorkflowRunBackgroundDeliveryReceipt workflow_run_delivery = 16;
   NyxIdAuthorizationRequiredEvent authorization_required = 17;
+  AgentToolReceiptEffect effect = 18;
 }
 
 message ManagedWorkflowHandoffReceipt {

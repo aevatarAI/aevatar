@@ -883,6 +883,19 @@ NyxidChat 的 draft-run interaction port 不在 `ConversationGAgent` turn 内执
 - **sender gate 不变**：与显式 skill 触发一致，未绑定 NyxID 的 sender 不启用（tool dispatch 对 unbound sender 关闭）。
 - **不感知具体 skill 名**：binding 值是 host/user 数据，路由逻辑只做通用 skill 触发合成，生产代码不 hardcode 任何 skill 名。
 
+### 5.6.4 Channel reply truthfulness: mutating receipts outrank model prose
+
+Channel 面向用户声称某个外部写操作成功时，唯一充分证据是**同一 turn** 内与该动作精确匹配的 typed `AgentToolReceipt`：`Status=Success`、`Effect=Mutating`，且 `call_id`、tool、side effect 与 typed subject 都对应本次具体动作。probe、workflow run、read 或其他动作的成功回执都不能替代该证据；`Effect=Unspecified` 仅用于兼容，永远不是写操作成功的正向证据。
+
+Executor 必须根据具体调用的 `GetCallSafety(argumentsJson)` 与 `SideEffectKind` 冻结 `Effect` 为 `ReadOnly` 或 `Mutating`，下游不得从模型措辞、结果 JSON 或工具名称重新猜测效果。最终 channel delivery 按以下规则对账并约束 reply：
+
+- 同一非空 `call_id + tool` 以最后一条回执为 terminal authority；空 `call_id` 的回执各自独立，不得合并对账。provider 未给 `call_id` 时，runtime 生成的 ID 必须带 request/round identity，禁止跨 round 重用匿名 ID。
+- 对账后的 mutating receipt 若为 `Error`、`ApprovalRequired`、`Denied`、`AuthorizationRequired` 或 `Unspecified`，必须用 deterministic receipt text 替换模型的成功叙述，并同步替换 streaming snapshot、reply、outbound intent 与本 turn assistant history。该回执必须保持用户可见，不能被模型文本覆盖或省略；assistant tool-call message 的 narrative 要清理，但 tool-call pairing 必须保留。
+- read-only failure 可以附加到回复中，但不得替换一个本来有效的答案。
+- `ApprovalRequired` 仍表示等待审批，不能证明成功；deterministic pending 文案必须保留 approval request evidence，不能与模型成功措辞并列。
+
+`use_skill` 必须保持两种操作语义分离：省略 `mount_workflows` 时仅加载 skill/instructions，是 read-only，加载成功不能证明 workflow 已挂载；`mount_workflows=true` 是独立的 mutating operation，只有与这次调用匹配的 successful mutating receipt 才能证明挂载成功。
+
 ### 5.7 Middleware Pipeline（窄范围）
 
 ```csharp

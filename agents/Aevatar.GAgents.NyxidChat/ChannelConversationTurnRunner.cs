@@ -2748,7 +2748,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         prompt =
             invocationLine +
             "This command is not handled by Aevatar's local relay commands. Treat it as an Ornn skill-backed command, not an open-ended chat answer.\n" +
-            "Aevatar has already attempted `use_skill` for this command before this turn. If that load failed, use the tool results above and the recovery rules to search for the best matching skill before giving up.\n" +
+            "Use a matching successful `use_skill` result already present in this turn. If none is present, call `use_skill` with this skill name and the exact command arguments; omit `mount_workflows` because loading instructions is read-only and must not mutate scope workflows.\n" +
             $"Follow those skill instructions exactly, with `args` = {argsJson}, until the command's final result is ready.\n" +
             "Stick to the data sources the loaded skill names. Do NOT invent repository/path guesses, do NOT call `/api/v1/skills/.../files` (skill files are already inlined in the `use_skill` response above), and do NOT fall back to generic `nyxid_proxy` discovery when the loaded skill did not point you there.\n" +
             "If no matching skill was actually loaded above, or every matching skill fails to load, give one concise actionable failure that names the command and the Ornn lookup/load problem.\n" +

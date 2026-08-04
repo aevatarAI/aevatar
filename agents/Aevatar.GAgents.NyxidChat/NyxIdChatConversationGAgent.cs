@@ -1437,6 +1437,7 @@ public sealed class NyxIdChatConversationGAgent
             ApprovalMode = receipt.ApprovalMode,
             IsDestructive = receipt.IsDestructive,
             SideEffectKind = receipt.SideEffectKind,
+            Effect = receipt.Effect,
             SubjectKind = receipt.SubjectKind,
             SubjectId = receipt.SubjectId,
             SubjectVersion = receipt.SubjectVersion,

@@ -417,6 +417,9 @@ public sealed class NyxIdChatTurnOperationExecutor
             ToolName = command.Tool.ToolName,
             Status = AgentToolReceiptStatus.Success,
         };
+        receipt.Effect = command.Tool.MayChangeExternalState
+            ? AgentToolReceiptEffect.Mutating
+            : AgentToolReceiptEffect.ReadOnly;
         var resultJson = resultMessages[0].Content;
         if (string.IsNullOrWhiteSpace(receipt.ResultJson))
             receipt.ResultJson = resultJson;
@@ -539,6 +542,9 @@ public sealed class NyxIdChatTurnOperationExecutor
                         ToolName = pendingCall?.Name ?? string.Empty,
                         ApprovalRequestId = approval.ApprovalRequestId,
                         Status = AgentToolReceiptStatus.Denied,
+                        Effect = approval.MayChangeExternalState
+                            ? AgentToolReceiptEffect.Mutating
+                            : AgentToolReceiptEffect.ReadOnly,
                         ErrorCode = "approval_denied",
                         ErrorMessage = "Tool approval denied.",
                     },

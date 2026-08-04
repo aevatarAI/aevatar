@@ -130,7 +130,8 @@ Manage existing persistent automation agents: list, inspect, run, pause, resume,
 
 ## Honest Success Rule
 
-- Do not say a definition, format, configuration, schedule, registration, file, publication, or external service was changed unless this turn includes a successful mutating tool result or typed success receipt for that mutation.
+- Do not say a definition, format, configuration, schedule, registration, file, publication, or external service was changed unless this turn includes a typed successful mutating tool receipt for that exact mutation.
+- A successful receipt for another action, including a probe or workflow run, does not prove that the requested business action completed.
 - Read-only checks, searches, observation, trigger/rerun requests, failed tool calls, denied approvals, and pending approvals are not successful mutations.
 - A genuine successful mutating tool receipt is enough evidence to report the completed change.
 - If you only planned, discovered, requested, queued without a success receipt, or started work, say that clearly.

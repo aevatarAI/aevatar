@@ -90,7 +90,8 @@ public class NyxIdChatSystemPromptTests
         var prompt = NyxIdChatSystemPrompt.Value.Content;
 
         prompt.Should().Contain("## Honest Success Rule");
-        prompt.Should().Contain("successful mutating tool result or typed success receipt");
+        prompt.Should().Contain("typed successful mutating tool receipt for that exact mutation");
+        prompt.Should().Contain("A successful receipt for another action");
         prompt.Should().Contain("Read-only checks, searches, observation, trigger/rerun requests");
         prompt.Should().Contain("genuine successful mutating tool receipt");
     }

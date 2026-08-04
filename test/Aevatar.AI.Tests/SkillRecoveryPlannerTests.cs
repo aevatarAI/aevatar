@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.SkillInvocations;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
@@ -240,7 +241,7 @@ public sealed class SkillRecoveryPlannerTests
     }
 
     [Fact]
-    public void TryPlanNextDirective_WhenInitialOrnnSearchMissing_ShouldBuildSearchCall()
+    public void TryPlanNextDirective_WhenPrimarySkillIsAvailable_ShouldBuildReadOnlySkillLoadCall()
     {
         var forced = SkillRecoveryPlanner.TryPlanNextDirective(
             Recovery(primarySkillName: "project-summary"),
@@ -251,7 +252,28 @@ public sealed class SkillRecoveryPlannerTests
             out var directive);
 
         forced.Should().BeTrue();
-        directive.ToolCall!.Name.Should().Be("use_skill");
+        AssertReadOnlySkillLoadCall(directive.ToolCall!, "project-summary", "ship");
+    }
+
+    [Fact]
+    public void TryPlanNextDirective_WhenLarkSlashNamesSkill_ShouldBuildReadOnlySkillLoadCall()
+    {
+        var parsed = SkillInvocationTriggerParser.TryParse(
+            "/invoice-approval",
+            platform: "lark",
+            out var trigger);
+
+        parsed.Should().BeTrue();
+        var forced = SkillRecoveryPlanner.TryPlanNextDirective(
+            AgentSkillRecoveryContextBuilder.FromTrigger(trigger),
+            [ChatMessage.User("/invoice-approval")],
+            finalContent: null,
+            recoveryAttempts: 0,
+            callIdPrefix: "req-invoice-approval",
+            out var directive);
+
+        forced.Should().BeTrue();
+        AssertReadOnlySkillLoadCall(directive.ToolCall!, "invoice-approval", string.Empty);
     }
 
     [Fact]
@@ -330,9 +352,7 @@ public sealed class SkillRecoveryPlannerTests
             out var directive);
 
         forced.Should().BeTrue();
-        using var document = JsonDocument.Parse(directive.ToolCall!.ArgumentsJson);
-        document.RootElement.GetProperty("skill").GetString().Should().Be("project-summary");
-        document.RootElement.GetProperty("args").GetString().Should().Be("typed args");
+        AssertReadOnlySkillLoadCall(directive.ToolCall!, "project-summary", "typed args");
     }
 
     [Fact]
@@ -390,7 +410,7 @@ public sealed class SkillRecoveryPlannerTests
             out var directive);
 
         forced.Should().BeTrue();
-        directive.ToolCall!.ArgumentsJson.Should().Contain("\"skill\":\"project-summary\"");
+        AssertReadOnlySkillLoadCall(directive.ToolCall!, "project-summary", "ship");
     }
 
     [Fact]
@@ -662,6 +682,20 @@ public sealed class SkillRecoveryPlannerTests
             Request = new AgentToolRequestIdentity(requestId, null),
             ExecutionOwner = AgentToolExecutionOwners.HostService(nameof(SkillRecoveryPlannerTests)),
         };
+
+    private static void AssertReadOnlySkillLoadCall(
+        ToolCall toolCall,
+        string expectedSkillName,
+        string expectedArguments)
+    {
+        toolCall.Name.Should().Be("use_skill");
+        using var document = JsonDocument.Parse(toolCall.ArgumentsJson);
+        var root = document.RootElement;
+        root.GetProperty("skill").GetString().Should().Be(expectedSkillName);
+        root.GetProperty("args").GetString().Should().Be(expectedArguments);
+        root.TryGetProperty("mount_workflows", out _).Should().BeFalse(
+            "synthetic skill recovery calls only load instructions and must not mount workflow resources");
+    }
 
     private static ChatMessage AssistantToolCall(string id, string name, string argumentsJson) =>
         new()

@@ -440,6 +440,19 @@ flowchart LR
 4. `src/workflow/Aevatar.Workflow.Core/Modules/ToolCallModule.cs:53`
 5. `src/Aevatar.AI.Abstractions/ai_messages.proto:34`
 
+### 8.1.1 Mutating receipt grounding and terminal delivery
+
+LLM 文本不是外部写操作结果的事实源。只有同一 turn 内 `Status=Success`、`Effect=Mutating`，并且 `call_id`、tool、side effect 与 typed subject 都和具体动作匹配的 `AgentToolReceipt`，才允许支撑面向用户的写成功声明。probe、workflow run、read 或无关动作的成功回执不能证明目标动作成功。`Effect` 必须由 executor 根据本次调用的 `GetCallSafety(argumentsJson)` 与 `SideEffectKind` 确定为 `ReadOnly` 或 `Mutating`；`Unspecified` 只用于兼容，不能作为 mutation success evidence。
+
+每次生成请求都必须携带“成功回执只证明匹配动作”的 request-local grounding constraint；本 turn 尚无 successful mutating receipt 时，再附加 no-success 约束。constraint 负责约束 zero-receipt 或 unrelated-success 场景的模型措辞，最终投递仍必须确定性执行 receipt authority。对同一非空 `call_id + tool`，最后一条 receipt 是 terminal authority；空 `call_id` 的 receipts 保持彼此独立，不得互相覆盖。provider 未返回 call id 时，runtime 生成的匿名 ID 必须包含 request/round identity。完成对账后，mutating receipt 的 terminal delivery 规则如下：
+
+| Reconciled status | Final delivery behavior |
+|---|---|
+| `Success` | 仅在 tool、side effect 与 typed subject 同样匹配时，允许支撑对应动作的成功声明。 |
+| `Error` / `ApprovalRequired` / `Denied` / `AuthorizationRequired` / `Unspecified` | 用 deterministic receipt text 替换模型成功叙述，并同时写入 streaming snapshot、reply、outbound intent 与本 turn assistant history；必须保持用户可见。`ApprovalRequired` 的确定性文案保留 approval request evidence。 |
+
+Assistant tool-call history 中与 blocking receipt 匹配的 narrative 必须清空，同时保留 tool call/result pairing，避免下一 turn 重放虚假成功。Read-only failure 可以追加为用户可见诊断，但不替换一个其他方面有效的回答；追加后的实际可见文本也必须同步进 retained history。`use_skill` 省略 `mount_workflows` 时只是 read-only 的 skill/instruction load，该成功回执不能证明 workflow mount；`mount_workflows=true` 是单独的 mutating operation，只有其 matching successful mutating receipt 才能证明挂载完成。
+
 ### 8.2 WorkflowRunEvent（输出统一事件）
 
 支持类型：

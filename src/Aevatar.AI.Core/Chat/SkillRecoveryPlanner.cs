@@ -221,7 +221,6 @@ internal static class SkillRecoveryPlanner
             {
                 skill = skillName,
                 args,
-                mount_workflows = true,
             }),
         };
 

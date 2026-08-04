@@ -489,7 +489,11 @@ public sealed class ChatRuntime
 
             var roundRequest = new LLMRequest
             {
-                Messages = [..messages],
+                Messages = BuildMutationClaimConstrainedMessages(
+                    messages,
+                    executedToolOutcomes,
+                    toolReceipts: null,
+                    mergeIntoExistingSystem: round == 0),
                 RequestId = baseRequest.RequestId,
                 Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(baseRequest.Metadata),
                 CallerContext = baseRequest.CallerContext,
@@ -820,7 +824,10 @@ public sealed class ChatRuntime
 
             var finalRequest = new LLMRequest
             {
-                Messages = BuildFinalNoToolsMessages(messages, executedToolOutcomes, toolReceipts: null),
+                Messages = BuildMutationClaimConstrainedMessages(
+                    messages,
+                    executedToolOutcomes,
+                    toolReceipts: null),
                 RequestId = baseRequest.RequestId,
                 Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(baseRequest.Metadata),
                 CallerContext = baseRequest.CallerContext,
@@ -909,7 +916,10 @@ public sealed class ChatRuntime
                 {
                     var summaryRequest = new LLMRequest
                     {
-                        Messages = BuildFinalNoToolsMessages(messages, executedToolOutcomes, toolReceipts: null),
+                        Messages = BuildMutationClaimConstrainedMessages(
+                            messages,
+                            executedToolOutcomes,
+                            toolReceipts: null),
                         RequestId = finalRequest.RequestId,
                         Metadata = finalRequest.Metadata,
                         CallerContext = finalRequest.CallerContext,
@@ -966,16 +976,17 @@ public sealed class ChatRuntime
                 logger: _logger),
             baseRequest.RequestId ?? string.Empty);
 
-    private List<ChatMessage> BuildFinalNoToolsMessages(
+    private static List<ChatMessage> BuildMutationClaimConstrainedMessages(
         IReadOnlyList<ChatMessage> messages,
         IReadOnlyList<ToolOutcomeReplyFact> toolOutcomes,
-        IReadOnlyList<AgentToolReceipt>? toolReceipts)
+        IReadOnlyList<AgentToolReceipt>? toolReceipts,
+        bool mergeIntoExistingSystem = false)
     {
-        var constraints = ToolOutcomeReplyConstraintBuilder.BuildFinalNoToolsConstraints(toolOutcomes, toolReceipts);
-        if (constraints.Count == 0)
-            return [.. messages];
-
-        return [.. messages, .. constraints];
+        var constraints = ToolOutcomeReplyConstraintBuilder.BuildMutationClaimConstraints(toolOutcomes, toolReceipts);
+        return ToolOutcomeReplyConstraintBuilder.ApplyConstraints(
+            messages,
+            constraints,
+            mergeIntoExistingSystem);
     }
 
     private ToolOutcomeReplyFact BuildToolOutcomeReplyFact(
@@ -1206,9 +1217,12 @@ public sealed class ChatRuntime
             TokenUsage? usage = null;
             string? finishReason = null;
             var completedToolCalls = new Queue<ToolCall>();
+            var anonymousToolCallPrefix = authorizedToolContext.Request.CallId;
             var toolCalls = onToolCallCompleted != null
-                ? new StreamingToolCallAccumulator(toolCall => completedToolCalls.Enqueue(toolCall))
-                : new StreamingToolCallAccumulator();
+                ? new StreamingToolCallAccumulator(
+                    toolCall => completedToolCalls.Enqueue(toolCall),
+                    anonymousToolCallPrefix)
+                : new StreamingToolCallAccumulator(anonymousToolCallPrefix);
 
             using var toolContextScope = AgentToolContextScope.Push(authorizedToolContext);
             await using var providerEnumerator = provider.ChatStreamAsync(llmCallContext.Request, ct)

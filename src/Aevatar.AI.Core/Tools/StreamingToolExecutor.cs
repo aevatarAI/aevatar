@@ -173,9 +173,7 @@ public sealed class StreamingToolExecutor
     {
         ArgumentNullException.ThrowIfNull(state);
         Advance(state);
-        return DrainReadyResults(state)
-            .Select(NormalizeFailureReceipt)
-            .ToList();
+        return DrainReadyResults(state);
     }
 
     /// <summary>
@@ -271,7 +269,9 @@ public sealed class StreamingToolExecutor
                 continue;
             }
 
-            await _checkpointPort.CommitCompletionAsync(tracked.Operation, result, ct);
+            var normalized = NormalizeFailureReceipt(tracked, result);
+            tracked.Result = normalized;
+            await _checkpointPort.CommitCompletionAsync(tracked.Operation, normalized, ct);
             tracked.CompletionCommitted = true;
         }
     }
@@ -341,10 +341,40 @@ public sealed class StreamingToolExecutor
         return results;
     }
 
-    private static ToolExecutionResult NormalizeFailureReceipt(ToolExecutionResult result)
+    private ToolExecutionResult NormalizeFailureReceipt(
+        ToolExecutionEntry tracked,
+        ToolExecutionResult result)
     {
         if (!result.IsError || result.Receipt is not null)
             return result;
+
+        if (tracked.Tool is { } tool)
+        {
+            try
+            {
+                using var scope = AgentToolContextScope.Push(tracked.Operation.ExecutionContext);
+                var callSafety = tool.GetCallSafety(tracked.Call.ArgumentsJson ?? string.Empty);
+                return result with
+                {
+                    Receipt = AgentToolReceiptFactory.CreateError(
+                        tool,
+                        result.CallId,
+                        result.ToolName,
+                        callSafety,
+                        result.Result,
+                        "tool_execution_error",
+                        SafeToolFailureMessage),
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Failed to classify receipt effect for tool {ToolName} call {CallId}; treating the visible failure as mutating",
+                    result.ToolName,
+                    result.CallId);
+            }
+        }
 
         return result with
         {
@@ -353,6 +383,7 @@ public sealed class StreamingToolExecutor
                 CallId = result.CallId,
                 ToolName = result.ToolName,
                 Status = AgentToolReceiptStatus.Error,
+                Effect = AgentToolReceiptEffect.Mutating,
                 ErrorCode = "tool_execution_error",
                 ErrorMessage = "The tool request failed.",
                 ResultJson = result.Result,

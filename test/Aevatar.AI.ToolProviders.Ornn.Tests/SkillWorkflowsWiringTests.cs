@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -268,6 +269,23 @@ public sealed class SkillWorkflowsWiringTests
                 RequiresApproval: false,
                 IsReadOnly: false,
                 IsDestructive: false));
+    }
+
+    [Fact]
+    public async Task UseSkillTool_MountFailureReceipt_ShouldIdentifySkillAndMountEffect()
+    {
+        var tool = new UseSkillTool(new LocalSkillCatalog());
+        const string arguments = "{\"skill\":\"invoice-approval\",\"mount_workflows\":true}";
+        var result = await tool.ExecuteAsync(arguments);
+
+        var receipt = tool.CreateResultReceipt("call-mount", tool.Name, arguments, result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.Effect.Should().Be(AgentToolReceiptEffect.Mutating);
+        receipt.SideEffectKind.Should().Be("workflow.mount");
+        receipt.SubjectKind.Should().Be("ornn.skill");
+        receipt.SubjectId.Should().Be("invoice-approval");
     }
 
     [Fact]

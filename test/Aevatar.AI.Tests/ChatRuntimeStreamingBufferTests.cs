@@ -310,7 +310,7 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
-    public void BuildLlmStepRequest_WhenFinalNoToolsHasMutatingSuccessReceipt_ShouldNotInjectConstraint()
+    public void BuildLlmStepRequest_WhenFinalNoToolsHasMutatingSuccessReceipt_ShouldInjectGroundingOnly()
     {
         var provider = new RecordingStepProvider();
         var runtime = CreateRuntime(provider);
@@ -335,10 +335,13 @@ public sealed class ChatRuntimeStreamingBufferTests
                 {
                     Status = AgentToolReceiptStatus.Success,
                     SideEffectKind = "definition.update",
+                    Effect = AgentToolReceiptEffect.Mutating,
                 },
             ]);
 
-        request.Messages.Should().BeEquivalentTo(messages);
+        request.Messages.Should().HaveCount(3);
+        request.Messages.Last().Content.Should().Contain("match that exact action");
+        request.Messages.Last().Content.Should().NotContain("no successful mutating tool execution");
     }
 
     [Fact]
@@ -1050,7 +1053,7 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
-    public async Task ChatStreamAsync_WhenFinalNoToolsHasNoMutatingSuccess_ShouldInjectEphemeralConstraint()
+    public async Task ChatStreamAsync_WhenEachTurnHasNoMutatingSuccess_ShouldReinjectEphemeralConstraint()
     {
         var provider = new QueuedStreamingProvider(
         [
@@ -1094,11 +1097,11 @@ public sealed class ChatRuntimeStreamingBufferTests
         provider.StreamRequests[2].Messages
             .Where(message => message.Role == "system" &&
                               message.Content?.Contains("no successful mutating tool execution") == true)
-            .Should().BeEmpty("the guard is request-local and must not be persisted to history");
+            .Should().ContainSingle("each new turn must receive a fresh request-local guard");
     }
 
     [Fact]
-    public async Task ChatStreamAsync_WhenFinalNoToolsHasMutatingSuccess_ShouldNotInjectConstraint()
+    public async Task ChatStreamAsync_WhenFinalNoToolsHasMutatingSuccess_ShouldInjectGroundingOnly()
     {
         var provider = new QueuedStreamingProvider(
         [
@@ -1130,6 +1133,10 @@ public sealed class ChatRuntimeStreamingBufferTests
             .Where(message => message.Role == "system" &&
                               message.Content?.Contains("no successful mutating tool execution") == true)
             .Should().BeEmpty();
+        provider.StreamRequests[1].Messages.Should().ContainSingle(message =>
+            message.Role == "system" &&
+            message.Content != null &&
+            message.Content.Contains("match that exact action", StringComparison.Ordinal));
     }
 
     [Theory]
