@@ -97,6 +97,15 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task ObserveRunTool_ShouldBeHiddenFromDirectChannelChat()
+    {
+        var tool = await DiscoverSingleAsync(new ObserveRunToolSource(new Harness().CreateDispatcher()));
+
+        tool.Should().BeAssignableTo<IAgentToolCapabilityDescriptor>()
+            .Which.Capabilities.Should().Contain(AgentToolCapabilities.ExcludeFromDirectChannelChat);
+    }
+
+    [Fact]
     public async Task ObserveRunSchema_ShouldRequireTypedTarget()
     {
         var tool = await DiscoverSingleAsync(new ObserveRunToolSource(new Harness().CreateDispatcher()));

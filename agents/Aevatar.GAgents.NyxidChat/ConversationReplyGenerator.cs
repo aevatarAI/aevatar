@@ -354,7 +354,6 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         var inputFileRefs = CollectInputFileRefs(input.Parts);
         effectiveToolContext = WithInputFileRefs(effectiveToolContext, inputFileRefs);
         var ownerFallbackToolContext = WithInputFileRefs(replyPlan.OwnerFallbackToolContext, inputFileRefs);
-        tools = FilterToolsForCurrentInputFiles(tools, effectiveToolContext);
         LogChannelLlmToolPlan(
             "actor-step",
             isChannelRelayTurn,
@@ -523,7 +522,6 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         input = await MaterializeUserInputPartsAsync(input, ct).ConfigureAwait(false);
         var inputFileRefs = CollectInputFileRefs(input.Parts);
         toolContext = WithInputFileRefs(toolContext, inputFileRefs);
-        tools = FilterToolsForCurrentInputFiles(tools, toolContext);
         LogChannelLlmToolPlan(
             "direct-reply",
             IsChannelRelayTurn(toolContext),
@@ -2324,29 +2322,6 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
         return _llmProviderFactory.GetDefault();
     }
-
-    private static ToolManager FilterToolsForCurrentInputFiles(
-        ToolManager tools,
-        AgentToolExecutionContext toolContext)
-    {
-        if (!ShouldExcludeCurrentInputFileTools(toolContext))
-            return tools;
-
-        var filtered = new ToolManager();
-        foreach (var tool in tools.GetAll())
-        {
-            if (DeclaresCapability(tool, AgentToolCapabilities.ExcludeWhenCurrentInputFilesPresent))
-                continue;
-
-            filtered.Register(tool);
-        }
-
-        return filtered;
-    }
-
-    private static bool ShouldExcludeCurrentInputFileTools(AgentToolExecutionContext toolContext) =>
-        (IsChannelRelayTurn(toolContext) || IsNyxIdChatTurn(toolContext)) &&
-        toolContext.InputFileRefs.Any(static fileRef => HasFileRefIdentity(fileRef));
 
     private static IReadOnlyList<IAgentTool>? FilterValidTools(ToolManager tools)
     {

@@ -302,7 +302,7 @@ internal sealed class ObserveRunTool : IAevatarInvocationReadOnlyTool, IAgentToo
     public bool IsReadOnly => true;
 
     public IReadOnlyCollection<string> Capabilities { get; } =
-        [AgentToolCapabilities.ExcludeWhenCurrentInputFilesPresent];
+        [AgentToolCapabilities.ExcludeFromDirectChannelChat];
 
     public string ReadOnlySubjectIdPropertyName => "run_id";
 

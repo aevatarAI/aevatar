@@ -995,53 +995,6 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task BuildStepPlanAsync_WithCurrentInputFiles_HidesPriorStateToolsFromChannelTurn()
-    {
-        var toolSource = new StubToolSource(
-            new CapabilityFixedResultTool(
-                "prior_state_observer",
-                """{"status":"running"}""",
-                AgentToolCapabilities.ExcludeWhenCurrentInputFilesPresent),
-            new FixedResultTool("aevatar_start_workflow", """{"run_id":"run-current"}"""));
-        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
-            new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
-            BuiltInPromptFloorProvider,
-            toolSources: [toolSource]);
-        var toolContext = RelayToolContext("bnd-user-1", "msg-current-file") with
-        {
-            InputFileRefs =
-            [
-                new Aevatar.AI.Abstractions.ChatFileRef
-                {
-                    FileId = "file-current",
-                    ArtifactId = "workflow-file://file-current",
-                    FileName = "invoice.pdf",
-                    MediaType = "application/pdf",
-                },
-            ],
-        };
-
-        var plan = await generator.BuildStepPlanAsync(
-            CreateLarkActivity("msg-current-file", "run invoice workflow", "om_current_file", token: "runtime-token"),
-            new Dictionary<string, string>
-            {
-                [ChannelMetadataKeys.Platform] = "lark",
-                [ChannelMetadataKeys.SenderId] = "ou_user_1",
-                [ChannelMetadataKeys.MessageId] = "msg-current-file",
-            },
-            Control(token: "runtime-token"),
-            toolContext,
-            priorHistory: null,
-            attachmentContext: null,
-            forceDisableTools: false,
-            CancellationToken.None);
-
-        var toolNames = OfferedToolNames(plan);
-        toolNames.Should().Contain("aevatar_start_workflow");
-        toolNames.Should().NotContain("prior_state_observer");
-    }
-
-    [Fact]
     public async Task BuildStepPlanAsync_WithTurnCatalog_ShouldApplyProfileToolsAndPrompt()
     {
         var allowed = new StubTool("nyxid_require_service");
