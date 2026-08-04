@@ -131,6 +131,37 @@ public class NyxIdCodeExecuteToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ProxyDelegation_UsesSourceReadableCredentialForSandbox()
+    {
+        var handler = new CaptureHandler();
+        using var httpClient = new HttpClient(handler);
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            httpClient);
+        var tool = new NyxIdCodeExecuteTool(client);
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "proxy-delegation-alpha",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.ProxyDelegation,
+                "source-readable-alpha"),
+        };
+
+        try
+        {
+            await tool.ExecuteAsync("""{"language":"python","code":"print(1)"}""");
+
+            handler.AuthorizationBearer.Should().Be("source-readable-alpha");
+        }
+        finally
+        {
+            ClearMetadata();
+        }
+    }
+
+    [Fact]
     public void CreateResultReceipt_Http401_ShouldReturnTypedFailure()
     {
         var tool = new NyxIdCodeExecuteTool(CreateDummyClient());
@@ -209,7 +240,14 @@ public class NyxIdCodeExecuteToolTests
         };
         if (servicesContext is not null)
             metadata[LLMRequestMetadataKeys.ConnectedServicesContext] = servicesContext;
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(metadata);
+        var context = global::TestAgentToolContexts.FromMetadata(metadata);
+        AgentToolRequestContext.Current = context with
+        {
+            Credentials = context.Credentials with
+            {
+                NyxIdCredentialKind = AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+            },
+        };
     }
 
     private static void ClearMetadata()
@@ -220,12 +258,14 @@ public class NyxIdCodeExecuteToolTests
     private sealed class CaptureHandler : HttpMessageHandler
     {
         public string? LastRequestUri { get; private set; }
+        public string? AuthorizationBearer { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
             LastRequestUri = request.RequestUri?.ToString();
+            AuthorizationBearer = request.Headers.Authorization?.Parameter;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("""{"success":true}"""),
