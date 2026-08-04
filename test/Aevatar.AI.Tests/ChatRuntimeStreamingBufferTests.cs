@@ -601,6 +601,74 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public async Task ChatStreamAsync_WhenNyxIdSourceUnavailableRepeats_ShouldEnterTerminalNoToolsRound()
+    {
+        const string arguments =
+            "{\"service_slug\":\"api-github\",\"requested_scopes\":[\"repo\"]}";
+        var provider = new QueuedStreamingProvider(
+        [
+            [new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-failure-1",
+                    Name = "nyxid_require_service",
+                    ArgumentsJson = arguments,
+                },
+            }],
+            [new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-failure-2",
+                    Name = "nyxid_require_service",
+                    ArgumentsJson = arguments,
+                },
+            }],
+            [new LLMStreamChunk { DeltaContent = "The readiness source is unavailable." }],
+            [new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-must-not-run",
+                    Name = "nyxid_require_service",
+                    ArgumentsJson = arguments,
+                },
+            }],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new ReceiptTool(
+            "nyxid_require_service",
+            AgentToolReceiptStatus.Error,
+            isReadOnly: true,
+            errorCode: "NYXID_SOURCE_UNAVAILABLE",
+            safeResultJson:
+                "{\"error\":true,\"reason_code\":\"NYXID_SOURCE_UNAVAILABLE\"," +
+                "\"safe_message\":\"NyxID source data is unavailable.\"}"));
+        var runtime = CreateRuntime(provider, tools: tools);
+        var output = new StringBuilder();
+        var completions = new List<ToolCallCompletedChunk>();
+
+        await foreach (var chunk in runtime.ChatStreamAsync(
+                           "connect github",
+                           maxToolRounds: 8,
+                           turnCatalog: null))
+        {
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+                output.Append(chunk.DeltaContent);
+            if (chunk.ToolCallCompleted != null)
+                completions.Add(chunk.ToolCallCompleted);
+        }
+
+        provider.StreamRequests.Should().HaveCount(3,
+            "two identical read-only failures must converge through one final no-tools round");
+        provider.StreamRequests[2].Tools.Should().BeNull();
+        completions.Should().HaveCount(2);
+        completions.Should().OnlyContain(completion => !completion.Success);
+        output.ToString().Should().Be("The readiness source is unavailable.");
+    }
+
+    [Fact]
     public async Task ChatStreamAsync_WhenAuthorizationBlocksFirstOfMultipleCalls_ShouldReconcileSafeTranscript()
     {
         var provider = new QueuedStreamingProvider(
@@ -1894,11 +1962,17 @@ public sealed class ChatRuntimeStreamingBufferTests
             ResultJson = resultJson,
         };
 
-    private sealed class ReceiptTool(string name, AgentToolReceiptStatus status) : IAgentTool
+    private sealed class ReceiptTool(
+        string name,
+        AgentToolReceiptStatus status,
+        bool isReadOnly = false,
+        string errorCode = "SAFE_TOOL_FAILURE",
+        string safeResultJson = "{\"error\":\"safe tool failure\"}") : IAgentTool
     {
         public string Name => name;
         public string Description => "returns a typed failed receipt";
         public string ParametersSchema => "{}";
+        public bool IsReadOnly => isReadOnly;
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
@@ -1916,9 +1990,9 @@ public sealed class ChatRuntimeStreamingBufferTests
                 CallId = callId,
                 ToolName = toolName,
                 Status = status,
-                ErrorCode = "SAFE_TOOL_FAILURE",
+                ErrorCode = errorCode,
                 ErrorMessage = "The tool request failed.",
-                ResultJson = "{\"error\":\"safe tool failure\"}",
+                ResultJson = safeResultJson,
             };
     }
 }

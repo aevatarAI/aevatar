@@ -40,6 +40,7 @@ public sealed class ChatRuntime
     /// the loop runs until the LLM stops calling tools (matching Claude Code behaviour).
     /// </summary>
     private const int DefaultMaxToolRounds = int.MaxValue;
+    private const int MaxIdenticalReadOnlyFailures = 2;
     private readonly Func<ILLMProvider> _providerFactory;
     private readonly ChatHistory _history;
     private readonly ToolCallLoop _toolLoop;
@@ -436,7 +437,9 @@ public sealed class ChatRuntime
         var authorizedTools = ToolCallLoop.CreateRequestToolManager(baseRequest.Tools);
         var skillRecovery = CreateSkillRecoveryOrchestrator(baseRequest, () => authorizedTools);
         var executedToolOutcomes = new List<ToolOutcomeReplyFact>();
+        var readOnlyFailureCounts = new Dictionary<ReadOnlyFailureKey, int>();
         var toolLoopSuspended = false;
+        var toolLoopTerminated = false;
 
         if (skillRecovery.RequiresInitialSearch)
         {
@@ -677,9 +680,16 @@ public sealed class ChatRuntime
                             pendingHistoryMessages.Add(toolMsg);
                             if (RequiresToolLoopSuspension(result))
                                 toolLoopSuspended = true;
+                            if (ReachedPersistentReadOnlyFailureLimit(
+                                    result,
+                                    preparedTextOperations,
+                                    readOnlyFailureCounts))
+                            {
+                                toolLoopTerminated = true;
+                            }
                         }
 
-                        if (toolLoopSuspended)
+                        if (toolLoopSuspended || toolLoopTerminated)
                             break;
 
                         continue;
@@ -787,9 +797,16 @@ public sealed class ChatRuntime
                 pendingHistoryMessages.Add(toolMsg);
                 if (RequiresToolLoopSuspension(result))
                     toolLoopSuspended = true;
+                if (ReachedPersistentReadOnlyFailureLimit(
+                        result,
+                        preparedRoundOperations,
+                        readOnlyFailureCounts))
+                {
+                    toolLoopTerminated = true;
+                }
             }
 
-            if (toolLoopSuspended)
+            if (toolLoopSuspended || toolLoopTerminated)
                 break;
         }
 
@@ -1059,6 +1076,35 @@ public sealed class ChatRuntime
     private static bool RequiresToolLoopSuspension(ToolExecutionResult result) =>
         result.Receipt?.Status is AgentToolReceiptStatus.ApprovalRequired or
             AgentToolReceiptStatus.AuthorizationRequired;
+
+    private static bool ReachedPersistentReadOnlyFailureLimit(
+        ToolExecutionResult result,
+        IReadOnlyList<PreparedChatToolOperation> operations,
+        Dictionary<ReadOnlyFailureKey, int> failureCounts)
+    {
+        if (!result.IsError || result.Receipt?.Status != AgentToolReceiptStatus.Error)
+            return false;
+
+        var operation = operations.FirstOrDefault(candidate =>
+            string.Equals(candidate.ToolCall.Id, result.CallId, StringComparison.Ordinal));
+        if (operation?.ReplayPolicy != AgentToolReplayPolicy.ReadOnlyRetryable)
+            return false;
+
+        var key = new ReadOnlyFailureKey(
+            operation.ToolCall.Name,
+            AgentToolArgumentsDigest.ComputeSha256(operation.ToolCall.ArgumentsJson),
+            string.IsNullOrWhiteSpace(result.Receipt.ErrorCode)
+                ? "tool_error"
+                : result.Receipt.ErrorCode.Trim());
+        var count = failureCounts.TryGetValue(key, out var existing) ? existing + 1 : 1;
+        failureCounts[key] = count;
+        return count >= MaxIdenticalReadOnlyFailures;
+    }
+
+    private readonly record struct ReadOnlyFailureKey(
+        string ToolName,
+        string ArgumentsSha256,
+        string ErrorCode);
 
     private async Task RunStopHookAsync(
         string? finalContent,

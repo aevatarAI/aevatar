@@ -586,6 +586,67 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
         }
 
         [Fact]
+        public async Task WorkflowRoleGAgent_WhenProxyDelegationRequiresGitHub_ShouldCommitConnectRequirement()
+        {
+            const string arguments =
+                """{"service_slug":"api-github","requested_scopes":["repo"]}""";
+            var eventStore = new InMemoryEventStore();
+            var handler = new RecordingNyxIdHandler(
+                """{"slug":"api-github","scope_catalog":[{"scope":"repo"}]}""");
+            var requireServiceTool = new NyxIdRequireServiceTool(new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
+                new HttpClient(handler)));
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new RequireServiceWorkflowIntentLlmProvider(requireServiceTool.Name, arguments),
+                "workflow-role-agent-github-connect",
+                [requireServiceTool]);
+
+            await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = "run-github-connect",
+                StepId = "reply",
+                SessionId = "session-github-connect",
+                Prompt = "can we connect github oauth?",
+                ScopeId = "scope-alpha",
+                CallerCredential = new WorkflowCallerCredential
+                {
+                    BearerToken = "delegation-alpha",
+                    Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+                    NyxIdAuthority = new WorkflowCallerNyxIdAuthority
+                    {
+                        Platform = "nyxid",
+                        Tenant = "tenant-alpha",
+                        ExternalUserId = "user-alpha",
+                        Scope = "scope-alpha",
+                    },
+                },
+            });
+
+            handler.Requests.Should().Equal(
+                "/api/v1/catalog/api-github",
+                "/api/v1/keys");
+            handler.BearerTokens.Should().OnlyContain(token => token == "delegation-alpha");
+            var terminal = agent.State.Sessions["session-github-connect"];
+            terminal.Completed.Should().BeTrue();
+            terminal.Outcome.Should().Be(RoleChatSessionOutcome.Blocked);
+            terminal.FailureCode.Should().Be("AUTHORIZATION_REQUIRED");
+            terminal.AuthorizationRequired.Should().NotBeNull();
+            terminal.AuthorizationRequired!.ServiceSlug.Should().Be("api-github");
+            terminal.AuthorizationRequired.RequestedScopes.Should().Equal("repo");
+            terminal.ToolReceipts.Should().ContainSingle(receipt =>
+                receipt.Status == AgentToolReceiptStatus.AuthorizationRequired &&
+                receipt.ResultJson.Contains("USER_SERVICE_NOT_VISIBLE", StringComparison.Ordinal));
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle(completed =>
+                    !completed.Success &&
+                    completed.AuthorizationRequirement != null &&
+                    completed.AuthorizationRequirement.ServiceSlug == "api-github" &&
+                    completed.AuthorizationRequirement.RequestedScopes.SequenceEqual(new[] { "repo" }));
+        }
+
+        [Fact]
         public async Task WorkflowRoleGAgent_WhenWorkflowLlmProviderCancelsAfterTimeout_ShouldPublishTimeoutCompletion()
         {
             var eventStore = new InMemoryEventStore();
@@ -1779,9 +1840,12 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             {
                 var result = await requireServiceTool.ExecuteAsync(
                     """{"service_slug":"api-github","requested_scopes":[]}""");
-                result.Should().Contain("NYXID_SOURCE_UNAVAILABLE");
+                result.Should().Contain("USER_SERVICE_NOT_VISIBLE");
             }
-            handler.Requests.Should().Be(0);
+            handler.Requests.Should().Equal(
+                "/api/v1/catalog/api-github",
+                "/api/v1/keys");
+            handler.BearerTokens.Should().OnlyContain(token => token == "fresh-token-1");
             tokenProvider.Authorities.Should().HaveCount(2);
             tokenProvider.Authorities.Should().OnlyContain(authority =>
                 authority.Platform == "lark" &&
@@ -3026,19 +3090,28 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             }
         }
 
-        private sealed class RecordingNyxIdHandler : HttpMessageHandler
+        private sealed class RecordingNyxIdHandler(
+            string catalogJson = """{ "slug": "api-github" }""",
+            string keysJson = """{ "keys": [] }""") : HttpMessageHandler
         {
-            public int Requests { get; private set; }
+            public List<string> Requests { get; } = [];
+
+            public List<string?> BearerTokens { get; } = [];
 
             protected override Task<HttpResponseMessage> SendAsync(
                 HttpRequestMessage request,
                 CancellationToken cancellationToken)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                Requests++;
+                var path = request.RequestUri!.AbsolutePath;
+                Requests.Add(path);
+                BearerTokens.Add(request.Headers.Authorization?.Parameter);
                 return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
                 {
-                    Content = new StringContent("""{ "keys": [] }"""),
+                    Content = new StringContent(
+                        path.StartsWith("/api/v1/catalog/", StringComparison.Ordinal)
+                            ? catalogJson
+                            : keysJson),
                 });
             }
         }
@@ -3091,6 +3164,30 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                             SafeMessage = "Connect Calendar to continue.",
                             RequestedScopes = { "calendar.read" },
                         },
+                    },
+                };
+                yield return new LLMStreamChunk { IsLast = true, FinishReason = "tool_calls" };
+                await Task.CompletedTask;
+            }
+        }
+
+        private sealed class RequireServiceWorkflowIntentLlmProvider(
+            string toolName,
+            string argumentsJson) : WorkflowIntentLlmProviderBase
+        {
+            public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+                LLMRequest request,
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+            {
+                _ = request;
+                ct.ThrowIfCancellationRequested();
+                yield return new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call-require-github",
+                        Name = toolName,
+                        ArgumentsJson = argumentsJson,
                     },
                 };
                 yield return new LLMStreamChunk { IsLast = true, FinishReason = "tool_calls" };

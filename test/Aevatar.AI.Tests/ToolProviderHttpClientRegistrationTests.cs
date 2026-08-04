@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
@@ -143,7 +144,11 @@ public sealed class ToolProviderHttpClientRegistrationTests
     [Fact]
     public async Task NyxIdRequireServiceTool_ShouldCreateDeterministicAuthorizationReceipt()
     {
-        var handler = new StubUserServiceListHandler("""{ "keys": [{ "id": "us-other-alpha", "slug": "api-slack" }] }""");
+        var handler = new StubUserServiceListHandler("""{ "keys": [{ "id": "us-other-alpha", "slug": "api-slack" }] }""")
+        {
+            CatalogResponseJson =
+                """{"slug":"catalog-finops-alpha","scope_catalog":[{"scope":"repo"},{"scope":"read:org"}]}""",
+        };
         var tool = CreateRequireServiceTool(handler);
         const string arguments =
             """{"service_slug":"catalog-finops-alpha","service_label":"FinOps Alpha","resource_uri":"/billing/private?token=bearer-secret","requested_scopes":["repo","read:org","repo"]}""";
@@ -289,8 +294,78 @@ public sealed class ToolProviderHttpClientRegistrationTests
                 "/api/v1/keys");
             receipt.Should().NotBeNull();
             receipt!.Status.Should().Be(AgentToolReceiptStatus.AuthorizationRequired);
+            receipt.ResultJson.Should().Be(result);
             receipt.AuthorizationRequired.ServiceSlug.Should().Be("api-github");
             receipt.AuthorizationRequired.RequestedScopes.Should().Equal("repo");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public async Task NyxIdRequireServiceTool_ShouldRejectRequestedScopeOutsideCatalogEntry()
+    {
+        var handler = new StubUserServiceListHandler("""{ "keys": [] }""")
+        {
+            CatalogResponseJson =
+                """{"slug":"api-github","scope_catalog":[{"scope":"repo","label":"Repositories","description":"Repository access","sensitive":true}]}""",
+        };
+        var tool = CreateRequireServiceTool(handler);
+        const string arguments =
+            """{"service_slug":"api-github","requested_scopes":["invented-scope"]}""";
+
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext();
+        try
+        {
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-invalid-scope", tool.Name, arguments, result);
+
+            handler.Requests.Should().Equal("/api/v1/catalog/api-github");
+            result.Should().Contain("NYXID_REQUIRE_SERVICE_SCOPES_INVALID");
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+            receipt.ErrorCode.Should().Be("NYXID_REQUIRE_SERVICE_SCOPES_INVALID");
+            receipt.ResultJson.Should().Be(result);
+            receipt.AuthorizationRequired.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public async Task NyxIdRequireServiceTool_ShouldCreateAwsCredentialEntryBlockerWithoutOAuthScopes()
+    {
+        var handler = new StubUserServiceListHandler("""{ "keys": [] }""")
+        {
+            CatalogResponseJson =
+                """{"slug":"aws-cost-explorer","provider_type":"api_key","auth_method":"aws_sigv4","credential_mode":"admin","requires_credential":true}""",
+        };
+        var tool = CreateRequireServiceTool(handler);
+        const string arguments =
+            """{"service_slug":"aws-cost-explorer","service_label":"AWS Cost Explorer","requested_scopes":[]}""";
+
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext();
+        try
+        {
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-aws", tool.Name, arguments, result);
+
+            handler.Requests.Should().Equal(
+                "/api/v1/catalog/aws-cost-explorer",
+                "/api/v1/keys",
+                "/api/v1/keys");
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.AuthorizationRequired);
+            receipt.ResultJson.Should().Be(result);
+            receipt.AuthorizationRequired.ServiceSlug.Should().Be("aws-cost-explorer");
+            receipt.AuthorizationRequired.ServiceLabel.Should().Be("AWS Cost Explorer");
+            receipt.AuthorizationRequired.RequestedScopes.Should().BeEmpty();
         }
         finally
         {
@@ -338,6 +413,15 @@ public sealed class ToolProviderHttpClientRegistrationTests
             receipt.Should().NotBeNull();
             receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
             receipt.ErrorCode.Should().Be("NYXID_SOURCE_UNAVAILABLE");
+            receipt.ResultJson.Should().Be(result);
+            var normalized = AgentToolReceiptFactory.CreateResult(
+                tool,
+                "call-source-stale",
+                tool.Name,
+                tool.GetCallSafety(arguments),
+                result,
+                arguments);
+            normalized.ResultJson.Should().Be(result);
             receipt.AuthorizationRequired.Should().BeNull();
         }
         finally
@@ -402,11 +486,49 @@ public sealed class ToolProviderHttpClientRegistrationTests
         }
     }
 
-    [Theory]
-    [InlineData(AgentToolNyxIdCredentialKind.ProxyDelegation)]
-    [InlineData(AgentToolNyxIdCredentialKind.Unspecified)]
-    public async Task NyxIdRequireServiceTool_WhenCredentialIsNotSourceReadable_ShouldNotReadNyxIdSource(
-        AgentToolNyxIdCredentialKind credentialKind)
+    [Fact]
+    public async Task NyxIdRequireServiceTool_WithProxyDelegation_ShouldUsePurposeBoundManagementReadAuthority()
+    {
+        var handler = new StubUserServiceListHandler("""{ "keys": [] }""")
+        {
+            CatalogResponseJson =
+                """{"slug":"api-github","scope_catalog":[{"scope":"repo","label":"Repositories","description":"Repository access","sensitive":true}]}""",
+        };
+        var tool = CreateRequireServiceTool(handler);
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext() with
+        {
+            Credentials = new AgentToolCredentials(
+                "runtime-caller-credential",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.ProxyDelegation),
+        };
+
+        try
+        {
+            const string arguments =
+                """{"service_slug":"api-github","requested_scopes":["repo"]}""";
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-delegated", tool.Name, arguments, result);
+
+            result.Should().Contain("USER_SERVICE_NOT_VISIBLE");
+            handler.Requests.Should().Equal(
+                "/api/v1/catalog/api-github",
+                "/api/v1/keys");
+            handler.BearerTokens.Should().OnlyContain(token => token == "runtime-caller-credential");
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.AuthorizationRequired);
+            receipt.ResultJson.Should().Be(result);
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public async Task NyxIdRequireServiceTool_WithUnspecifiedCredential_ShouldNotReadNyxIdManagementSource()
     {
         var handler = new StubUserServiceListHandler("""{ "keys": [] }""");
         var tool = CreateRequireServiceTool(handler);
@@ -417,12 +539,13 @@ public sealed class ToolProviderHttpClientRegistrationTests
                 "runtime-caller-credential",
                 null,
                 null,
-                credentialKind),
+                AgentToolNyxIdCredentialKind.Unspecified),
         };
 
         try
         {
-            var result = await tool.ExecuteAsync("""{"service_slug":"api-github","requested_scopes":[]}""");
+            var result = await tool.ExecuteAsync(
+                """{"service_slug":"api-github","requested_scopes":[]}""");
 
             result.Should().Contain("NYXID_SOURCE_UNAVAILABLE");
             handler.Requests.Should().BeEmpty();
@@ -544,6 +667,8 @@ public sealed class ToolProviderHttpClientRegistrationTests
     {
         public List<string> Requests { get; } = [];
 
+        public List<string?> BearerTokens { get; } = [];
+
         public System.Net.HttpStatusCode CatalogStatus { get; init; } = System.Net.HttpStatusCode.OK;
 
         public string? CatalogResponseJson { get; init; }
@@ -554,6 +679,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
         {
             var path = request.RequestUri!.AbsolutePath;
             Requests.Add(path);
+            BearerTokens.Add(request.Headers.Authorization?.Parameter);
             var isCatalogRequest = path.StartsWith("/api/v1/catalog/", StringComparison.Ordinal);
             var response = isCatalogRequest
                 ? CatalogResponseJson ?? System.Text.Json.JsonSerializer.Serialize(new
