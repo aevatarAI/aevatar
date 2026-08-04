@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -209,15 +210,17 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         if (State.Status is not (ChatTurnHistoryDeliveryStatus.Reserved or ChatTurnHistoryDeliveryStatus.Bound))
             return;
 
+        var terminalFramePersistStarted = Stopwatch.GetTimestamp();
         await PersistDomainEventAsync(terminal);
         _logger.LogWarning(
-            "Chat turn history delivery terminal frame persisted: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} sourceActorId={SourceActorId} sourceCommandId={SourceCommandId} status={TerminalStatus} currentStatus={CurrentStatus}",
+            "Chat turn history delivery terminal frame persisted: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} sourceActorId={SourceActorId} sourceCommandId={SourceCommandId} status={TerminalStatus} currentStatus={CurrentStatus} elapsedMs={ElapsedMs}",
             Id,
             State.DeliveryId,
             State.SourceActorId,
             State.SourceCommandId,
             State.TerminalStatus,
-            State.Status);
+            State.Status,
+            Stopwatch.GetElapsedTime(terminalFramePersistStarted).TotalMilliseconds);
         await DispatchPendingTerminalAppendAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
@@ -244,7 +247,17 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             appendAttempt,
             State.Status,
             State.TerminalStatus);
-        if (!await _actorRuntime.ExistsAsync(conversationActorId).ConfigureAwait(false))
+        var existsStarted = Stopwatch.GetTimestamp();
+        var conversationExists = await _actorRuntime.ExistsAsync(conversationActorId).ConfigureAwait(false);
+        _logger.LogWarning(
+            "Chat turn history delivery conversation exists check completed: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} conversationActorId={ConversationActorId} sourceCommandId={SourceCommandId} exists={Exists} elapsedMs={ElapsedMs}",
+            Id,
+            State.DeliveryId,
+            conversationActorId,
+            State.SourceCommandId,
+            conversationExists,
+            Stopwatch.GetElapsedTime(existsStarted).TotalMilliseconds);
+        if (!conversationExists)
         {
             if (!State.CreateConversationIfMissing)
             {
@@ -258,8 +271,16 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
                 return;
             }
 
+            var createStarted = Stopwatch.GetTimestamp();
             await _actorRuntime.CreateAsync<ChatConversationGAgent>(conversationActorId, ct)
                 .ConfigureAwait(false);
+            _logger.LogWarning(
+                "Chat turn history delivery conversation create completed: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} conversationActorId={ConversationActorId} sourceCommandId={SourceCommandId} elapsedMs={ElapsedMs}",
+                Id,
+                State.DeliveryId,
+                conversationActorId,
+                State.SourceCommandId,
+                Stopwatch.GetElapsedTime(createStarted).TotalMilliseconds);
         }
 
         var envelope = new EventEnvelope
@@ -278,10 +299,11 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         envelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId =
             $"chat-history-append:{State.DeliveryId}:{appendAttempt}";
 
+        var dispatchStarted = Stopwatch.GetTimestamp();
         var admission = await _dispatchPort.DispatchAsync(conversationActorId, envelope, ct)
             .ConfigureAwait(false);
         _logger.LogWarning(
-            "Chat turn history delivery append dispatch completed: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} conversationActorId={ConversationActorId} sourceCommandId={SourceCommandId} appendAttempt={AppendAttempt} accepted={Accepted} commandId={CommandId} correlationId={CorrelationId}",
+            "Chat turn history delivery append dispatch completed: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} conversationActorId={ConversationActorId} sourceCommandId={SourceCommandId} appendAttempt={AppendAttempt} accepted={Accepted} commandId={CommandId} correlationId={CorrelationId} elapsedMs={ElapsedMs}",
             Id,
             State.DeliveryId,
             conversationActorId,
@@ -289,7 +311,8 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             appendAttempt,
             admission.Accepted,
             admission.CommandId,
-            admission.CorrelationId);
+            admission.CorrelationId,
+            Stopwatch.GetElapsedTime(dispatchStarted).TotalMilliseconds);
         if (!admission.Accepted)
         {
             await PersistFailureAsync(
@@ -309,6 +332,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             conversationActorId,
             State.SourceCommandId,
             appendAttempt);
+        var appendDispatchedPersistStarted = Stopwatch.GetTimestamp();
         await PersistDomainEventAsync(new ChatTurnHistoryDeliveryAppendDispatchedEvent
         {
             DeliveryId = State.DeliveryId,
@@ -322,12 +346,13 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             DispatchedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         });
         _logger.LogWarning(
-            "Chat turn history delivery append dispatched event persisted: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} sourceCommandId={SourceCommandId} appendAttempt={AppendAttempt} currentStatus={CurrentStatus}",
+            "Chat turn history delivery append dispatched event persisted: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} sourceCommandId={SourceCommandId} appendAttempt={AppendAttempt} currentStatus={CurrentStatus} elapsedMs={ElapsedMs}",
             Id,
             State.DeliveryId,
             State.SourceCommandId,
             appendAttempt,
-            State.Status);
+            State.Status,
+            Stopwatch.GetElapsedTime(appendDispatchedPersistStarted).TotalMilliseconds);
     }
 
     [EventHandler]
