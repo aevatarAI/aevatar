@@ -380,6 +380,129 @@ public sealed class WorkflowChatRunInteractionServiceTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShouldWaitForCreateReservationVisibilityBeforeDispatchingRun()
+    {
+        var actorResolver = new RecordingActorResolver
+        {
+            Results =
+            {
+                new WorkflowActorResolutionResult(
+                    new WorkflowRunCreationReceipt("run-1", "definition-1", ["definition-1", "run-1"]),
+                    "direct",
+                    WorkflowChatRunStartError.None),
+            },
+        };
+        var deliveryPort = new RecordingChatHistoryTerminalDeliveryPort();
+        var recoveryPort = new RecordingChatHistoryCreateRecoveryReadPort();
+        var request = new WorkflowChatRunRequest(
+            "hello",
+            WorkflowChatSource.CatalogWorkflow("direct"),
+            ExternalCapabilityExecutionMode.Interactive,
+            ScopeId: "scope-a",
+            CommandIdSeed: "create-command-1",
+            CorrelationIdSeed: "correlation-1",
+            ChatConversation: WorkflowChatConversationIntent.Create());
+        recoveryPort.ConversationRecoveries.Enqueue(null);
+        recoveryPort.ConversationRecoveries.Enqueue(new WorkflowChatHistoryCreateRecovery(
+            WorkflowChatHistoryCreateRecoveryStatus.Reserved,
+            "scope-a",
+            "create-command-1",
+            "generated-conversation",
+            "generated-turn",
+            "run-1",
+            "create-command-1",
+            "correlation-1",
+            WorkflowChatCreateRequestFingerprint.Compute(request),
+            1,
+            DateTimeOffset.Parse("2026-08-04T06:00:00Z")));
+        var delays = new List<TimeSpan>();
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            new RecordingRunProvisioningPort(),
+            inner,
+            chatHistoryTerminalDeliveryPort: deliveryPort,
+            chatHistoryCreateRecoveryReadPort: recoveryPort,
+            behaviorOptions: FastReservationObservationOptions(),
+            delayAsync: (delay, _) =>
+            {
+                delays.Add(delay);
+                return Task.CompletedTask;
+            });
+
+        var result = await service.ExecuteAsync(
+            request,
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        recoveryPort.ConversationRequests.Should().Equal(
+            ("scope-a", "generated-conversation"),
+            ("scope-a", "generated-conversation"));
+        delays.Should().Equal(TimeSpan.FromMilliseconds(50));
+        inner.Requests.Should().ContainSingle(
+            "the workflow must not dispatch until the acknowledged conversation query is readable");
+        deliveryPort.Abandons.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldNotAcknowledgeOrDispatchRun_WhenCreateReservationRemainsUnreadable()
+    {
+        var actorResolver = new RecordingActorResolver
+        {
+            Results =
+            {
+                new WorkflowActorResolutionResult(
+                    new WorkflowRunCreationReceipt("run-1", "definition-1", ["definition-1", "run-1"]),
+                    "direct",
+                    WorkflowChatRunStartError.None),
+            },
+        };
+        var deliveryPort = new RecordingChatHistoryTerminalDeliveryPort();
+        var recoveryPort = new RecordingChatHistoryCreateRecoveryReadPort();
+        var request = new WorkflowChatRunRequest(
+            "hello",
+            WorkflowChatSource.CatalogWorkflow("direct"),
+            ExternalCapabilityExecutionMode.Interactive,
+            ScopeId: "scope-a",
+            CommandIdSeed: "create-command-1",
+            ChatConversation: WorkflowChatConversationIntent.Create());
+        recoveryPort.ConversationRecoveries.Enqueue(null);
+        recoveryPort.ConversationRecoveries.Enqueue(new WorkflowChatHistoryCreateRecovery(
+            WorkflowChatHistoryCreateRecoveryStatus.Reserved,
+            "scope-a",
+            "create-command-1",
+            "generated-conversation",
+            "generated-turn",
+            "run-1",
+            "create-command-1",
+            null,
+            "different-fingerprint",
+            1,
+            DateTimeOffset.Parse("2026-08-04T06:00:00Z")));
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            new RecordingRunProvisioningPort(),
+            inner,
+            chatHistoryTerminalDeliveryPort: deliveryPort,
+            chatHistoryCreateRecoveryReadPort: recoveryPort,
+            behaviorOptions: FastReservationObservationOptions(),
+            delayAsync: static (_, _) => Task.CompletedTask);
+
+        var result = await service.ExecuteAsync(
+            request,
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.ChatHistoryReservationUnavailable);
+        inner.Requests.Should().BeEmpty();
+        deliveryPort.Bindings.Should().BeEmpty();
+        deliveryPort.Abandons.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldReserveAndBindChatHistoryDelivery_WhenConversationContinueIntentIsPresent()
     {
         var actorResolver = new RecordingActorResolver
@@ -1166,7 +1289,9 @@ public sealed class WorkflowChatRunInteractionServiceTests
         ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> inner,
         WorkflowDirectFallbackPolicy? fallbackPolicy = null,
         IWorkflowChatHistoryTerminalDeliveryPort? chatHistoryTerminalDeliveryPort = null,
-        IWorkflowChatHistoryCreateRecoveryReadPort? chatHistoryCreateRecoveryReadPort = null) =>
+        IWorkflowChatHistoryCreateRecoveryReadPort? chatHistoryCreateRecoveryReadPort = null,
+        WorkflowRunBehaviorOptions? behaviorOptions = null,
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null) =>
         new(
             actorResolver,
             projectionPort,
@@ -1174,7 +1299,16 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner,
             fallbackPolicy ?? new WorkflowDirectFallbackPolicy(),
             chatHistoryTerminalDeliveryPort,
-            chatHistoryCreateRecoveryReadPort);
+            chatHistoryCreateRecoveryReadPort,
+            behaviorOptions,
+            delayAsync);
+
+    private static WorkflowRunBehaviorOptions FastReservationObservationOptions() =>
+        new()
+        {
+            ChatHistoryReservationObservationTimeout = TimeSpan.FromMilliseconds(100),
+            ChatHistoryReservationObservationInterval = TimeSpan.FromMilliseconds(50),
+        };
 
     private static ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> CreateDefaultInner(
         RecordingProjectionPort projectionPort,
@@ -1470,7 +1604,9 @@ public sealed class WorkflowChatRunInteractionServiceTests
     private sealed class RecordingChatHistoryCreateRecoveryReadPort : IWorkflowChatHistoryCreateRecoveryReadPort
     {
         public WorkflowChatHistoryCreateRecovery? Recovery { get; set; }
+        public Queue<WorkflowChatHistoryCreateRecovery?> ConversationRecoveries { get; } = new();
         public List<(string ScopeId, string CommandId)> Requests { get; } = [];
+        public List<(string ScopeId, string ConversationId)> ConversationRequests { get; } = [];
 
         public Task<WorkflowChatHistoryCreateRecovery?> GetAsync(
             string scopeId,
@@ -1480,6 +1616,19 @@ public sealed class WorkflowChatRunInteractionServiceTests
             ct.ThrowIfCancellationRequested();
             Requests.Add((scopeId, commandId));
             return Task.FromResult(Recovery);
+        }
+
+        public Task<WorkflowChatHistoryCreateRecovery?> GetByConversationAsync(
+            string scopeId,
+            string conversationId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ConversationRequests.Add((scopeId, conversationId));
+            return Task.FromResult(
+                ConversationRecoveries.Count == 0
+                    ? Recovery
+                    : ConversationRecoveries.Dequeue());
         }
     }
 

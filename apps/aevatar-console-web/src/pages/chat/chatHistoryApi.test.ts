@@ -93,7 +93,11 @@ describe("chatHistoryApi", () => {
   });
 
   it("loads the canonical transcript and conditional current state", async () => {
-    const transcript = { messages: [], stateVersion: 7 };
+    const transcript = {
+      messages: [],
+      projectionStatus: "current",
+      stateVersion: 7,
+    };
     const state = {
       snapshot: {
         actorId: "conversation/a",
@@ -173,6 +177,7 @@ describe("chatHistoryApi", () => {
             turnId: "turn-a",
           },
         ],
+        projectionStatus: "current",
         stateVersion: 7,
       })
     ).toEqual({
@@ -190,7 +195,22 @@ describe("chatHistoryApi", () => {
           turnId: "turn-a",
         },
       ],
+      projectionStatus: "current",
       stateVersion: 7,
+    });
+  });
+
+  it("preserves pending status for an acknowledged conversation without a projected turn", () => {
+    expect(
+      decodeChatConversationDetail({
+        messages: [],
+        projectionStatus: "pending",
+        stateVersion: 0,
+      })
+    ).toEqual({
+      messages: [],
+      projectionStatus: "pending",
+      stateVersion: 0,
     });
   });
 
@@ -202,8 +222,21 @@ describe("chatHistoryApi", () => {
       ChatHistoryContractError
     );
     expect(() =>
-      decodeChatConversationDetail({ messages: [], stateVersion: -1 })
+      decodeChatConversationDetail({
+        messages: [],
+        projectionStatus: "current",
+        stateVersion: -1,
+      })
     ).toThrow(expect.objectContaining({ path: "$conversation.stateVersion" }));
+    expect(() =>
+      decodeChatConversationDetail({
+        messages: [],
+        projectionStatus: "stale",
+        stateVersion: 0,
+      })
+    ).toThrow(
+      expect.objectContaining({ path: "$conversation.projectionStatus" })
+    );
   });
 
   it("submits canonical deletion without parsing the accepted body", async () => {

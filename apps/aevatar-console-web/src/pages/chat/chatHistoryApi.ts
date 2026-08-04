@@ -217,6 +217,17 @@ export function decodeChatConversationDetail(
   value: unknown
 ): ChatConversationDetail {
   const record = asRecord(value, "$conversation");
+  const projectionStatus = readString(
+    record,
+    "projectionStatus",
+    "$conversation"
+  );
+  if (projectionStatus !== "current" && projectionStatus !== "pending") {
+    return failContract(
+      "$conversation.projectionStatus",
+      '"current" or "pending"'
+    );
+  }
   const stateVersion = readNumber(record, "stateVersion", "$conversation");
   if (!Number.isSafeInteger(stateVersion) || stateVersion < 0) {
     return failContract(
@@ -231,6 +242,7 @@ export function decodeChatConversationDetail(
     messages: record.messages.map((message, index) =>
       decodeStoredChatMessage(message, `$conversation.messages[${index}]`)
     ),
+    projectionStatus,
     stateVersion,
   };
 }

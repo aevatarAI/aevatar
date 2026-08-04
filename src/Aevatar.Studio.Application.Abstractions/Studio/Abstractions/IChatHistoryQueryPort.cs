@@ -37,10 +37,17 @@ public enum ChatHistoryConversationResultStatus
     NotFound = 1,
 }
 
+public enum ChatHistoryConversationProjectionStatus
+{
+    Current = 0,
+    Pending = 1,
+}
+
 public sealed record ChatHistoryConversationMessagesResult(
     ChatHistoryConversationResultStatus Status,
     IReadOnlyList<StoredChatMessage> Messages,
-    long StateVersion)
+    long StateVersion,
+    ChatHistoryConversationProjectionStatus ProjectionStatus)
 {
     public static ChatHistoryConversationMessagesResult Found(
         IReadOnlyList<StoredChatMessage> messages) =>
@@ -49,10 +56,25 @@ public sealed record ChatHistoryConversationMessagesResult(
     public static ChatHistoryConversationMessagesResult Found(
         IReadOnlyList<StoredChatMessage> messages,
         long stateVersion) =>
-        new(ChatHistoryConversationResultStatus.Found, messages, Math.Max(0, stateVersion));
+        new(
+            ChatHistoryConversationResultStatus.Found,
+            messages,
+            Math.Max(0, stateVersion),
+            ChatHistoryConversationProjectionStatus.Current);
+
+    public static ChatHistoryConversationMessagesResult Pending() =>
+        new(
+            ChatHistoryConversationResultStatus.Found,
+            [],
+            0,
+            ChatHistoryConversationProjectionStatus.Pending);
 
     public static ChatHistoryConversationMessagesResult NotFound() =>
-        new(ChatHistoryConversationResultStatus.NotFound, [], 0);
+        new(
+            ChatHistoryConversationResultStatus.NotFound,
+            [],
+            0,
+            ChatHistoryConversationProjectionStatus.Current);
 }
 
 public enum ChatHistoryCreateRecoveryStatus

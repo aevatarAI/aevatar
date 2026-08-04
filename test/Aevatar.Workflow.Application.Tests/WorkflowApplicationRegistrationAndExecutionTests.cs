@@ -126,6 +126,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
 
         options.DefaultWorkflowName.Should().Be("direct");
         options.AcceptedObservationTimeout.Should().Be(TimeSpan.FromSeconds(30));
+        options.ChatHistoryReservationObservationTimeout.Should().Be(TimeSpan.FromSeconds(3));
+        options.ChatHistoryReservationObservationInterval.Should().Be(TimeSpan.FromMilliseconds(50));
         options.UseAutoAsDefaultWhenWorkflowUnspecified.Should().BeFalse();
         options.EnableDirectFallback.Should().BeTrue();
         options.DirectFallbackWorkflowWhitelist.Should().Contain("auto");

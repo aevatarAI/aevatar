@@ -157,7 +157,14 @@ public static partial class NyxIdChatEndpoints
         var messages = await queryPort.GetMessagesAsync(scopeId, normalizedConversationId, ct);
         return messages.Status == ChatHistoryConversationResultStatus.NotFound
             ? Results.NotFound()
-            : Results.Ok(new { messages.Messages, messages.StateVersion });
+            : Results.Ok(new
+            {
+                messages.Messages,
+                messages.StateVersion,
+                ProjectionStatus = messages.ProjectionStatus == ChatHistoryConversationProjectionStatus.Pending
+                    ? "pending"
+                    : "current",
+            });
     }
 
     private static async Task<IResult> HandlePublicGetStateAsync(

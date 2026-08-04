@@ -598,6 +598,32 @@ public sealed class NyxIdChatPublicEndpointsTests
         admission.Targets.Should().ContainSingle().Which.Operation.Should().Be(ScopeResourceOperation.Use);
         using var body = JsonDocument.Parse(response.Body);
         body.RootElement.GetProperty("stateVersion").GetInt64().Should().Be(9);
+        body.RootElement.GetProperty("projectionStatus").GetString().Should().Be("current");
+    }
+
+    [Fact]
+    public async Task TranscriptRoute_ShouldExposeAcknowledgedPendingConversation()
+    {
+        var history = new RecordingHistoryPort
+        {
+            MessagesResult = ChatHistoryConversationMessagesResult.Pending(),
+        };
+        var admission = new RecordingAdmissionPort();
+        var context = CreateContext("scope-alpha", services => services
+            .AddSingleton<IChatHistoryQueryPort>(history)
+            .AddSingleton<IScopeResourceAdmissionPort>(admission));
+
+        var response = await ExecutePublicRouteAsync(
+            context,
+            HttpMethods.Get,
+            "/api/chat/conversations/{conversationId}",
+            new RouteValueDictionary { ["conversationId"] = "conversation-alpha" });
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        using var body = JsonDocument.Parse(response.Body);
+        body.RootElement.GetProperty("projectionStatus").GetString().Should().Be("pending");
+        body.RootElement.GetProperty("stateVersion").GetInt64().Should().Be(0);
+        body.RootElement.GetProperty("messages").GetArrayLength().Should().Be(0);
     }
 
     [Fact]

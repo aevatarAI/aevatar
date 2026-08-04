@@ -137,6 +137,7 @@ export type StoredChatMessage = {
 export type ChatConversationDetail = {
   messages: StoredChatMessage[];
   stateVersion: number;
+  projectionStatus: "current" | "pending";
 };
 
 export type ChatHistoryIndex = {

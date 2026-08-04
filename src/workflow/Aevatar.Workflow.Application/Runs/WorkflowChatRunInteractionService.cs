@@ -14,6 +14,8 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
     private readonly WorkflowDirectFallbackPolicy _fallbackPolicy;
     private readonly IWorkflowChatHistoryTerminalDeliveryPort? _chatHistoryTerminalDeliveryPort;
     private readonly IWorkflowChatHistoryCreateRecoveryReadPort? _chatHistoryCreateRecoveryReadPort;
+    private readonly WorkflowRunBehaviorOptions _behaviorOptions;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
 
     public WorkflowChatRunInteractionService(
         IWorkflowRunActorResolver actorResolver,
@@ -22,7 +24,9 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> inner,
         WorkflowDirectFallbackPolicy fallbackPolicy,
         IWorkflowChatHistoryTerminalDeliveryPort? chatHistoryTerminalDeliveryPort = null,
-        IWorkflowChatHistoryCreateRecoveryReadPort? chatHistoryCreateRecoveryReadPort = null)
+        IWorkflowChatHistoryCreateRecoveryReadPort? chatHistoryCreateRecoveryReadPort = null,
+        WorkflowRunBehaviorOptions? behaviorOptions = null,
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
     {
         _actorResolver = actorResolver ?? throw new ArgumentNullException(nameof(actorResolver));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
@@ -31,6 +35,8 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         _fallbackPolicy = fallbackPolicy ?? throw new ArgumentNullException(nameof(fallbackPolicy));
         _chatHistoryTerminalDeliveryPort = chatHistoryTerminalDeliveryPort;
         _chatHistoryCreateRecoveryReadPort = chatHistoryCreateRecoveryReadPort;
+        _behaviorOptions = behaviorOptions ?? new WorkflowRunBehaviorOptions();
+        _delayAsync = delayAsync ?? ((delay, token) => Task.Delay(delay, token));
     }
 
     public async Task<WorkflowChatRunInteractionResult> ExecuteAsync(
@@ -252,7 +258,7 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
                 CompletionNotificationTarget = null,
             })
             : string.Empty;
-        return await _chatHistoryTerminalDeliveryPort.ReserveAsync(
+        var result = await _chatHistoryTerminalDeliveryPort.ReserveAsync(
                 new WorkflowChatHistoryTerminalDeliveryReservationRequest(
                     deliveryId,
                     normalizedScopeId,
@@ -264,7 +270,106 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
                     requestFingerprint),
                 ct)
             .ConfigureAwait(false);
+
+        if (!result.Succeeded ||
+            conversation.Intent != WorkflowChatConversationIntentKind.Create ||
+            _chatHistoryCreateRecoveryReadPort is null)
+        {
+            return result;
+        }
+
+        try
+        {
+            if (await IsCreateReservationReadableAsync(
+                    normalizedScopeId,
+                    normalizedCommandId,
+                    result,
+                    requestFingerprint,
+                    ct).ConfigureAwait(false))
+            {
+                return result;
+            }
+        }
+        catch
+        {
+            await _chatHistoryTerminalDeliveryPort.AbandonAsync(
+                    result.Reservation!,
+                    "chat_history_reservation_observation_cancelled",
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+            throw;
+        }
+
+        await _chatHistoryTerminalDeliveryPort.AbandonAsync(
+                result.Reservation!,
+                "chat_history_reservation_not_observed",
+                CancellationToken.None)
+            .ConfigureAwait(false);
+        return WorkflowChatHistoryTerminalDeliveryReservationResult.Unavailable();
     }
+
+    private async Task<bool> IsCreateReservationReadableAsync(
+        string scopeId,
+        string commandId,
+        WorkflowChatHistoryTerminalDeliveryReservationResult reservation,
+        string requestFingerprint,
+        CancellationToken ct)
+    {
+        var interval = _behaviorOptions.ChatHistoryReservationObservationInterval;
+        var timeout = _behaviorOptions.ChatHistoryReservationObservationTimeout;
+        var maxPolls = Math.Max(1, (int)Math.Ceiling(timeout.TotalMilliseconds / interval.TotalMilliseconds));
+        using var observationTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        observationTimeout.CancelAfter(timeout);
+        var observationToken = observationTimeout.Token;
+
+        try
+        {
+            for (var attempt = 0; attempt < maxPolls; attempt++)
+            {
+                observationToken.ThrowIfCancellationRequested();
+                var observed = await _chatHistoryCreateRecoveryReadPort!
+                    .GetByConversationAsync(
+                        scopeId,
+                        reservation.ChatContext!.ConversationId,
+                        observationToken)
+                    .ConfigureAwait(false);
+                if (MatchesCreateReservation(
+                        observed,
+                        scopeId,
+                        commandId,
+                        reservation.ChatContext,
+                        requestFingerprint))
+                {
+                    return true;
+                }
+
+                if (attempt + 1 < maxPolls)
+                    await _delayAsync(interval, observationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && observationTimeout.IsCancellationRequested)
+        {
+            return false;
+        }
+
+        return false;
+    }
+
+    private static bool MatchesCreateReservation(
+        WorkflowChatHistoryCreateRecovery? observed,
+        string scopeId,
+        string commandId,
+        WorkflowChatContext context,
+        string requestFingerprint) =>
+        observed is not null &&
+        observed.Status is not (WorkflowChatHistoryCreateRecoveryStatus.NotFound or
+            WorkflowChatHistoryCreateRecoveryStatus.Abandoned) &&
+        observed.StateVersion > 0 &&
+        string.Equals(observed.ScopeId, scopeId, StringComparison.Ordinal) &&
+        string.Equals(observed.CommandId, commandId, StringComparison.Ordinal) &&
+        string.Equals(observed.ConversationId, context.ConversationId, StringComparison.Ordinal) &&
+        string.Equals(observed.TurnId, context.TurnId, StringComparison.Ordinal) &&
+        string.Equals(observed.RequestFingerprint, requestFingerprint, StringComparison.Ordinal);
 
     private async Task<WorkflowChatRunInteractionResult?> TryRecoverCreateAsync(
         WorkflowChatRunRequest request,

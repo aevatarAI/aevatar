@@ -44,6 +44,15 @@ public static class ServiceCollectionExtensions
                 nameof(configureRunBehavior),
                 "Workflow accepted observation timeout must be positive.");
         }
+        if (runBehaviorOptions.ChatHistoryReservationObservationTimeout <= TimeSpan.Zero ||
+            runBehaviorOptions.ChatHistoryReservationObservationInterval <= TimeSpan.Zero ||
+            runBehaviorOptions.ChatHistoryReservationObservationInterval >
+            runBehaviorOptions.ChatHistoryReservationObservationTimeout)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(configureRunBehavior),
+                "Chat history reservation observation timing must be positive and the interval must not exceed the timeout.");
+        }
         services.AddSingleton(runBehaviorOptions);
         services.TryAddTransient<ExternalWorkflowCapabilityReadinessService>();
         services.TryAddTransient<IExternalWorkflowCapabilityListPort>(provider =>
@@ -155,7 +164,8 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>(),
                 sp.GetRequiredService<WorkflowDirectFallbackPolicy>(),
                 sp.GetService<IWorkflowChatHistoryTerminalDeliveryPort>(),
-                sp.GetService<IWorkflowChatHistoryCreateRecoveryReadPort>()));
+                sp.GetService<IWorkflowChatHistoryCreateRecoveryReadPort>(),
+                sp.GetRequiredService<WorkflowRunBehaviorOptions>()));
         services.TryAddSingleton<IWorkflowRunReportExportPort, NoopWorkflowRunReportExporter>();
         // Refactor (iter18/cluster-005):
         //   Old pattern: accepted-only dispatch used a detached live-sink monitor service

@@ -39,11 +39,11 @@ Mainnet also exposes the authenticated Assistant resource family:
 | Endpoint | Meaning |
 |---|---|
 | `GET /api/chat/conversations?pageSize={n}&cursor={cursor}` | List the caller's NyxIdChat transcript index; the response carries `nextCursor`. |
-| `GET /api/chat/conversations/{conversationId}` | Read the durable transcript and transcript `stateVersion`. |
+| `GET /api/chat/conversations/{conversationId}` | Read the durable transcript, transcript `stateVersion`, and projection status. |
 | `GET /api/chat/conversations/{conversationId}/state?afterStateVersion={v}&turnId={turnId}` | Read the conditional actor current-state replica. |
 | `DELETE /api/chat/conversations/{conversationId}` | Submit the existing authoritative retirement/deletion workflow. |
 
-The transcript endpoint returns every committed terminal turn while the conversation is active. The current contract has no per-turn TTL or silent rolling eviction: the 251st and later turns remain appendable, and only explicit whole-conversation deletion removes query availability. LLM continuation context is independently bounded to the latest 24 nonblank messages; that prompt selection never prunes the durable transcript.
+The transcript endpoint returns every committed terminal turn while the conversation is active. An acknowledged conversation whose transcript actor read model has not materialized yet returns `200` with `messages: []`, `stateVersion: 0`, and `projectionStatus: "pending"`; once materialized, it returns `projectionStatus: "current"` and the authoritative transcript version. `404` remains reserved for a conversation that was never accepted, belongs to another scope, was abandoned before acceptance, or was explicitly deleted. The current contract has no per-turn TTL or silent rolling eviction: the 251st and later turns remain appendable, and only explicit whole-conversation deletion removes query availability. LLM continuation context is independently bounded to the latest 24 nonblank messages; that prompt selection never prunes the durable transcript.
 
 Standalone Workflow Host behavior is unchanged: its own `POST /api/chat` remains Workflow JSON/multipart, and `GET /api/ws/chat` remains the Workflow WebSocket surface. Mainnet's WebSocket route is likewise not selected by the Assistant JSON discriminators. New NyxID clients use only the HTTP facade and `/api/chat/conversations/**`; scoped NyxIdChat routes are compatibility adapters, not a second evolving contract.
 

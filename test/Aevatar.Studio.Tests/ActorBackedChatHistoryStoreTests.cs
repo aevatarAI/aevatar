@@ -7,6 +7,7 @@ using Aevatar.GAgents.ChatHistory;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.ActorBacked;
 using Aevatar.Studio.Projection.ReadModels;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -157,8 +158,135 @@ public sealed class ActorBackedChatHistoryStoreTests
         var result = await store.GetMessagesAsync("scope-a", "conversation-a");
 
         result.Status.Should().Be(ChatHistoryConversationResultStatus.Found);
+        result.ProjectionStatus.Should().Be(ChatHistoryConversationProjectionStatus.Current);
         result.StateVersion.Should().Be(1);
         result.Messages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetMessagesAsync_ShouldConvergeFromAcknowledgedPendingReservationToCurrentTranscript()
+    {
+        const string scopeId = "scope-a";
+        const string conversationId = "conversation-acknowledged";
+        var actorId = ChatHistoryActorIds.Conversation(scopeId, conversationId);
+        var conversationReader = new RecordingDocumentReader();
+        var recoveryReader = new InMemoryProjectionDocumentStore<ChatHistoryCreateRecoveryCurrentStateDocument, string>(
+            static document => document.Id);
+        await recoveryReader.UpsertAsync(new ChatHistoryCreateRecoveryCurrentStateDocument
+        {
+            Id = ChatHistoryCreateRecoveryIds.FromScopeAndCommandId(scopeId, "create-command-1"),
+            ActorId = "chat-history-delivery:acknowledged",
+            StateVersion = 2,
+            ScopeId = scopeId,
+            ConversationId = conversationId,
+            TurnId = "turn-acknowledged",
+            WorkflowActorId = "workflow-run-alpha",
+            WorkflowCommandId = "create-command-1",
+            Status = "bound",
+        });
+        var store = new ActorBackedChatHistoryStore(
+            new RecordingBootstrap(new StubActor(actorId)),
+            new StudioActorCommandDispatch(new RecordingDispatchService()),
+            conversationReader,
+            recoveryReader);
+
+        var pending = await store.GetMessagesAsync(scopeId, conversationId);
+
+        pending.Status.Should().Be(ChatHistoryConversationResultStatus.Found);
+        pending.ProjectionStatus.Should().Be(ChatHistoryConversationProjectionStatus.Pending);
+        pending.StateVersion.Should().Be(0,
+            "the delivery actor version must not impersonate the conversation actor version");
+        pending.Messages.Should().BeEmpty();
+
+        var recovery = await store.GetByConversationAsync(scopeId, conversationId);
+
+        recovery.Should().NotBeNull();
+        recovery!.Status.Should().Be(WorkflowChatHistoryCreateRecoveryStatus.Bound);
+        recovery.ScopeId.Should().Be(scopeId);
+        recovery.CommandId.Should().Be("create-command-1");
+        recovery.ConversationId.Should().Be(conversationId);
+        recovery.TurnId.Should().Be("turn-acknowledged");
+        recovery.StateVersion.Should().Be(2);
+
+        conversationReader.Documents[actorId] = new ChatConversationCurrentStateDocument
+        {
+            Id = actorId,
+            ActorId = actorId,
+            ScopeId = scopeId,
+            ConversationId = conversationId,
+            StateVersion = 1,
+            Turns =
+            {
+                new ChatConversationTurnDocument
+                {
+                    TurnId = "turn-acknowledged",
+                    Sequence = 1,
+                    UserText = "hi",
+                    AssistantText = "Hello.",
+                    TerminalStatus = "complete",
+                },
+            },
+        };
+
+        var current = await store.GetMessagesAsync(scopeId, conversationId);
+
+        current.Status.Should().Be(ChatHistoryConversationResultStatus.Found);
+        current.ProjectionStatus.Should().Be(ChatHistoryConversationProjectionStatus.Current);
+        current.StateVersion.Should().Be(1);
+        current.Messages.Select(static message => (message.Role, message.Content))
+            .Should()
+            .Equal(("user", "hi"), ("assistant", "Hello."));
+    }
+
+    [Fact]
+    public async Task GetMessagesAsync_ShouldNotExposeReservationAcrossScopeOrAfterDeletion()
+    {
+        const string conversationId = "conversation-private";
+        var actorId = ChatHistoryActorIds.Conversation("scope-a", conversationId);
+        var conversationReader = new RecordingDocumentReader();
+        var recoveryReader = new InMemoryProjectionDocumentStore<ChatHistoryCreateRecoveryCurrentStateDocument, string>(
+            static document => document.Id);
+        var recoveryDocument = new ChatHistoryCreateRecoveryCurrentStateDocument
+        {
+            Id = ChatHistoryCreateRecoveryIds.FromScopeAndCommandId("scope-a", "create-command-private"),
+            ActorId = "chat-history-delivery:private",
+            StateVersion = 1,
+            ScopeId = "scope-a",
+            ConversationId = conversationId,
+            WorkflowCommandId = "create-command-private",
+            Status = "bound",
+        };
+        await recoveryReader.UpsertAsync(recoveryDocument);
+        var store = new ActorBackedChatHistoryStore(
+            new RecordingBootstrap(new StubActor(actorId)),
+            new StudioActorCommandDispatch(new RecordingDispatchService()),
+            conversationReader,
+            recoveryReader);
+
+        var wrongScope = await store.GetMessagesAsync("scope-b", conversationId);
+
+        wrongScope.Status.Should().Be(ChatHistoryConversationResultStatus.NotFound);
+
+        recoveryDocument.Status = "abandoned";
+        recoveryDocument.StateVersion = 2;
+        await recoveryReader.UpsertAsync(recoveryDocument);
+
+        var abandoned = await store.GetMessagesAsync("scope-a", conversationId);
+
+        abandoned.Status.Should().Be(ChatHistoryConversationResultStatus.NotFound);
+
+        conversationReader.Documents[actorId] = new ChatConversationCurrentStateDocument
+        {
+            Id = actorId,
+            ActorId = actorId,
+            ScopeId = "scope-a",
+            ConversationId = conversationId,
+            Deleted = true,
+        };
+
+        var deleted = await store.GetMessagesAsync("scope-a", conversationId);
+
+        deleted.Status.Should().Be(ChatHistoryConversationResultStatus.NotFound);
     }
 
     [Fact]
