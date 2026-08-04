@@ -21,12 +21,17 @@ public interface INyxIdChatTurnOperationExecutor
 
 public sealed class NyxIdChatTransientExecutionSession
 {
+    private readonly HashSet<string> _publishedToolStartCallIds = new(StringComparer.Ordinal);
+
     internal AgentRunReplyStepState? StepState { get; set; }
     internal NeedsLlmReplyEvent? Request { get; set; }
     internal AgentRunAuthorizedToolStep? AuthorizedToolStep { get; set; }
     internal NyxIdChatOperationKey? AuthorizationSourceKey { get; set; }
     internal AgentProfileTurnCatalog? TurnCatalog { get; set; }
     internal long ProgressSequence { get; set; }
+
+    internal bool TryMarkToolStartPublished(string callId) =>
+        _publishedToolStartCallIds.Add(callId);
 }
 
 public sealed record NyxIdChatTurnOperationExecution(
@@ -353,7 +358,7 @@ public sealed class NyxIdChatTurnOperationExecutor
                 NyxIdChatEffectEvidence.NotStarted);
         }
 
-        await ReportProgressAsync(
+        await ReportToolStartedOnceAsync(
                 command.Key,
                 new NyxIdChatToolProgress
                 {
@@ -907,7 +912,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             outputParts.Add(ContentPartProtoMapper.ToProto(chunk.DeltaContentPart));
         if (chunk.ToolCallStarted?.ToolCall is { } started)
         {
-            await ReportProgressAsync(
+            await ReportToolStartedOnceAsync(
                     key,
                     new NyxIdChatToolProgress
                     {
@@ -923,6 +928,16 @@ public sealed class NyxIdChatTurnOperationExecutor
                 .ConfigureAwait(false);
         }
     }
+
+    private static Task ReportToolStartedOnceAsync(
+        NyxIdChatOperationKey key,
+        NyxIdChatToolProgress progress,
+        NyxIdChatTransientExecutionSession session,
+        Func<NyxIdChatOperationProgressSignal, CancellationToken, Task> reportProgressAsync,
+        CancellationToken ct) =>
+        session.TryMarkToolStartPublished(progress.CallId)
+            ? ReportProgressAsync(key, progress, session, reportProgressAsync, ct)
+            : Task.CompletedTask;
 
     private static Task ReportProgressAsync(
         NyxIdChatOperationKey key,

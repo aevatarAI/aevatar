@@ -401,6 +401,15 @@ public sealed class NyxIdChatTurnGAgentTests
         var generationExecutor = new StreamingCapabilityReplyExecutor();
         var executor = new NyxIdChatTurnOperationExecutor(generationExecutor);
         var session = new NyxIdChatTransientExecutionSession();
+        var progress = new List<NyxIdChatOperationProgressSignal>();
+        Task ReportProgressAsync(
+            NyxIdChatOperationProgressSignal signal,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            progress.Add(signal.Clone());
+            return Task.CompletedTask;
+        }
         var llmCommand = new NyxIdChatOperationDispatchCommand
         {
             Key = CreateKey(),
@@ -416,7 +425,7 @@ public sealed class NyxIdChatTurnGAgentTests
         await executor.ExecuteAsync(
             llmCommand,
             session,
-            static (_, _) => Task.CompletedTask,
+            ReportProgressAsync,
             CancellationToken.None);
         var toolCommand = new NyxIdChatOperationDispatchCommand
         {
@@ -433,15 +442,21 @@ public sealed class NyxIdChatTurnGAgentTests
         var first = await executor.ExecuteAsync(
             toolCommand,
             session,
-            static (_, _) => Task.CompletedTask,
+            ReportProgressAsync,
             CancellationToken.None);
         var duplicate = await executor.ExecuteAsync(
             toolCommand.Clone(),
             session,
-            static (_, _) => Task.CompletedTask,
+            ReportProgressAsync,
             CancellationToken.None);
 
         generationExecutor.ToolExecutions.Should().Be(1);
+        var toolStarts = progress.Where(signal =>
+            signal.ProgressCase ==
+            NyxIdChatOperationProgressSignal.ProgressOneofCase.ToolStarted).ToArray();
+        toolStarts.Should().ContainSingle();
+        toolStarts[0].ToolStarted.CallId.Should().Be("call-alpha");
+        toolStarts[0].ToolStarted.Presentation.DisplayName.Should().Be("Tool Alpha");
         first.Result.ResultCase.Should().Be(NyxIdChatOperationResultSignal.ResultOneofCase.Tool);
         first.Result.Tool.ResultJson.Should().Be("{\"ok\":true}");
         first.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
