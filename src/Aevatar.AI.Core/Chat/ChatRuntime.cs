@@ -520,7 +520,7 @@ public sealed class ChatRuntime
                                    roundRequest,
                                    roundScope,
                                    runToken,
-                                   onToolCallCompleted: null,
+                                   emitResolvedToolCallStarts: false,
                                    onRequestAuthorized: BindAuthorizedRequest))
                 {
                     if (chunk.ToolCallStarted != null)
@@ -581,7 +581,7 @@ public sealed class ChatRuntime
                                    roundRequest,
                                    roundScope,
                                    runToken,
-                                   onToolCallCompleted: null,
+                                   emitResolvedToolCallStarts: false,
                                    onRequestAuthorized: BindAuthorizedRequest))
                 {
                     if (chunk.ToolCallStarted != null)
@@ -1166,7 +1166,7 @@ public sealed class ChatRuntime
         LLMRequest request,
         StreamingRoundScope roundScope,
         [EnumeratorCancellation] CancellationToken ct,
-        Action<ToolCall>? onToolCallCompleted = null,
+        bool emitResolvedToolCallStarts = false,
         Action<LLMRequest>? onRequestAuthorized = null)
     {
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
@@ -1221,7 +1221,7 @@ public sealed class ChatRuntime
             string? finishReason = null;
             var completedToolCalls = new Queue<ToolCall>();
             var anonymousToolCallPrefix = authorizedToolContext.Request.CallId;
-            var toolCalls = onToolCallCompleted != null
+            var toolCalls = emitResolvedToolCallStarts
                 ? new StreamingToolCallAccumulator(
                     toolCall => completedToolCalls.Enqueue(toolCall),
                     anonymousToolCallPrefix)
@@ -1260,7 +1260,6 @@ public sealed class ChatRuntime
                 while (completedToolCalls.TryDequeue(out var completedToolCall))
                 {
                     yield return BuildToolCallStartedChunk(completedToolCall, authorizedToolManager);
-                    onToolCallCompleted?.Invoke(completedToolCall);
                 }
 
                 if (normalizedChunk != null)
@@ -1271,7 +1270,6 @@ public sealed class ChatRuntime
             while (completedToolCalls.TryDequeue(out var completedToolCall))
             {
                 yield return BuildToolCallStartedChunk(completedToolCall, authorizedToolManager);
-                onToolCallCompleted?.Invoke(completedToolCall);
             }
 
             streamedContent = full.Length > 0 ? full.ToString() : null;
@@ -1335,11 +1333,15 @@ public sealed class ChatRuntime
         ILLMProvider provider,
         LLMRequest request,
         CancellationToken ct,
-        Func<LLMStreamChunk, CancellationToken, Task>? onChunkAsync = null,
-        Action<ToolCall>? onToolCallCompleted = null)
+        Func<LLMStreamChunk, CancellationToken, Task>? onChunkAsync = null)
     {
         var roundScope = new StreamingRoundScope();
-        await foreach (var _ in StreamLlmRoundAsync(provider, request, roundScope, ct, onToolCallCompleted))
+        await foreach (var _ in StreamLlmRoundAsync(
+                           provider,
+                           request,
+                           roundScope,
+                           ct,
+                           emitResolvedToolCallStarts: true))
         {
             if (onChunkAsync is not null)
                 await onChunkAsync(_, ct);

@@ -7,6 +7,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Tools;
+using Aevatar.Foundation.Abstractions.Tools;
 using FluentAssertions;
 
 namespace Aevatar.AI.Tests;
@@ -280,6 +281,51 @@ public sealed class ChatRuntimeStreamingBufferTests
         tool.CapturedContext.ExternalMetadata["safe"].Should().Be("tool-context");
         tool.CapturedContext.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         tool.CapturedContext.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+    }
+
+    [Fact]
+    public async Task CreateStepExecutor_WhenToolCallCompletes_ShouldEmitResolvedTypedPresentation()
+    {
+        var provider = new StreamingProvider(
+            chunks: [],
+            streamToolCall: new ToolCall
+            {
+                Id = "skill-call-1",
+                Name = "use_skill",
+                ArgumentsJson = """{"skill_name":"release-readiness-review","mount_workflows":false}""",
+            });
+        var tools = new ToolManager();
+        tools.Register(new ResolvedSkillPresentationTool());
+        var executor = CreateRuntime(provider, tools).CreateStepExecutor(turnCatalog: null);
+        var request = executor.BuildLlmStepRequest(
+            [ChatMessage.User("load the skill")],
+            "skill-presentation-request",
+            metadata: null,
+            toolContext: null,
+            llmControl: null,
+            round: 0,
+            finalNoTools: false);
+        var chunks = new List<LLMStreamChunk>();
+
+        var result = await executor.ExecuteLlmStepAsync(
+            executor.ResolveProvider(),
+            request,
+            (chunk, _) =>
+            {
+                chunks.Add(chunk);
+                return Task.CompletedTask;
+            },
+            CancellationToken.None);
+
+        result.ToolCalls.Should().ContainSingle(call =>
+            call.Id == "skill-call-1" &&
+            call.Name == "use_skill");
+        var started = chunks.Should().ContainSingle(chunk => chunk.ToolCallStarted != null).Which
+            .ToolCallStarted!;
+        started.ToolCall.Id.Should().Be("skill-call-1");
+        started.Presentation.Kind.Should().Be(ToolPresentationKind.Skill);
+        started.Presentation.Skill.SkillName.Should().Be("release-readiness-review");
+        started.Presentation.Skill.Source.Should().Be("local-or-remote");
     }
 
     [Fact]
@@ -1783,6 +1829,28 @@ public sealed class ChatRuntimeStreamingBufferTests
             CapturedContext = AgentToolRequestContext.Current;
             return Task.FromResult("""{"result":"tool-ok"}""");
         }
+    }
+
+    private sealed class ResolvedSkillPresentationTool : IAgentTool
+    {
+        public string Name => "use_skill";
+        public string Description => "Loads one skill.";
+        public string ParametersSchema => "{}";
+        public ToolPresentationDescriptor Presentation =>
+            ToolPresentationDescriptors.Skill(Name, "Use skill", Description, string.Empty, "local-or-remote");
+
+        public ToolPresentationDescriptor ResolvePresentation(string argumentsJson) =>
+            ToolPresentationDescriptors.Skill(
+                Name,
+                "release-readiness-review",
+                Description,
+                argumentsJson.Contains("release-readiness-review", StringComparison.Ordinal)
+                    ? "release-readiness-review"
+                    : string.Empty,
+                "local-or-remote");
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
     }
 
     private sealed class StreamingProvider(
