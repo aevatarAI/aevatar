@@ -851,7 +851,13 @@ public sealed class WorkflowDocumentExtractToolTests
                 InputFileRefs = [ToChatInputFileRef(result.FileRef)],
             };
 
-            var output = await tool.ExecuteAsync("{}");
+            var outcome = await tool.ExecuteWithOutcomeAsync("agent-call-1", tool.Name, "{}");
+            var output = outcome.ResultJson;
+
+            outcome.Receipt.Should().NotBeNull();
+            outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+            outcome.Receipt.ResultJson.Should().Be(output);
+            outcome.Receipt.ResultJson.Should().NotContain("tool_outcome_unknown");
 
             using var document = JsonDocument.Parse(output);
             var rootElement = document.RootElement;
@@ -866,6 +872,24 @@ public sealed class WorkflowDocumentExtractToolTests
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task WorkflowFileExtractionAgentTool_ShouldAdvertiseOnlySupportedSpreadsheetArguments()
+    {
+        var source = new WorkflowFileExtractionAgentToolSource(
+            new WorkflowDocumentExtractToolSource(CreateFileArtifactPort(Path.GetTempPath())),
+            new WorkflowSpreadsheetExtractToolSource(
+                CreateFileArtifactPort(Path.GetTempPath()),
+                Microsoft.Extensions.Options.Options.Create(new WorkflowSpreadsheetExtractOptions())));
+        var agentTools = await source.DiscoverToolsAsync();
+        var tool = agentTools.Should().ContainSingle(x => x.Name == "spreadsheet_extract").Subject;
+
+        using var schema = JsonDocument.Parse(tool.ParametersSchema);
+        var properties = schema.RootElement.GetProperty("properties");
+        properties.TryGetProperty("fileRef", out _).Should().BeTrue();
+        properties.TryGetProperty("worksheet", out _).Should().BeFalse();
+        properties.TryGetProperty("maxRows", out _).Should().BeFalse();
     }
 
     [Fact]

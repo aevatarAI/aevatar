@@ -41,16 +41,37 @@ public sealed class WorkflowFileExtractionAgentToolSource(
             "document_extract" =>
                 "{\"type\":\"object\",\"properties\":{\"fileRef\":{\"type\":\"object\"},\"extraction_kind\":{\"type\":\"string\",\"enum\":[\"text\",\"schema_bound_json\"]},\"maxChars\":{\"type\":\"integer\"},\"schema_contract\":{\"type\":\"object\"}},\"additionalProperties\":true}",
             "spreadsheet_extract" =>
-                "{\"type\":\"object\",\"properties\":{\"fileRef\":{\"type\":\"object\"},\"worksheet\":{\"type\":\"string\"},\"maxRows\":{\"type\":\"integer\"}},\"additionalProperties\":true}",
+                "{\"type\":\"object\",\"properties\":{\"fileRef\":{\"type\":\"object\"}},\"additionalProperties\":true}",
             _ => "{\"type\":\"object\"}",
         };
 
         public bool IsReadOnly => true;
 
+        public async Task<AgentToolTerminalOutcome> ExecuteWithOutcomeAsync(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            CancellationToken ct = default)
+        {
+            var result = await ExecuteWorkflowToolAsync(argumentsJson, ct).ConfigureAwait(false);
+            var resultJson = ToResultJson(result);
+            return new AgentToolTerminalOutcome(
+                resultJson,
+                ToReceipt(callId, toolName, resultJson, result.Failure));
+        }
+
         public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
+            var result = await ExecuteWorkflowToolAsync(argumentsJson, ct).ConfigureAwait(false);
+            return ToResultJson(result);
+        }
+
+        private async Task<WorkflowToolExecutionResult> ExecuteWorkflowToolAsync(
+            string argumentsJson,
+            CancellationToken ct)
+        {
             var context = AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty;
-            var result = await _tool.ExecuteAsync(
+            return await _tool.ExecuteAsync(
                 new WorkflowToolExecutionRequest(
                     string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson,
                     Normalize(context.WorkflowRuntime.ParentRunId) ?? Normalize(context.Request.RequestId) ?? string.Empty,
@@ -64,7 +85,26 @@ public sealed class WorkflowFileExtractionAgentToolSource(
                     IdempotencyKey: Normalize(context.Request.IdempotencyKey) ?? string.Empty,
                     ScheduleId: Normalize(context.Schedule.ScheduleId) ?? string.Empty),
                 ct).ConfigureAwait(false);
+        }
 
+        private AgentToolReceipt ToReceipt(
+            string callId,
+            string toolName,
+            string resultJson,
+            WorkflowToolExecutionFailure? failure) =>
+            new()
+            {
+                CallId = callId ?? string.Empty,
+                ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+                Status = failure == null ? AgentToolReceiptStatus.Success : AgentToolReceiptStatus.Error,
+                ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+                ResultJson = resultJson ?? string.Empty,
+                ErrorCode = failure?.ErrorCode ?? string.Empty,
+                ErrorMessage = failure?.ErrorMessage ?? string.Empty,
+            };
+
+        private static string ToResultJson(WorkflowToolExecutionResult result)
+        {
             if (result.Failure == null || !string.IsNullOrWhiteSpace(result.ResultJson))
                 return result.ResultJson;
 
