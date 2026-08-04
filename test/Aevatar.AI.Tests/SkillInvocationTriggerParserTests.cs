@@ -141,4 +141,38 @@ public sealed class SkillInvocationTriggerParserTests
         trigger.Name.Should().Be("alpha");
         trigger.Arguments.Should().Be("body line one\nbody line two");
     }
+
+    [Fact]
+    public void TryParse_WhenChineseTextExplicitlyNamesSkill_ShouldReturnNaturalLanguageTrigger()
+    {
+        var text = "请先搜索并使用精确名称为 invoice-ocr-policy-review 的 skill，然后实际运行。";
+
+        SkillInvocationTriggerParser.TryParse(text, "cli", out var trigger).Should().BeTrue();
+
+        trigger.Name.Should().Be("invoice-ocr-policy-review");
+        trigger.Arguments.Should().Be(text);
+        trigger.OriginalText.Should().Be(text);
+        trigger.TriggerToken.Should().Be("natural-language-skill");
+    }
+
+    [Theory]
+    [InlineData("Please use skill invoice-ocr-policy-review for this request.")]
+    [InlineData("Please load the exact invoice-ocr-policy-review skill for this request.")]
+    public void TryParse_WhenEnglishTextExplicitlyNamesSkill_ShouldReturnNaturalLanguageTrigger(string text)
+    {
+        SkillInvocationTriggerParser.TryParse(text, "web", out var trigger).Should().BeTrue();
+
+        trigger.Name.Should().Be("invoice-ocr-policy-review");
+        trigger.Arguments.Should().Be(text);
+        trigger.TriggerToken.Should().Be("natural-language-skill");
+    }
+
+    [Theory]
+    [InlineData("The invoice-ocr-policy-review skill is available.")]
+    [InlineData("Do not use skill invoice-ocr-policy-review for this request.")]
+    [InlineData("不要使用精确名称为 invoice-ocr-policy-review 的 skill。")]
+    public void TryParse_WhenSkillIsOnlyMentionedOrNegated_ShouldIgnoreIt(string text)
+    {
+        SkillInvocationTriggerParser.TryParse(text, "cli", out _).Should().BeFalse();
+    }
 }
