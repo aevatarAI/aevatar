@@ -77,6 +77,7 @@ public sealed class AgentWorkflowToolSourceAdapter(
                     null,
                     Normalize(request.StepId),
                     null),
+                InputFileRefs = request.InputFileRefs.Select(ToChatFileRef).ToArray(),
                 ExecutionOwner = AgentToolExecutionOwners.WorkflowRun(request.RunId),
             });
             _logger.LogInformation(
@@ -135,6 +136,32 @@ public sealed class AgentWorkflowToolSourceAdapter(
 
             return AgentWorkflowToolReceiptOutcomeMapper.Map(outcome.Receipt, outcome.ResultJson);
         }
+
+        private static ChatFileRef ToChatFileRef(WorkflowFileRef fileRef) =>
+            new()
+            {
+                FileId = Normalize(fileRef.FileId) ?? string.Empty,
+                ArtifactId = Normalize(fileRef.ArtifactId) ?? string.Empty,
+                SourceKind = fileRef.SourceKind switch
+                {
+                    WorkflowFileSourceKind.ChatInput => ChatFileSourceKind.ChatInput,
+                    WorkflowFileSourceKind.FormUpload => ChatFileSourceKind.FormUpload,
+                    WorkflowFileSourceKind.ConnectedServiceResource => ChatFileSourceKind.ConnectedServiceResource,
+                    WorkflowFileSourceKind.ExternalResource => ChatFileSourceKind.ExternalResource,
+                    WorkflowFileSourceKind.Generated => ChatFileSourceKind.Generated,
+                    _ => ChatFileSourceKind.Unspecified,
+                },
+                SourceMessageId = Normalize(fileRef.SourceMessageId) ?? string.Empty,
+                SourceResourceKey = Normalize(fileRef.SourceResourceKey) ?? string.Empty,
+                FileName = Normalize(fileRef.FileName) ?? string.Empty,
+                MediaType = Normalize(fileRef.MediaType) ?? string.Empty,
+                SizeBytes = fileRef.SizeBytes,
+                Sha256 = Normalize(fileRef.Sha256) ?? string.Empty,
+                CreatedAtUnixMs = fileRef.CreatedAtUnixMs,
+                ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs,
+                OwnerRunId = Normalize(fileRef.OwnerRunId) ?? string.Empty,
+                OwnerScopeId = Normalize(fileRef.OwnerScopeId) ?? string.Empty,
+            };
 
         private static string? Normalize(string? value) =>
             string.IsNullOrWhiteSpace(value) ? null : value.Trim();

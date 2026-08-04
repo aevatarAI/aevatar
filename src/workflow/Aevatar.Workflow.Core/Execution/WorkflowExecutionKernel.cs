@@ -504,7 +504,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 return;
             }
 
-            await DispatchStepAsync(next, evt.Output ?? string.Empty, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
+            await DispatchStepAsync(next, evt.Output ?? string.Empty, state.InputFileRefs, state, WorkflowStepDispatchKind.Forward, ctx, ct);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
@@ -1097,7 +1097,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     }
                     else
                     {
-                        await DispatchStepAsync(next, output, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
+                        await DispatchStepAsync(next, output, state.InputFileRefs, state, WorkflowStepDispatchKind.Forward, ctx, ct);
                     }
 
                     return true;
@@ -1118,7 +1118,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     var fallbackInput = string.IsNullOrWhiteSpace(evt.Output)
                         ? evt.Error ?? string.Empty
                         : evt.Output;
-                    await DispatchStepAsync(fallback, fallbackInput, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
+                    await DispatchStepAsync(fallback, fallbackInput, state.InputFileRefs, state, WorkflowStepDispatchKind.Forward, ctx, ct);
                     return true;
                 }
             default:

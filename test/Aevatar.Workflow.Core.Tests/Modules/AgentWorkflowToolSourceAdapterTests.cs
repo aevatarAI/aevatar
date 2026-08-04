@@ -226,6 +226,19 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                     },
                 },
                 RuntimeContext: WorkflowToolRuntimeContext.Empty,
+                InputFileRefs:
+                [
+                    new WorkflowFileRef
+                    {
+                        FileId = "wf-file-1",
+                        ArtifactId = "workflow-file://wf-file-1",
+                        SourceKind = WorkflowFileSourceKind.ChatInput,
+                        FileName = "invoice.pdf",
+                        MediaType = "application/pdf",
+                        OwnerRunId = "run-1",
+                        OwnerScopeId = "scope-1",
+                    },
+                ],
                 IdempotencyKey: "idem-agent-tool-1",
                 ScheduleId: " schedule-1 "),
             CancellationToken.None);
@@ -248,6 +261,16 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         agentTool.ObservedCallId.Should().Be("call-1");
         agentTool.ObservedIdempotencyKey.Should().Be("idem-agent-tool-1");
         agentTool.ObservedScheduleId.Should().Be("schedule-1");
+        agentTool.ObservedInputFileRefs.Should().ContainSingle().Which.Should().BeEquivalentTo(new ChatFileRef
+        {
+            FileId = "wf-file-1",
+            ArtifactId = "workflow-file://wf-file-1",
+            SourceKind = ChatFileSourceKind.ChatInput,
+            FileName = "invoice.pdf",
+            MediaType = "application/pdf",
+            OwnerRunId = "run-1",
+            OwnerScopeId = "scope-1",
+        });
         agentTool.ObservedExternalMetadata.Should().NotContainKey("ExecutionId");
         AgentToolRequestContext.Current.Should().BeNull();
     }
@@ -700,6 +723,8 @@ public sealed class AgentWorkflowToolSourceAdapterTests
 
         public string? ObservedScheduleId { get; private set; }
 
+        public IReadOnlyList<ChatFileRef> ObservedInputFileRefs { get; private set; } = [];
+
         public IReadOnlyDictionary<string, string> ObservedExternalMetadata { get; private set; } =
             new Dictionary<string, string>(StringComparer.Ordinal);
 
@@ -736,6 +761,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             ObservedCallId = AgentToolRequestContext.CallId;
             ObservedIdempotencyKey = AgentToolRequestContext.IdempotencyKey;
             ObservedScheduleId = AgentToolRequestContext.Current?.Schedule.ScheduleId;
+            ObservedInputFileRefs = AgentToolRequestContext.Current?.InputFileRefs ?? [];
             ObservedExternalMetadata = AgentToolRequestContext.Current?.ExternalMetadata
                 ?? new Dictionary<string, string>(StringComparer.Ordinal);
             ObservedWorkflowRuntime = AgentToolRequestContext.Current?.WorkflowRuntime
