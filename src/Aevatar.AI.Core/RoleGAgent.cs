@@ -2578,10 +2578,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 requestSummary.InputPartCount);
 
             // ─── AG-UI: TEXT_MESSAGE_START ───
-            await PersistSessionProgressAsync(
-                request.SessionId,
-                progress => progress.TextStarted = new RoleChatTextStartedProgress { AgentId = Id },
-                streamCt);
+            await EnsureSessionTextStartedAsync(request.SessionId, streamCt);
             streamCt.ThrowIfCancellationRequested();
             await PublishAsync(new TextMessageStartEvent
             {
@@ -3615,6 +3612,24 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             return;
 
         await PersistDomainEventAsync(CreateSessionProgress(sessionId, configure), ct);
+    }
+
+    protected Task EnsureSessionTextStartedAsync(
+        string? sessionId,
+        CancellationToken ct = default)
+    {
+        var normalizedSessionId = sessionId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalizedSessionId) ||
+            (State.Sessions.TryGetValue(normalizedSessionId, out var session) &&
+             session.LastProgressSequence > 0))
+        {
+            return Task.CompletedTask;
+        }
+
+        return PersistSessionProgressAsync(
+            normalizedSessionId,
+            progress => progress.TextStarted = new RoleChatTextStartedProgress { AgentId = Id },
+            ct);
     }
 
     private RoleChatSessionProgressedEvent CreateSessionProgress(

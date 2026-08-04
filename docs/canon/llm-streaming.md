@@ -87,7 +87,9 @@ classifier 的普通 provider failure JSON fallback 只作为主链上的非超�
 结束伪造成功终态。所有用户可见 text/reasoning/media/tool progress 均提交为统一的
 `RoleChatSessionProgressedEvent`，由 workflow Projection Pipeline 映射为 run-event；禁止恢复
 workflow 专用 transient chunk 协议。completion 中的 typed terminal tail 只补齐 usage、fallback text、
-text end 与 authorization，role terminal/replay 不得冒充 workflow 根 actor 的 run terminal。
+text end 与 authorization，role terminal/replay 不得冒充 workflow 根 actor 的 run terminal。每个 role
+session 的首个 progress 必须且只能是 `text_started`；approval continuation 与 recovery 重入也必须通过
+同一个幂等 start gate，禁止在新 message id 上直接发送 text delta，或因 recovery 重复发送 start。
 
 审批通过后的 tool resume 是新的 actor turn，必须创建新的 Host-owned deadline；其 token 连续覆盖
 caller token refresh、request tool catalog materialization 和 approved tool execution，禁止使用

@@ -1879,6 +1879,15 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             sourceTerminal.Model.Should().Be("workflow-approval-model");
             sourceTerminal.FailureCode.Should().BeEmpty();
             sourceTerminal.AuthorizationRequired.Should().BeNull();
+            var continuationProgress = (await eventStore.GetEventsAsync(agent.Id))
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>())
+                .Where(progress => progress.SessionId == "approval-continuation")
+                .ToArray();
+            continuationProgress.Select(progress => progress.PayloadCase).Should().Equal(
+                RoleChatSessionProgressedEvent.PayloadOneofCase.TextStarted,
+                RoleChatSessionProgressedEvent.PayloadOneofCase.TextDelta);
+            continuationProgress.Select(progress => progress.Sequence).Should().Equal(1, 2);
         }
 
         [Fact]
@@ -1960,6 +1969,15 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                 .OfType<WorkflowLlmInvocationCompletedEvent>()
                 .Should().ContainSingle(completed =>
                     completed.Success && completed.SessionId == "session-approval");
+            var targetProgress = (await eventStore.GetEventsAsync(agent.Id))
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>())
+                .Where(progress => progress.SessionId == continuationSessionId)
+                .ToArray();
+            targetProgress.Should().ContainSingle(progress =>
+                progress.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.TextStarted);
+            targetProgress[0].PayloadCase.Should()
+                .Be(RoleChatSessionProgressedEvent.PayloadOneofCase.TextStarted);
         }
 
         [Fact]

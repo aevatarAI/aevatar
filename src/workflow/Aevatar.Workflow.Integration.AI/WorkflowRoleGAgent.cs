@@ -123,10 +123,7 @@ public class WorkflowRoleGAgent(
                     return;
                 }
 
-                await PersistSessionProgressAsync(
-                    chatRequest.SessionId,
-                    progress => progress.TextStarted = new RoleChatTextStartedProgress { AgentId = Id },
-                    streamCt);
+                await EnsureSessionTextStartedAsync(chatRequest.SessionId, streamCt);
                 streamCt.ThrowIfCancellationRequested();
                 await PublishAsync(new WorkflowLlmInvocationStartedEvent
                 {
@@ -1229,6 +1226,8 @@ public class WorkflowRoleGAgent(
         {
             return null;
         }
+        await EnsureSessionTextStartedAsync(request.SessionId, streamCt);
+        streamCt.ThrowIfCancellationRequested();
         var turnCatalog = await BuildRequestToolCatalogAsync(intent.AgentToolScope, toolContext, streamCt);
         streamCt.ThrowIfCancellationRequested();
         var firstToolContextFileRef = toolContext.InputFileRefs.FirstOrDefault();
