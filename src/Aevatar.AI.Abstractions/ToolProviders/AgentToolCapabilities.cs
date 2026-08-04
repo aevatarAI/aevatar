@@ -37,4 +37,12 @@ public static class AgentToolCapabilities
     /// surfaces. Eligibility is a property of the tool, so the channel path stays name-agnostic.
     /// </summary>
     public const string RequiresHumanSession = "surface.requires_human_session";
+
+    /// <summary>
+    /// Surface signal: a tool carrying this capability observes or acts on prior state rather
+    /// than consuming the current turn's input files. Channel reply generation hides it when the
+    /// current turn has input file refs, so the model cannot answer a fresh file-processing
+    /// request by observing an old run instead of starting the current-file workflow path.
+    /// </summary>
+    public const string ExcludeWhenCurrentInputFilesPresent = "surface.exclude_when_current_input_files_present";
 }

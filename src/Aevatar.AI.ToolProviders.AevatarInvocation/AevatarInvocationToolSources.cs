@@ -283,7 +283,7 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
         WorkflowRunBackgroundDeliveryReceipt? WorkflowRunDelivery);
 }
 
-internal sealed class ObserveRunTool : IAevatarInvocationReadOnlyTool
+internal sealed class ObserveRunTool : IAevatarInvocationReadOnlyTool, IAgentToolCapabilityDescriptor
 {
     private readonly AevatarInvocationDispatcher _dispatcher;
 
@@ -300,6 +300,9 @@ internal sealed class ObserveRunTool : IAevatarInvocationReadOnlyTool
     public string ParametersSchema => AevatarInvocationToolSchemas.ObserveRun;
 
     public bool IsReadOnly => true;
+
+    public IReadOnlyCollection<string> Capabilities { get; } =
+        [AgentToolCapabilities.ExcludeWhenCurrentInputFilesPresent];
 
     public string ReadOnlySubjectIdPropertyName => "run_id";
 
