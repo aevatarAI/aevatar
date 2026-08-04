@@ -41,10 +41,9 @@ hierarchy, while the backend contract controls what the UI may claim, filter,
 persist, or execute. The frontend must degrade honestly rather than inventing
 data to make a mockup appear complete.
 
-The source package was imported from
-`/Users/xiezixin/Downloads/mocks/workflow-activity-vnext/`. The repository copy
-is the reviewable branch artifact and must be used by later implementation
-work; the Downloads path is provenance only.
+The user-provided source package was imported byte-for-byte. The repository
+copy is the reviewable, portable branch artifact and must be used by later
+implementation work; no developer-local source path is a dependency.
 
 ## Production Data Truth Rule
 
@@ -304,7 +303,7 @@ The Excalidraw frame order is the review order and acceptance checklist:
 | --- | --- | --- |
 | 01 Workflows - catalogue | Searchable, compact Workflow table with New workflow, Open, and conditional Run actions | Do not show Last Run, revision numbers, or callable state unless returned by an authoritative contract |
 | 02 New workflow - direct creation | Describe, Start blank, Import YAML, and Template create Workflow drafts directly | Every successful path persists through the draft API before navigating to the editor |
-| 03 Describe - generated Workflow draft | Description generates connected nodes and opens the common editor | Generation is not persistence; create the returned document as a draft, then navigate using the returned `workflowId` |
+| 03 Describe - generated Workflow draft | Description generates connected nodes and opens the common editor | Generation is not persistence; create the returned document as a draft, observe it until readable when creation returns `202`, then navigate using the returned `workflowId` |
 | 04 Start blank - empty Workflow draft | Empty connected-node canvas with Add node and Edit YAML | Publish and Run remain disabled until the current document passes real validation |
 | 05 Import YAML - imported Workflow draft | YAML is parsed and validated before draft creation | Parse errors stay in the creation surface and do not create partial drafts |
 | 06 Template - populated Workflow draft | A chosen template creates an independent editable draft | Templates are versioned frontend product content unless an authoritative catalogue already exists; they are never pretend backend records |
@@ -336,7 +335,15 @@ observatory summary lacks a Workflow ID and names are neither unique nor
 stable. Consequently, the Excalidraw `Last Run` cell is omitted until an
 authoritative join key exists.
 
-`Open` always uses the row's real `workflowId`. `Run` follows this policy:
+`Open` always uses the row's real `workflowId` and preserves the row's source
+kind. A draft row opens its authoritative draft. A committed-only row may load
+through the existing committed fallback with `draftExists=false`; it is an
+immutable source until the user explicitly saves a draft copy. That first
+save uses draft creation, not draft update. The create response's
+`workflowId` becomes canonical after materialization, and the editor replaces
+the route if it differs from the committed source ID.
+
+`Run` follows this policy:
 
 - A validated draft may run through the reviewed scope draft-run endpoint.
 - A published Workflow may run only if an explicit callable
@@ -359,10 +366,21 @@ All four creation choices end in the same persisted draft and same editor:
    template ID is frontend product content, never reused as the new
    `workflowId`.
 
-Creation buttons enter a stable pending state, reject duplicate submission,
-and navigate only after the create response returns the persisted identity.
-On failure, user input remains editable and the page offers retry. There is no
-optimistic route built from a locally generated Workflow ID.
+Creation buttons enter a stable pending state and reject duplicate submission.
+A scoped create may return either a materialized draft or a `202 Accepted`
+receipt whose `readiness.readable` is `false` and whose stage is
+`projection_pending`. For that receipt, retain the real `workflowId`,
+`commandId`, and readiness message; show an observing state; and poll the
+existing draft GET by exact scope and ID until the read model is readable.
+Navigate only after the materialized response or a successful authoritative
+GET returns the draft.
+
+A bounded observation timeout is delayed materialization, not create failure.
+It keeps the accepted receipt and creation input available and offers another
+readiness check for the same ID. It must not automatically repeat the create
+POST, fabricate a readable draft, or route into a transient `404`. Non-`404`
+query failures remain real errors. There is no optimistic route built from a
+locally generated Workflow ID.
 
 ### Common Editor
 
@@ -698,6 +716,21 @@ The current `src/shared/studio/api.ts` already exposes
 and `saveWorkflow`. Reuse those typed boundaries rather than issuing ad hoc
 fetches from components.
 
+For a scoped create, `createWorkflowDraft` can return
+`StudioWorkflowSaveResult.kind = "accepted"` with a
+`StudioWorkflowDraftCreateAcceptedReceipt`. The receipt is command acceptance,
+not a readable draft. Reuse the existing accepted-to-materialized behavior:
+query `getWorkflowDraftFile(receipt.workflowId, scopeId)`, treat bounded `404`
+responses as projection pending, and enter the editor only after the query
+succeeds. Preserve the receipt on timeout so retry observes the same command
+result rather than creating a duplicate draft.
+
+`getWorkflow` can fall back to a committed scope Workflow and marks it with
+`draftExists=false`. `saveWorkflow` intentionally creates a new workspace
+draft on its first save. The implementation must use the returned draft ID,
+wait through the same accepted-to-materialized contract, and replace the
+committed-only route identity if the created draft ID differs.
+
 ### Generation And Editing
 
 ```text
@@ -868,7 +901,10 @@ graph dependency unless an existing capability is demonstrably insufficient.
 
 - Implement the authoritative Workflow catalogue.
 - Implement Describe, blank, YAML import, and versioned template creation.
-- Navigate only with the Workflow ID returned by draft persistence.
+- Reconcile `202 projection_pending` receipts to a readable draft before
+  navigation, without resubmitting create on observation timeout.
+- Open committed-only Workflows as explicit source state; first Save creates a
+  draft and replaces the route with the returned materialized draft ID.
 
 ### Phase 3: Common Editor And Run
 
@@ -908,8 +944,13 @@ The expected high-value coverage is:
 - Activity adapter tests prove query encoding, scope handling, response
   decoding, unknown status preservation, detail/graph separation, and fork
   receipt decoding;
-- a Workflows route test proves each creation path persists a draft before
-  editor navigation and retains input on failure;
+- a Workflows route test proves each creation path handles both materialized
+  and `202 projection_pending` create results, enters the editor only after an
+  authoritative draft GET succeeds, retains the receipt/input on timeout, and
+  never resubmits create as an observation retry;
+- a committed-only editor test proves first Save calls draft create rather
+  than update, waits for materialization, and replaces the route with the
+  returned draft ID without treating the committed source ID as the draft ID;
 - an editor/Run route test proves Accepted/Running does not claim Activity
   persistence and Observed appears only after an authoritative Run response;
 - Activity route tests cover loading, empty, error, server filter changes,
@@ -956,11 +997,9 @@ meaningfully validates the changed surface; use package lint when cross-cutting
 scope makes a narrow command misleading.
 
 Before installing dependencies, starting the frontend, opening it for browser
-QA, or running an integration-style command in a linked worktree, run:
-
-```bash
-/usr/bin/python3 /Users/xiezixin/.codex/hooks/sync_worktree_env.py --cwd "$PWD"
-```
+QA, or running an integration-style command in a linked worktree, follow the
+active local `AGENTS.md` worktree environment synchronization instructions.
+Do not copy a developer-specific hook path into shared implementation docs.
 
 Before OAuth browser verification, confirm without printing dotenv values that
 the actual origin exactly matches both `NYXID_REDIRECT_URI` and
@@ -993,7 +1032,12 @@ are true:
 - The route `scopeId` is retained across navigation and sent only through
   scope-validating backend contracts.
 - A user can create a persisted draft with all four creation methods and enter
-  one common connected-node editor without creating a member.
+  one common connected-node editor without creating a member; a `202`
+  create receipt remains Accepted/Observing until the exact scoped draft GET
+  confirms readability.
+- A committed-only Workflow remains a distinct source: first Save creates a
+  draft, observes materialization, and adopts the returned draft ID instead of
+  updating or assuming identity equality with the committed Workflow.
 - Workflow, member, definition actor, published service, and Run identities are
   never inferred from one another.
 - Run shows Accepted/Running separately from Activity observation and never

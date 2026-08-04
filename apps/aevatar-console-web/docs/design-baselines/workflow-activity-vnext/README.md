@@ -121,7 +121,7 @@ failures rather than undocumented implementation choices.
 
 ## Imported Source
 
-这个目录是根据 2026-08-03 会议结论重新整理的独立版本。`/Users/xiezixin/Downloads/mocks/` 下的原始画板、生成器、HTML 和 PNG 作为来源资产逐字节导入，没有修改。仓库额外增加的 `README.md` 和 `verify-baseline.py` 负责说明规范优先级并验证基线完整性，不属于原始原型资产。
+这个目录是根据 2026-08-03 会议结论重新整理的独立版本。用户提供的原始画板、生成器、HTML 和 PNG 作为来源资产逐字节导入，没有修改。仓库额外增加的 `README.md` 和 `verify-baseline.py` 负责说明规范优先级并验证基线完整性，不属于原始原型资产。仓库内副本是后续实现与评审的唯一可移植基准；本机来源路径不构成依赖。
 
 ## 文件
 

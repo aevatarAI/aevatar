@@ -163,7 +163,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | UP-00 | Authenticate and enter the scoped workbench | 01, 13 | Existing callback returns to the original vNext URL and real scoped queries begin |
 | UP-01 | Browse and search Workflows | 01, 13 | Authoritative catalogue rows or a truthful empty/error state |
-| UP-02 | Create by Describe | 02, 03 | Draft-create response returns the `workflowId` used by the editor route |
+| UP-02 | Create by Describe | 02, 03 | Draft create returns a real `workflowId`, and the exact scoped draft GET confirms it is readable before editor navigation |
 | UP-03 | Start blank and add the first node | 02, 04 | Persisted draft opens; valid document state controls Save/Run/Publish |
 | UP-04 | Import YAML | 02, 05 | Server parse/validation succeeds before draft creation |
 | UP-05 | Create from Template | 02, 06 | Bundled template is copied into a newly persisted independent draft |
@@ -267,6 +267,26 @@ successful empty response produces the New workflow empty state.
 - Do not use sample rows when one catalogue source fails. Preserve valid rows
   from the successful source and identify the failed source.
 
+### Shared Draft Create Observation Contract
+
+UP-02 through UP-05 share one create-completion rule. A scoped draft create may
+return a materialized draft or a `202 Accepted` receipt with a real
+`workflowId`, command receipt, and `readiness.stage = projection_pending` while
+`readiness.readable = false`.
+
+- A materialized draft can enter the editor immediately using its returned ID.
+- An accepted receipt enters an explicit Accepted/Observing state and polls
+  `GET /api/workspace/workflow-drafts/:workflowId?scopeId=:scopeId`.
+- A bounded `404` during that observation window means the projection is still
+  pending; it does not mean the create failed and it does not authorize a
+  second create request.
+- Navigation occurs only after the exact scoped GET returns the readable draft.
+- A timeout preserves the receipt, input, and returned ID. Retry checks the
+  same ID again. It never silently resubmits the create POST or fabricates a
+  local draft.
+- Any non-`404` read failure is shown as its real authorization, decoding, or
+  network error and remains distinct from projection delay.
+
 ## UP-02: Create A Workflow By Description
 
 **Intent:** Turn a natural-language automation goal into an editable Workflow
@@ -292,14 +312,19 @@ draft.
 5. Confirming creation calls
    `POST /api/workspace/workflow-drafts?scopeId=:scopeId`.
 6. Only the draft-create response establishes the real `workflowId`.
-7. The router opens that ID in the common connected-node editor.
+7. If creation is accepted but not readable, the UI follows the shared create
+   observation contract for that exact scope and ID.
+8. The router opens the common connected-node editor only after the draft is
+   materialized or the authoritative GET confirms readability.
 
 **Completion:** The editor loads the persisted draft and shows the generated
 nodes and edges. Generation success alone is not completion.
 
 **Recovery:** Generator, parser, validator, and draft-create failures preserve
-the user's description and any safe generated preview. Retry repeats only the
-failed explicit action. No local ID or demonstration draft is routed as saved.
+the user's description and any safe generated preview. A create-observation
+timeout preserves the accepted receipt and retries only the GET for the same
+ID. Retry repeats only the failed explicit action. No local ID or demonstration
+draft is routed as saved.
 
 ## UP-03: Start Blank And Add The First Node
 
@@ -312,8 +337,10 @@ failed explicit action. No local ID or demonstration draft is routed as saved.
 1. The user chooses `Start blank`.
 2. The frontend creates a minimal, well-formed Workflow document as explicit
    frontend authoring content.
-3. The draft-create API persists it and returns its `workflowId`.
-4. The editor opens an empty connected-node canvas.
+3. The draft-create API returns its authoritative `workflowId` and follows the
+   shared create observation contract when the draft is not readable yet.
+4. The editor opens an empty connected-node canvas only after readability is
+   confirmed.
 5. `Add node` opens the searchable Node library.
 6. Choosing a node adds it to the shared document state.
 7. Selecting the node opens Node configuration; `Edit YAML` opens the same
@@ -341,8 +368,9 @@ insert a sample node and call the draft valid.
    needed.
 4. Parse and validation feedback is shown against the YAML source.
 5. Only a successful document can be submitted to the draft-create API.
-6. The returned `workflowId` opens the common editor with parsed nodes and
-   edges.
+6. The returned `workflowId` follows the shared create observation contract;
+   the common editor opens with parsed nodes and edges only after readability
+   is confirmed.
 
 **Completion:** The editor represents the same authoritative document in
 canvas and YAML modes.
@@ -365,8 +393,10 @@ Workflow.
    real template API is introduced and reviewed later.
 3. The user selects and previews a versioned template.
 4. Its Workflow document is copied, parsed, and validated.
-5. Draft creation persists a new resource and returns a new `workflowId`.
-6. The common editor opens the copied nodes and edges.
+5. Draft creation returns a new authoritative `workflowId` and follows the
+   shared create observation contract when projection is pending.
+6. The common editor opens the copied nodes and edges only after readability
+   is confirmed.
 
 **Completion:** Editing the new draft cannot mutate the bundled template or
 another user's Workflow.
@@ -388,6 +418,8 @@ model.
 ```text
 GET /api/workspace/workflow-drafts/:workflowId?scopeId=:scopeId
 PUT /api/workspace/workflow-drafts/:workflowId?scopeId=:scopeId
+POST /api/workspace/workflow-drafts?scopeId=:scopeId
+GET /api/scopes/:scopeId/workflows/:workflowId
 POST /api/editor/parse-yaml
 POST /api/editor/serialize-yaml
 POST /api/editor/validate
@@ -396,15 +428,21 @@ POST /api/editor/normalize
 
 **Steps:**
 
-1. The route loads the exact Workflow under the route scope.
+1. The route loads the exact Workflow under the route scope and retains whether
+   the source is an existing draft or a committed-only Workflow.
 2. Canvas, Node library, Node configuration, and YAML panel edit one document
    state.
 3. A node or YAML change marks the draft dirty.
 4. Validation exposes exact actionable problems and controls executable
    actions.
-5. Save serializes and updates the authoritative draft.
-6. Save success clears dirty state only after the real update succeeds.
-7. Leaving while dirty prompts Save, Discard, or Stay.
+5. Save serializes and updates an existing authoritative draft.
+6. For a committed-only source (`draftExists=false`), first Save creates a new
+   draft instead of calling draft update. It follows the shared create
+   observation contract and replaces the route with the returned readable
+   draft ID, which may differ from the committed source ID.
+7. Save success clears dirty state only after the real update succeeds or the
+   newly created draft becomes readable.
+8. Leaving while dirty prompts Save, Discard, or Stay.
 
 **Publish boundary:** The Excalidraw retains a Publish control because the
 existing Studio supports publication/binding behavior. Publication must use
@@ -413,7 +451,9 @@ confirmations. It is not a prerequisite for draft Run, and it must not invent a
 `publishedServiceId` after save acceptance.
 
 **Completion:** The saved document can be reloaded from the API with the
-expected Workflow identity and content.
+expected draft identity and content. For a committed-only source, that identity
+is the create response's materialized draft ID, not an assumed reuse of the
+committed Workflow ID.
 
 **Identity guard:** This path never creates a fake Team/member, never sends
 `workflowId` to a member endpoint, and never assumes publication makes the
@@ -732,7 +772,8 @@ or completion evidence.
 | Checkpoint | The UI may say | Required evidence | The UI must not say |
 | --- | --- | --- | --- |
 | Workflow generated | Generated preview ready | Real generator response | Saved |
-| Workflow created | Draft created | Draft-create response with `workflowId` | Created from a local ID |
+| Workflow create accepted | Accepted/Observing | Real `202` receipt with `workflowId` and `projection_pending` readiness | Draft readable or editor ready |
+| Workflow created | Draft created | Materialized create response or exact scoped draft GET succeeds | Created from a local ID or receipt alone |
 | Workflow saved | Saved | Real draft update success and clean document | Saved after timer-only feedback |
 | Run submitted | Submitting | User action in progress | Running |
 | Run accepted | Accepted/Running | Real SSE event or accepted receipt | Observed in Activity |
@@ -751,6 +792,7 @@ or completion evidence.
 | Generator fails | User description | Generator error | Retry generation |
 | YAML parse fails | YAML input | Exact parse feedback | Edit and parse again |
 | Draft create fails | Creation inputs/preview | Create error | Retry create |
+| Draft projection is delayed | Accepted receipt, returned ID, and creation inputs | Accepted/Observing or delayed readiness | Retry the exact draft GET; do not repeat create |
 | Draft save fails | Dirty document | Save error | Retry or continue editing |
 | Run submission fails | Input and document | Submission error | Retry explicit Run |
 | Run stream disconnects | Last real receipt/event | Disconnected or unknown status | Reconnect or open Activity |
@@ -802,7 +844,13 @@ Every frame has a corresponding user path:
   switching uses the existing `ConsoleLanguageSwitch`/Umi locale state.
 - All four creation methods converge on a real persisted draft and the same
   connected-node editor.
-- A real returned `workflowId` is required before editor navigation.
+- A real returned `workflowId` and a successful materialized response or exact
+  scoped draft GET are required before editor navigation; a `202` receipt alone
+  is not readability.
+- A create-observation timeout retries the same draft ID and never silently
+  resubmits draft creation.
+- Opening a committed-only Workflow preserves `draftExists=false`; first Save
+  creates and observes a new draft, then adopts its returned ID.
 - Draft Run reaches Accepted/Running before it can reach Activity observation.
 - Activity observation requires a real observatory `runId` and `stateVersion`.
 - Workflow-specific Activity filtering uses only an exact returned
