@@ -1,10 +1,18 @@
 # Chat Top Entry MVP PRD
 
 Date: 2026-07-01
-Status: Simplified for product/design review
+Status: Archived historical concept; not a current implementation contract
 Target surface: `apps/aevatar-console-web`
 Related prototype: `../prototypes/2026-07-01-chat-top-entry-prototype.html`
 Related PNG: `../prototypes/2026-07-01-chat-top-entry-prototype.png`
+
+> **Superseded behavior:** The current Chat surface uses backend-backed history
+> and typed runtime events. Assistant prose that asks the user to choose or
+> confirm something remains a completed text turn, and the user continues
+> through the composer. Do not infer `needs_confirmation` or `creating` from
+> message text, and do not render a generic confirmation action from prose.
+> Approval controls must come from an explicit typed approval or intervention
+> event. The material below is retained only as the July 2026 design record.
 
 ## Product Thesis
 
