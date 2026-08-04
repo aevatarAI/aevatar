@@ -452,7 +452,7 @@ public sealed class AevatarInvocationDispatcher
                 .Where(static item => !string.IsNullOrWhiteSpace(item))
                 .Select(static item => item.Trim())
                 .ToArray();
-        var workflowName = request.WorkflowId.Trim();
+        var workflowName = request.WorkflowId!.Trim();
         var actorId = string.IsNullOrWhiteSpace(request.ActorId) ? null : request.ActorId.Trim();
         if (isManagedWorkflowRuntime)
         {
@@ -468,6 +468,7 @@ public sealed class AevatarInvocationDispatcher
                 workflowRuntimeContext,
                 workflowName,
                 workflowYamls,
+                toolContext,
                 ct);
         }
 
@@ -735,6 +736,7 @@ public sealed class AevatarInvocationDispatcher
         AgentWorkflowRuntimeContext workflowRuntimeContext,
         string workflowName,
         IReadOnlyList<string>? workflowYamls,
+        AgentToolExecutionContext? toolContext,
         CancellationToken ct)
     {
         if (!string.IsNullOrWhiteSpace(request.ActorId))
@@ -765,18 +767,21 @@ public sealed class AevatarInvocationDispatcher
                 : workflowRuntimeContext.RootRunId.Trim(),
             RequestedDepth = Math.Max(0, workflowRuntimeContext.Depth) + 1,
         };
-        managedStart.InputFileRefs.Add(request.Inputs.InputParts
+        var effectiveInputParts = ToEffectiveInputParts(request.Inputs, toolContext);
+        managedStart.InputFileRefs.Add(effectiveInputParts
             .Select(static part => ToWorkflowEventFileRef(part.FileRef))
             .Where(static fileRef => fileRef != null)
             .Select(static fileRef => fileRef!.Clone()));
         var firstManagedFileRef = managedStart.InputFileRefs.FirstOrDefault();
         _logger.LogWarning(
-            "Managed sub-workflow input file refs resolved: workflowId={WorkflowId} parentRunId={ParentRunId} parentStepId={ParentStepId} commandId={CommandId} explicitInputPartCount={ExplicitInputPartCount} managedInputFileRefCount={ManagedInputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+            "Managed sub-workflow input file refs resolved: workflowId={WorkflowId} parentRunId={ParentRunId} parentStepId={ParentStepId} commandId={CommandId} explicitInputPartCount={ExplicitInputPartCount} explicitInputFileRefCount={ExplicitInputFileRefCount} ambientToolContextFileRefCount={AmbientToolContextFileRefCount} managedInputFileRefCount={ManagedInputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
             workflowName,
             parentRunId,
             parentStepId,
             commandId,
             request.Inputs.InputParts.Count,
+            CountExplicitInputFileRefs(request.Inputs),
+            toolContext?.InputFileRefs.Count ?? 0,
             managedStart.InputFileRefs.Count,
             firstManagedFileRef?.FileId ?? string.Empty,
             firstManagedFileRef?.ArtifactId ?? string.Empty,

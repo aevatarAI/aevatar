@@ -1103,6 +1103,9 @@ public sealed partial class WorkflowRunGAgent
             .Select(fileRef =>
             {
                 var clone = fileRef.Clone();
+                if (!string.IsNullOrWhiteSpace(clone.OwnerRunId))
+                    return clone;
+
                 clone.OwnerRunId = runId;
                 clone.OwnerScopeId = scopeId ?? string.Empty;
                 return clone;
@@ -1119,6 +1122,9 @@ public sealed partial class WorkflowRunGAgent
 
         foreach (var fileRef in fileRefs)
         {
+            if (!ShouldBindInputFileArtifact(fileRef, runId))
+                continue;
+
             try
             {
                 await _fileArtifactOwnership.BindOwnerAsync(
@@ -1136,6 +1142,9 @@ public sealed partial class WorkflowRunGAgent
 
         return true;
     }
+
+    private static bool ShouldBindInputFileArtifact(WorkflowFileRef fileRef, string runId) =>
+        string.Equals(fileRef.OwnerRunId?.Trim(), runId, StringComparison.Ordinal);
 
     private static ApplicationFileArtifactRef ToApplicationFileArtifactRef(WorkflowFileRef source) =>
         new()

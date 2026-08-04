@@ -438,6 +438,45 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
     }
 
     [Fact]
+    public async Task ChatRequest_WhenInputFileRefAlreadyHasOwner_ShouldNotRebindOwner()
+    {
+        var runId = "run-file-prebound-" + Guid.NewGuid().ToString("N");
+        var ownershipPort = new RecordingWorkflowFileArtifactOwnershipPort();
+        var harness = await CreateRunAsync(runId, fileOwnershipPort: ownershipPort);
+        var request = CreateNotificationTargetRequest();
+        request.InputParts.Add(new WorkflowChatInputPartPayload
+        {
+            Kind = WorkflowChatInputPartKind.File,
+            FileRef = new WorkflowFileRef
+            {
+                FileId = "file-1",
+                ArtifactId = "workflow-file://file-1",
+                SourceKind = WorkflowFileSourceKind.ChatInput,
+                OwnerRunId = "source-run",
+                OwnerScopeId = "source-scope",
+            },
+        });
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom(
+            "api",
+            request,
+            envelopeId: "command-1",
+            correlationId: "correlation-1"));
+
+        ownershipPort.BindRequests.Should().BeEmpty();
+        var fileRef = CommittedEvents<WorkflowRunExecutionStartedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Subject
+            .InputFileRefs
+            .Should()
+            .ContainSingle()
+            .Subject;
+        fileRef.OwnerRunId.Should().Be("source-run");
+        fileRef.OwnerScopeId.Should().Be("source-scope");
+    }
+
+    [Fact]
     public async Task RelayedOwnRunCompletion_WithNotificationTarget_ShouldDispatchAdoptedTerminal()
     {
         var harness = await CreateStartedRunAsync(includeCompletionNotificationTarget: true);
@@ -1155,6 +1194,22 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
             string? ownerScopeId,
             CancellationToken cancellationToken = default) =>
             ValueTask.FromException(new InvalidOperationException("file owner binding failed"));
+    }
+
+    private sealed class RecordingWorkflowFileArtifactOwnershipPort
+        : Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactOwnershipPort
+    {
+        public List<(Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef FileRef, string OwnerRunId, string? OwnerScopeId)> BindRequests { get; } = [];
+
+        public ValueTask BindOwnerAsync(
+            Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef fileRef,
+            string ownerRunId,
+            string? ownerScopeId,
+            CancellationToken cancellationToken = default)
+        {
+            BindRequests.Add((fileRef, ownerRunId, ownerScopeId));
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class EmptyEventModuleFactory : IEventModuleFactory<IWorkflowExecutionContext>
