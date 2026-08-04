@@ -320,6 +320,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         result.ToolCalls.Should().ContainSingle(call =>
             call.Id == "skill-call-1" &&
             call.Name == "use_skill");
+        chunks.Should().NotContain(chunk => chunk.DeltaToolCall != null);
         var started = chunks.Should().ContainSingle(chunk => chunk.ToolCallStarted != null).Which
             .ToolCallStarted!;
         started.ToolCall.Id.Should().Be("skill-call-1");

@@ -1249,7 +1249,14 @@ public sealed class ChatRuntime
                 LLMStreamChunk? normalizedChunk;
                 try
                 {
-                    normalizedChunk = NormalizeStreamChunk(chunk, toolCalls, full, fullReasoning, ref usage, ref finishReason);
+                    normalizedChunk = NormalizeStreamChunk(
+                        chunk,
+                        toolCalls,
+                        full,
+                        fullReasoning,
+                        ref usage,
+                        ref finishReason,
+                        emitToolCallDeltas: !emitResolvedToolCallStarts);
                 }
                 catch (Exception ex)
                 {
@@ -1444,11 +1451,13 @@ public sealed class ChatRuntime
         StringBuilder fullContent,
         StringBuilder fullReasoningContent,
         ref TokenUsage? usage,
-        ref string? finishReason)
+        ref string? finishReason,
+        bool emitToolCallDeltas = true)
     {
         ToolCall? normalizedToolCall = null;
         if (chunk.DeltaToolCall != null)
             normalizedToolCall = toolCalls.TrackDelta(chunk.DeltaToolCall);
+        var emittedToolCall = emitToolCallDeltas ? normalizedToolCall : null;
 
         if (!string.IsNullOrEmpty(chunk.DeltaContent))
             fullContent.Append(chunk.DeltaContent);
@@ -1465,7 +1474,7 @@ public sealed class ChatRuntime
         if (string.IsNullOrEmpty(chunk.DeltaContent) &&
             string.IsNullOrEmpty(chunk.DeltaReasoningContent) &&
             chunk.DeltaContentPart == null &&
-            normalizedToolCall == null &&
+            emittedToolCall == null &&
             !chunk.IsLast &&
             chunk.Usage == null &&
             chunk.ToolReceipt == null)
@@ -1478,7 +1487,7 @@ public sealed class ChatRuntime
             DeltaContent = chunk.DeltaContent,
             DeltaContentPart = chunk.DeltaContentPart,
             DeltaReasoningContent = chunk.DeltaReasoningContent,
-            DeltaToolCall = normalizedToolCall,
+            DeltaToolCall = emittedToolCall,
             Usage = chunk.Usage,
             IsLast = chunk.IsLast,
             ToolReceipt = chunk.ToolReceipt?.Clone(),
