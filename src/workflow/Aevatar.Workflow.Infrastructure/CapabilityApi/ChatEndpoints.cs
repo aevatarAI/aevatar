@@ -198,7 +198,8 @@ public static class WorkflowCapabilityEndpoints
         CancellationToken ct = default,
         Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedHook = null,
         IFileArtifactIngressPort? fileIngressPort = null,
-        bool allowEmptyInputForResolvedMemberWorkflow = false)
+        bool allowEmptyInputForResolvedMemberWorkflow = false,
+        WorkflowDefinitionBinding? resolvedDefinitionBinding = null)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var serviceProvider = http.Features.Get<IServiceProvidersFeature>()?.RequestServices;
@@ -248,8 +249,11 @@ public static class WorkflowCapabilityEndpoints
                 return;
             }
 
-            var result = await chatRunService.ExecuteAsync(
+            var request = AttachResolvedDefinitionBinding(
                 normalizedRequest.Request!,
+                resolvedDefinitionBinding);
+            var result = await chatRunService.ExecuteAsync(
+                request,
                 async (frame, token) =>
                 {
                     await writer.WriteAsync(frame, token);
@@ -295,6 +299,13 @@ public static class WorkflowCapabilityEndpoints
             await WriteStreamErrorFrameAsync(writer, ex, logger, CancellationToken.None);
         }
     }
+
+    private static WorkflowChatRunRequest AttachResolvedDefinitionBinding(
+        WorkflowChatRunRequest request,
+        WorkflowDefinitionBinding? resolvedDefinitionBinding) =>
+        resolvedDefinitionBinding == null
+            ? request
+            : request with { ResolvedDefinitionBinding = resolvedDefinitionBinding };
 
     private static async Task HandleHttpChat(
         HttpContext http,

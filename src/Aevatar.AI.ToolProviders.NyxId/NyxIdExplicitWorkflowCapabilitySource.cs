@@ -150,16 +150,6 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
         var capability = BuildCapability(request, service.Slug);
         if (executionMode == ExternalCapabilityExecutionMode.Durable)
         {
-            if (capability.NyxIdUserRequest.ExecutionPolicy.Risk != NyxIdOperationRisk.ReadOnly ||
-                !capability.NyxIdUserRequest.ExecutionPolicy.AllowedExecutionModes.Contains(
-                    ExternalCapabilityExecutionMode.Durable))
-            {
-                return Failure(
-                    selector, executionMode, ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
-                    "NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED",
-                    "This explicit request can only be admitted for interactive execution.", source, capability);
-            }
-
             var durableAuthorizationSource = await _durableAuthorizationCatalog.InspectAsync(
                 access,
                 request.UserServiceId,

@@ -71,13 +71,21 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
 
     public AgentToolCallSafety GetCallSafety(string argumentsJson)
     {
-        var policy = AgentToolRequestContext.Current?.OperationAdmission?.ExecutionPolicy;
-        return IsValidExecutionPolicy(policy)
-            ? new AgentToolCallSafety(
-                policy!.Approval == AgentToolOperationApproval.Required,
-                policy.Risk == AgentToolOperationRisk.ReadOnly,
-                policy.Risk == AgentToolOperationRisk.Destructive)
-            : new AgentToolCallSafety(null, false, false);
+        var context = AgentToolRequestContext.Current;
+        var policy = context?.OperationAdmission?.ExecutionPolicy;
+        if (!IsValidExecutionPolicy(policy))
+            return new AgentToolCallSafety(null, false, false);
+
+        // Binder admission authorizes this exact workflow call site. NyxID remains the authority
+        // for downstream operation approval after the request reaches its proxy.
+        var proofBoundWorkflowCall =
+            context!.InvocationSurface == AgentToolInvocationSurface.WorkflowToolCall;
+        return new AgentToolCallSafety(
+            proofBoundWorkflowCall
+                ? false
+                : policy!.Approval == AgentToolOperationApproval.Required,
+            policy!.Risk == AgentToolOperationRisk.ReadOnly,
+            policy.Risk == AgentToolOperationRisk.Destructive);
     }
 
     public AgentToolReceipt? CreateResultReceipt(
@@ -232,8 +240,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             AgentToolOperationRisk.ReadOnly =>
                 policy.Approval == AgentToolOperationApproval.None,
             AgentToolOperationRisk.Write or AgentToolOperationRisk.Destructive =>
-                policy.Approval == AgentToolOperationApproval.Required &&
-                !policy.AllowedExecutionModes.Contains(AgentToolOperationExecutionMode.Durable),
+                policy.Approval == AgentToolOperationApproval.Required,
             _ => false,
         };
     }

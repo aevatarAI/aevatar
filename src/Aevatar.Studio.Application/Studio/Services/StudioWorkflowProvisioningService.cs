@@ -137,6 +137,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             suppliedExplicitRequestConfirmations,
             request,
             ct);
+        ValidatePersistedAdmissionCapabilities(capabilityAdmissionPlan);
         var trustedAdmission = new WorkflowCapabilityAdmissionContext(
             callerId,
             executionMode: executionMode,
@@ -193,15 +194,10 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 teamId,
                 memberId,
                 publishedServiceId,
-                bindReceipt,
-                workflowId,
-                revisionId,
                 displayName,
-                workflowYaml,
                 request.Prompt ?? string.Empty,
                 callerCredential,
                 request,
-                capabilityAdmissionPlan,
                 timing,
                 ct);
         }
@@ -419,15 +415,10 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         string teamId,
         string memberId,
         string publishedServiceId,
-        StudioMemberWorkflowBindingResult bindReceipt,
-        string workflowId,
-        string revisionId,
         string displayName,
-        string workflowYaml,
         string prompt,
         ProvisionWorkflowCallerCredential callerCredential,
         ProvisionWorkflowRequest request,
-        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan,
         ProvisionScheduleTiming timing,
         CancellationToken ct)
     {
@@ -448,16 +439,6 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             Enabled = true,
             ScheduleMode = timing.ScheduleMode,
             OneShotFireAt = timing.OneShotFireAt,
-            AcceptedBinding = new StudioMemberWorkflowAcceptedBindingContext(
-                teamId,
-                publishedServiceId,
-                NormalizeOptional(bindReceipt.WorkflowId) ?? workflowId,
-                NormalizeOptional(bindReceipt.RevisionId) ?? revisionId)
-            {
-                WorkflowEvidence = BuildTrustedWorkflowEvidence(
-                    workflowYaml,
-                    capabilityAdmissionPlan),
-            },
         };
 
         var preflight = await _schedulePort.PreflightForWriteAsync(baseScheduleRequest, ct);
@@ -501,20 +482,6 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             $"Provisioning for service '{publishedServiceId}' exhausted {maxGenerations} deleted schedule generations.");
     }
 
-    private static ScheduledInvocationWorkflowEvidence BuildTrustedWorkflowEvidence(
-        string workflowYaml,
-        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan)
-    {
-        var workflow = new WorkflowParser().Parse(workflowYaml);
-        var authorizationDependencies = WorkflowAuthorizationDependencyEvaluator.Evaluate(workflow);
-        var admittedCapabilities = WorkflowCapabilityAdmissionPlanIntegrity.DistinctCapabilities(capabilityAdmissionPlan);
-        return new ScheduledInvocationWorkflowEvidence(
-            StateVersion: 0,
-            ExternalCapabilities: admittedCapabilities,
-            OwnerLLMRouteRequired: authorizationDependencies.OwnerLlmRouteRequired,
-            ServiceGrantRequirement: WorkflowServiceGrantRequirementClassifier.Classify(admittedCapabilities));
-    }
-
     /// <summary>
     /// A schedule (and therefore a run) is created when there is something to
     /// fire: a recurring monitor (caller-supplied <see cref="ProvisionWorkflowRequest.Cron"/>)
@@ -522,6 +489,24 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     /// </summary>
     private static bool ShouldSchedule(ProvisionWorkflowRequest request) =>
         request.RunImmediately || !string.IsNullOrWhiteSpace(request.Cron);
+
+    private static void ValidatePersistedAdmissionCapabilities(
+        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan)
+    {
+        foreach (var admission in capabilityAdmissionPlan.InvocationAdmissions)
+        {
+            if (admission.Capability?.CapabilityCase is
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.HostConnector or
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService or
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest)
+            {
+                continue;
+            }
+
+            throw new InvalidOperationException(
+                "Workflow capability admission contains an unsupported capability.");
+        }
+    }
 
     /// <summary>
     /// Resolves schedule timing as one typed value. A caller-supplied cron remains

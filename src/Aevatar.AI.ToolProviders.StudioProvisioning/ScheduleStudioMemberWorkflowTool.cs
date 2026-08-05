@@ -3,8 +3,10 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
+using Aevatar.Workflow.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
@@ -21,14 +23,17 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IStudioMutationReceiptT
     };
 
     private readonly IStudioMemberWorkflowSchedulePort _schedulePort;
+    private readonly IStudioMemberWorkflowDurableAdmissionPort? _durableAdmissionPort;
     private readonly ILogger<ScheduleStudioMemberWorkflowTool>? _logger;
 
     public ScheduleStudioMemberWorkflowTool(
         IStudioMemberWorkflowSchedulePort schedulePort,
-        ILogger<ScheduleStudioMemberWorkflowTool>? logger = null)
+        ILogger<ScheduleStudioMemberWorkflowTool>? logger = null,
+        IStudioMemberWorkflowDurableAdmissionPort? durableAdmissionPort = null)
     {
         _schedulePort = schedulePort ?? throw new ArgumentNullException(nameof(schedulePort));
         _logger = logger;
+        _durableAdmissionPort = durableAdmissionPort;
     }
 
     public string Name => "aevatar_schedule_member_workflow";
@@ -37,7 +42,8 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IStudioMutationReceiptT
         "Create or update a schedule for an existing Studio member's already-bound workflow in the caller's current Aevatar scope. " +
         "Use this when the user already has or just created an m-... Studio member and asks to schedule that same member workflow. " +
         "Supply member_id, schedule_cron, and schedule_timezone, plus optional prompt/display_name. " +
-        "This tool does not create standalone wf-... workflow members, does not accept workflow_yaml, and does not bind or rebind workflows. " +
+        "If the serving revision needs durable admission, this tool may publish a new immutable durable revision and return durable_revision_propagating until that exact revision is invoke-ready in the read model. " +
+        "A bind/publish acknowledgement is not invoke-ready evidence. This tool does not create standalone wf-... workflow members and does not accept workflow_yaml. " +
         "Do not provide scope_id, published_service_id, service_id, or tokens because scope, service identity, and caller subject are resolved from platform context.";
 
     public string ParametersSchema => """
@@ -168,6 +174,43 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IStudioMutationReceiptT
         try
         {
             var preflight = await _schedulePort.PreflightForWriteAsync(request, ct);
+            if (!preflight.Success &&
+                IsDurableAdmissionFailure(preflight.FailureCode) &&
+                _durableAdmissionPort is not null)
+            {
+                var durableAdmission = await _durableAdmissionPort.AdmitAsync(
+                    new StudioMemberWorkflowDurableAdmissionRequest(
+                        scopeId,
+                        memberId,
+                        BuildDurableAdmissionContext(resolvedAuthorization.OwnerSubject)),
+                    ct);
+                if (!MatchesAdmissionIdentity(durableAdmission, scopeId, memberId))
+                {
+                    return ErrorJson(
+                        "durable_admission_identity_mismatch",
+                        "The durable admission result did not match the authenticated Studio member identity.");
+                }
+
+                if (durableAdmission.Status == StudioMemberWorkflowDurableAdmissionStatus.RevisionAccepted)
+                    return DurableRevisionPropagatingJson(durableAdmission);
+
+                if (!durableAdmission.ReadyForSchedule)
+                {
+                    return ErrorJson(
+                        "durable_admission_status_invalid",
+                        "The durable admission result did not provide an invoke-ready revision.");
+                }
+
+                request = BuildPinnedScheduleRequest(request, durableAdmission);
+                preflight = await _schedulePort.PreflightForWriteAsync(request, ct);
+                if (preflight.Success && !MatchesAdmissionTarget(preflight.Plan, durableAdmission))
+                {
+                    return ErrorJson(
+                        "durable_revision_target_mismatch",
+                        "The schedule authorization preflight did not resolve the exact durable published service revision.");
+                }
+            }
+
             if (!preflight.Success)
                 return ErrorJson(preflight.FailureCode.ToString(), preflight.Detail);
 
@@ -231,6 +274,77 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IStudioMutationReceiptT
             return ErrorJson("member_workflow_schedule_failed", $"Studio member workflow schedule failed: {ex.GetType().Name}");
         }
     }
+
+    private static WorkflowCapabilityAdmissionContext BuildDurableAdmissionContext(string ownerSubject) =>
+        new(
+            ownerSubject,
+            NyxIdCallerCredentialSelection.SourceReadableUserBearerOrNull(
+                AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
+                    AgentToolRequestContext.Current?.Credentials)),
+            AgentToolRequestContext.NyxIdOrgToken,
+            ExternalCapabilityExecutionMode.Durable);
+
+    private static bool IsDurableAdmissionFailure(
+        ScheduledInvocationAuthorizationFailureCode failureCode) =>
+        failureCode is ScheduledInvocationAuthorizationFailureCode.DurableAdmissionRequired or
+            ScheduledInvocationAuthorizationFailureCode.DurableRequestGrantMismatch;
+
+    private static bool MatchesAdmissionIdentity(
+        StudioMemberWorkflowDurableAdmissionResult result,
+        string scopeId,
+        string memberId) =>
+        string.Equals(result.ScopeId, scopeId, StringComparison.Ordinal) &&
+        string.Equals(result.MemberId, memberId, StringComparison.Ordinal) &&
+        Normalize(result.TeamId) is not null &&
+        Normalize(result.WorkflowId) is not null &&
+        Normalize(result.PublishedServiceId) is not null &&
+        Normalize(result.ServingRevisionId) is not null &&
+        Normalize(result.TargetRevisionId) is not null;
+
+    private static bool MatchesAdmissionTarget(
+        ScheduledInvocationAuthorizationPlan? plan,
+        StudioMemberWorkflowDurableAdmissionResult admission)
+    {
+        var target = plan?.InvocationTarget?.StudioMember;
+        return target is not null &&
+               string.Equals(target.ScopeId, admission.ScopeId, StringComparison.Ordinal) &&
+               string.Equals(target.TeamId, admission.TeamId, StringComparison.Ordinal) &&
+               string.Equals(target.MemberId, admission.MemberId, StringComparison.Ordinal) &&
+               string.Equals(target.DraftWorkflowId, admission.WorkflowId, StringComparison.Ordinal) &&
+               string.Equals(target.PublishedServiceId, admission.PublishedServiceId, StringComparison.Ordinal) &&
+               string.Equals(target.WorkflowRevisionId, admission.TargetRevisionId, StringComparison.Ordinal);
+    }
+
+    private static StudioMemberWorkflowScheduleRequest BuildPinnedScheduleRequest(
+        StudioMemberWorkflowScheduleRequest request,
+        StudioMemberWorkflowDurableAdmissionResult admission) =>
+        request with
+        {
+            TeamId = admission.TeamId,
+            AcceptedBinding = new StudioMemberWorkflowAcceptedBindingContext(
+                admission.TeamId,
+                admission.PublishedServiceId,
+                admission.WorkflowId,
+                admission.TargetRevisionId),
+        };
+
+    private static string DurableRevisionPropagatingJson(
+        StudioMemberWorkflowDurableAdmissionResult admission) =>
+        JsonSerializer.Serialize(
+            new ScheduleStudioMemberWorkflowErrorJson(
+                new ScheduleStudioMemberWorkflowErrorBody(
+                    "durable_revision_propagating",
+                    "The durable workflow bind/publish was accepted, but the exact revision is not yet visible as invoke-ready. Retry after readiness is observed.",
+                    ScopeId: admission.ScopeId,
+                    TeamId: admission.TeamId,
+                    MemberId: admission.MemberId,
+                    WorkflowId: admission.WorkflowId,
+                    PublishedServiceId: admission.PublishedServiceId,
+                    ServingRevisionId: admission.ServingRevisionId,
+                    TargetRevisionId: admission.TargetRevisionId,
+                    BindingOperation: admission.BindingOperation,
+                    BindingStatus: admission.BindingStatus)),
+            s_jsonOptions);
 
     private static string ToPlanConflictCode(string code) => code switch
     {
@@ -357,7 +471,16 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IStudioMutationReceiptT
     private sealed record ScheduleStudioMemberWorkflowErrorBody(
         string Code,
         string Message,
-        string? AuthorizationPlanMismatchReason = null);
+        string? AuthorizationPlanMismatchReason = null,
+        string? ScopeId = null,
+        string? TeamId = null,
+        string? MemberId = null,
+        string? WorkflowId = null,
+        string? PublishedServiceId = null,
+        string? ServingRevisionId = null,
+        string? TargetRevisionId = null,
+        string? BindingOperation = null,
+        string? BindingStatus = null);
 }
 
 internal static class StudioMemberWorkflowScheduleAuthorizationResolver

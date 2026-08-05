@@ -280,7 +280,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
     [InlineData(NyxIdRequestMethod.Put, NyxIdOperationRisk.Write)]
     [InlineData(NyxIdRequestMethod.Patch, NyxIdOperationRisk.Write)]
     [InlineData(NyxIdRequestMethod.Delete, NyxIdOperationRisk.Destructive)]
-    public async Task InspectAsync_ShouldKeepMutatingDurableRequestsInteractiveOnly(
+    public async Task InspectAsync_ShouldAdmitMutatingDurableRequestsFromExactCatalogGrant(
         NyxIdRequestMethod method,
         NyxIdOperationRisk expectedRisk)
     {
@@ -290,15 +290,21 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
         var result = await source.InspectAsync(
             Access(), Selector(method), ExternalCapabilityExecutionMode.Durable, CancellationToken.None);
 
-        result.Status.Should().Be(ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable);
-        result.Blockers.Should().ContainSingle().Which.Code.Should()
-            .Be("NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED");
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
+        result.Blockers.Should().BeEmpty();
         result.SelectedCapability.NyxIdUserRequest.ExecutionPolicy.Risk.Should().Be(expectedRisk);
         result.SelectedCapability.NyxIdUserRequest.ExecutionPolicy.Approval.Should()
             .Be(NyxIdOperationApproval.Required);
         result.SelectedCapability.NyxIdUserRequest.ExecutionPolicy.AllowedExecutionModes.Should()
-            .Equal(ExternalCapabilityExecutionMode.Interactive);
-        catalog.ReadCount.Should().Be(0);
+            .Equal(
+                ExternalCapabilityExecutionMode.Interactive,
+                ExternalCapabilityExecutionMode.Durable);
+        result.Sources.Select(static source => source.SourceKind).Should().BeEquivalentTo(new[]
+        {
+            ExternalCapabilitySourceKind.NyxIdUserServices,
+            ExternalCapabilitySourceKind.DurableAuthorizationCatalog,
+        });
+        catalog.ReadCount.Should().Be(1);
     }
 
     [Theory]

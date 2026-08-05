@@ -65,6 +65,8 @@ public static class ServiceCollectionExtensions
             WorkflowArtifactCompatibilityPreflight>();
         services.TryAddSingleton<IWorkflowExplicitRequestPreviewService,
             WorkflowExplicitRequestPreviewService>();
+        services.TryAddTransient<IWorkflowDraftRunCapabilityAdmissionService,
+            WorkflowDraftRunCapabilityAdmissionService>();
 
         services.AddSingleton<IWorkflowDefinitionCatalog>(_ =>
         {
@@ -100,6 +102,7 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IWorkflowRunProvisioningPort>(),
                 sp.GetRequiredService<IWorkflowDefinitionParser>(),
                 sp.GetRequiredService<IWorkflowDefinitionCatalog>(),
+                sp.GetRequiredService<IWorkflowDraftRunCapabilityAdmissionService>(),
                 sp.GetRequiredService<WorkflowRunBehaviorOptions>()));
         services.TryAddSingleton<ICommandContextPolicy, DefaultCommandContextPolicy>();
         services.AddSingleton<ICommandTargetResolver<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunStartError>, WorkflowRunCommandTargetResolver>();

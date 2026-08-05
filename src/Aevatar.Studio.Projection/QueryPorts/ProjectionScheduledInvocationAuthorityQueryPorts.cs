@@ -51,20 +51,73 @@ public sealed class ProjectionScheduledInvocationWorkflowQueryPort(
             ServiceId = publishedServiceId.Trim(),
         };
         var catalog = await revisionCatalogReader.GetAsync(identity, ct);
+        var normalizedRevisionId = workflowRevisionId.Trim();
         if (catalog == null ||
-            !catalog.TryGetPreparedArtifact(workflowRevisionId.Trim(), out var artifact) ||
+            !catalog.TryGetPreparedArtifact(normalizedRevisionId, out var artifact) ||
             artifact.ImplementationKind != ServiceImplementationKind.Workflow ||
-            artifact.DeploymentPlan?.WorkflowPlan?.AuthorizationEvidence == null)
+            !string.Equals(artifact.RevisionId, normalizedRevisionId, StringComparison.Ordinal) ||
+            artifact.DeploymentPlan?.WorkflowPlan is not { } workflowPlan ||
+            workflowPlan.AuthorizationEvidence == null ||
+            workflowPlan.CapabilityAdmissionPlan == null ||
+            !HasMatchingAdmissionEvidence(workflowPlan, normalizedRevisionId))
         {
             return null;
         }
 
-        var evidence = artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence;
+        var evidence = workflowPlan.AuthorizationEvidence;
         return new ScheduledInvocationWorkflowEvidence(
             catalog.StateVersion,
             evidence.ExternalCapabilities.Select(static capability => capability.Clone()).ToArray(),
             evidence.OwnerLlmRouteRequired,
-            evidence.ServiceGrantRequirement);
+            evidence.ServiceGrantRequirement,
+            workflowPlan.CapabilityAdmissionPlan.Clone());
+    }
+
+    private static bool HasMatchingAdmissionEvidence(
+        WorkflowServiceDeploymentPlan workflowPlan,
+        string revisionId)
+    {
+        var plan = workflowPlan.CapabilityAdmissionPlan;
+        var evidence = workflowPlan.AuthorizationEvidence;
+        try
+        {
+            if (!string.Equals(
+                    plan.AdmissionDigest,
+                    WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(plan),
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var admittedCapabilities = WorkflowCapabilityAdmissionPlanIntegrity
+                .DistinctCapabilities(plan);
+            if (!admittedCapabilities
+                    .Select(WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey)
+                    .SequenceEqual(
+                        evidence.ExternalCapabilities
+                            .Select(WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey)
+                            .Order(StringComparer.Ordinal),
+                        StringComparer.Ordinal) ||
+                evidence.ServiceGrantRequirement !=
+                WorkflowServiceGrantRequirementClassifier.Classify(admittedCapabilities))
+            {
+                return false;
+            }
+
+            if (!WorkflowCapabilityAdmissionPlanIntegrity
+                    .RequiresExplicitRequestBindingIdentity(plan))
+            {
+                return true;
+            }
+
+            var bindingIdentity = WorkflowServiceDeploymentPlanIntegrity
+                .RequireExplicitBindingIdentity(workflowPlan.WorkflowId, workflowPlan.RevisionId);
+            return string.Equals(bindingIdentity.RevisionId, revisionId, StringComparison.Ordinal);
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 }
 

@@ -265,7 +265,8 @@ public sealed record WorkflowChatRunRequest(
     WorkflowConversationExecutionContext? ConversationContext = null,
     [property: JsonIgnore] string? CurrentTurnId = null,
     [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null,
-    [property: JsonIgnore] WorkflowCompletionNotificationTarget? CompletionNotificationTarget = null) : ICommandContextSeed
+    [property: JsonIgnore] WorkflowCompletionNotificationTarget? CompletionNotificationTarget = null,
+    [property: JsonIgnore] WorkflowDefinitionBinding? ResolvedDefinitionBinding = null) : ICommandContextSeed
 {
     string? ICommandContextSeed.CommandId => CommandIdSeed;
 

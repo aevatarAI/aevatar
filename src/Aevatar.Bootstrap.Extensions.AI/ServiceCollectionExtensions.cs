@@ -113,6 +113,7 @@ public sealed class AevatarAIFeatureOptions
     public string? ServiceInvokeNamespace { get; set; }
     public bool BypassServiceInvokeApproval { get; set; }
     public bool EnableWebTools { get; set; }
+    public string? WebSearchNyxIdBaseUrl { get; set; }
     public string? WebSearchNyxIdSlug { get; set; }
     public string? WebSearchApiBaseUrl { get; set; }
     public bool EnableWorkflowTools { get; set; }
@@ -1273,6 +1274,7 @@ public static class ServiceCollectionExtensions
     {
         services.AddWebTools(o =>
         {
+            o.NyxIdBaseUrl = options.WebSearchNyxIdBaseUrl;
             o.NyxIdSearchSlug = options.WebSearchNyxIdSlug;
             o.SearchApiBaseUrl = options.WebSearchApiBaseUrl;
         });

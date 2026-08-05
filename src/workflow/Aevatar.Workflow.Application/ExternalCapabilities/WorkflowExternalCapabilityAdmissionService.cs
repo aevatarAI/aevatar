@@ -61,16 +61,6 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
                     BuildNyxIdOperationSelectionRequiredReadiness(request.ExecutionMode));
             }
 
-            if (RequiresInteractiveExplicitRequest(request.ExecutionMode, invocation.Selector))
-            {
-                throw ExplicitRequestConfirmationFailure(
-                    invocation,
-                    null,
-                    request.ExecutionMode,
-                    "NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED",
-                    "This explicit request can only be admitted for interactive execution.");
-            }
-
             var readiness = await _readinessPort.InspectAsync(
                 new InspectExternalWorkflowCapabilityReadinessRequest(
                     request.Access,
@@ -302,25 +292,6 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             request.ExecutionMode,
             "NYXID_EXPLICIT_REQUEST_CONFIRMATION_BINDING_MISMATCH",
             "The explicit request confirmation does not match this workflow revision.");
-    }
-
-    private static bool RequiresInteractiveExplicitRequest(
-        ExternalCapabilityExecutionMode executionMode,
-        ExternalWorkflowCapabilitySelector selector)
-    {
-        if (executionMode != ExternalCapabilityExecutionMode.Durable ||
-            selector.SelectorCase != ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest)
-        {
-            return false;
-        }
-
-        return !NyxIdRequestSelectorContract.TryResolveRisk(
-                   selector.NyxIdRequest.Method,
-                   selector.NyxIdRequest.Risk,
-                   out var risk) ||
-               !NyxIdRequestSelectorContract.SupportsDurableExecution(
-                   selector.NyxIdRequest.Method,
-                   risk);
     }
 
     private static bool IsAttestedRiskAllowed(

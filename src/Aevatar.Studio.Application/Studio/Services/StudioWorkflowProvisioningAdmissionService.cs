@@ -197,13 +197,8 @@ internal sealed class StudioWorkflowProvisioningAdmissionService
                 case ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest:
                     {
                         var request = capability.NyxIdUserRequest;
-                        if (request.ExecutionPolicy?.Risk != NyxIdOperationRisk.ReadOnly ||
-                            !request.ExecutionPolicy.AllowedExecutionModes.Contains(
-                                ExternalCapabilityExecutionMode.Durable) ||
-                            request.Request?.Method is not (
-                                NyxIdRequestMethod.Get or
-                                NyxIdRequestMethod.Head or
-                                NyxIdRequestMethod.Options) ||
+                        if (request.ExecutionPolicy?.AllowedExecutionModes.Contains(
+                                ExternalCapabilityExecutionMode.Durable) != true ||
                             string.IsNullOrWhiteSpace(request.Request.UserServiceId))
                         {
                             requiredServices = [];

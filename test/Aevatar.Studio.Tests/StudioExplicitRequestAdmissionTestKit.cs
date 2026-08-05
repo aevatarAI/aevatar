@@ -36,12 +36,18 @@ internal static class StudioExplicitRequestAdmissionTestKit
 
     public static StudioWorkflowCapabilityAdmissionTestService CreateAdmissionService(
         NyxIdOperationRisk currentRisk = NyxIdOperationRisk.ReadOnly,
+        string ownerSubject = CallerId,
         Func<bool>? durableCatalogReady = null,
         long sourceVersion = 23,
         DateTimeOffset? sourceObservedAt = null)
     {
         var readiness = new ExternalWorkflowCapabilityReadinessService(
-            [new ExplicitRequestSource(currentRisk, durableCatalogReady, sourceVersion, sourceObservedAt)]);
+            [new ExplicitRequestSource(
+                currentRisk,
+                ownerSubject,
+                durableCatalogReady,
+                sourceVersion,
+                sourceObservedAt)]);
         var inner = new WorkflowExternalCapabilityAdmissionService(
             new RealWorkflowDefinitionParser(),
             readiness,
@@ -148,6 +154,7 @@ internal static class StudioExplicitRequestAdmissionTestKit
 
     private sealed class ExplicitRequestSource(
         NyxIdOperationRisk currentRisk,
+        string ownerSubject,
         Func<bool>? durableCatalogReady,
         long sourceVersion,
         DateTimeOffset? sourceObservedAt) :
@@ -204,7 +211,7 @@ internal static class StudioExplicitRequestAdmissionTestKit
             result.Sources.Add(new ExternalCapabilitySourceStamp
             {
                 SourceKind = ExternalCapabilitySourceKind.NyxIdUserServices,
-                SourceId = $"nyxid-keys:caller:{CallerId}",
+                SourceId = $"nyxid-keys:caller:{ownerSubject}",
                 SourceVersion = sourceVersion,
                 ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
                 FreshUntil = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(5)),
@@ -232,7 +239,7 @@ internal static class StudioExplicitRequestAdmissionTestKit
                 {
                     Authority = NyxIdAuthorizationAuthorities.NyxId,
                     OwnerKind = AuthorizationOwnerKind.Personal,
-                    OwnerSubject = CallerId,
+                    OwnerSubject = ownerSubject,
                 }),
                 SourceVersion = sourceVersion,
                 ObservedAt = Timestamp.FromDateTimeOffset(observedAt),

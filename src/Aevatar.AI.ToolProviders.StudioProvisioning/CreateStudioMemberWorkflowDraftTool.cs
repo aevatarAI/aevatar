@@ -6,7 +6,7 @@ using Aevatar.Studio.Application.Provisioning;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 
-internal sealed class CreateStudioMemberWorkflowDraftTool : IStudioMutationErrorReceiptTool
+internal sealed class CreateStudioMemberWorkflowDraftTool : IStudioMutationReceiptTool
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
@@ -27,9 +27,10 @@ internal sealed class CreateStudioMemberWorkflowDraftTool : IStudioMutationError
     public string Name => "aevatar_create_member_workflow_draft";
 
     public string Description =>
-        "Create or reuse a Studio workflow member and save an editable workflow draft in the caller's current Aevatar scope. " +
-        "Use this when authoring can describe the intended workflow but an exact NyxID operation is not yet available. " +
-        "The draft is not runnable and this tool does not bind, schedule, publish, or run it. " +
+        "Create or reuse a Studio workflow member and save any editable workflow draft in the caller's current Aevatar scope. " +
+        "After saving a workflow that authors capability.nyxid_request, call preview_workflow_explicit_requests with the returned workflow_id and exact workflow YAML before binding. " +
+        "A runnable=false draft is not bound yet; it is not evidence that the workflow can never become runnable. " +
+        "This tool does not bind, schedule, publish, or run the workflow. " +
         "Supply team_id, display_name, workflow_yaml, and optional member_id or workflow_id; scope comes from the session context.";
 
     public string ParametersSchema => """
@@ -66,6 +67,26 @@ internal sealed class CreateStudioMemberWorkflowDraftTool : IStudioMutationError
     public bool IsReadOnly => false;
     public bool IsDestructive => false;
     public string SideEffectKind => "studio.workflow_draft.create";
+    public string SubjectKind => "studio_workflow_draft";
+    public string? SuccessStatusPropertyName => "status";
+    public string? SuccessStatusValue => StudioMemberWorkflowDraftStatusNames.SaveAccepted;
+    public string SubjectIdPropertyName => "workflow_id";
+
+    public IReadOnlyList<StudioQueryToolJson.ResultPropertyRequirement> ResultRequirements { get; } = new[]
+    {
+        StudioQueryToolJson.StringProperty("scope_id"),
+        StudioQueryToolJson.StringProperty("team_id"),
+        StudioQueryToolJson.StringProperty("member_id"),
+        StudioQueryToolJson.StringProperty("workflow_id"),
+        StudioQueryToolJson.StringProperty("binding_status"),
+        StudioQueryToolJson.StringProperty("studio_url"),
+        StudioQueryToolJson.StringProperty("command_id"),
+        StudioQueryToolJson.StringProperty("ack_stage"),
+        StudioQueryToolJson.StringProperty("actor_id"),
+        StudioQueryToolJson.StringProperty("workspace_id"),
+        StudioQueryToolJson.ObjectProperty("readiness"),
+        StudioQueryToolJson.ArrayProperty("blockers"),
+    };
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
@@ -108,14 +129,17 @@ internal sealed class CreateStudioMemberWorkflowDraftTool : IStudioMutationError
         if (workflowYaml is null)
             return ErrorJson("invalid_arguments", "workflow_yaml is required.");
 
+        var memberId = Normalize(args.MemberId);
+        var workflowId = Normalize(args.WorkflowId);
+
         var request = new StudioMemberWorkflowDraftProvisioningRequest(
             scopeId,
             teamId,
             displayName,
             workflowYaml)
         {
-            MemberId = Normalize(args.MemberId),
-            WorkflowId = Normalize(args.WorkflowId),
+            MemberId = memberId,
+            WorkflowId = workflowId,
         };
 
         try

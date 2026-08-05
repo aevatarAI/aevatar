@@ -88,6 +88,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
             ServiceKey = BuildServiceKey(serviceIdentity),
             ServiceId = serviceIdentity?.ServiceId ?? string.Empty,
             ServiceEndpointId = target.ServiceInvocation?.EndpointId ?? string.Empty,
+            ServiceRevisionId = target.ServiceInvocation?.RevisionId ?? string.Empty,
             Prompt = ExtractPrompt(target.ServiceInvocation?.Payload, state.TriggerEnvelope),
             TargetActorId = state.TargetActorId ?? string.Empty,
             Deleted = state.Deleted,

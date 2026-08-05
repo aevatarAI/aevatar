@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Web;
 using Aevatar.AI.ToolProviders.Web.Tools;
@@ -9,6 +10,36 @@ namespace Aevatar.AI.Tests;
 
 public sealed class WebSearchToolExecutionTests
 {
+    [Fact]
+    public async Task DiscoverToolsAsync_WhenSearchBackendIsNotConfigured_ShouldExposeSearchWithTypedBlocker()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"results":[]}"""),
+        });
+        using var http = new HttpClient(handler);
+        var options = new WebToolOptions();
+        using var client = new WebApiClient(options, http);
+        var source = new WebAgentToolSource(options, client);
+        using var _ = AgentToolContextScope.Push(WithNyxIdAccessToken("token-1"));
+
+        var tools = await source.DiscoverToolsAsync();
+        var search = tools.Should().ContainSingle(tool => tool.Name == "web_search").Subject;
+        var result = await search.ExecuteAsync("""{"query":"official X API documentation"}""");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("error").GetString()
+            .Should().Be("search_backend_not_configured");
+        document.RootElement.GetProperty("message").GetString()
+            .Should().Contain("No search backend configured");
+        var receipt = search.CreateResultReceipt("call-search", search.Name, "{}", result);
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("search_backend_not_configured");
+        receipt.ResultJson.Should().Be(result);
+        handler.Requests.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task ExecuteAsync_ObjectPayload_ReturnsExpectedJson()
     {
@@ -30,6 +61,10 @@ public sealed class WebSearchToolExecutionTests
         item.GetProperty("title").GetString().Should().Be("Aevatar docs");
         item.GetProperty("url").GetString().Should().Be("https://docs.example/aevatar");
         item.GetProperty("snippet").GetString().Should().Be("typed mapper");
+        var receipt = sut.CreateResultReceipt("call-search", sut.Name, "{}", result);
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.ResultJson.Should().Be(result);
 
         var request = handler.Requests.Should().ContainSingle().Subject;
         request.RequestUri!.AbsoluteUri.Should().Be("https://search.test/search?q=aevatar%20docs&limit=3");
@@ -134,6 +169,59 @@ public sealed class WebSearchToolExecutionTests
                 "https://search.test/search?q=broken%20backend&limit=2");
     }
 
+    [Fact]
+    public async Task SearchAsync_WithFirecrawlNyxIdSlug_ShouldUseNyxIdSlugProxyAndMapFirecrawlWebResults()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """
+                {
+                  "success": true,
+                  "data": {
+                    "web": [
+                      {
+                        "title": "Lark send message",
+                        "url": "https://open.larksuite.com/document/server-docs/im-v1/message/create",
+                        "description": "Send messages by chat_id."
+                      }
+                    ]
+                  }
+                }
+                """),
+        });
+        using var http = new HttpClient(handler);
+        var client = new WebApiClient(
+            new WebToolOptions
+            {
+                NyxIdBaseUrl = "https://nyxid.example.test",
+                NyxIdSearchSlug = "api-firecrawl",
+            },
+            http);
+
+        var result = await client.SearchAsync("token-5", "lark send message docs", 3, CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        result.Results.Should().ContainSingle().Which.Should().Be(
+            new WebSearchResultItem(
+                "Lark send message",
+                "https://open.larksuite.com/document/server-docs/im-v1/message/create",
+                "Send messages by chat_id."));
+
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(HttpMethod.Post);
+        request.RequestUri!.AbsoluteUri.Should().Be(
+            "https://nyxid.example.test/api/v1/proxy/s/api-firecrawl/v2/search");
+        request.Headers.Authorization!.Scheme.Should().Be("Bearer");
+        request.Headers.Authorization!.Parameter.Should().Be("token-5");
+        request.Content.Should().NotBeNull();
+        var body = await request.Content!.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+        root.GetProperty("query").GetString().Should().Be("lark send message docs");
+        root.GetProperty("limit").GetInt32().Should().Be(3);
+    }
+
     private static WebSearchTool CreateTool(HttpClient http)
     {
         var options = new WebToolOptions
@@ -158,20 +246,31 @@ public sealed class WebSearchToolExecutionTests
     {
         public List<HttpRequestMessage> Requests { get; } = [];
 
-        protected override Task<HttpResponseMessage> SendAsync(
+        protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Requests.Add(CloneRequest(request));
-            return Task.FromResult(respond(request));
+            Requests.Add(await CloneRequestAsync(request, cancellationToken));
+            return respond(request);
         }
 
-        private static HttpRequestMessage CloneRequest(HttpRequestMessage request)
+        private static async Task<HttpRequestMessage> CloneRequestAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
         {
             var clone = new HttpRequestMessage(request.Method, request.RequestUri);
             foreach (var header in request.Headers)
                 clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+
+            if (request.Content != null)
+            {
+                var body = await request.Content.ReadAsStringAsync(cancellationToken);
+                clone.Content = new StringContent(body);
+                foreach (var header in request.Content.Headers)
+                    clone.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            }
+
             return clone;
         }
     }

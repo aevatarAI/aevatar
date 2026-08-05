@@ -16,19 +16,23 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
     private readonly IScheduledInvocationWorkflowEvidenceQueryPort _workflowQueryPort;
     private readonly IScheduledInvocationConnectorEvidenceQueryPort _connectorQueryPort;
     private readonly IScheduledInvocationOwnerLLMEvidenceQueryPort _ownerLLMQueryPort;
+    private readonly INyxIdScheduledOperationAuthorizationPort _operationAuthorizationPort;
 
     public ScheduledInvocationAuthorizationPlanner(
         INyxIdAuthorizationCatalogQueryPort catalogQueryPort,
         IScheduledInvocationMemberEvidenceQueryPort? memberQueryPort = null,
         IScheduledInvocationWorkflowEvidenceQueryPort? workflowQueryPort = null,
         IScheduledInvocationConnectorEvidenceQueryPort? connectorQueryPort = null,
-        IScheduledInvocationOwnerLLMEvidenceQueryPort? ownerLLMQueryPort = null)
+        IScheduledInvocationOwnerLLMEvidenceQueryPort? ownerLLMQueryPort = null,
+        INyxIdScheduledOperationAuthorizationPort? operationAuthorizationPort = null)
     {
         _catalogQueryPort = catalogQueryPort ?? throw new ArgumentNullException(nameof(catalogQueryPort));
         _memberQueryPort = memberQueryPort ?? UnavailableTargetEvidenceQueryPorts.Instance;
         _workflowQueryPort = workflowQueryPort ?? UnavailableTargetEvidenceQueryPorts.Instance;
         _connectorQueryPort = connectorQueryPort ?? UnavailableTargetEvidenceQueryPorts.Instance;
         _ownerLLMQueryPort = ownerLLMQueryPort ?? UnavailableTargetEvidenceQueryPorts.Instance;
+        _operationAuthorizationPort = operationAuthorizationPort ??
+                                      UnavailableNyxIdScheduledOperationAuthorizationPort.Instance;
     }
 
     public async Task<ScheduledInvocationAuthorizationPlanResult> PlanAsync(
@@ -46,7 +50,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
                 "nyxid_authenticated_actor_invalid");
         }
 
-        var evidence = await ResolveTargetEvidenceAsync(request, ct);
+        var evidence = await ResolveTargetEvidenceAsync(request, authenticatedActor, ct);
         if (evidence.Failure != null)
             return evidence.Failure;
         if (CanAuthorizeWithoutCatalog(evidence))
@@ -350,6 +354,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
 
     private async Task<TargetEvidenceResolution> ResolveTargetEvidenceAsync(
         ScheduledInvocationAuthorizationRequest request,
+        AuthorizationOwnerIdentity authenticatedActor,
         CancellationToken ct)
     {
         if (request.InvocationTarget.TargetCase != ScheduledInvocationTarget.TargetOneofCase.StudioMember)
@@ -395,14 +400,12 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         }
 
         var target = request.InvocationTarget.StudioMember;
-        var member = request.TrustedMemberEvidence ??
-            await _memberQueryPort.GetAsync(target.ScopeId, target.MemberId, ct);
+        var member = await _memberQueryPort.GetAsync(target.ScopeId, target.MemberId, ct);
         if (member == null)
             return TargetEvidenceResolution.Failed(Failed(
                 ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
                 "studio_member_evidence_not_found"));
         if (!string.Equals(member.DraftWorkflowId, target.DraftWorkflowId, StringComparison.Ordinal) ||
-            !string.Equals(member.WorkflowRevisionId, target.WorkflowRevisionId, StringComparison.Ordinal) ||
             !string.Equals(member.PublishedServiceId, target.PublishedServiceId, StringComparison.Ordinal))
         {
             return TargetEvidenceResolution.Failed(Failed(
@@ -410,12 +413,11 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
                 "studio_member_evidence_changed"));
         }
 
-        var workflow = request.TrustedWorkflowEvidence ??
-            await _workflowQueryPort.GetAsync(
-                target.ScopeId,
-                member.PublishedServiceId,
-                member.WorkflowRevisionId,
-                ct);
+        var workflow = await _workflowQueryPort.GetAsync(
+            target.ScopeId,
+            member.PublishedServiceId,
+            target.WorkflowRevisionId,
+            ct);
         if (workflow == null)
             return TargetEvidenceResolution.Failed(Failed(
                 ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
@@ -427,6 +429,21 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
                 ScheduledInvocationAuthorizationFailureCode.UnknownEnum,
                 "workflow_service_grant_requirement_invalid"));
         }
+
+        var durableExplicitRequestFailure = ValidateDurableExplicitRequestEvidence(
+            workflow,
+            target);
+        if (durableExplicitRequestFailure != null)
+            return TargetEvidenceResolution.Failed(durableExplicitRequestFailure);
+
+        var operationAuthorizationFailure = await EvaluateScheduledOperationAuthorizationAsync(
+            request,
+            target,
+            workflow,
+            authenticatedActor,
+            ct);
+        if (operationAuthorizationFailure != null)
+            return TargetEvidenceResolution.Failed(operationAuthorizationFailure);
 
         var capabilities = ResolveWorkflowCapabilities(workflow.ExternalCapabilities);
         if (capabilities.Failure != null)
@@ -510,6 +527,250 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             llmRefreshRequirement,
             null);
     }
+
+    private async Task<ScheduledInvocationAuthorizationPlanResult?>
+        EvaluateScheduledOperationAuthorizationAsync(
+            ScheduledInvocationAuthorizationRequest request,
+            StudioMemberInvocationTarget target,
+            ScheduledInvocationWorkflowEvidence workflow,
+            AuthorizationOwnerIdentity authenticatedActor,
+            CancellationToken ct)
+    {
+        var plan = workflow.CapabilityAdmissionPlan;
+        if (plan is null)
+            return null;
+
+        foreach (var admission in plan.InvocationAdmissions)
+        {
+            if (admission.Capability?.CapabilityCase !=
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest)
+            {
+                continue;
+            }
+
+            var proof = admission.Capability.NyxIdUserRequest;
+            var grant = admission.NyxIdExplicitRequestGrant;
+            if (proof.Request is null || grant is null)
+                return DurableRequestGrantMismatch();
+
+            var result = await _operationAuthorizationPort.EvaluateAsync(
+                new NyxIdScheduledOperationAuthorizationRequest(
+                    target.Clone(),
+                    request.Owner.Clone(),
+                    authenticatedActor.Clone(),
+                    request.OwnerContext.SubjectPlatform,
+                    request.OwnerContext.SubjectTenant,
+                    request.OwnerContext.SubjectExternalUserId,
+                    request.OwnerContext.VerifiedBindingId,
+                    proof.Request.Clone(),
+                    grant.Clone(),
+                    request.EvaluatedAtUtc),
+                ct);
+            var failure = result?.Decision switch
+            {
+                NyxIdScheduledOperationAuthorizationDecision.AutoAllow => null,
+                NyxIdScheduledOperationAuthorizationDecision.ReusableGrantRequired => Failed(
+                    ScheduledInvocationAuthorizationFailureCode.NyxIdOperationGrantRequired,
+                    "nyxid_operation_grant_required"),
+                NyxIdScheduledOperationAuthorizationDecision.PerRequestApprovalRequired => Failed(
+                    ScheduledInvocationAuthorizationFailureCode.NyxIdOperationApprovalRequired,
+                    "nyxid_operation_approval_required"),
+                NyxIdScheduledOperationAuthorizationDecision.Denied => Failed(
+                    ScheduledInvocationAuthorizationFailureCode.NyxIdOperationDenied,
+                    "nyxid_operation_denied"),
+                NyxIdScheduledOperationAuthorizationDecision.AuthorityContractUnavailable => Failed(
+                    ScheduledInvocationAuthorizationFailureCode.NyxIdOperationAuthorityContractUnavailable,
+                    "nyxid_operation_authority_contract_unavailable"),
+                _ => Failed(
+                    ScheduledInvocationAuthorizationFailureCode.UnknownEnum,
+                    "nyxid_operation_authorization_decision_invalid"),
+            };
+            if (failure != null)
+                return failure;
+        }
+
+        return null;
+    }
+
+    private static ScheduledInvocationAuthorizationPlanResult? ValidateDurableExplicitRequestEvidence(
+        ScheduledInvocationWorkflowEvidence workflow,
+        StudioMemberInvocationTarget target)
+    {
+        var capabilities = workflow.ExternalCapabilities;
+        if (!capabilities.Any(static capability =>
+                capability.CapabilityCase ==
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest))
+        {
+            return null;
+        }
+
+        var plan = workflow.CapabilityAdmissionPlan;
+        if (plan is null ||
+            !string.Equals(
+                plan.SchemaVersion,
+                WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+                StringComparison.Ordinal) ||
+            plan.ExternalCapabilities.Count != 0 ||
+            string.IsNullOrWhiteSpace(plan.AdmissionDigest) ||
+            !string.Equals(
+                plan.AdmissionDigest,
+                WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(plan),
+                StringComparison.Ordinal))
+        {
+            return DurableRequestGrantMismatch();
+        }
+
+        if (plan.ExecutionMode != ExternalCapabilityExecutionMode.Durable)
+        {
+            return plan.ExecutionMode == ExternalCapabilityExecutionMode.Interactive
+                ? DurableAdmissionRequired()
+                : DurableRequestGrantMismatch();
+        }
+
+        IReadOnlyList<ExternalWorkflowCapabilityRef> admittedCapabilities;
+        try
+        {
+            if (!plan.InvocationAdmissions
+                    .Select(static admission => admission.CallSiteId)
+                    .SequenceEqual(
+                        plan.InvocationAdmissions
+                            .Select(static admission => admission.CallSiteId)
+                            .Order(StringComparer.Ordinal),
+                        StringComparer.Ordinal) ||
+                plan.InvocationAdmissions
+                    .GroupBy(static admission => admission.CallSiteId, StringComparer.Ordinal)
+                    .Any(static group => group.Count() != 1))
+            {
+                return DurableRequestGrantMismatch();
+            }
+
+            foreach (var admission in plan.InvocationAdmissions)
+            {
+                WorkflowCapabilityAdmissionPlanIntegrity
+                    .ValidateInvocationAdmissionIntrinsicIntegrity(admission);
+            }
+
+            admittedCapabilities = WorkflowCapabilityAdmissionPlanIntegrity
+                .DistinctCapabilities(plan);
+        }
+        catch (InvalidOperationException)
+        {
+            return DurableRequestGrantMismatch();
+        }
+
+        if (!admittedCapabilities
+                .Select(WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey)
+                .SequenceEqual(
+                    capabilities
+                        .Select(WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey)
+                        .Order(StringComparer.Ordinal),
+                    StringComparer.Ordinal))
+        {
+            return DurableRequestGrantMismatch();
+        }
+
+        foreach (var admission in plan.InvocationAdmissions)
+        {
+            if (admission.Capability?.CapabilityCase !=
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest)
+            {
+                continue;
+            }
+
+            var grant = admission.NyxIdExplicitRequestGrant;
+            if (grant is null ||
+                !string.Equals(grant.WorkflowId, target.DraftWorkflowId, StringComparison.Ordinal) ||
+                !string.Equals(grant.RevisionId, target.WorkflowRevisionId, StringComparison.Ordinal))
+            {
+                return DurableRequestGrantMismatch();
+            }
+
+            if (!grant.AllowedExecutionModes.Contains(ExternalCapabilityExecutionMode.Durable) ||
+                admission.Capability.NyxIdUserRequest.ExecutionPolicy is not { } policy ||
+                !policy.AllowedExecutionModes.Contains(ExternalCapabilityExecutionMode.Durable))
+            {
+                return DurableAdmissionRequired();
+            }
+        }
+
+        foreach (var capability in capabilities)
+        {
+            if (capability.CapabilityCase !=
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest)
+            {
+                continue;
+            }
+
+            var proof = capability.NyxIdUserRequest;
+            if (proof.Request is null ||
+                string.IsNullOrWhiteSpace(proof.ServiceSlugSnapshot) ||
+                !string.Equals(
+                    proof.ServiceSlugSnapshot,
+                    proof.ServiceSlugSnapshot.Trim(),
+                    StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(proof.ExplicitRequestGrantDigest) ||
+                !string.Equals(
+                    proof.ExplicitRequestGrantDigest,
+                    proof.ExplicitRequestGrantDigest.Trim(),
+                    StringComparison.Ordinal))
+            {
+                return DurableRequestGrantMismatch();
+            }
+
+            string requestContractDigest;
+            try
+            {
+                requestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                    .ComputeNyxIdRequestContractDigest(proof.Request);
+            }
+            catch (InvalidOperationException)
+            {
+                return DurableRequestGrantMismatch();
+            }
+
+            if (!string.Equals(
+                    proof.ContractDigest,
+                    WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdExplicitRequestProofDigest(
+                        requestContractDigest,
+                        proof.ServiceSlugSnapshot),
+                    StringComparison.Ordinal) ||
+                !WorkflowCapabilityAdmissionPlanIntegrity.IsValidNyxIdExecutionPolicy(
+                    proof.ExecutionPolicy) ||
+                !RiskMatchesMethod(proof.Request.Method, proof.ExecutionPolicy.Risk))
+            {
+                return DurableRequestGrantMismatch();
+            }
+
+            if (!proof.ExecutionPolicy.AllowedExecutionModes.Contains(
+                    ExternalCapabilityExecutionMode.Durable))
+            {
+                return DurableAdmissionRequired();
+            }
+        }
+
+        return null;
+    }
+
+    private static ScheduledInvocationAuthorizationPlanResult DurableRequestGrantMismatch() =>
+        Failed(
+            ScheduledInvocationAuthorizationFailureCode.DurableRequestGrantMismatch,
+            "durable_request_grant_mismatch");
+
+    private static ScheduledInvocationAuthorizationPlanResult DurableAdmissionRequired() =>
+        Failed(
+            ScheduledInvocationAuthorizationFailureCode.DurableAdmissionRequired,
+            "durable_admission_required");
+
+    private static bool RiskMatchesMethod(NyxIdRequestMethod method, NyxIdOperationRisk risk) =>
+        method switch
+        {
+            NyxIdRequestMethod.Get or NyxIdRequestMethod.Head or NyxIdRequestMethod.Options =>
+                risk == NyxIdOperationRisk.ReadOnly,
+            NyxIdRequestMethod.Post or NyxIdRequestMethod.Put or NyxIdRequestMethod.Patch =>
+                risk == NyxIdOperationRisk.Write,
+            NyxIdRequestMethod.Delete => risk == NyxIdOperationRisk.Destructive,
+            _ => false,
+        };
 
     private async Task<OwnerLLMEvidenceResolution> ResolveOwnerLLMEvidenceAsync(
         string scopeId,
