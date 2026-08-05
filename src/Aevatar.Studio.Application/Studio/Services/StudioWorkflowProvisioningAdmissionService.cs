@@ -3,6 +3,8 @@ using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
@@ -14,15 +16,18 @@ internal sealed class StudioWorkflowProvisioningAdmissionService
     private readonly IWorkflowExternalCapabilityAdmissionService _admissionService;
     private readonly INyxIdAuthorizationCatalogRefreshPort? _catalogRefreshPort;
     private readonly INyxIdAuthorizationCatalogVisibilityPort? _catalogVisibilityPort;
+    private readonly ILogger<StudioWorkflowProvisioningService> _logger;
 
     public StudioWorkflowProvisioningAdmissionService(
         IWorkflowExternalCapabilityAdmissionService admissionService,
         INyxIdAuthorizationCatalogRefreshPort? catalogRefreshPort,
-        INyxIdAuthorizationCatalogVisibilityPort? catalogVisibilityPort)
+        INyxIdAuthorizationCatalogVisibilityPort? catalogVisibilityPort,
+        ILogger<StudioWorkflowProvisioningService>? logger = null)
     {
         _admissionService = admissionService ?? throw new ArgumentNullException(nameof(admissionService));
         _catalogRefreshPort = catalogRefreshPort;
         _catalogVisibilityPort = catalogVisibilityPort;
+        _logger = logger ?? NullLogger<StudioWorkflowProvisioningService>.Instance;
     }
 
     public Task<WorkflowCapabilityAdmissionPlan> ResolveAsync(
@@ -95,10 +100,19 @@ internal sealed class StudioWorkflowProvisioningAdmissionService
             {
                 throw;
             }
-            catch
+            catch (Exception ex)
             {
+                _logger.LogWarning(
+                    "Studio workflow durable authorization catalog refresh failed. failureType={FailureType}",
+                    ex.GetType().Name);
                 throw new StudioMemberAutomationCatalogRefreshUnavailableException();
             }
+
+            _logger.LogInformation(
+                "Studio workflow durable authorization catalog refresh completed. status={RefreshStatus} stateVersion={StateVersion} failureCode={FailureCode}",
+                refresh.Status,
+                refresh.StateVersion,
+                refresh.FailureCode);
 
             if (refresh.Status == NyxIdAuthorizationCatalogRefreshStatus.Superseded)
                 throw new StudioMemberAutomationCatalogRefreshSupersededException();
@@ -107,10 +121,19 @@ internal sealed class StudioWorkflowProvisioningAdmissionService
 
             var visibility = await _catalogVisibilityPort!
                 .ResolveAsync(owner!, refresh.StateVersion, ct);
+            _logger.LogInformation(
+                "Studio workflow durable authorization catalog visibility resolved. status={VisibilityStatus} requiredStateVersion={RequiredStateVersion} visibleStateVersion={VisibleStateVersion} failureCode={FailureCode}",
+                visibility.Status,
+                visibility.RequiredStateVersion,
+                visibility.VisibleStateVersion,
+                visibility.FailureCode);
             if (visibility.ProjectionPending)
                 throw new StudioMemberAutomationProjectionPendingException(refresh.StateVersion);
-            if (!visibility.Ready)
+            if (!visibility.Ready &&
+                visibility.Status != NyxIdAuthorizationCatalogVisibilityStatus.Stale)
+            {
                 throw new StudioMemberAutomationCatalogRefreshUnavailableException();
+            }
 
             return await _admissionService.AdmitAsync(admissionRequest, ct);
         }

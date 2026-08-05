@@ -136,6 +136,66 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
     }
 
     [Fact]
+    public async Task InspectAsync_WhenTargetedServiceEvidenceIsFresh_ShouldIgnoreStaleOwnerCatalogWindow()
+    {
+        var snapshot = ReadyCatalogSnapshot();
+        var service = snapshot.Services.Single().Clone();
+        var serviceObservedAt = new DateTimeOffset(2026, 7, 30, 7, 59, 30, TimeSpan.Zero);
+        var serviceFreshUntil = new DateTimeOffset(2026, 7, 30, 8, 14, 30, TimeSpan.Zero);
+        service.ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(serviceObservedAt);
+        service.FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(serviceFreshUntil);
+        service.EvaluatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+            serviceObservedAt.AddSeconds(-1));
+        service.AuthorityContractVersion = "scope-plan-contract/v1";
+        service.AuthorityPolicyVersion = "scope-plan-policy/v1";
+        NyxIdAuthorizationServiceEvidence[] services = [service];
+        snapshot = snapshot with
+        {
+            ObservedAtUtc = new DateTimeOffset(2026, 7, 30, 7, 40, 0, TimeSpan.Zero),
+            FreshUntilUtc = new DateTimeOffset(2026, 7, 30, 7, 55, 0, TimeSpan.Zero),
+            ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(snapshot.Owner, services),
+            Services = services,
+        };
+        var source = CreateSource(
+            new InventoryHandler(UserServiceKeys(Service())),
+            new RecordingCatalogQueryPort(snapshot));
+
+        var result = await source.InspectAsync(
+            Access(), Selector(), ExternalCapabilityExecutionMode.Durable, CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
+        var durableSource = result.Sources.Single(static sourceStamp =>
+            sourceStamp.SourceKind == ExternalCapabilitySourceKind.DurableAuthorizationCatalog);
+        durableSource.ObservedAt.ToDateTimeOffset().Should().Be(serviceObservedAt);
+        durableSource.FreshUntil.ToDateTimeOffset().Should().Be(serviceFreshUntil);
+    }
+
+    [Fact]
+    public async Task InspectAsync_WhenServiceAuthorityStampIsPartial_ShouldFailClosedWithoutOwnerFallback()
+    {
+        var snapshot = ReadyCatalogSnapshot();
+        var service = snapshot.Services.Single().Clone();
+        service.ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+            new DateTimeOffset(2026, 7, 30, 7, 59, 30, TimeSpan.Zero));
+        NyxIdAuthorizationServiceEvidence[] services = [service];
+        snapshot = snapshot with
+        {
+            ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(snapshot.Owner, services),
+            Services = services,
+        };
+        var source = CreateSource(
+            new InventoryHandler(UserServiceKeys(Service())),
+            new RecordingCatalogQueryPort(snapshot));
+
+        var result = await source.InspectAsync(
+            Access(), Selector(), ExternalCapabilityExecutionMode.Durable, CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable);
+        result.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("DURABLE_AUTHORIZATION_UNAVAILABLE");
+    }
+
+    [Fact]
     public async Task InspectAsync_WhenDurableCatalogQueryThrows_ShouldFailClosedAndLogSanitizedWarning()
     {
         const string sensitiveExceptionMessage = "catalog secret-token-alpha";
@@ -195,6 +255,24 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
         catalog.ReadCount.Should().Be(0);
         result.Sources.Should().ContainSingle().Which.SourceKind.Should()
             .Be(ExternalCapabilitySourceKind.NyxIdUserServices);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldAdmitExplicitReadOnlyPostForInteractiveExecutionOnly()
+    {
+        var source = CreateSource(new InventoryHandler(UserServiceKeys(Service())));
+
+        var result = await source.InspectAsync(
+            Access(),
+            Selector(NyxIdRequestMethod.Post, NyxIdOperationRisk.ReadOnly),
+            ExternalCapabilityExecutionMode.Interactive,
+            CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
+        var policy = result.SelectedCapability.NyxIdUserRequest.ExecutionPolicy;
+        policy.Risk.Should().Be(NyxIdOperationRisk.ReadOnly);
+        policy.Approval.Should().Be(NyxIdOperationApproval.None);
+        policy.AllowedExecutionModes.Should().Equal(ExternalCapabilityExecutionMode.Interactive);
     }
 
     [Theory]
@@ -349,7 +427,8 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
             NyxIdCallerCredentialSelection.SourceReadableUserBearer("caller-credential"));
 
     private static ExternalWorkflowCapabilitySelector Selector(
-        NyxIdRequestMethod method = NyxIdRequestMethod.Get)
+        NyxIdRequestMethod method = NyxIdRequestMethod.Get,
+        NyxIdOperationRisk risk = NyxIdOperationRisk.Unspecified)
     {
         var request = new NyxIdRequestSelector
         {
@@ -361,6 +440,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
                 : NyxIdRequestBodyMode.None,
             BodyRequired = method is NyxIdRequestMethod.Post or NyxIdRequestMethod.Put or NyxIdRequestMethod.Patch,
             ResponseMode = NyxIdRequestResponseMode.Text,
+            Risk = risk,
         };
         request.QueryParameters.Add("page_size");
         request.HeaderParameters.Add("If-Match");

@@ -172,7 +172,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
                 "The explicit request contract changed after it was confirmed.");
         }
         if (confirmation.AttestedRisk != capability.NyxIdUserRequest.ExecutionPolicy?.Risk ||
-            !IsAttestedRiskAllowed(capability.NyxIdUserRequest.Request.Method, confirmation.AttestedRisk))
+            !IsAttestedRiskAllowed(capability.NyxIdUserRequest.Request, confirmation.AttestedRisk))
         {
             throw ExplicitRequestConfirmationFailure(
                 invocation,
@@ -182,8 +182,10 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
                 "The explicit request risk confirmation does not satisfy the request method policy.");
         }
         if (request.ExplicitRequestGrantMode == ExternalCapabilityExecutionMode.Durable &&
-            capability.NyxIdUserRequest.ExecutionPolicy?.Risk is
-                NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive)
+            (capability.NyxIdUserRequest.ExecutionPolicy is not { } executionPolicy ||
+             !NyxIdRequestSelectorContract.SupportsDurableExecution(
+                 capability.NyxIdUserRequest.Request.Method,
+                 executionPolicy.Risk)))
         {
             throw ExplicitRequestConfirmationFailure(
                 invocation,
@@ -304,23 +306,30 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
 
     private static bool RequiresInteractiveExplicitRequest(
         ExternalCapabilityExecutionMode executionMode,
-        ExternalWorkflowCapabilitySelector selector) =>
-        executionMode == ExternalCapabilityExecutionMode.Durable &&
-        selector.SelectorCase == ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest &&
-        selector.NyxIdRequest.Method is NyxIdRequestMethod.Post or NyxIdRequestMethod.Put or
-            NyxIdRequestMethod.Patch or NyxIdRequestMethod.Delete;
+        ExternalWorkflowCapabilitySelector selector)
+    {
+        if (executionMode != ExternalCapabilityExecutionMode.Durable ||
+            selector.SelectorCase != ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest)
+        {
+            return false;
+        }
+
+        return !NyxIdRequestSelectorContract.TryResolveRisk(
+                   selector.NyxIdRequest.Method,
+                   selector.NyxIdRequest.Risk,
+                   out var risk) ||
+               !NyxIdRequestSelectorContract.SupportsDurableExecution(
+                   selector.NyxIdRequest.Method,
+                   risk);
+    }
 
     private static bool IsAttestedRiskAllowed(
-        NyxIdRequestMethod method,
-        NyxIdOperationRisk risk) => method switch
-    {
-        NyxIdRequestMethod.Get or NyxIdRequestMethod.Head or NyxIdRequestMethod.Options =>
-            risk is NyxIdOperationRisk.ReadOnly or NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive,
-        NyxIdRequestMethod.Post or NyxIdRequestMethod.Put or NyxIdRequestMethod.Patch =>
-            risk is NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive,
-        NyxIdRequestMethod.Delete => risk == NyxIdOperationRisk.Destructive,
-        _ => false,
-    };
+        NyxIdRequestSelector request,
+        NyxIdOperationRisk risk) =>
+        NyxIdRequestSelectorContract.IsRiskAttestationSatisfied(
+            request.Method,
+            request.Risk,
+            risk);
 
     private static WorkflowExternalCapabilityAdmissionException ExplicitRequestConfirmationFailure(
         ExternalToolInvocationSpec invocation,

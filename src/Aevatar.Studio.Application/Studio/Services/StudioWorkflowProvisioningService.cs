@@ -11,6 +11,7 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
@@ -84,7 +85,8 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService,
         TimeProvider? timeProvider = null,
         INyxIdAuthorizationCatalogRefreshPort? catalogRefreshPort = null,
-        INyxIdAuthorizationCatalogVisibilityPort? catalogVisibilityPort = null)
+        INyxIdAuthorizationCatalogVisibilityPort? catalogVisibilityPort = null,
+        ILogger<StudioWorkflowProvisioningService>? logger = null)
     {
         _memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
         _bindingPort = bindingPort ?? throw new ArgumentNullException(nameof(bindingPort));
@@ -92,7 +94,8 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         _provisioningAdmissionService = new StudioWorkflowProvisioningAdmissionService(
             capabilityAdmissionService,
             catalogRefreshPort,
-            catalogVisibilityPort);
+            catalogVisibilityPort,
+            logger);
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 

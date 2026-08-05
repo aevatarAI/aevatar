@@ -33,6 +33,7 @@ public static class WorkflowAuthorizationDependencyEvaluator
         "http_method",
         "path",
         "path_template",
+        "risk",
         "schema",
         "contract_digest",
         "source_stamp",

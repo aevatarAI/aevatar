@@ -212,13 +212,8 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
         NyxIdRequestSelector request,
         string serviceSlug)
     {
-        var risk = request.Method switch
-        {
-            NyxIdRequestMethod.Get or NyxIdRequestMethod.Head or NyxIdRequestMethod.Options =>
-                NyxIdOperationRisk.ReadOnly,
-            NyxIdRequestMethod.Delete => NyxIdOperationRisk.Destructive,
-            _ => NyxIdOperationRisk.Write,
-        };
+        if (!NyxIdRequestSelectorContract.TryResolveRisk(request.Method, request.Risk, out var risk))
+            throw new InvalidOperationException("The normalized NyxID request risk is invalid.");
         var policy = new NyxIdOperationExecutionPolicy
         {
             Risk = risk,
@@ -228,7 +223,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
             EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
         };
         policy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
-        if (risk == NyxIdOperationRisk.ReadOnly)
+        if (NyxIdRequestSelectorContract.SupportsDurableExecution(request.Method, risk))
             policy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Durable);
 
         var requestDigest = WorkflowCapabilityAdmissionPlanIntegrity

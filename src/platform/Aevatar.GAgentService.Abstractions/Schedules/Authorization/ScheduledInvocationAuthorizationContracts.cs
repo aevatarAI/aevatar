@@ -121,6 +121,48 @@ public static class NyxIdAuthorizationCatalogIntegrity
             content.GatewayLlmTarget = gatewayLLMTarget.Clone();
         return Convert.ToHexStringLower(SHA256.HashData(content.ToByteArray()));
     }
+
+    public static bool TryResolveServiceAuthorityWindow(
+        NyxIdAuthorizationCatalogSnapshot snapshot,
+        NyxIdAuthorizationServiceEvidence service,
+        out DateTimeOffset observedAtUtc,
+        out DateTimeOffset freshUntilUtc)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(service);
+
+        var hasServiceAuthorityStamp =
+            service.ObservedAt != null ||
+            service.FreshUntil != null ||
+            service.EvaluatedAt != null ||
+            !string.IsNullOrWhiteSpace(service.AuthorityContractVersion) ||
+            !string.IsNullOrWhiteSpace(service.AuthorityPolicyVersion);
+        if (!hasServiceAuthorityStamp)
+        {
+            observedAtUtc = snapshot.ObservedAtUtc;
+            freshUntilUtc = snapshot.FreshUntilUtc;
+            return observedAtUtc != default && freshUntilUtc > observedAtUtc;
+        }
+
+        if (service.ObservedAt == null ||
+            service.FreshUntil == null ||
+            service.EvaluatedAt == null ||
+            string.IsNullOrWhiteSpace(service.AuthorityContractVersion) ||
+            string.IsNullOrWhiteSpace(service.AuthorityPolicyVersion))
+        {
+            observedAtUtc = default;
+            freshUntilUtc = default;
+            return false;
+        }
+
+        observedAtUtc = service.ObservedAt.ToDateTimeOffset();
+        freshUntilUtc = service.FreshUntil.ToDateTimeOffset();
+        var evaluatedAtUtc = service.EvaluatedAt.ToDateTimeOffset();
+        return observedAtUtc != default &&
+               evaluatedAtUtc != default &&
+               evaluatedAtUtc <= observedAtUtc &&
+               freshUntilUtc > observedAtUtc;
+    }
 }
 
 public sealed record ScheduledInvocationAuthorizationValidationResult(

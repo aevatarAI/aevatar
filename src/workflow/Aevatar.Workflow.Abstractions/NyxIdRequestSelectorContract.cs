@@ -23,6 +23,7 @@ public static class NyxIdRequestSelectorContract
         normalized.BodyMode = selector.BodyMode;
         normalized.BodyRequired = selector.BodyRequired;
         normalized.ResponseMode = selector.ResponseMode;
+        normalized.Risk = selector.Risk;
         normalized.QueryParameters.Add(selector.QueryParameters
             .Select(static value => value.Trim())
             .OrderBy(static value => value, StringComparer.Ordinal));
@@ -34,6 +35,8 @@ public static class NyxIdRequestSelectorContract
             return Fail("explicit request must select one exact static UserService", out error);
         if (normalized.Method == NyxIdRequestMethod.Unspecified || !System.Enum.IsDefined(normalized.Method))
             return Fail("explicit request method is not supported", out error);
+        if (!TryResolveRisk(normalized.Method, normalized.Risk, out _))
+            return Fail("explicit request risk is below the method floor", out error);
         if (!IsSafePathTemplate(normalized.PathTemplate, out error))
             return false;
         if (!ValidateNames(normalized.QueryParameters, "query", StringComparer.Ordinal, out error) ||
@@ -84,6 +87,71 @@ public static class NyxIdRequestSelectorContract
         NyxIdRequestMethod.Delete => "DELETE",
         _ => string.Empty,
     };
+
+    public static bool TryResolveRisk(
+        NyxIdRequestMethod method,
+        NyxIdOperationRisk declaredRisk,
+        out NyxIdOperationRisk effectiveRisk)
+    {
+        effectiveRisk = method switch
+        {
+            NyxIdRequestMethod.Get or NyxIdRequestMethod.Head or NyxIdRequestMethod.Options =>
+                NyxIdOperationRisk.ReadOnly,
+            NyxIdRequestMethod.Post or NyxIdRequestMethod.Put or NyxIdRequestMethod.Patch =>
+                NyxIdOperationRisk.Write,
+            NyxIdRequestMethod.Delete => NyxIdOperationRisk.Destructive,
+            _ => NyxIdOperationRisk.Unspecified,
+        };
+        if (effectiveRisk == NyxIdOperationRisk.Unspecified)
+            return false;
+        if (declaredRisk == NyxIdOperationRisk.Unspecified)
+            return true;
+        if (!System.Enum.IsDefined(declaredRisk))
+            return false;
+
+        var allowed = method switch
+        {
+            NyxIdRequestMethod.Get or NyxIdRequestMethod.Head or NyxIdRequestMethod.Options or
+                NyxIdRequestMethod.Post =>
+                declaredRisk is NyxIdOperationRisk.ReadOnly or NyxIdOperationRisk.Write or
+                    NyxIdOperationRisk.Destructive,
+            NyxIdRequestMethod.Put or NyxIdRequestMethod.Patch =>
+                declaredRisk is NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive,
+            NyxIdRequestMethod.Delete => declaredRisk == NyxIdOperationRisk.Destructive,
+            _ => false,
+        };
+        if (allowed)
+            effectiveRisk = declaredRisk;
+        return allowed;
+    }
+
+    public static bool IsRiskAttestationSatisfied(
+        NyxIdRequestMethod method,
+        NyxIdOperationRisk declaredRisk,
+        NyxIdOperationRisk evaluatedRisk)
+    {
+        if (!TryResolveRisk(method, declaredRisk, out var effectiveRisk))
+            return false;
+        if (declaredRisk != NyxIdOperationRisk.Unspecified)
+            return effectiveRisk == evaluatedRisk;
+
+        return method switch
+        {
+            NyxIdRequestMethod.Get or NyxIdRequestMethod.Head or NyxIdRequestMethod.Options =>
+                evaluatedRisk is NyxIdOperationRisk.ReadOnly or NyxIdOperationRisk.Write or
+                    NyxIdOperationRisk.Destructive,
+            NyxIdRequestMethod.Post or NyxIdRequestMethod.Put or NyxIdRequestMethod.Patch =>
+                evaluatedRisk is NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive,
+            NyxIdRequestMethod.Delete => evaluatedRisk == NyxIdOperationRisk.Destructive,
+            _ => false,
+        };
+    }
+
+    public static bool SupportsDurableExecution(
+        NyxIdRequestMethod method,
+        NyxIdOperationRisk risk) =>
+        risk == NyxIdOperationRisk.ReadOnly &&
+        method is NyxIdRequestMethod.Get or NyxIdRequestMethod.Head or NyxIdRequestMethod.Options;
 
     public static IReadOnlyList<string> PathParameters(NyxIdRequestSelector selector) =>
         selector.PathTemplate.Split('/', StringSplitOptions.RemoveEmptyEntries)
