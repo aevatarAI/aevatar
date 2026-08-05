@@ -41,11 +41,11 @@ Baseline integrity:
 - Modify: `docs/canon/frontend-design.md`
 - Create: `apps/aevatar-console-web/docs/superpowers/plans/2026-08-05-workflow-activity-vnext-nyxid-visual-alignment.md`
 
-- [ ] Record the measured shell, typography, spacing, control, table, responsive, and accessibility rules.
-- [ ] Record the permitted Aevatar deviations: existing colors, AlibabaSans delivery, and the repository's 8px radius cap.
-- [ ] Update issue `#3194` with the measurement table, page inventory, and acceptance evidence.
-- [ ] Run `bash tools/docs/lint.sh` and `git diff --check`.
-- [ ] Commit the documentation as `Document NyxID visual alignment`.
+- [x] Record the measured shell, typography, spacing, control, table, responsive, and accessibility rules.
+- [x] Record the permitted Aevatar deviations: existing colors, AlibabaSans delivery, and the repository's 8px radius cap.
+- [x] Update issue `#3194` with the measurement table, page inventory, and acceptance evidence.
+- [x] Run `bash tools/docs/lint.sh` and `git diff --check`.
+- [x] Commit the documentation as `Document NyxID visual alignment`.
 
 ### Task 2: Align the shared shell and navigation
 
@@ -54,11 +54,11 @@ Baseline integrity:
 - Modify: `src/pages/workflow-activity-vnext/styles.ts`
 - Test: `src/pages/workflow-activity-vnext/index.test.tsx`
 
-- [ ] Preserve the existing semantic navigation and account/language components while moving their presentation into a 52px top bar.
-- [ ] Place the Aevatar brand and current breadcrumb in the top bar, start the 200px local rail below it, and render the page title inside the main content surface.
-- [ ] Replace the permanent mobile navigation strip with an accessible menu button and drawer using the same route builders.
-- [ ] Define shared spacing, type, radius, shadow, control, and table tokens in `.wa-vnext`.
-- [ ] Run the existing route integration test before and after the shell change to prove navigation, auth action reuse, and page behavior remain intact:
+- [x] Preserve the existing semantic navigation and account/language components while moving their presentation into a 52px top bar.
+- [x] Place the Aevatar brand and current breadcrumb in the top bar, start the 200px local rail below it, and render the page title inside the main content surface.
+- [x] Replace the permanent mobile navigation strip with an accessible menu button and drawer using the same route builders.
+- [x] Define shared spacing, type, radius, shadow, control, and table tokens in `.wa-vnext`.
+- [x] Run the existing route integration test before and after the shell change to prove navigation, auth action reuse, and page behavior remain intact:
 
 ```bash
 pnpm exec jest --runInBand --runTestsByPath \
@@ -73,11 +73,11 @@ pnpm exec jest --runInBand --runTestsByPath \
 - Modify: `src/pages/workflow-activity-vnext/styles.ts`
 - Test: `src/pages/workflow-activity-vnext/index.test.tsx`
 
-- [ ] Keep Workflow search and source filter in one responsive toolbar.
-- [ ] Render the Workflow table with a 32px header, 53-60px rows, one clear Open action, and secondary actions in the existing accessible overflow menu.
-- [ ] Remove the mobile card transformation and use a named local horizontal scroll region.
-- [ ] Replace New workflow inline presentation styles with shared classes: four equal-level creation choices, then one form container for the selected method.
-- [ ] Verify Describe, blank, import, and template retain their current authoritative creation behavior through the existing focused test file.
+- [x] Keep Workflow search and source filter in one responsive toolbar.
+- [x] Render the Workflow table with a 32px header, 53-60px rows, one clear Open action, and the branch's existing accessible secondary actions.
+- [x] Remove the mobile card transformation and use a named local horizontal scroll region.
+- [x] Replace New workflow inline presentation styles with shared classes: four equal-level creation choices, then one form container for the selected method.
+- [x] Verify Describe, blank, import, and template retain their current authoritative creation behavior through the existing focused test file.
 
 ### Task 4: Align the Workflow editor
 
@@ -86,10 +86,10 @@ pnpm exec jest --runInBand --runTestsByPath \
 - Modify: `src/pages/workflow-activity-vnext/styles.ts`
 - Test: `src/pages/workflow-activity-vnext/index.test.tsx`
 
-- [ ] Keep Canvas and YAML as a compact segmented mode control and preserve the existing shared editor state.
-- [ ] Keep the canvas unframed/full-width inside the work surface; remove conflicting fixed layout values where shared responsive tokens can own sizing.
-- [ ] Preserve visible Save, Run, Publish availability and the current node library/detail/YAML behavior.
-- [ ] At mobile width, keep editor actions reachable, allow horizontal action scrolling only inside the toolbar, and preserve the existing accessible node panel behavior.
+- [x] Keep Canvas and YAML as a compact segmented mode control and preserve the existing shared editor state.
+- [x] Keep the canvas unframed/full-width inside the work surface; remove conflicting fixed layout values where shared responsive tokens can own sizing.
+- [x] Preserve visible Save, Run, Publish availability and the current node library/detail/YAML behavior.
+- [x] At mobile width, keep editor actions reachable, allow horizontal action scrolling only inside the toolbar, and preserve the existing accessible node panel behavior.
 
 ### Task 5: Align Activity and Run detail
 
@@ -100,11 +100,11 @@ pnpm exec jest --runInBand --runTestsByPath \
 - Test: `src/pages/workflow-activity-vnext/activity/ActivityPage.test.tsx`
 - Test: `src/pages/workflow-activity-vnext/activity/RunDetailPage.test.tsx`
 
-- [ ] Apply the NyxID ledger density to Activity while preserving status, source, updated time, server filters, and the single detail target.
-- [ ] Keep mobile Activity as a semantic table in a bounded horizontal scroller rather than a card layout.
-- [ ] Move Run status and recovery actions close to the page title; use a 32px underline tab strip and single-layer detail sections.
-- [ ] Keep Steps and Diagnostics tables semantic and locally scrollable; preserve independent graph failure and immutable source behavior.
-- [ ] Run both focused behavior tests after the visual-only edits.
+- [x] Apply the NyxID ledger density to Activity while preserving status, source, updated time, server filters, and the single detail target.
+- [x] Keep mobile Activity as a semantic table in a bounded horizontal scroller rather than a card layout.
+- [x] Move Run status and recovery actions close to the page title; use a 32px underline tab strip and single-layer detail sections.
+- [x] Keep Steps and Diagnostics tables semantic and locally scrollable; preserve independent graph failure and immutable source behavior.
+- [x] Run both focused behavior tests after the visual-only edits.
 
 ### Task 6: Align Settings
 
@@ -113,19 +113,19 @@ pnpm exec jest --runInBand --runTestsByPath \
 - Modify: `src/pages/workflow-activity-vnext/styles.ts`
 - Test: `src/pages/workflow-activity-vnext/index.test.tsx`
 
-- [ ] Replace the desktop secondary side navigation with a 32px underline tab strip that remains horizontally scrollable on mobile.
-- [ ] Render each section in one bordered 8px container with a compact section header and 32-36px controls.
-- [ ] Preserve authoritative LLM clean/dirty/accepted/observed states, current account actions, and read-only advanced values.
-- [ ] Keep dirty actions at the bottom of the owning container and sticky only when needed; ensure they do not cover mobile inputs.
+- [x] Replace the desktop secondary side navigation with a 32px underline tab strip that remains horizontally scrollable on mobile.
+- [x] Render each section in one bordered 8px container with a compact section header and 32-36px controls.
+- [x] Preserve authoritative LLM clean/dirty/accepted/observed states, current account actions, and read-only advanced values.
+- [x] Keep dirty actions at the bottom of the owning container and sticky only when needed; ensure they do not cover mobile inputs.
 
 ### Task 7: Focused verification and delivery
 
 **Files:**
 - Review every file changed by Tasks 1-6.
 
-- [ ] Run the frontend scope analyzer with the task start commit as base and use only its changed source/test/static-check files.
-- [ ] Run directly changed tests and dependency-related Jest tests only. Do not run the full frontend suite.
-- [ ] Run Biome with explicit changed frontend file paths. Skip package-wide typecheck because no repository-native affected typecheck target exists; GitHub CI owns full type verification.
-- [ ] Run `bash tools/ci/test_stability_guards.sh`, `bash tools/docs/lint.sh`, baseline verification, and `git diff --check`.
-- [ ] Verify real pages at `1440x900`, `834x1112`, and `390x844`, including local table scroll and page-level overflow checks.
-- [ ] Review `git diff`, stage only this task's files, commit `Align Workflow Activity with NyxID`, push the existing feature branch, update issue `#3194`, and update PR `#3189` with exact focused commands and the GitHub CI delegation statement.
+- [x] Run the frontend scope analyzer with the task start commit as base and use only its changed source/test/static-check files.
+- [x] Run directly changed tests and dependency-related Jest tests only. Do not run the full frontend suite.
+- [x] Run Biome with explicit changed frontend file paths. Skip package-wide typecheck because no repository-native affected typecheck target exists; GitHub CI owns full type verification.
+- [x] Run `bash tools/ci/test_stability_guards.sh`, `bash tools/docs/lint.sh`, baseline verification, and `git diff --check`.
+- [x] Verify real pages at `1440x900`, `834x1112`, and `390x844`, including local table scroll and page-level overflow checks.
+- [x] Review `git diff`, stage only this task's files, commit `Align Workflow Activity with NyxID`, push the existing feature branch, update issue `#3194`, and update PR `#3189` with exact focused commands and the GitHub CI delegation statement.

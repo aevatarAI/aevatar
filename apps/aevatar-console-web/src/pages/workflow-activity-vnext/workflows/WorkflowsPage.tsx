@@ -1,11 +1,11 @@
 import {
-  MoreOutlined,
+  DeleteOutlined,
   PlusOutlined,
   ReloadOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Button, Dropdown, Input, Modal, Select, Space } from 'antd';
+import { Alert, Button, Input, Modal, Select, Space, Tooltip } from 'antd';
 import React from 'react';
 import { scopesApi } from '@/shared/api/scopesApi';
 import { t } from '@/shared/i18n/messages';
@@ -16,7 +16,6 @@ import type { StudioWorkflowDraftSummary } from '@/shared/studio/models';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
 import {
   buildWorkflowActivityEditorHref,
-  buildWorkflowActivityEditorRunHref,
   buildWorkflowActivityNewHref,
   buildWorkflowActivitySectionHref,
 } from '../navigation';
@@ -532,54 +531,28 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                         )}
                       </Button>
                       {row.hasDraftSource ? (
-                        <Button
-                          aria-label={t(
-                            'workflowActivityVNext.workflows.runAria',
-                            'Run {name}',
-                            { name: row.name },
+                        <Tooltip
+                          title={t(
+                            'workflowActivityVNext.workflows.deleteDraft',
+                            'Delete draft',
                           )}
-                          onClick={() =>
-                            history.push(
-                              buildWorkflowActivityEditorRunHref(
-                                scopeId,
-                                row.workflowId,
-                              ),
-                            )
-                          }
-                        >
-                          {t('workflowActivityVNext.common.run', 'Run')}
-                        </Button>
-                      ) : null}
-                      {row.hasDraftSource ? (
-                        <Dropdown
-                          menu={{
-                            items: [
-                              {
-                                danger: true,
-                                key: 'delete-draft',
-                                label: t(
-                                  'workflowActivityVNext.workflows.deleteDraft',
-                                  'Delete draft',
-                                ),
-                              },
-                            ],
-                            onClick: () => {
-                              setDeleteTarget(row);
-                              setDeleteError('');
-                              setDeleteSucceeded(false);
-                            },
-                          }}
-                          trigger={['click']}
                         >
                           <Button
                             aria-label={t(
-                              'workflowActivityVNext.workflows.moreActionsAria',
-                              'More actions for {name}',
+                              'workflowActivityVNext.workflows.deleteAria',
+                              'Delete {name}',
                               { name: row.name },
                             )}
-                            icon={<MoreOutlined />}
+                            danger
+                            icon={<DeleteOutlined />}
+                            onClick={() => {
+                              setDeleteTarget(row);
+                              setDeleteError('');
+                              setDeleteSucceeded(false);
+                            }}
+                            type="text"
                           />
-                        </Dropdown>
+                        </Tooltip>
                       ) : null}
                     </Space>
                   </td>

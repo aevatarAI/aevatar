@@ -353,40 +353,43 @@ const RunDetailPage: React.FC<{
           type="success"
         />
       ) : null}
-      <Descriptions
-        bordered
-        column={{ xs: 1, sm: 2 }}
-        items={[
-          {
-            key: 'origin',
-            label: t('workflowActivityVNext.activity.columnOrigin', 'Source'),
-            children: getRunOriginLabel(run.summary.runOrigin),
-          },
-          {
-            key: 'input',
-            label: t('workflowActivityVNext.run.input', 'Input'),
-            children:
-              run.input || t('workflowActivityVNext.common.empty', 'Empty'),
-          },
-          {
-            key: 'output',
-            label: t('workflowActivityVNext.run.output', 'Final output'),
-            children:
-              run.finalOutput ||
-              t('workflowActivityVNext.common.unavailable', 'Unavailable'),
-          },
-          {
-            key: 'error',
-            label: t('workflowActivityVNext.run.error', 'Final error'),
-            children: run.finalError ? (
-              <RunFailureSummary detail={run.finalError} kind="run" />
-            ) : (
-              t('workflowActivityVNext.common.unavailable', 'Unavailable')
-            ),
-          },
-        ]}
-      />
+      <div className="wa-vnext__run-summary">
+        <Descriptions
+          bordered
+          column={{ xs: 1, sm: 2 }}
+          items={[
+            {
+              key: 'origin',
+              label: t('workflowActivityVNext.activity.columnOrigin', 'Source'),
+              children: getRunOriginLabel(run.summary.runOrigin),
+            },
+            {
+              key: 'input',
+              label: t('workflowActivityVNext.run.input', 'Input'),
+              children:
+                run.input || t('workflowActivityVNext.common.empty', 'Empty'),
+            },
+            {
+              key: 'output',
+              label: t('workflowActivityVNext.run.output', 'Final output'),
+              children:
+                run.finalOutput ||
+                t('workflowActivityVNext.common.unavailable', 'Unavailable'),
+            },
+            {
+              key: 'error',
+              label: t('workflowActivityVNext.run.error', 'Final error'),
+              children: run.finalError ? (
+                <RunFailureSummary detail={run.finalError} kind="run" />
+              ) : (
+                t('workflowActivityVNext.common.unavailable', 'Unavailable')
+              ),
+            },
+          ]}
+        />
+      </div>
       <Tabs
+        className="wa-vnext__run-tabs"
         items={[
           {
             key: 'steps',

@@ -1,8 +1,10 @@
 import {
   ControlOutlined,
   HistoryOutlined,
+  MenuOutlined,
   PartitionOutlined,
 } from '@ant-design/icons';
+import { Button, Drawer } from 'antd';
 import React from 'react';
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
@@ -49,9 +51,12 @@ const items = [
 
 function Navigation({
   activeSection,
+  afterNavigate,
   onNavigate,
   scopeId,
-}: Pick<ShellProps, 'activeSection' | 'onNavigate' | 'scopeId'>) {
+}: Pick<ShellProps, 'activeSection' | 'onNavigate' | 'scopeId'> & {
+  readonly afterNavigate?: () => void;
+}) {
   return (
     <nav
       aria-label={t('workflowActivityVNext.nav.aria', 'Workflow workbench')}
@@ -68,6 +73,7 @@ function Navigation({
             const target = buildWorkflowActivitySectionHref(scopeId, item.key);
             if (onNavigate) onNavigate(target);
             else history.push(target);
+            afterNavigate?.();
           }}
         >
           {item.icon}
@@ -88,44 +94,89 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
   onNavigate,
   scopeId,
   title,
-}) => (
-  <div className="wa-vnext">
-    <style>{workflowActivityVNextCss}</style>
-    <aside className="wa-vnext__rail">
-      <div className="wa-vnext__brand">
-        <strong>{t('common.appName', 'Aevatar')}</strong>
-        <span>
-          {t('workflowActivityVNext.brand.subtitle', 'AUTOMATION LEDGER')}
-        </span>
-      </div>
-      <Navigation
-        activeSection={activeSection}
-        onNavigate={onNavigate}
-        scopeId={scopeId}
-      />
-    </aside>
-    <main className="wa-vnext__main">
-      <div className="wa-vnext__mobile-nav">
+}) => {
+  const [mobileNavigationOpen, setMobileNavigationOpen] = React.useState(false);
+  const activeItem = items.find((item) => item.key === activeSection);
+  const activeLabel = activeItem
+    ? t(`workflowActivityVNext.nav.${activeItem.labelKey}`, activeItem.fallback)
+    : title;
+
+  return (
+    <div className="wa-vnext">
+      <style>{workflowActivityVNextCss}</style>
+      <header className="wa-vnext__topbar">
+        <div className="wa-vnext__topbar-leading">
+          <Button
+            aria-label={t(
+              'workflowActivityVNext.nav.openMenu',
+              'Open navigation',
+            )}
+            className="wa-vnext__menu-button"
+            icon={<MenuOutlined />}
+            onClick={() => setMobileNavigationOpen(true)}
+            type="text"
+          />
+          <a
+            className="wa-vnext__brand"
+            href={buildWorkflowActivitySectionHref(scopeId, 'workflows')}
+            onClick={(event) => {
+              event.preventDefault();
+              const target = buildWorkflowActivitySectionHref(
+                scopeId,
+                'workflows',
+              );
+              if (onNavigate) onNavigate(target);
+              else history.push(target);
+            }}
+          >
+            {t('common.appName', 'Aevatar')}
+          </a>
+          <span aria-hidden="true" className="wa-vnext__topbar-divider" />
+          <span className="wa-vnext__topbar-context">{activeLabel}</span>
+        </div>
+        <div className="wa-vnext__topbar-actions">
+          <ConsoleLanguageSwitch />
+          <ConsoleAuthActions />
+        </div>
+      </header>
+      <aside className="wa-vnext__rail">
         <Navigation
           activeSection={activeSection}
           onNavigate={onNavigate}
           scopeId={scopeId}
         />
-      </div>
-      <header className="wa-vnext__header">
-        <div>
-          <h1>{title}</h1>
-          <p>{description}</p>
-        </div>
-        <div className="wa-vnext__header-actions">
-          {headerActions}
-          <ConsoleLanguageSwitch />
-          <ConsoleAuthActions />
-        </div>
-      </header>
-      <div className="wa-vnext__content">{children}</div>
-    </main>
-  </div>
-);
+      </aside>
+      <main className="wa-vnext__main">
+        <header className="wa-vnext__header">
+          <div className="wa-vnext__heading-copy">
+            <h1>{title}</h1>
+            <p>{description}</p>
+          </div>
+          {headerActions ? (
+            <div className="wa-vnext__header-actions">{headerActions}</div>
+          ) : null}
+        </header>
+        <div className="wa-vnext__content">{children}</div>
+      </main>
+      <Drawer
+        className="wa-vnext__drawer"
+        closable
+        onClose={() => setMobileNavigationOpen(false)}
+        open={mobileNavigationOpen}
+        placement="left"
+        rootClassName="wa-vnext-drawer"
+        size={240}
+        title={t('workflowActivityVNext.brand.subtitle', 'Automation ledger')}
+      >
+        <Navigation
+          activeSection={activeSection}
+          afterNavigate={() => setMobileNavigationOpen(false)}
+          onNavigate={onNavigate}
+          scopeId={scopeId}
+        />
+      </Drawer>
+    </div>
+  );
+};
 
 export default WorkflowActivityVNextShell;

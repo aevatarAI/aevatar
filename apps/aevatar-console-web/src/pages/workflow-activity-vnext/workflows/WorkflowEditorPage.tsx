@@ -10,15 +10,16 @@ import {
 import { Alert, Button, Input, Modal, Segmented, Space } from 'antd';
 import React from 'react';
 import WorkflowStudioCanvasRegion from '@/pages/team-member-workflow-studio/components/WorkflowStudioCanvasRegion';
-import WorkflowStudioNodeDetailPanel from '@/pages/team-member-workflow-studio/components/WorkflowStudioNodeDetailPanel';
 import WorkflowStudioNodeLibrary from '@/pages/team-member-workflow-studio/components/WorkflowStudioNodeLibrary';
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
+import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
 import { useWorkflowEditor } from '../hooks/useWorkflowEditor';
 import { buildWorkflowActivitySectionHref } from '../navigation';
 import TechnicalDetails from '../TechnicalDetails';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
+import WorkflowNodeInspector from './WorkflowNodeInspector';
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -30,6 +31,7 @@ const WorkflowEditorPage: React.FC<{
 }> = ({ scopeId, workflowId }) => {
   const location = useConsoleLocation();
   const editor = useWorkflowEditor(scopeId, workflowId);
+  const toast = useConsoleToast();
   const [mode, setMode] = React.useState<'canvas' | 'yaml'>('canvas');
   const [nodeLibraryOpen, setNodeLibraryOpen] = React.useState(false);
   const [runPanelOpen, setRunPanelOpen] = React.useState(false);
@@ -48,8 +50,18 @@ const WorkflowEditorPage: React.FC<{
     [editor.dirty],
   );
 
+  const saveWorkflow = React.useCallback(async () => {
+    const saved = await editor.save();
+    if (saved) {
+      toast.success(
+        t('workflowActivityVNext.editor.saveSuccess', 'Workflow saved'),
+      );
+    }
+    return saved;
+  }, [editor.save, toast]);
+
   const saveAndLeave = async () => {
-    if (await editor.save()) {
+    if (await saveWorkflow()) {
       const target = pendingNavigation;
       setPendingNavigation('');
       if (target) history.push(target);
@@ -143,7 +155,7 @@ const WorkflowEditorPage: React.FC<{
           <Button
             icon={<SaveOutlined />}
             loading={editor.saving}
-            onClick={() => void editor.save()}
+            onClick={() => void saveWorkflow()}
             type="primary"
           >
             {t('workflowActivityVNext.editor.save', 'Save workflow')}
@@ -182,11 +194,11 @@ const WorkflowEditorPage: React.FC<{
         t('workflowActivityVNext.editor.untitled', 'Untitled workflow')
       }
     >
-      <div className="wa-vnext__toolbar">
+      <div className="wa-vnext__toolbar wa-vnext__editor-toolbar">
         <Input
           aria-label={t('workflowActivityVNext.new.name', 'Workflow name')}
+          className="wa-vnext__editor-name"
           onChange={(event) => editor.updateTitle(event.target.value)}
-          style={{ maxWidth: 420 }}
           value={editor.workflowTitle}
         />
         <Space>
@@ -276,10 +288,7 @@ const WorkflowEditorPage: React.FC<{
         />
       ) : null}
       {editor.findings.length > 0 ? (
-        <div
-          aria-live="polite"
-          style={{ display: 'grid', gap: 6, marginBottom: 12 }}
-        >
+        <div aria-live="polite" className="wa-vnext__editor-alerts">
           {editor.findings.map((finding) => (
             <Alert
               key={[
@@ -318,14 +327,14 @@ const WorkflowEditorPage: React.FC<{
           style={{
             border: '1px solid var(--wa-line)',
             flex: 'none',
-            height: 'min(620px, calc(100vh - 260px))',
+            height: 'min(620px, calc(100dvh - 248px))',
             minHeight: 440,
           }}
         >
           <Button
             icon={<PlusOutlined />}
+            className="wa-vnext__editor-add"
             onClick={() => setNodeLibraryOpen(true)}
-            style={{ left: 16, position: 'absolute', top: 16, zIndex: 5 }}
           >
             {t('workflowActivityVNext.editor.addNode', 'Add node')}
           </Button>
@@ -337,12 +346,10 @@ const WorkflowEditorPage: React.FC<{
             }}
             open={nodeLibraryOpen}
           />
-          <WorkflowStudioNodeDetailPanel
+          <WorkflowNodeInspector
             error={editor.selectedStepConfigurationError}
             onClose={editor.selectCanvas}
-            onConfigurationChange={(parametersText) =>
-              void editor.updateSelectedStepConfiguration(parametersText)
-            }
+            onConfigurationChange={editor.updateSelectedStepConfiguration}
             onConfigurationErrorChange={
               editor.setSelectedStepConfigurationError
             }
@@ -352,12 +359,11 @@ const WorkflowEditorPage: React.FC<{
       ) : (
         <Input.TextArea
           aria-label={t('workflowActivityVNext.new.yaml', 'Workflow YAML')}
+          className="wa-vnext__editor-yaml"
           onChange={(event) => editor.updateYaml(event.target.value)}
           style={{
             border: '1px solid var(--wa-line)',
-            borderRadius: 0,
-            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-            height: 'min(620px, calc(100vh - 260px))',
+            height: 'min(620px, calc(100dvh - 248px))',
             minHeight: 440,
             resize: 'none',
           }}
@@ -367,10 +373,9 @@ const WorkflowEditorPage: React.FC<{
       {runPanelOpen ? (
         <section
           aria-label={t('workflowActivityVNext.editor.runPanel', 'Test run')}
-          className="wa-vnext__panel"
-          style={{ marginTop: 16 }}
+          className="wa-vnext__panel wa-vnext__run-panel"
         >
-          <Space direction="vertical" style={{ width: '100%' }}>
+          <Space className="wa-vnext__run-panel-content" direction="vertical">
             <strong>
               {t('workflowActivityVNext.editor.runPanel', 'Test run')}
             </strong>

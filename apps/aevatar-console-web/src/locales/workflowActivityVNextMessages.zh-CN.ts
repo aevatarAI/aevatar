@@ -80,6 +80,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.editor.savingProgress': '正在保存工作流…',
     'workflowActivityVNext.editor.save': '保存工作流',
     'workflowActivityVNext.editor.saveLeave': '保存并离开',
+    'workflowActivityVNext.editor.saveSuccess': '工作流已保存',
     'workflowActivityVNext.editor.saved': '已保存',
     'workflowActivityVNext.editor.stay': '留在此处',
     'workflowActivityVNext.editor.streamEnded':
@@ -94,8 +95,38 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.editor.unsavedTitle': '工作流有未保存更改',
     'workflowActivityVNext.editor.untitled': '未命名工作流',
     'workflowActivityVNext.editor.yaml': 'YAML',
+    'workflowActivityVNext.nodeInspector.advanced': '高级选项',
+    'workflowActivityVNext.nodeInspector.advancedDescription':
+      '仅当上方没有对应设置时使用 JSON。',
+    'workflowActivityVNext.nodeInspector.applyChanges': '应用更改',
+    'workflowActivityVNext.nodeInspector.applyJson': '应用 JSON',
+    'workflowActivityVNext.nodeInspector.branches': '分支',
+    'workflowActivityVNext.nodeInspector.branchesUnavailable': '分支不可用',
+    'workflowActivityVNext.nodeInspector.close': '关闭配置',
+    'workflowActivityVNext.nodeInspector.closeAria': '关闭节点配置',
+    'workflowActivityVNext.nodeInspector.configuration': '配置',
+    'workflowActivityVNext.nodeInspector.configurationDescription':
+      '设置此步骤在工作流运行前所需的内容。',
+    'workflowActivityVNext.nodeInspector.discard': '放弃更改',
+    'workflowActivityVNext.nodeInspector.discardDescription':
+      '此步骤中尚未应用的更改将丢失。',
+    'workflowActivityVNext.nodeInspector.discardTitle': '放弃节点更改？',
+    'workflowActivityVNext.nodeInspector.nextStep': '下一步骤',
+    'workflowActivityVNext.nodeInspector.noBranches': '没有分支',
+    'workflowActivityVNext.nodeInspector.noGuidedFields':
+      '此步骤暂不提供引导式配置项。',
+    'workflowActivityVNext.nodeInspector.notSet': '未设置',
+    'workflowActivityVNext.nodeInspector.rawConfigurationAria': '原始配置',
+    'workflowActivityVNext.nodeInspector.rawConfigurationError':
+      '配置必须为 JSON 对象。',
+    'workflowActivityVNext.nodeInspector.sectionAria': '配置 {name}',
+    'workflowActivityVNext.nodeInspector.stepDetails': '步骤详情',
+    'workflowActivityVNext.nodeInspector.targetRole': '目标角色',
+    'workflowActivityVNext.nodeInspector.title': '配置 {name}',
+    'workflowActivityVNext.nodeInspector.type': '类型',
     'workflowActivityVNext.nav.activity': '活动',
     'workflowActivityVNext.nav.aria': '工作流工作台',
+    'workflowActivityVNext.nav.openMenu': '打开导航',
     'workflowActivityVNext.nav.settings': '设置',
     'workflowActivityVNext.nav.workflows': '工作流',
     'workflowActivityVNext.new.back': '返回工作流列表',
@@ -280,6 +311,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.workflows.draftsView': '草稿',
     'workflowActivityVNext.workflows.deleteDescription':
       '此操作只删除可编辑草稿，已发布版本和运行历史会继续保留。',
+    'workflowActivityVNext.workflows.deleteAria': '删除 {name}',
     'workflowActivityVNext.workflows.deleteDraft': '删除草稿',
     'workflowActivityVNext.workflows.deleteFailed': '无法删除草稿',
     'workflowActivityVNext.workflows.deleteRefreshFailed':

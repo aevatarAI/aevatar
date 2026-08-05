@@ -280,45 +280,24 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
             'workflowActivityVNext.new.chooserAria',
             'Workflow creation methods',
           )}
-          style={{
-            border: 0,
-            display: 'grid',
-            gap: 12,
-            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-            margin: 0,
-            minWidth: 0,
-            padding: 0,
-          }}
+          className="wa-vnext__creation-options"
         >
           {modeItems.map((item) => (
             <button
               aria-label={item.label}
               disabled={disabledByWorkspace}
+              className="wa-vnext__creation-option"
               key={item.key}
               onClick={() => selectMode(item.key)}
-              style={{
-                background: '#fff',
-                border: '1px solid var(--wa-line)',
-                minHeight: 150,
-                padding: 20,
-                textAlign: 'left',
-              }}
               type="button"
             >
-              <span style={{ color: 'var(--wa-blue)', fontSize: 22 }}>
+              <span className="wa-vnext__creation-option-icon">
                 {item.icon}
               </span>
-              <strong style={{ display: 'block', fontSize: 16, marginTop: 16 }}>
+              <strong className="wa-vnext__creation-option-title">
                 {item.label}
               </strong>
-              <span
-                style={{
-                  color: 'var(--wa-muted)',
-                  display: 'block',
-                  lineHeight: 1.5,
-                  marginTop: 7,
-                }}
-              >
+              <span className="wa-vnext__creation-option-description">
                 {item.description}
               </span>
             </button>
@@ -335,7 +314,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
               >
                 {t('workflowActivityVNext.new.changeMethod', 'Change method')}
               </Button>
-              <Typography.Title level={3} style={{ fontSize: 18, margin: 0 }}>
+              <Typography.Title className="wa-vnext__form-title" level={3}>
                 {modeItems.find((item) => item.key === mode)?.label ?? mode}
               </Typography.Title>
             </Space>
@@ -359,7 +338,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                       : item.label,
                   value: item.directoryId,
                 }))}
-                style={{ display: 'block', marginTop: 6, width: '100%' }}
+                className="wa-vnext__field-control"
                 value={directoryId || undefined}
               />
             </div>
@@ -373,7 +352,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                   'Workflow name',
                 )}
                 onChange={(event) => setName(event.target.value)}
-                style={{ marginTop: 6 }}
+                className="wa-vnext__field-control"
                 value={name}
               />
             </div>
@@ -391,7 +370,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                     )}
                     onChange={(event) => setPrompt(event.target.value)}
                     rows={5}
-                    style={{ marginTop: 6 }}
+                    className="wa-vnext__field-control"
                     value={prompt}
                   />
                 </div>
@@ -413,10 +392,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                         setGeneratedReady(false);
                       }}
                       rows={12}
-                      style={{
-                        fontFamily: 'ui-monospace, monospace',
-                        marginTop: 6,
-                      }}
+                      className="wa-vnext__editor-yaml wa-vnext__field-control"
                       value={generatedYaml}
                     />
                   </div>
@@ -473,10 +449,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                     )}
                     onChange={(event) => setYaml(event.target.value)}
                     rows={16}
-                    style={{
-                      fontFamily: 'ui-monospace, monospace',
-                      marginTop: 6,
-                    }}
+                    className="wa-vnext__editor-yaml wa-vnext__field-control"
                     value={yaml}
                   />
                 </div>
@@ -510,14 +483,14 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                       label: templateName,
                       value: item.id,
                     }))}
-                    style={{ display: 'block', marginTop: 6, width: '100%' }}
+                    className="wa-vnext__field-control"
                     value={templateId}
                   />
                 </div>
                 {selectedTemplate ? (
                   <div>
                     <strong>{templateName}</strong>
-                    <p style={{ color: 'var(--wa-muted)' }}>
+                    <p className="wa-vnext__creation-option-description">
                       {templateDescription}
                     </p>
                   </div>

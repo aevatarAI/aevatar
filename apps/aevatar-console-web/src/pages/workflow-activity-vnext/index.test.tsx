@@ -123,33 +123,6 @@ jest.mock(
   }),
 );
 
-jest.mock(
-  '@/pages/team-member-workflow-studio/components/WorkflowStudioNodeDetailPanel',
-  () => ({
-    __esModule: true,
-    default: ({
-      onConfigurationChange,
-      stepDraft,
-    }: {
-      onConfigurationChange: (parametersText: string) => void;
-      stepDraft: { readonly id: string } | null;
-    }) =>
-      stepDraft ? (
-        <section aria-label="Node configuration">
-          <span>Configuring {stepDraft.id}</span>
-          <button
-            onClick={() =>
-              onConfigurationChange('{"prompt_prefix":"Updated prompt"}')
-            }
-            type="button"
-          >
-            Apply node configuration
-          </button>
-        </section>
-      ) : null,
-  }),
-);
-
 const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
   authorWorkflow: jest.Mock;
   createWorkflowDraft: jest.Mock;
@@ -292,7 +265,7 @@ describe('Workflow Activity vNext catalogue', () => {
     );
   });
 
-  it('runs an exact draft from the editor and omits Run for committed-only rows', async () => {
+  it('uses one editor entry point and exposes direct deletion only for editable drafts', async () => {
     mockStudioApi.listWorkflowDrafts.mockResolvedValue([
       {
         workflowId: 'wf-draft-alpha',
@@ -328,19 +301,34 @@ describe('Workflow Activity vNext catalogue', () => {
     const committedRow = screen.getByText('Invoice review').closest('tr');
     expect(draftRow).not.toBeNull();
     expect(committedRow).not.toBeNull();
-    const runDraft = within(draftRow as HTMLElement).getByRole('button', {
-      name: 'Run Support triage',
+    const openDraft = within(draftRow as HTMLElement).getByRole('button', {
+      name: 'Open Support triage',
     });
-    expect(runDraft).toBeEnabled();
+    expect(openDraft).toBeEnabled();
+    expect(
+      within(draftRow as HTMLElement).queryByRole('button', {
+        name: 'Run Support triage',
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(draftRow as HTMLElement).getByRole('button', {
+        name: 'Delete Support triage',
+      }),
+    ).toBeEnabled();
+    expect(
+      within(draftRow as HTMLElement).queryByRole('button', {
+        name: 'More actions for Support triage',
+      }),
+    ).not.toBeInTheDocument();
     expect(
       within(committedRow as HTMLElement).queryByRole('button', {
-        name: /Run/,
+        name: 'Delete Invoice review',
       }),
     ).not.toBeInTheDocument();
 
-    fireEvent.click(runDraft);
+    fireEvent.click(openDraft);
     expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha?run=1',
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha',
     );
   });
 
@@ -385,11 +373,8 @@ describe('Workflow Activity vNext catalogue', () => {
     expect(row).not.toBeNull();
     fireEvent.click(
       within(row as HTMLElement).getByRole('button', {
-        name: 'More actions for Support triage',
+        name: 'Delete Support triage',
       }),
-    );
-    fireEvent.click(
-      await screen.findByRole('menuitem', { name: 'Delete draft' }),
     );
     expect(screen.getByText('Delete editable draft?')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Delete draft' }));
@@ -439,11 +424,8 @@ describe('Workflow Activity vNext catalogue', () => {
     const row = draftName.closest('tr');
     fireEvent.click(
       within(row as HTMLElement).getByRole('button', {
-        name: 'More actions for Support triage',
+        name: 'Delete Support triage',
       }),
-    );
-    fireEvent.click(
-      await screen.findByRole('menuitem', { name: 'Delete draft' }),
     );
     fireEvent.click(screen.getByRole('button', { name: 'Delete draft' }));
 
@@ -1121,6 +1103,21 @@ describe('Workflow Activity vNext editor', () => {
     );
   });
 
+  it('confirms a workflow save only after the server returns a readable draft', async () => {
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(
+      await screen.findByDisplayValue('Committed source'),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Updated source' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
+
+    expect(await screen.findByText('Workflow saved')).toBeVisible();
+    expect(mockStudioApi.saveWorkflow).toHaveBeenCalledTimes(1);
+  });
+
   it('parses authoritative YAML when the workflow response omits its document', async () => {
     mockStudioApi.getWorkflow.mockResolvedValue({
       workflowId: 'wf-imported',
@@ -1260,7 +1257,7 @@ describe('Workflow Activity vNext editor', () => {
     ).not.toBeVisible();
   });
 
-  it('edits a selected canvas node through the shared document state', async () => {
+  it('puts editable node configuration first and keeps raw JSON advanced', async () => {
     mockStudioApi.serializeYaml.mockImplementation(async ({ document }) => ({
       yaml: 'name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n    parameters:\n      prompt_prefix: Updated prompt\n',
       document,
@@ -1272,9 +1269,21 @@ describe('Workflow Activity vNext editor', () => {
     fireEvent.click(
       await screen.findByRole('button', { name: 'Select step:step-root' }),
     );
-    expect(screen.getByText('Configuring step-root')).toBeInTheDocument();
+    const inspector = await screen.findByRole('complementary', {
+      name: 'Configure step-root',
+    });
+    expect(within(inspector).getByLabelText('Instruction')).toHaveValue(
+      'Original prompt',
+    );
+    expect(
+      within(inspector).queryByLabelText('Raw configuration'),
+    ).not.toBeInTheDocument();
+    expect(within(inspector).getByText('Advanced options')).toBeVisible();
+    fireEvent.change(within(inspector).getByLabelText('Instruction'), {
+      target: { value: 'Updated prompt' },
+    });
     fireEvent.click(
-      screen.getByRole('button', { name: 'Apply node configuration' }),
+      within(inspector).getByRole('button', { name: 'Apply changes' }),
     );
 
     await waitFor(() =>

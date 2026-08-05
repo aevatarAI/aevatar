@@ -80,6 +80,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.savingProgress': 'Saving workflow…',
   'workflowActivityVNext.editor.save': 'Save workflow',
   'workflowActivityVNext.editor.saveLeave': 'Save and leave',
+  'workflowActivityVNext.editor.saveSuccess': 'Workflow saved',
   'workflowActivityVNext.editor.saved': 'Saved',
   'workflowActivityVNext.editor.stay': 'Stay',
   'workflowActivityVNext.editor.streamEnded':
@@ -96,8 +97,40 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.unsavedTitle': 'Unsaved workflow changes',
   'workflowActivityVNext.editor.untitled': 'Untitled workflow',
   'workflowActivityVNext.editor.yaml': 'YAML',
+  'workflowActivityVNext.nodeInspector.advanced': 'Advanced options',
+  'workflowActivityVNext.nodeInspector.advancedDescription':
+    'Use JSON only when the setting is not available above.',
+  'workflowActivityVNext.nodeInspector.applyChanges': 'Apply changes',
+  'workflowActivityVNext.nodeInspector.applyJson': 'Apply JSON',
+  'workflowActivityVNext.nodeInspector.branches': 'Branches',
+  'workflowActivityVNext.nodeInspector.branchesUnavailable':
+    'Branches unavailable',
+  'workflowActivityVNext.nodeInspector.close': 'Close configuration',
+  'workflowActivityVNext.nodeInspector.closeAria': 'Close node configuration',
+  'workflowActivityVNext.nodeInspector.configuration': 'Configuration',
+  'workflowActivityVNext.nodeInspector.configurationDescription':
+    'Set what this step needs before the workflow runs.',
+  'workflowActivityVNext.nodeInspector.discard': 'Discard changes',
+  'workflowActivityVNext.nodeInspector.discardDescription':
+    'Your unapplied changes to this step will be lost.',
+  'workflowActivityVNext.nodeInspector.discardTitle': 'Discard node changes?',
+  'workflowActivityVNext.nodeInspector.nextStep': 'Next step',
+  'workflowActivityVNext.nodeInspector.noBranches': 'No branches',
+  'workflowActivityVNext.nodeInspector.noGuidedFields':
+    'Guided options are not available for this step yet.',
+  'workflowActivityVNext.nodeInspector.notSet': 'Not set',
+  'workflowActivityVNext.nodeInspector.rawConfigurationAria':
+    'Raw configuration',
+  'workflowActivityVNext.nodeInspector.rawConfigurationError':
+    'Configuration must be a JSON object.',
+  'workflowActivityVNext.nodeInspector.sectionAria': 'Configure {name}',
+  'workflowActivityVNext.nodeInspector.stepDetails': 'Step details',
+  'workflowActivityVNext.nodeInspector.targetRole': 'Target role',
+  'workflowActivityVNext.nodeInspector.title': 'Configure {name}',
+  'workflowActivityVNext.nodeInspector.type': 'Type',
   'workflowActivityVNext.nav.activity': 'Activity',
   'workflowActivityVNext.nav.aria': 'Workflow workbench',
+  'workflowActivityVNext.nav.openMenu': 'Open navigation',
   'workflowActivityVNext.nav.settings': 'Settings',
   'workflowActivityVNext.nav.workflows': 'Workflows',
   'workflowActivityVNext.new.back': 'Back to workflows',
@@ -299,6 +332,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.workflows.draftsView': 'Drafts',
   'workflowActivityVNext.workflows.deleteDescription':
     'This deletes only the editable draft. Published versions and run history remain available.',
+  'workflowActivityVNext.workflows.deleteAria': 'Delete {name}',
   'workflowActivityVNext.workflows.deleteDraft': 'Delete draft',
   'workflowActivityVNext.workflows.deleteFailed': "Draft couldn't be deleted",
   'workflowActivityVNext.workflows.deleteRefreshFailed':

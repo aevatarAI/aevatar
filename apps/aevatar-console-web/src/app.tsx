@@ -43,6 +43,7 @@ import {
   resolveProIntl,
 } from "@/shared/i18n/localeProvider";
 import { AevatarPageLoading } from "@/shared/ui/AevatarLoading";
+import { ConsoleToastProvider } from "@/shared/ui/ConsoleToast";
 
 const PUBLIC_ROUTES = new Set(["/login", "/auth/callback"]);
 const DEFAULT_PROTECTED_ROUTE = CONSOLE_HOME_ROUTE;
@@ -692,14 +693,16 @@ const ConsoleRuntimeProviders: React.FC<ConsoleRuntimeProvidersProps> = ({
       theme={aevatarThemeConfig}
     >
       <ProConfigProvider intl={resolveProIntl(currentLocale)}>
-        <QueryClientProvider client={queryClient}>
-          <LiveOpsAttentionBridge
-            enabled={!isPublicRoute && !isStudioRoute}
-            pathname={pathname}
-            search={search}
-          />
-          <React.Fragment key={currentLocale}>{localizedContent}</React.Fragment>
-        </QueryClientProvider>
+        <ConsoleToastProvider>
+          <QueryClientProvider client={queryClient}>
+            <LiveOpsAttentionBridge
+              enabled={!isPublicRoute && !isStudioRoute}
+              pathname={pathname}
+              search={search}
+            />
+            <React.Fragment key={currentLocale}>{localizedContent}</React.Fragment>
+          </QueryClientProvider>
+        </ConsoleToastProvider>
       </ProConfigProvider>
     </ConfigProvider>
   );
