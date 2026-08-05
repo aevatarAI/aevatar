@@ -322,6 +322,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         {
             Reason = NormalizeOptional(command.Reason),
             EnabledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ScheduleId = ResolveScheduleId(),
+            ScopeId = ResolveScheduleScopeId(),
         });
         await EnsureNextFireScheduledAsync(DateTimeOffset.UtcNow, CancellationToken.None);
     }
@@ -336,6 +338,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         {
             Reason = NormalizeOptional(command.Reason),
             DisabledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ScheduleId = ResolveScheduleId(),
+            ScopeId = ResolveScheduleScopeId(),
         });
         await CancelNextFireLeaseAsync(previousLease, CancellationToken.None);
     }
@@ -397,6 +401,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 {
                     Reason = normalizedReason,
                     DeletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    ScheduleId = ResolveScheduleId(),
+                    ScopeId = ResolveScheduleScopeId(),
                 });
             }
             await PurgeDurableCallbacksAsync(CancellationToken.None);
@@ -449,6 +455,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         {
             Reason = normalizedReason,
             DeletedAt = Timestamp.FromDateTimeOffset(deletedAt),
+            ScheduleId = ResolveScheduleId(),
+            ScopeId = ResolveScheduleScopeId(),
         });
         await PersistDomainEventsAsync(deletionEvents);
         await PurgeDurableCallbacksAsync(CancellationToken.None);
@@ -1675,6 +1683,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             {
                 Reason = LegacyUnmarkedEnvelopeRetiredReason,
                 DisabledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                ScheduleId = ResolveScheduleId(),
+                ScopeId = ResolveScheduleScopeId(),
             }, ct);
         }
 
@@ -3845,6 +3855,24 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private static string NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+
+    private string ResolveScheduleScopeId()
+    {
+        var ownerScopeId = NormalizeOptional(State.TeamAutomationOwner?.ScopeId);
+        if (ownerScopeId.Length > 0)
+            return ownerScopeId;
+
+        if (State.Headers.TryGetValue("scope_id", out var snakeScopeId) &&
+            !string.IsNullOrWhiteSpace(snakeScopeId))
+        {
+            return snakeScopeId.Trim();
+        }
+
+        return State.Headers.TryGetValue("scopeId", out var camelScopeId) &&
+               !string.IsNullOrWhiteSpace(camelScopeId)
+            ? camelScopeId.Trim()
+            : string.Empty;
+    }
 
     private static IReadOnlyDictionary<string, string> NormalizeHeaders(
         IEnumerable<KeyValuePair<string, string>>? source)

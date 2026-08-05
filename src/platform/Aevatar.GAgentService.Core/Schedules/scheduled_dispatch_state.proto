@@ -435,12 +435,16 @@ message ScheduledDispatchEnabledEvent
 {
   string reason = 1;
   google.protobuf.Timestamp enabled_at = 2;
+  string schedule_id = 3;
+  string scope_id = 4;
 }
 
 message ScheduledDispatchDisabledEvent
 {
   string reason = 1;
   google.protobuf.Timestamp disabled_at = 2;
+  string schedule_id = 3;
+  string scope_id = 4;
 }
 
 message ScheduledDispatchDeleteCommand
@@ -458,6 +462,8 @@ message ScheduledDispatchDeletedEvent
 {
   string reason = 1;
   google.protobuf.Timestamp deleted_at = 2;
+  string schedule_id = 3;
+  string scope_id = 4;
 }
 
 message ScheduledDispatchCompletedEvent
