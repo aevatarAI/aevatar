@@ -18,7 +18,7 @@ public interface IStudioScheduledCredentialMaterializer
         string scheduleId,
         string operationId,
         ScheduledCredentialEffectLocator effectLocator,
-        long effectAttemptGeneration,
+        StudioScheduledCredentialMaterializationMode mode,
         OwnerScope ownerScope,
         CancellationToken ct = default);
 
@@ -29,6 +29,12 @@ public interface IStudioScheduledCredentialMaterializer
         bool revokeNyxId,
         bool revokeVault,
         CancellationToken ct = default);
+}
+
+public enum StudioScheduledCredentialMaterializationMode
+{
+    Initial = 1,
+    Recovery = 2,
 }
 
 public sealed record StudioScheduledCredential(

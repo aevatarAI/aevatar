@@ -1330,11 +1330,33 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     [Fact]
     public async Task CreateAsync_WhenBeginCommitsNewOperation_ShouldReportNewOperationCommitted()
     {
+        var materializer = new RecordingCredentialMaterializer();
         var result = await ScheduleAsync(
-            NewPort(new RecordingScheduleService()),
+            NewPort(new RecordingScheduleService(), materializer: materializer),
             Request("scope-1", "member-1"));
 
         result.NewOperationCommitted.Should().BeTrue();
+        materializer.MaterializationMode.Should()
+            .Be(StudioScheduledCredentialMaterializationMode.Initial);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenNewOperationUsesLaterScheduleAttemptGeneration_ShouldStillMaterializeAsInitial()
+    {
+        var scheduleService = new RecordingScheduleService
+        {
+            BeginEffectAttemptGeneration = 4,
+            BeginNewOperationCommitted = true,
+        };
+        var materializer = new RecordingCredentialMaterializer();
+
+        var result = await ScheduleAsync(
+            NewPort(scheduleService, materializer: materializer),
+            Request("scope-1", "member-1"));
+
+        result.Success.Should().BeTrue();
+        materializer.MaterializationMode.Should()
+            .Be(StudioScheduledCredentialMaterializationMode.Initial);
     }
 
     [Fact]
@@ -1375,6 +1397,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         result.NewOperationCommitted.Should().BeFalse();
         scheduleService.BeginCallCount.Should().Be(1);
         materializer.MaterializeCallCount.Should().Be(1);
+        materializer.MaterializationMode.Should()
+            .Be(StudioScheduledCredentialMaterializationMode.Recovery);
     }
 
     [Fact]
@@ -2637,6 +2661,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public ScheduledInvocationAuthorizationPlan? Plan { get; private set; }
         public Aevatar.Foundation.Abstractions.OwnerScope? OwnerScope { get; private set; }
         public ScheduledCredentialEffectLocator? EffectLocator { get; private set; }
+        public StudioScheduledCredentialMaterializationMode? MaterializationMode { get; private set; }
         public StudioScheduledCredential? Credential { get; init; }
         public Exception? MaterializeException { get; init; }
         public bool NyxIdRevoked { get; init; } = true;
@@ -2663,7 +2688,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             string scheduleId,
             string operationId,
             ScheduledCredentialEffectLocator effectLocator,
-            long effectAttemptGeneration,
+            StudioScheduledCredentialMaterializationMode mode,
             Aevatar.Foundation.Abstractions.OwnerScope ownerScope,
             CancellationToken ct = default)
         {
@@ -2672,6 +2697,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             Plan = validatedPlan.Plan;
             OwnerScope = ownerScope;
             EffectLocator = effectLocator;
+            MaterializationMode = mode;
             if (MaterializeException != null)
                 return Task.FromException<StudioScheduledCredential>(MaterializeException);
             return Task.FromResult(Credential ?? CreateCredential(
@@ -2726,6 +2752,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public Exception? EnsureException { get; init; }
         public bool BeginOwnsEffectAttempt { get; init; } = true;
         public bool BeginNewOperationCommitted { get; init; } = true;
+        public long BeginEffectAttemptGeneration { get; init; } = 1;
         public Exception? CandidateException { get; init; }
         public bool CommitCandidateBeforeException { get; init; }
         public bool ReturnPendingRevocationOnRetry { get; init; }
@@ -2781,7 +2808,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 candidateCredential: _candidateCredential,
                 candidateOwner: _candidateOwner,
                 credentialEffectLocator: operation.CredentialEffectLocator,
-                newOperationCommitted: BeginNewOperationCommitted));
+                newOperationCommitted: BeginNewOperationCommitted,
+                effectAttemptGeneration: BeginEffectAttemptGeneration));
         }
 
         public Task<TeamAutomationCommittedMutationReceipt> RetryTeamAutomationCredentialOperationAsync(
@@ -3111,7 +3139,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             ScheduledInvocationAuthorizationOwner? pendingRevocationOwner = null,
             bool nyxIdRevocationPending = false,
             bool vaultRevocationPending = false,
-            bool newOperationCommitted = false) =>
+            bool newOperationCommitted = false,
+            long effectAttemptGeneration = 1) =>
             new(
                 Accepted(scheduleId, commandId),
                 new TeamAutomationOperationCommittedOutcome(
@@ -3129,7 +3158,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                     NyxIdRevocationPending: nyxIdRevocationPending,
                     VaultRevocationPending: vaultRevocationPending,
                     EffectAttemptId: effectAttemptId,
-                    EffectAttemptGeneration: ownsEffectAttempt ? 1 : 0,
+                    EffectAttemptGeneration: ownsEffectAttempt ? effectAttemptGeneration : 0,
                     EffectAttemptExpiresAtUtc: ownsEffectAttempt ? TestNow.AddMinutes(5) : null,
                     CandidateCredential: candidateCredential,
                     CandidateOwner: candidateOwner,

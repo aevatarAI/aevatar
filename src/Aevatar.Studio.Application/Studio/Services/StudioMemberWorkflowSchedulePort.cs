@@ -681,7 +681,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                     scheduleId,
                     operationId,
                     effectLocator,
-                    began.Outcome.EffectAttemptGeneration,
+                    began.Outcome.NewOperationCommitted
+                        ? StudioScheduledCredentialMaterializationMode.Initial
+                        : StudioScheduledCredentialMaterializationMode.Recovery,
                     ownerScope,
                     ct);
             EnsureCredentialMatchesPlan(credential, plan, _timeProvider.GetUtcNow());

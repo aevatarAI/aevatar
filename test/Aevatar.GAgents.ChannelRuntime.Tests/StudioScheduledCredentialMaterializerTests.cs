@@ -32,7 +32,7 @@ public sealed class StudioScheduledCredentialMaterializerTests
             "schedule-alpha",
             "operation-alpha",
             EffectLocator("schedule-alpha", "operation-alpha"),
-            1,
+            StudioScheduledCredentialMaterializationMode.Initial,
             OwnerScope.ForNyxIdNative("owner-alpha"));
 
         credential.ApiKeyId.Should().Be("api-key-alpha");
@@ -77,7 +77,7 @@ public sealed class StudioScheduledCredentialMaterializerTests
             "schedule-alpha",
             "operation-alpha",
             EffectLocator("schedule-alpha", "operation-alpha"),
-            1,
+            StudioScheduledCredentialMaterializationMode.Initial,
             OwnerScope.ForNyxIdNative("owner-alpha"));
 
         var failure = await action.Should()
@@ -106,7 +106,7 @@ public sealed class StudioScheduledCredentialMaterializerTests
             "schedule-alpha",
             "operation-alpha",
             EffectLocator("schedule-alpha", "operation-alpha"),
-            1,
+            StudioScheduledCredentialMaterializationMode.Initial,
             OwnerScope.ForNyxIdNative("owner-alpha"));
 
         var conflict = await action.Should().ThrowAsync<StudioMemberAutomationPlanConflictException>()
@@ -136,7 +136,7 @@ public sealed class StudioScheduledCredentialMaterializerTests
             "schedule-alpha",
             "operation-alpha",
             EffectLocator("schedule-alpha", "operation-alpha"),
-            1,
+            StudioScheduledCredentialMaterializationMode.Initial,
             OwnerScope.ForNyxIdNative("owner-alpha"));
 
         var conflict = await action.Should().ThrowAsync<StudioMemberAutomationPlanConflictException>()
@@ -166,7 +166,7 @@ public sealed class StudioScheduledCredentialMaterializerTests
             "schedule-alpha",
             "operation-alpha",
             EffectLocator("schedule-alpha", "operation-alpha"),
-            1,
+            StudioScheduledCredentialMaterializationMode.Initial,
             OwnerScope.ForNyxIdNative("owner-alpha"));
 
         var failure = await action.Should()
@@ -202,7 +202,7 @@ public sealed class StudioScheduledCredentialMaterializerTests
             "schedule-alpha",
             "operation-alpha",
             EffectLocator("schedule-alpha", "operation-alpha"),
-            1,
+            StudioScheduledCredentialMaterializationMode.Initial,
             OwnerScope.ForNyxIdNative("owner-alpha"));
 
         await action.Should().ThrowAsync<InvalidOperationException>()
@@ -235,7 +235,7 @@ public sealed class StudioScheduledCredentialMaterializerTests
             "schedule-alpha",
             "operation-alpha",
             EffectLocator("schedule-alpha", "operation-alpha"),
-            1,
+            StudioScheduledCredentialMaterializationMode.Initial,
             OwnerScope.ForNyxIdNative("owner-alpha"));
 
         var exception = await action.Should().ThrowAsync<InvalidOperationException>()
@@ -267,7 +267,7 @@ public sealed class StudioScheduledCredentialMaterializerTests
             "schedule-alpha",
             "operation-alpha",
             locator,
-            1,
+            StudioScheduledCredentialMaterializationMode.Initial,
             OwnerScope.ForNyxIdNative("owner-alpha"));
 
         await action.Should().ThrowAsync<InvalidOperationException>()
@@ -297,7 +297,7 @@ public sealed class StudioScheduledCredentialMaterializerTests
             "schedule-alpha",
             "operation-alpha",
             locator,
-            2,
+            StudioScheduledCredentialMaterializationMode.Recovery,
             OwnerScope.ForNyxIdNative("owner-alpha"));
 
         credential.ApiKeyId.Should().Be("api-key-replacement");
@@ -331,7 +331,7 @@ public sealed class StudioScheduledCredentialMaterializerTests
             "schedule-alpha",
             "operation-alpha",
             EffectLocator("schedule-alpha", "operation-alpha"),
-            2,
+            StudioScheduledCredentialMaterializationMode.Recovery,
             OwnerScope.ForNyxIdNative("owner-alpha"));
 
         var failure = await action.Should()
@@ -366,7 +366,7 @@ public sealed class StudioScheduledCredentialMaterializerTests
             "schedule-alpha",
             "operation-alpha",
             EffectLocator("schedule-alpha", "operation-alpha"),
-            1,
+            StudioScheduledCredentialMaterializationMode.Initial,
             OwnerScope.ForNyxIdNative("owner-alpha"));
 
         var failure = await action.Should()

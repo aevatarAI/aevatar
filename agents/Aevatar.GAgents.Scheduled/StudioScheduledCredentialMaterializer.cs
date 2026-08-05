@@ -49,7 +49,7 @@ public sealed class StudioScheduledCredentialMaterializer : IStudioScheduledCred
         string scheduleId,
         string operationId,
         ScheduledCredentialEffectLocator effectLocator,
-        long effectAttemptGeneration,
+        StudioScheduledCredentialMaterializationMode mode,
         OwnerScope ownerScope,
         CancellationToken ct = default)
     {
@@ -57,8 +57,11 @@ public sealed class StudioScheduledCredentialMaterializer : IStudioScheduledCred
         ArgumentException.ThrowIfNullOrWhiteSpace(scheduleId);
         ArgumentException.ThrowIfNullOrWhiteSpace(operationId);
         ArgumentNullException.ThrowIfNull(effectLocator);
-        if (effectAttemptGeneration <= 0)
-            throw new ArgumentOutOfRangeException(nameof(effectAttemptGeneration));
+        if (mode is not (StudioScheduledCredentialMaterializationMode.Initial or
+            StudioScheduledCredentialMaterializationMode.Recovery))
+        {
+            throw new ArgumentOutOfRangeException(nameof(mode));
+        }
         var plan = validatedPlan.Plan ??
             throw new InvalidOperationException("scheduled_authorization_plan_missing");
         var owner = plan.Owner ??
@@ -74,7 +77,8 @@ public sealed class StudioScheduledCredentialMaterializer : IStudioScheduledCred
             validatedPlan,
             effectLocator,
             ct);
-        if (effectAttemptGeneration > 1 && recoveredEffectCount == 0)
+        if (mode == StudioScheduledCredentialMaterializationMode.Recovery &&
+            recoveredEffectCount == 0)
         {
             const string errorCode = "scheduled_credential_recovery_evidence_missing";
             throw new StudioScheduledCredentialMaterializationException(
