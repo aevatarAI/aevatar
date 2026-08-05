@@ -1743,6 +1743,26 @@ public sealed class ScheduledDispatchApplicationServiceTests
             .Be(ScheduledDispatchCredentialRequirementTargetKindState.WorkflowService);
         begin.ActivationDecision.RevisionId.Should().Be("revision-alpha");
         begin.ActivationDecision.Caller.ServiceKey.Should().Be(decision.Caller!.ServiceKey);
+
+        dispatchPort.Envelopes.Clear();
+        await port.DispatchRetryTeamAutomationCredentialOperationAsync(
+            actorId,
+            decision.Owner,
+            "operation-stale",
+            "idempotency-stale",
+            "observation-retry");
+
+        var retry = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload
+            .Unpack<RetryTeamAutomationCredentialOperationCommand>();
+        retry.Owner.Should().BeEquivalentTo(new TeamMemberAutomationOwnerState
+        {
+            ScopeId = "scope-alpha",
+            MemberId = "member-alpha",
+            TeamId = "team-alpha",
+        });
+        retry.OperationId.Should().Be("operation-stale");
+        retry.IdempotencyKey.Should().Be("idempotency-stale");
+        retry.ObservationRequestId.Should().Be("observation-retry");
     }
 
     [Fact]
@@ -2250,6 +2270,45 @@ public sealed class ScheduledDispatchApplicationServiceTests
         actorPort.ResolvedScheduleIds.Should().BeEmpty();
         actorPort.TeamDeleted.Should().BeEmpty();
         actorPort.TeamRunNow.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PendingTeamAutomation_ShouldBeVisibleToOwnerBeforeTargetActivation()
+    {
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
+        var pending = CreateSummaryDetail(
+            "schedule-team-pending",
+            ScheduledDispatchTargetKind.Envelope,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialSourceKind.None);
+        var queryPort = new RecordingScheduledDispatchQueryPort
+        {
+            Detail = pending with
+            {
+                Schedule = pending.Schedule with
+                {
+                    TeamOwned = true,
+                    TeamOwnerScopeId = owner.ScopeId,
+                    TeamId = owner.TeamId,
+                    TeamOwnerMemberId = owner.MemberId,
+                    TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatus.ProvisioningPending,
+                    TeamAutomationOperationId = "operation-alpha",
+                    TeamAutomationIdempotencyKey = "idempotency-alpha",
+                },
+            },
+        };
+        var service = new ScheduledDispatchApplicationService(
+            new RecordingScheduledDispatchActorPort(),
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var detail = await service.GetTeamAutomationAsync("schedule-team-pending", owner);
+
+        detail.Should().NotBeNull();
+        detail!.Schedule.TeamAutomationOperationId.Should().Be("operation-alpha");
+        detail.Schedule.TargetKind.Should().Be(ScheduledDispatchTargetKind.Envelope);
     }
 
     [Fact]

@@ -346,6 +346,41 @@ message NyxIdChatConversationOperationDocument {
   google.protobuf.Timestamp completed_at = 16;
 }
 
+message NyxIdChatConversationLLMStepSourceDocument {
+  string model = 1;
+}
+
+message NyxIdChatConversationToolStepSourceDocument {
+  string tool_name = 1;
+  string service_slug = 2;
+  string service_id = 3;
+  optional string readiness_capability_id = 4;
+}
+
+message NyxIdChatConversationBrowserActionStepSourceDocument {
+  string action = 1;
+  string action_request_id = 2;
+}
+
+message NyxIdChatConversationPostconditionStepSourceDocument {
+  string action_request_id = 1;
+  string postcondition_kind = 2;
+}
+
+message NyxIdChatConversationInputStepSourceDocument {
+  string request_id = 1;
+}
+
+message NyxIdChatConversationStepSourceDocument {
+  oneof source {
+    NyxIdChatConversationLLMStepSourceDocument llm = 1;
+    NyxIdChatConversationToolStepSourceDocument tool = 2;
+    NyxIdChatConversationBrowserActionStepSourceDocument browser_action = 3;
+    NyxIdChatConversationPostconditionStepSourceDocument postcondition = 4;
+    NyxIdChatConversationInputStepSourceDocument input = 5;
+  }
+}
+
 message NyxIdChatConversationStepDocument {
   string step_id = 1;
   int32 order = 2;
@@ -363,6 +398,7 @@ message NyxIdChatConversationStepDocument {
   NyxIdChatConversationAvailableActionsDocument available_actions = 14;
   google.protobuf.Timestamp updated_at = 15;
   NyxIdChatConversationOperationDocument operation = 16;
+  NyxIdChatConversationStepSourceDocument source = 17;
 }
 
 message NyxIdChatConversationTaskDocument {

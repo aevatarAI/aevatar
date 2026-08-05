@@ -45,6 +45,8 @@ The conversation controller owns active/latest turns, task and step status, oper
 
 `NyxIdChatTurnGAgent` is short-lived. Its opaque actor address is a server-owned reuse key and has no client-visible meaning. It records only admission/completion/delivery waterlines and safe effect evidence, runs one LLM or tool operation, and reports back to the controller. It never owns conversation truth and never performs a second operation without a new controller authorization.
 
+One NyxID Chat LLM operation admits at most one tool call. The turn executor carries this as the typed `AllowMultipleToolCalls = false` request constraint and provider adapters must preserve it through routing, request copies, and tool-round construction. Providers that support the constraint map it to their native option. The actor still fails closed with `NYXID_CHAT_MULTIPLE_TOOL_CALLS_UNSUPPORTED` if a provider violates the contract; ordinary non-NyxID chat requests leave the nullable option unset and retain their provider default.
+
 The Host authenticates, validates identities, dispatches commands, and maps typed results. It does not decide task transitions. Projection consumes committed controller facts only. Query reads `NyxIdChatConversationCurrentStateDocument` only; it does not activate an actor, read the event store, attach or prime a projection, replay events, or create a turn.
 
 Conversation creation has three deliberately separate authorities:
@@ -76,6 +78,10 @@ The HTTP endpoint owns only authentication/protocol adaptation, serialized SSE w
 | input `requestId` | Conversation actor | Selects the exact pending input fact; it is distinct from the caller's `clientRequestId`. |
 | approval `requestId` | Conversation actor | Selects a pending Aevatar tool approval; it is not a browser-action ID. |
 | `actionRequestId` | Conversation actor | Correlates one NyxID browser journey and its reports. |
+| `connectedServiceId` | NyxID connected-service inventory | One exact connected UserService instance; it is not a route or readiness identity. |
+| `serviceSlug` | NyxID route contract | The exact route slug for the admitted operation; it is not a connected-service ID. |
+| `catalogServiceSlug` | NyxID catalog | The catalog family that authored the operation descriptor; it is not a route slug or readiness identity. |
+| `readinessCapabilityId` | NyxID Assistant readiness registry | Optional producer-authored recovery identity, such as `api-github`; it is never derived by Aevatar. |
 | `originTurnId` | Conversation actor | The blocked turn that emitted an action request. |
 | `continuationTurnId` | Server-created | New run created after accepted steering or `action.continue`; it never resumes the old turn ID. |
 | `stateVersion` | Conversation actor committed version | Read-model freshness watermark; projection never invents a local version. |
@@ -199,6 +205,32 @@ External-effect evidence is closed:
 `uncertain` is not success and is not an automatic retry invitation. A required `failed`, `cancelled`, or unrecoverable `uncertain` step prevents task success. Browser-reported completion cannot make a step `done`; only a matching typed postcondition can.
 
 The actor computes `retry`, `skip`, and `stop` availability. Retry requires rebuildable typed input plus proof that replay is safe: no effect occurred, or the exact logical operation is idempotent under a stable key. V1 does not persist tool arguments or capabilities, so an interrupted tool is never silently reconstructed. Skip requires an optional step or explicit safe-skip policy. UI code must not derive these actions independently.
+
+### Tool recovery provenance
+
+An authorized NyxID operation may provide an optional
+`readiness_capability_id` in its typed `NyxIdOperationRef`; its JSON name is
+`readinessCapabilityId`. Admission snapshots that exact producer-owned value
+beside the exact call safety. The turn result carries only the connected
+service ID, service slug, catalog service slug, and optional readiness
+capability ID into the conversation actor. It does not persist the descriptor's
+method, path, labels, arguments, or result.
+
+When the conversation actor creates the tool step, it copies the connected
+service ID to `source.tool.serviceId`, the route slug to
+`source.tool.serviceSlug`, and the readiness identity to
+`source.tool.readinessCapabilityId`. The catalog slug remains a distinct
+provider-provenance identity and is never substituted for any of those fields.
+If the producer omits readiness provenance, the actor and every projection omit
+`readinessCapabilityId`; Aevatar never derives it from tool names, failure text,
+service IDs, route slugs, catalog slugs, or route position.
+
+The committed tool step is the single source for both
+`nyxid.task.snapshot`/`nyxid.task.step.changed` and the current-state query.
+Passivation and reload therefore preserve the same recovery identity together
+with the unchanged `externalEffect` evidence and actor-computed
+`availableActions`. The failed and uncertain convergence examples are checked
+in under `test/Aevatar.AI.Tests/Fixtures/NyxIdChat/v1/`.
 
 ## Stop, steering, retry, and skip
 
@@ -436,7 +468,7 @@ Example `current` envelope:
 }
 ```
 
-The snapshot contains query-shaped safe data: active/latest/recent turns, ordered task steps, operation key/generation and phase, effect evidence, available actions, pending input, approval presentation, latest safe input/approval resolution facts, control fences, continuation admission, progress sequence, actor-authored attention, and actor version. It excludes submitted answers and reasons, transient capabilities, raw LLM/tool results, credentials, and actor runtime internals.
+The snapshot contains query-shaped safe data: active/latest/recent turns, ordered task steps and their typed sources, operation key/generation and phase, effect evidence, available actions, pending input, approval presentation, latest safe input/approval resolution facts, control fences, continuation admission, progress sequence, actor-authored attention, and actor version. A NyxID tool source may include the exact optional `readinessCapabilityId` described above. It excludes submitted answers and reasons, transient capabilities, raw LLM/tool results, credentials, and actor runtime internals.
 
 The read model is eventually consistent and says so through its actor-derived `stateVersion`. Writes are monotonic overwrite: newer replaces older, byte-equivalent equal-version duplicates are idempotent, equal-version conflicts fail, and older versions cannot overwrite newer state. Query-time priming and replay are forbidden.
 

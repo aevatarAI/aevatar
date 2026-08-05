@@ -315,6 +315,7 @@ public sealed class EditorControllerSerializationTests
                                body_mode: none
                                body_required: true
                                response_mode: file_artifact
+                               risk: read_only
                            parameters:
                              tool: nyxid_proxy
                    """,
@@ -327,6 +328,7 @@ public sealed class EditorControllerSerializationTests
         parseBody.Should().Contain("\"nyxIdOperation\":{\"userServiceId\":\"usvc-alpha\",\"endpointId\":\"endpoint-alpha\"}");
         parseBody.Should().Contain("\"nyxIdRequest\":{\"userServiceId\":\"usvc-beta\",\"method\":\"GET\",\"pathTemplate\":\"/api/resources/{resource_id}\"");
         parseBody.Should().Contain("\"bodyRequired\":true");
+        parseBody.Should().Contain("\"risk\":\"read_only\"");
 
         var document = JsonNode.Parse(parseBody)!["document"]!.DeepClone();
         document["description"] = "unrelated edit";
@@ -341,6 +343,7 @@ public sealed class EditorControllerSerializationTests
         normalizeBody.Should().Contain("\"description\":\"unrelated edit\"");
         normalizeBody.Should().Contain("\"bodyRequired\":true");
         normalizeBody.Should().Contain("body_required: true");
+        normalizeBody.Should().Contain("risk: read_only");
 
         var normalizedDocument = JsonNode.Parse(normalizeBody)!["document"]!.DeepClone();
         using var serializeResponse = await client.PostAsJsonAsync("/api/editor/serialize-yaml", new
@@ -357,6 +360,7 @@ public sealed class EditorControllerSerializationTests
         serializeBody.Should().Contain("path_template: /api/resources/{resource_id}");
         serializeBody.Should().Contain("body_required: true");
         serializeBody.Should().Contain("response_mode: file_artifact");
+        serializeBody.Should().Contain("risk: read_only");
     }
 
     [Fact]

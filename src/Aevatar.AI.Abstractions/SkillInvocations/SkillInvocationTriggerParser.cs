@@ -1,7 +1,23 @@
+using System.Text.RegularExpressions;
+
 namespace Aevatar.AI.Abstractions.SkillInvocations;
 
 public static class SkillInvocationTriggerParser
 {
+    private static readonly Regex[] ExplicitNamedSkillPatterns =
+    [
+        new(
+            "(?:使用|加载|挂载)\\s*(?:精确名称为|名称为|名为|名叫)?\\s*[`'\"]?(?<name>[a-z0-9]+(?:-[a-z0-9]+)+)[`'\"]?\\s*(?:的\\s*)?(?:skill|技能)",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase),
+        new(
+            "(?:use|load|mount)\\s+(?:(?:the\\s+)?(?:exact\\s+)?skill\\s+(?:named\\s+)?[`'\"]?(?<name>[a-z0-9]+(?:-[a-z0-9]+)+)[`'\"]?|(?:the\\s+)?(?:exact\\s+)?[`'\"]?(?<name>[a-z0-9]+(?:-[a-z0-9]+)+)[`'\"]?\\s+skill)",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase),
+    ];
+
+    private static readonly Regex ExplicitSkillNegation = new(
+        "(?:do\\s+not|don't|never|not\\s+to|不要|禁止(?:直接)?|别)\\s*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     public static bool TryParse(
         string? text,
         string? platform,
@@ -61,7 +77,35 @@ public static class SkillInvocationTriggerParser
             return true;
         }
 
+        foreach (var pattern in ExplicitNamedSkillPatterns)
+        {
+            foreach (Match match in pattern.Matches(source))
+            {
+                if (IsNegated(source, match.Index))
+                    continue;
+
+                var name = match.Groups["name"].Value;
+                if (!IsValidName(name.AsSpan()))
+                    continue;
+
+                trigger = new SkillInvocationTrigger(
+                    Name: name.ToLowerInvariant(),
+                    Arguments: source,
+                    IsDiscovery: false,
+                    OriginalText: source,
+                    TriggerToken: "natural-language-skill",
+                    Platform: effectivePlatform);
+                return true;
+            }
+        }
+
         return false;
+    }
+
+    private static bool IsNegated(string source, int matchStart)
+    {
+        var prefixStart = Math.Max(0, matchStart - 32);
+        return ExplicitSkillNegation.IsMatch(source[prefixStart..matchStart]);
     }
 
     private static bool TryMatchLine(

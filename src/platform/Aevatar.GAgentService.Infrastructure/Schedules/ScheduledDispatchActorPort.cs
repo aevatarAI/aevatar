@@ -157,6 +157,24 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         }, ct);
     }
 
+    public Task<DispatchAdmission> DispatchRetryTeamAutomationCredentialOperationAsync(
+        string actorId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
+        string observationRequestId,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        return DispatchAsync(actorId, new RetryTeamAutomationCredentialOperationCommand
+        {
+            Owner = CreateTeamOwnerState(owner),
+            OperationId = operationId,
+            IdempotencyKey = idempotencyKey,
+            ObservationRequestId = observationRequestId,
+        }, ct);
+    }
+
     private static TeamAutomationActivationDecisionState CreateActivationDecisionState(
         TeamAutomationActivationDecision decision)
     {

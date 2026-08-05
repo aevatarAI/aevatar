@@ -9,6 +9,7 @@ import "google/protobuf/struct.proto";
 import "llm_sessions.proto";
 import "service_definition.proto";
 import "service_invocation_catalog.proto";
+import "service_deployment.proto";
 import "service_revision.proto";
 import "content_artifact_messages.proto";
 import "agent_profiles.proto";
@@ -105,6 +106,7 @@ message ServiceDeploymentCatalogReadModel {
   string last_event_id = 4;
   google.protobuf.Timestamp updated_at_utc_value = 5;
   repeated ServiceDeploymentReadModel deployment_entries = 6;
+  repeated ServiceDeploymentActivationFailureReadModel activation_failure_entries = 7;
 }
 
 message ServiceDeploymentReadModel {
@@ -114,6 +116,13 @@ message ServiceDeploymentReadModel {
   string status = 4;
   google.protobuf.Timestamp activated_at_utc_value = 5;
   google.protobuf.Timestamp updated_at_utc_value = 6;
+}
+
+message ServiceDeploymentActivationFailureReadModel {
+  string revision_id = 1;
+  aevatar.gagentservice.ServiceDeploymentActivationFailureCode failure_code = 2;
+  string failure_reason = 3;
+  google.protobuf.Timestamp occurred_at_utc_value = 4;
 }
 
 // --- ServiceRevisionCatalogReadModel ---

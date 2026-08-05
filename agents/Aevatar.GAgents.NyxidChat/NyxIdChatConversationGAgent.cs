@@ -1403,6 +1403,7 @@ public sealed class NyxIdChatConversationGAgent
                         CallId = call.CallId,
                         ToolName = call.ToolName,
                         Safety = call.Safety?.Clone(),
+                        NyxIdProvenance = call.NyxIdProvenance?.Clone(),
                     }));
                 break;
             case NyxIdChatOperationResultSignal.ResultOneofCase.Tool:
@@ -2971,6 +2972,7 @@ public sealed class NyxIdChatConversationGAgent
             command.ClientRequestId.Trim(),
             sourceCommandId,
             command.Prompt,
+            NormalizeOptional(command.InputPartsFingerprint) ??
             BuildInputPartsFingerprint(command.InputParts));
 
     private static string BuildInputPartsFingerprint(

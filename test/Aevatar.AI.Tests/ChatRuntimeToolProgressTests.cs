@@ -63,9 +63,8 @@ public sealed class ChatRuntimeToolProgressTests
                 "the recovery tool must not execute until its start carrier is consumed");
             (await firstMove).Should().BeTrue();
             stream.Current.ToolCallStarted.Should().NotBeNull();
-            stream.Current.ToolCallStarted!.ToolCall.Name.Should().Be("use_skill");
-            stream.Current.ToolCallStarted.Presentation.Kind.Should().Be(ToolPresentationKind.Skill);
-            stream.Current.ToolCallStarted.Presentation.Skill.SkillName.Should().Be("project-summary");
+            stream.Current.ToolCallStarted!.ToolCall.Name.Should().Be("ornn_search_skills");
+            stream.Current.ToolCallStarted.Presentation.Kind.Should().Be(ToolPresentationKind.Generic);
             tool.Started.Task.IsCompleted.Should().BeFalse();
 
             var resume = stream.MoveNextAsync().AsTask();
@@ -73,15 +72,15 @@ public sealed class ChatRuntimeToolProgressTests
             executionSignal.Should().BeSameAs(tool.Started.Task,
                 "the admitted terminal must invoke the recovery tool before publishing its result");
             resume.IsCompleted.Should().BeFalse();
-            tool.Release("{\"loaded\":true}");
+            tool.Release("{\"status\":\"no_match\",\"matches\":[]}");
             (await resume).Should().BeTrue();
             stream.Current.ToolCallCompleted.Should().NotBeNull();
-            stream.Current.ToolCallCompleted!.ToolName.Should().Be("use_skill");
-            stream.Current.ToolCallCompleted.ResultJson.Should().Be("{\"loaded\":true}");
+            stream.Current.ToolCallCompleted!.ToolName.Should().Be("ornn_search_skills");
+            stream.Current.ToolCallCompleted.ResultJson.Should().Be("{\"status\":\"no_match\",\"matches\":[]}");
         }
         finally
         {
-            tool.Release("{\"loaded\":true}");
+            tool.Release("{\"status\":\"no_match\",\"matches\":[]}");
             if (!firstMove.IsCompleted)
                 await firstMove;
         }
@@ -274,8 +273,8 @@ public sealed class ChatRuntimeToolProgressTests
         public TaskCompletionSource Started { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public string Name => "use_skill";
-        public string Description => "Loads one recovery skill.";
+        public string Name => "ornn_search_skills";
+        public string Description => "Searches for recovery skills.";
         public string ParametersSchema => "{}";
         public bool IsReadOnly => true;
         public AgentToolReceipt? CreateSuccessReceipt(
@@ -290,17 +289,7 @@ public sealed class ChatRuntimeToolProgressTests
                 ResultJson = resultJson,
             };
         public ToolPresentationDescriptor Presentation =>
-            ToolPresentationDescriptors.Skill(Name, "Use skill", Description, string.Empty, "test");
-
-        public ToolPresentationDescriptor ResolvePresentation(string argumentsJson) =>
-            ToolPresentationDescriptors.Skill(
-                Name,
-                "project-summary",
-                Description,
-                argumentsJson.Contains("project-summary", StringComparison.Ordinal)
-                    ? "project-summary"
-                    : string.Empty,
-                "test");
+            ToolPresentationDescriptors.Generic(Name, Description);
 
         public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {

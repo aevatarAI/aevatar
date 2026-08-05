@@ -407,6 +407,39 @@ public sealed class DefaultServiceInvocationDispatcherTests
         registry.Calls.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData(ExternalCapabilityExecutionMode.Unspecified)]
+    [InlineData((ExternalCapabilityExecutionMode)999)]
+    public async Task DispatchAsync_WithLegacyWorkflowArtifactMissingExecutionMode_ShouldRequireReprovisionBeforeCreatingRun(
+        ExternalCapabilityExecutionMode executionMode)
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var registry = new RecordingServiceRunRegistrationPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            new RecordingDispatchPort(),
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            registry,
+            new AcceptingArtifactCompatibilityPreflight());
+        var target = CreateExplicitWorkflowTarget("rev-alpha", "rev-alpha", "rev-alpha");
+        target.Artifact.DeploymentPlan.WorkflowPlan.ExecutionMode = executionMode;
+
+        var act = () => dispatcher.DispatchAsync(target, CreateWorkflowInvocationRequest());
+
+        var failure = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        failure.Which.StableCode.Should().Be(WorkflowCapabilityAdmissionPlanIntegrity.RebindRequiredCode);
+        failure.Which.SafeMessage.Should().Be(
+            "Saved workflow deployment is missing an explicit execution mode. " +
+            "Re-publish the workflow and reprovision schedules that reference it.");
+        failure.Which.Readiness.ExecutionMode.Should().Be(executionMode);
+        failure.Which.Readiness.Remediations.Should().ContainSingle().Which.ActionKind.Should()
+            .Be(ExternalCapabilityRemediationActionKind.RebindWorkflow);
+        workflowPort.CreateRunCalls.Should().BeEmpty();
+        workflowPort.EnsureRunCalls.Should().BeEmpty();
+        workflowPort.EnsureAndDispatchCalls.Should().BeEmpty();
+        registry.Calls.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task DispatchAsync_ShouldMapTypedWorkflowCompletionNotificationTarget()
     {

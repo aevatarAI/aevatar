@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Tools;
+using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
@@ -21,12 +22,17 @@ public interface INyxIdChatTurnOperationExecutor
 
 public sealed class NyxIdChatTransientExecutionSession
 {
+    private readonly HashSet<string> _publishedToolStartCallIds = new(StringComparer.Ordinal);
+
     internal AgentRunReplyStepState? StepState { get; set; }
     internal NeedsLlmReplyEvent? Request { get; set; }
     internal AgentRunAuthorizedToolStep? AuthorizedToolStep { get; set; }
     internal NyxIdChatOperationKey? AuthorizationSourceKey { get; set; }
     internal AgentProfileTurnCatalog? TurnCatalog { get; set; }
     internal long ProgressSequence { get; set; }
+
+    internal bool TryMarkToolStartPublished(string callId) =>
+        _publishedToolStartCallIds.Add(callId);
 }
 
 public sealed record NyxIdChatTurnOperationExecution(
@@ -255,7 +261,8 @@ public sealed class NyxIdChatTurnOperationExecutor
                         session,
                         reportProgressAsync,
                         token),
-                    session.TurnCatalog),
+                    session.TurnCatalog,
+                    AllowMultipleToolCalls: false),
                 ct)
             .ConfigureAwait(false);
 
@@ -352,7 +359,7 @@ public sealed class NyxIdChatTurnOperationExecutor
                 NyxIdChatEffectEvidence.NotStarted);
         }
 
-        await ReportProgressAsync(
+        await ReportToolStartedOnceAsync(
                 command.Key,
                 new NyxIdChatToolProgress
                 {
@@ -667,7 +674,29 @@ public sealed class NyxIdChatTurnOperationExecutor
                                      callSafety.IsDestructive ||
                                      !string.IsNullOrWhiteSpace(snapshot.SideEffectKind),
         };
+        if (snapshot.Presentation?.SourceRefCase ==
+            ToolPresentationDescriptor.SourceRefOneofCase.NyxIdOperation)
+        {
+            result.NyxIdProvenance = SnapshotNyxIdIdentity(
+                snapshot.Presentation.NyxIdOperation);
+        }
         return result;
+    }
+
+    private static NyxIdOperationRef SnapshotNyxIdIdentity(NyxIdOperationRef source)
+    {
+        var snapshot = new NyxIdOperationRef
+        {
+            ConnectedServiceId = source.ConnectedServiceId,
+            ServiceSlug = source.ServiceSlug,
+            CatalogServiceSlug = source.CatalogServiceSlug,
+        };
+        if (source.HasReadinessCapabilityId &&
+            !string.IsNullOrWhiteSpace(source.ReadinessCapabilityId))
+        {
+            snapshot.ReadinessCapabilityId = source.ReadinessCapabilityId;
+        }
+        return snapshot;
     }
 
     private static NeedsLlmReplyEvent BuildReplyRequest(NyxIdChatOperationDispatchCommand command)
@@ -850,6 +879,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             assistant.ContentParts.AddRange(outputParts.Select(static part => part.Clone()));
             assistant.ToolCalls.AddRange(result.ToolCalls.Select(static call => call.Clone()));
             next.Messages.Add(assistant);
+            next.PendingHistoryMessages.Add(assistant.Clone());
         }
 
         return next;
@@ -864,6 +894,7 @@ public sealed class NyxIdChatTurnOperationExecutor
         next.NextStepIndex = completedStepIndex;
         next.PendingToolCalls.Clear();
         next.Messages.AddRange(result.ResultMessages.Select(static message => message.Clone()));
+        next.PendingHistoryMessages.AddRange(result.ResultMessages.Select(static message => message.Clone()));
         next.AppendedHistory.AddRange(result.ResultMessages.Select(
             AgentRunReplyStepMappers.ToConversationHistoryEntry));
         next.ToolReceipts.AddRange(result.ToolReceipts.Select(static receipt => receipt.Clone()));
@@ -906,12 +937,15 @@ public sealed class NyxIdChatTurnOperationExecutor
             outputParts.Add(ContentPartProtoMapper.ToProto(chunk.DeltaContentPart));
         if (chunk.ToolCallStarted?.ToolCall is { } started)
         {
-            await ReportProgressAsync(
+            await ReportToolStartedOnceAsync(
                     key,
                     new NyxIdChatToolProgress
                     {
                         CallId = started.Id,
                         ToolName = started.Name,
+                        Presentation = ToolPresentationDescriptors.Snapshot(
+                            chunk.ToolCallStarted.Presentation,
+                            started.Name),
                     },
                     session,
                     reportProgressAsync,
@@ -919,6 +953,16 @@ public sealed class NyxIdChatTurnOperationExecutor
                 .ConfigureAwait(false);
         }
     }
+
+    private static Task ReportToolStartedOnceAsync(
+        NyxIdChatOperationKey key,
+        NyxIdChatToolProgress progress,
+        NyxIdChatTransientExecutionSession session,
+        Func<NyxIdChatOperationProgressSignal, CancellationToken, Task> reportProgressAsync,
+        CancellationToken ct) =>
+        session.TryMarkToolStartPublished(progress.CallId)
+            ? ReportProgressAsync(key, progress, session, reportProgressAsync, ct)
+            : Task.CompletedTask;
 
     private static Task ReportProgressAsync(
         NyxIdChatOperationKey key,

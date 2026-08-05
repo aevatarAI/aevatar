@@ -954,15 +954,13 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             var serviceId = service.UserServiceId?.Trim() ?? string.Empty;
             if (!requiredServiceIds.Contains(serviceId))
                 continue;
-            if (service.ObservedAt == null || service.FreshUntil == null)
-            {
-                if (snapshot.ObservedAtUtc > evaluatedAtUtc || snapshot.FreshUntilUtc <= evaluatedAtUtc)
-                    return false;
-                freshServiceIds.Add(serviceId);
-                continue;
-            }
-            if (service.ObservedAt.ToDateTimeOffset() > evaluatedAtUtc ||
-                service.FreshUntil.ToDateTimeOffset() <= evaluatedAtUtc)
+            if (!NyxIdAuthorizationCatalogIntegrity.TryResolveServiceAuthorityWindow(
+                    snapshot,
+                    service,
+                    out var observedAtUtc,
+                    out var freshUntilUtc) ||
+                observedAtUtc > evaluatedAtUtc ||
+                freshUntilUtc <= evaluatedAtUtc)
             {
                 return false;
             }

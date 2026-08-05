@@ -109,6 +109,84 @@ public sealed class NyxIdChatFixtureConvergenceTests
         }
     }
 
+    [Theory]
+    [InlineData("failed", "failed", "not_applied", true, false, false)]
+    [InlineData("uncertain", "uncertain", "may_have_changed", false, false, false)]
+    public void VersionOneToolRecoveryFixtures_ShouldConvergeOnAuthoritativeRecoveryIdentity(
+        string scenario,
+        string status,
+        string externalEffect,
+        bool retry,
+        bool skip,
+        bool stop)
+    {
+        using var liveFrames = ReadFixture("tool-recovery-live-frames.json");
+        using var currentStates = ReadFixture("tool-recovery-current-states.json");
+        var frame = FindScenario(liveFrames.RootElement, scenario);
+        var state = FindScenario(currentStates.RootElement, scenario);
+        var liveStep = frame.GetProperty("custom").GetProperty("payload");
+        var snapshot = state.GetProperty("snapshot");
+        var currentStep = snapshot.GetProperty("activeTask").GetProperty("steps")[0];
+
+        frame.GetProperty("custom").GetProperty("name").GetString().Should()
+            .Be("nyxid.task.step.changed");
+        frame.GetProperty("sequence").GetInt64().Should()
+            .Be(snapshot.GetProperty("progressSequence").GetInt64());
+        state.GetProperty("stateVersion").GetInt64().Should()
+            .Be(snapshot.GetProperty("stateVersion").GetInt64());
+
+        liveStep.GetProperty("status").GetString().Should().Be(status);
+        currentStep.GetProperty("status").GetString().Should().Be(status);
+        liveStep.GetProperty("externalEffect").GetString().Should().Be(externalEffect);
+        currentStep.GetProperty("externalEffect").GetString().Should().Be(externalEffect);
+        AssertToolSourceEquivalent(
+            liveStep.GetProperty("source").GetProperty("tool"),
+            currentStep.GetProperty("source").GetProperty("tool"));
+        AssertAvailableActions(
+            liveStep.GetProperty("availableActions"),
+            retry,
+            skip,
+            stop);
+        AssertAvailableActions(
+            currentStep.GetProperty("availableActions"),
+            retry,
+            skip,
+            stop);
+
+        foreach (var fixture in new[] { frame, state })
+        {
+            fixture.GetRawText().Should().NotContainAny(
+                "credential",
+                "token",
+                "arguments",
+                "resultJson",
+                "://");
+        }
+    }
+
+    private static void AssertToolSourceEquivalent(JsonElement live, JsonElement current)
+    {
+        foreach (var propertyName in new[]
+                 {
+                     "toolName", "serviceSlug", "serviceId", "readinessCapabilityId",
+                 })
+        {
+            live.GetProperty(propertyName).GetString().Should()
+                .Be(current.GetProperty(propertyName).GetString(), propertyName);
+        }
+    }
+
+    private static void AssertAvailableActions(
+        JsonElement actions,
+        bool retry,
+        bool skip,
+        bool stop)
+    {
+        actions.GetProperty("retry").GetBoolean().Should().Be(retry);
+        actions.GetProperty("skip").GetBoolean().Should().Be(skip);
+        actions.GetProperty("stop").GetBoolean().Should().Be(stop);
+    }
+
     private static void AssertPendingInputEquivalent(JsonElement live, JsonElement current)
     {
         foreach (var propertyName in new[]

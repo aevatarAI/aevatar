@@ -660,6 +660,40 @@ public sealed class ServiceImplementationAdaptersTests
     }
 
     [Fact]
+    public async Task WorkflowAdapter_WithoutPersistedPlanAndMode_ShouldRepairAsInteractive()
+    {
+        const string workflowYaml = "name: legacy-interactive-workflow\nsteps: []";
+        var workflowPort = new RecordingWorkflowRunActorPort
+        {
+            ParseResult = CreateSuccessfulWorkflowParse("legacy-interactive-workflow"),
+        };
+        var admission = new RecordingWorkflowCapabilityAdmissionService();
+        var adapter = new WorkflowServiceImplementationAdapter(workflowPort, admission);
+
+        var artifact = await adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
+        {
+            Spec = new ServiceRevisionSpec
+            {
+                Identity = GAgentServiceTestKit.CreateIdentity(),
+                RevisionId = "rev-legacy-interactive",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                WorkflowSpec = new WorkflowServiceRevisionSpec
+                {
+                    WorkflowYaml = workflowYaml,
+                },
+            },
+        });
+
+        admission.LiveRequest.Should().NotBeNull();
+        admission.LiveRequest!.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Interactive);
+        artifact.DeploymentPlan.WorkflowPlan.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Interactive);
+        artifact.DeploymentPlan.WorkflowPlan.CapabilityAdmissionPlan.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Interactive);
+    }
+
+    [Fact]
     public async Task WorkflowAdapter_ShouldRejectInvalidWorkflowYaml()
     {
         var adapter = new WorkflowServiceImplementationAdapter(

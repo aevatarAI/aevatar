@@ -614,7 +614,7 @@ let accountLabel = "已登录";
 /* ---- Session persistence (localStorage) -------------------------------- */
 const SESSIONS_KEY = "aevatar-studio:sessions";
 /* Session schema:
-   { id, title, createdAt(ms), updatedAt(ms),
+   { id, conversationId?, title, createdAt(ms), updatedAt(ms),
      messages: [
        { role:"user", text },
        { role:"agent", text, status:"working"|"done"|"error",
@@ -636,18 +636,20 @@ function saveSessions(){
   catch(e){ console.warn("studio: sessions save failed", e); }
 }
 function newSessionId(){ return "s_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2,7); }
-function makeSession(){ const now=Date.now(); return { id:newSessionId(), title:"新会话", createdAt:now, updatedAt:now, messages:[] }; }
+function newClientRequestId(){ return crypto.randomUUID ? crypto.randomUUID() : "chat_" + Date.now().toString(36) + "_" + randomString(16); }
+function makeSession(){ const now=Date.now(); return { id:newSessionId(), conversationId:"", title:"新会话", createdAt:now, updatedAt:now, messages:[] }; }
 function activeSession(){ return state.sessions.find(s=>s.id===state.selectedSession) || null; }
 function sessionTitleFrom(text){ const t=(text||"").trim().replace(/\s+/g," "); if(!t) return "新会话"; return t.length>26 ? t.slice(0,26)+"…" : t; }
 
 /* ---- Chat streaming (POST /api/chat, SSE) ------------------------------ */
 // Reads the response body as a stream, buffers, splits on the SSE record
 // separator (\n\n), and invokes onFrame(parsedJson) per `data:` line.
-async function streamChat(prompt, sessionId, onFrame, signal){
-  const body = { prompt, sessionId, workflow: "studio" };
+async function streamChat(prompt, conversationId, clientRequestId, onFrame, signal){
+  const body = { type:"text", clientRequestId, prompt };
+  if(conversationId) body.conversationId = conversationId;
   const res = await fetchWithConsoleAuth("/api/chat", {
     method:"POST",
-    headers:{ "Content-Type":"application/json", "Accept":"text/event-stream" },
+    headers:{ "Content-Type":"application/json", "Accept":"text/event-stream", "Idempotency-Key":clientRequestId },
     body: JSON.stringify(body),
     signal
   });
@@ -683,9 +685,27 @@ function emitSseChunk(chunk, onFrame){
   onFrame(frame);
 }
 
-// Apply one SSE frame to an agent message object (mutates msg in place).
+// Apply one canonical Assistant SSE frame to an agent message and conversation (mutates both in place).
 // Returns true when the run reached a terminal state (finished or errored).
-function applyFrameToMessage(frame, msg){
+function applyFrameToMessage(frame, msg, sess){
+  if(frame.runStarted || frame.type === "RUN_STARTED"){
+    const started = frame.runStarted || {};
+    const conversationId = String(frame.actorId || started.threadId || "").trim();
+    if(!conversationId) throw new Error("chat-run-started-missing-conversation-id");
+    if(sess.conversationId && sess.conversationId !== conversationId) throw new Error("chat-conversation-id-mismatch");
+    sess.conversationId = conversationId;
+    msg.actorId = conversationId;
+  }
+  if(frame.textMessageContent && typeof frame.textMessageContent.delta === "string"){
+    msg.text += frame.textMessageContent.delta;
+  }
+  if(frame.toolCallStart && frame.toolCallStart.toolName){
+    mergeToolCalls(msg, [{
+      toolName:frame.toolCallStart.toolName,
+      callId:frame.toolCallStart.toolCallId || "",
+      argumentsJson:""
+    }]);
+  }
   // top-level run completion → final assistant text
   if(frame.runFinished){
     const out = frame.runFinished.result && frame.runFinished.result.output;
@@ -1184,31 +1204,6 @@ function makeSend(ta){
   return sb;
 }
 
-/* ---- conversation continuity ------------------------------------------- */
-// The /api/chat run is stateless: one prompt per call, and SessionId is a
-// correlation tag only (the backend never rehydrates prior turns from it). This
-// page already owns the full transcript in localStorage, so to give the agent
-// memory we fold a bounded slice of prior turns into the prompt. The first turn
-// (no prior context) sends the bare prompt — identical to the previous behavior.
-const HISTORY_TURN_CAP = 10;     // most recent prior messages to include
-const HISTORY_CHAR_CAP = 6000;   // hard ceiling on the injected transcript length
-function composePromptWithHistory(sess, currentPrompt){
-  const msgs = (sess && Array.isArray(sess.messages)) ? sess.messages : [];
-  // The current user turn is the last user message; history is everything before it.
-  let lastUserIdx = -1;
-  for(let i=msgs.length-1;i>=0;i--){ if(msgs[i].role==="user"){ lastUserIdx=i; break; } }
-  const prior = (lastUserIdx>=0 ? msgs.slice(0,lastUserIdx) : msgs)
-    .filter(m => m && (m.role==="user"||m.role==="agent") && m.text && m.text.trim());
-  if(!prior.length) return currentPrompt;
-  const recent = prior.slice(-HISTORY_TURN_CAP);
-  const lines = recent.map(m => (m.role==="user" ? "用户" : "助手") + "：" + m.text.trim());
-  let transcript = lines.join("\n");
-  if(transcript.length > HISTORY_CHAR_CAP) transcript = "…（更早内容已省略）\n" + transcript.slice(-HISTORY_CHAR_CAP);
-  return "以下是本次对话的前序记录，仅供你保持上下文连续，请勿复述：\n"
-    + "<对话历史>\n" + transcript + "\n</对话历史>\n\n"
-    + "用户最新消息：\n" + currentPrompt;
-}
-
 /* ---- send / stop / retry (live chat) ----------------------------------- */
 function sendComposer(){
   const ta=$("#composerInput");
@@ -1232,9 +1227,7 @@ function retryLastRun(){
   runChat(sess, lastUser.text);
 }
 function runChat(sess, prompt){
-  // Build the history-augmented prompt BEFORE pushing the in-flight agent
-  // placeholder, so the placeholder (empty text) is never part of the transcript.
-  const promptWithHistory = composePromptWithHistory(sess, prompt);
+  const clientRequestId = newClientRequestId();
   const agent = { role:"agent", text:"", status:"working", steps:[], toolCalls:[] };
   sess.messages.push(agent);
   state.streaming = true;
@@ -1243,8 +1236,8 @@ function runChat(sess, prompt){
   scrollChatToBottom();
   let rafPending = false;
   const scheduleRender = ()=>{ if(rafPending) return; rafPending = true; requestAnimationFrame(()=>{ rafPending=false; if(state.streaming){ patchActiveAgent(agent); scrollChatToBottom(); } }); };
-  streamChat(promptWithHistory, sess.id, (frame)=>{
-    const terminal = applyFrameToMessage(frame, agent);
+  streamChat(prompt, sess.conversationId || "", clientRequestId, (frame)=>{
+    const terminal = applyFrameToMessage(frame, agent, sess);
     sess.updatedAt = Date.now();
     if(terminal){ finishRun(sess, agent); } else { scheduleRender(); }
   }, state.abort.signal)

@@ -113,6 +113,7 @@ public sealed class ServiceInvocationResolutionServiceTests
     [InlineData(ServiceInvokeUnavailableReason.ServingTargetMissing)]
     [InlineData(ServiceInvokeUnavailableReason.RevisionNotPrepared)]
     [InlineData(ServiceInvokeUnavailableReason.PreparedArtifactMissing)]
+    [InlineData(ServiceInvokeUnavailableReason.PreparedArtifactIncompatible)]
     public async Task ResolveAsync_ShouldRejectUnavailableReadiness_WithCanonicalReason(ServiceInvokeUnavailableReason reason)
     {
         var identity = GAgentServiceTestKit.CreateIdentity();

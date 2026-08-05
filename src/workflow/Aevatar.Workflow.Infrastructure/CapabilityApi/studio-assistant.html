@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>Aevatar Studio Assistant</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;family=Mona+Sans:wght@400;500;600;700&amp;display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260805-needs-you" />
+    <script defer src="https://unpkg.com/lucide@0.563.0/dist/umd/lucide.min.js"></script>
+    <script defer src="https://unpkg.com/marked@15.0.12/marked.min.js"></script>
+    <script defer src="https://unpkg.com/dompurify@3.2.6/dist/purify.min.js"></script>
+    <script>globalThis.__AEVATAR_ASSISTANT_CONFIG__ = __BACKEND_CONSOLE_CONFIG__;</script>
+    <script type="module" src="/workflow/studio/assets/app.js?v=20260805-needs-you"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <button class="icon-button mobile-only" id="mobileMenuButton" type="button" aria-label="打开导航" title="导航">
+          <i data-lucide="menu"></i>
+        </button>
+        <div class="brand-zone">
+          <div class="brand-mark" aria-hidden="true">A</div>
+          <span class="brand-name">Aevatar</span>
+        </div>
+        <div class="breadcrumbs" aria-label="当前位置">
+          <span>Studio</span>
+          <i data-lucide="chevron-right"></i>
+          <strong id="conversationTitle">新会话</strong>
+        </div>
+        <div class="topbar-actions">
+          <button class="toolbar-button" id="servicesButton" type="button" aria-label="管理 NyxID services">
+            <i data-lucide="boxes"></i>
+            <span>Services</span>
+            <strong id="servicesCount">0</strong>
+          </button>
+          <button class="connection-pill" id="connectionButton" type="button" aria-label="查看连接设置">
+            <span class="status-dot idle" id="connectionDot"></span>
+            <span id="connectionText">正在检查</span>
+          </button>
+          <button class="icon-button mobile-only" id="mobileInspectorButton" type="button" aria-label="打开运行面板" title="运行面板">
+            <i data-lucide="panel-right"></i>
+          </button>
+          <button class="icon-button" id="settingsButton" type="button" aria-label="账户与 Services" title="账户与 Services">
+            <i data-lucide="user-round-cog"></i>
+          </button>
+        </div>
+      </header>
+
+      <div class="workspace">
+        <aside class="sidebar" id="sidebar" aria-label="Assistant 导航">
+          <button class="new-chat-button" id="newChatButton" type="button">
+            <i data-lucide="square-pen"></i>
+            <span>新会话</span>
+          </button>
+
+          <div class="sidebar-group">
+            <div class="group-label">Workspace</div>
+            <button class="nav-item active" id="assistantNavButton" type="button">
+              <i data-lucide="message-square"></i>
+              <span>Assistant</span>
+            </button>
+            <button class="nav-item" id="openSettingsNav" type="button">
+              <i data-lucide="boxes"></i>
+              <span>Services</span>
+            </button>
+          </div>
+
+          <div class="sidebar-group session-group">
+            <div class="group-label">Current</div>
+            <button class="session-item active" id="currentSessionButton" type="button">
+              <span class="session-icon"><i data-lucide="message-circle"></i></span>
+              <span class="session-copy">
+                <strong id="sidebarSessionTitle">新会话</strong>
+                <small id="sidebarSessionMeta">尚未运行</small>
+              </span>
+            </button>
+          </div>
+
+          <div class="sidebar-group recent-group" id="recentGroup">
+            <div class="group-label history-heading">
+              <span>Recent</span>
+              <button class="history-filter" id="needsYouFilterButton" type="button" aria-pressed="false">
+                <i data-lucide="circle-alert"></i>
+                <span>Needs you</span>
+                <strong id="needsYouCount">0</strong>
+              </button>
+            </div>
+            <div class="recent-session-list" id="recentSessionsList" aria-live="polite">
+              <div class="history-empty">正在加载生产会话…</div>
+            </div>
+          </div>
+
+          <div class="sidebar-footer">
+            <div class="runtime-badge">
+              <span class="status-dot" id="sidebarRuntimeDot"></span>
+              <div>
+                <strong id="sidebarSurface">Studio Assistant</strong>
+                <small id="sidebarTransport">NyxID authenticated</small>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <main class="chat-column">
+          <div class="thread" id="thread" aria-live="polite">
+            <section class="empty-state" id="emptyState">
+              <div class="assistant-emblem" aria-hidden="true">
+                <i data-lucide="sparkles"></i>
+              </div>
+              <h1 id="emptyTitle">Aevatar Studio</h1>
+              <p id="emptyDescription">今天要创建、调整或运行什么工作流？</p>
+              <div class="auth-gate hidden" id="authGate">
+                <button class="primary-button auth-login-button" id="emptyLoginButton" type="button">
+                  <i data-lucide="log-in"></i>
+                  <span>使用 NyxID 登录</span>
+                </button>
+              </div>
+              <section class="readiness-panel hidden" id="readinessPanel" aria-labelledby="readinessTitle">
+                <header class="readiness-header">
+                  <div>
+                    <span class="eyebrow">Before the first run</span>
+                    <h2 id="readinessTitle">运行准备</h2>
+                  </div>
+                  <button class="icon-button" id="refreshReadinessButton" type="button" aria-label="刷新运行准备状态" title="刷新">
+                    <i data-lucide="refresh-cw"></i>
+                  </button>
+                </header>
+                <p id="readinessSummary">正在检查所需能力。</p>
+                <div class="readiness-list" id="readinessList" role="list"></div>
+                <small id="readinessFreshness">尚未检查</small>
+              </section>
+              <div class="quick-actions" id="quickActions" aria-label="快捷请求">
+                <button type="button" data-prompt="列出当前 workspace 中可用的 team、workflow 和已连接服务，并标出需要处理的问题。">
+                  <i data-lucide="list-checks"></i>
+                  <span>检查 workspace</span>
+                  <i data-lucide="arrow-up-right"></i>
+                </button>
+                <button type="button" data-prompt="从 Ornn 查找适合构建 Aevatar workflow 的 skills，并告诉我将使用哪些。">
+                  <i data-lucide="search"></i>
+                  <span>查找 Aevatar skills</span>
+                  <i data-lucide="arrow-up-right"></i>
+                </button>
+                <button type="button" data-prompt="创建一个带人工确认步骤的工作流草稿，先向我说明角色和步骤再保存。">
+                  <i data-lucide="key-round"></i>
+                  <span>创建工作流草稿</span>
+                  <i data-lucide="arrow-up-right"></i>
+                </button>
+                <button type="button" data-prompt="根据 NyxID 服务目录，推荐适合接入当前工作流的服务，并说明各自能完成什么步骤。">
+                  <i data-lucide="plug"></i>
+                  <span>发现可连接的服务</span>
+                  <i data-lucide="arrow-up-right"></i>
+                </button>
+              </div>
+            </section>
+          </div>
+
+          <div class="composer-wrap">
+            <section class="composer-service-panel hidden" id="composerServicePanel" aria-label="NyxID service 状态">
+              <header class="composer-service-header">
+                <div>
+                  <strong>NyxID Services</strong>
+                  <small id="composerServiceCount">0 / 0 可用</small>
+                </div>
+                <button class="icon-button" id="refreshComposerServicesButton" type="button" aria-label="刷新 service 状态" title="刷新">
+                  <i data-lucide="refresh-cw"></i>
+                </button>
+                <button class="icon-button" id="closeComposerServicesButton" type="button" aria-label="关闭 service 状态" title="关闭">
+                  <i data-lucide="x"></i>
+                </button>
+              </header>
+              <div class="composer-service-list" id="composerServiceList">
+                <div class="service-access-empty">登录后显示 NyxID services</div>
+              </div>
+            </section>
+            <div class="attachment-chip hidden" id="attachmentChip">
+              <i data-lucide="paperclip"></i>
+              <span id="attachmentName"></span>
+              <button id="removeAttachmentButton" type="button" aria-label="移除附件" title="移除附件">
+                <i data-lucide="x"></i>
+              </button>
+            </div>
+            <form class="composer" id="composerForm">
+              <textarea
+                id="promptInput"
+                rows="1"
+                maxlength="12000"
+                placeholder="告诉 Assistant 你要完成的操作"
+                aria-label="消息"
+              ></textarea>
+              <div class="composer-toolbar">
+                <button class="composer-icon" id="attachButton" type="button" aria-label="添加附件" title="添加附件（最大 5 MB）">
+                  <i data-lucide="paperclip"></i>
+                </button>
+                <button class="composer-icon" id="composerServicesButton" type="button" aria-label="查看 NyxID services" title="NyxID services" aria-expanded="false" aria-controls="composerServicePanel">
+                  <i data-lucide="boxes"></i>
+                </button>
+                <input id="fileInput" type="file" hidden />
+                <span class="route-label" id="routeLabel">NyxID session · /api/chat</span>
+                <button class="send-button" id="sendButton" type="submit" aria-label="发送" title="发送">
+                  <i data-lucide="arrow-up"></i>
+                </button>
+                <button class="steer-button hidden" id="steerButton" type="button" aria-label="引导当前任务" title="将输入作为明确的 steering 指令提交">
+                  <i data-lucide="corner-up-right"></i>
+                </button>
+                <button class="stop-button hidden" id="stopButton" type="button" aria-label="停止 Actor 任务" title="向 Actor 提交停止命令">
+                  <i data-lucide="square"></i>
+                </button>
+              </div>
+            </form>
+            <div class="composer-status" id="composerStatus">生产环境 · 操作会影响真实数据，高风险操作需要确认</div>
+          </div>
+        </main>
+
+        <aside class="inspector" id="inspector" aria-label="运行详情">
+          <div class="inspector-header">
+            <div>
+              <span class="eyebrow">Current run</span>
+              <h2>运行详情</h2>
+            </div>
+            <div class="run-status idle" id="runStatus">
+              <span></span>
+              <strong>Idle</strong>
+            </div>
+            <button class="observation-disconnect hidden" id="observationDisconnectButton" type="button">
+              停止观察
+            </button>
+            <button class="icon-button inspector-close mobile-only" id="closeInspectorButton" type="button" aria-label="关闭运行面板">
+              <i data-lucide="x"></i>
+            </button>
+          </div>
+          <div class="inspector-tabs" role="tablist">
+            <button class="active" id="runTabButton" type="button" role="tab" aria-selected="true">Run</button>
+            <button id="eventsTabButton" type="button" role="tab" aria-selected="false">Events <span id="eventCount">0</span></button>
+          </div>
+
+          <div class="inspector-body" id="runPanel" role="tabpanel">
+            <section class="inspector-section">
+              <div class="section-title">Route</div>
+              <div class="route-stack">
+                <div class="route-node">
+                  <span class="route-node-icon client"><i data-lucide="monitor"></i></span>
+                  <div><strong>NyxID UI</strong><small id="routeTransportValue">NyxID site session</small></div>
+                  <span class="route-state ok" id="routeClientState">ready</span>
+                </div>
+                <div class="route-line"></div>
+                <div class="route-node">
+                  <span class="route-node-icon aevatar"><i data-lucide="orbit"></i></span>
+                  <div><strong>Aevatar</strong><small id="routeSurfaceValue">POST /api/chat</small></div>
+                  <span class="route-state" id="routeUpstreamState">idle</span>
+                </div>
+                <div class="route-line"></div>
+                <div class="route-node">
+                  <span class="route-node-icon ornn"><i data-lucide="library"></i></span>
+                  <div><strong>Ornn</strong><small>ornn_search_skills · use_skill</small></div>
+                  <span class="route-state" id="routeOrnnState">waiting</span>
+                </div>
+              </div>
+            </section>
+
+            <section class="inspector-section facts-section">
+              <div class="section-title">Runtime facts</div>
+              <dl class="facts-list">
+                <div><dt>Actor</dt><dd class="mono" id="actorFact">—</dd></div>
+                <div id="runFactRow"><dt>Run</dt><dd class="mono" id="runFact">—</dd></div>
+                <div id="commandFactRow"><dt>Command</dt><dd class="mono" id="commandFact">—</dd></div>
+                <div><dt id="runIdentityLabel">Turn</dt><dd class="mono" id="runIdentityFact">—</dd></div>
+              </dl>
+            </section>
+
+            <section class="inspector-section">
+              <div class="section-title section-title-row">
+                <span>Steps</span>
+                <span class="section-meta" id="stepCount">0</span>
+              </div>
+              <div class="step-list empty-list" id="stepList">等待运行</div>
+            </section>
+
+            <section class="inspector-section usage-section">
+              <div class="section-title">Usage</div>
+              <div class="usage-grid">
+                <div><span>Total tokens</span><strong class="mono" id="usageTokens">—</strong></div>
+                <div><span>Model</span><strong class="mono" id="usageModel">—</strong></div>
+                <div><span>Elapsed</span><strong class="mono" id="usageElapsed">00:00</strong></div>
+              </div>
+            </section>
+          </div>
+
+          <div class="inspector-body hidden" id="eventsPanel" role="tabpanel">
+            <div class="event-toolbar">
+              <span>原始事件已脱敏</span>
+              <button id="clearEventsButton" type="button">Clear</button>
+            </div>
+            <div class="event-list" id="eventList">
+              <div class="event-empty">尚无事件</div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <div class="mobile-backdrop hidden" id="mobileBackdrop"></div>
+
+    <dialog class="settings-dialog" id="settingsDialog">
+      <form method="dialog" id="settingsForm">
+        <header class="dialog-header">
+          <div>
+            <span class="eyebrow">NyxID access</span>
+            <h2>账户与 Services</h2>
+          </div>
+          <button class="icon-button" id="closeSettingsButton" type="button" aria-label="关闭设置">
+            <i data-lucide="x"></i>
+          </button>
+        </header>
+
+        <div class="dialog-body">
+          <section class="auth-account-row">
+            <span class="account-avatar" id="accountAvatar"><i data-lucide="user-round"></i></span>
+            <div>
+              <strong id="accountName">尚未登录</strong>
+              <small id="accountEmail">登录 NyxID 后使用已配置的 services</small>
+            </div>
+            <button class="primary-button compact-button" id="loginButton" type="button">登录</button>
+            <button class="secondary-button compact-button hidden" id="logoutButton" type="button">退出</button>
+          </section>
+
+          <section class="service-access-section">
+            <div class="dialog-section-title">
+              <div><strong>Service availability</strong><small id="serviceAccessDescription">来自当前 NyxID 账户的可用 services</small></div>
+              <span id="serviceCount">0 / 0</span>
+            </div>
+            <div class="service-access-list" id="serviceList">
+              <div class="service-access-empty">登录后显示 NyxID services</div>
+            </div>
+          </section>
+
+          <details class="advanced-settings" hidden>
+            <summary>运行模式</summary>
+            <fieldset>
+              <legend>API surface</legend>
+              <div class="segmented-control">
+                <label>
+                  <input type="radio" name="surface" value="nyxid-chat" checked />
+                  <span><strong>Studio Assistant</strong><small>POST /api/chat</small></span>
+                </label>
+              </div>
+            </fieldset>
+            <label class="form-field" id="workflowField">
+              <span>Workflow</span>
+              <select id="workflowInput" name="workflow">
+                <option value="direct">direct</option>
+                <option value="auto">auto</option>
+                <option value="auto_review">auto_review</option>
+              </select>
+            </label>
+          </details>
+
+          <div class="connection-test" id="connectionTest">
+            <span class="status-dot idle"></span>
+            <div><strong>尚未连接</strong><small>通过 NyxID 站点会话调用 Aevatar</small></div>
+            <button id="testConnectionButton" type="button">Test</button>
+          </div>
+        </div>
+
+        <footer class="dialog-footer">
+          <button class="secondary-button" id="cancelSettingsButton" type="button">关闭</button>
+          <button class="primary-button" type="submit">完成</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite">
+      <i data-lucide="info"></i>
+      <span id="toastText"></span>
+    </div>
+  </body>
+</html>

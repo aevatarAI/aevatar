@@ -196,7 +196,7 @@ public sealed class SkillRecoveryPlannerTests
     }
 
     [Fact]
-    public async Task Orchestrator_ApplyInitialDirectivesAsync_WhenPrimarySkillFails_ShouldAttemptItOnlyOnce()
+    public async Task Orchestrator_ApplyInitialDirectivesAsync_WhenInitialSearchAndPrimarySkillFail_ShouldSearchThenAttemptPrimaryOnlyOnce()
     {
         var tools = new ToolManager();
         tools.Register(new FailedReceiptTool("use_skill"));
@@ -220,6 +220,11 @@ public sealed class SkillRecoveryPlannerTests
             .SelectMany(message => message.ToolCalls ?? [])
             .Where(call => string.Equals(call.Name, "use_skill", StringComparison.Ordinal))
             .ToArray();
+        var toolCallNames = messages
+            .SelectMany(message => message.ToolCalls ?? [])
+            .Select(call => call.Name)
+            .ToArray();
+        toolCallNames.Should().Equal("ornn_search_skills", "use_skill");
         useSkillCalls.Should().ContainSingle();
         useSkillCalls[0].ArgumentsJson.Should().Be("{}");
     }
@@ -241,7 +246,7 @@ public sealed class SkillRecoveryPlannerTests
     }
 
     [Fact]
-    public void TryPlanNextDirective_WhenPrimarySkillIsAvailable_ShouldBuildReadOnlySkillLoadCall()
+    public void TryPlanNextDirective_WhenInitialSearchIsRequiredAndPrimarySkillIsKnown_ShouldSearchFirst()
     {
         var forced = SkillRecoveryPlanner.TryPlanNextDirective(
             Recovery(primarySkillName: "project-summary"),
@@ -252,11 +257,12 @@ public sealed class SkillRecoveryPlannerTests
             out var directive);
 
         forced.Should().BeTrue();
-        AssertReadOnlySkillLoadCall(directive.ToolCall!, "project-summary", "ship");
+        directive.ToolCall!.Name.Should().Be("ornn_search_skills");
+        directive.ToolCall.ArgumentsJson.Should().Contain("project-summary");
     }
 
     [Fact]
-    public void TryPlanNextDirective_WhenLarkSlashNamesSkill_ShouldBuildReadOnlySkillLoadCall()
+    public void TryPlanNextDirective_WhenLarkSlashNamesSkill_ShouldSearchBeforeLoadingSkill()
     {
         var parsed = SkillInvocationTriggerParser.TryParse(
             "/invoice-approval",
@@ -273,11 +279,12 @@ public sealed class SkillRecoveryPlannerTests
             out var directive);
 
         forced.Should().BeTrue();
-        AssertReadOnlySkillLoadCall(directive.ToolCall!, "invoice-approval", string.Empty);
+        directive.ToolCall!.Name.Should().Be("ornn_search_skills");
+        directive.ToolCall.ArgumentsJson.Should().Contain("invoice-approval");
     }
 
     [Fact]
-    public void TryPlanNextDirective_WhenLongPrefixesDiffer_ShouldKeepUseSkillCallIdsBoundedAndDistinct()
+    public void TryPlanNextDirective_WhenLongPrefixesDiffer_ShouldKeepSearchCallIdsBoundedAndDistinct()
     {
         var first = SkillRecoveryPlanner.TryPlanNextDirective(
             Recovery(primarySkillName: "project-summary"),
@@ -299,7 +306,7 @@ public sealed class SkillRecoveryPlannerTests
         firstDirective.ToolCall!.Id.Length.Should().BeLessThanOrEqualTo(SkillRecoveryPlanner.MaxCallIdLength);
         secondDirective.ToolCall!.Id.Length.Should().BeLessThanOrEqualTo(SkillRecoveryPlanner.MaxCallIdLength);
         firstDirective.ToolCall.Id.Should().NotBe(secondDirective.ToolCall.Id);
-        firstDirective.ToolCall.Id.Should().Contain("use-skill");
+        firstDirective.ToolCall.Id.Should().Contain("ornn-search-skills");
     }
 
     [Fact]
@@ -353,6 +360,34 @@ public sealed class SkillRecoveryPlannerTests
 
         forced.Should().BeTrue();
         AssertReadOnlySkillLoadCall(directive.ToolCall!, "project-summary", "typed args");
+    }
+
+    [Fact]
+    public void TryPlanNextDirective_WhenInitialSearchFindsDifferentSkill_ShouldLoadTypedMatchInsteadOfPrimaryGuess()
+    {
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.User("/goal ship today"),
+            AssistantToolCall("search-1", "ornn_search_skills", """{"query":"goal"}"""),
+            ToolResult("search-1", "ornn_search_skills", SearchResult(
+                status: "success",
+                text: "typed catalog match",
+                matches:
+                [
+                    new { skill_name = "goal-delivery", description = "delivery plan", is_private = false, category = "ops", tags = Array.Empty<string>() },
+                ])),
+        };
+
+        var forced = SkillRecoveryPlanner.TryPlanNextDirective(
+            Recovery(primarySkillName: "project-summary", commandArguments: "typed args"),
+            messages,
+            finalContent: null,
+            recoveryAttempts: 1,
+            callIdPrefix: "req-typed-match",
+            out var directive);
+
+        forced.Should().BeTrue();
+        AssertReadOnlySkillLoadCall(directive.ToolCall!, "goal-delivery", "typed args");
     }
 
     [Fact]
@@ -596,6 +631,37 @@ public sealed class SkillRecoveryPlannerTests
         forced.Should().BeTrue();
         directive.ToolCall.Should().NotBeNull();
         directive.ToolCall!.Name.Should().Be("ornn_search_skills");
+    }
+
+    [Fact]
+    public void TryPlanNextDirective_WhenWorkflowWasStarted_ShouldIgnoreLaterArtifactPendingBlocker()
+    {
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.User("/goal ship"),
+            AssistantToolCall("use-1", "use_skill", """{"skill":"project-summary"}"""),
+            ToolResult("use-1", "use_skill", LoadResult(
+                status: "success",
+                skillName: "project-summary",
+                loaded: true,
+                error: null,
+                text: "# project-summary\n\nInstructions")),
+            AssistantToolCall("workflow-1", "aevatar_start_workflow", """{"workflow_id":"wf-alpha"}"""),
+            ToolResult("workflow-1", "aevatar_start_workflow", """{"run_id":"run-alpha","status":"completed"}"""),
+            AssistantToolCall("artifact-1", "nyxid_proxy", """{"path":"/artifact/alpha"}"""),
+            ToolResult("artifact-1", "nyxid_proxy", "Artifact pending: result is not materialized."),
+        };
+
+        var forced = SkillRecoveryPlanner.TryPlanNextDirective(
+            Recovery(requireInitialSearch: true, primarySkillName: "project-summary", maxAttempts: 2),
+            messages,
+            finalContent: "The artifact is pending and cannot be read yet.",
+            recoveryAttempts: 0,
+            callIdPrefix: "req-workflow-started",
+            out var directive);
+
+        forced.Should().BeFalse();
+        directive.ToolCall.Should().BeNull();
     }
 
     [Theory]

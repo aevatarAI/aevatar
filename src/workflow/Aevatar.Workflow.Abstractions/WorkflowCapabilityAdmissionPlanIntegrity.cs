@@ -475,8 +475,11 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         if (!NyxIdRequestSelectorContract.TryNormalize(selector, out var normalized, out var error))
             throw new InvalidOperationException($"Workflow NyxID {error}.");
 
-        return ComputeLengthPrefixedDigest([
-            "nyxid-explicit-request-contract.v1",
+        var components = new List<string?>
+        {
+            normalized.Risk == NyxIdOperationRisk.Unspecified
+                ? "nyxid-explicit-request-contract.v1"
+                : "nyxid-explicit-request-contract.v2",
             normalized.UserServiceId,
             ((int)normalized.Method).ToString(System.Globalization.CultureInfo.InvariantCulture),
             normalized.PathTemplate,
@@ -488,7 +491,14 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             ((int)normalized.BodyMode).ToString(System.Globalization.CultureInfo.InvariantCulture),
             normalized.BodyRequired.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ((int)normalized.ResponseMode).ToString(System.Globalization.CultureInfo.InvariantCulture),
-        ]);
+        };
+        if (normalized.Risk != NyxIdOperationRisk.Unspecified)
+        {
+            components.Add(((int)normalized.Risk)
+                .ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        return ComputeLengthPrefixedDigest(components);
     }
 
     public static string ComputeNyxIdExplicitRequestProofDigest(
@@ -724,7 +734,16 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             throw new InvalidOperationException("Workflow NyxID explicit request grant policy is invalid.");
         }
 
-        ValidateExplicitRequestRisk(proof.Request.Method, grant.Risk);
+        ValidateExplicitRequestRisk(proof.Request, grant.Risk);
+        if (grant.AllowedExecutionModes.Contains(ExternalCapabilityExecutionMode.Durable) &&
+            !NyxIdRequestSelectorContract.SupportsDurableExecution(
+                proof.Request.Method,
+                grant.Risk))
+        {
+            throw new InvalidOperationException(
+                "Workflow NyxID explicit request durable admission is not allowed for the request risk.");
+        }
+
         ValidateNyxIdExecutionPolicy(proof.ExecutionPolicy);
         if (proof.ExecutionPolicy.Risk != grant.Risk ||
             !proof.ExecutionPolicy.AllowedExecutionModes.Order()
@@ -760,19 +779,17 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         }
     }
 
-    private static void ValidateExplicitRequestRisk(NyxIdRequestMethod method, NyxIdOperationRisk risk)
+    private static void ValidateExplicitRequestRisk(
+        NyxIdRequestSelector request,
+        NyxIdOperationRisk risk)
     {
-        var isValid = method switch
+        if (!NyxIdRequestSelectorContract.IsRiskAttestationSatisfied(
+                request.Method,
+                request.Risk,
+                risk))
         {
-            NyxIdRequestMethod.Get or NyxIdRequestMethod.Head or NyxIdRequestMethod.Options =>
-                risk == NyxIdOperationRisk.ReadOnly,
-            NyxIdRequestMethod.Post or NyxIdRequestMethod.Put or NyxIdRequestMethod.Patch =>
-                risk == NyxIdOperationRisk.Write,
-            NyxIdRequestMethod.Delete => risk == NyxIdOperationRisk.Destructive,
-            _ => false,
-        };
-        if (!isValid)
             throw new InvalidOperationException("Workflow NyxID explicit request grant risk is below the method floor.");
+        }
     }
 
     public static bool IsValidNyxIdExecutionPolicy(NyxIdOperationExecutionPolicy? policy)

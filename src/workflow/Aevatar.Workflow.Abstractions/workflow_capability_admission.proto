@@ -112,6 +112,7 @@ message NyxIdRequestSelector {
   NyxIdRequestBodyMode body_mode = 6;
   NyxIdRequestResponseMode response_mode = 7;
   bool body_required = 8;
+  NyxIdOperationRisk risk = 9;
 }
 
 message ExternalWorkflowCapabilitySelector {

@@ -270,6 +270,41 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
             diagnostic.StepId == "create_approval");
     }
 
+    [Fact]
+    public async Task GetRunForScopeAsync_ShouldExposeCommittedToolApprovalResumeRejectionDiagnostic()
+    {
+        var snapshot = Snapshot(
+            "run-1",
+            CallerScope,
+            WorkflowRunCompletionStatus.AwaitingToolApproval,
+            started: 1,
+            updated: 6);
+        var currentState = new FakeCurrentStateQueryPort { SingleResult = snapshot };
+        var rejection = TimelineEvent(
+            "tool_approval.resume_rejected",
+            "Tool approval resume did not match the actor-owned pending approval.",
+            "create_approval");
+        rejection.StepType = "tool_call";
+        rejection.Data["reason"] = "IdentityMismatch";
+        var report = new WorkflowRunReport
+        {
+            Timeline = [rejection],
+        };
+        var service = new WorkflowRunObservatoryQueryService(
+            currentState,
+            new FakeArtifactQueryPort { Report = report });
+
+        var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
+
+        detail.Should().NotBeNull();
+        detail!.Diagnostics.Should().ContainSingle(diagnostic =>
+            diagnostic.Code == "tool_approval_resume_rejected" &&
+            diagnostic.Severity == "warning" &&
+            diagnostic.Source == "run-report.timeline" &&
+            diagnostic.StepId == "create_approval" &&
+            diagnostic.StepType == "tool_call");
+    }
+
     // 06-26 detail enrichment: the final result + per-step trace + rollup statistics are surfaced from the
     // committed run-report artifact. Final output/input are NOT truncated; step output is a 240-char preview.
     [Fact]

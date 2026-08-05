@@ -36,6 +36,8 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
                                     spec.ExpectedExecutionMode == ExternalCapabilityExecutionMode.Unspecified
             ? ExternalCapabilityExecutionMode.Interactive
             : spec.ExpectedExecutionMode;
+        var preparationSpec = request.Spec.Clone();
+        preparationSpec.WorkflowSpec.ExpectedExecutionMode = expectedExecutionMode;
         var capabilityAdmissionPlan = spec.CapabilityAdmissionPlan is { } persistedPlan
             ? await _capabilityAdmissionService.RevalidatePersistedAsync(
                 new PersistedWorkflowCapabilityAdmissionRequest(
@@ -76,7 +78,7 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
             ?? throw new InvalidOperationException("workflow authorization dependencies are required.");
 
         return WorkflowServiceRevisionArtifactBuilder.Build(
-            request.Spec,
+            preparationSpec,
             resolvedWorkflowName,
             authorizationDependencies,
             capabilityAdmissionPlan);

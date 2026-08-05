@@ -353,6 +353,7 @@ public class AIComponentCoverageTests
             Model = "demo-model",
             Temperature = 0.7,
             MaxTokens = 42,
+            AllowMultipleToolCalls = false,
             Messages =
             [
                 new AevatarChatMessage
@@ -390,6 +391,7 @@ public class AIComponentCoverageTests
         capturedOptions.AdditionalProperties![LLMRequestMetadataKeys.RequestId].Should().Be("session-1");
         capturedOptions.AdditionalProperties["workflow.run_id"].Should().Be("run-1");
         capturedOptions.MaxOutputTokens.Should().Be(42);
+        capturedOptions.AllowMultipleToolCalls.Should().BeFalse();
         capturedOptions.Tools.Should().NotBeNull();
         capturedOptions.Tools.Should().ContainSingle();
 

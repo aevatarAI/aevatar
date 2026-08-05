@@ -1174,6 +1174,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             };
             message.ToolCalls.AddRange(result.ToolCalls.Select(call => call.Clone()));
             next.Messages.Add(message);
+            next.PendingHistoryMessages.Add(message.Clone());
             // Reasoning-only results stay in the intra-run step messages (diagnostics,
             // same-run continuation) but must NOT enter durable conversation history:
             // providers drop bare reasoning on assistant history messages, so a
@@ -1222,6 +1223,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.PendingToolAuthorizations.Clear();
         next.PendingToolAuthorizationConsumed = false;
         next.Messages.AddRange(result.ResultMessages.Select(message => message.Clone()));
+        next.PendingHistoryMessages.AddRange(result.ResultMessages.Select(message => message.Clone()));
         next.AppendedHistory.AddRange(
             result.ResultMessages.Select(AgentRunReplyStepMappers.ToConversationHistoryEntry));
         next.ToolReceipts.AddRange(result.ToolReceipts.Select(receipt => receipt.Clone()));

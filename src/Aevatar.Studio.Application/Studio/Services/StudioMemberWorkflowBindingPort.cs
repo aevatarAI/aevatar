@@ -150,7 +150,7 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
                 request.ScopeId,
                 workflowId,
                 request.WorkflowYaml,
-                WorkflowName: workflowId,
+                WorkflowName: null,
                 DisplayName: member.Summary.DisplayName,
                 InlineWorkflowYamls: null,
                 AppId: "studio",

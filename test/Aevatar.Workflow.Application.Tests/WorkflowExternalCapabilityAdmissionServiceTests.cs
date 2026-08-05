@@ -399,7 +399,7 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
     [InlineData("grant_request_contract_digest", "*explicit request grant scope is invalid*")]
     [InlineData("grant_owner_kind", "*explicit request grant digest is invalid*")]
     [InlineData("grant_owner_subject", "*explicit request grant digest is invalid*")]
-    [InlineData("grant_risk", "*explicit request grant risk*")]
+    [InlineData("grant_risk", "*explicit request proof policy does not match its grant*")]
     [InlineData("grant_modes", "*explicit request proof policy does not match its grant*")]
     [InlineData("proof_contract_digest", "*explicit request proof digest is invalid*")]
     [InlineData("proof_grant_digest", "*explicit request grant digest is invalid*")]
@@ -534,7 +534,6 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
     }
 
     [Theory]
-    [InlineData(NyxIdRequestMethod.Post, NyxIdOperationRisk.ReadOnly)]
     [InlineData(NyxIdRequestMethod.Put, NyxIdOperationRisk.ReadOnly)]
     [InlineData(NyxIdRequestMethod.Patch, NyxIdOperationRisk.ReadOnly)]
     [InlineData(NyxIdRequestMethod.Delete, NyxIdOperationRisk.Write)]
@@ -560,21 +559,15 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             .WithMessage("*risk*");
     }
 
-    [Theory]
-    [InlineData(NyxIdRequestMethod.Get, NyxIdOperationRisk.Write)]
-    [InlineData(NyxIdRequestMethod.Get, NyxIdOperationRisk.Destructive)]
-    [InlineData(NyxIdRequestMethod.Head, NyxIdOperationRisk.Write)]
-    [InlineData(NyxIdRequestMethod.Options, NyxIdOperationRisk.Destructive)]
-    public void Create_ShouldRejectExplicitGrantThatDoesNotMatchCanonicalMethodRisk(
-        NyxIdRequestMethod method,
-        NyxIdOperationRisk grantedRisk)
+    [Fact]
+    public void Create_ShouldAcceptExplicitReadOnlyPostWhenRiskIsPartOfTheRequestContract()
     {
         var admission = ExplicitAdmissionFor(
-            method,
-            grantedRisk,
+            NyxIdRequestMethod.Post,
+            NyxIdOperationRisk.ReadOnly,
             ExternalCapabilityExecutionMode.Interactive);
 
-        var act = () => WorkflowCapabilityAdmissionPlanIntegrity.Create(
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
             "name: explicit-workflow\nsteps: []\n",
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
@@ -583,8 +576,54 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             workflowId: ExplicitWorkflowId,
             revisionId: ExplicitRevisionId);
 
+        plan.InvocationAdmissions.Should().ContainSingle().Which
+            .Capability.NyxIdUserRequest.ExecutionPolicy.Approval.Should()
+            .Be(NyxIdOperationApproval.None);
+    }
+
+    [Fact]
+    public void RequestContractDigest_ShouldPreserveVersionOneForUnspecifiedRisk()
+    {
+        var request = ExplicitSelector().NyxIdRequest;
+        var expected = ExternalWorkflowCapabilityContractDigest.Compute(
+            "nyxid-explicit-request-contract.v1",
+            request.UserServiceId,
+            ((int)request.Method).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            request.PathTemplate,
+            string.Join("\n", NyxIdRequestSelectorContract.PathParameters(request).Order(StringComparer.Ordinal)),
+            string.Join("\n", request.QueryParameters.Order(StringComparer.Ordinal)),
+            string.Join("\n", request.HeaderParameters
+                .Select(static value => value.ToLowerInvariant())
+                .Order(StringComparer.Ordinal)),
+            ((int)request.BodyMode).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            request.BodyRequired.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ((int)request.ResponseMode).ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdRequestContractDigest(request)
+            .Should().Be(expected);
+    }
+
+    [Fact]
+    public void Create_ShouldRejectDurableExplicitReadOnlyPostGrant()
+    {
+        var admission = ExplicitAdmissionFor(
+            NyxIdRequestMethod.Post,
+            NyxIdOperationRisk.ReadOnly,
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable);
+
+        var act = () => WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: explicit-workflow\nsteps: []\n",
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Durable,
+            [admission],
+            [ExplicitSource(), DurableCatalogSource()],
+            DurableOwner(),
+            workflowId: ExplicitWorkflowId,
+            revisionId: ExplicitRevisionId);
+
         act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*risk*");
+            .WithMessage("*durable*");
     }
 
     [Theory]
@@ -1562,6 +1601,8 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
     {
         var request = ExplicitSelector().NyxIdRequest;
         request.Method = method;
+        if (method == NyxIdRequestMethod.Post && risk == NyxIdOperationRisk.ReadOnly)
+            request.Risk = risk;
         var capability = ExplicitCapability(request);
         capability.NyxIdUserRequest.ExecutionPolicy = ExplicitPolicy(risk, modes);
         return ExplicitAdmission(capability);
@@ -1614,19 +1655,7 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
     }
 
     private static string ExplicitRequestContractDigest(NyxIdRequestSelector request) =>
-        ExternalWorkflowCapabilityContractDigest.Compute(
-            "nyxid-explicit-request-contract.v1",
-            request.UserServiceId,
-            ((int)request.Method).ToString(System.Globalization.CultureInfo.InvariantCulture),
-            request.PathTemplate,
-            string.Join("\n", NyxIdRequestSelectorContract.PathParameters(request).Order(StringComparer.Ordinal)),
-            string.Join("\n", request.QueryParameters.Order(StringComparer.Ordinal)),
-            string.Join("\n", request.HeaderParameters
-                .Select(static value => value.ToLowerInvariant())
-                .Order(StringComparer.Ordinal)),
-            ((int)request.BodyMode).ToString(System.Globalization.CultureInfo.InvariantCulture),
-            request.BodyRequired.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ((int)request.ResponseMode).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdRequestContractDigest(request);
 
     private static string ExplicitProofDigest(NyxIdRequestSelector request, string slug) =>
         ExternalWorkflowCapabilityContractDigest.Compute(

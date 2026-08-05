@@ -156,6 +156,7 @@ public sealed class WorkflowExplicitRequestPreviewServiceTests
         var selector = RequestSelector("/records/{id}", method, bodyRequired: method != NyxIdRequestMethod.Delete);
         if (method == NyxIdRequestMethod.Delete)
             selector.BodyMode = NyxIdRequestBodyMode.None;
+
         var parser = new StubParser(new ExternalToolInvocationSpec
         {
             CallSiteId = "wf-alpha/request-alpha",
@@ -184,6 +185,89 @@ public sealed class WorkflowExplicitRequestPreviewServiceTests
         result.Items.Should().ContainSingle().Which.AllowedExecutionModes.Should().Equal(
             ExternalCapabilityExecutionMode.Interactive,
             ExternalCapabilityExecutionMode.Durable);
+    }
+
+    [Fact]
+    public async Task PreviewAsync_WhenOnlyDurableCatalogIsMissing_ShouldStillReturnReviewableContract()
+    {
+        var selector = RequestSelector("/records/{id}", NyxIdRequestMethod.Get, bodyRequired: false);
+        selector.BodyMode = NyxIdRequestBodyMode.None;
+        var parser = new StubParser(new ExternalToolInvocationSpec
+        {
+            CallSiteId = "wf-alpha/request-alpha",
+            ToolName = "nyxid_proxy",
+            Selector = new ExternalWorkflowCapabilitySelector { NyxIdRequest = selector },
+        });
+        var readiness = CanonicalReadiness(selector, "slug-preview-secret", NyxIdOperationRisk.ReadOnly);
+        readiness.ExecutionMode = ExternalCapabilityExecutionMode.Durable;
+        readiness.Status = ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable;
+        readiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
+            Code = "DURABLE_AUTHORIZATION_UNAVAILABLE",
+            SafeMessage = "The current catalog does not prove this durable grant.",
+        });
+        var service = new WorkflowExplicitRequestPreviewService(
+            parser,
+            new RecordingReadinessPort(readiness));
+
+        var result = await service.PreviewAsync(new WorkflowExplicitRequestPreviewRequest(
+            new ExternalWorkflowCapabilityAccessContext(
+                "scope-alpha",
+                "authenticated-owner-alpha",
+                NyxIdCallerCredentialSelection.SourceReadableUserBearer("bearer-preview-secret")),
+            "name: wf-alpha",
+            null,
+            ExternalCapabilityExecutionMode.Durable,
+            WorkflowId: "wf-alpha",
+            RevisionId: "rev-alpha"));
+
+        result.Items.Should().ContainSingle().Which.AllowedExecutionModes.Should().Equal(
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable);
+    }
+
+    [Fact]
+    public async Task PreviewAsync_WhenDurableCatalogAndAnotherRequirementAreMissing_ShouldReject()
+    {
+        var selector = RequestSelector("/records/{id}", NyxIdRequestMethod.Get, bodyRequired: false);
+        selector.BodyMode = NyxIdRequestBodyMode.None;
+        var readiness = CanonicalReadiness(selector, "slug-preview-secret", NyxIdOperationRisk.ReadOnly);
+        readiness.ExecutionMode = ExternalCapabilityExecutionMode.Durable;
+        readiness.Status = ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable;
+        readiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
+            Code = "DURABLE_AUTHORIZATION_UNAVAILABLE",
+            SafeMessage = "The current catalog does not prove this durable grant.",
+        });
+        readiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = ExternalCapabilityReadinessStatus.ContractDrift,
+            Code = "CONTRACT_DRIFT",
+            SafeMessage = "The request contract changed.",
+        });
+        var service = new WorkflowExplicitRequestPreviewService(
+            new StubParser(new ExternalToolInvocationSpec
+            {
+                CallSiteId = "wf-alpha/request-alpha",
+                ToolName = "nyxid_proxy",
+                Selector = new ExternalWorkflowCapabilitySelector { NyxIdRequest = selector },
+            }),
+            new RecordingReadinessPort(readiness));
+
+        var action = () => service.PreviewAsync(new WorkflowExplicitRequestPreviewRequest(
+            new ExternalWorkflowCapabilityAccessContext(
+                "scope-alpha",
+                "authenticated-owner-alpha",
+                NyxIdCallerCredentialSelection.SourceReadableUserBearer("bearer-preview-secret")),
+            "name: wf-alpha",
+            null,
+            ExternalCapabilityExecutionMode.Durable,
+            WorkflowId: "wf-alpha",
+            RevisionId: "rev-alpha"));
+
+        await action.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
     }
 
     private static NyxIdRequestSelector RequestSelector(

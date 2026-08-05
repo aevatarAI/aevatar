@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.GAgents.NyxidChat";
 
 import "ai_messages.proto";
 import "google/protobuf/timestamp.proto";
+import "Tools/tool_presentation.proto";
 
 message NyxIdDirectChatHistoryDispatchedEvent {
   string session_id = 1;
@@ -211,6 +212,7 @@ message NyxIdChatToolStepSource {
   string tool_name = 1;
   string service_slug = 2;
   string service_id = 3;
+  optional string readiness_capability_id = 4;
 }
 
 message NyxIdChatBrowserActionStepSource {
@@ -915,6 +917,9 @@ message NyxIdChatToolCall {
   // Exact invocation safety is snapshotted by the authorized tool provider.
   // Its absence is fail-closed; consumers never infer safety from strings.
   NyxIdChatToolCallSafety safety = 4;
+  // Provider-authored NyxID identity provenance. The conversation actor copies
+  // only its safe identity fields into the durable tool step source.
+  aevatar.foundation.tools.NyxIdOperationRef nyx_id_provenance = 5;
 }
 
 message NyxIdChatLLMOperationResult {
@@ -977,6 +982,7 @@ message NyxIdChatReasoningProgress {
 message NyxIdChatToolProgress {
   string call_id = 1;
   string tool_name = 2;
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 3;
 }
 
 message NyxIdChatOperationProgressSignal {
@@ -1001,6 +1007,9 @@ message NyxIdChatStartTurnCommand {
   repeated aevatar.ai.ChatContentPart input_parts = 9;
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 10;
   aevatar.ai.LLMControlContextPayload llm_control = 11;
+  // Stable fingerprint of the caller-supplied input parts before inline bytes
+  // are replaced by storage-assigned file artifact identities.
+  string input_parts_fingerprint = 12;
 }
 
 message NyxIdChatStopCommand {

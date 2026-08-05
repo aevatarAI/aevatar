@@ -129,6 +129,10 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             foreach (var pair in plan.Metadata)
                 state.ExternalMetadata[pair.Key] = pair.Value;
             state.Messages.AddRange(plan.InitialMessages.Select(AgentRunReplyStepMappers.ToProto));
+            var currentUserMessage = plan.InitialMessages.LastOrDefault(static message =>
+                string.Equals(message.Role, "user", StringComparison.Ordinal));
+            if (currentUserMessage is not null)
+                state.PendingHistoryMessages.Add(AgentRunReplyStepMappers.ToProto(currentUserMessage));
             return state;
         }
     }
@@ -188,8 +192,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             plan.LlmControl,
             workItem.StepState.Round,
             workItem.StepState.FinalNoToolsStep,
-            toolReceipts: workItem.StepState.ToolReceipts);
-        llmRequest = await MaterializeFileRefMessagesAsync(llmRequest, ct).ConfigureAwait(false);
+            toolReceipts: workItem.StepState.ToolReceipts,
+            allowMultipleToolCalls: workItem.AllowMultipleToolCalls);
         if (workItem.StepState.FinalNoToolsStep && llmRequest.Tools is { Count: > 0 })
         {
             // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
@@ -209,31 +213,63 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 Model = llmRequest.Model,
                 Temperature = llmRequest.Temperature,
                 MaxTokens = llmRequest.MaxTokens,
+                AllowMultipleToolCalls = llmRequest.AllowMultipleToolCalls,
                 ResponseFormat = llmRequest.ResponseFormat,
             };
         }
 
         var output = new StringBuilder(workItem.StepState.AccumulatedText ?? string.Empty);
-        using var interactiveScope = TryBeginInteractiveScope(request);
-        var llmResult = await plan.StepExecutor.ExecuteLlmStepAsync(
-                    plan.StepExecutor.ResolveProvider(),
-                    llmRequest,
-                    async (chunk, token) =>
-                    {
-                        if (!string.IsNullOrEmpty(chunk.DeltaContent))
-                        {
-                            output.Append(chunk.DeltaContent);
-                            if (streamingState is not null)
-                                await streamingState.OnDeltaAsync(output.ToString(), token).ConfigureAwait(false);
-                        }
+        var skillRecoveryMessages = BuildSkillRecoveryMessages(workItem.StepState);
+        var deferSkillRecoveryText = !workItem.StepState.FinalNoToolsStep &&
+                                     llmRequest.ToolContext?.SkillRecovery.RequireOrnnSearchOnBlocker == true;
+        List<LLMStreamChunk>? deferredLlmChunks = deferSkillRecoveryText ? [] : null;
 
-                        if (workItem.ReportChunkAsync is not null)
-                            await workItem.ReportChunkAsync(chunk, token).ConfigureAwait(false);
-                    },
+        async Task DeliverLlmChunkAsync(LLMStreamChunk chunk, CancellationToken token)
+        {
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+            {
+                output.Append(chunk.DeltaContent);
+                if (streamingState is not null)
+                    await streamingState.OnDeltaAsync(output.ToString(), token).ConfigureAwait(false);
+            }
+
+            if (workItem.ReportChunkAsync is not null)
+                await workItem.ReportChunkAsync(chunk, token).ConfigureAwait(false);
+        }
+
+        var recoveryToolCall = workItem.StepState.FinalNoToolsStep
+            ? null
+            : await plan.StepExecutor.TryPlanSkillRecoveryToolCallAsync(
+                    llmRequest,
+                    skillRecoveryMessages,
+                    finalContent: null,
                     ct)
                 .ConfigureAwait(false);
-        if (streamingState is not null)
-            await streamingState.FinalizeAsync(output.ToString(), ct).ConfigureAwait(false);
+        ChatRuntimeStepLlmResult llmResult;
+        if (recoveryToolCall is not null)
+        {
+            llmResult = BuildSkillRecoveryLlmResult(recoveryToolCall);
+        }
+        else
+        {
+            llmRequest = await MaterializeFileRefMessagesAsync(llmRequest, ct).ConfigureAwait(false);
+            using var interactiveScope = TryBeginInteractiveScope(request);
+            llmResult = await plan.StepExecutor.ExecuteLlmStepAsync(
+                        plan.StepExecutor.ResolveProvider(),
+                        llmRequest,
+                        async (chunk, token) =>
+                        {
+                            if (deferredLlmChunks is not null)
+                            {
+                                deferredLlmChunks.Add(chunk);
+                                return;
+                            }
+
+                            await DeliverLlmChunkAsync(chunk, token).ConfigureAwait(false);
+                        },
+                        ct)
+                    .ConfigureAwait(false);
+        }
 
         // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
         // slash silently consumed.
@@ -252,6 +288,33 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 effectiveToolCalls = parsed.ToolCalls;
             }
         }
+
+        if (effectiveToolCalls is not { Count: > 0 } &&
+            !workItem.StepState.FinalNoToolsStep &&
+            effectiveContent is not null)
+        {
+            var finalAnswerRecovery = await plan.StepExecutor.TryPlanSkillRecoveryToolCallAsync(
+                    llmRequest,
+                    skillRecoveryMessages,
+                    effectiveContent,
+                    ct)
+                .ConfigureAwait(false);
+            if (finalAnswerRecovery is not null)
+            {
+                llmResult = BuildSkillRecoveryLlmResult(finalAnswerRecovery, llmResult.Usage);
+                effectiveContent = null;
+                effectiveToolCalls = llmResult.ToolCalls;
+                deferredLlmChunks?.Clear();
+            }
+        }
+
+        if (deferredLlmChunks is not null)
+        {
+            foreach (var chunk in deferredLlmChunks)
+                await DeliverLlmChunkAsync(chunk, ct).ConfigureAwait(false);
+        }
+        if (streamingState is not null)
+            await streamingState.FinalizeAsync(output.ToString(), ct).ConfigureAwait(false);
 
         var result = new AgentRunLlmStepResult
         {
@@ -334,6 +397,34 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             authorizedToolCallSafeties);
     }
 
+    private static ChatRuntimeStepLlmResult BuildSkillRecoveryLlmResult(
+        ChatRuntimeStepRecoveryToolCall recovery,
+        TokenUsage? usage = null) =>
+        new(
+            Content: null,
+            ReasoningContent: null,
+            ToolCalls: [recovery.ToolCall],
+            Terminated: false,
+            FinishReason: "tool_calls",
+            Usage: usage,
+            recovery.AuthorizedTools,
+            recovery.AuthorizedToolContext);
+
+    private static IReadOnlyList<ChatMessage> BuildSkillRecoveryMessages(AgentRunReplyStepState stepState)
+    {
+        if (stepState.PendingHistoryMessages.Count > 0)
+        {
+            return stepState.PendingHistoryMessages
+                .Select(AgentRunReplyStepMappers.FromProto)
+                .ToArray();
+        }
+
+        return stepState.AppendedHistory
+            .Select(AgentRunReplyStepMappers.ToProto)
+            .Select(AgentRunReplyStepMappers.FromProto)
+            .ToArray();
+    }
+
     private static IReadOnlyList<AgentRunAuthorizedToolCallSafety> BuildAuthorizedToolCallSafeties(
         IReadOnlyList<ToolCall> toolCalls,
         IReadOnlyList<IAgentTool> authorizedTools,
@@ -356,7 +447,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 argumentsJson,
                 callSafety,
                 tool.SideEffectKind ?? string.Empty,
-                BuildToolDefinitionFingerprint(tool, callSafety)));
+                BuildToolDefinitionFingerprint(tool, callSafety),
+                ToolPresentationDescriptors.Snapshot(tool, call.Name ?? string.Empty, argumentsJson)));
         }
 
         return snapshots;
@@ -424,6 +516,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             Model = request.Model,
             Temperature = request.Temperature,
             MaxTokens = request.MaxTokens,
+            AllowMultipleToolCalls = request.AllowMultipleToolCalls,
             ResponseFormat = request.ResponseFormat,
         };
     }
@@ -573,7 +666,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             plan.LlmControl,
             workItem.StepState.Round,
             finalNoTools: false,
-            toolReceipts: workItem.StepState.ToolReceipts);
+            toolReceipts: workItem.StepState.ToolReceipts,
+            allowMultipleToolCalls: workItem.AllowMultipleToolCalls);
         var executionToolContext = llmRequest.ToolContext ?? plan.ToolContext ?? AgentToolExecutionContext.Empty;
         var currentCatalog = llmRequest.Tools ?? [];
         if (!TryMatchCurrentCatalog(toolCalls, authorizations, currentCatalog, executionToolContext, out var admittedTools))
@@ -743,7 +837,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         foreach (var toolResult in results)
         {
             toolStepResult.ResultMessages.Add(AgentRunReplyStepMappers.ToProto(
-                ToolCallLoop.BuildToolResultMessage(toolResult.CallId, toolResult.ToolName, toolResult.Result)));
+                ToolCallLoop.BuildToolResultMessage(
+                    toolResult.CallId,
+                    toolResult.ToolName,
+                    toolResult.Result,
+                    toolResult.Receipt)));
             if (toolResult.Receipt is not null)
                 toolStepResult.ToolReceipts.Add(toolResult.Receipt.Clone());
         }

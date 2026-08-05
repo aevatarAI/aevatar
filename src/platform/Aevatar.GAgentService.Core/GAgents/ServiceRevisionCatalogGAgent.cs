@@ -39,8 +39,14 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
         EnsureCatalogIdentity(command.Spec.Identity, allowInitialize: true);
 
         var revisionId = command.Spec.RevisionId.Trim();
-        if (State.Revisions.ContainsKey(revisionId))
-            throw new InvalidOperationException($"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(command.Spec.Identity)}'.");
+        if (State.Revisions.TryGetValue(revisionId, out var existing))
+        {
+            if (existing.Spec != null && existing.Spec.Equals(command.Spec))
+                return;
+
+            throw new InvalidOperationException(
+                $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(command.Spec.Identity)}' with a conflicting spec.");
+        }
 
         await PersistDomainEventAsync(new ServiceRevisionCreatedEvent
         {
@@ -59,6 +65,12 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
         if (record.Status is ServiceRevisionStatus.Prepared or ServiceRevisionStatus.Published)
         {
             EnsureReusablePreparedArtifact(record, command.RevisionId);
+            if (RequiresWorkflowPreparedArtifactRepair(record, command.RevisionId))
+            {
+                await RepairWorkflowPreparedArtifactAsync(command, record);
+                return;
+            }
+
             await DispatchInvocationRevisionObservationAsync(CancellationToken.None);
             return;
         }
@@ -67,33 +79,7 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
             throw new InvalidOperationException($"Revision '{command.RevisionId}' has been retired.");
 
         var spec = record.Spec?.Clone() ?? throw new InvalidOperationException($"Revision '{command.RevisionId}' has no authoring spec.");
-        var adapter = GetRequiredAdapter(spec.ImplementationKind);
-        var serviceKey = ServiceKeys.Build(command.Identity);
-        PreparedServiceRevisionArtifact assembled;
-
-        try
-        {
-            var prepared = await adapter.PrepareRevisionAsync(
-                new PrepareServiceRevisionRequest
-                {
-                    ServiceKey = serviceKey,
-                    Spec = spec,
-                },
-                CancellationToken.None);
-            assembled = _artifactAssembler.Assemble(prepared);
-        }
-        catch (Exception ex)
-        {
-            await PersistDomainEventAsync(new ServiceRevisionPreparationFailedEvent
-            {
-                Identity = command.Identity.Clone(),
-                RevisionId = command.RevisionId ?? string.Empty,
-                FailureReason = ex.Message,
-                OccurredAt = Timestamp.FromDateTime(DateTime.UtcNow),
-            });
-            await DispatchInvocationRevisionObservationAsync(CancellationToken.None);
-            throw;
-        }
+        var assembled = await PrepareArtifactAsync(command, spec);
 
         await PersistDomainEventAsync(new ServiceRevisionPreparedEvent
         {
@@ -173,6 +159,7 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
             .Match(current, evt)
             .On<ServiceRevisionCreatedEvent>(ApplyCreated)
             .On<ServiceRevisionPreparedEvent>(ApplyPrepared)
+            .On<ServiceRevisionPreparedArtifactRepairedEvent>(ApplyPreparedArtifactRepaired)
             .On<ServiceRevisionPreparationFailedEvent>(ApplyPreparationFailed)
             .On<ServiceRevisionPublishedEvent>(ApplyPublished)
             .On<ServiceRevisionRetiredEvent>(ApplyRetired)
@@ -224,6 +211,23 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
         return next;
     }
 
+    private static ServiceRevisionCatalogState ApplyPreparedArtifactRepaired(
+        ServiceRevisionCatalogState state,
+        ServiceRevisionPreparedArtifactRepairedEvent evt)
+    {
+        var next = state.Clone();
+        var record = next.Revisions[evt.RevisionId];
+        record.ArtifactHash = evt.ArtifactHash ?? string.Empty;
+        record.Endpoints.Clear();
+        record.Endpoints.Add(evt.Endpoints.Select(x => x.Clone()));
+        record.PreparedArtifact = evt.PreparedArtifact?.Clone() ?? new PreparedServiceRevisionArtifact();
+        record.PreparedAt = evt.RepairedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow);
+        record.FailureReason = string.Empty;
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
+        next.LastEventId = BuildEventId(evt.Identity, evt.RevisionId, "prepared-artifact-repaired");
+        return next;
+    }
+
     private static ServiceRevisionCatalogState ApplyPublished(ServiceRevisionCatalogState state, ServiceRevisionPublishedEvent evt)
     {
         var next = state.Clone();
@@ -264,6 +268,70 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
         {
             throw new InvalidOperationException(
                 $"Revision '{revisionId}' is marked prepared but has no matching prepared artifact.");
+        }
+    }
+
+    private static bool RequiresWorkflowPreparedArtifactRepair(
+        ServiceRevisionRecordState record,
+        string revisionId) =>
+        record.Spec?.ImplementationKind == ServiceImplementationKind.Workflow &&
+        !WorkflowServiceDeploymentPlanIntegrity.IsCompatible(record.PreparedArtifact, revisionId);
+
+    private async Task RepairWorkflowPreparedArtifactAsync(
+        PrepareServiceRevisionCommand command,
+        ServiceRevisionRecordState record)
+    {
+        var spec = record.Spec?.Clone()
+            ?? throw new InvalidOperationException($"Revision '{command.RevisionId}' has no authoring spec.");
+        var assembled = await PrepareArtifactAsync(command, spec);
+        if (!WorkflowServiceDeploymentPlanIntegrity.IsCompatible(assembled, command.RevisionId))
+        {
+            throw new InvalidOperationException(
+                $"Revision '{command.RevisionId}' prepared an incompatible workflow deployment plan.");
+        }
+
+        await PersistDomainEventAsync(new ServiceRevisionPreparedArtifactRepairedEvent
+        {
+            Identity = command.Identity.Clone(),
+            RevisionId = command.RevisionId ?? string.Empty,
+            ImplementationKind = assembled.ImplementationKind,
+            PreviousArtifactHash = record.ArtifactHash ?? string.Empty,
+            ArtifactHash = assembled.ArtifactHash ?? string.Empty,
+            Endpoints = { assembled.Endpoints.Select(x => x.Clone()) },
+            RepairedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            PreparedArtifact = assembled.Clone(),
+            RepairReason = ServiceRevisionPreparedArtifactRepairReason.WorkflowDeploymentPlanIncompatible,
+        });
+        await DispatchInvocationRevisionObservationAsync(CancellationToken.None);
+    }
+
+    private async Task<PreparedServiceRevisionArtifact> PrepareArtifactAsync(
+        PrepareServiceRevisionCommand command,
+        ServiceRevisionSpec spec)
+    {
+        var adapter = GetRequiredAdapter(spec.ImplementationKind);
+        try
+        {
+            var prepared = await adapter.PrepareRevisionAsync(
+                new PrepareServiceRevisionRequest
+                {
+                    ServiceKey = ServiceKeys.Build(command.Identity),
+                    Spec = spec,
+                },
+                CancellationToken.None);
+            return _artifactAssembler.Assemble(prepared);
+        }
+        catch (Exception ex)
+        {
+            await PersistDomainEventAsync(new ServiceRevisionPreparationFailedEvent
+            {
+                Identity = command.Identity.Clone(),
+                RevisionId = command.RevisionId ?? string.Empty,
+                FailureReason = ex.Message,
+                OccurredAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            });
+            await DispatchInvocationRevisionObservationAsync(CancellationToken.None);
+            throw;
         }
     }
 

@@ -12,7 +12,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
 {
     [Theory]
     [InlineData("admin-observatory", "Workflow Run Observatory")]
-    [InlineData("studio", "Workflow Studio")]
+    [InlineData("studio", "Aevatar Studio Assistant")]
     public async Task WorkflowStaticShellEndpoints_ShouldRenderInjectedEmbeddedAssets(string endpoint, string marker)
     {
         var http = new DefaultHttpContext
@@ -37,16 +37,16 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         html.Should().Contain("client-example");
         html.Should().Contain("console:test");
         html.Should().Contain("https://api.example.test/api/v1/proxy/s/aevatar");
-        html.Should().Contain("searchParams.append(\"resource\"");
-        html.Should().Contain("form.append(\"resource\"");
-        html.Should().Contain("async function fetchWithConsoleAuth(");
-        html.Should().Contain("requestAdminShellTokenRefresh(");
-        html.Should().Contain("rejectedAccessToken");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
         html.Should().NotContain("https://nyx.chrono-ai.fun");
         html.Should().NotContain("37a93189-2734-406e-bca1-7dbdf25c5a53");
         if (endpoint == "admin-observatory")
         {
+            html.Should().Contain("searchParams.append(\"resource\"");
+            html.Should().Contain("form.append(\"resource\"");
+            html.Should().Contain("async function fetchWithConsoleAuth(");
+            html.Should().Contain("requestAdminShellTokenRefresh(");
+            html.Should().Contain("rejectedAccessToken");
             html.Should().Contain("if(window.top !== window) return;");
             html.Should().Contain("location.replace(\"/admin#/observatory\"");
             html.Should().Contain("const url = CFG.nyxidApi + \"/api/v1/admin/users");
@@ -58,9 +58,268 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         }
         else
         {
-            html.Should().Contain("const OBS = \"/admin#/observatory\"");
-            html.Should().NotContain("const OBS = \"/workflow/observatory\"");
+            html.Should().Contain("/workflow/studio/assets/styles.css");
+            html.Should().Contain("/workflow/studio/assets/app.js");
+            html.Should().Contain("globalThis.__AEVATAR_ASSISTANT_CONFIG__");
+            html.Should().Contain("Aevatar Studio");
+            html.Should().Contain("name=\"color-scheme\" content=\"light\"");
+            html.Should().NotContain("themeButton");
+            html.Should().NotContain("workflow: \"studio\"");
         }
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_ChatTransport_ShouldMapOnlyCanonicalAssistantCommands()
+    {
+        var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [
+                source.indexOf('function ' + name + '('),
+                source.indexOf('async function ' + name + '('),
+                source.indexOf('export function ' + name + '(')
+              ].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [
+                source.indexOf('\nfunction ' + nextName + '(', start),
+                source.indexOf('\nasync function ' + nextName + '(', start),
+                source.indexOf('\nexport function ' + nextName + '(', start)
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served Studio transport');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return source.slice(start, end).replace(/^export /, '');
+            }
+
+            const context = {
+              JSON,
+              structuredClone,
+              crypto:{randomUUID:()=> 'generated-alpha'}
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('mapAttachment', 'canonicalAssistantRequest')}
+              ${functionSource('canonicalAssistantRequest', 'forwardAssistant')}
+            `, context);
+
+            assert.deepEqual(JSON.parse(JSON.stringify(context.canonicalAssistantRequest({
+              surface:'nyxid-chat', type:'text', clientRequestId:'request-first',
+              prompt:'Create a workflow', attachment:null
+            }))), {
+              type:'text', clientRequestId:'request-first', prompt:'Create a workflow'
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(context.canonicalAssistantRequest({
+              surface:'nyxid-chat', type:'text', conversationId:'conversation-alpha',
+              clientRequestId:'request-second', prompt:'Inspect this file',
+              attachment:{name:'input.txt',mediaType:'text/plain',dataBase64:'aGVsbG8='}
+            }))), {
+              type:'text', conversationId:'conversation-alpha',
+              clientRequestId:'request-second', prompt:'Inspect this file',
+              inputParts:[{type:'file',name:'input.txt',mediaType:'text/plain',dataBase64:'aGVsbG8='}]
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(context.canonicalAssistantRequest({
+              surface:'nyxid-chat', type:'approval.resolve', conversationId:'conversation-alpha',
+              requestId:'approval-alpha', approved:true, reason:'Approved by user'
+            }, 'approval-alpha'))), {
+              type:'approval.resolve', conversationId:'conversation-alpha',
+              requestId:'approval-alpha', approved:true, reason:'Approved by user',
+              clientRequestId:'client-approval-approval-alpha'
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(context.canonicalAssistantRequest({
+              surface:'nyxid-chat', type:'task.stop', conversationId:'conversation-alpha',
+              turnId:'turn-alpha', stopRequestId:'stop-alpha', clientRequestId:'client-stop-alpha',
+              expectedStateVersion:7
+            }))), {
+              type:'task.stop', conversationId:'conversation-alpha', turnId:'turn-alpha',
+              stopRequestId:'stop-alpha', clientRequestId:'client-stop-alpha', expectedStateVersion:7
+            });
+            """;
+
+        var result = await RunNodeAsync(script, transport);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        transport.Should().Contain("authorizedFetch(\"/api/chat\"");
+        transport.Should().Contain("\"Idempotency-Key\": clientRequestId");
+        transport.Should().NotContain("workflow: \"studio\"");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_AssistantAssets_ShouldShipNyxIdV4FeatureParity()
+    {
+        var html = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetStudioPage);
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
+        var readiness = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantReadiness);
+        var actorState = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantActorState);
+        var blocks = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantBlocks);
+        var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
+        var styles = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantStyles);
+
+        app.Should().Contain("import \"./transport.js\"");
+        app.Should().Contain("async function sendPrompt(");
+        app.Should().Contain("async function loadConversations(");
+        app.Should().Contain("async function refreshActorState(");
+        app.Should().Contain("async function submitActorControl(");
+        app.Should().Contain("async function submitNeedsYouDecision(");
+        app.Should().Contain("async function loadReadiness(");
+        app.Should().Contain("state.pendingFirstTurn ||=");
+        app.Should().Contain("已受理，等待 Actor 确认");
+        app.Should().Contain("async function submitApproval(");
+        app.Should().Contain("async function submitActionContinuation(");
+        app.Should().Contain("async function selectAttachment(");
+        app.Should().Contain("conversationStates: new Map()");
+        protocol.Should().Contain("export function normalizeFrame(");
+        protocol.Should().Contain("export function validateActionContinuation(");
+        protocol.Should().Contain("schemaVersion !== 4");
+        protocol.Should().Contain("\"nyxid.input.request\": \"input_requested\"");
+        protocol.Should().Contain("\"nyxid.approval.request\": \"approval_requested\"");
+        actorState.Should().Contain("export function reduceActorEvent(");
+        actorState.Should().Contain("export function applyCurrentStateResult(");
+        actorState.Should().Contain("pendingInput: null");
+        actorState.Should().Contain("latestApprovalResolution: null");
+        readiness.Should().Contain("export function normalizeReadinessSnapshot(");
+        readiness.Should().Contain("Readiness snapshot contains secret fields");
+        transport.Should().Contain("/api/v1/assistant/readiness");
+        transport.Should().Contain("authorizedFetch(\"/api/chat\"");
+        blocks.Should().Contain("export function buildConnectCardBlock(");
+        html.Should().Contain("id=\"readinessPanel\"");
+        html.Should().Contain("id=\"needsYouFilterButton\"");
+        styles.Should().Contain(".connect-card");
+        styles.Should().Contain(".readiness-panel");
+        styles.Should().Contain(".needs-you-panel");
+        styles.Should().Contain(".history-filter");
+        styles.Should().Contain("@media (max-width:");
+        styles.Should().Contain("color-scheme: light");
+        styles.Should().Contain("--bg: #f4f5f7");
+        styles.Should().Contain("--accent: #2563eb");
+        styles.Should().NotContain("data-theme");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_ReadinessAsset_ShouldRejectUnsafeOrOpenEndedEvidence()
+    {
+        var readiness = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantReadiness);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
+            const context = { URL, Date, Set, Error };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            const fixture = {
+              revision:'rev-alpha', evaluatedAt:'2026-08-01T01:02:03Z', capabilities:[{
+                capabilityId:'api-github', label:'GitHub', required:false, status:'available',
+                connectionState:'connected', grantState:'granted', requestedScopes:['repo:read'],
+                managementUrl:'https://nyx.example/keys/github', reasonCode:null
+              }]
+            };
+            const normalized = context.normalizeReadinessSnapshot(fixture, {nyxidWebUrl:'https://nyx.example'});
+            assert.equal(normalized.capabilities[0].status, 'available');
+            assert.equal(normalized.evaluatedAt, '2026-08-01T01:02:03.000Z');
+            assert.throws(() => context.normalizeReadinessSnapshot({
+              ...fixture, capabilities:[{...fixture.capabilities[0], managementUrl:'https://evil.example/keys'}]
+            }, {nyxidWebUrl:'https://nyx.example'}), /not allowed/);
+            assert.throws(() => context.normalizeReadinessSnapshot({
+              ...fixture, accessToken:'secret'
+            }, {nyxidWebUrl:'https://nyx.example'}), /secret fields/);
+            assert.throws(() => context.normalizeReadinessSnapshot({
+              ...fixture, capabilities:[{...fixture.capabilities[0], status:'maybe'}]
+            }, {nyxidWebUrl:'https://nyx.example'}), /status is invalid/);
+            """;
+
+        var result = await RunNodeAsync(script, readiness);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_ActorProjection_ShouldConvergeNeedsYouFactsFromLiveAndCurrentState()
+    {
+        var actorState = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantActorState);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8')
+              .replace(/^import[^;]+;\s*/m, '')
+              .replace(/^export /gm, '');
+            const context = { structuredClone, validateActionRequest:value => value };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            let live = context.createActorProjection('conversation-alpha');
+            live = context.reduceActorEvent(live, {type:'input_requested', sequence:23, payload:{
+              requestId:'input-alpha', turnId:'turn-alpha', taskId:'task-alpha', stepId:'step-input',
+              prompt:'Select regions', options:[{optionId:'option-sg',label:'Singapore'}],
+              allowFreeText:false, multiSelect:true, askedAt:'2026-08-01T12:00:00Z'
+            }});
+            assert.equal(live.pendingInput.requestId, 'input-alpha');
+            assert.equal(live.attentionKind, 'input');
+            live = context.reduceActorEvent(live, {type:'input_changed', sequence:24, payload:{
+              requestId:'input-alpha', clientRequestId:'client-input', outcome:'accepted'
+            }});
+            assert.equal(live.pendingInput, null);
+            assert.equal(live.latestInputResolution.requestId, 'input-alpha');
+
+            let current = context.createActorProjection('conversation-alpha');
+            const applied = context.applyCurrentStateResult(current, {status:'current', stateVersion:31, snapshot:{
+              actorId:'conversation-alpha', scopeId:'scope-alpha', stateVersion:31, progressSequence:31,
+              activeTurn:null, latestTurn:null, recentTerminalTurns:[], activeTask:null,
+              pendingInput:null, pendingApproval:{
+                approvalRequestId:'approval-alpha', turnId:'turn-alpha', taskId:'task-alpha',
+                stepId:'step-tool', toolName:'repository_delete', action:'repository.delete',
+                target:'repository:repo-alpha', reversibility:'irreversible', grantBoundary:'within_grant'
+              }, latestInputResolution:null, latestApprovalResolution:null, taskStatus:'active',
+              attentionKind:'approval', attentionSince:'2026-08-01T12:05:00Z',
+              activeStepSummary:'Delete repository.', pendingActions:[], controlFence:null,
+              latestControlResult:null, continuationAdmission:null
+            }});
+            assert.equal(applied.projection.pendingApproval.approvalRequestId, 'approval-alpha');
+            assert.equal(applied.projection.pendingApproval.reversibility, 'irreversible');
+            assert.equal(applied.projection.attentionKind, 'approval');
+            assert.equal(applied.reloadWithoutCursor, false);
+            """;
+
+        var result = await RunNodeAsync(script, actorState);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_ConversationProtocol_ShouldPreserveAuthoritativeAttentionSummary()
+    {
+        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('export function normalizeConversationIndex(');
+            const end = source.indexOf('\nexport function normalizeStoredMessages(', start);
+            assert.notEqual(start, -1);
+            assert.notEqual(end, -1);
+            const context = {};
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end).replace(/^export /, ''), context);
+            const result = context.normalizeConversationIndex({conversations:[{
+              id:'conversation-alpha', title:'Deploy', attentionKind:'approval',
+              attentionSince:'2026-08-01T12:05:00Z', activeStepSummary:'Delete repository.',
+              taskStatus:'active', stateVersion:31
+            }]});
+            assert.deepEqual(JSON.parse(JSON.stringify(result[0])), {
+              id:'conversation-alpha', title:'Deploy', serviceId:'', serviceKind:'', createdAt:null,
+              updatedAt:null, messageCount:0, llmRoute:null, llmModel:null, taskStatus:'active',
+              attentionKind:'approval', attentionSince:'2026-08-01T12:05:00Z',
+              activeStepSummary:'Delete repository.', stateVersion:31
+            });
+            """;
+
+        var result = await RunNodeAsync(script, protocol);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     [Fact]
@@ -379,6 +638,21 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         http.Response.Body = new MemoryStream();
         var assets = http.RequestServices.GetRequiredService<IBackendConsoleAssetService>();
         await WorkflowRunObservatoryEndpoints.GetAdminObservatoryFrame(http, assets).ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var reader = new StreamReader(http.Response.Body);
+        return await reader.ReadToEndAsync();
+    }
+
+    private static async Task<string> GetStudioAssetAsync(
+        Func<HttpContext, IBackendConsoleAssetService, IResult> endpoint)
+    {
+        var http = new DefaultHttpContext
+        {
+            RequestServices = BuildProvider(),
+        };
+        http.Response.Body = new MemoryStream();
+        var assets = http.RequestServices.GetRequiredService<IBackendConsoleAssetService>();
+        await endpoint(http, assets).ExecuteAsync(http);
         http.Response.Body.Position = 0;
         using var reader = new StreamReader(http.Response.Body);
         return await reader.ReadToEndAsync();

@@ -9,6 +9,9 @@ public sealed class WorkflowExplicitRequestPreviewService(
     IExternalWorkflowCapabilityReadinessPort readinessPort) :
     IWorkflowExplicitRequestPreviewService
 {
+    private const string DurableAuthorizationUnavailableCode =
+        "DURABLE_AUTHORIZATION_UNAVAILABLE";
+
     public async Task<WorkflowExplicitRequestPreviewResult> PreviewAsync(
         WorkflowExplicitRequestPreviewRequest request,
         CancellationToken cancellationToken = default)
@@ -32,7 +35,8 @@ public sealed class WorkflowExplicitRequestPreviewService(
                     invocation.Selector,
                     request.ExecutionMode),
                 cancellationToken);
-            if (readiness.Status != ExternalCapabilityReadinessStatus.Ready)
+            if (readiness.Status != ExternalCapabilityReadinessStatus.Ready &&
+                !CanReviewBeforeDurableAuthorizationPreparation(request.ExecutionMode, readiness))
                 throw new WorkflowExternalCapabilityAdmissionException(readiness);
             if (readiness.SelectedCapability?.CapabilityCase !=
                 ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest)
@@ -69,6 +73,33 @@ public sealed class WorkflowExplicitRequestPreviewService(
         }
 
         return new WorkflowExplicitRequestPreviewResult(workflowId, revisionId, items);
+    }
+
+    private static bool CanReviewBeforeDurableAuthorizationPreparation(
+        ExternalCapabilityExecutionMode executionMode,
+        ExternalCapabilityReadiness readiness)
+    {
+        if (executionMode != ExternalCapabilityExecutionMode.Durable ||
+            readiness.ExecutionMode != executionMode ||
+            readiness.Status != ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable ||
+            readiness.Blockers.Count == 0 ||
+            readiness.Blockers.Any(static blocker =>
+                blocker.Status != ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable ||
+                !string.Equals(blocker.Code, DurableAuthorizationUnavailableCode, StringComparison.Ordinal)) ||
+            readiness.SelectedCapability?.CapabilityCase !=
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest)
+        {
+            return false;
+        }
+
+        var request = readiness.SelectedCapability.NyxIdUserRequest;
+        return request.Request?.Method is (
+                   NyxIdRequestMethod.Get or
+                   NyxIdRequestMethod.Head or
+                   NyxIdRequestMethod.Options) &&
+               request.ExecutionPolicy?.Risk == NyxIdOperationRisk.ReadOnly &&
+               request.ExecutionPolicy.AllowedExecutionModes.Contains(
+                   ExternalCapabilityExecutionMode.Durable);
     }
 
     private async Task<IReadOnlyList<ExternalToolInvocationSpec>> ParseInvocationsAsync(

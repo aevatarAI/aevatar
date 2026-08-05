@@ -503,6 +503,14 @@ message BeginTeamAutomationCredentialOperationCommand
   TeamAutomationActivationDecisionState activation_decision = 11;
 }
 
+message RetryTeamAutomationCredentialOperationCommand
+{
+  TeamMemberAutomationOwnerState owner = 1;
+  string operation_id = 2;
+  string idempotency_key = 3;
+  string observation_request_id = 4;
+}
+
 message TeamAutomationCredentialOperationBeganEvent
 {
   TeamMemberAutomationOwnerState owner = 1;

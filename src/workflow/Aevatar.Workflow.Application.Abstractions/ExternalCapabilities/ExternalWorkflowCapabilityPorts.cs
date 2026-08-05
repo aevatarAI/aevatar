@@ -58,13 +58,15 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
         ExternalCapabilityExecutionMode executionMode,
         IEnumerable<NyxIdExplicitRequestConfirmation>? explicitRequestConfirmations = null,
         string? workflowId = null,
-        string? revisionId = null)
+        string? revisionId = null,
+        ExternalCapabilityExecutionMode? explicitRequestGrantMode = null)
     {
         Access = access ?? throw new ArgumentNullException(nameof(access));
         WorkflowYaml = workflowYaml ?? string.Empty;
         InlineWorkflowYamls = inlineWorkflowYamls ?? new Dictionary<string, string>();
         SourceKind = sourceKind?.Trim() ?? string.Empty;
         ExecutionMode = executionMode;
+        ExplicitRequestGrantMode = explicitRequestGrantMode ?? executionMode;
         ExplicitRequestConfirmations = CloneConfirmations(explicitRequestConfirmations);
         WorkflowId = NormalizeOptional(workflowId);
         RevisionId = NormalizeOptional(revisionId);
@@ -79,6 +81,8 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
     public string SourceKind { get; }
 
     public ExternalCapabilityExecutionMode ExecutionMode { get; }
+
+    public ExternalCapabilityExecutionMode ExplicitRequestGrantMode { get; }
 
     public IReadOnlyList<NyxIdExplicitRequestConfirmation> ExplicitRequestConfirmations { get; }
 
@@ -95,7 +99,8 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
         ExternalCapabilityExecutionMode executionMode,
         IEnumerable<NyxIdExplicitRequestConfirmation>? explicitRequestConfirmations = null,
         string? workflowId = null,
-        string? revisionId = null)
+        string? revisionId = null,
+        ExternalCapabilityExecutionMode? explicitRequestGrantMode = null)
     {
         ArgumentNullException.ThrowIfNull(workflowYamls);
         if (workflowYamls.Count == 0)
@@ -109,14 +114,15 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
             executionMode,
             explicitRequestConfirmations,
             workflowId,
-            revisionId)
+            revisionId,
+            explicitRequestGrantMode)
         {
             WorkflowYamls = workflowYamls.ToArray(),
         };
     }
 
     public override string ToString() =>
-        $"{nameof(WorkflowExternalCapabilityAdmissionRequest)} {{ Access = {Access}, SourceKind = {SourceKind}, ExecutionMode = {ExecutionMode}, Definition = [REDACTED] }}";
+        $"{nameof(WorkflowExternalCapabilityAdmissionRequest)} {{ Access = {Access}, SourceKind = {SourceKind}, ExecutionMode = {ExecutionMode}, ExplicitRequestGrantMode = {ExplicitRequestGrantMode}, Definition = [REDACTED] }}";
 
     private static IReadOnlyList<NyxIdExplicitRequestConfirmation> CloneConfirmations(
         IEnumerable<NyxIdExplicitRequestConfirmation>? confirmations) =>
@@ -266,15 +272,28 @@ public sealed class WorkflowExternalCapabilityAdmissionException : InvalidOperat
     {
         Readiness = readiness?.Clone() ?? throw new ArgumentNullException(nameof(readiness));
         var blocker = Readiness.Blockers.FirstOrDefault(static item => !string.IsNullOrWhiteSpace(item.Code));
-        StableCode = NormalizeStableCode(blocker?.Code);
+        SafeBlockerCode = NormalizeSafeBlockerCode(blocker?.Code);
+        StableCode = NormalizeStableCode(SafeBlockerCode);
         SafeMessage = string.IsNullOrWhiteSpace(blocker?.SafeMessage)
             ? AdmissionRejectedMessage
             : blocker.SafeMessage.Trim();
     }
 
     public ExternalCapabilityReadiness Readiness { get; }
+    public string SafeBlockerCode { get; }
     public string StableCode { get; }
     public string SafeMessage { get; }
+
+    private static string NormalizeSafeBlockerCode(string? code)
+    {
+        var normalized = code?.Trim();
+        return !string.IsNullOrWhiteSpace(normalized) &&
+               normalized.Length <= 128 &&
+               normalized.All(static character =>
+                   char.IsAsciiLetterOrDigit(character) || character == '_')
+            ? normalized
+            : AdmissionRejectedCode;
+    }
 
     private static string NormalizeStableCode(string? code) =>
         code?.Trim() switch

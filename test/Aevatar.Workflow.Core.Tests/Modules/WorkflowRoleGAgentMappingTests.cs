@@ -199,8 +199,8 @@ public sealed class WorkflowRoleGAgentMappingTests
 
         provider.LastRequest.Should().NotBeNull();
         var user = provider.LastRequest!.Messages.Should()
-            .ContainSingle(static message => message.Role == "user")
-            .Subject;
+            .ContainSingle(message => message.Role == "user")
+            .Which;
         user.ContentParts.Should().NotBeNull();
         user.ContentParts!.Should().HaveCount(2);
         user.ContentParts[0].Kind.Should().Be(ContentPartKind.Text);

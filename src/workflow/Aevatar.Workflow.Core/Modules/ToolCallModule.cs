@@ -246,7 +246,10 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 
         var state = WorkflowExecutionStateAccess.Load<ToolCallModuleState>(ctx, ModuleStateKey);
         if (!TryResolvePending(state, resumed, out var pendingKey, out var pending))
+        {
+            await PublishResumeRejectedAsync(state, resumed, ctx, ct);
             return;
+        }
 
         if (!resumed.Approved)
         {
@@ -386,6 +389,49 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                string.Equals(pending.ExecutionId, NormalizeRequired(resumed.ToolApproval.ExecutionId), StringComparison.Ordinal) &&
                string.Equals(pending.ToolCallId, NormalizeRequired(resumed.ToolApproval.ToolCallId), StringComparison.Ordinal) &&
                string.Equals(pending.ApprovalRequestId, NormalizeRequired(resumed.ToolApproval.ApprovalRequestId), StringComparison.Ordinal);
+    }
+
+    private static Task PublishResumeRejectedAsync(
+        ToolCallModuleState state,
+        WorkflowResumedEvent resumed,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var reason = ResolveResumeRejectionReason(state, resumed);
+        ctx.Logger.LogWarning(
+            "ToolCall: reject tool approval resume run={RunId} step={StepId} reason={Reason}",
+            resumed.RunId,
+            resumed.StepId,
+            reason);
+        return ctx.PublishAsync(new WorkflowToolApprovalResumeRejectedEvent
+        {
+            RunId = resumed.RunId ?? string.Empty,
+            StepId = resumed.StepId ?? string.Empty,
+            SubmittedApproval = resumed.ToolApproval.Clone(),
+            Reason = reason,
+        }, TopologyAudience.Self, ct);
+    }
+
+    private static WorkflowToolApprovalResumeRejectionReason ResolveResumeRejectionReason(
+        ToolCallModuleState state,
+        WorkflowResumedEvent resumed)
+    {
+        if (string.IsNullOrWhiteSpace(resumed.RunId) ||
+            string.IsNullOrWhiteSpace(resumed.StepId) ||
+            resumed.ToolApproval == null ||
+            string.IsNullOrWhiteSpace(resumed.ToolApproval.ExecutionId) ||
+            string.IsNullOrWhiteSpace(resumed.ToolApproval.ToolCallId) ||
+            string.IsNullOrWhiteSpace(resumed.ToolApproval.ApprovalRequestId))
+        {
+            return WorkflowToolApprovalResumeRejectionReason.InvalidIdentity;
+        }
+
+        var hasPendingForStep = state.PendingApprovals.Values.Any(pending =>
+            string.Equals(pending.RunId, resumed.RunId.Trim(), StringComparison.Ordinal) &&
+            string.Equals(pending.StepId, resumed.StepId.Trim(), StringComparison.Ordinal));
+        return hasPendingForStep
+            ? WorkflowToolApprovalResumeRejectionReason.IdentityMismatch
+            : WorkflowToolApprovalResumeRejectionReason.PendingApprovalNotFound;
     }
 
     private static async Task SuspendForApprovalAsync(

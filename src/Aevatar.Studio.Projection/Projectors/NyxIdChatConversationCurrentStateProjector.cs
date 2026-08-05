@@ -166,7 +166,68 @@ public sealed class NyxIdChatConversationCurrentStateProjector
             AvailableActions = ToAvailableActions(step.AvailableActions),
             UpdatedAt = step.UpdatedAt?.Clone(),
             Operation = ToOperation(step.Operation),
+            Source = ToSource(step.Source),
         };
+
+    private static NyxIdChatConversationStepSourceDocument? ToSource(
+        NyxIdChatStepSource? source) =>
+        source?.SourceCase switch
+        {
+            NyxIdChatStepSource.SourceOneofCase.Llm =>
+                new NyxIdChatConversationStepSourceDocument
+                {
+                    Llm = new NyxIdChatConversationLLMStepSourceDocument
+                    {
+                        Model = source.Llm.Model,
+                    },
+                },
+            NyxIdChatStepSource.SourceOneofCase.Tool =>
+                new NyxIdChatConversationStepSourceDocument
+                {
+                    Tool = ToToolSource(source.Tool),
+                },
+            NyxIdChatStepSource.SourceOneofCase.BrowserAction =>
+                new NyxIdChatConversationStepSourceDocument
+                {
+                    BrowserAction = new NyxIdChatConversationBrowserActionStepSourceDocument
+                    {
+                        Action = ToWireName(source.BrowserAction.Action),
+                        ActionRequestId = source.BrowserAction.ActionRequestId,
+                    },
+                },
+            NyxIdChatStepSource.SourceOneofCase.Postcondition =>
+                new NyxIdChatConversationStepSourceDocument
+                {
+                    Postcondition = new NyxIdChatConversationPostconditionStepSourceDocument
+                    {
+                        ActionRequestId = source.Postcondition.ActionRequestId,
+                        PostconditionKind = source.Postcondition.PostconditionKind,
+                    },
+                },
+            NyxIdChatStepSource.SourceOneofCase.Input =>
+                new NyxIdChatConversationStepSourceDocument
+                {
+                    Input = new NyxIdChatConversationInputStepSourceDocument
+                    {
+                        RequestId = source.Input.RequestId,
+                    },
+                },
+            _ => null,
+        };
+
+    private static NyxIdChatConversationToolStepSourceDocument ToToolSource(
+        NyxIdChatToolStepSource source)
+    {
+        var document = new NyxIdChatConversationToolStepSourceDocument
+        {
+            ToolName = source.ToolName,
+            ServiceSlug = source.ServiceSlug,
+            ServiceId = source.ServiceId,
+        };
+        if (source.HasReadinessCapabilityId)
+            document.ReadinessCapabilityId = source.ReadinessCapabilityId;
+        return document;
+    }
 
     private static NyxIdChatConversationAvailableActionsDocument? ToAvailableActions(
         NyxIdChatAvailableActions? actions) =>

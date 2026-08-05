@@ -6,6 +6,7 @@ using Aevatar.AI.ToolProviders.Web;
 using Aevatar.AI.ToolProviders.Web.Tools;
 using Aevatar.Foundation.Abstractions.Tools;
 using FluentAssertions;
+using Google.Protobuf;
 
 namespace Aevatar.AI.Tests;
 
@@ -115,6 +116,30 @@ public sealed class ToolPresentationDescriptorTests
             tool.Presentation.Kind == ToolPresentationKind.BuiltIn &&
             tool.Presentation.SourceRefCase == ToolPresentationDescriptor.SourceRefOneofCase.BuiltIn &&
             tool.Presentation.BuiltIn.ToolId == tool.Name);
+    }
+
+    [Fact]
+    public void NyxIdOperationRef_ShouldPreserveOptionalReadinessCapabilityPresence()
+    {
+        var absent = new NyxIdOperationRef
+        {
+            ConnectedServiceId = "connected-service-alpha",
+            ServiceSlug = "service-slug-alpha",
+            CatalogServiceSlug = "catalog-slug-alpha",
+        };
+        var present = absent.Clone();
+        present.ReadinessCapabilityId = "readiness-capability-alpha";
+
+        var absentRoundTrip = NyxIdOperationRef.Parser.ParseFrom(absent.ToByteArray());
+        var presentRoundTrip = NyxIdOperationRef.Parser.ParseFrom(present.ToByteArray());
+
+        absentRoundTrip.HasReadinessCapabilityId.Should().BeFalse();
+        presentRoundTrip.HasReadinessCapabilityId.Should().BeTrue();
+        presentRoundTrip.ReadinessCapabilityId.Should().Be("readiness-capability-alpha");
+        presentRoundTrip.ConnectedServiceId.Should().NotBe(presentRoundTrip.ServiceSlug);
+        presentRoundTrip.ServiceSlug.Should().NotBe(presentRoundTrip.CatalogServiceSlug);
+        presentRoundTrip.CatalogServiceSlug.Should().NotBe(
+            presentRoundTrip.ReadinessCapabilityId);
     }
 
     private sealed class GenericTool : IAgentTool

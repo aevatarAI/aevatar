@@ -376,6 +376,11 @@ internal sealed class NyxIdChatSseWriter
                     connectedServiceId = descriptor.NyxIdOperation.ConnectedServiceId,
                     serviceSlug = descriptor.NyxIdOperation.ServiceSlug,
                     catalogServiceSlug = descriptor.NyxIdOperation.CatalogServiceSlug,
+                    readinessCapabilityId = descriptor.NyxIdOperation.HasReadinessCapabilityId &&
+                                            !string.IsNullOrWhiteSpace(
+                                                descriptor.NyxIdOperation.ReadinessCapabilityId)
+                        ? descriptor.NyxIdOperation.ReadinessCapabilityId
+                        : null,
                     connectionLabel = descriptor.NyxIdOperation.ConnectionLabel,
                     connectorDisplayName = descriptor.NyxIdOperation.ConnectorDisplayName,
                     operationId = descriptor.NyxIdOperation.OperationId,

@@ -44,6 +44,12 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
                     payload.TypeUrl ?? string.Empty,
                     payload.Unpack<WorkflowSuspendedEvent>(),
                     observedAt),
+            [BuildTypeUrl(WorkflowToolApprovalResumeRejectedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+                ApplyWorkflowToolApprovalResumeRejected(
+                    readModel,
+                    payload.TypeUrl ?? string.Empty,
+                    payload.Unpack<WorkflowToolApprovalResumeRejectedEvent>(),
+                    observedAt),
             [BuildTypeUrl(WaitingForSignalEvent.Descriptor)] = static (readModel, payload, observedAt) =>
                 ApplyWaitingForSignal(
                     readModel,
@@ -322,6 +328,32 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             metadata["redacted_output"] = redactedOutput;
 
         return metadata;
+    }
+
+    private static void ApplyWorkflowToolApprovalResumeRejected(
+        WorkflowRunInsightReportDocument readModel,
+        string eventType,
+        WorkflowToolApprovalResumeRejectedEvent evt,
+        DateTimeOffset observedAt)
+    {
+        var submitted = evt.SubmittedApproval;
+        var data = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["reason"] = evt.Reason.ToString(),
+            ["execution_id"] = submitted?.ExecutionId ?? string.Empty,
+            ["tool_call_id"] = submitted?.ToolCallId ?? string.Empty,
+            ["approval_request_id"] = submitted?.ApprovalRequestId ?? string.Empty,
+        };
+        AddTimeline(
+            readModel.Timeline,
+            observedAt,
+            "tool_approval.resume_rejected",
+            "Tool approval resume did not match the actor-owned pending approval.",
+            readModel.RootActorId,
+            evt.StepId,
+            "tool_call",
+            eventType,
+            data);
     }
 
     private static Dictionary<string, string> FilterOpenExtensionMetadata(IDictionary<string, string> metadata)

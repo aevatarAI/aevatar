@@ -57,6 +57,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
                     header_parameters: [If-Match]
                     body_mode: none
                     response_mode: text
+                    risk: read_only
                 parameters:
                   tool: nyxid_proxy
                   arguments: '{"path_params":{"resource_id":"${input.resource_id}"},"query":{"page_size":500}}'
@@ -74,6 +75,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
         selector.NyxIdRequest.HeaderParameters.Should().Equal("If-Match");
         selector.NyxIdRequest.BodyMode.Should().Be(NyxIdRequestBodyMode.None);
         selector.NyxIdRequest.ResponseMode.Should().Be(NyxIdRequestResponseMode.Text);
+        selector.NyxIdRequest.Risk.Should().Be(NyxIdOperationRisk.ReadOnly);
     }
 
     [Fact]

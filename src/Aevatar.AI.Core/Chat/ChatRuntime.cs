@@ -506,6 +506,7 @@ public sealed class ChatRuntime
                 Model = baseRequest.Model,
                 Temperature = baseRequest.Temperature,
                 MaxTokens = baseRequest.MaxTokens,
+                AllowMultipleToolCalls = baseRequest.AllowMultipleToolCalls,
                 ResponseFormat = baseRequest.ResponseFormat,
             };
             var roundScope = new StreamingRoundScope();
@@ -519,7 +520,7 @@ public sealed class ChatRuntime
                                    roundRequest,
                                    roundScope,
                                    runToken,
-                                   onToolCallCompleted: null,
+                                   emitResolvedToolCallStarts: false,
                                    onRequestAuthorized: BindAuthorizedRequest))
                 {
                     if (chunk.ToolCallStarted != null)
@@ -580,7 +581,7 @@ public sealed class ChatRuntime
                                    roundRequest,
                                    roundScope,
                                    runToken,
-                                   onToolCallCompleted: null,
+                                   emitResolvedToolCallStarts: false,
                                    onRequestAuthorized: BindAuthorizedRequest))
                 {
                     if (chunk.ToolCallStarted != null)
@@ -840,6 +841,7 @@ public sealed class ChatRuntime
                 Model = baseRequest.Model,
                 Temperature = baseRequest.Temperature,
                 MaxTokens = baseRequest.MaxTokens,
+                AllowMultipleToolCalls = baseRequest.AllowMultipleToolCalls,
                 ResponseFormat = baseRequest.ResponseFormat,
             };
             var finalScope = new StreamingRoundScope();
@@ -930,6 +932,7 @@ public sealed class ChatRuntime
                         Model = finalRequest.Model,
                         Temperature = finalRequest.Temperature,
                         MaxTokens = finalRequest.MaxTokens,
+                        AllowMultipleToolCalls = finalRequest.AllowMultipleToolCalls,
                         ResponseFormat = finalRequest.ResponseFormat,
                     };
                     var summaryScope = new StreamingRoundScope();
@@ -1163,7 +1166,7 @@ public sealed class ChatRuntime
         LLMRequest request,
         StreamingRoundScope roundScope,
         [EnumeratorCancellation] CancellationToken ct,
-        Action<ToolCall>? onToolCallCompleted = null,
+        bool emitResolvedToolCallStarts = false,
         Action<LLMRequest>? onRequestAuthorized = null)
     {
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
@@ -1218,7 +1221,7 @@ public sealed class ChatRuntime
             string? finishReason = null;
             var completedToolCalls = new Queue<ToolCall>();
             var anonymousToolCallPrefix = authorizedToolContext.Request.CallId;
-            var toolCalls = onToolCallCompleted != null
+            var toolCalls = emitResolvedToolCallStarts
                 ? new StreamingToolCallAccumulator(
                     toolCall => completedToolCalls.Enqueue(toolCall),
                     anonymousToolCallPrefix)
@@ -1246,7 +1249,14 @@ public sealed class ChatRuntime
                 LLMStreamChunk? normalizedChunk;
                 try
                 {
-                    normalizedChunk = NormalizeStreamChunk(chunk, toolCalls, full, fullReasoning, ref usage, ref finishReason);
+                    normalizedChunk = NormalizeStreamChunk(
+                        chunk,
+                        toolCalls,
+                        full,
+                        fullReasoning,
+                        ref usage,
+                        ref finishReason,
+                        emitToolCallDeltas: !emitResolvedToolCallStarts);
                 }
                 catch (Exception ex)
                 {
@@ -1257,7 +1267,6 @@ public sealed class ChatRuntime
                 while (completedToolCalls.TryDequeue(out var completedToolCall))
                 {
                     yield return BuildToolCallStartedChunk(completedToolCall, authorizedToolManager);
-                    onToolCallCompleted?.Invoke(completedToolCall);
                 }
 
                 if (normalizedChunk != null)
@@ -1268,7 +1277,6 @@ public sealed class ChatRuntime
             while (completedToolCalls.TryDequeue(out var completedToolCall))
             {
                 yield return BuildToolCallStartedChunk(completedToolCall, authorizedToolManager);
-                onToolCallCompleted?.Invoke(completedToolCall);
             }
 
             streamedContent = full.Length > 0 ? full.ToString() : null;
@@ -1332,11 +1340,15 @@ public sealed class ChatRuntime
         ILLMProvider provider,
         LLMRequest request,
         CancellationToken ct,
-        Func<LLMStreamChunk, CancellationToken, Task>? onChunkAsync = null,
-        Action<ToolCall>? onToolCallCompleted = null)
+        Func<LLMStreamChunk, CancellationToken, Task>? onChunkAsync = null)
     {
         var roundScope = new StreamingRoundScope();
-        await foreach (var _ in StreamLlmRoundAsync(provider, request, roundScope, ct, onToolCallCompleted))
+        await foreach (var _ in StreamLlmRoundAsync(
+                           provider,
+                           request,
+                           roundScope,
+                           ct,
+                           emitResolvedToolCallStarts: true))
         {
             if (onChunkAsync is not null)
                 await onChunkAsync(_, ct);
@@ -1439,11 +1451,13 @@ public sealed class ChatRuntime
         StringBuilder fullContent,
         StringBuilder fullReasoningContent,
         ref TokenUsage? usage,
-        ref string? finishReason)
+        ref string? finishReason,
+        bool emitToolCallDeltas = true)
     {
         ToolCall? normalizedToolCall = null;
         if (chunk.DeltaToolCall != null)
             normalizedToolCall = toolCalls.TrackDelta(chunk.DeltaToolCall);
+        var emittedToolCall = emitToolCallDeltas ? normalizedToolCall : null;
 
         if (!string.IsNullOrEmpty(chunk.DeltaContent))
             fullContent.Append(chunk.DeltaContent);
@@ -1460,7 +1474,7 @@ public sealed class ChatRuntime
         if (string.IsNullOrEmpty(chunk.DeltaContent) &&
             string.IsNullOrEmpty(chunk.DeltaReasoningContent) &&
             chunk.DeltaContentPart == null &&
-            normalizedToolCall == null &&
+            emittedToolCall == null &&
             !chunk.IsLast &&
             chunk.Usage == null &&
             chunk.ToolReceipt == null)
@@ -1473,7 +1487,7 @@ public sealed class ChatRuntime
             DeltaContent = chunk.DeltaContent,
             DeltaContentPart = chunk.DeltaContentPart,
             DeltaReasoningContent = chunk.DeltaReasoningContent,
-            DeltaToolCall = normalizedToolCall,
+            DeltaToolCall = emittedToolCall,
             Usage = chunk.Usage,
             IsLast = chunk.IsLast,
             ToolReceipt = chunk.ToolReceipt?.Clone(),

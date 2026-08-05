@@ -1012,14 +1012,43 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldFailClosedWhenPublishedReadOnlyRuntimeCatalogIsUnavailable()
+    public async Task ExecuteAsync_ShouldUseExactRouteWhenPublishedReadOnlyRuntimeCatalogAccessIsDenied()
     {
+        var admission = ListMessagesAdmission();
         var handler = new RecordingHandler
         {
             McpConfigJson = """{"error":true,"status":403}""",
         };
         var tool = CreateTool(handler);
-        using var scope = PushContext(ListMessagesAdmission());
+        using var scope = PushContext(
+            admission,
+            userToken: "proxy-delegation-wf-alpha",
+            credentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation);
+
+        var result = await tool.ExecuteAsync(
+            """{"query":{"container_id":"oc_1"}}""");
+
+        result.Should().NotContain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        handler.McpConfigRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().ContainSingle().Which.Query
+            .Should().Be("?_nyxid_via=us-lark-alpha&container_id=oc_1");
+        handler.AuthorizationBearers.Should().Equal(
+            "proxy-delegation-wf-alpha",
+            "proxy-delegation-wf-alpha");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldFailClosedWhenPublishedReadOnlyRuntimeCatalogSourceIsUnavailable()
+    {
+        var handler = new RecordingHandler
+        {
+            McpConfigJson = """{"error":true,"status":503}""",
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(
+            ListMessagesAdmission(),
+            userToken: "proxy-delegation-wf-alpha",
+            credentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation);
 
         var result = await tool.ExecuteAsync(
             """{"query":{"container_id":"oc_1"}}""");

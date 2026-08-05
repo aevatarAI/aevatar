@@ -242,6 +242,7 @@ public sealed class WorkflowParser
             BodyMode = ParseNyxIdRequestBodyMode(request.BodyMode),
             BodyRequired = request.BodyRequired,
             ResponseMode = ParseNyxIdRequestResponseMode(request.ResponseMode),
+            Risk = ParseNyxIdOperationRisk(request.Risk),
         };
         selector.QueryParameters.Add(NormalizeNames(request.QueryParameters, StringComparer.Ordinal));
         selector.HeaderParameters.Add(NormalizeNames(request.HeaderParameters, StringComparer.OrdinalIgnoreCase));
@@ -265,6 +266,20 @@ public sealed class WorkflowParser
             "DELETE" => NyxIdRequestMethod.Delete,
             _ => NyxIdRequestMethod.Unspecified,
         };
+
+    private static NyxIdOperationRisk ParseNyxIdOperationRisk(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return NyxIdOperationRisk.Unspecified;
+
+        return value.Trim().ToUpperInvariant() switch
+        {
+            "READ_ONLY" => NyxIdOperationRisk.ReadOnly,
+            "WRITE" => NyxIdOperationRisk.Write,
+            "DESTRUCTIVE" => NyxIdOperationRisk.Destructive,
+            _ => (NyxIdOperationRisk)(-1),
+        };
+    }
 
     private static NyxIdRequestBodyMode ParseNyxIdRequestBodyMode(string? value) =>
         value?.Trim().ToLowerInvariant() switch
@@ -1525,6 +1540,7 @@ public sealed class WorkflowParser
         public string? BodyMode { get; set; }
         public bool BodyRequired { get; set; }
         public string? ResponseMode { get; set; }
+        public string? Risk { get; set; }
     }
     private sealed class RawStepPresentation
     {

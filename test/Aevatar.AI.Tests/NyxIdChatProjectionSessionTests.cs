@@ -1143,7 +1143,19 @@ public sealed class NyxIdChatProjectionSessionTests
                 ToolStarted = new NyxIdChatToolProgress
                 {
                     CallId = "call-alpha",
-                    ToolName = "repository_update",
+                    ToolName = "use_skill",
+                    Presentation = new ToolPresentationDescriptor
+                    {
+                        InvocationName = "use_skill",
+                        DisplayName = "release-readiness-review",
+                        Kind = ToolPresentationKind.Skill,
+                        Availability = ToolAvailability.Available,
+                        Skill = new SkillRef
+                        {
+                            SkillName = "release-readiness-review",
+                            Source = "local-or-remote",
+                        },
+                    },
                 },
             },
         };
@@ -1173,7 +1185,9 @@ public sealed class NyxIdChatProjectionSessionTests
         hub.Published[1].Event.Custom.Payload.Unpack<NyxIdChatReasoningProgress>().Delta
             .Should().Be("reasoning");
         hub.Published[2].Event.ToolCallStart.ToolCallId.Should().Be("call-alpha");
-        hub.Published[2].Event.ToolCallStart.ToolName.Should().Be("repository_update");
+        hub.Published[2].Event.ToolCallStart.ToolName.Should().Be("use_skill");
+        hub.Published[2].Event.ToolCallStart.Presentation.Skill.SkillName.Should()
+            .Be("release-readiness-review");
     }
 
     [Fact]

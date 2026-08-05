@@ -318,6 +318,9 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             AuthorizationGrantRequirement.NotRequired);
         service.ObservedAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(-1));
         service.FreshUntil = Timestamp.FromDateTimeOffset(Now.AddMinutes(10));
+        service.EvaluatedAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(-2));
+        service.AuthorityContractVersion = "scope-plan-contract/v1";
+        service.AuthorityPolicyVersion = "scope-plan-policy/v1";
         var snapshot = Snapshot(service) with
         {
             FreshUntilUtc = Now.AddMinutes(-1),
@@ -329,6 +332,23 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         result.Success.Should().BeTrue();
         result.Plan!.NyxIdServiceGrants.Should().ContainSingle()
             .Which.UserServiceId.Should().Be("us-home-alpha");
+    }
+
+    [Fact]
+    public async Task PlanAsync_WhenServiceAuthorityStampIsPartial_ShouldFailClosedWithoutOwnerFallback()
+    {
+        var service = Service(
+            "us-home-alpha",
+            "home-assistant",
+            AuthorizationGrantRequirement.NotRequired);
+        service.ObservedAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(-1));
+        var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(service)));
+
+        var result = await planner.PlanAsync(Request(["us-home-alpha"]));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotStale);
+        result.Detail.Should().Be("nyxid_catalog_snapshot_stale");
     }
 
     [Fact]

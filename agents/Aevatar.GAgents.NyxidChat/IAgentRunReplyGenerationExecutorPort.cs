@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgents.Channel.Runtime;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -36,7 +37,8 @@ public sealed record AgentRunAuthorizedToolCallSafety(
     string ArgumentsJson,
     AgentToolCallSafety CallSafety,
     string SideEffectKind,
-    string ToolDefinitionFingerprint = "");
+    string ToolDefinitionFingerprint = "",
+    ToolPresentationDescriptor? Presentation = null);
 
 public sealed class AgentRunAuthorizedToolStep
 {
@@ -246,4 +248,5 @@ public sealed record AgentRunReplyStepExecutionRequest(
     AgentRunReplyStepState StepState,
     Func<LLMStreamChunk, CancellationToken, Task>? ReportChunkAsync = null,
     AgentProfileTurnCatalog? TurnCatalog = null,
-    bool AllowDurableToolAuthorization = false);
+    bool AllowDurableToolAuthorization = false,
+    bool? AllowMultipleToolCalls = null);

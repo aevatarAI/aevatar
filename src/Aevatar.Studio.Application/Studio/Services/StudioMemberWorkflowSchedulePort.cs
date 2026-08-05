@@ -591,6 +591,18 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             scheduleId,
             operationId,
             credentialOwner);
+        if (existingAutomation != null &&
+            IsPendingCredentialOperation(existingAutomation.Schedule) &&
+            !IsSameOperation(existingAutomation.Schedule, operationId, idempotencyKey))
+        {
+            await SupersedePendingCredentialOperationAsync(
+                existingAutomation.Schedule,
+                teamOwner,
+                bearerToken,
+                request.AuthenticatedOwner,
+                resolved.TeamId,
+                ct);
+        }
         var began = await _scheduleService.BeginTeamAutomationCredentialOperationAsync(
             new TeamAutomationCredentialOperation(
                 scheduleId,
@@ -687,7 +699,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                     scheduleId,
                     operationId,
                     effectLocator,
-                    began.Outcome.EffectAttemptGeneration,
+                    began.Outcome.NewOperationCommitted
+                        ? StudioScheduledCredentialMaterializationMode.Initial
+                        : StudioScheduledCredentialMaterializationMode.Recovery,
                     ownerScope,
                     ct);
             EnsureCredentialMatchesPlan(credential, plan, _timeProvider.GetUtcNow());
@@ -838,6 +852,73 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             NewOperationCommitted = began.Outcome.NewOperationCommitted,
         };
     }
+
+    private async Task SupersedePendingCredentialOperationAsync(
+        ScheduledDispatchSummary existing,
+        TeamMemberAutomationOwner teamOwner,
+        string bearerToken,
+        AuthenticatedAuthorizationOwnerContext authenticatedOwner,
+        string teamId,
+        CancellationToken ct)
+    {
+        var existingOperationId = NormalizeRequired(
+            existing.TeamAutomationOperationId,
+            nameof(existing.TeamAutomationOperationId));
+        var existingIdempotencyKey = NormalizeRequired(
+            existing.TeamAutomationIdempotencyKey,
+            nameof(existing.TeamAutomationIdempotencyKey));
+        var retry = await _scheduleService.RetryTeamAutomationCredentialOperationAsync(
+            existing.ScheduleId,
+            teamOwner,
+            existingOperationId,
+            existingIdempotencyKey,
+            ct);
+        if (!retry.Admission.Accepted)
+            throw new InvalidOperationException("team_automation_retry_rejected");
+        if (!retry.Outcome.OwnsEffectAttempt)
+        {
+            throw new ScheduledDispatchConflictException(
+                existing.ScheduleId,
+                "team_automation_operation_in_progress");
+        }
+
+        var failure = await _scheduleService.FailTeamAutomationCredentialOperationAsync(
+            existing.ScheduleId,
+            teamOwner,
+            existingOperationId,
+            existingIdempotencyKey,
+            NormalizeRequired(retry.Outcome.EffectAttemptId, nameof(retry.Outcome.EffectAttemptId)),
+            "team_automation_operation_superseded",
+            ct);
+        if (!failure.Admission.Accepted)
+            throw new InvalidOperationException("team_automation_failure_rejected");
+
+        var cleanupCompleted = await ExecutePendingRevocationAsync(
+            failure.Outcome,
+            bearerToken,
+            authenticatedOwner,
+            teamOwner,
+            teamId,
+            CancellationToken.None);
+        if (!cleanupCompleted)
+        {
+            throw new ScheduledDispatchConflictException(
+                existing.ScheduleId,
+                "team_automation_revocation_in_progress");
+        }
+    }
+
+    private static bool IsPendingCredentialOperation(ScheduledDispatchSummary schedule) =>
+        schedule.TeamAutomationLifecycleStatus is
+            TeamAutomationLifecycleStatus.ProvisioningPending or
+            TeamAutomationLifecycleStatus.ReplacementPending;
+
+    private static bool IsSameOperation(
+        ScheduledDispatchSummary schedule,
+        string operationId,
+        string idempotencyKey) =>
+        string.Equals(schedule.TeamAutomationOperationId, operationId, StringComparison.Ordinal) &&
+        string.Equals(schedule.TeamAutomationIdempotencyKey, idempotencyKey, StringComparison.Ordinal);
 
     private static ScheduledInvocationAuthorizationConfirmation BuildConfirmation(
         ScheduledInvocationAuthorizationRequest request,

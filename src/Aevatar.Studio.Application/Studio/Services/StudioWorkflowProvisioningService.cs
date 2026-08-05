@@ -7,10 +7,12 @@ using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
-using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
+using Google.Protobuf;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
@@ -74,7 +76,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     private readonly IStudioMemberService _memberService;
     private readonly IStudioMemberWorkflowBindingPort _bindingPort;
     private readonly IStudioMemberWorkflowSchedulePort _schedulePort;
-    private readonly IWorkflowExternalCapabilityAdmissionService _capabilityAdmissionService;
+    private readonly StudioWorkflowProvisioningAdmissionService _provisioningAdmissionService;
     private readonly TimeProvider _timeProvider;
 
     public StudioWorkflowProvisioningService(
@@ -82,13 +84,19 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         IStudioMemberWorkflowBindingPort bindingPort,
         IStudioMemberWorkflowSchedulePort schedulePort,
         IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        INyxIdAuthorizationCatalogRefreshPort? catalogRefreshPort = null,
+        INyxIdAuthorizationCatalogVisibilityPort? catalogVisibilityPort = null,
+        ILogger<StudioWorkflowProvisioningService>? logger = null)
     {
         _memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
         _bindingPort = bindingPort ?? throw new ArgumentNullException(nameof(bindingPort));
         _schedulePort = schedulePort ?? throw new ArgumentNullException(nameof(schedulePort));
-        _capabilityAdmissionService = capabilityAdmissionService
-            ?? throw new ArgumentNullException(nameof(capabilityAdmissionService));
+        _provisioningAdmissionService = new StudioWorkflowProvisioningAdmissionService(
+            capabilityAdmissionService,
+            catalogRefreshPort,
+            catalogVisibilityPort,
+            logger);
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -106,43 +114,29 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         var workflowYaml = NormalizeRequired(request.WorkflowYaml, nameof(request.WorkflowYaml));
         var provisionKey = BuildProvisionKey(normalizedScopeId, teamId, displayName);
         var workflowId = $"workflow-{provisionKey}";
-        var revisionId = $"revision-{provisionKey}";
+        var executionMode = ShouldSchedule(request)
+            ? ExternalCapabilityExecutionMode.Durable
+            : ExternalCapabilityExecutionMode.Interactive;
 
         var suppliedAdmission = request.CapabilityAdmission;
         var callerId = suppliedAdmission?.CallerId ?? string.Empty;
         var nyxIdCallerCredentialSelection = suppliedAdmission?.NyxIdCallerCredential;
         var organizationBearerToken = suppliedAdmission?.NyxIdOrganizationBearerToken;
         var existingPlan = suppliedAdmission?.ExistingPlan?.Clone();
-        var explicitRequestConfirmations = suppliedAdmission?.ExplicitRequestConfirmations ?? [];
-        var executionMode = ShouldSchedule(request)
-            ? ExternalCapabilityExecutionMode.Durable
-            : ExternalCapabilityExecutionMode.Interactive;
-        var capabilityAdmissionPlan = existingPlan is not null
-            ? await _capabilityAdmissionService.RevalidatePersistedAsync(
-                new PersistedWorkflowCapabilityAdmissionRequest(
-                    existingPlan,
-                    workflowYaml,
-                    new Dictionary<string, string>(),
-                    "studio_workflow_provisioning",
-                    executionMode,
-                    workflowId,
-                    revisionId),
-                ct)
-            : await _capabilityAdmissionService.AdmitAsync(
-                new WorkflowExternalCapabilityAdmissionRequest(
-                new ExternalWorkflowCapabilityAccessContext(
-                    normalizedScopeId,
-                    callerId,
-                    nyxIdCallerCredentialSelection,
-                    organizationBearerToken),
-                workflowYaml,
-                new Dictionary<string, string>(),
-                "studio_workflow_provisioning",
-                executionMode,
-                explicitRequestConfirmations,
-                workflowId,
-                revisionId),
-                ct);
+        var suppliedExplicitRequestConfirmations = suppliedAdmission?.ExplicitRequestConfirmations;
+        var (revisionId, capabilityAdmissionPlan) = await ResolveProvisionRevisionAdmissionAsync(
+            normalizedScopeId,
+            provisionKey,
+            workflowId,
+            workflowYaml,
+            executionMode,
+            callerId,
+            nyxIdCallerCredentialSelection,
+            organizationBearerToken,
+            existingPlan,
+            suppliedExplicitRequestConfirmations,
+            request,
+            ct);
         ValidatePersistedAdmissionCapabilities(capabilityAdmissionPlan);
         var trustedAdmission = new WorkflowCapabilityAdmissionContext(
             callerId,
@@ -219,6 +213,147 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             ScheduleId = scheduleId,
             StudioUrl = BuildStudioUrl(normalizedScopeId, teamId, memberId),
         };
+    }
+
+    private async Task<ProvisionRevisionAdmission> ResolveProvisionRevisionAdmissionAsync(
+        string scopeId,
+        string provisionKey,
+        string workflowId,
+        string workflowYaml,
+        ExternalCapabilityExecutionMode executionMode,
+        string callerId,
+        NyxIdCallerCredentialSelection? nyxIdCallerCredentialSelection,
+        string? organizationBearerToken,
+        WorkflowCapabilityAdmissionPlan? existingPlan,
+        IReadOnlyList<NyxIdExplicitRequestConfirmation>? suppliedConfirmations,
+        ProvisionWorkflowRequest request,
+        CancellationToken ct)
+    {
+        var revisionId = BuildProvisionRevisionId(
+            provisionKey,
+            workflowId,
+            workflowYaml,
+            executionMode);
+        var mayBindResolvedRevision = existingPlan is null &&
+                                      CanBindProvisionedConfirmationIdentity(suppliedConfirmations);
+
+        var explicitRequestConfirmations = BindProvisionedExplicitRequestConfirmations(
+            suppliedConfirmations,
+            workflowId,
+            revisionId);
+        var liveAdmissionRequest = new WorkflowExternalCapabilityAdmissionRequest(
+            new ExternalWorkflowCapabilityAccessContext(
+                scopeId,
+                callerId,
+                nyxIdCallerCredentialSelection,
+                organizationBearerToken),
+            workflowYaml,
+            new Dictionary<string, string>(),
+            "studio_workflow_provisioning",
+            executionMode,
+            explicitRequestConfirmations,
+            workflowId,
+            revisionId);
+        var capabilityAdmissionPlan = await _provisioningAdmissionService.ResolveAsync(
+            liveAdmissionRequest,
+            existingPlan,
+            request,
+            ct);
+        var resolvedRevisionId = BuildProvisionRevisionId(
+            provisionKey,
+            workflowId,
+            workflowYaml,
+            executionMode,
+            capabilityAdmissionPlan);
+
+        if (string.Equals(resolvedRevisionId, revisionId, StringComparison.Ordinal) ||
+            !WorkflowCapabilityAdmissionPlanIntegrity.RequiresExplicitRequestBindingIdentity(
+                capabilityAdmissionPlan))
+        {
+            return new ProvisionRevisionAdmission(resolvedRevisionId, capabilityAdmissionPlan);
+        }
+
+        // Exact caller-bound confirmations retain their reviewed revision identity.
+        // Skill scheduling supplies unbound confirmations, allowing this service to
+        // bind the already-admitted plan to the immutable revision without repeating
+        // external discovery and changing its source snapshot between passes.
+        if (!mayBindResolvedRevision)
+            return new ProvisionRevisionAdmission(revisionId, capabilityAdmissionPlan);
+
+        var reboundPlan = BindProvisionedAdmissionPlanRevision(
+            capabilityAdmissionPlan,
+            workflowYaml,
+            workflowId,
+            resolvedRevisionId);
+        var reboundRevisionId = BuildProvisionRevisionId(
+            provisionKey,
+            workflowId,
+            workflowYaml,
+            executionMode,
+            reboundPlan);
+        if (!string.Equals(reboundRevisionId, resolvedRevisionId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Provisioned workflow admission did not produce a stable revision identity.");
+        }
+
+        return new ProvisionRevisionAdmission(resolvedRevisionId, reboundPlan);
+    }
+
+    private static bool CanBindProvisionedConfirmationIdentity(
+        IReadOnlyList<NyxIdExplicitRequestConfirmation>? confirmations) =>
+        (confirmations ?? []).All(static confirmation =>
+            string.IsNullOrWhiteSpace(confirmation.WorkflowId) &&
+            string.IsNullOrWhiteSpace(confirmation.RevisionId));
+
+    private static IReadOnlyList<NyxIdExplicitRequestConfirmation> BindProvisionedExplicitRequestConfirmations(
+        IReadOnlyList<NyxIdExplicitRequestConfirmation>? confirmations,
+        string workflowId,
+        string revisionId) =>
+        (confirmations ?? []).Select(confirmation =>
+        {
+            var bound = confirmation.Clone();
+            if (bound.WorkflowId.Length == 0 && bound.RevisionId.Length == 0)
+            {
+                bound.WorkflowId = workflowId;
+                bound.RevisionId = revisionId;
+            }
+
+            return bound;
+        }).ToArray();
+
+    private static WorkflowCapabilityAdmissionPlan BindProvisionedAdmissionPlanRevision(
+        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan,
+        string workflowYaml,
+        string workflowId,
+        string revisionId)
+    {
+        var rebound = capabilityAdmissionPlan.Clone();
+        foreach (var admission in rebound.InvocationAdmissions)
+        {
+            var grant = admission.NyxIdExplicitRequestGrant;
+            if (grant is null)
+                continue;
+            if (admission.Capability?.CapabilityCase !=
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest)
+            {
+                throw new InvalidOperationException(
+                    "Provisioned workflow explicit request admission is invalid.");
+            }
+
+            grant.WorkflowId = workflowId;
+            grant.RevisionId = revisionId;
+            admission.Capability.NyxIdUserRequest.ExplicitRequestGrantDigest =
+                WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdExplicitRequestGrantDigest(grant);
+        }
+
+        rebound.DefinitionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeDefinitionDigest(
+            workflowYaml,
+            new Dictionary<string, string>(),
+            workflowId,
+            revisionId);
+        rebound.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(rebound);
+        return rebound;
     }
 
     /// <summary>
@@ -468,6 +603,68 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         var hash = SHA256.HashData(identity);
         return Convert.ToHexString(hash.AsSpan(0, 16)).ToLowerInvariant();
     }
+
+    /// <summary>
+    /// A provisioned workflow keeps one stable draft identity while each distinct
+    /// executable spec receives its own immutable service revision. The versioned
+    /// contract marker also prevents a retry from colliding with revisions created
+    /// before the published-member binding began resolving the workflow name from
+    /// YAML instead of writing the workflow id into that semantic field.
+    /// </summary>
+    internal static string BuildProvisionRevisionId(
+        string provisionKey,
+        string workflowId,
+        string workflowYaml,
+        ExternalCapabilityExecutionMode executionMode,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null)
+    {
+        var admissionDiscriminator = BuildAdmissionRevisionDiscriminator(capabilityAdmissionPlan);
+        var canonicalSpec = Encoding.UTF8.GetBytes(string.Join('\n',
+            admissionDiscriminator.Length == 0
+                ? "studio-workflow-provision-revision/v2"
+                : "studio-workflow-provision-revision/v3",
+            provisionKey,
+            workflowId,
+            "workflow-name=yaml",
+            ((int)executionMode).ToString(),
+            workflowYaml,
+            admissionDiscriminator));
+        var hash = SHA256.HashData(canonicalSpec);
+        return $"revision-{Convert.ToHexString(hash.AsSpan(0, 16)).ToLowerInvariant()}";
+    }
+
+    private static string BuildAdmissionRevisionDiscriminator(
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan)
+    {
+        if (capabilityAdmissionPlan is null ||
+            (capabilityAdmissionPlan.InvocationAdmissions.Count == 0 &&
+             capabilityAdmissionPlan.SourceStamps.Count == 0 &&
+             capabilityAdmissionPlan.DurableAuthorizationOwner is null))
+        {
+            return string.Empty;
+        }
+
+        var canonical = capabilityAdmissionPlan.Clone();
+        canonical.DefinitionDigest = string.Empty;
+        canonical.AdmissionDigest = string.Empty;
+        foreach (var admission in canonical.InvocationAdmissions)
+        {
+            var grant = admission.NyxIdExplicitRequestGrant;
+            if (grant is null)
+                continue;
+
+            grant.WorkflowId = string.Empty;
+            grant.RevisionId = string.Empty;
+            if (admission.Capability?.NyxIdUserRequest is { } requestCapability)
+                requestCapability.ExplicitRequestGrantDigest = string.Empty;
+        }
+
+        return Convert.ToHexStringLower(SHA256.HashData(canonical.ToByteArray()));
+    }
+
+    private readonly record struct ProvisionRevisionAdmission(
+        string RevisionId,
+        WorkflowCapabilityAdmissionPlan Plan);
 
     private static string NormalizeRequired(string? value, string fieldName)
     {

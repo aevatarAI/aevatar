@@ -110,7 +110,8 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProvider : IPro
     {
         if (!payload.Is(ServiceDeploymentActivatedEvent.Descriptor) &&
             !payload.Is(ServiceDeploymentDeactivatedEvent.Descriptor) &&
-            !payload.Is(ServiceDeploymentHealthChangedEvent.Descriptor))
+            !payload.Is(ServiceDeploymentHealthChangedEvent.Descriptor) &&
+            !payload.Is(ServiceDeploymentActivationFailedEvent.Descriptor))
         {
             return [];
         }

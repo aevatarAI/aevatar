@@ -45,6 +45,11 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         result.Snapshot.ActiveTurn!.CommandId.Should().Be("command-alpha");
         result.Snapshot.ActiveTask!.Steps.Should().ContainSingle().Which.Operation!
             .OperationId.Should().Be("operation-alpha");
+        var source = result.Snapshot.ActiveTask.Steps.Single().Source!.Tool!;
+        source.ToolName.Should().Be("repository_update");
+        source.ServiceId.Should().Be("connected-service-alpha");
+        source.ServiceSlug.Should().Be("service-slug-alpha");
+        source.ReadinessCapabilityId.Should().Be("readiness-capability-alpha");
         result.Snapshot.PendingActions.Should().ContainSingle().Which.Reports
             .Should().ContainSingle().Which.Resource!.UserServiceId.Should()
             .Be("user-service-alpha");
@@ -246,6 +251,16 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
                     Kind = "tool",
                     Status = "running",
                     ExternalEffect = "not_started",
+                    Source = new NyxIdChatConversationStepSourceDocument
+                    {
+                        Tool = new NyxIdChatConversationToolStepSourceDocument
+                        {
+                            ToolName = "repository_update",
+                            ServiceId = "connected-service-alpha",
+                            ServiceSlug = "service-slug-alpha",
+                            ReadinessCapabilityId = "readiness-capability-alpha",
+                        },
+                    },
                     Operation = new NyxIdChatConversationOperationDocument
                     {
                         ConversationActorId = "conversation-alpha",
