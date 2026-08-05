@@ -54,6 +54,16 @@ public sealed class NyxIdChatTaskContractTests
                 TurnId = "turn-alpha",
                 Status = NyxIdChatTaskStatus.Active,
                 ActiveStepId = "step-alpha",
+                SchemaVersion = 4,
+                ActorId = "conversation-alpha",
+                PlanId = "plan-alpha",
+                PlanRevision = 2,
+                Title = "Update GitHub safely",
+                Gate = new NyxIdChatPlanGate
+                {
+                    Mode = NyxIdChatPlanGateMode.Confirm,
+                    Reason = "The plan contains an effect-capable operation.",
+                },
             },
             PendingApproval = new NyxIdChatPendingApprovalState
             {
@@ -91,6 +101,22 @@ public sealed class NyxIdChatTaskContractTests
             Description = "Call the exact connected service",
             MayChangeExternalState = true,
             ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+            AddedBy = NyxIdChatStepAddedBy.Replan,
+            DependsOn = { "step-plan" },
+            Estimate = new NyxIdChatStepEstimate
+            {
+                Kind = NyxIdChatStepEstimateKind.Duration,
+                Seconds = 20,
+            },
+            Substeps =
+            {
+                new NyxIdChatSubstepState
+                {
+                    SubstepId = "substep-alpha",
+                    Title = "Validate repository",
+                    Status = NyxIdChatSubstepStatus.Done,
+                },
+            },
             Operation = new NyxIdChatOperationState
             {
                 Key = operationKey,
@@ -136,6 +162,13 @@ public sealed class NyxIdChatTaskContractTests
 
         roundTripped.Should().BeEquivalentTo(state);
         roundTripped.ActiveTask.Steps.Single().Operation.Key.Should().BeEquivalentTo(operationKey);
+        roundTripped.ActiveTask.PlanId.Should().Be("plan-alpha");
+        roundTripped.ActiveTask.PlanRevision.Should().Be(2);
+        roundTripped.ActiveTask.Gate.Mode.Should().Be(NyxIdChatPlanGateMode.Confirm);
+        roundTripped.ActiveTask.Steps.Single().AddedBy.Should().Be(NyxIdChatStepAddedBy.Replan);
+        roundTripped.ActiveTask.Steps.Single().DependsOn.Should().Equal("step-plan");
+        roundTripped.ActiveTask.Steps.Single().Substeps.Should().ContainSingle().Which.Status
+            .Should().Be(NyxIdChatSubstepStatus.Done);
         roundTripped.PendingActions.Single().Params.ParamsCase.Should()
             .Be(NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect);
         roundTripped.ConversationActorId.Should().NotBe(roundTripped.ActiveTurn.TurnId);
@@ -180,10 +213,24 @@ public sealed class NyxIdChatTaskContractTests
             NyxIdChatActionDisposition.Failed,
             NyxIdChatActionDisposition.Cancelled,
             NyxIdChatActionDisposition.Expired);
+        Enum.GetValues<NyxIdChatPlanGateMode>().Should().Equal(
+            NyxIdChatPlanGateMode.Unspecified,
+            NyxIdChatPlanGateMode.Auto,
+            NyxIdChatPlanGateMode.Confirm);
+        Enum.GetValues<NyxIdChatStepAddedBy>().Should().Equal(
+            NyxIdChatStepAddedBy.Unspecified,
+            NyxIdChatStepAddedBy.Initial,
+            NyxIdChatStepAddedBy.Replan,
+            NyxIdChatStepAddedBy.Steering);
 
         AssertEnumField<NyxIdChatTaskState>("status", nameof(NyxIdChatTaskStatus));
         AssertEnumField<NyxIdChatTaskStepState>("status", nameof(NyxIdChatStepStatus));
         AssertEnumField<NyxIdChatTaskStepState>("external_effect", nameof(NyxIdChatEffectEvidence));
+        AssertEnumField<NyxIdChatPlanGate>("mode", nameof(NyxIdChatPlanGateMode));
+        AssertEnumField<NyxIdChatTaskStepState>("added_by", nameof(NyxIdChatStepAddedBy));
+        AssertEnumField<NyxIdChatStepEstimate>("kind", nameof(NyxIdChatStepEstimateKind));
+        AssertEnumField<NyxIdChatSubstepState>("status", nameof(NyxIdChatSubstepStatus));
+        AssertEnumField<NyxIdChatTaskStepChanged>("change_kind", nameof(NyxIdChatStepChangeKind));
         AssertEnumField<NyxIdChatActionReport>("disposition", nameof(NyxIdChatActionDisposition));
     }
 

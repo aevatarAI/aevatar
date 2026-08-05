@@ -489,13 +489,17 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(context);
 
+        var taskId = CreateTaskId(command.ActorId, command.TurnId);
         var startTurn = new NyxIdChatStartTurnCommand
         {
             Prompt = command.Prompt,
             ScopeId = command.ScopeId,
             ConversationActorId = command.ActorId,
             TurnId = command.TurnId,
-            TaskId = CreateTaskId(command.ActorId, command.TurnId),
+            TaskId = taskId,
+            PlanId = CreatePlanId(command.ActorId, command.TurnId),
+            PlanRevision = 1,
+            AddedBy = NyxIdChatStepAddedBy.Initial,
             ClientRequestId = command.ClientRequestId?.Trim() ?? string.Empty,
             CommandId = context.CommandId,
             CorrelationId = context.CorrelationId,
@@ -590,6 +594,16 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
         var hash = System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(identity));
         return $"task-{Convert.ToHexStringLower(hash)[..32]}";
+    }
+
+    private static string CreatePlanId(string actorId, string turnId)
+    {
+        var normalizedActorId = actorId?.Trim() ?? string.Empty;
+        var normalizedTurnId = turnId?.Trim() ?? string.Empty;
+        var identity = $"{normalizedActorId.Length}:{normalizedActorId}{normalizedTurnId.Length}:{normalizedTurnId}";
+        var hash = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(identity));
+        return $"plan-{Convert.ToHexStringLower(hash)[..32]}";
     }
 
     private static EventEnvelope CreateDirectEnvelope(CommandContext context, IMessage message) =>

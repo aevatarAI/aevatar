@@ -718,8 +718,10 @@ public sealed class MainnetHostCompositionTests
 
         var nyxIdChatProfile = registry.Resolve(AgentProfilePolicies.NyxIdChatRouteToolSet);
         nyxIdChatProfile.IsSuccess.Should().BeTrue(nyxIdChatProfile.Error?.Message);
-        nyxIdChatProfile.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
-        nyxIdChatProfile.Sources.Should().ContainSingle(source =>
+        nyxIdChatProfile.Sources.Should().ContainSingle().Which.Should()
+            .BeOfType<NyxIdAssistantToolSource>();
+        nyxIdChatProfile.Sources.Should().NotContain(source => source is NyxIdAgentToolSource);
+        nyxIdChatProfile.Sources.Should().NotContain(source =>
             source is NyxIdConnectedServiceToolSource);
 
         var voice = registry.Resolve("voice.realtime");

@@ -350,7 +350,10 @@ public static class NyxIdChatNeedsYouDecisions
             operationKey,
             mayChangeExternalState: false,
             now);
+        continuationStep.AddedBy = NyxIdChatStepAddedBy.Replan;
+        continuationStep.DependsOn.Add(inputStep.StepId);
         activeTask.Steps.Add(continuationStep);
+        activeTask.PlanRevision = Math.Max(1, activeTask.PlanRevision + 1);
         ActivateStep(state, continuationStep, now);
         var continuation = new NyxIdChatInputContinuationInput
         {

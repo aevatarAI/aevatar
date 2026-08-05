@@ -2216,7 +2216,7 @@ var MODULE_META={
   status:{name:'系统状态', auth:'public', icon:NAV_ICON.status, live:true},
   observatory:{name:'运行观测台', auth:'login', icon:NAV_ICON.obs, live:true},
   cqrs:{name:'投影管道 CQRS', auth:'platform-admin', icon:NAV_ICON.cqrs},
-  studio:{name:'编排工作台', auth:'login', icon:NAV_ICON.studio},
+  studio:{name:'工作台', auth:'login', icon:NAV_ICON.studio},
   'agent-profiles':{name:'Agent Profile', auth:'login', icon:NAV_ICON.agentProfiles},
   skills:{name:'技能调用', auth:'login', icon:NAV_ICON.skills},
   schedules:{name:'排班调度', auth:'login', icon:NAV_ICON.sched},
@@ -3424,7 +3424,7 @@ function viewCqrs(){
   var src='/cqrs'+(p.toString()?'?'+p.toString():'');
   return {html:suiteFrame(src,'投影管道 CQRS'),persistentKey:'cqrs',frameSource:src};
 }
-function viewStudio(){ return {html:suiteFrame('/workflow/studio','编排工作台'),persistentKey:'workflow-studio',frameSource:'/workflow/studio'}; }
+function viewStudio(){ return {html:suiteFrame('/workflow/studio','工作台'),persistentKey:'workflow-studio',frameSource:'/workflow/studio'}; }
 function viewChannels(){ return {html:suiteFrame('/channels','通道接入'),persistentKey:'channels',frameSource:'/channels'}; }
 function viewVoice(){ return {html:suiteFrame('/voice','语音台'),persistentKey:'voice',frameSource:'/voice'}; }
 

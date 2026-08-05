@@ -255,18 +255,30 @@ function applyTaskSnapshot(projection, input) {
 }
 
 function applyStepChanged(projection, input) {
-  if (!input || typeof input !== "object" || Array.isArray(input) || !validIdentity(input.stepId)) {
+  if (!input || typeof input !== "object" || Array.isArray(input) ||
+      !validIdentity(input.taskId) || !validIdentity(input.step?.stepId)) {
     addConflict(projection, "NYXID_STEP_ID_INVALID");
     return;
   }
-  const previous = projection.steps.get(input.stepId) || {};
-  const step = { ...cloneValue(previous), ...cloneValue(input) };
+  if (projection.task?.taskId && projection.task.taskId !== input.taskId) {
+    addConflict(projection, "NYXID_TASK_ID_CONFLICT");
+    return;
+  }
+  const planRevision = Number(input.planRevision);
+  if (!Number.isSafeInteger(planRevision) || planRevision < 1 ||
+      (projection.task?.planRevision && planRevision < projection.task.planRevision)) {
+    addConflict(projection, "NYXID_PLAN_REVISION_CONFLICT");
+    return;
+  }
+  const previous = projection.steps.get(input.step.stepId) || {};
+  const step = { ...cloneValue(previous), ...cloneValue(input.step) };
   projection.steps.set(step.stepId, step);
   projection.steps = new Map(orderedSteps([...projection.steps.values()])
     .map((item) => [item.stepId, item]));
   if (projection.task) {
     projection.task = {
       ...projection.task,
+      planRevision,
       steps: [...projection.steps.values()].map(cloneValue),
     };
   }

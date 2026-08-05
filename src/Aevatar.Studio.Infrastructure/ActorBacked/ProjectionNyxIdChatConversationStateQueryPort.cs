@@ -219,7 +219,17 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 NullIfEmpty(task.SafeMessage),
                 ToDateTimeOffset(task.CreatedAt),
                 ToDateTimeOffset(task.UpdatedAt),
-                task.Steps.Select(ToStep).ToArray());
+                task.Steps.Select(ToStep).ToArray(),
+                task.SchemaVersion,
+                NullIfEmpty(task.ActorId),
+                NullIfEmpty(task.PlanId),
+                task.PlanRevision,
+                NullIfEmpty(task.Title),
+                task.Gate == null
+                    ? null
+                    : new NyxIdChatConversationPlanGateSnapshot(
+                        task.Gate.Mode,
+                        NullIfEmpty(task.Gate.Reason)));
 
     private static NyxIdChatConversationStepSnapshot ToStep(
         NyxIdChatConversationStepDocument step) =>
@@ -243,7 +253,19 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 step.AvailableActions?.Stop ?? false),
             ToDateTimeOffset(step.UpdatedAt),
             ToOperation(step.Operation),
-            ToSource(step.Source));
+            ToSource(step.Source),
+            NullIfEmpty(step.AddedBy),
+            step.DependsOn.ToArray(),
+            step.Estimate == null
+                ? null
+                : new NyxIdChatConversationStepEstimateSnapshot(
+                    step.Estimate.Kind,
+                    step.Estimate.Seconds),
+            step.Substeps.Select(static substep =>
+                new NyxIdChatConversationSubstepSnapshot(
+                    substep.SubstepId,
+                    substep.Title,
+                    substep.Status)).ToArray());
 
     private static NyxIdChatConversationStepSourceSnapshot? ToSource(
         NyxIdChatConversationStepSourceDocument? source) =>
@@ -275,6 +297,13 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 new NyxIdChatConversationStepSourceSnapshot(
                     Input: new NyxIdChatInputStepSourceSnapshot(
                         NullIfEmpty(source.Input.RequestId))),
+            NyxIdChatConversationStepSourceDocument.SourceOneofCase.Approval =>
+                new NyxIdChatConversationStepSourceSnapshot(
+                    Approval: new NyxIdChatApprovalStepSourceSnapshot(
+                        NullIfEmpty(source.Approval.ApprovalRequestId))),
+            NyxIdChatConversationStepSourceDocument.SourceOneofCase.Web =>
+                new NyxIdChatConversationStepSourceSnapshot(
+                    Web: new NyxIdChatWebStepSourceSnapshot()),
             _ => null,
         };
 
