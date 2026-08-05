@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using NSubstitute;
 
 namespace Aevatar.Capabilities.Tests;
@@ -125,6 +126,41 @@ public sealed class WorkflowSkillsEndpointsTests
         runService.WorkflowConfirmationToken.Should().Be("sha256:supplied");
     }
 
+    [Fact]
+    public async Task ScheduleSkill_WhenProvisioningFails_ShouldLogOnlySafeDiagnosticFields()
+    {
+        var runService = new RecordingUserSkillRunService
+        {
+            ScheduleOutcome = SkillScheduleOutcome.Failed(
+                "schedule_authorization_refresh_unavailable",
+                "The authorization catalog could not be refreshed."),
+        };
+        var bindingQuery = Substitute.For<IExternalIdentityBindingQueryPort>();
+        bindingQuery.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<BindingId?>(new BindingId { Value = "binding-alpha" }));
+        using var logs = new RecordingLoggerProvider();
+        using var services = CreateRequestServices(bindingQuery, logs);
+        var http = CreateHttpContext(
+            services,
+            "Bearer caller-token",
+            "{\"prompt\":\"run\",\"cronExpression\":\"0 9 * * *\",\"timezone\":\"UTC\",\"displayName\":\"Daily Check\",\"teamId\":\"team-alpha\",\"workflowConfirmationToken\":\"sha256:supplied\"}");
+
+        var result = await WorkflowSkillsEndpoints.ScheduleSkill(
+            http,
+            "skill-alpha",
+            runService,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status502BadGateway);
+        logs.Messages.Should().ContainSingle(message =>
+            message.Contains("SkillGuid=skill-alpha", StringComparison.Ordinal) &&
+            message.Contains("Stage=authorization_catalog", StringComparison.Ordinal) &&
+            message.Contains("ErrorCode=schedule_authorization_refresh_unavailable", StringComparison.Ordinal));
+        logs.Messages.Should().NotContain(message =>
+            message.Contains("sha256:supplied", StringComparison.Ordinal) ||
+            message.Contains("caller-token", StringComparison.Ordinal));
+    }
+
     private static DefaultHttpContext CreateHttpContext(
         IServiceProvider services,
         string? authorization,
@@ -149,7 +185,9 @@ public sealed class WorkflowSkillsEndpointsTests
         return http;
     }
 
-    private static ServiceProvider CreateRequestServices(IExternalIdentityBindingQueryPort bindingQuery)
+    private static ServiceProvider CreateRequestServices(
+        IExternalIdentityBindingQueryPort bindingQuery,
+        ILoggerProvider? loggerProvider = null)
     {
         var environment = Substitute.For<IHostEnvironment>();
         environment.EnvironmentName.Returns(Environments.Production);
@@ -160,12 +198,16 @@ public sealed class WorkflowSkillsEndpointsTests
             })
             .Build();
 
-        return new ServiceCollection()
+        var services = new ServiceCollection()
             .AddSingleton<IConfiguration>(configuration)
             .AddSingleton(environment)
-            .AddSingleton(bindingQuery)
-            .AddLogging()
-            .BuildServiceProvider();
+            .AddSingleton(bindingQuery);
+        services.AddLogging(logging =>
+        {
+            if (loggerProvider != null)
+                logging.AddProvider(loggerProvider);
+        });
+        return services.BuildServiceProvider();
     }
 
     private static int StatusCode(IResult result) =>
@@ -216,6 +258,34 @@ public sealed class WorkflowSkillsEndpointsTests
             ScheduleInvocationCount++;
             WorkflowConfirmationToken = workflowConfirmationToken;
             return Task.FromResult(ScheduleOutcome);
+        }
+    }
+
+    private sealed class RecordingLoggerProvider : ILoggerProvider
+    {
+        public List<string> Messages { get; } = [];
+
+        public ILogger CreateLogger(string categoryName) => new RecordingLogger(Messages);
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class RecordingLogger(List<string> messages) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                messages.Add(formatter(state, exception));
+            }
         }
     }
 }

@@ -237,10 +237,11 @@ internal static class WorkflowSkillsEndpoints
             return Results.Unauthorized();
 
         var loggerFactory = http.RequestServices.GetService<ILoggerFactory>();
+        var logger = loggerFactory?.CreateLogger("Aevatar.Mainnet.Host.Api.WorkflowSkills");
         var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
             http,
             http.RequestServices.GetService<IExternalIdentityBindingQueryPort>(),
-            loggerFactory?.CreateLogger("Aevatar.Mainnet.Host.Api.WorkflowSkills"),
+            logger,
             ct);
         if (!callerCredential.Succeeded ||
             callerCredential.Credential == null ||
@@ -278,12 +279,53 @@ internal static class WorkflowSkillsEndpoints
         if (outcome.Succeeded)
             return Results.Json(outcome.Receipt);
         if (outcome.Confirmation is not null)
+        {
+            logger?.LogInformation(
+                "Workflow skill schedule confirmation returned. SkillGuid={SkillGuid} Stage={Stage} Status={Status} FailureCode={FailureCode}",
+                guid,
+                "confirmation",
+                outcome.Confirmation.Status,
+                outcome.Confirmation.FailureCode ?? string.Empty);
             return Results.Json(outcome.Confirmation);
+        }
+
+        logger?.LogWarning(
+            "Workflow skill schedule failed. SkillGuid={SkillGuid} Stage={Stage} ErrorCode={ErrorCode}",
+            guid,
+            ResolveScheduleFailureStage(outcome.ErrorCode),
+            outcome.ErrorCode ?? "skill_schedule_unknown_failure");
 
         var scheduleStatus = string.Equals(outcome.ErrorCode, "skill_not_found", StringComparison.Ordinal)
             ? StatusCodes.Status404NotFound
             : StatusCodes.Status502BadGateway;
         return Results.Json(new { code = outcome.ErrorCode, message = outcome.ErrorMessage }, statusCode: scheduleStatus);
+    }
+
+    private static string ResolveScheduleFailureStage(string? errorCode)
+    {
+        if (string.IsNullOrWhiteSpace(errorCode))
+            return "unknown";
+
+        if (errorCode is "invalid_caller_credential" or
+            "authenticated_authorization_owner_required" or
+            "source_readable_caller_credential_required")
+        {
+            return "caller_authority";
+        }
+
+        if (string.Equals(errorCode, "skill_not_found", StringComparison.Ordinal))
+            return "skill_fetch";
+        if (errorCode.StartsWith("skill_schedule_workflow_", StringComparison.Ordinal))
+            return "workflow_resolution";
+        if (errorCode.Contains("confirmation", StringComparison.OrdinalIgnoreCase))
+            return "confirmation";
+        if (errorCode.StartsWith("schedule_authorization_", StringComparison.Ordinal) ||
+            string.Equals(errorCode, "schedule_reauthorization_required", StringComparison.Ordinal))
+        {
+            return "authorization_catalog";
+        }
+
+        return "provisioning";
     }
 
     private static bool TryGetBearerToken(HttpContext http, out string token)
