@@ -36,10 +36,12 @@ internal static class StudioExplicitRequestAdmissionTestKit
 
     public static StudioWorkflowCapabilityAdmissionTestService CreateAdmissionService(
         NyxIdOperationRisk currentRisk = NyxIdOperationRisk.ReadOnly,
-        Func<bool>? durableCatalogReady = null)
+        Func<bool>? durableCatalogReady = null,
+        long sourceVersion = 23,
+        DateTimeOffset? sourceObservedAt = null)
     {
         var readiness = new ExternalWorkflowCapabilityReadinessService(
-            [new ExplicitRequestSource(currentRisk, durableCatalogReady)]);
+            [new ExplicitRequestSource(currentRisk, durableCatalogReady, sourceVersion, sourceObservedAt)]);
         var inner = new WorkflowExternalCapabilityAdmissionService(
             new RealWorkflowDefinitionParser(),
             readiness,
@@ -146,7 +148,9 @@ internal static class StudioExplicitRequestAdmissionTestKit
 
     private sealed class ExplicitRequestSource(
         NyxIdOperationRisk currentRisk,
-        Func<bool>? durableCatalogReady) :
+        Func<bool>? durableCatalogReady,
+        long sourceVersion,
+        DateTimeOffset? sourceObservedAt) :
         IExternalWorkflowCapabilitySource
     {
         public ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind =>
@@ -163,6 +167,7 @@ internal static class StudioExplicitRequestAdmissionTestKit
             ExternalCapabilityExecutionMode executionMode,
             CancellationToken cancellationToken = default)
         {
+            var observedAt = sourceObservedAt ?? FixedTimeProvider.Now;
             var request = selector.NyxIdRequest.Clone();
             var requestDigest = WorkflowCapabilityAdmissionPlanIntegrity
                 .ComputeNyxIdRequestContractDigest(request);
@@ -200,9 +205,9 @@ internal static class StudioExplicitRequestAdmissionTestKit
             {
                 SourceKind = ExternalCapabilitySourceKind.NyxIdUserServices,
                 SourceId = $"nyxid-keys:caller:{CallerId}",
-                SourceVersion = 23,
-                ObservedAt = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now),
-                FreshUntil = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now.AddMinutes(5)),
+                SourceVersion = sourceVersion,
+                ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
+                FreshUntil = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(5)),
                 ContentDigest = "keys-digest-alpha",
             });
             if (executionMode != ExternalCapabilityExecutionMode.Durable)
@@ -229,9 +234,9 @@ internal static class StudioExplicitRequestAdmissionTestKit
                     OwnerKind = AuthorizationOwnerKind.Personal,
                     OwnerSubject = CallerId,
                 }),
-                SourceVersion = 23,
-                ObservedAt = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now),
-                FreshUntil = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now.AddMinutes(5)),
+                SourceVersion = sourceVersion,
+                ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
+                FreshUntil = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(5)),
                 ContentDigest = "catalog-digest-alpha",
             });
             return Task.FromResult(result);

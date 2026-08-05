@@ -143,11 +143,89 @@ public sealed class StudioWorkflowProvisioningServiceTests
                     ExternalCapabilityExecutionMode.Durable),
             });
 
-        var confirmation = admission.Requests.Should().ContainSingle()
-            .Which.ExplicitRequestConfirmations.Should().ContainSingle().Which;
-        confirmation.WorkflowId.Should().Be(identity.WorkflowId);
-        confirmation.RevisionId.Should().Be(identity.RevisionId);
+        var provisionalConfirmation = admission.Requests.Should().ContainSingle().Which
+            .ExplicitRequestConfirmations.Should().ContainSingle().Which;
+        provisionalConfirmation.WorkflowId.Should().Be(identity.WorkflowId);
+        provisionalConfirmation.RevisionId.Should().Be(identity.RevisionId);
+        member.BindRequest!.RevisionId.Should().NotBe(identity.RevisionId);
+        var finalPlan = member.BindRequest.Workflow!.CapabilityAdmissionPlan!;
+        finalPlan.InvocationAdmissions.Should()
+            .ContainSingle().Which.NyxIdExplicitRequestGrant.RevisionId.Should()
+            .Be(member.BindRequest.RevisionId);
+        finalPlan.DefinitionDigest.Should().Be(
+            WorkflowCapabilityAdmissionPlanIntegrity.ComputeDefinitionDigest(
+                StudioExplicitRequestAdmissionTestKit.WorkflowYaml,
+                new Dictionary<string, string>(),
+                identity.WorkflowId,
+                member.BindRequest.RevisionId));
+        finalPlan.AdmissionDigest.Should().Be(
+            WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(finalPlan));
         member.CreateInvoked.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_UnboundExplicitConfirmation_WhenCatalogSnapshotChanges_ShouldAdvanceRevision()
+    {
+        var firstMember = NewMemberService();
+        var secondMember = NewMemberService();
+        var firstAdmission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService(sourceVersion: 23);
+        var secondAdmission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService(sourceVersion: 24);
+        var request = new ProvisionWorkflowRequest(
+            "Monitor",
+            StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+        {
+            TeamId = TeamId,
+            CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(string.Empty, string.Empty)],
+                ExternalCapabilityExecutionMode.Durable),
+        };
+
+        await NewService(firstMember, new RecordingScheduleService(), firstAdmission)
+            .ProvisionAsync(ScopeId, Caller, request);
+        await NewService(secondMember, new RecordingScheduleService(), secondAdmission)
+            .ProvisionAsync(ScopeId, Caller, request);
+
+        firstMember.BindRequest!.Workflow!.WorkflowId.Should().Be(
+            secondMember.BindRequest!.Workflow!.WorkflowId);
+        firstMember.BindRequest.RevisionId.Should().NotBe(secondMember.BindRequest.RevisionId);
+        firstAdmission.Requests.Should().ContainSingle();
+        secondAdmission.Requests.Should().ContainSingle();
+        firstMember.BindRequest.Workflow.CapabilityAdmissionPlan!.InvocationAdmissions.Should()
+            .ContainSingle().Which.NyxIdExplicitRequestGrant.RevisionId.Should()
+            .Be(firstMember.BindRequest.RevisionId);
+        secondMember.BindRequest.Workflow.CapabilityAdmissionPlan!.InvocationAdmissions.Should()
+            .ContainSingle().Which.NyxIdExplicitRequestGrant.RevisionId.Should()
+            .Be(secondMember.BindRequest.RevisionId);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_UnboundExplicitConfirmation_WhenSourceWindowChanges_ShouldAdvanceRevision()
+    {
+        var firstMember = NewMemberService();
+        var secondMember = NewMemberService();
+        var firstObservedAt = new DateTimeOffset(2026, 7, 30, 7, 59, 0, TimeSpan.Zero);
+        var firstAdmission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService(
+            sourceObservedAt: firstObservedAt);
+        var secondAdmission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService(
+            sourceObservedAt: firstObservedAt.AddMinutes(1));
+        var request = new ProvisionWorkflowRequest(
+            "Monitor",
+            StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+        {
+            TeamId = TeamId,
+            CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(string.Empty, string.Empty)],
+                ExternalCapabilityExecutionMode.Durable),
+        };
+
+        await NewService(firstMember, new RecordingScheduleService(), firstAdmission)
+            .ProvisionAsync(ScopeId, Caller, request);
+        await NewService(secondMember, new RecordingScheduleService(), secondAdmission)
+            .ProvisionAsync(ScopeId, Caller, request);
+
+        firstMember.BindRequest!.RevisionId.Should().NotBe(secondMember.BindRequest!.RevisionId);
+        firstAdmission.Requests.Should().ContainSingle();
+        secondAdmission.Requests.Should().ContainSingle();
     }
 
     [Fact]
@@ -322,6 +400,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
             .Which.UserServiceId.Should().Be("usvc-alpha");
         member.BindRequest!.Workflow!.CapabilityAdmissionPlan!.ExecutionMode.Should()
             .Be(ExternalCapabilityExecutionMode.Durable);
+        admission.Requests[^1].RevisionId.Should().NotBe(member.BindRequest.RevisionId);
+        member.BindRequest.Workflow.CapabilityAdmissionPlan.InvocationAdmissions.Should()
+            .ContainSingle().Which.NyxIdExplicitRequestGrant.RevisionId.Should()
+            .Be(member.BindRequest.RevisionId);
         schedule.Ensured.Should().BeTrue();
     }
 
@@ -381,6 +463,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
             ExternalCapabilityExecutionMode.Interactive,
             ExternalCapabilityExecutionMode.Durable);
         visibility.RequiredStateVersion.Should().Be(31);
+        admission.Requests[^1].RevisionId.Should().NotBe(member.BindRequest!.RevisionId);
+        member.BindRequest.Workflow!.CapabilityAdmissionPlan!.InvocationAdmissions.Should()
+            .ContainSingle().Which.NyxIdExplicitRequestGrant.RevisionId.Should()
+            .Be(member.BindRequest.RevisionId);
         member.CreateInvoked.Should().BeTrue();
         schedule.Ensured.Should().BeTrue();
     }
