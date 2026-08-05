@@ -1097,10 +1097,14 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     }
 
     [Fact]
-    public async Task PlanAsync_ForStudioTarget_ShouldGrantExactServiceFromExplicitRequest()
+    public async Task PlanAsync_ForStudioTarget_ShouldGrantExactServiceFromExplicitWriteRequest()
     {
         var evidence = StudioWorkflowEvidence(
-            ExplicitRequestCapability("usvc-explicit-alpha", "untrusted-slug-alpha"));
+            ExplicitRequestCapability(
+                "usvc-explicit-alpha",
+                "untrusted-slug-alpha",
+                NyxIdRequestMethod.Post,
+                NyxIdOperationRisk.Write));
         var operationAuthorization = OperationAuthorization(
             NyxIdScheduledOperationAuthorizationDecision.AutoAllow);
         var planner = new ScheduledInvocationAuthorizationPlanner(
@@ -1132,15 +1136,41 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         operationRequest.VerifiedBindingId.Should().Be("binding-alpha");
         operationRequest.Request.UserServiceId.Should().Be("usvc-explicit-alpha");
         operationRequest.DurableRequestGrant.CallSiteId.Should().Be("wf-alpha/call-0");
-        operationRequest.DurableRequestGrant.Risk.Should().Be(NyxIdOperationRisk.ReadOnly);
+        operationRequest.DurableRequestGrant.Risk.Should().Be(NyxIdOperationRisk.Write);
         operationRequest.EvaluatedAtUtc.Should().Be(Now);
     }
 
     [Fact]
-    public async Task PlanAsync_ForExplicitRequestWithoutOperationAuthorityContract_ShouldFailClosedBeforeCatalog()
+    public async Task PlanAsync_ForBinderAttestedReadOnlyGet_ShouldNotRequireOperationAuthorityContract()
     {
         var evidence = StudioWorkflowEvidence(
             ExplicitRequestCapability("usvc-explicit-alpha", "proof-slug-alpha"));
+        var catalog = new MutableCatalogQueryPort(Snapshot(
+            Service("usvc-explicit-alpha", "catalog-slug-alpha", AuthorizationGrantRequirement.NotRequired)));
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            catalog,
+            evidence,
+            evidence,
+            evidence,
+            evidence);
+
+        var result = await planner.PlanAsync(StudioRequest());
+
+        result.Success.Should().BeTrue();
+        result.Plan!.NyxIdServiceGrants.Should().ContainSingle()
+            .Which.UserServiceId.Should().Be("usvc-explicit-alpha");
+        catalog.QueryCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForExplicitWriteWithoutOperationAuthorityContract_ShouldFailClosedBeforeCatalog()
+    {
+        var evidence = StudioWorkflowEvidence(
+            ExplicitRequestCapability(
+                "usvc-explicit-alpha",
+                "proof-slug-alpha",
+                NyxIdRequestMethod.Post,
+                NyxIdOperationRisk.Write));
         var catalog = new MutableCatalogQueryPort(Snapshot(
             Service("usvc-explicit-alpha", "catalog-slug-alpha", AuthorizationGrantRequirement.NotRequired)));
         var planner = new ScheduledInvocationAuthorizationPlanner(
@@ -1178,7 +1208,11 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         string expectedDetail)
     {
         var evidence = StudioWorkflowEvidence(
-            ExplicitRequestCapability("usvc-explicit-alpha", "proof-slug-alpha"));
+            ExplicitRequestCapability(
+                "usvc-explicit-alpha",
+                "proof-slug-alpha",
+                NyxIdRequestMethod.Post,
+                NyxIdOperationRisk.Write));
         var catalog = new MutableCatalogQueryPort(Snapshot(
             Service("usvc-explicit-alpha", "catalog-slug-alpha", AuthorizationGrantRequirement.NotRequired)));
         var operationAuthorization = OperationAuthorization(decision);
@@ -1612,20 +1646,25 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
 
     private static ExternalWorkflowCapabilityRef ExplicitRequestCapability(
         string userServiceId,
-        string proofSlug) =>
-        BuildExplicitRequestCapability(userServiceId, proofSlug);
+        string proofSlug,
+        NyxIdRequestMethod method = NyxIdRequestMethod.Get,
+        NyxIdOperationRisk risk = NyxIdOperationRisk.ReadOnly) =>
+        BuildExplicitRequestCapability(userServiceId, proofSlug, method, risk);
 
     private static ExternalWorkflowCapabilityRef BuildExplicitRequestCapability(
         string userServiceId,
-        string proofSlug)
+        string proofSlug,
+        NyxIdRequestMethod method,
+        NyxIdOperationRisk risk)
     {
         var request = new NyxIdRequestSelector
         {
             UserServiceId = userServiceId,
-            Method = NyxIdRequestMethod.Get,
+            Method = method,
             PathTemplate = "/api/resources/{resource_id}",
             BodyMode = NyxIdRequestBodyMode.None,
             ResponseMode = NyxIdRequestResponseMode.Text,
+            Risk = risk,
         };
         var requestContractDigest = string.IsNullOrWhiteSpace(userServiceId)
             ? string.Empty
@@ -1642,8 +1681,10 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
                         .ComputeNyxIdExplicitRequestProofDigest(requestContractDigest, proofSlug),
                 ExecutionPolicy = new NyxIdOperationExecutionPolicy
                 {
-                    Risk = NyxIdOperationRisk.ReadOnly,
-                    Approval = NyxIdOperationApproval.None,
+                    Risk = risk,
+                    Approval = risk == NyxIdOperationRisk.ReadOnly
+                        ? NyxIdOperationApproval.None
+                        : NyxIdOperationApproval.Required,
                     EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
                 },
             },

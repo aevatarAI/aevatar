@@ -553,6 +553,12 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             if (proof.Request is null || grant is null)
                 return DurableRequestGrantMismatch();
 
+            // A binder-attested safe read has no unattended mutation to pre-authorize. Its
+            // exact request proof, durable grant, and service catalog are still validated here,
+            // while NyxID remains the runtime policy enforcement point for every proxy call.
+            if (IsBinderAttestedReadOnlyRequest(proof, grant))
+                continue;
+
             var result = await _operationAuthorizationPort.EvaluateAsync(
                 new NyxIdScheduledOperationAuthorizationRequest(
                     target.Clone(),
@@ -591,6 +597,17 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
 
         return null;
     }
+
+    private static bool IsBinderAttestedReadOnlyRequest(
+        NyxIdUserRequestCapabilityRef proof,
+        NyxIdExplicitRequestGrant grant) =>
+        proof.Request.Method is
+            NyxIdRequestMethod.Get or
+            NyxIdRequestMethod.Head or
+            NyxIdRequestMethod.Options &&
+        proof.ExecutionPolicy?.Risk == NyxIdOperationRisk.ReadOnly &&
+        grant.Risk == NyxIdOperationRisk.ReadOnly &&
+        grant.GrantorAuthority == NyxIdExplicitRequestGrantorAuthority.AevatarWorkflowBinder;
 
     private static ScheduledInvocationAuthorizationPlanResult? ValidateDurableExplicitRequestEvidence(
         ScheduledInvocationWorkflowEvidence workflow,
