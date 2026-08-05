@@ -305,9 +305,10 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
-    public async Task BuildLlmStepContinuation_WithExactSkillRecovery_ShouldIgnorePriorTurnUseSkill()
+    public async Task BuildLlmStepContinuation_WithExactSkillRecovery_ShouldSearchDespitePriorTurnUseSkill()
     {
-        var tool = new CountingTool("use_skill");
+        var useSkill = new CountingTool("use_skill");
+        var searchSkills = new CountingTool("ornn_search_skills");
         var provider = new RecordingProvider();
         var recovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
@@ -318,7 +319,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             MaxOrnnSearchAttempts: 2,
             CommandArguments: "提取发票并运行 workflow");
         var toolContext = AgentToolExecutionContext.Empty with { SkillRecovery = recovery };
-        var executor = CreateToolEnabledExecutor(tool, provider, toolContext: toolContext);
+        var executor = CreateToolEnabledExecutor([useSkill, searchSkills], provider, toolContext: toolContext);
         var workItem = BuildToolEnabledWorkItem();
         workItem.StepState.ToolContext = toolContext.ToPayload();
         var priorUseSkillCall = new ToolCall
@@ -339,12 +340,13 @@ public sealed class AgentRunReplyGenerationExecutorTests
 
         provider.Requests.Should().BeEmpty();
         var call = execution.Continuation.LlmStepResult.ToolCalls.Should().ContainSingle().Which;
-        call.Name.Should().Be("use_skill");
+        call.Name.Should().Be("ornn_search_skills");
         call.ArgumentsJson.Should().Contain("invoice-ocr-policy-review");
         execution.AuthorizedToolStep.Should().NotBeNull();
         execution.AuthorizedToolCallSafeties.Should().ContainSingle()
-            .Which.ToolName.Should().Be("use_skill");
-        tool.ExecuteCount.Should().Be(0);
+            .Which.ToolName.Should().Be("ornn_search_skills");
+        useSkill.ExecuteCount.Should().Be(0);
+        searchSkills.ExecuteCount.Should().Be(0);
     }
 
     [Fact]
@@ -633,7 +635,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
-    public async Task NyxIdChatTurnExecutor_WithExactSkillRecovery_ShouldAdvanceUseThenSearchWithoutCallingProvider()
+    public async Task NyxIdChatTurnExecutor_WithExactSkillRecovery_ShouldAdvanceSearchThenUseWithoutCallingProvider()
     {
         var useSkill = new CountingTool("use_skill");
         var searchSkills = new CountingTool("ornn_search_skills");
@@ -658,7 +660,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var first = await executor.ExecuteAsync(
             new NyxIdChatOperationDispatchCommand
             {
-                Key = BuildOperationKey("step-use", "operation-use"),
+                Key = BuildOperationKey("step-search", "operation-search"),
                 Llm = new NyxIdChatLLMOperationInput
                 {
                     Request = new ChatRequestEvent
@@ -672,19 +674,19 @@ public sealed class AgentRunReplyGenerationExecutorTests
             session,
             static (_, _) => Task.CompletedTask,
             CancellationToken.None);
-        var useCall = first.Result.Llm.ToolCalls.Should().ContainSingle().Which;
-        useCall.ToolName.Should().Be("use_skill");
+        var searchCall = first.Result.Llm.ToolCalls.Should().ContainSingle().Which;
+        searchCall.ToolName.Should().Be("ornn_search_skills");
 
         var toolResult = await executor.ExecuteAsync(
             new NyxIdChatOperationDispatchCommand
             {
-                Key = BuildOperationKey("step-use-result", "operation-use-result"),
+                Key = BuildOperationKey("step-search-result", "operation-search-result"),
                 Tool = new NyxIdChatToolOperationInput
                 {
-                    CallId = useCall.CallId,
-                    ToolName = useCall.ToolName,
-                    ArgumentsJson = useCall.ArgumentsJson,
-                    MayChangeExternalState = useCall.Safety.MayChangeExternalState,
+                    CallId = searchCall.CallId,
+                    ToolName = searchCall.ToolName,
+                    ArgumentsJson = searchCall.ArgumentsJson,
+                    MayChangeExternalState = searchCall.Safety.MayChangeExternalState,
                 },
             },
             session,
@@ -695,7 +697,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var second = await executor.ExecuteAsync(
             new NyxIdChatOperationDispatchCommand
             {
-                Key = BuildOperationKey("step-search", "operation-search"),
+                Key = BuildOperationKey("step-use", "operation-use"),
                 Llm = new NyxIdChatLLMOperationInput { ContinueSession = true },
             },
             session,
@@ -703,10 +705,10 @@ public sealed class AgentRunReplyGenerationExecutorTests
             CancellationToken.None);
 
         second.Result.Llm.ToolCalls.Should().ContainSingle()
-            .Which.ToolName.Should().Be("ornn_search_skills");
+            .Which.ToolName.Should().Be("use_skill");
         provider.Requests.Should().BeEmpty();
-        useSkill.ExecuteCount.Should().Be(1);
-        searchSkills.ExecuteCount.Should().Be(0);
+        useSkill.ExecuteCount.Should().Be(0);
+        searchSkills.ExecuteCount.Should().Be(1);
     }
 
     [Fact]

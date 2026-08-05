@@ -13,6 +13,7 @@ internal static class SkillRecoveryPlanner
     private const string CompactCallIdPrefix = "sr";
     private const string OrnnSearchSkillsToolName = "ornn_search_skills";
     private const string UseSkillToolName = "use_skill";
+    private const string StartWorkflowToolName = "aevatar_start_workflow";
 
     private enum SkillDiscoveryBlockerDisposition
     {
@@ -125,24 +126,12 @@ internal static class SkillRecoveryPlanner
         if (!IsEnabled(recovery))
             return false;
 
+        if (HasToolCall(messages, StartWorkflowToolName))
+            return false;
+
         var maxAttempts = recovery.MaxOrnnSearchAttempts > 0
             ? recovery.MaxOrnnSearchAttempts
             : 1;
-
-        if (!primarySkillAttempted &&
-            !string.IsNullOrWhiteSpace(recovery.PrimarySkillName) &&
-            !HasUseSkillFor(messages, recovery.PrimarySkillName))
-        {
-            directive = new RecoveryDirective(
-                BuildUseSkillToolCall(
-                    BuildCallId(callIdPrefix, UseSkillToolName),
-                    recovery.PrimarySkillName,
-                    ExtractCommandArguments(recovery)),
-                ConsumesOrnnSearchAttempt: false,
-                Nudge: null,
-                AttemptsPrimarySkill: true);
-            return true;
-        }
 
         if (recovery.RequireInitialOrnnSearch &&
             !HasToolCall(messages, OrnnSearchSkillsToolName))
@@ -178,6 +167,21 @@ internal static class SkillRecoveryPlanner
                     ConsumesOrnnSearchAttempt: true,
                     Nudge: BuildUseDiscoveredSkillNudge(recovery, latestSearchResult.DisplayText));
             return directive.ToolCall is not null || !string.IsNullOrWhiteSpace(directive.Nudge);
+        }
+
+        if (!primarySkillAttempted &&
+            !string.IsNullOrWhiteSpace(recovery.PrimarySkillName) &&
+            !HasUseSkillFor(messages, recovery.PrimarySkillName))
+        {
+            directive = new RecoveryDirective(
+                BuildUseSkillToolCall(
+                    BuildCallId(callIdPrefix, UseSkillToolName),
+                    recovery.PrimarySkillName,
+                    ExtractCommandArguments(recovery)),
+                ConsumesOrnnSearchAttempt: false,
+                Nudge: null,
+                AttemptsPrimarySkill: true);
+            return true;
         }
 
         if (!recovery.RequireOrnnSearchOnBlocker)
