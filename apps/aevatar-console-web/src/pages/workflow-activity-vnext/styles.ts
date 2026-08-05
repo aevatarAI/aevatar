@@ -19,19 +19,22 @@ export const workflowActivityVNextCss = `
   display: grid;
   font-family: "Avenir Next", "Segoe UI", sans-serif;
   grid-template-columns: 216px minmax(0, 1fr);
-  height: 100vh;
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
+  width: 100%;
 }
 .wa-vnext * { box-sizing: border-box; letter-spacing: 0; }
+.wa-vnext button, .wa-vnext a, .wa-vnext input, .wa-vnext select { touch-action: manipulation; }
 .wa-vnext__rail {
   background: var(--wa-sidebar);
   border-right: 1px solid #344054;
   color: #fff;
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
   min-height: 0;
-  padding: 22px 12px 18px;
+  padding: max(22px, env(safe-area-inset-top)) 12px max(18px, env(safe-area-inset-bottom));
 }
 .wa-vnext__brand { padding: 0 12px 28px; }
 .wa-vnext__brand strong { display: block; font-size: 18px; }
@@ -50,7 +53,7 @@ export const workflowActivityVNextCss = `
 .wa-vnext__main { background: var(--wa-surface); min-height: 0; min-width: 0; overflow: auto; }
 .wa-vnext__mobile-nav { display: none; }
 .wa-vnext__header { align-items: center; border-bottom: 1px solid var(--wa-line); display: flex; gap: 18px; justify-content: space-between; min-height: 84px; padding: 18px 30px; }
-.wa-vnext__header h1 { font-size: 22px; line-height: 1.25; margin: 0; }
+.wa-vnext__header h1 { font-size: 22px; line-height: 1.25; margin: 0; text-wrap: balance; }
 .wa-vnext__header p { color: var(--wa-muted); font-size: 13px; margin: 5px 0 0; }
 .wa-vnext__header-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .wa-vnext__content { padding: 24px 30px 56px; }
@@ -73,14 +76,41 @@ export const workflowActivityVNextCss = `
 .wa-vnext__state { background: var(--wa-subtle); border: 1px dashed var(--wa-line); display: grid; min-height: 260px; padding: 32px; place-items: center; text-align: center; }
 .wa-vnext__state h2 { font-size: 18px; margin: 0 0 8px; }
 .wa-vnext__state p { color: var(--wa-muted); margin: 0 0 18px; }
+.wa-vnext__state--compact { border-style: solid; justify-items: start; min-height: 0; padding: 24px; place-items: initial; text-align: left; }
+.wa-vnext__state--compact h3 { font-size: 16px; margin: 0 0 8px; text-wrap: balance; }
+.wa-vnext__state--compact p { max-width: 560px; text-wrap: pretty; }
 .wa-vnext__notice { border: 1px solid #fdb022; background: var(--wa-amber-bg); color: #7a2e0e; margin-bottom: 14px; padding: 11px 13px; }
 .wa-vnext__notice--error { background: var(--wa-red-bg); border-color: #fda29b; color: var(--wa-red); }
 .wa-vnext__panel { border: 1px solid var(--wa-line); padding: 20px; }
-.wa-vnext__form { display: grid; gap: 18px; max-width: 760px; }
+.wa-vnext__form { display: grid; gap: 18px; }
 .wa-vnext__form-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.wa-vnext__settings-actions--dirty { background: var(--wa-subtle); border: 1px solid var(--wa-line); bottom: 12px; padding: 10px; position: sticky; z-index: 8; }
 .wa-vnext__mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
 .wa-vnext__split { display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr) minmax(280px, 34%); }
+.wa-vnext__settings-layout { display: grid; gap: 42px; grid-template-columns: 190px minmax(0, 1fr); margin: 0 auto; max-width: 1160px; }
+.wa-vnext__settings-nav { align-content: start; display: grid; gap: 4px; }
+.wa-vnext__settings-nav-link { border-radius: 6px; color: var(--wa-muted); font-size: 13px; font-weight: 650; min-height: 44px; padding: 13px 12px; text-decoration: none; }
+.wa-vnext__settings-nav-link:hover { background: var(--wa-subtle); color: var(--wa-ink); }
+.wa-vnext__settings-nav-link[aria-current="page"] { background: var(--wa-blue-bg); color: var(--wa-blue); }
+.wa-vnext__settings-panel { min-width: 0; }
+.wa-vnext__settings-heading { border-bottom: 1px solid var(--wa-line); margin-bottom: 0; padding: 0 0 18px; }
+.wa-vnext__settings-heading h2 { font-size: 18px; line-height: 1.35; margin: 0; text-wrap: balance; }
+.wa-vnext__settings-heading p { color: var(--wa-muted); font-size: 13px; margin: 5px 0 0; max-width: 760px; text-wrap: pretty; }
+.wa-vnext__settings-fields { display: grid; }
+.wa-vnext__settings-field { align-items: center; border-bottom: 1px solid #e4e7ec; display: grid; gap: 32px; grid-template-columns: 220px minmax(0, 1fr); min-height: 86px; padding: 18px 0; }
+.wa-vnext__settings-field-copy { min-width: 0; }
+.wa-vnext__settings-field-copy strong { display: block; font-size: 13px; }
+.wa-vnext__settings-field-copy span { color: var(--wa-muted); display: block; font-size: 12px; line-height: 1.45; margin-top: 4px; text-wrap: pretty; }
+.wa-vnext__settings-field .ant-select { max-width: 520px; width: 100%; }
+.wa-vnext__settings-savebar { align-items: center; background: #1d2939; border: 1px solid #344054; bottom: 18px; box-shadow: 0 12px 30px rgba(16, 24, 40, .2); color: #fff; display: flex; gap: 24px; justify-content: space-between; margin-top: 34px; padding: 12px 14px; position: sticky; z-index: 8; }
+.wa-vnext__settings-savebar strong { display: block; font-size: 13px; }
+.wa-vnext__settings-savebar span { color: #d0d5dd; display: block; font-size: 11px; margin-top: 2px; }
+.wa-vnext__settings-savebar .ant-btn-default { background: transparent; border-color: #667085; color: #fff; }
+.wa-vnext__settings-facts { padding-top: 20px; }
+.wa-vnext__settings-facts .ant-descriptions-item-label { color: var(--wa-muted); font-size: 12px; }
+.wa-vnext__settings-facts .ant-descriptions-item-content { color: var(--wa-ink); min-width: 0; overflow-wrap: anywhere; }
+.wa-vnext__technical-details { color: var(--wa-muted); font-size: 12px; margin-top: 18px; max-width: 100%; }
+.wa-vnext__technical-details summary { cursor: pointer; font-weight: 650; }
+.wa-vnext__technical-details code { background: #fff; border: 1px solid var(--wa-line); display: block; margin-top: 8px; max-width: 100%; padding: 10px; }
 .wa-vnext button:focus-visible, .wa-vnext a:focus-visible, .wa-vnext input:focus-visible, .wa-vnext textarea:focus-visible, .wa-vnext select:focus-visible { outline: 3px solid rgba(23, 92, 211, .25); outline-offset: 2px; }
 @media (max-width: 900px) {
   .wa-vnext { grid-template-columns: 1fr; }
@@ -89,6 +119,9 @@ export const workflowActivityVNextCss = `
   .wa-vnext__mobile-nav .wa-vnext__nav { display: flex; gap: 4px; min-width: max-content; width: 100%; }
   .wa-vnext__mobile-nav .wa-vnext__nav-button { flex: 1 0 auto; justify-content: center; min-height: 38px; white-space: nowrap; }
   .wa-vnext__split { grid-template-columns: 1fr; }
+  .wa-vnext__settings-layout { gap: 24px; grid-template-columns: 1fr; max-width: none; }
+  .wa-vnext__settings-nav { border-bottom: 1px solid var(--wa-line); display: flex; gap: 8px; }
+  .wa-vnext__settings-nav-link { flex: 1 1 0; text-align: center; }
 }
 @media (max-width: 600px) {
   .wa-vnext__header { align-items: flex-start; flex-direction: column; min-height: 0; padding: 16px; }
@@ -96,6 +129,16 @@ export const workflowActivityVNextCss = `
   .wa-vnext__content { padding: 18px 16px 44px; }
   .wa-vnext__toolbar { align-items: stretch; flex-direction: column; }
   .wa-vnext__toolbar .ant-input-affix-wrapper { width: 100% !important; }
+  .wa-vnext__settings-layout { gap: 20px; }
+  .wa-vnext__settings-nav { gap: 4px; }
+  .wa-vnext__settings-nav-link { font-size: 12px; padding-inline: 6px; }
+  .wa-vnext__settings-heading { padding-bottom: 17px; }
+  .wa-vnext__settings-field { align-items: stretch; gap: 10px; grid-template-columns: 1fr; min-height: 0; padding: 20px 0; }
+  .wa-vnext__settings-field .ant-select { max-width: none; }
+  .wa-vnext__settings-savebar { align-items: stretch; bottom: max(12px, env(safe-area-inset-bottom)); flex-direction: column; gap: 12px; }
+  .wa-vnext__settings-savebar .ant-space { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+  .wa-vnext__settings-savebar .ant-btn { width: 100%; }
+  .wa-vnext__state--compact { padding: 20px; }
   .wa-vnext__activity-table { border: 0; overflow: visible; }
   .wa-vnext__activity-table .wa-vnext__table { display: block; min-width: 0; }
   .wa-vnext__activity-table thead { display: none; }

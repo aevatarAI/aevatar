@@ -110,9 +110,11 @@ describe("layout menu collapse behavior", () => {
     expect(actionsRender?.({}, {})).toEqual([]);
     expect(runtimeLayout.contentStyle).toMatchObject({
       background: "#ffffff",
-      height: "100vh",
+      height: "auto",
+      inset: 0,
       overflow: "hidden",
       padding: 0,
+      position: "fixed",
     });
   });
 

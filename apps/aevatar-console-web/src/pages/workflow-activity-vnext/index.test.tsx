@@ -330,17 +330,50 @@ describe("Workflow Activity vNext settings", () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
     expect((await screen.findAllByText("System default")).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("tab", { name: "Account" }));
+    const accountLink = screen.getByRole("link", { name: "Account" });
+    expect(accountLink).toHaveAttribute(
+      "href",
+      "/scopes/scope-alpha/workflow-activity-vnext/settings?section=account",
+    );
+    fireEvent.click(accountLink);
+    expect(accountLink).toHaveAttribute("aria-current", "page");
     expect(await screen.findByText("Ada Operator")).toBeInTheDocument();
     expect(screen.getByText("user-subject-alpha")).toBeInTheDocument();
     expect(screen.getByText("NyxID")).toBeInTheDocument();
     expect(screen.getByText("operator")).toBeInTheDocument();
     expect(screen.getByText("platform")).toBeInTheDocument();
     expect(screen.getByText("nyxid-session")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        new Intl.DateTimeFormat("en-US", {
+          dateStyle: "medium",
+          timeStyle: "short",
+        }).format(new Date("2026-08-05T10:00:00Z")),
+      ),
+    ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Advanced" }));
+    const advancedLink = screen.getByRole("link", { name: "Advanced" });
+    fireEvent.click(advancedLink);
+    expect(advancedLink).toHaveAttribute("aria-current", "page");
     expect(await screen.findAllByText("https://runtime.example.test")).toHaveLength(2);
     expect(screen.getByText("remote")).toBeInTheDocument();
+  });
+
+  it("keeps an AI defaults decoding failure compact and actionable", async () => {
+    mockStudioApi.getUserLlmSettings.mockRejectedValue(
+      new Error(
+        "StudioUserLlmSettings.savedSelection.modelSelection must be an object.",
+      ),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(await screen.findByText("AI defaults unavailable")).toBeInTheDocument();
+    expect(
+      screen.getByText("Refresh this section to try loading the authoritative settings again."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Technical details")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
   });
 
   it("discards dirty AI defaults back to the last authoritative selection", async () => {
@@ -402,12 +435,14 @@ describe("Workflow Activity vNext settings", () => {
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
-    const routeSelect = await screen.findByRole("combobox", { name: "AI route" });
+    const routeSelect = await screen.findByRole("combobox", {
+      name: "Preferred service",
+    });
     fireEvent.mouseDown(routeSelect);
     fireEvent.click(await screen.findByText("Service alpha"));
-    expect(screen.getByRole("button", { name: "Save AI defaults" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
-    expect(screen.getByRole("button", { name: "Save AI defaults" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
     expect(mockStudioApi.saveUserLlmSettings).not.toHaveBeenCalled();
   });
 });

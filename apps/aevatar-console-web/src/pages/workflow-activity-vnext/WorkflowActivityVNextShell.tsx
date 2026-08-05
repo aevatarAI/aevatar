@@ -24,9 +24,9 @@ type ShellProps = {
 };
 
 const items = [
-  { key: "workflows" as const, icon: <PartitionOutlined />, labelKey: "workflows", fallback: "Workflows" },
-  { key: "activity" as const, icon: <HistoryOutlined />, labelKey: "activity", fallback: "Activity" },
-  { key: "settings" as const, icon: <ControlOutlined />, labelKey: "settings", fallback: "Settings" },
+  { key: "workflows" as const, icon: <PartitionOutlined aria-hidden="true" />, labelKey: "workflows", fallback: "Workflows" },
+  { key: "activity" as const, icon: <HistoryOutlined aria-hidden="true" />, labelKey: "activity", fallback: "Activity" },
+  { key: "settings" as const, icon: <ControlOutlined aria-hidden="true" />, labelKey: "settings", fallback: "Settings" },
 ];
 
 function Navigation({ activeSection, onNavigate, scopeId }: Pick<ShellProps, "activeSection" | "onNavigate" | "scopeId">) {
@@ -72,7 +72,7 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
       <Navigation activeSection={activeSection} onNavigate={onNavigate} scopeId={scopeId} />
       <div className="wa-vnext__rail-foot">
         <span>{t("workflowActivityVNext.scope", "Scope")}</span>
-        <strong>{scopeId}</strong>
+        <strong translate="no">{scopeId}</strong>
       </div>
     </aside>
     <main className="wa-vnext__main">

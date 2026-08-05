@@ -16,7 +16,6 @@ import {
 import { getNyxIDRuntimeConfig } from "./shared/auth/config";
 import {
   buildAuthInitialState,
-  loadRestorableAuthSession,
   loadStoredAuthSession,
   sanitizeReturnTo,
 } from "./shared/auth/session";
@@ -234,7 +233,9 @@ function setLiveOpsAttentionSnapshot(next: LiveOpsAttentionSnapshot): void {
   }
 
   liveOpsAttentionSnapshot = next;
-  liveOpsAttentionListeners.forEach((listener) => listener());
+  liveOpsAttentionListeners.forEach((listener) => {
+    listener();
+  });
 }
 
 function buildLiveOpsAttentionCandidateKey(
@@ -806,10 +807,13 @@ export const layout = ({
       ? {
           background: "#ffffff",
           display: "block",
-          height: "100vh",
+          height: "auto",
+          inset: 0,
           minHeight: 0,
           overflow: "hidden",
           padding: 0,
+          position: "fixed",
+          width: "100%",
         }
       : fullscreenDisplayRoute
       ? {
