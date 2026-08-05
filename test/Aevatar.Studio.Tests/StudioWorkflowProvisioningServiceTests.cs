@@ -120,8 +120,40 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new StudioMemberWorkflowAcceptedBindingContext(
                 TeamId,
                 PublishedServiceId,
-                identity.WorkflowId,
-                identity.RevisionId));
+                WorkflowId,
+                RevisionId));
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenBindingReceiptOmitsResolvedIdentity_ShouldUseRequestedIdentity()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var bindingPort = new RecordingBindingPort(member, null, null);
+        var schedulePort = new RecordingWorkflowSchedulePort(schedule);
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            bindingPort,
+            schedulePort,
+            new StudioWorkflowCapabilityAdmissionTestService(),
+            new FakeTimeProvider());
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor", Prompt: "go")
+            {
+                TeamId = TeamId,
+            });
+
+        bindingPort.LastResult!.WorkflowId.Should().BeNull();
+        bindingPort.LastResult.RevisionId.Should().BeNull();
+        schedulePort.LastPreflightRequest!.AcceptedBinding.Should().BeEquivalentTo(
+            new StudioMemberWorkflowAcceptedBindingContext(
+                TeamId,
+                PublishedServiceId,
+                bindingPort.LastRequest!.WorkflowId!,
+                bindingPort.LastRequest.RevisionId!));
     }
 
     [Fact]
@@ -1076,8 +1108,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new StudioMemberWorkflowAcceptedBindingContext(
                 TeamId,
                 PublishedServiceId,
-                bindingPort.LastRequest.WorkflowId!,
-                bindingPort.LastRequest.RevisionId!));
+                bindingPort.LastResult.WorkflowId!,
+                bindingPort.LastResult.RevisionId!));
         schedulePort.LastCreateRequest.Should().BeSameAs(schedule.LastCreateRequest);
         schedulePort.LastResult!.MemberId.Should().Be("m-alpha");
         schedulePort.LastResult.PublishedServiceId.Should().Be("svc-alpha");
@@ -1869,13 +1901,13 @@ public sealed class StudioWorkflowProvisioningServiceTests
     private sealed class RecordingBindingPort : IStudioMemberWorkflowBindingPort
     {
         private readonly RecordingMemberService _member;
-        private readonly string _acceptedWorkflowId;
-        private readonly string _acceptedRevisionId;
+        private readonly string? _acceptedWorkflowId;
+        private readonly string? _acceptedRevisionId;
 
         public RecordingBindingPort(
             RecordingMemberService member,
-            string acceptedWorkflowId,
-            string acceptedRevisionId)
+            string? acceptedWorkflowId,
+            string? acceptedRevisionId)
         {
             _member = member;
             _acceptedWorkflowId = acceptedWorkflowId;

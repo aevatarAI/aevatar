@@ -170,6 +170,14 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 CapabilityAdmission = trustedAdmission,
             },
             ct);
+        if (!bindReceipt.Success ||
+            !string.Equals(bindReceipt.ScopeId, normalizedScopeId, StringComparison.Ordinal) ||
+            !string.Equals(bindReceipt.MemberId, memberId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("workflow_binding_receipt_invalid");
+        }
+        var acceptedWorkflowId = NormalizeOptional(bindReceipt.WorkflowId) ?? workflowId;
+        var acceptedRevisionId = NormalizeOptional(bindReceipt.RevisionId) ?? revisionId;
 
         // 3. Create the scheduled-dispatch that produces the run. The Workflow kind
         //    is what flips on caller-token projection. A schedule is created when
@@ -193,8 +201,8 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 teamId,
                 memberId,
                 publishedServiceId,
-                workflowId,
-                revisionId,
+                acceptedWorkflowId,
+                acceptedRevisionId,
                 displayName,
                 request.Prompt ?? string.Empty,
                 callerCredential,
