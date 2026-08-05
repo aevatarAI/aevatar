@@ -235,13 +235,34 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         StudioMemberWorkflowScheduleRequest request,
         string confirmedPermissionDigest,
         CancellationToken ct = default) =>
-        ApplyAsync(request, confirmedPermissionDigest, TeamAutomationOperationKind.Create, ct);
+        ApplyAsync(
+            request,
+            confirmedPermissionDigest,
+            TeamAutomationOperationKind.Create,
+            preserveExistingRevision: false,
+            ct);
 
     public Task<StudioMemberWorkflowScheduleResult> ReauthorizeAsync(
         StudioMemberWorkflowScheduleRequest request,
         string confirmedPermissionDigest,
         CancellationToken ct = default) =>
-        ApplyAsync(request, confirmedPermissionDigest, TeamAutomationOperationKind.Reauthorize, ct);
+        ApplyAsync(
+            request,
+            confirmedPermissionDigest,
+            TeamAutomationOperationKind.Reauthorize,
+            preserveExistingRevision: true,
+            ct);
+
+    public Task<StudioMemberWorkflowScheduleResult> ReplaceAsync(
+        StudioMemberWorkflowScheduleRequest request,
+        string confirmedPermissionDigest,
+        CancellationToken ct = default) =>
+        ApplyAsync(
+            request,
+            confirmedPermissionDigest,
+            TeamAutomationOperationKind.Reauthorize,
+            preserveExistingRevision: false,
+            ct);
 
     public async Task<StudioMemberAutomationListResponse> ListAsync(
         string scopeId,
@@ -487,6 +508,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         StudioMemberWorkflowScheduleRequest request,
         string confirmedPermissionDigest,
         TeamAutomationOperationKind operationKind,
+        bool preserveExistingRevision,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -506,7 +528,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 existingOwner,
                 ct) ?? throw new ScheduledDispatchNotFoundException(existingScheduleId);
             EnsureExistingCredentialOwnerMatches(request.AuthenticatedOwner, existingAutomation.Schedule);
-            resolved = RebindToExistingScheduleTarget(resolved, existingAutomation.Schedule);
+            resolved = preserveExistingRevision
+                ? RebindToExistingScheduleTarget(resolved, existingAutomation.Schedule)
+                : ValidateExistingScheduleTarget(resolved, existingAutomation.Schedule);
         }
         var confirmation = BuildConfirmation(
             resolved.AuthorizationRequest,
@@ -1219,6 +1243,31 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         ResolvedStudioAuthorizationRequest current,
         ScheduledDispatchSummary schedule)
     {
+        current = ValidateExistingScheduleTarget(current, schedule);
+        var targetRevisionId = NormalizeOptional(schedule.ServiceRevisionId);
+        if (targetRevisionId is null)
+        {
+            throw new StudioMemberAutomationPlanConflictException(
+                "schedule_target_revision_unavailable",
+                "The stored schedule does not expose the pinned service revision required for authorization.");
+        }
+
+        var invocationTarget = current.AuthorizationRequest.InvocationTarget.Clone();
+        invocationTarget.StudioMember!.WorkflowRevisionId = targetRevisionId;
+        return current with
+        {
+            TargetRevisionId = targetRevisionId,
+            AuthorizationRequest = current.AuthorizationRequest with
+            {
+                InvocationTarget = invocationTarget,
+            },
+        };
+    }
+
+    private static ResolvedStudioAuthorizationRequest ValidateExistingScheduleTarget(
+        ResolvedStudioAuthorizationRequest current,
+        ScheduledDispatchSummary schedule)
+    {
         if (schedule.TargetKind != ScheduledDispatchTargetKind.ServiceInvocation ||
             schedule.ScheduleKind != ScheduledDispatchScheduleKind.Workflow ||
             !string.Equals(schedule.ServiceId, current.PublishedServiceId, StringComparison.Ordinal) ||
@@ -1229,16 +1278,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 "The stored schedule target no longer matches the workflow member service identity.");
         }
 
-        var targetRevisionId = NormalizeOptional(schedule.ServiceRevisionId);
-        if (targetRevisionId is null)
-        {
-            throw new StudioMemberAutomationPlanConflictException(
-                "schedule_target_revision_unavailable",
-                "The stored schedule does not expose the pinned service revision required for authorization.");
-        }
-
-        var invocationTarget = current.AuthorizationRequest.InvocationTarget.Clone();
-        var studioMember = invocationTarget.StudioMember;
+        var studioMember = current.AuthorizationRequest.InvocationTarget.StudioMember;
         if (studioMember == null ||
             !string.Equals(studioMember.ScopeId, current.ScopeId, StringComparison.Ordinal) ||
             !string.Equals(studioMember.TeamId, current.TeamId, StringComparison.Ordinal) ||
@@ -1250,15 +1290,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 "The workflow member identity changed while resolving the stored schedule target.");
         }
 
-        studioMember.WorkflowRevisionId = targetRevisionId;
-        return current with
-        {
-            TargetRevisionId = targetRevisionId,
-            AuthorizationRequest = current.AuthorizationRequest with
-            {
-                InvocationTarget = invocationTarget,
-            },
-        };
+        return current;
     }
 
     private async Task<string> ResolveProvisioningBearerTokenAsync(
@@ -1368,6 +1400,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             OwnerLLMUserServiceId = schedule.OwnerLLMUserServiceId,
             OwnerLLMServiceSlug = schedule.OwnerLLMServiceSlug,
             OwnerLLMModel = schedule.OwnerLLMModel,
+            TargetRevisionId = schedule.ServiceRevisionId,
             NyxIdRevocationStatus = schedule.NyxIdRevocationStatus,
             VaultRevocationStatus = schedule.VaultRevocationStatus,
         };
@@ -1401,6 +1434,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             OwnerLLMUserServiceId = schedule.OwnerLLMUserServiceId,
             OwnerLLMServiceSlug = schedule.OwnerLLMServiceSlug,
             OwnerLLMModel = schedule.OwnerLLMModel,
+            TargetRevisionId = schedule.ServiceRevisionId,
             NyxIdRevocationStatus = schedule.NyxIdRevocationStatus,
             VaultRevocationStatus = schedule.VaultRevocationStatus,
         };

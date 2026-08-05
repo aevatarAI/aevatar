@@ -1992,6 +1992,39 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         scheduleService.BeginOperation!.ActivationDecision.RevisionId.Should().Be("rev-pinned");
     }
 
+    [Fact]
+    public async Task ReplaceAsync_WhenServingRevisionAdvanced_ShouldUseCurrentRevision()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        var memberService = new RecordingMemberService
+        {
+            Detail = CreateWorkflowMemberDetail(),
+            EndpointContract = CreateEndpointContract("published-member-1", "rev-current"),
+        };
+        var scheduleService = new RecordingScheduleService
+        {
+            TeamAutomationDetail = CreateTeamAutomationDetail(
+                RecordingAuthorizationPlanner.Digest,
+                RecordingAuthorizationPlanner.PolicyVersion,
+                serviceRevisionId: "rev-pinned"),
+        };
+        var port = NewPort(scheduleService, memberService, planner);
+        var request = Request("scope-1", "member-1") with
+        {
+            ScheduleId = "schedule-1",
+            OperationId = "operation-replace",
+            IdempotencyKey = "idempotency-replace",
+        };
+
+        await port.ReplaceAsync(request, RecordingAuthorizationPlanner.Digest);
+
+        memberService.EndpointContractQueryCount.Should().Be(1);
+        planner.Requests.Should().ContainSingle();
+        planner.Requests[0].InvocationTarget.StudioMember.WorkflowRevisionId.Should().Be("rev-current");
+        scheduleService.Configuration!.Target.ServiceInvocation!.RevisionId.Should().Be("rev-current");
+        scheduleService.BeginOperation!.ActivationDecision.RevisionId.Should().Be("rev-current");
+    }
+
     [Theory]
     [InlineData("stale-digest", RecordingAuthorizationPlanner.PolicyVersion)]
     [InlineData(RecordingAuthorizationPlanner.Digest, "stale-policy")]

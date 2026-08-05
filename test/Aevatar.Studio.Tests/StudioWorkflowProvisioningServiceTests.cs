@@ -116,7 +116,12 @@ public sealed class StudioWorkflowProvisioningServiceTests
         member.BindRequest.CapabilityAdmission.ExplicitRequestConfirmations.Should().BeEmpty();
         plan.ToString().Should().NotContain(StudioExplicitRequestAdmissionTestKit.CallerBearer);
         plan.ToString().Should().NotContain(StudioExplicitRequestAdmissionTestKit.OrganizationBearer);
-        schedule.LastCreateRequest!.AcceptedBinding.Should().BeNull();
+        schedule.LastCreateRequest!.AcceptedBinding.Should().BeEquivalentTo(
+            new StudioMemberWorkflowAcceptedBindingContext(
+                TeamId,
+                PublishedServiceId,
+                identity.WorkflowId,
+                identity.RevisionId));
     }
 
     [Fact]
@@ -1067,7 +1072,12 @@ public sealed class StudioWorkflowProvisioningServiceTests
         var preflightRequest = schedule.PreflightRequests.Should().ContainSingle().Which;
         preflightRequest.Should().BeSameAs(schedulePort.LastPreflightRequest);
         preflightRequest.MemberId.Should().Be("m-alpha");
-        preflightRequest.AcceptedBinding.Should().BeNull();
+        preflightRequest.AcceptedBinding.Should().BeEquivalentTo(
+            new StudioMemberWorkflowAcceptedBindingContext(
+                TeamId,
+                PublishedServiceId,
+                bindingPort.LastRequest.WorkflowId!,
+                bindingPort.LastRequest.RevisionId!));
         schedulePort.LastCreateRequest.Should().BeSameAs(schedule.LastCreateRequest);
         schedulePort.LastResult!.MemberId.Should().Be("m-alpha");
         schedulePort.LastResult.PublishedServiceId.Should().Be("svc-alpha");
@@ -1576,6 +1586,52 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_WhenLiveScheduleExists_ShouldReplaceIt()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var sut = NewService(member, schedule, out _, out var schedulePort);
+        schedulePort.ExistingAutomation = new StudioMemberAutomationView(
+            ScopeId,
+            TeamId,
+            MemberId,
+            $"provision-{PublishedServiceId}",
+            PublishedServiceId,
+            "Existing monitor",
+            "old prompt",
+            "0 9 * * *",
+            "UTC",
+            true,
+            "active",
+            DateTimeOffset.UtcNow.AddHours(1),
+            string.Empty,
+            "studio-workflow-provision-create:old",
+            1,
+            false,
+            DateTimeOffset.UtcNow.AddMinutes(1),
+            null,
+            10)
+        {
+            TargetRevisionId = "rev-old",
+        };
+
+        var response = await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor", "new prompt")
+            {
+                TeamId = TeamId,
+            });
+
+        schedulePort.LastCreateRequest.Should().BeNull();
+        schedulePort.LastReplaceRequest.Should().NotBeNull();
+        schedulePort.LastReplaceRequest!.ScheduleId.Should().Be($"provision-{PublishedServiceId}");
+        schedulePort.LastReplaceRequest.OperationId.Should()
+            .StartWith("studio-workflow-provision-replace:");
+        response.ScheduleId.Should().Be($"provision-{PublishedServiceId}");
+    }
+
+    [Fact]
     public async Task ProvisionAsync_PropagatesScheduleEnsureFailure()
     {
         var member = NewMemberService();
@@ -1954,7 +2010,11 @@ public sealed class StudioWorkflowProvisioningServiceTests
 
         public StudioMemberWorkflowScheduleRequest? LastCreateRequest { get; private set; }
 
+        public StudioMemberWorkflowScheduleRequest? LastReplaceRequest { get; private set; }
+
         public StudioMemberWorkflowScheduleResult? LastResult { get; private set; }
+
+        public StudioMemberAutomationView? ExistingAutomation { get; set; }
 
         public async Task<StudioMemberWorkflowScheduleResult> CreateAsync(
             StudioMemberWorkflowScheduleRequest request,
@@ -2024,6 +2084,23 @@ public sealed class StudioWorkflowProvisioningServiceTests
             CancellationToken ct = default) =>
             throw new NotSupportedException();
 
+        public Task<StudioMemberWorkflowScheduleResult> ReplaceAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest,
+            CancellationToken ct = default)
+        {
+            LastReplaceRequest = request;
+            LastResult = new StudioMemberWorkflowScheduleResult(
+                true,
+                request.ScopeId,
+                request.MemberId,
+                request.ScheduleId ?? "schedule-test",
+                PublishedServiceId,
+                "/admin#/observatory",
+                "pending");
+            return Task.FromResult(LastResult);
+        }
+
         public Task<StudioMemberAutomationListResponse> ListAsync(
             string scopeId,
             string teamId,
@@ -2040,7 +2117,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
             string memberId,
             string scheduleId,
             CancellationToken ct = default) =>
-            throw new NotSupportedException();
+            Task.FromResult(
+                string.Equals(ExistingAutomation?.ScheduleId, scheduleId, StringComparison.Ordinal)
+                    ? ExistingAutomation
+                    : null);
 
         public Task<StudioMemberAutomationMutationReceipt> UpdateAsync(
             StudioMemberAutomationUpdateCommand command,

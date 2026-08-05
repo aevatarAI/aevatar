@@ -3641,6 +3641,12 @@ public sealed class ProvisionWorkflowScheduleToolTests
             CancellationToken ct = default) =>
             CompleteAsync(request, confirmedPermissionDigest);
 
+        public Task<StudioMemberWorkflowScheduleResult> ReplaceAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest,
+            CancellationToken ct = default) =>
+            CompleteAsync(request, confirmedPermissionDigest);
+
         public Task<StudioMemberAutomationListResponse> ListAsync(
             string scopeId,
             string teamId,
