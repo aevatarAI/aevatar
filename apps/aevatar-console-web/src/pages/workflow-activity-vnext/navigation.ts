@@ -1,4 +1,4 @@
-export type WorkflowActivitySection = "workflows" | "activity" | "settings";
+export type WorkflowActivitySection = 'workflows' | 'activity' | 'settings';
 
 function encode(value: string): string {
   return encodeURIComponent(value.trim());
@@ -16,19 +16,26 @@ export function buildWorkflowActivitySectionHref(
 }
 
 export function buildWorkflowActivityNewHref(scopeId: string): string {
-  return `${buildWorkflowActivitySectionHref(scopeId, "workflows")}/new`;
+  return `${buildWorkflowActivitySectionHref(scopeId, 'workflows')}/new`;
 }
 
 export function buildWorkflowActivityEditorHref(
   scopeId: string,
   workflowId: string,
 ): string {
-  return `${buildWorkflowActivitySectionHref(scopeId, "workflows")}/${encode(workflowId)}`;
+  return `${buildWorkflowActivitySectionHref(scopeId, 'workflows')}/${encode(workflowId)}`;
+}
+
+export function buildWorkflowActivityEditorRunHref(
+  scopeId: string,
+  workflowId: string,
+): string {
+  return `${buildWorkflowActivityEditorHref(scopeId, workflowId)}?run=1`;
 }
 
 export function buildWorkflowActivityRunHref(
   scopeId: string,
   runId: string,
 ): string {
-  return `${buildWorkflowActivitySectionHref(scopeId, "activity")}/${encode(runId)}`;
+  return `${buildWorkflowActivitySectionHref(scopeId, 'activity')}/${encode(runId)}`;
 }

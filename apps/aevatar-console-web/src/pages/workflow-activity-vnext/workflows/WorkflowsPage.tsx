@@ -1,20 +1,22 @@
 import {
+  MoreOutlined,
   PlusOutlined,
   ReloadOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Button, Input, Select, Space } from 'antd';
+import { Alert, Button, Dropdown, Input, Modal, Select, Space } from 'antd';
 import React from 'react';
 import { scopesApi } from '@/shared/api/scopesApi';
 import { t } from '@/shared/i18n/messages';
 import type { ScopeWorkflowSummary } from '@/shared/models/scopes';
 import { history } from '@/shared/navigation/history';
-import { studioApi } from '@/shared/studio/api';
+import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
 import type { StudioWorkflowDraftSummary } from '@/shared/studio/models';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
 import {
   buildWorkflowActivityEditorHref,
+  buildWorkflowActivityEditorRunHref,
   buildWorkflowActivityNewHref,
   buildWorkflowActivitySectionHref,
 } from '../navigation';
@@ -25,6 +27,7 @@ import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 type WorkflowRow = {
   readonly description: string;
   readonly hasCommittedSource: boolean;
+  readonly hasDraftSource: boolean;
   readonly name: string;
   readonly stepCount?: number;
   readonly updatedAtUtc: string | null;
@@ -38,6 +41,7 @@ function toDraftRow(
   return {
     description: item.description,
     hasCommittedSource: Boolean(committed),
+    hasDraftSource: true,
     name: item.name,
     stepCount: item.stepCount,
     updatedAtUtc: item.updatedAtUtc,
@@ -49,6 +53,7 @@ function toCommittedRow(item: ScopeWorkflowSummary): WorkflowRow {
   return {
     description: '',
     hasCommittedSource: true,
+    hasDraftSource: false,
     name: item.displayName || item.workflowName,
     updatedAtUtc: item.updatedAt,
     workflowId: item.workflowId,
@@ -85,6 +90,12 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   );
   const [activityWorkflowId, setActivityWorkflowId] = React.useState('');
   const [activityError, setActivityError] = React.useState('');
+  const [deleteTarget, setDeleteTarget] = React.useState<WorkflowRow | null>(
+    null,
+  );
+  const [deleteError, setDeleteError] = React.useState('');
+  const [deleteSucceeded, setDeleteSucceeded] = React.useState(false);
+  const [deleting, setDeleting] = React.useState(false);
   const drafts = useQuery({
     queryKey: ['workflow-activity-vnext', 'drafts', scopeId],
     queryFn: () => studioApi.listWorkflowDrafts(scopeId),
@@ -171,6 +182,43 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       setActivityError(error instanceof Error ? error.message : String(error));
     } finally {
       setActivityWorkflowId('');
+    }
+  };
+
+  const closeDelete = () => {
+    if (deleting) return;
+    setDeleteTarget(null);
+    setDeleteError('');
+    setDeleteSucceeded(false);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    setDeleteError('');
+    let removed = deleteSucceeded;
+    try {
+      if (!removed) {
+        try {
+          await studioApi.deleteWorkflowDraft(deleteTarget.workflowId, scopeId);
+          removed = true;
+          setDeleteSucceeded(true);
+        } catch (error) {
+          if (!isStudioApiStatus(error, 404)) throw error;
+          removed = true;
+          setDeleteSucceeded(true);
+        }
+      }
+
+      const refreshed = await drafts.refetch();
+      if (refreshed.isError) throw refreshed.error;
+      setDeleteTarget(null);
+      setDeleteSucceeded(false);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : String(error));
+      setDeleteSucceeded(removed);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -483,15 +531,56 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                           'Activity',
                         )}
                       </Button>
-                      <Button
-                        disabled
-                        title={t(
-                          'workflowActivityVNext.workflows.runFromEditor',
-                          'Open the editor to validate and run this workflow.',
-                        )}
-                      >
-                        {t('workflowActivityVNext.common.run', 'Run')}
-                      </Button>
+                      {row.hasDraftSource ? (
+                        <Button
+                          aria-label={t(
+                            'workflowActivityVNext.workflows.runAria',
+                            'Run {name}',
+                            { name: row.name },
+                          )}
+                          onClick={() =>
+                            history.push(
+                              buildWorkflowActivityEditorRunHref(
+                                scopeId,
+                                row.workflowId,
+                              ),
+                            )
+                          }
+                        >
+                          {t('workflowActivityVNext.common.run', 'Run')}
+                        </Button>
+                      ) : null}
+                      {row.hasDraftSource ? (
+                        <Dropdown
+                          menu={{
+                            items: [
+                              {
+                                danger: true,
+                                key: 'delete-draft',
+                                label: t(
+                                  'workflowActivityVNext.workflows.deleteDraft',
+                                  'Delete draft',
+                                ),
+                              },
+                            ],
+                            onClick: () => {
+                              setDeleteTarget(row);
+                              setDeleteError('');
+                              setDeleteSucceeded(false);
+                            },
+                          }}
+                          trigger={['click']}
+                        >
+                          <Button
+                            aria-label={t(
+                              'workflowActivityVNext.workflows.moreActionsAria',
+                              'More actions for {name}',
+                              { name: row.name },
+                            )}
+                            icon={<MoreOutlined />}
+                          />
+                        </Dropdown>
+                      ) : null}
                     </Space>
                   </td>
                 </tr>
@@ -500,6 +589,50 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           </table>
         </TableScrollRegion>
       )}
+      <Modal
+        cancelText={t('workflowActivityVNext.common.cancel', 'Cancel')}
+        closable={!deleting}
+        confirmLoading={deleting}
+        mask={{ closable: false }}
+        okButtonProps={{ danger: true }}
+        okText={
+          deleteError
+            ? t('workflowActivityVNext.workflows.deleteRetry', 'Try again')
+            : t('workflowActivityVNext.workflows.deleteDraft', 'Delete draft')
+        }
+        onCancel={closeDelete}
+        onOk={() => void confirmDelete()}
+        open={Boolean(deleteTarget)}
+        title={t(
+          'workflowActivityVNext.workflows.deleteTitle',
+          'Delete editable draft?',
+        )}
+      >
+        <p>
+          {t(
+            'workflowActivityVNext.workflows.deleteDescription',
+            'This deletes only the editable draft. Published versions and run history remain available.',
+          )}
+        </p>
+        {deleteError ? (
+          <Alert
+            description={<TechnicalDetails>{deleteError}</TechnicalDetails>}
+            message={
+              deleteSucceeded
+                ? t(
+                    'workflowActivityVNext.workflows.deleteRefreshFailed',
+                    "Draft was deleted, but workflows couldn't refresh",
+                  )
+                : t(
+                    'workflowActivityVNext.workflows.deleteFailed',
+                    "Draft couldn't be deleted",
+                  )
+            }
+            showIcon
+            type="error"
+          />
+        ) : null}
+      </Modal>
     </WorkflowActivityVNextShell>
   );
 };

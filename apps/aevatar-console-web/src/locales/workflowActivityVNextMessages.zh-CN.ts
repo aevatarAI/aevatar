@@ -221,6 +221,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.settings.delayed': '更改显示所需时间比预期更长',
     'workflowActivityVNext.settings.description': '个人默认设置与访问权限。',
     'workflowActivityVNext.settings.discard': '放弃更改',
+    'workflowActivityVNext.settings.discardLeave': '放弃并离开',
     'workflowActivityVNext.settings.email': '邮箱',
     'workflowActivityVNext.settings.expires': '过期时间',
     'workflowActivityVNext.settings.failed': '无法保存更改',
@@ -242,13 +243,22 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.settings.runtimeUnavailable': '连接信息不可用',
     'workflowActivityVNext.settings.retryGuidance': '请重试加载此部分。',
     'workflowActivityVNext.settings.save': '保存更改',
+    'workflowActivityVNext.settings.saveLeave': '保存并离开',
+    'workflowActivityVNext.settings.savedModelUnavailable':
+      '已保存的模型当前不可用，保存的值不会被更改。',
     'workflowActivityVNext.settings.saving': '正在保存更改…',
     'workflowActivityVNext.settings.sectionsAria': '设置分类',
+    'workflowActivityVNext.settings.serviceDefaultModel': '使用服务默认模型。',
+    'workflowActivityVNext.settings.stay': '留在此页',
     'workflowActivityVNext.settings.systemDefault': '系统默认值',
     'workflowActivityVNext.settings.title': '设置',
     'workflowActivityVNext.settings.unsaved': '未保存的更改',
     'workflowActivityVNext.settings.unsavedDescription':
       'AI 默认设置尚未保存。',
+    'workflowActivityVNext.settings.unsavedLeaveDescription':
+      '保存更改、放弃更改，或留在设置页面。',
+    'workflowActivityVNext.settings.unsavedLeaveTitle':
+      'AI 默认设置有未保存的更改',
     'workflowActivityVNext.state.forbidden': '你无权访问此工作区',
     'workflowActivityVNext.state.unauthorized': '请登录后继续',
     'workflowActivityVNext.unavailable.body': '请检查地址或返回其他页面。',
@@ -265,15 +275,25 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.workflows.draftsUnavailableDescription':
       '请重试加载草稿工作流。',
     'workflowActivityVNext.workflows.draftsView': '草稿',
+    'workflowActivityVNext.workflows.deleteDescription':
+      '此操作只删除可编辑草稿，已发布版本和运行历史会继续保留。',
+    'workflowActivityVNext.workflows.deleteDraft': '删除草稿',
+    'workflowActivityVNext.workflows.deleteFailed': '无法删除草稿',
+    'workflowActivityVNext.workflows.deleteRefreshFailed':
+      '草稿已删除，但工作流列表刷新失败',
+    'workflowActivityVNext.workflows.deleteRetry': '重试',
+    'workflowActivityVNext.workflows.deleteTitle': '删除可编辑草稿？',
     'workflowActivityVNext.workflows.empty': '暂无工作流',
     'workflowActivityVNext.workflows.emptyDescription':
       '创建一个工作流即可开始。',
     'workflowActivityVNext.workflows.loading': '正在加载工作流…',
+    'workflowActivityVNext.workflows.moreActionsAria': '{name}的更多操作',
     'workflowActivityVNext.workflows.new': '新建工作流',
     'workflowActivityVNext.workflows.noMatch': '没有匹配的工作流',
     'workflowActivityVNext.workflows.noMatchDescription':
       '请尝试其他搜索或筛选条件。',
     'workflowActivityVNext.workflows.openAria': '打开 {name}',
+    'workflowActivityVNext.workflows.runAria': '运行 {name}',
     'workflowActivityVNext.workflows.refreshAria': '刷新工作流',
     'workflowActivityVNext.workflows.retryAria': '重试加载工作流',
     'workflowActivityVNext.workflows.runFromEditor':

@@ -231,6 +231,7 @@ const workflowActivityVNextMessages = {
     'Changes are taking longer to appear',
   'workflowActivityVNext.settings.description': 'Personal defaults and access.',
   'workflowActivityVNext.settings.discard': 'Discard changes',
+  'workflowActivityVNext.settings.discardLeave': 'Discard and leave',
   'workflowActivityVNext.settings.email': 'Email',
   'workflowActivityVNext.settings.expires': 'Expires',
   'workflowActivityVNext.settings.failed': "Changes couldn't be saved",
@@ -256,13 +257,23 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.settings.retryGuidance':
     'Try loading this section again.',
   'workflowActivityVNext.settings.save': 'Save changes',
+  'workflowActivityVNext.settings.saveLeave': 'Save and leave',
+  'workflowActivityVNext.settings.savedModelUnavailable':
+    'The saved model is unavailable. Your saved value remains unchanged.',
   'workflowActivityVNext.settings.saving': 'Saving changes…',
   'workflowActivityVNext.settings.sectionsAria': 'Settings sections',
+  'workflowActivityVNext.settings.serviceDefaultModel':
+    'Uses the service default model.',
+  'workflowActivityVNext.settings.stay': 'Stay',
   'workflowActivityVNext.settings.systemDefault': 'System default',
   'workflowActivityVNext.settings.title': 'Settings',
   'workflowActivityVNext.settings.unsaved': 'Unsaved changes',
   'workflowActivityVNext.settings.unsavedDescription':
     'Your AI defaults have not been saved.',
+  'workflowActivityVNext.settings.unsavedLeaveDescription':
+    'Save your changes, discard them, or stay in Settings.',
+  'workflowActivityVNext.settings.unsavedLeaveTitle':
+    'Unsaved AI default changes',
   'workflowActivityVNext.state.forbidden':
     "You don't have access to this workspace",
   'workflowActivityVNext.state.unauthorized': 'Sign in to continue',
@@ -283,15 +294,25 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.workflows.draftsUnavailableDescription':
     'Try again to load draft workflows.',
   'workflowActivityVNext.workflows.draftsView': 'Drafts',
+  'workflowActivityVNext.workflows.deleteDescription':
+    'This deletes only the editable draft. Published versions and run history remain available.',
+  'workflowActivityVNext.workflows.deleteDraft': 'Delete draft',
+  'workflowActivityVNext.workflows.deleteFailed': "Draft couldn't be deleted",
+  'workflowActivityVNext.workflows.deleteRefreshFailed':
+    "Draft was deleted, but workflows couldn't refresh",
+  'workflowActivityVNext.workflows.deleteRetry': 'Try again',
+  'workflowActivityVNext.workflows.deleteTitle': 'Delete editable draft?',
   'workflowActivityVNext.workflows.empty': 'No workflows yet',
   'workflowActivityVNext.workflows.emptyDescription':
     'Create a workflow to get started.',
   'workflowActivityVNext.workflows.loading': 'Loading workflows…',
+  'workflowActivityVNext.workflows.moreActionsAria': 'More actions for {name}',
   'workflowActivityVNext.workflows.new': 'New workflow',
   'workflowActivityVNext.workflows.noMatch': 'No matching workflows',
   'workflowActivityVNext.workflows.noMatchDescription':
     'Try a different search or filter.',
   'workflowActivityVNext.workflows.openAria': 'Open {name}',
+  'workflowActivityVNext.workflows.runAria': 'Run {name}',
   'workflowActivityVNext.workflows.refreshAria': 'Refresh workflows',
   'workflowActivityVNext.workflows.retryAria': 'Retry workflows',
   'workflowActivityVNext.workflows.runFromEditor':

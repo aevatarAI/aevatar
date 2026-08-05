@@ -1,7 +1,7 @@
 import { ReloadOutlined, SaveOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getLocale } from '@umijs/max';
-import { Alert, Button, Descriptions, Select, Space } from 'antd';
+import { Alert, Button, Descriptions, Modal, Select, Space } from 'antd';
 import React from 'react';
 import { observeUserLlmSave } from '@/pages/settings/userLlmSaveObservation';
 import {
@@ -125,6 +125,7 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   >(undefined);
   const [savePhase, setSavePhase] = React.useState<SavePhase>('idle');
   const [saveMessage, setSaveMessage] = React.useState('');
+  const [pendingNavigation, setPendingNavigation] = React.useState('');
   const saveTokenRef = React.useRef(0);
   const loadedRef = React.useRef(false);
 
@@ -143,7 +144,16 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   );
 
   const options = React.useMemo(
-    () => buildUserLlmSelectionOptions(llm.data?.routeOptions ?? []),
+    () =>
+      buildUserLlmSelectionOptions(
+        (llm.data?.routeOptions ?? []).filter(
+          (option) =>
+            option.source === 'gateway_provider' ||
+            (option.source === 'user_service' &&
+              option.modelCatalog.certainty === 'enumerated' &&
+              option.modelCatalog.modelIds.length > 0),
+        ),
+      ),
     [llm.data?.routeOptions],
   );
   const selectedOption = draft
@@ -155,6 +165,25 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       ? draft.modelSelection.modelId
       : 'provider-default';
   const dirty = !userLlmSelectionsEqual(draft, baseline);
+  const encodedBaseline = baseline ? encodeUserLlmSelectionValue(baseline) : '';
+  const savedSelectionUnavailable = Boolean(
+    baseline && !options.some((item) => item.value === encodedBaseline),
+  );
+  const unavailableSavedModel =
+    draft?.modelSelection.kind === 'explicit_model' &&
+    !modelIds.includes(draft.modelSelection.modelId)
+      ? draft.modelSelection.modelId
+      : '';
+
+  React.useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => {
+      if (!dirty) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
 
   const selectRoute = (value: string) => {
     if (!value) {
@@ -175,8 +204,9 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     } as UserLlmSelectionDraft);
   };
 
-  const save = async () => {
-    if (!dirty || savePhase === 'saving' || savePhase === 'accepted') return;
+  const save = async (): Promise<boolean> => {
+    if (!dirty || savePhase === 'saving' || savePhase === 'accepted')
+      return false;
     const submitted = draft ? cloneUserLlmSelection(draft) : undefined;
     const token = ++saveTokenRef.current;
     setSavePhase('saving');
@@ -226,6 +256,7 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       if (observation.phase === 'observed') {
         setBaseline(submitted ? cloneUserLlmSelection(submitted) : undefined);
         setSavePhase('observed');
+        return true;
       } else if (observation.phase === 'accepted_unobserved') {
         setSavePhase('delayed');
       }
@@ -235,6 +266,7 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         setSavePhase('failed');
       }
     }
+    return false;
   };
 
   const discard = () => {
@@ -244,9 +276,33 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     setSaveMessage('');
   };
 
-  const changeSection = (next: SettingsSection) => {
-    setSection(next);
-    history.replace(settingsSectionHref(location.pathname, next));
+  const finishNavigation = (target: string) => {
+    const targetUrl = new URL(target, 'http://console.local');
+    if (targetUrl.pathname === location.pathname) {
+      setSection(readSection(targetUrl.search));
+      history.replace(`${targetUrl.pathname}${targetUrl.search}`);
+      return;
+    }
+    history.push(target);
+  };
+
+  const requestNavigation = (target: string) => {
+    if (dirty) setPendingNavigation(target);
+    else finishNavigation(target);
+  };
+
+  const discardAndLeave = () => {
+    const target = pendingNavigation;
+    discard();
+    setPendingNavigation('');
+    if (target) finishNavigation(target);
+  };
+
+  const saveAndLeave = async () => {
+    if (!(await save())) return;
+    const target = pendingNavigation;
+    setPendingNavigation('');
+    if (target) finishNavigation(target);
   };
 
   const aiPanel = llm.isPending ? (
@@ -322,11 +378,23 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                 label: item.label,
                 value: item.value,
               })),
+              ...(savedSelectionUnavailable && baseline
+                ? [
+                    {
+                      disabled: true,
+                      label: `${llm.data?.savedRouteLabel || baseline.routeValue} (${t(
+                        'workflowActivityVNext.common.unavailable',
+                        'Unavailable',
+                      )})`,
+                      value: encodedBaseline,
+                    },
+                  ]
+                : []),
             ]}
             value={draft ? encodeUserLlmSelectionValue(draft) : ''}
           />
         </div>
-        {draft ? (
+        {draft && modelIds.length > 0 ? (
           <div className="wa-vnext__settings-field">
             <div className="wa-vnext__settings-field-copy">
               <strong>
@@ -364,9 +432,43 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                   label: modelId,
                   value: modelId,
                 })),
+                ...(unavailableSavedModel
+                  ? [
+                      {
+                        disabled: true,
+                        label: `${unavailableSavedModel} (${t(
+                          'workflowActivityVNext.common.unavailable',
+                          'Unavailable',
+                        )})`,
+                        value: unavailableSavedModel,
+                      },
+                    ]
+                  : []),
               ]}
               value={modelValue}
             />
+          </div>
+        ) : draft ? (
+          <div className="wa-vnext__settings-field">
+            <div className="wa-vnext__settings-field-copy">
+              <strong>
+                {t(
+                  'workflowActivityVNext.settings.defaultModel',
+                  'Default model',
+                )}
+              </strong>
+              <span>
+                {unavailableSavedModel
+                  ? t(
+                      'workflowActivityVNext.settings.savedModelUnavailable',
+                      'The saved model is unavailable. Your saved value remains unchanged.',
+                    )
+                  : t(
+                      'workflowActivityVNext.settings.serviceDefaultModel',
+                      'Uses the service default model.',
+                    )}
+              </span>
+            </div>
           </div>
         ) : null}
       </div>
@@ -630,6 +732,7 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       )}
       scopeId={scopeId}
       title={t('workflowActivityVNext.settings.title', 'Settings')}
+      onNavigate={requestNavigation}
     >
       <div className="wa-vnext__settings-layout">
         <nav
@@ -655,7 +758,9 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                 )
                   return;
                 event.preventDefault();
-                changeSection(item.key);
+                requestNavigation(
+                  settingsSectionHref(location.pathname, item.key),
+                );
               }}
             >
               {item.label}
@@ -673,6 +778,45 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           {active.panel}
         </section>
       </div>
+      <Modal
+        aria-label={t(
+          'workflowActivityVNext.settings.unsavedLeaveTitle',
+          'Unsaved AI default changes',
+        )}
+        footer={[
+          <Button key="stay" onClick={() => setPendingNavigation('')}>
+            {t('workflowActivityVNext.settings.stay', 'Stay')}
+          </Button>,
+          <Button key="discard" onClick={discardAndLeave}>
+            {t(
+              'workflowActivityVNext.settings.discardLeave',
+              'Discard and leave',
+            )}
+          </Button>,
+          <Button
+            disabled={!llm.data?.capabilities.canSave}
+            key="save"
+            loading={savePhase === 'saving' || savePhase === 'accepted'}
+            onClick={() => void saveAndLeave()}
+            type="primary"
+          >
+            {t('workflowActivityVNext.settings.saveLeave', 'Save and leave')}
+          </Button>,
+        ]}
+        onCancel={() => setPendingNavigation('')}
+        open={Boolean(pendingNavigation)}
+        title={t(
+          'workflowActivityVNext.settings.unsavedLeaveTitle',
+          'Unsaved AI default changes',
+        )}
+      >
+        <p>
+          {t(
+            'workflowActivityVNext.settings.unsavedLeaveDescription',
+            'Save your changes, discard them, or stay in Settings.',
+          )}
+        </p>
+      </Modal>
     </WorkflowActivityVNextShell>
   );
 };

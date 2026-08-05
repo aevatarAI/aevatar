@@ -14,6 +14,7 @@ import WorkflowStudioNodeDetailPanel from '@/pages/team-member-workflow-studio/c
 import WorkflowStudioNodeLibrary from '@/pages/team-member-workflow-studio/components/WorkflowStudioNodeLibrary';
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
+import { useConsoleLocation } from '../hooks/useConsoleLocation';
 import { useWorkflowEditor } from '../hooks/useWorkflowEditor';
 import { buildWorkflowActivitySectionHref } from '../navigation';
 import TechnicalDetails from '../TechnicalDetails';
@@ -27,11 +28,17 @@ const WorkflowEditorPage: React.FC<{
   readonly scopeId: string;
   readonly workflowId: string;
 }> = ({ scopeId, workflowId }) => {
+  const location = useConsoleLocation();
   const editor = useWorkflowEditor(scopeId, workflowId);
   const [mode, setMode] = React.useState<'canvas' | 'yaml'>('canvas');
   const [nodeLibraryOpen, setNodeLibraryOpen] = React.useState(false);
   const [runPanelOpen, setRunPanelOpen] = React.useState(false);
   const [pendingNavigation, setPendingNavigation] = React.useState('');
+  const runRequested = new URLSearchParams(location.search).get('run') === '1';
+
+  React.useEffect(() => {
+    if (runRequested && editor.canRun) setRunPanelOpen(true);
+  }, [editor.canRun, runRequested]);
 
   const requestNavigation = React.useCallback(
     (target: string) => {
