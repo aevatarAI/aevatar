@@ -211,6 +211,13 @@ Queries read only the current-state document provider:
   for status, requester, Team, member, published service, workflow, Run, and
   creation time window.
 
+`WorkOrderCurrentStateResponse.availableActions` is a typed copy of
+Actor-owned current-state semantics. It contains `canReassign`, `canDispatch`,
+and `canCancel`. Projection and frontend code do not derive these capabilities
+from `lifecycleStatus`. Requester authorization remains a separate exact
+principal check, and command handling with `expectedLifecycleVersion` remains
+the final authority.
+
 Mutation endpoints use `:reassign`, `:dispatch`, and `:cancel` suffixes. There
 are no WorkOrder `:approve` or `:deny` endpoints. All mutation responses remain
 accepted-only receipts; callers observe committed lifecycle changes through the
@@ -226,6 +233,29 @@ shape. `artifact_kind="content-artifact"` identifies the resource family,
 the optional `uri` may use the same-Scope revision metadata path. WorkOrder does
 not copy the ContentArtifact hash, content, provenance, citations, or lifecycle
 into its own authority. See [Content Artifacts](content-artifacts.md).
+
+## Console Context
+
+The first Console mount point is the `Requests` tab in Team Detail. Its query is
+always Scope- and Team-scoped, and the tab is not represented in global
+navigation. A WorkOrder has a direct contextual detail route:
+
+`/scopes/{scopeId}/teams/{teamId}/work-orders/{workOrderId}`
+
+WorkOrder Detail displays request intent, requester, assignment, WorkOrder
+lifecycle, authoritative versions, and the Actor-owned available actions. It
+does not reproduce Run progress, approval, attention, retry, failure diagnosis,
+usage, output, or timeline. When `runId` and its typed Run link fields exist,
+`Open Run` navigates to canonical Run diagnostics with those exact fields.
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+    T["Team Detail"] --> L["Scoped Requests"]
+    L --> D["WorkOrder Detail"]
+    D -->|"typed availableActions + expectedLifecycleVersion"| W["WorkOrder command path"]
+    D -->|"typed Run reference"| R["Run Detail"]
+```
 
 ## Non-Goals
 

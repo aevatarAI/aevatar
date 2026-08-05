@@ -76,6 +76,12 @@ message WorkOrderRunOutcomeReference {
   google.protobuf.Timestamp terminal_at_utc = 7;
 }
 
+message WorkOrderAvailableActions {
+  bool can_reassign = 1;
+  bool can_dispatch = 2;
+  bool can_cancel = 3;
+}
+
 message WorkOrderState {
   string work_order_id = 1;
   string dedup_key = 2;
@@ -108,6 +114,7 @@ message WorkOrderState {
   int32 execution_retry_attempt = 30;
   string execution_retry_callback_id = 31;
   google.protobuf.Timestamp execution_retry_at_utc = 32;
+  WorkOrderAvailableActions available_actions = 33;
 }
 
 message CreateWorkOrder {
