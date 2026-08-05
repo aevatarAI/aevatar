@@ -771,7 +771,21 @@ describe('Workflow Activity vNext settings', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
   });
 
-  it('discards dirty AI defaults back to the last authoritative selection', async () => {
+  it('explains service and model inheritance for System default', async () => {
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    await screen.findByRole('combobox', { name: 'Preferred service' });
+    expect(screen.getAllByText('System default').length).toBeGreaterThan(0);
+    expect(screen.getByText('Default model')).toBeInTheDocument();
+    expect(
+      screen.getByText('Uses the system-selected service and model.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('combobox', { name: 'Default model' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('keeps connected services selectable without an enumerated model catalogue', async () => {
     mockStudioApi.getUserLlmSettings.mockResolvedValue({
       savedSelection: {
         routeKind: 'gateway',
@@ -857,13 +871,18 @@ describe('Workflow Activity vNext settings', () => {
       screen.getByText('Uses the service default model.'),
     ).toBeInTheDocument();
     fireEvent.mouseDown(routeSelect);
-    expect(screen.queryByText('Storage alpha')).not.toBeInTheDocument();
-    fireEvent.click(await screen.findByText('Service alpha'));
+    expect(await screen.findByText('Service alpha')).toBeInTheDocument();
+    fireEvent.click(await screen.findByText('Storage alpha'));
     expect(
-      screen.getByRole('combobox', { name: 'Default model' }),
+      screen.queryByRole('combobox', { name: 'Default model' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText('Uses the service default model.'),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Restore saved settings' }),
+    );
     expect(
       screen.queryByRole('button', { name: 'Save changes' }),
     ).not.toBeInTheDocument();

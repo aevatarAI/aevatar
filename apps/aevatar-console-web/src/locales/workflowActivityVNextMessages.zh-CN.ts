@@ -221,7 +221,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '留空时使用服务默认模型。',
     'workflowActivityVNext.settings.delayed': '更改显示所需时间比预期更长',
     'workflowActivityVNext.settings.description': '个人默认设置与访问权限。',
-    'workflowActivityVNext.settings.discard': '放弃更改',
+    'workflowActivityVNext.settings.discard': '恢复已保存设置',
     'workflowActivityVNext.settings.discardLeave': '放弃并离开',
     'workflowActivityVNext.settings.email': '邮箱',
     'workflowActivityVNext.settings.expires': '过期时间',
@@ -252,6 +252,8 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.settings.serviceDefaultModel': '使用服务默认模型。',
     'workflowActivityVNext.settings.stay': '留在此页',
     'workflowActivityVNext.settings.systemDefault': '系统默认值',
+    'workflowActivityVNext.settings.systemDefaultModel':
+      '使用系统选择的服务和模型。',
     'workflowActivityVNext.settings.title': '设置',
     'workflowActivityVNext.settings.unsaved': '未保存的更改',
     'workflowActivityVNext.settings.unsavedDescription':

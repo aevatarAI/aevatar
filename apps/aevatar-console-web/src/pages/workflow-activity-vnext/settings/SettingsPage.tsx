@@ -144,16 +144,7 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   );
 
   const options = React.useMemo(
-    () =>
-      buildUserLlmSelectionOptions(
-        (llm.data?.routeOptions ?? []).filter(
-          (option) =>
-            option.source === 'gateway_provider' ||
-            (option.source === 'user_service' &&
-              option.modelCatalog.certainty === 'enumerated' &&
-              option.modelCatalog.modelIds.length > 0),
-        ),
-      ),
+    () => buildUserLlmSelectionOptions(llm.data?.routeOptions ?? []),
     [llm.data?.routeOptions],
   );
   const selectedOption = draft
@@ -448,7 +439,7 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
               value={modelValue}
             />
           </div>
-        ) : draft ? (
+        ) : (
           <div className="wa-vnext__settings-field">
             <div className="wa-vnext__settings-field-copy">
               <strong>
@@ -458,19 +449,24 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                 )}
               </strong>
               <span>
-                {unavailableSavedModel
+                {!draft
                   ? t(
-                      'workflowActivityVNext.settings.savedModelUnavailable',
-                      'The saved model is unavailable. Your saved value remains unchanged.',
+                      'workflowActivityVNext.settings.systemDefaultModel',
+                      'Uses the system-selected service and model.',
                     )
-                  : t(
-                      'workflowActivityVNext.settings.serviceDefaultModel',
-                      'Uses the service default model.',
-                    )}
+                  : unavailableSavedModel
+                    ? t(
+                        'workflowActivityVNext.settings.savedModelUnavailable',
+                        'The saved model is unavailable. Your saved value remains unchanged.',
+                      )
+                    : t(
+                        'workflowActivityVNext.settings.serviceDefaultModel',
+                        'Uses the service default model.',
+                      )}
               </span>
             </div>
           </div>
-        ) : null}
+        )}
       </div>
       {dirty ? (
         <div className="wa-vnext__settings-savebar" role="status">
@@ -490,7 +486,10 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
               disabled={savePhase === 'saving' || savePhase === 'accepted'}
               onClick={discard}
             >
-              {t('workflowActivityVNext.settings.discard', 'Discard changes')}
+              {t(
+                'workflowActivityVNext.settings.discard',
+                'Restore saved settings',
+              )}
             </Button>
             <Button
               disabled={

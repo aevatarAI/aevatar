@@ -231,7 +231,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.settings.delayed':
     'Changes are taking longer to appear',
   'workflowActivityVNext.settings.description': 'Personal defaults and access.',
-  'workflowActivityVNext.settings.discard': 'Discard changes',
+  'workflowActivityVNext.settings.discard': 'Restore saved settings',
   'workflowActivityVNext.settings.discardLeave': 'Discard and leave',
   'workflowActivityVNext.settings.email': 'Email',
   'workflowActivityVNext.settings.expires': 'Expires',
@@ -267,6 +267,8 @@ const workflowActivityVNextMessages = {
     'Uses the service default model.',
   'workflowActivityVNext.settings.stay': 'Stay',
   'workflowActivityVNext.settings.systemDefault': 'System default',
+  'workflowActivityVNext.settings.systemDefaultModel':
+    'Uses the system-selected service and model.',
   'workflowActivityVNext.settings.title': 'Settings',
   'workflowActivityVNext.settings.unsaved': 'Unsaved changes',
   'workflowActivityVNext.settings.unsavedDescription':
