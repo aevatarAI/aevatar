@@ -144,11 +144,13 @@ public sealed class AevatarInvocationToolSourceTests
         tool.Name.Should().Be("aevatar_read_workflow_run_artifact");
         tool.IsReadOnly.Should().BeTrue();
         tool.Description.Should().Contain("aevatar_start_workflow");
+        tool.Description.Should().Contain("always pass both");
         tool.Description.Should().Contain("pending");
         doc.RootElement.GetProperty("type").GetString().Should().Be("object");
         doc.RootElement.GetProperty("additionalProperties").GetBoolean().Should().BeFalse();
         doc.RootElement.GetProperty("required")[0].GetString().Should().Be("workflow_run_id");
         doc.RootElement.GetProperty("properties").TryGetProperty("workflow_run_id", out _).Should().BeTrue();
+        doc.RootElement.GetProperty("properties").TryGetProperty("actor_id", out _).Should().BeTrue();
         doc.RootElement.GetProperty("properties").TryGetProperty("wait_ms", out _).Should().BeTrue();
     }
 
@@ -3986,6 +3988,34 @@ public sealed class AevatarInvocationToolSourceTests
         result.GetProperty("workflow_run_id").GetString().Should().Be("run-1");
         result.GetProperty("artifact_actor_id").GetString().Should().Be("workflow-run-actor");
         result.GetProperty("root_actor_id").GetString().Should().Be("workflow-run-actor");
+    }
+
+    [Fact]
+    public async Task ReadWorkflowRunArtifact_ShouldUseExplicitActorIdWithoutBindingLookup()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.ReportsByWorkflowRunId["workflow-run-actor"] = new WorkflowRunReport
+        {
+            RootActorId = "workflow-run-actor",
+            CommandId = "run-1",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            StateVersion = 11,
+            Success = true,
+            FinalOutput = "Completed through explicit actor identity.",
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_read_workflow_run_artifact");
+
+        var output = await tool.ExecuteAsync(
+            """{"workflow_run_id":"run-1","actor_id":"workflow-run-actor"}""");
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.RunBindingReader.ListByRunIdCalls.Should().BeEmpty();
+        harness.WorkflowQuery.ReportCalls.Should().Equal("run-1", "workflow-run-actor");
+        var result = Read(output);
+        result.GetProperty("workflow_run_id").GetString().Should().Be("run-1");
+        result.GetProperty("artifact_actor_id").GetString().Should().Be("workflow-run-actor");
+        result.GetProperty("status").GetString().Should().Be(nameof(WorkflowRunCompletionStatus.Completed));
+        result.GetProperty("final_output").GetString().Should().Be("Completed through explicit actor identity.");
     }
 
     [Fact]
