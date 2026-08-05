@@ -489,10 +489,11 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         if (service is null)
         {
             // A source catalog and the execution delegation can expose different visibility
-            // windows for the same exact UserService. Read-only proofs may let NyxID's exact
-            // route make the final live authority decision; writes remain fail-closed here.
-            if (!catalog.AccessDenied &&
-                !catalog.SourceUnavailable &&
+            // windows for the same exact UserService. A proxy-only delegation is also expected
+            // to be denied access to NyxID's management catalog. Read-only proofs may let
+            // NyxID's exact route make the final live authority decision; writes and actual
+            // catalog outages remain fail-closed here.
+            if (!catalog.SourceUnavailable &&
                 CanUseExactReadOnlyAuthority(admission))
                 return null;
 
