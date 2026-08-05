@@ -12,6 +12,12 @@ public sealed record AgentToolTerminalOutcome(
     string ResultJson,
     AgentToolReceipt? Receipt = null);
 
+public enum AgentToolTurnReusePolicy
+{
+    Reusable = 0,
+    RetireAfterSuccess = 1,
+}
+
 public enum AgentToolOperationReconciliationDisposition
 {
     Completed = 1,
@@ -68,6 +74,12 @@ public interface IAgentTool
 
     /// <summary>Stable side-effect kind for receipt-worthy tool calls; empty means no declared side effect.</summary>
     string SideEffectKind => "";
+
+    /// <summary>
+    /// Controls whether a successful execution remains available to later model rounds in the same chat turn.
+    /// A new user turn always starts from the original authorized tool catalog.
+    /// </summary>
+    AgentToolTurnReusePolicy TurnReusePolicy => AgentToolTurnReusePolicy.Reusable;
 
     /// <summary>Legacy provider-owned typed success receipt; null leaves the outcome unverified.</summary>
     AgentToolReceipt? CreateSuccessReceipt(string callId, string toolName, string resultJson) => null;

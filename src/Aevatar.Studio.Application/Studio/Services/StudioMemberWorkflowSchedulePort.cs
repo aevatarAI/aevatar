@@ -235,13 +235,34 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         StudioMemberWorkflowScheduleRequest request,
         string confirmedPermissionDigest,
         CancellationToken ct = default) =>
-        ApplyAsync(request, confirmedPermissionDigest, TeamAutomationOperationKind.Create, ct);
+        ApplyAsync(
+            request,
+            confirmedPermissionDigest,
+            TeamAutomationOperationKind.Create,
+            preserveExistingRevision: false,
+            ct);
 
     public Task<StudioMemberWorkflowScheduleResult> ReauthorizeAsync(
         StudioMemberWorkflowScheduleRequest request,
         string confirmedPermissionDigest,
         CancellationToken ct = default) =>
-        ApplyAsync(request, confirmedPermissionDigest, TeamAutomationOperationKind.Reauthorize, ct);
+        ApplyAsync(
+            request,
+            confirmedPermissionDigest,
+            TeamAutomationOperationKind.Reauthorize,
+            preserveExistingRevision: true,
+            ct);
+
+    public Task<StudioMemberWorkflowScheduleResult> ReplaceAsync(
+        StudioMemberWorkflowScheduleRequest request,
+        string confirmedPermissionDigest,
+        CancellationToken ct = default) =>
+        ApplyAsync(
+            request,
+            confirmedPermissionDigest,
+            TeamAutomationOperationKind.Reauthorize,
+            preserveExistingRevision: false,
+            ct);
 
     public async Task<StudioMemberAutomationListResponse> ListAsync(
         string scopeId,
@@ -324,6 +345,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             TeamId = resolved.TeamId,
         };
         var current = await ResolveAuthorizationRequestAsync(authorizationRequest, ct, expiresAt);
+        current = RebindToExistingScheduleTarget(current, existing.Schedule);
         var confirmation = BuildConfirmation(
             current.AuthorizationRequest,
             existing.Schedule.PermissionDigest,
@@ -357,7 +379,8 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 command.DisplayName,
                 resolved.ScopeId,
                 resolved.MemberId,
-                resolved.PublishedServiceId,
+                current.PublishedServiceId,
+                current.TargetRevisionId,
                 NormalizeOptional(command.Prompt) ?? string.Empty,
                 auth: null,
                 authorizationFact: ToScheduleAuthorizationFact(validated.ValidatedPlan!.Plan),
@@ -485,11 +508,30 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         StudioMemberWorkflowScheduleRequest request,
         string confirmedPermissionDigest,
         TeamAutomationOperationKind operationKind,
+        bool preserveExistingRevision,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
         var callerAuthority = BuildScheduleCallerAuthority(request.AuthenticatedOwner);
         var resolved = await ResolveAuthorizationRequestAsync(request, ct);
+        ScheduledDispatchDetail? existingAutomation = null;
+        if (operationKind == TeamAutomationOperationKind.Reauthorize)
+        {
+            var existingScheduleId = NormalizeOptional(request.ScheduleId)
+                ?? throw new StudioMemberAutomationNotFoundException();
+            var existingOwner = new TeamMemberAutomationOwner(
+                resolved.ScopeId,
+                resolved.MemberId,
+                resolved.TeamId);
+            existingAutomation = await _scheduleService.GetTeamAutomationAsync(
+                existingScheduleId,
+                existingOwner,
+                ct) ?? throw new ScheduledDispatchNotFoundException(existingScheduleId);
+            EnsureExistingCredentialOwnerMatches(request.AuthenticatedOwner, existingAutomation.Schedule);
+            resolved = preserveExistingRevision
+                ? RebindToExistingScheduleTarget(resolved, existingAutomation.Schedule)
+                : ValidateExistingScheduleTarget(resolved, existingAutomation.Schedule);
+        }
         var confirmation = BuildConfirmation(
             resolved.AuthorizationRequest,
             NormalizeRequired(confirmedPermissionDigest, nameof(confirmedPermissionDigest)),
@@ -531,6 +573,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         var memberId = resolved.MemberId;
         var timing = ResolveScheduleTiming(request);
         var publishedServiceId = resolved.PublishedServiceId;
+        var targetRevisionId = resolved.TargetRevisionId;
         var teamOwner = new TeamMemberAutomationOwner(scopeId, memberId, resolved.TeamId);
         var operationId = NormalizeRequired(request.OperationId, nameof(request.OperationId));
         var idempotencyKey = NormalizeRequired(request.IdempotencyKey, nameof(request.IdempotencyKey));
@@ -553,6 +596,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             resolved.TeamId,
             memberId,
             publishedServiceId,
+            targetRevisionId,
             chatPayload,
             callerAuthority,
             authorizationFact,
@@ -564,11 +608,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         var mutationDigest = BuildTeamAutomationMutationDigest(activationDecision);
         var ownerScope = BuildOwnerScope(request);
         var bearerToken = await ResolveProvisioningBearerTokenAsync(request, ct);
-        var existingAutomation = await _scheduleService.GetTeamAutomationAsync(scheduleId, teamOwner, ct);
+        existingAutomation ??= await _scheduleService.GetTeamAutomationAsync(scheduleId, teamOwner, ct);
         if (operationKind == TeamAutomationOperationKind.Reauthorize && existingAutomation == null)
             throw new ScheduledDispatchNotFoundException(scheduleId);
-        if (operationKind == TeamAutomationOperationKind.Reauthorize)
-            EnsureExistingCredentialOwnerMatches(request.AuthenticatedOwner, existingAutomation!.Schedule);
         var requestedEffectLocator = _credentialMaterializer.CreateEffectLocator(
             scheduleId,
             operationId,
@@ -709,6 +751,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 scopeId,
                 memberId,
                 publishedServiceId,
+                targetRevisionId,
                 prompt,
                 BuildScheduleAuth(credential, callerAuthority),
                 CloneScheduleAuthorizationFact(activationDecision.AuthorizationFact),
@@ -1034,17 +1077,21 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         }
         catch (StudioMemberNotFoundException)
         {
-            return ResolveAcceptedBindingAuthorizationRequest(
-                request,
-                scopeId,
-                memberId,
-                credentialExpiresAtUtc)
-                ?? throw new StudioMemberAutomationNotFoundException();
+            throw new StudioMemberAutomationNotFoundException();
+        }
+        var resolvedMemberScopeId = NormalizeRequired(member.Summary.ScopeId, nameof(member.Summary.ScopeId));
+        var resolvedMemberId = NormalizeRequired(member.Summary.MemberId, nameof(member.Summary.MemberId));
+        if (!string.Equals(resolvedMemberScopeId, scopeId, StringComparison.Ordinal) ||
+            !string.Equals(resolvedMemberId, memberId, StringComparison.Ordinal))
+        {
+            throw new StudioMemberAutomationNotFoundException();
         }
         if (!string.Equals(member.Summary.ImplementationKind, MemberImplementationKindNames.Workflow, StringComparison.Ordinal))
             throw new InvalidOperationException($"member_id '{memberId}' is not a workflow member and cannot be scheduled as a workflow.");
 
-        var publishedServiceId = NormalizeRequired(member.Summary.PublishedServiceId, nameof(member.Summary.PublishedServiceId));
+        var memberPublishedServiceId = NormalizeRequired(
+            member.Summary.PublishedServiceId,
+            nameof(member.Summary.PublishedServiceId));
         var teamId = NormalizeRequired(member.Summary.TeamId, nameof(member.Summary.TeamId));
         if (!string.IsNullOrWhiteSpace(request.TeamId) &&
             !string.Equals(teamId, request.TeamId.Trim(), StringComparison.Ordinal))
@@ -1052,19 +1099,36 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             throw new StudioMemberAutomationNotFoundException();
         }
 
-        if (request.AcceptedBinding is not null)
+        if (request.AcceptedBinding is { } acceptedBinding)
         {
-            return ResolveAcceptedBindingAuthorizationRequest(
+            var acceptedTarget = ResolveAcceptedWorkflowTarget(
+                acceptedBinding,
+                teamId,
+                memberPublishedServiceId);
+            return BuildResolvedAuthorizationRequest(
                 request,
                 scopeId,
-                memberId,
-                credentialExpiresAtUtc,
                 teamId,
-                publishedServiceId)!;
+                memberId,
+                memberPublishedServiceId,
+                acceptedTarget.WorkflowId,
+                acceptedTarget.WorkflowRevisionId,
+                credentialExpiresAtUtc);
         }
 
-        EnsureWorkflowBindingCanBeScheduled(member, memberId, publishedServiceId);
-        var workflowRevision = member.LastBinding?.RevisionId ?? member.Summary.LastBoundRevisionId ?? string.Empty;
+        EnsureWorkflowBindingCanBeScheduled(member, memberId, memberPublishedServiceId);
+
+        var endpointContract = await ResolveServingEndpointContractAsync(
+            scopeId,
+            memberId,
+            memberPublishedServiceId,
+            ct);
+        var publishedServiceId = NormalizeRequired(
+            endpointContract.PublishedServiceId,
+            nameof(endpointContract.PublishedServiceId));
+        var workflowRevision = NormalizeRequired(
+            endpointContract.RevisionId,
+            nameof(endpointContract.RevisionId));
         var workflowId = NormalizeRequired(member.ImplementationRef?.WorkflowId, "workflowId");
         return BuildResolvedAuthorizationRequest(
             request,
@@ -1077,47 +1141,70 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             credentialExpiresAtUtc);
     }
 
-    private ResolvedStudioAuthorizationRequest? ResolveAcceptedBindingAuthorizationRequest(
-        StudioMemberWorkflowScheduleRequest request,
+    private async Task<StudioMemberEndpointContractResponse> ResolveServingEndpointContractAsync(
         string scopeId,
         string memberId,
-        DateTimeOffset? credentialExpiresAtUtc,
-        string? knownTeamId = null,
-        string? knownPublishedServiceId = null)
+        string expectedPublishedServiceId,
+        CancellationToken ct)
     {
-        if (request.AcceptedBinding is not { } acceptedBinding)
-            return null;
+        var contract = await _memberService.GetEndpointContractAsync(
+            scopeId,
+            memberId,
+            WorkflowInvokeEndpointId,
+            ct);
+        if (contract is null || !contract.InvocationReadiness.CanInvoke)
+        {
+            throw new StudioMemberAutomationPlanConflictException(
+                "serving_revision_not_ready",
+                contract?.InvocationReadiness.Message ??
+                "The published member service has no invoke-ready serving revision.");
+        }
 
-        var acceptedTeamId = NormalizeRequired(acceptedBinding.TeamId, nameof(acceptedBinding.TeamId));
-        if (!string.IsNullOrWhiteSpace(request.TeamId) &&
-            !string.Equals(acceptedTeamId, request.TeamId.Trim(), StringComparison.Ordinal))
+        var resolvedScopeId = NormalizeRequired(contract.ScopeId, nameof(contract.ScopeId));
+        var resolvedMemberId = NormalizeRequired(contract.MemberId, nameof(contract.MemberId));
+        var resolvedPublishedServiceId = NormalizeRequired(
+            contract.PublishedServiceId,
+            nameof(contract.PublishedServiceId));
+        var resolvedEndpointId = NormalizeRequired(contract.EndpointId, nameof(contract.EndpointId));
+        var resolvedRevisionId = NormalizeRequired(contract.RevisionId, nameof(contract.RevisionId));
+        var readinessRevisionId = NormalizeOptional(contract.InvocationReadiness.RevisionId);
+        if (!string.Equals(resolvedScopeId, scopeId, StringComparison.Ordinal) ||
+            !string.Equals(resolvedMemberId, memberId, StringComparison.Ordinal) ||
+            !string.Equals(resolvedPublishedServiceId, expectedPublishedServiceId, StringComparison.Ordinal) ||
+            !string.Equals(resolvedEndpointId, WorkflowInvokeEndpointId, StringComparison.Ordinal) ||
+            (readinessRevisionId is not null &&
+             !string.Equals(readinessRevisionId, resolvedRevisionId, StringComparison.Ordinal)))
         {
-            throw new StudioMemberAutomationNotFoundException();
+            throw new StudioMemberAutomationPlanConflictException(
+                "serving_target_changed",
+                "The member serving target changed while resolving the schedule invocation target.");
         }
-        if (knownTeamId is not null &&
-            !string.Equals(acceptedTeamId, knownTeamId, StringComparison.Ordinal))
-        {
+
+        return contract;
+    }
+
+    private static AcceptedWorkflowTarget ResolveAcceptedWorkflowTarget(
+        StudioMemberWorkflowAcceptedBindingContext acceptedBinding,
+        string resolvedTeamId,
+        string resolvedPublishedServiceId)
+    {
+        var acceptedTeamId = NormalizeRequired(
+            acceptedBinding.TeamId,
+            nameof(acceptedBinding.TeamId));
+        if (!string.Equals(acceptedTeamId, resolvedTeamId, StringComparison.Ordinal))
             throw new StudioMemberAutomationNotFoundException();
-        }
 
         var acceptedPublishedServiceId = NormalizeRequired(
             acceptedBinding.PublishedServiceId,
             nameof(acceptedBinding.PublishedServiceId));
-        if (knownPublishedServiceId is not null &&
-            !string.Equals(acceptedPublishedServiceId, knownPublishedServiceId, StringComparison.Ordinal))
-        {
+        if (!string.Equals(acceptedPublishedServiceId, resolvedPublishedServiceId, StringComparison.Ordinal))
             throw new StudioMemberAutomationNotFoundException();
-        }
 
-        return BuildResolvedAuthorizationRequest(
-            request,
-            scopeId,
-            acceptedTeamId,
-            memberId,
-            acceptedPublishedServiceId,
+        return new AcceptedWorkflowTarget(
             NormalizeRequired(acceptedBinding.WorkflowId, nameof(acceptedBinding.WorkflowId)),
-            NormalizeOptional(acceptedBinding.WorkflowRevisionId) ?? string.Empty,
-            credentialExpiresAtUtc);
+            NormalizeRequired(
+                acceptedBinding.WorkflowRevisionId,
+                nameof(acceptedBinding.WorkflowRevisionId)));
     }
 
     private ResolvedStudioAuthorizationRequest BuildResolvedAuthorizationRequest(
@@ -1148,67 +1235,68 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             teamId,
             memberId,
             publishedServiceId,
+            workflowRevision,
             new ScheduledInvocationAuthorizationRequest(
                 target,
                 request.AuthenticatedOwner,
                 [],
                 AuthorizationGrantRequirement.Required,
                 credentialExpiresAtUtc ?? _schedulePolicy.ResolveCredentialExpiresAtUtc(evaluatedAtUtc),
-                evaluatedAtUtc,
-                TrustedMemberEvidence: BuildTrustedMemberEvidence(
-                    request,
-                    publishedServiceId,
-                    workflowId,
-                    workflowRevision),
-                TrustedWorkflowEvidence: BuildTrustedWorkflowEvidence(
-                    request,
-                    publishedServiceId,
-                    workflowId,
-                    workflowRevision)));
+                evaluatedAtUtc));
     }
 
-    private static ScheduledInvocationMemberEvidence? BuildTrustedMemberEvidence(
-        StudioMemberWorkflowScheduleRequest request,
-        string publishedServiceId,
-        string workflowId,
-        string workflowRevision)
+    private static ResolvedStudioAuthorizationRequest RebindToExistingScheduleTarget(
+        ResolvedStudioAuthorizationRequest current,
+        ScheduledDispatchSummary schedule)
     {
-        if (request.AcceptedBinding is not { } acceptedBinding)
-            return null;
-
-        var acceptedPublishedServiceId = NormalizeRequired(
-            acceptedBinding.PublishedServiceId,
-            nameof(acceptedBinding.PublishedServiceId));
-        var acceptedWorkflowId = NormalizeRequired(
-            acceptedBinding.WorkflowId,
-            nameof(acceptedBinding.WorkflowId));
-        var acceptedWorkflowRevision = NormalizeRequired(
-            acceptedBinding.WorkflowRevisionId,
-            nameof(acceptedBinding.WorkflowRevisionId));
-        if (!string.Equals(acceptedPublishedServiceId, publishedServiceId, StringComparison.Ordinal) ||
-            !string.Equals(acceptedWorkflowId, workflowId, StringComparison.Ordinal) ||
-            !string.Equals(acceptedWorkflowRevision, workflowRevision, StringComparison.Ordinal))
+        current = ValidateExistingScheduleTarget(current, schedule);
+        var targetRevisionId = NormalizeOptional(schedule.ServiceRevisionId);
+        if (targetRevisionId is null)
         {
-            return null;
+            throw new StudioMemberAutomationPlanConflictException(
+                "schedule_target_revision_unavailable",
+                "The stored schedule does not expose the pinned service revision required for authorization.");
         }
 
-        return new ScheduledInvocationMemberEvidence(
-            StateVersion: 0,
-            DraftWorkflowId: acceptedWorkflowId,
-            WorkflowRevisionId: acceptedWorkflowRevision,
-            PublishedServiceId: acceptedPublishedServiceId);
+        var invocationTarget = current.AuthorizationRequest.InvocationTarget.Clone();
+        invocationTarget.StudioMember!.WorkflowRevisionId = targetRevisionId;
+        return current with
+        {
+            TargetRevisionId = targetRevisionId,
+            AuthorizationRequest = current.AuthorizationRequest with
+            {
+                InvocationTarget = invocationTarget,
+            },
+        };
     }
 
-    private static ScheduledInvocationWorkflowEvidence? BuildTrustedWorkflowEvidence(
-        StudioMemberWorkflowScheduleRequest request,
-        string publishedServiceId,
-        string workflowId,
-        string workflowRevision)
+    private static ResolvedStudioAuthorizationRequest ValidateExistingScheduleTarget(
+        ResolvedStudioAuthorizationRequest current,
+        ScheduledDispatchSummary schedule)
     {
-        if (BuildTrustedMemberEvidence(request, publishedServiceId, workflowId, workflowRevision) is null)
-            return null;
+        if (schedule.TargetKind != ScheduledDispatchTargetKind.ServiceInvocation ||
+            schedule.ScheduleKind != ScheduledDispatchScheduleKind.Workflow ||
+            !string.Equals(schedule.ServiceId, current.PublishedServiceId, StringComparison.Ordinal) ||
+            !string.Equals(schedule.ServiceEndpointId, WorkflowInvokeEndpointId, StringComparison.Ordinal))
+        {
+            throw new StudioMemberAutomationPlanConflictException(
+                "schedule_target_changed",
+                "The stored schedule target no longer matches the workflow member service identity.");
+        }
 
-        return request.AcceptedBinding?.WorkflowEvidence;
+        var studioMember = current.AuthorizationRequest.InvocationTarget.StudioMember;
+        if (studioMember == null ||
+            !string.Equals(studioMember.ScopeId, current.ScopeId, StringComparison.Ordinal) ||
+            !string.Equals(studioMember.TeamId, current.TeamId, StringComparison.Ordinal) ||
+            !string.Equals(studioMember.MemberId, current.MemberId, StringComparison.Ordinal) ||
+            !string.Equals(studioMember.PublishedServiceId, current.PublishedServiceId, StringComparison.Ordinal))
+        {
+            throw new StudioMemberAutomationPlanConflictException(
+                "schedule_target_changed",
+                "The workflow member identity changed while resolving the stored schedule target.");
+        }
+
+        return current;
     }
 
     private async Task<string> ResolveProvisioningBearerTokenAsync(
@@ -1318,6 +1406,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             OwnerLLMUserServiceId = schedule.OwnerLLMUserServiceId,
             OwnerLLMServiceSlug = schedule.OwnerLLMServiceSlug,
             OwnerLLMModel = schedule.OwnerLLMModel,
+            TargetRevisionId = schedule.ServiceRevisionId,
             NyxIdRevocationStatus = schedule.NyxIdRevocationStatus,
             VaultRevocationStatus = schedule.VaultRevocationStatus,
         };
@@ -1351,6 +1440,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             OwnerLLMUserServiceId = schedule.OwnerLLMUserServiceId,
             OwnerLLMServiceSlug = schedule.OwnerLLMServiceSlug,
             OwnerLLMModel = schedule.OwnerLLMModel,
+            TargetRevisionId = schedule.ServiceRevisionId,
             NyxIdRevocationStatus = schedule.NyxIdRevocationStatus,
             VaultRevocationStatus = schedule.VaultRevocationStatus,
         };
@@ -1384,6 +1474,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         string scopeId,
         string memberId,
         string publishedServiceId,
+        string targetRevisionId,
         string prompt,
         ScheduledServiceInvocationAuth auth,
         ScheduledInvocationAuthorizationFact authorizationFact,
@@ -1399,6 +1490,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 scopeId,
                 memberId,
                 publishedServiceId,
+                targetRevisionId,
                 prompt,
                 auth,
                 authorizationFact,
@@ -1480,6 +1572,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         string scopeId,
         string memberId,
         string publishedServiceId,
+        string targetRevisionId,
         string prompt,
         ScheduledServiceInvocationAuth? auth,
         ScheduledInvocationAuthorizationFact? authorizationFact,
@@ -1505,6 +1598,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                     },
                     EndpointId: WorkflowInvokeEndpointId,
                     Payload: payload?.Clone() ?? Any.Pack(BuildChatRequest(prompt, scopeId, authorizationFact)),
+                    RevisionId: NormalizeRequired(targetRevisionId, nameof(targetRevisionId)),
                     Auth: auth,
                     AuthorizationFact: authorizationFact)),
             CronExpression: cronExpression,
@@ -1816,6 +1910,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         string teamId,
         string memberId,
         string publishedServiceId,
+        string targetRevisionId,
         Any payload,
         ScheduledCallerNyxIdAuthority callerAuthority,
         ScheduledInvocationAuthorizationFact authorizationFact,
@@ -1847,7 +1942,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             scheduleMode,
             oneShotFireAt,
             ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
-            string.Empty,
+            NormalizeRequired(targetRevisionId, nameof(targetRevisionId)),
             null);
 
     private static ScheduledInvocationAuthorizationFact CloneScheduleAuthorizationFact(
@@ -2061,7 +2156,12 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         string TeamId,
         string MemberId,
         string PublishedServiceId,
+        string TargetRevisionId,
         ScheduledInvocationAuthorizationRequest AuthorizationRequest);
+
+    private sealed record AcceptedWorkflowTarget(
+        string WorkflowId,
+        string WorkflowRevisionId);
 
     private sealed record ResolvedTeamMember(
         string ScopeId,

@@ -21,7 +21,7 @@ public sealed class WorkflowExplicitRequestPreviewService(
         if (request.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified)
             throw new InvalidOperationException("External capability execution mode is required.");
         var workflowId = NormalizeRequired(request.WorkflowId, nameof(request.WorkflowId));
-        var revisionId = NormalizeRequired(request.RevisionId, nameof(request.RevisionId));
+        var revisionId = ResolveRevisionId(request.RevisionId);
 
         var invocations = await ParseInvocationsAsync(request, cancellationToken);
         var items = new List<WorkflowExplicitRequestPreviewItem>();
@@ -55,7 +55,7 @@ public sealed class WorkflowExplicitRequestPreviewService(
                 ExternalCapabilityExecutionMode.Interactive,
             };
             if (request.ExecutionMode == ExternalCapabilityExecutionMode.Durable &&
-                risk == NyxIdOperationRisk.ReadOnly)
+                policy?.AllowedExecutionModes.Contains(ExternalCapabilityExecutionMode.Durable) == true)
                 allowedExecutionModes.Add(ExternalCapabilityExecutionMode.Durable);
 
             items.Add(new WorkflowExplicitRequestPreviewItem(
@@ -154,6 +154,14 @@ public sealed class WorkflowExplicitRequestPreviewService(
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized)
             ? throw new InvalidOperationException($"{parameterName} is required.")
+            : normalized;
+    }
+
+    private static string ResolveRevisionId(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized)
+            ? $"rev-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}"
             : normalized;
     }
 }

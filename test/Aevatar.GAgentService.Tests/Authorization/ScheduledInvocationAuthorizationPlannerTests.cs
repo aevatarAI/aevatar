@@ -22,6 +22,12 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         ((int)ScheduledInvocationAuthorizationFailureCode.OwnerLlmRouteUnavailable).Should().Be(15);
         ((int)ScheduledInvocationAuthorizationFailureCode.OwnerLlmModelNotVerifiable).Should().Be(16);
         ((int)ScheduledInvocationAuthorizationFailureCode.OwnerLlmModelUnavailable).Should().Be(17);
+        ((int)ScheduledInvocationAuthorizationFailureCode.DurableAdmissionRequired).Should().Be(18);
+        ((int)ScheduledInvocationAuthorizationFailureCode.DurableRequestGrantMismatch).Should().Be(19);
+        ((int)ScheduledInvocationAuthorizationFailureCode.NyxIdOperationGrantRequired).Should().Be(20);
+        ((int)ScheduledInvocationAuthorizationFailureCode.NyxIdOperationApprovalRequired).Should().Be(21);
+        ((int)ScheduledInvocationAuthorizationFailureCode.NyxIdOperationDenied).Should().Be(22);
+        ((int)ScheduledInvocationAuthorizationFailureCode.NyxIdOperationAuthorityContractUnavailable).Should().Be(23);
     }
 
     [Fact]
@@ -1041,13 +1047,22 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     }
 
     [Fact]
-    public async Task PlanAsync_ForStudioTarget_ShouldGrantExactServiceFromExplicitRequest()
+    public void ScheduledInvocationAuthorizationRequest_ShouldNotExposeCallerTrustedStudioEvidence()
     {
-        var evidence = StudioWorkflowEvidence(
-            ExplicitRequestCapability("usvc-explicit-alpha", "untrusted-slug-alpha"));
+        typeof(ScheduledInvocationAuthorizationRequest)
+            .GetProperty("TrustedMemberEvidence")
+            .Should().BeNull();
+        typeof(ScheduledInvocationAuthorizationRequest)
+            .GetProperty("TrustedWorkflowEvidence")
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForStudioTarget_ShouldReadAuthoritativeReadModels()
+    {
+        var evidence = StudioWorkflowEvidence();
         var planner = new ScheduledInvocationAuthorizationPlanner(
-            new MutableCatalogQueryPort(Snapshot(
-                Service("usvc-explicit-alpha", "catalog-slug-alpha", AuthorizationGrantRequirement.NotRequired))),
+            new MutableCatalogQueryPort(Snapshot()),
             evidence,
             evidence,
             evidence,
@@ -1056,9 +1071,310 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         var result = await planner.PlanAsync(StudioRequest());
 
         result.Success.Should().BeTrue();
+        evidence.MemberQueries.Should().Be(1);
+        evidence.WorkflowQueries.Should().Be(1);
+        result.Plan!.SourceStamps.Select(static stamp => (stamp.SourceKind, stamp.SourceId, stamp.StateVersion))
+            .Should().Equal(
+                (AuthorizationSourceKind.StudioMember, "m-alpha", 3),
+                (AuthorizationSourceKind.WorkflowRevision, "rev-alpha", 5));
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForStudioTarget_WhenReadModelEvidenceMissing_ShouldFailClosed()
+    {
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            new MutableCatalogQueryPort(Snapshot()),
+            MissingEvidencePorts.Instance,
+            MissingEvidencePorts.Instance,
+            MissingEvidencePorts.Instance,
+            MissingEvidencePorts.Instance);
+
+        var result = await planner.PlanAsync(StudioRequest());
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound);
+        result.Detail.Should().Be("studio_member_evidence_not_found");
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForStudioTarget_ShouldGrantExactServiceFromExplicitRequest()
+    {
+        var evidence = StudioWorkflowEvidence(
+            ExplicitRequestCapability("usvc-explicit-alpha", "untrusted-slug-alpha"));
+        var operationAuthorization = OperationAuthorization(
+            NyxIdScheduledOperationAuthorizationDecision.AutoAllow);
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            new MutableCatalogQueryPort(Snapshot(
+                Service("usvc-explicit-alpha", "catalog-slug-alpha", AuthorizationGrantRequirement.NotRequired))),
+            evidence,
+            evidence,
+            evidence,
+            evidence,
+            operationAuthorization);
+
+        var result = await planner.PlanAsync(StudioRequest());
+
+        result.Success.Should().BeTrue();
         result.Plan!.NyxIdServiceGrants.Should().ContainSingle()
             .Which.UserServiceId.Should().Be("usvc-explicit-alpha");
         result.Plan.NyxIdServiceGrants[0].ServiceSlug.Should().Be("catalog-slug-alpha");
+        var operationRequest = operationAuthorization.Requests.Should().ContainSingle().Subject;
+        operationRequest.InvocationTarget.ScopeId.Should().Be("scope-alpha");
+        operationRequest.InvocationTarget.MemberId.Should().Be("m-alpha");
+        operationRequest.InvocationTarget.PublishedServiceId.Should().Be("svc-alpha");
+        operationRequest.InvocationTarget.DraftWorkflowId.Should().Be("wf-alpha");
+        operationRequest.InvocationTarget.WorkflowRevisionId.Should().Be("rev-alpha");
+        operationRequest.Owner.OwnerSubject.Should().Be("user-alpha");
+        operationRequest.AuthenticatedActor.OwnerSubject.Should().Be("user-alpha");
+        operationRequest.SubjectPlatform.Should().Be("lark");
+        operationRequest.SubjectTenant.Should().Be("tenant-alpha");
+        operationRequest.SubjectExternalUserId.Should().Be("sender-alpha");
+        operationRequest.VerifiedBindingId.Should().Be("binding-alpha");
+        operationRequest.Request.UserServiceId.Should().Be("usvc-explicit-alpha");
+        operationRequest.DurableRequestGrant.CallSiteId.Should().Be("wf-alpha/call-0");
+        operationRequest.DurableRequestGrant.Risk.Should().Be(NyxIdOperationRisk.ReadOnly);
+        operationRequest.EvaluatedAtUtc.Should().Be(Now);
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForExplicitRequestWithoutOperationAuthorityContract_ShouldFailClosedBeforeCatalog()
+    {
+        var evidence = StudioWorkflowEvidence(
+            ExplicitRequestCapability("usvc-explicit-alpha", "proof-slug-alpha"));
+        var catalog = new MutableCatalogQueryPort(Snapshot(
+            Service("usvc-explicit-alpha", "catalog-slug-alpha", AuthorizationGrantRequirement.NotRequired)));
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            catalog,
+            evidence,
+            evidence,
+            evidence,
+            evidence);
+
+        var result = await planner.PlanAsync(StudioRequest());
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.NyxIdOperationAuthorityContractUnavailable);
+        result.Detail.Should().Be("nyxid_operation_authority_contract_unavailable");
+        catalog.QueryCount.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(
+        NyxIdScheduledOperationAuthorizationDecision.ReusableGrantRequired,
+        ScheduledInvocationAuthorizationFailureCode.NyxIdOperationGrantRequired,
+        "nyxid_operation_grant_required")]
+    [InlineData(
+        NyxIdScheduledOperationAuthorizationDecision.PerRequestApprovalRequired,
+        ScheduledInvocationAuthorizationFailureCode.NyxIdOperationApprovalRequired,
+        "nyxid_operation_approval_required")]
+    [InlineData(
+        NyxIdScheduledOperationAuthorizationDecision.Denied,
+        ScheduledInvocationAuthorizationFailureCode.NyxIdOperationDenied,
+        "nyxid_operation_denied")]
+    public async Task PlanAsync_ForExplicitRequestBlockedByNyxIdPolicy_ShouldFailBeforeCatalog(
+        NyxIdScheduledOperationAuthorizationDecision decision,
+        ScheduledInvocationAuthorizationFailureCode expectedFailureCode,
+        string expectedDetail)
+    {
+        var evidence = StudioWorkflowEvidence(
+            ExplicitRequestCapability("usvc-explicit-alpha", "proof-slug-alpha"));
+        var catalog = new MutableCatalogQueryPort(Snapshot(
+            Service("usvc-explicit-alpha", "catalog-slug-alpha", AuthorizationGrantRequirement.NotRequired)));
+        var operationAuthorization = OperationAuthorization(decision);
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            catalog,
+            evidence,
+            evidence,
+            evidence,
+            evidence,
+            operationAuthorization);
+
+        var result = await planner.PlanAsync(StudioRequest());
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(expectedFailureCode);
+        result.Detail.Should().Be(expectedDetail);
+        catalog.QueryCount.Should().Be(0);
+        operationAuthorization.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForExplicitRequestWithoutGrantDigest_ShouldFailClosedBeforeCatalog()
+    {
+        var capability = ExplicitRequestCapability("usvc-explicit-alpha", "proof-slug-alpha");
+        var evidence = StudioWorkflowEvidence(capability);
+        capability.NyxIdUserRequest.ExplicitRequestGrantDigest = string.Empty;
+        var catalog = new MutableCatalogQueryPort(Snapshot(
+            Service("usvc-explicit-alpha", "catalog-slug-alpha", AuthorizationGrantRequirement.NotRequired)));
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            catalog,
+            evidence,
+            evidence,
+            evidence,
+            evidence);
+
+        var result = await planner.PlanAsync(StudioRequest());
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.DurableRequestGrantMismatch);
+        result.Detail.Should().Be("durable_request_grant_mismatch");
+        catalog.QueryCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForExplicitRequestWithoutDurableMode_ShouldFailClosedBeforeCatalog()
+    {
+        var capability = ExplicitRequestCapability("usvc-explicit-alpha", "proof-slug-alpha");
+        capability.NyxIdUserRequest.ExecutionPolicy.AllowedExecutionModes.Clear();
+        capability.NyxIdUserRequest.ExecutionPolicy.AllowedExecutionModes.Add(
+            ExternalCapabilityExecutionMode.Interactive);
+        capability.NyxIdUserRequest.ExplicitRequestGrantDigest =
+            WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdExplicitRequestGrantDigest(
+                ExplicitRequestGrant(
+                    capability,
+                    "wf-alpha/call-0",
+                    workflowId: "wf-alpha",
+                    revisionId: "rev-alpha"));
+        var evidence = StudioWorkflowEvidence(capability);
+        var catalog = new MutableCatalogQueryPort(Snapshot(
+            Service("usvc-explicit-alpha", "catalog-slug-alpha", AuthorizationGrantRequirement.NotRequired)));
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            catalog,
+            evidence,
+            evidence,
+            evidence,
+            evidence);
+
+        var result = await planner.PlanAsync(StudioRequest());
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.DurableAdmissionRequired);
+        result.Detail.Should().Be("durable_admission_required");
+        catalog.QueryCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForExplicitRequestWithRiskBelowMethodFloor_ShouldFailClosedBeforeCatalog()
+    {
+        var capability = ExplicitRequestCapability("usvc-explicit-alpha", "proof-slug-alpha");
+        capability.NyxIdUserRequest.Request.Method = NyxIdRequestMethod.Post;
+        capability.NyxIdUserRequest.ContractDigest =
+            WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdExplicitRequestProofDigest(
+                WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdRequestContractDigest(
+                    capability.NyxIdUserRequest.Request),
+                capability.NyxIdUserRequest.ServiceSlugSnapshot);
+        var evidence = StudioWorkflowEvidence(capability);
+        var catalog = new MutableCatalogQueryPort(Snapshot(
+            Service("usvc-explicit-alpha", "catalog-slug-alpha", AuthorizationGrantRequirement.NotRequired)));
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            catalog,
+            evidence,
+            evidence,
+            evidence,
+            evidence);
+
+        var result = await planner.PlanAsync(StudioRequest());
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.DurableRequestGrantMismatch);
+        result.Detail.Should().Be("durable_request_grant_mismatch");
+        catalog.QueryCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForExplicitRequestWithMismatchedProofDigest_ShouldFailClosedBeforeCatalog()
+    {
+        var capability = ExplicitRequestCapability("usvc-explicit-alpha", "proof-slug-alpha");
+        capability.NyxIdUserRequest.ContractDigest = "forged-proof-digest";
+        var evidence = StudioWorkflowEvidence(capability);
+        var catalog = new MutableCatalogQueryPort(Snapshot(
+            Service("usvc-explicit-alpha", "catalog-slug-alpha", AuthorizationGrantRequirement.NotRequired)));
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            catalog,
+            evidence,
+            evidence,
+            evidence,
+            evidence);
+
+        var result = await planner.PlanAsync(StudioRequest());
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.DurableRequestGrantMismatch);
+        result.Detail.Should().Be("durable_request_grant_mismatch");
+        catalog.QueryCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForExplicitRequestWithoutAdmissionPlan_ShouldFailClosedBeforeCatalog()
+    {
+        var capability = ExplicitRequestCapability("usvc-explicit-alpha", "proof-slug-alpha");
+        var originalEvidence = StudioWorkflowEvidence(capability);
+        var evidence = new StudioEvidencePorts
+        {
+            Member = originalEvidence.Member,
+            Workflow = originalEvidence.Workflow! with { CapabilityAdmissionPlan = null },
+        };
+        var catalog = new MutableCatalogQueryPort(Snapshot(
+            Service("usvc-explicit-alpha", "catalog-slug-alpha", AuthorizationGrantRequirement.NotRequired)));
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            catalog,
+            evidence,
+            evidence,
+            evidence,
+            evidence);
+
+        var result = await planner.PlanAsync(StudioRequest());
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.DurableRequestGrantMismatch);
+        result.Detail.Should().Be("durable_request_grant_mismatch");
+        catalog.QueryCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForExplicitRequestWhoseGrantTargetsDifferentRevision_ShouldFailClosedBeforeCatalog()
+    {
+        var capability = ExplicitRequestCapability("usvc-explicit-alpha", "proof-slug-alpha");
+        var originalEvidence = StudioWorkflowEvidence(capability);
+        var plan = originalEvidence.Workflow!.CapabilityAdmissionPlan!;
+        var admission = plan.InvocationAdmissions.Single();
+        admission.NyxIdExplicitRequestGrant.RevisionId = "rev-other";
+        capability.NyxIdUserRequest.ExplicitRequestGrantDigest =
+            WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdExplicitRequestGrantDigest(
+                admission.NyxIdExplicitRequestGrant);
+        admission.Capability = capability.Clone();
+        plan.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(plan);
+        var evidence = new StudioEvidencePorts
+        {
+            Member = originalEvidence.Member,
+            Workflow = originalEvidence.Workflow with
+            {
+                ExternalCapabilities = [capability],
+                CapabilityAdmissionPlan = plan,
+            },
+        };
+        var catalog = new MutableCatalogQueryPort(Snapshot(
+            Service("usvc-explicit-alpha", "catalog-slug-alpha", AuthorizationGrantRequirement.NotRequired)));
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            catalog,
+            evidence,
+            evidence,
+            evidence,
+            evidence);
+
+        var result = await planner.PlanAsync(StudioRequest());
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.DurableRequestGrantMismatch);
+        result.Detail.Should().Be("durable_request_grant_mismatch");
+        catalog.QueryCount.Should().Be(0);
     }
 
     [Fact]
@@ -1073,7 +1389,8 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             evidence,
             evidence,
             evidence,
-            evidence);
+            evidence,
+            OperationAuthorization(NyxIdScheduledOperationAuthorizationDecision.AutoAllow));
 
         var result = await planner.PlanAsync(StudioRequest());
 
@@ -1095,7 +1412,8 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             evidence,
             evidence,
             evidence,
-            evidence);
+            evidence,
+            OperationAuthorization(NyxIdScheduledOperationAuthorizationDecision.AutoAllow));
 
         var result = await planner.PlanAsync(StudioRequest());
 
@@ -1108,8 +1426,9 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     public async Task PlanAsync_ForExplicitRequestWithoutExactServiceId_ShouldFailClosed()
     {
         var evidence = StudioWorkflowEvidence(ExplicitRequestCapability(string.Empty, "proof-slug-alpha"));
+        var catalog = new MutableCatalogQueryPort(Snapshot());
         var planner = new ScheduledInvocationAuthorizationPlanner(
-            new MutableCatalogQueryPort(Snapshot()),
+            catalog,
             evidence,
             evidence,
             evidence,
@@ -1119,8 +1438,9 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
 
         result.Success.Should().BeFalse();
         result.FailureCode.Should().Be(
-            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable);
-        result.Detail.Should().Be("nyxid_exact_service_identity_unavailable");
+            ScheduledInvocationAuthorizationFailureCode.DurableRequestGrantMismatch);
+        result.Detail.Should().Be("durable_request_grant_mismatch");
+        catalog.QueryCount.Should().Be(0);
     }
 
     [Fact]
@@ -1262,31 +1582,79 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             Model = "gpt-5.5",
         };
 
-    private static ExternalWorkflowCapabilityRef NyxIdCapability(string serviceId, string slug) => new()
+    private static ExternalWorkflowCapabilityRef NyxIdCapability(string serviceId, string slug)
     {
-        NyxIdUserService = NyxIdService(serviceId, slug),
-    };
+        var capability = new ExternalWorkflowCapabilityRef
+        {
+            NyxIdUserService = new NyxIdUserServiceCapabilityRef
+            {
+                UserServiceId = serviceId,
+                ServiceSlugSnapshot = slug,
+                EndpointId = "endpoint-alpha",
+                HttpMethod = "GET",
+                PathTemplate = "/api/resources/{resource_id}",
+                ContractDigest = "published-contract-digest-alpha",
+                ExecutionPolicy = new NyxIdOperationExecutionPolicy
+                {
+                    Risk = NyxIdOperationRisk.ReadOnly,
+                    Approval = NyxIdOperationApproval.None,
+                    EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+                },
+            },
+        };
+        capability.NyxIdUserService.ExecutionPolicy.AllowedExecutionModes.Add(new[]
+        {
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable,
+        });
+        return capability;
+    }
 
     private static ExternalWorkflowCapabilityRef ExplicitRequestCapability(
         string userServiceId,
         string proofSlug) =>
-        new()
+        BuildExplicitRequestCapability(userServiceId, proofSlug);
+
+    private static ExternalWorkflowCapabilityRef BuildExplicitRequestCapability(
+        string userServiceId,
+        string proofSlug)
+    {
+        var request = new NyxIdRequestSelector
+        {
+            UserServiceId = userServiceId,
+            Method = NyxIdRequestMethod.Get,
+            PathTemplate = "/api/resources/{resource_id}",
+            BodyMode = NyxIdRequestBodyMode.None,
+            ResponseMode = NyxIdRequestResponseMode.Text,
+        };
+        var requestContractDigest = string.IsNullOrWhiteSpace(userServiceId)
+            ? string.Empty
+            : WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdRequestContractDigest(request);
+        var capability = new ExternalWorkflowCapabilityRef
         {
             NyxIdUserRequest = new NyxIdUserRequestCapabilityRef
             {
-                Request = new NyxIdRequestSelector
-                {
-                    UserServiceId = userServiceId,
-                    Method = NyxIdRequestMethod.Get,
-                    PathTemplate = "/api/resources/{resource_id}",
-                    BodyMode = NyxIdRequestBodyMode.None,
-                    ResponseMode = NyxIdRequestResponseMode.Text,
-                },
+                Request = request,
                 ServiceSlugSnapshot = proofSlug,
-                ContractDigest = "request-proof-digest-alpha",
-                ExplicitRequestGrantDigest = "request-grant-digest-alpha",
+                ContractDigest = requestContractDigest.Length == 0
+                    ? string.Empty
+                    : WorkflowCapabilityAdmissionPlanIntegrity
+                        .ComputeNyxIdExplicitRequestProofDigest(requestContractDigest, proofSlug),
+                ExecutionPolicy = new NyxIdOperationExecutionPolicy
+                {
+                    Risk = NyxIdOperationRisk.ReadOnly,
+                    Approval = NyxIdOperationApproval.None,
+                    EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+                },
             },
         };
+        capability.NyxIdUserRequest.ExecutionPolicy.AllowedExecutionModes.Add(new[]
+        {
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable,
+        });
+        return capability;
+    }
 
     private static StudioEvidencePorts StudioWorkflowEvidence(
         params ExternalWorkflowCapabilityRef[] capabilities) =>
@@ -1303,8 +1671,94 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
                 false,
                 capabilities.Length == 0
                     ? AuthorizationGrantRequirement.NotRequired
-                    : AuthorizationGrantRequirement.Required),
+                    : AuthorizationGrantRequirement.Required,
+                CapabilityAdmissionPlan: BuildExplicitRequestAdmissionPlan(capabilities)),
         };
+
+    private static WorkflowCapabilityAdmissionPlan? BuildExplicitRequestAdmissionPlan(
+        IReadOnlyList<ExternalWorkflowCapabilityRef> capabilities)
+    {
+        if (!capabilities.Any(static capability =>
+                capability.CapabilityCase ==
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest))
+        {
+            return null;
+        }
+
+        var plan = new WorkflowCapabilityAdmissionPlan
+        {
+            SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+            DefinitionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeDefinitionDigest(
+                "name: wf-alpha",
+                inlineWorkflowYamls: null,
+                "wf-alpha",
+                "rev-alpha"),
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            DurableAuthorizationOwner = new ExternalCapabilityAuthorizationOwner
+            {
+                Authority = WorkflowCapabilityAdmissionPlanIntegrity.NyxIdAuthority,
+                OwnerKind = ExternalCapabilityAuthorizationOwnerKind.Personal,
+                OwnerSubject = "owner-alpha",
+            },
+        };
+        foreach (var (capability, index) in capabilities.Select(static (value, index) => (value, index)))
+        {
+            var callSiteId = $"wf-alpha/call-{index}";
+            NyxIdExplicitRequestGrant? explicitRequestGrant = null;
+            if (capability.CapabilityCase ==
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest)
+            {
+                try
+                {
+                    explicitRequestGrant = ExplicitRequestGrant(
+                        capability,
+                        callSiteId,
+                        "wf-alpha",
+                        "rev-alpha");
+                }
+                catch (InvalidOperationException)
+                {
+                    return null;
+                }
+
+                capability.NyxIdUserRequest.ExplicitRequestGrantDigest =
+                    WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdExplicitRequestGrantDigest(
+                        explicitRequestGrant);
+            }
+
+            plan.InvocationAdmissions.Add(new WorkflowCapabilityInvocationAdmission
+            {
+                CallSiteId = callSiteId,
+                Capability = capability.Clone(),
+                NyxIdExplicitRequestGrant = explicitRequestGrant,
+            });
+        }
+        plan.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(plan);
+        return plan;
+    }
+
+    private static NyxIdExplicitRequestGrant ExplicitRequestGrant(
+        ExternalWorkflowCapabilityRef capability,
+        string callSiteId,
+        string workflowId,
+        string revisionId)
+    {
+        var proof = capability.NyxIdUserRequest;
+        var grant = new NyxIdExplicitRequestGrant
+        {
+            WorkflowId = workflowId,
+            RevisionId = revisionId,
+            CallSiteId = callSiteId,
+            RequestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                .ComputeNyxIdRequestContractDigest(proof.Request),
+            GrantorAuthority = NyxIdExplicitRequestGrantorAuthority.AevatarWorkflowBinder,
+            GrantorOwnerKind = ExternalCapabilityAuthorizationOwnerKind.Personal,
+            GrantorOwnerSubject = "owner-alpha",
+            Risk = proof.ExecutionPolicy.Risk,
+        };
+        grant.AllowedExecutionModes.Add(proof.ExecutionPolicy.AllowedExecutionModes);
+        return grant;
+    }
 
     private static ExternalWorkflowCapabilityRef ConnectorCapability(string connectorRef) => new()
     {
@@ -1332,6 +1786,9 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             services,
             Activated: true);
     }
+
+    private static RecordingNyxIdScheduledOperationAuthorizationPort OperationAuthorization(
+        NyxIdScheduledOperationAuthorizationDecision decision) => new(decision);
 
     private static NyxIdAuthorizationCatalogSnapshot SnapshotWithGateway(
         NyxIdAuthorizationLLMTargetEvidence gatewayTarget,
@@ -1452,6 +1909,21 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         }
     }
 
+    private sealed class RecordingNyxIdScheduledOperationAuthorizationPort(
+        NyxIdScheduledOperationAuthorizationDecision decision)
+        : INyxIdScheduledOperationAuthorizationPort
+    {
+        public List<NyxIdScheduledOperationAuthorizationRequest> Requests { get; } = [];
+
+        public Task<NyxIdScheduledOperationAuthorizationResult> EvaluateAsync(
+            NyxIdScheduledOperationAuthorizationRequest request,
+            CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            return Task.FromResult(new NyxIdScheduledOperationAuthorizationResult(decision));
+        }
+    }
+
     private sealed class StudioEvidencePorts :
         IScheduledInvocationMemberEvidenceQueryPort,
         IScheduledInvocationWorkflowEvidenceQueryPort,
@@ -1462,18 +1934,28 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         public ScheduledInvocationWorkflowEvidence? Workflow { get; init; }
         public ScheduledInvocationConnectorEvidence? Connector { get; init; }
         public ScheduledInvocationOwnerLLMEvidence? OwnerLLM { get; init; }
+        public int MemberQueries { get; private set; }
+        public int WorkflowQueries { get; private set; }
         public int ConnectorQueries { get; private set; }
         public int OwnerLLMQueries { get; private set; }
         public string? LastOwnerLLMScopeId { get; private set; }
 
         Task<ScheduledInvocationMemberEvidence?> IScheduledInvocationMemberEvidenceQueryPort.GetAsync(
-            string scopeId, string memberId, CancellationToken ct) => Task.FromResult(Member);
+            string scopeId, string memberId, CancellationToken ct)
+        {
+            MemberQueries++;
+            return Task.FromResult(Member);
+        }
 
         Task<ScheduledInvocationWorkflowEvidence?> IScheduledInvocationWorkflowEvidenceQueryPort.GetAsync(
             string scopeId,
             string publishedServiceId,
             string workflowRevisionId,
-            CancellationToken ct) => Task.FromResult(Workflow);
+            CancellationToken ct)
+        {
+            WorkflowQueries++;
+            return Task.FromResult(Workflow);
+        }
 
         Task<ScheduledInvocationConnectorEvidence?> IScheduledInvocationConnectorEvidenceQueryPort.GetAsync(
             string scopeId, CancellationToken ct)

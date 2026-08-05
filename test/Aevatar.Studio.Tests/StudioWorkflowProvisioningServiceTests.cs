@@ -116,11 +116,44 @@ public sealed class StudioWorkflowProvisioningServiceTests
         member.BindRequest.CapabilityAdmission.ExplicitRequestConfirmations.Should().BeEmpty();
         plan.ToString().Should().NotContain(StudioExplicitRequestAdmissionTestKit.CallerBearer);
         plan.ToString().Should().NotContain(StudioExplicitRequestAdmissionTestKit.OrganizationBearer);
-        var workflowEvidence = schedule.LastCreateRequest!.AcceptedBinding!.WorkflowEvidence;
-        workflowEvidence.Should().NotBeNull();
-        workflowEvidence!.ServiceGrantRequirement.Should().Be(AuthorizationGrantRequirement.Required);
-        workflowEvidence.ExternalCapabilities.Should().ContainSingle()
-            .Which.NyxIdUserRequest.Request.UserServiceId.Should().Be("usvc-alpha");
+        schedule.LastCreateRequest!.AcceptedBinding.Should().BeEquivalentTo(
+            new StudioMemberWorkflowAcceptedBindingContext(
+                TeamId,
+                PublishedServiceId,
+                WorkflowId,
+                RevisionId));
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenBindingReceiptOmitsResolvedIdentity_ShouldUseRequestedIdentity()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var bindingPort = new RecordingBindingPort(member, null, null);
+        var schedulePort = new RecordingWorkflowSchedulePort(schedule);
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            bindingPort,
+            schedulePort,
+            new StudioWorkflowCapabilityAdmissionTestService(),
+            new FakeTimeProvider());
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor", Prompt: "go")
+            {
+                TeamId = TeamId,
+            });
+
+        bindingPort.LastResult!.WorkflowId.Should().BeNull();
+        bindingPort.LastResult.RevisionId.Should().BeNull();
+        schedulePort.LastPreflightRequest!.AcceptedBinding.Should().BeEquivalentTo(
+            new StudioMemberWorkflowAcceptedBindingContext(
+                TeamId,
+                PublishedServiceId,
+                bindingPort.LastRequest!.WorkflowId!,
+                bindingPort.LastRequest.RevisionId!));
     }
 
     [Fact]
@@ -1068,19 +1101,15 @@ public sealed class StudioWorkflowProvisioningServiceTests
         owner!.ScopeId.Should().Be(ScopeId);
         owner.TeamId.Should().Be(TeamId);
         owner.MemberId.Should().Be("m-alpha");
-        var acceptedBinding = schedule.LastCreateRequest!.AcceptedBinding;
-        acceptedBinding.Should().NotBeNull();
-        acceptedBinding!.PublishedServiceId.Should().Be("svc-alpha");
-        acceptedBinding.WorkflowId.Should().Be("wf-alpha");
-        acceptedBinding.WorkflowRevisionId.Should().Be("rev-alpha");
-        acceptedBinding.WorkflowEvidence.Should().NotBeNull();
-        acceptedBinding.WorkflowEvidence!.ServiceGrantRequirement.Should()
-            .Be(AuthorizationGrantRequirement.NotRequired);
-        acceptedBinding.WorkflowEvidence.ExternalCapabilities.Should().BeEmpty();
         var preflightRequest = schedule.PreflightRequests.Should().ContainSingle().Which;
         preflightRequest.Should().BeSameAs(schedulePort.LastPreflightRequest);
         preflightRequest.MemberId.Should().Be("m-alpha");
-        preflightRequest.AcceptedBinding.Should().BeEquivalentTo(acceptedBinding);
+        preflightRequest.AcceptedBinding.Should().BeEquivalentTo(
+            new StudioMemberWorkflowAcceptedBindingContext(
+                TeamId,
+                PublishedServiceId,
+                bindingPort.LastResult.WorkflowId!,
+                bindingPort.LastResult.RevisionId!));
         schedulePort.LastCreateRequest.Should().BeSameAs(schedule.LastCreateRequest);
         schedulePort.LastResult!.MemberId.Should().Be("m-alpha");
         schedulePort.LastResult.PublishedServiceId.Should().Be("svc-alpha");
@@ -1589,6 +1618,52 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_WhenLiveScheduleExists_ShouldReplaceIt()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var sut = NewService(member, schedule, out _, out var schedulePort);
+        schedulePort.ExistingAutomation = new StudioMemberAutomationView(
+            ScopeId,
+            TeamId,
+            MemberId,
+            $"provision-{PublishedServiceId}",
+            PublishedServiceId,
+            "Existing monitor",
+            "old prompt",
+            "0 9 * * *",
+            "UTC",
+            true,
+            "active",
+            DateTimeOffset.UtcNow.AddHours(1),
+            string.Empty,
+            "studio-workflow-provision-create:old",
+            1,
+            false,
+            DateTimeOffset.UtcNow.AddMinutes(1),
+            null,
+            10)
+        {
+            TargetRevisionId = "rev-old",
+        };
+
+        var response = await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor", "new prompt")
+            {
+                TeamId = TeamId,
+            });
+
+        schedulePort.LastCreateRequest.Should().BeNull();
+        schedulePort.LastReplaceRequest.Should().NotBeNull();
+        schedulePort.LastReplaceRequest!.ScheduleId.Should().Be($"provision-{PublishedServiceId}");
+        schedulePort.LastReplaceRequest.OperationId.Should()
+            .StartWith("studio-workflow-provision-replace:");
+        response.ScheduleId.Should().Be($"provision-{PublishedServiceId}");
+    }
+
+    [Fact]
     public async Task ProvisionAsync_PropagatesScheduleEnsureFailure()
     {
         var member = NewMemberService();
@@ -1826,13 +1901,13 @@ public sealed class StudioWorkflowProvisioningServiceTests
     private sealed class RecordingBindingPort : IStudioMemberWorkflowBindingPort
     {
         private readonly RecordingMemberService _member;
-        private readonly string _acceptedWorkflowId;
-        private readonly string _acceptedRevisionId;
+        private readonly string? _acceptedWorkflowId;
+        private readonly string? _acceptedRevisionId;
 
         public RecordingBindingPort(
             RecordingMemberService member,
-            string acceptedWorkflowId,
-            string acceptedRevisionId)
+            string? acceptedWorkflowId,
+            string? acceptedRevisionId)
         {
             _member = member;
             _acceptedWorkflowId = acceptedWorkflowId;
@@ -1967,15 +2042,17 @@ public sealed class StudioWorkflowProvisioningServiceTests
 
         public StudioMemberWorkflowScheduleRequest? LastCreateRequest { get; private set; }
 
+        public StudioMemberWorkflowScheduleRequest? LastReplaceRequest { get; private set; }
+
         public StudioMemberWorkflowScheduleResult? LastResult { get; private set; }
+
+        public StudioMemberAutomationView? ExistingAutomation { get; set; }
 
         public async Task<StudioMemberWorkflowScheduleResult> CreateAsync(
             StudioMemberWorkflowScheduleRequest request,
             string confirmedPermissionDigest,
             CancellationToken ct = default)
         {
-            var acceptedBinding = request.AcceptedBinding
-                ?? throw new InvalidOperationException("Accepted binding context is required.");
             LastCreateRequest = request;
             _schedule.LastCreateRequest = request;
             var scheduleId = request.ScheduleId ?? "schedule-test";
@@ -1983,7 +2060,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             var receipt = await _schedule.EnsureAsync(
                 new ScheduledDispatchConfiguration(
                     ScheduleId: scheduleId,
-                    DisplayName: request.DisplayName ?? $"provision-{acceptedBinding.PublishedServiceId}",
+                    DisplayName: request.DisplayName ?? $"provision-{PublishedServiceId}",
                     Target: new ScheduledDispatchTargetDescriptor(
                         ScheduledDispatchTargetKind.ServiceInvocation,
                         ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
@@ -1992,7 +2069,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
                                 TenantId = request.ScopeId,
                                 AppId = ScopeServiceIdentityDefaults.ServiceAppId,
                                 Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
-                                ServiceId = acceptedBinding.PublishedServiceId,
+                                ServiceId = PublishedServiceId,
                             },
                             EndpointId: "chat",
                             Payload: Any.Pack(new ChatRequestEvent
@@ -2027,7 +2104,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 request.ScopeId,
                 request.MemberId,
                 receipt.ScheduleId,
-                acceptedBinding.PublishedServiceId,
+                PublishedServiceId,
                 "/admin#/observatory",
                 "pending");
             return LastResult;
@@ -2038,6 +2115,23 @@ public sealed class StudioWorkflowProvisioningServiceTests
             string confirmedPermissionDigest,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public Task<StudioMemberWorkflowScheduleResult> ReplaceAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest,
+            CancellationToken ct = default)
+        {
+            LastReplaceRequest = request;
+            LastResult = new StudioMemberWorkflowScheduleResult(
+                true,
+                request.ScopeId,
+                request.MemberId,
+                request.ScheduleId ?? "schedule-test",
+                PublishedServiceId,
+                "/admin#/observatory",
+                "pending");
+            return Task.FromResult(LastResult);
+        }
 
         public Task<StudioMemberAutomationListResponse> ListAsync(
             string scopeId,
@@ -2055,7 +2149,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
             string memberId,
             string scheduleId,
             CancellationToken ct = default) =>
-            throw new NotSupportedException();
+            Task.FromResult(
+                string.Equals(ExistingAutomation?.ScheduleId, scheduleId, StringComparison.Ordinal)
+                    ? ExistingAutomation
+                    : null);
 
         public Task<StudioMemberAutomationMutationReceipt> UpdateAsync(
             StudioMemberAutomationUpdateCommand command,

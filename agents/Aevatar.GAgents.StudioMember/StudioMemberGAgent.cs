@@ -112,6 +112,8 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         }
 
         var renamed = evt.Clone();
+        renamed.MemberId = State.MemberId;
+        renamed.ScopeId = State.ScopeId;
         if (string.IsNullOrEmpty(renamed.Description))
             renamed.Description = State.Description;
         if (renamed.UpdatedAtUtc == null)
@@ -145,7 +147,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
                 "Use create with the correct kind, or rename / impl-update with the same kind.");
         }
 
-        await PersistDomainEventAsync(evt);
+        var updated = evt.Clone();
+        updated.MemberId = State.MemberId;
+        updated.ScopeId = State.ScopeId;
+        await PersistDomainEventAsync(updated);
     }
 
     [EventHandler(EndpointName = "requestBindingAdmission")]
@@ -276,7 +281,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             return;
         }
 
-        await PersistDomainEventAsync(evt);
+        var completed = evt.Clone();
+        completed.MemberId = State.MemberId;
+        completed.ScopeId = State.ScopeId;
+        await PersistDomainEventAsync(completed);
         await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Succeeded);
     }
 
@@ -303,7 +311,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             return;
         }
 
-        await PersistDomainEventAsync(evt);
+        var failed = evt.Clone();
+        failed.MemberId = State.MemberId;
+        failed.ScopeId = State.ScopeId;
+        await PersistDomainEventAsync(failed);
         await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Failed);
     }
 

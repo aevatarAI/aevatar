@@ -27,9 +27,7 @@ public sealed record ScheduledInvocationAuthorizationRequest(
     AuthorizationGrantRequirement ServiceGrantRequirement,
     DateTimeOffset ExpiresAtUtc,
     DateTimeOffset EvaluatedAtUtc,
-    IReadOnlyList<AuthorizationSourceStamp>? SourceStamps = null,
-    ScheduledInvocationMemberEvidence? TrustedMemberEvidence = null,
-    ScheduledInvocationWorkflowEvidence? TrustedWorkflowEvidence = null)
+    IReadOnlyList<AuthorizationSourceStamp>? SourceStamps = null)
 {
     public AuthorizationOwnerIdentity Owner => OwnerContext.Owner;
 }
@@ -361,7 +359,8 @@ public sealed record ScheduledInvocationWorkflowEvidence(
     long StateVersion,
     IReadOnlyList<ExternalWorkflowCapabilityRef> ExternalCapabilities,
     bool OwnerLLMRouteRequired,
-    AuthorizationGrantRequirement ServiceGrantRequirement);
+    AuthorizationGrantRequirement ServiceGrantRequirement,
+    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null);
 
 public sealed record ScheduledInvocationConnectorEvidence(
     long StateVersion,

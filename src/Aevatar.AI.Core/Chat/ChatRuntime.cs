@@ -438,6 +438,7 @@ public sealed class ChatRuntime
         var skillRecovery = CreateSkillRecoveryOrchestrator(baseRequest, () => authorizedTools);
         var executedToolOutcomes = new List<ToolOutcomeReplyFact>();
         var readOnlyFailureCounts = new Dictionary<ReadOnlyFailureKey, int>();
+        var retiredToolNames = new HashSet<string>(StringComparer.Ordinal);
         var toolLoopSuspended = false;
         var toolLoopTerminated = false;
 
@@ -457,7 +458,8 @@ public sealed class ChatRuntime
 
         for (var round = 0; round < effectiveMaxToolRounds; round++)
         {
-            authorizedTools = ToolCallLoop.CreateRequestToolManager(baseRequest.Tools);
+            var roundTools = FilterRetiredTurnTools(baseRequest.Tools, retiredToolNames);
+            authorizedTools = ToolCallLoop.CreateRequestToolManager(roundTools);
             if (hasStreamedTextContent)
             {
                 wroteOutput = true;
@@ -493,6 +495,7 @@ public sealed class ChatRuntime
                     messages,
                     executedToolOutcomes,
                     toolReceipts: null,
+                    retiredToolNames: retiredToolNames,
                     mergeIntoExistingSystem: round == 0),
                 RequestId = baseRequest.RequestId,
                 Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(baseRequest.Metadata),
@@ -502,7 +505,7 @@ public sealed class ChatRuntime
                     ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round)),
                 RoutingContext = baseRequest.RoutingContext,
                 LlmControl = baseRequest.LlmControl,
-                Tools = baseRequest.Tools,
+                Tools = roundTools,
                 Model = baseRequest.Model,
                 Temperature = baseRequest.Temperature,
                 MaxTokens = baseRequest.MaxTokens,
@@ -668,6 +671,7 @@ public sealed class ChatRuntime
                                 authorizedTools,
                                 result,
                                 parsed.ToolCalls));
+                            RetireTurnToolAfterSuccess(authorizedTools, result, retiredToolNames);
                             parsedAssistantToolCallMessage = FailedToolCallArgumentRedactor.Redact(
                                 messages,
                                 pendingHistoryMessages,
@@ -785,6 +789,7 @@ public sealed class ChatRuntime
                     authorizedTools,
                     result,
                     roundResult.ToolCalls));
+                RetireTurnToolAfterSuccess(authorizedTools, result, retiredToolNames);
                 assistantToolCallMessage = FailedToolCallArgumentRedactor.Redact(
                     messages,
                     pendingHistoryMessages,
@@ -828,7 +833,8 @@ public sealed class ChatRuntime
                 Messages = BuildMutationClaimConstrainedMessages(
                     messages,
                     executedToolOutcomes,
-                    toolReceipts: null),
+                    toolReceipts: null,
+                    retiredToolNames: retiredToolNames),
                 RequestId = baseRequest.RequestId,
                 Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(baseRequest.Metadata),
                 CallerContext = baseRequest.CallerContext,
@@ -921,7 +927,8 @@ public sealed class ChatRuntime
                         Messages = BuildMutationClaimConstrainedMessages(
                             messages,
                             executedToolOutcomes,
-                            toolReceipts: null),
+                            toolReceipts: null,
+                            retiredToolNames: retiredToolNames),
                         RequestId = finalRequest.RequestId,
                         Metadata = finalRequest.Metadata,
                         CallerContext = finalRequest.CallerContext,
@@ -983,13 +990,49 @@ public sealed class ChatRuntime
         IReadOnlyList<ChatMessage> messages,
         IReadOnlyList<ToolOutcomeReplyFact> toolOutcomes,
         IReadOnlyList<AgentToolReceipt>? toolReceipts,
+        IReadOnlySet<string>? retiredToolNames = null,
         bool mergeIntoExistingSystem = false)
     {
-        var constraints = ToolOutcomeReplyConstraintBuilder.BuildMutationClaimConstraints(toolOutcomes, toolReceipts);
+        var constraints = ToolOutcomeReplyConstraintBuilder
+            .BuildMutationClaimConstraints(toolOutcomes, toolReceipts)
+            .ToList();
+        if (retiredToolNames is { Count: > 0 })
+        {
+            constraints.Add(ChatMessage.System(
+                "System constraint: These tools already completed their single successful execution for this turn and are no longer available: " +
+                string.Join(", ", retiredToolNames.OrderBy(static name => name, StringComparer.Ordinal)) +
+                ". Do not call them again. Continue with the available tools, using read-only observation when a receipt identifies an asynchronous run."));
+        }
+
         return ToolOutcomeReplyConstraintBuilder.ApplyConstraints(
             messages,
             constraints,
             mergeIntoExistingSystem);
+    }
+
+    private static IReadOnlyList<IAgentTool>? FilterRetiredTurnTools(
+        IReadOnlyList<IAgentTool>? tools,
+        IReadOnlySet<string> retiredToolNames)
+    {
+        if (tools is not { Count: > 0 } || retiredToolNames.Count == 0)
+            return tools;
+
+        return tools
+            .Where(tool => !retiredToolNames.Contains(tool.Name))
+            .ToArray();
+    }
+
+    private static void RetireTurnToolAfterSuccess(
+        ToolManager tools,
+        ToolExecutionResult result,
+        ISet<string> retiredToolNames)
+    {
+        if (result.IsError || result.Receipt?.Status != AgentToolReceiptStatus.Success)
+            return;
+
+        var tool = tools.Get(result.ToolName);
+        if (tool?.TurnReusePolicy == AgentToolTurnReusePolicy.RetireAfterSuccess)
+            retiredToolNames.Add(tool.Name);
     }
 
     private ToolOutcomeReplyFact BuildToolOutcomeReplyFact(

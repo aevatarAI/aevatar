@@ -149,9 +149,13 @@ public static class NyxIdRequestSelectorContract
 
     public static bool SupportsDurableExecution(
         NyxIdRequestMethod method,
-        NyxIdOperationRisk risk) =>
-        risk == NyxIdOperationRisk.ReadOnly &&
-        method is NyxIdRequestMethod.Get or NyxIdRequestMethod.Head or NyxIdRequestMethod.Options;
+        NyxIdOperationRisk risk) => risk switch
+        {
+            NyxIdOperationRisk.ReadOnly =>
+                method is NyxIdRequestMethod.Get or NyxIdRequestMethod.Head or NyxIdRequestMethod.Options,
+            NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive => true,
+            _ => false,
+        };
 
     public static IReadOnlyList<string> PathParameters(NyxIdRequestSelector selector) =>
         selector.PathTemplate.Split('/', StringSplitOptions.RemoveEmptyEntries)

@@ -394,12 +394,22 @@ public static class MainnetHostBuilderExtensions
         });
         builder.Services.AddWebTools(o =>
         {
-            o.NyxIdBaseUrl = builder.Configuration["Aevatar:NyxId:Authority"]
-                             ?? builder.Configuration["Cli:App:NyxId:Authority"]
-                             ?? builder.Configuration["Aevatar:Authentication:Authority"];
-            o.NyxIdSearchSlug = builder.Configuration["Aevatar:Web:NyxIdSearchSlug"]
-                                ?? builder.Configuration["Aevatar:Web:SearchSlug"];
-            o.SearchApiBaseUrl = builder.Configuration["Aevatar:Web:SearchApiBaseUrl"];
+            o.NyxIdBaseUrl = FirstConfiguredValue(
+                builder.Configuration,
+                "Aevatar:Web:NyxIdBaseUrl",
+                "Aevatar:NyxId:ApiBaseUrl",
+                "Aevatar:NyxId:Authority",
+                "Cli:App:NyxId:Authority",
+                "Aevatar:Authentication:Authority");
+            o.NyxIdSearchSlug = FirstConfiguredValue(
+                builder.Configuration,
+                "Aevatar:Web:NyxIdSearchSlug",
+                "Aevatar:Web:SearchSlug",
+                "Aevatar:WebSearch:NyxIdSlug");
+            o.SearchApiBaseUrl = FirstConfiguredValue(
+                builder.Configuration,
+                "Aevatar:Web:SearchApiBaseUrl",
+                "Aevatar:WebSearch:ApiBaseUrl");
         });
         builder.Services.AddToolSetRegistry(options =>
         {
@@ -600,6 +610,18 @@ public static class MainnetHostBuilderExtensions
         var value = Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER");
         return string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(value, "1", StringComparison.Ordinal);
+    }
+
+    private static string? FirstConfiguredValue(IConfiguration configuration, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            var value = configuration[key];
+            if (!string.IsNullOrWhiteSpace(value))
+                return value.Trim();
+        }
+
+        return null;
     }
 
     private static void ConfigureMainnetAIFeatures(AevatarAIFeatureOptions options)

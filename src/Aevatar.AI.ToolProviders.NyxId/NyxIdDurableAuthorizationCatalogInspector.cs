@@ -95,7 +95,10 @@ internal sealed class NyxIdDurableAuthorizationCatalogInspector(
             string.IsNullOrWhiteSpace(snapshot.ContentDigest) ||
             !string.Equals(
                 snapshot.ContentDigest,
-                NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(snapshot.Owner, snapshot.Services),
+                NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+                    snapshot.Owner,
+                    snapshot.Services,
+                    snapshot.GatewayLLMTarget),
                 StringComparison.Ordinal))
         {
             return false;

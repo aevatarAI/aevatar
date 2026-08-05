@@ -56,15 +56,14 @@ namespace Aevatar.Studio.Application.Studio.Services;
 ///   <item><b>Retries converge.</b> One (scope, display name) pair owns exactly
 ///   one member, one workflow id, and one schedule inside one target Team: the
 ///   member id is derived deterministically from that ownership tuple (an
-///   existing member is reused, never
-///   re-created), and the schedule uses a deterministic id via
-///   <see cref="IScheduledDispatchApplicationService.EnsureAsync"/> (idempotent
-///   upsert). Re-provisioning the same display name re-binds and re-schedules the
-///   same resources instead of accumulating a new member + enabled schedule per
-///   attempt. That reuse is also the documented ownership rule: a display name
-///   identifies ONE automation, and re-provisioning it replaces that member's
-///   workflow. When the pair's schedule was explicitly deleted, the schedule id
-///   advances to the next generation instead of resurrecting the tombstone (see
+///   existing member is reused, never re-created), and the schedule uses a
+///   deterministic id. Re-provisioning the same display name replaces the live
+///   automation through the credential replacement protocol instead of trying to
+///   create a second active credential. That reuse is also the documented
+///   ownership rule: a display name identifies ONE automation, and
+///   re-provisioning it replaces that member's workflow. When the pair's schedule
+///   was explicitly deleted, the schedule id advances to the next generation
+///   instead of resurrecting the tombstone (see
 ///   <see cref="EnsureProvisionScheduleAsync"/>).</item>
 /// </list>
 /// </summary>
@@ -137,6 +136,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             suppliedExplicitRequestConfirmations,
             request,
             ct);
+        ValidatePersistedAdmissionCapabilities(capabilityAdmissionPlan);
         var trustedAdmission = new WorkflowCapabilityAdmissionContext(
             callerId,
             executionMode: executionMode,
@@ -170,6 +170,14 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 CapabilityAdmission = trustedAdmission,
             },
             ct);
+        if (!bindReceipt.Success ||
+            !string.Equals(bindReceipt.ScopeId, normalizedScopeId, StringComparison.Ordinal) ||
+            !string.Equals(bindReceipt.MemberId, memberId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("workflow_binding_receipt_invalid");
+        }
+        var acceptedWorkflowId = NormalizeOptional(bindReceipt.WorkflowId) ?? workflowId;
+        var acceptedRevisionId = NormalizeOptional(bindReceipt.RevisionId) ?? revisionId;
 
         // 3. Create the scheduled-dispatch that produces the run. The Workflow kind
         //    is what flips on caller-token projection. A schedule is created when
@@ -181,9 +189,9 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         //    no more), a re-mintable subject reference. Raw bearer tokens are never
         //    persisted in schedule state.
         //
-        //    The schedule id is deterministic (provision-{publishedServiceId}) and
-        //    the write goes through EnsureAsync, so a re-provision updates the one
-        //    existing schedule instead of stacking a new enabled schedule per retry.
+        //    The schedule id is deterministic (provision-{publishedServiceId}); a
+        //    live schedule is replaced through the credential operation protocol,
+        //    while a deleted schedule advances to the next generation.
         string? scheduleId = null;
         if (ShouldSchedule(request))
         {
@@ -193,15 +201,12 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 teamId,
                 memberId,
                 publishedServiceId,
-                bindReceipt,
-                workflowId,
-                revisionId,
+                acceptedWorkflowId,
+                acceptedRevisionId,
                 displayName,
-                workflowYaml,
                 request.Prompt ?? string.Empty,
                 callerCredential,
                 request,
-                capabilityAdmissionPlan,
                 timing,
                 ct);
         }
@@ -419,15 +424,12 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         string teamId,
         string memberId,
         string publishedServiceId,
-        StudioMemberWorkflowBindingResult bindReceipt,
         string workflowId,
-        string revisionId,
+        string targetRevisionId,
         string displayName,
-        string workflowYaml,
         string prompt,
         ProvisionWorkflowCallerCredential callerCredential,
         ProvisionWorkflowRequest request,
-        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan,
         ProvisionScheduleTiming timing,
         CancellationToken ct)
     {
@@ -451,13 +453,8 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             AcceptedBinding = new StudioMemberWorkflowAcceptedBindingContext(
                 teamId,
                 publishedServiceId,
-                NormalizeOptional(bindReceipt.WorkflowId) ?? workflowId,
-                NormalizeOptional(bindReceipt.RevisionId) ?? revisionId)
-            {
-                WorkflowEvidence = BuildTrustedWorkflowEvidence(
-                    workflowYaml,
-                    capabilityAdmissionPlan),
-            },
+                workflowId,
+                targetRevisionId),
         };
 
         var preflight = await _schedulePort.PreflightForWriteAsync(baseScheduleRequest, ct);
@@ -472,19 +469,63 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             var scheduleId = generation == 1
                 ? $"provision-{publishedServiceId}"
                 : $"provision-{publishedServiceId}.{generation}";
-            var operationIdentity = BuildProvisionScheduleOperationIdentity(
+            var createOperationIdentity = BuildProvisionScheduleOperationIdentity(
                 request,
                 scheduleId,
                 permissionDigest,
-                timing);
+                timing,
+                targetRevisionId,
+                TeamAutomationOperationKind.Create);
+            var existing = await _schedulePort.GetAsync(
+                scopeId,
+                teamId,
+                memberId,
+                scheduleId,
+                ct);
+            if (existing != null)
+            {
+                if (!string.Equals(existing.PublishedServiceId, publishedServiceId, StringComparison.Ordinal))
+                {
+                    throw new StudioMemberAutomationPlanConflictException(
+                        "schedule_target_changed",
+                        "The stored schedule target no longer matches the provisioned workflow member service identity.");
+                }
+
+                if (string.Equals(existing.AuthorizationStatus, "active", StringComparison.Ordinal) &&
+                    string.Equals(existing.OperationId, createOperationIdentity.OperationId, StringComparison.Ordinal) &&
+                    string.Equals(existing.TargetRevisionId, targetRevisionId, StringComparison.Ordinal))
+                {
+                    return existing.ScheduleId;
+                }
+
+                var replaceOperationIdentity = BuildProvisionScheduleOperationIdentity(
+                    request,
+                    scheduleId,
+                    permissionDigest,
+                    timing,
+                    targetRevisionId,
+                    TeamAutomationOperationKind.Reauthorize);
+                var replacement = await _schedulePort.ReplaceAsync(
+                    baseScheduleRequest with
+                    {
+                        ScheduleId = scheduleId,
+                        OperationId = replaceOperationIdentity.OperationId,
+                        IdempotencyKey = replaceOperationIdentity.IdempotencyKey,
+                        ConfirmedPolicyVersion = policyVersion,
+                    },
+                    permissionDigest,
+                    ct);
+                return NormalizeOptional(replacement.ScheduleId);
+            }
+
             try
             {
                 var schedule = await _schedulePort.CreateAsync(
                     baseScheduleRequest with
                     {
                         ScheduleId = scheduleId,
-                        OperationId = operationIdentity.OperationId,
-                        IdempotencyKey = operationIdentity.IdempotencyKey,
+                        OperationId = createOperationIdentity.OperationId,
+                        IdempotencyKey = createOperationIdentity.IdempotencyKey,
                         ConfirmedPolicyVersion = policyVersion,
                     },
                     permissionDigest,
@@ -501,20 +542,6 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             $"Provisioning for service '{publishedServiceId}' exhausted {maxGenerations} deleted schedule generations.");
     }
 
-    private static ScheduledInvocationWorkflowEvidence BuildTrustedWorkflowEvidence(
-        string workflowYaml,
-        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan)
-    {
-        var workflow = new WorkflowParser().Parse(workflowYaml);
-        var authorizationDependencies = WorkflowAuthorizationDependencyEvaluator.Evaluate(workflow);
-        var admittedCapabilities = WorkflowCapabilityAdmissionPlanIntegrity.DistinctCapabilities(capabilityAdmissionPlan);
-        return new ScheduledInvocationWorkflowEvidence(
-            StateVersion: 0,
-            ExternalCapabilities: admittedCapabilities,
-            OwnerLLMRouteRequired: authorizationDependencies.OwnerLlmRouteRequired,
-            ServiceGrantRequirement: WorkflowServiceGrantRequirementClassifier.Classify(admittedCapabilities));
-    }
-
     /// <summary>
     /// A schedule (and therefore a run) is created when there is something to
     /// fire: a recurring monitor (caller-supplied <see cref="ProvisionWorkflowRequest.Cron"/>)
@@ -522,6 +549,24 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     /// </summary>
     private static bool ShouldSchedule(ProvisionWorkflowRequest request) =>
         request.RunImmediately || !string.IsNullOrWhiteSpace(request.Cron);
+
+    private static void ValidatePersistedAdmissionCapabilities(
+        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan)
+    {
+        foreach (var admission in capabilityAdmissionPlan.InvocationAdmissions)
+        {
+            if (admission.Capability?.CapabilityCase is
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.HostConnector or
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService or
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest)
+            {
+                continue;
+            }
+
+            throw new InvalidOperationException(
+                "Workflow capability admission contains an unsupported capability.");
+        }
+    }
 
     /// <summary>
     /// Resolves schedule timing as one typed value. A caller-supplied cron remains
@@ -560,26 +605,36 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         ProvisionWorkflowRequest request,
         string scheduleId,
         string permissionDigest,
-        ProvisionScheduleTiming timing)
+        ProvisionScheduleTiming timing,
+        string targetRevisionId,
+        TeamAutomationOperationKind operationKind)
     {
         var explicitOperationId = NormalizeOptional(request.ScheduleOperationId);
         var explicitIdempotencyKey = NormalizeOptional(request.ScheduleIdempotencyKey);
         if (explicitOperationId != null && explicitIdempotencyKey != null)
             return new ProvisionScheduleOperationIdentity(explicitOperationId, explicitIdempotencyKey);
 
+        var isReplacement = operationKind == TeamAutomationOperationKind.Reauthorize;
         var identity = Encoding.UTF8.GetBytes(string.Join('\n',
-            "studio-workflow-provision-schedule/v1",
+            isReplacement
+                ? "studio-workflow-provision-schedule-replacement/v1"
+                : "studio-workflow-provision-schedule/v1",
             scheduleId,
             permissionDigest,
             NormalizeOptional(request.Prompt) ?? string.Empty,
             timing.CronExpression,
             timing.Timezone,
             ((int)timing.ScheduleMode).ToString(),
-            timing.OneShotFireAt?.ToUniversalTime().UtcTicks.ToString() ?? string.Empty));
+            timing.OneShotFireAt?.ToUniversalTime().UtcTicks.ToString() ?? string.Empty,
+            isReplacement ? targetRevisionId : string.Empty));
         var hash = Convert.ToHexStringLower(SHA256.HashData(identity).AsSpan(0, 16));
         return new ProvisionScheduleOperationIdentity(
-            $"studio-workflow-provision-create:{hash}",
-            $"studio-workflow-provision-schedule:{hash}");
+            isReplacement
+                ? $"studio-workflow-provision-replace:{hash}"
+                : $"studio-workflow-provision-create:{hash}",
+            isReplacement
+                ? $"studio-workflow-provision-replacement:{hash}"
+                : $"studio-workflow-provision-schedule:{hash}");
     }
 
     private readonly record struct ProvisionScheduleOperationIdentity(

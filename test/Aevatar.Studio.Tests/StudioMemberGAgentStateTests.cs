@@ -224,6 +224,28 @@ public sealed class StudioMemberGAgentStateTests
     }
 
     [Fact]
+    public async Task HandleImplementationUpdated_ShouldPersistAuthorityMemberAndScopeIdentity()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var current = NewCreatedWorkflowMember(now);
+        var eventSourcing = new RecordingEventSourcing(current);
+        var agent = NewHandlerAgent(current, eventSourcing, new RecordingEventPublisher());
+
+        await agent.HandleImplementationUpdated(new StudioMemberImplementationUpdatedEvent
+        {
+            MemberId = "m-other",
+            ScopeId = "scope-other",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            UpdatedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+        });
+
+        var updated = eventSourcing.RaisedEvents.Should().ContainSingle().Subject
+            .Should().BeOfType<StudioMemberImplementationUpdatedEvent>().Subject;
+        updated.MemberId.Should().Be("m-1");
+        updated.ScopeId.Should().Be("scope-1");
+    }
+
+    [Fact]
     public void Created_ShouldPersistPublishedServiceId()
     {
         var initial = new StudioMemberState();
@@ -320,6 +342,8 @@ public sealed class StudioMemberGAgentStateTests
 
         await agent.HandleRenamed(new StudioMemberRenamedEvent
         {
+            MemberId = "m-other",
+            ScopeId = "scope-other",
             DisplayName = "Renamed Workflow",
             UpdatedAtUtc = updatedAt,
         });
@@ -328,6 +352,8 @@ public sealed class StudioMemberGAgentStateTests
             .Should().BeOfType<StudioMemberRenamedEvent>().Subject;
         renamed.DisplayName.Should().Be("Renamed Workflow");
         renamed.Description.Should().Be("Existing description");
+        renamed.MemberId.Should().Be("m-1");
+        renamed.ScopeId.Should().Be("scope-1");
         renamed.UpdatedAtUtc.Should().Be(updatedAt);
     }
 
@@ -1094,12 +1120,18 @@ public sealed class StudioMemberGAgentStateTests
         await agent.HandleBindingCompleted(new StudioMemberBindingCompletedEvent
         {
             BindingRunId = "bind-1",
+            MemberId = "m-other",
+            ScopeId = "scope-other",
             PublishedServiceId = "member-m-1",
             RevisionId = "rev-1",
             ImplementationKind = StudioMemberImplementationKind.Script,
             CompletedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(4)),
         });
 
+        var completed = eventSourcing.RaisedEvents.Should().ContainSingle().Subject
+            .Should().BeOfType<StudioMemberBindingCompletedEvent>().Subject;
+        completed.MemberId.Should().Be("m-1");
+        completed.ScopeId.Should().Be("scope-1");
         var ack = publisher.SentMessages.Should().ContainSingle().Subject.Event
             .Should().BeOfType<StudioMemberBindingTerminalAcknowledged>().Subject;
         ack.BindingRunId.Should().Be("bind-1");
@@ -1118,6 +1150,8 @@ public sealed class StudioMemberGAgentStateTests
         await agent.HandleBindingFailed(new StudioMemberBindingFailedEvent
         {
             BindingRunId = "bind-1",
+            MemberId = "m-other",
+            ScopeId = "scope-other",
             Failure = new StudioMemberBindingFailure
             {
                 Code = "SCOPE_BINDING_FAILED",
@@ -1126,6 +1160,10 @@ public sealed class StudioMemberGAgentStateTests
             },
         });
 
+        var failed = eventSourcing.RaisedEvents.Should().ContainSingle().Subject
+            .Should().BeOfType<StudioMemberBindingFailedEvent>().Subject;
+        failed.MemberId.Should().Be("m-1");
+        failed.ScopeId.Should().Be("scope-1");
         var ack = publisher.SentMessages.Should().ContainSingle().Subject.Event
             .Should().BeOfType<StudioMemberBindingTerminalAcknowledged>().Subject;
         ack.BindingRunId.Should().Be("bind-1");
@@ -1242,12 +1280,14 @@ public sealed class StudioMemberGAgentStateTests
     }
 
     [Fact]
-    public void BindingCompletedEvent_ShouldCarryMemberContractFieldsWithoutPlatformResultBag()
+    public void BindingCompletedEvent_ShouldCarryMemberAndScopeContractFieldsWithoutPlatformResultBag()
     {
         StudioMemberBindingCompletedEvent.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => field.Name)
             .Should()
             .Contain("expected_actor_id")
+            .And.Contain("member_id")
+            .And.Contain("scope_id")
             .And.NotContain("result");
     }
 

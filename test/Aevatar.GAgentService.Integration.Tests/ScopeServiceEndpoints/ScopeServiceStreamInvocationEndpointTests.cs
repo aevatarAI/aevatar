@@ -28,6 +28,7 @@ using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -99,12 +100,10 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
                 },
                 DeploymentPlan = new ServiceDeploymentPlan
                 {
-                    WorkflowPlan = new WorkflowServiceDeploymentPlan
-                    {
-                        WorkflowName = "main",
-                        WorkflowYaml = "name: main\nsteps:\n  - run: echo hello",
-                        DefinitionActorId = "definition-actor-1",
-                    },
+                    WorkflowPlan = BuildInteractiveWorkflowPlan(
+                        "main",
+                        "name: main\nsteps:\n  - run: echo hello",
+                        "definition-actor-1"),
                 },
             },
             CancellationToken.None);
@@ -472,12 +471,10 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
                 },
                 DeploymentPlan = new ServiceDeploymentPlan
                 {
-                    WorkflowPlan = new WorkflowServiceDeploymentPlan
-                    {
-                        WorkflowName = "main",
-                        WorkflowYaml = "name: main\nsteps:\n  - run: echo hello",
-                        DefinitionActorId = "definition-actor-1",
-                    },
+                    WorkflowPlan = BuildInteractiveWorkflowPlan(
+                        "main",
+                        "name: main\nsteps:\n  - run: echo hello",
+                        "definition-actor-1"),
                 },
             },
             CancellationToken.None);
@@ -543,12 +540,10 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
                 },
                 DeploymentPlan = new ServiceDeploymentPlan
                 {
-                    WorkflowPlan = new WorkflowServiceDeploymentPlan
-                    {
-                        WorkflowName = "main",
-                        WorkflowYaml = "name: main\nsteps:\n  - run: echo hello",
-                        DefinitionActorId = "definition-actor-1",
-                    },
+                    WorkflowPlan = BuildInteractiveWorkflowPlan(
+                        "main",
+                        "name: main\nsteps:\n  - run: echo hello",
+                        "definition-actor-1"),
                 },
             },
             CancellationToken.None);
@@ -801,12 +796,10 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
                 },
                 DeploymentPlan = new ServiceDeploymentPlan
                 {
-                    WorkflowPlan = new WorkflowServiceDeploymentPlan
-                    {
-                        WorkflowName = "orders",
-                        WorkflowYaml = "name: orders\nsteps:\n  - run: echo orders",
-                        DefinitionActorId = "definition-actor-orders",
-                    },
+                    WorkflowPlan = BuildInteractiveWorkflowPlan(
+                        "orders",
+                        "name: orders\nsteps:\n  - run: echo orders",
+                        "definition-actor-orders"),
                 },
             },
             CancellationToken.None);
@@ -901,12 +894,10 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
                 },
                 DeploymentPlan = new ServiceDeploymentPlan
                 {
-                    WorkflowPlan = new WorkflowServiceDeploymentPlan
-                    {
-                        WorkflowName = "file-probe",
-                        WorkflowYaml = "name: file_probe\nsteps:\n  - run: echo file",
-                        DefinitionActorId = "wf-alpha",
-                    },
+                    WorkflowPlan = BuildInteractiveWorkflowPlan(
+                        "file-probe",
+                        "name: file_probe\nsteps:\n  - run: echo file",
+                        "wf-alpha"),
                 },
             },
             CancellationToken.None);
@@ -1015,12 +1006,10 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
                 },
                 DeploymentPlan = new ServiceDeploymentPlan
                 {
-                    WorkflowPlan = new WorkflowServiceDeploymentPlan
-                    {
-                        WorkflowName = "status-report",
-                        WorkflowYaml = "name: status_report\nsteps:\n  - run: echo member",
-                        DefinitionActorId = "wf-alpha",
-                    },
+                    WorkflowPlan = BuildInteractiveWorkflowPlan(
+                        "status-report",
+                        "name: status_report\nsteps:\n  - run: echo member",
+                        "wf-alpha"),
                 },
             },
             CancellationToken.None);
@@ -1058,6 +1047,131 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
         host.InteractionService.LastRequest.Headers.Should().ContainKey("channel").WhoseValue.Should().Be("member-tests");
         host.ServiceRunRegistrationPort.RegisterCalls.Should().ContainSingle()
             .Which.ServiceId.Should().Be("svc-alpha");
+    }
+
+    [Fact]
+    public async Task MemberInvokeStreamEndpoint_ShouldCarryResolvedServiceRevisionAdmissionPlan()
+    {
+        const string workflowYaml = "name: status_report\nsteps:\n  - run: echo member";
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.MemberPublishedServiceResolver.Result = new MemberPublishedServiceResolution(
+            "scope-a",
+            "m-alpha",
+            "svc-alpha",
+            IsMemberAuthorityBacked: true);
+        var service = BuildService("scope-a", "svc-alpha", "wf-alpha");
+        host.ServiceCatalogReader.Service = service;
+        host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
+            service.ServiceKey,
+            1,
+            string.Empty,
+            [
+                new ServiceTrafficEndpointSnapshot(
+                    "chat",
+                    [
+                        new ServiceTrafficTargetSnapshot(
+                            "dep-alpha-1",
+                            "rev-alpha-1",
+                            "wf-alpha",
+                            100,
+                            ServiceServingState.Active.ToString()),
+                    ]),
+            ],
+            DateTimeOffset.UtcNow);
+        var admissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
+        await host.RevisionCatalog.UpsertRevisionAsync(
+            service.ServiceKey,
+            "rev-alpha-1",
+            new PreparedServiceRevisionArtifact
+            {
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "scope-a",
+                    AppId = "default",
+                    Namespace = "default",
+                    ServiceId = "svc-alpha",
+                },
+                RevisionId = "rev-alpha-1",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                Endpoints =
+                {
+                    new ServiceEndpointDescriptor
+                    {
+                        EndpointId = "chat",
+                        DisplayName = "chat",
+                        Kind = ServiceEndpointKind.Chat,
+                        RequestTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                        ResponseTypeUrl = Any.Pack(new ChatResponseEvent()).TypeUrl,
+                    },
+                },
+                DeploymentPlan = new ServiceDeploymentPlan
+                {
+                    WorkflowPlan = BuildInteractiveWorkflowPlan(
+                        "status-report",
+                        workflowYaml,
+                        "wf-alpha",
+                        workflowId: "workflow-alpha",
+                        revisionId: "rev-alpha-1",
+                        capabilityAdmissionPlan: admissionPlan),
+                },
+            },
+            CancellationToken.None);
+        host.InteractionService.ResultFactory = async (request, emitAsync, onAcceptedAsync, ct) =>
+        {
+            var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-alpha", "status-report", "cmd-alpha", "corr-alpha");
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(receipt, ct);
+            return WorkflowChatRunInteractionResult
+                .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+        };
+
+        using var request = CreateAuthenticatedJsonRequest(
+            HttpMethod.Post,
+            "/api/scopes/scope-a/members/m-alpha/invoke/chat:stream",
+            new
+            {
+                prompt = "   ",
+                resolvedDefinitionBinding = new
+                {
+                    definitionActorId = "caller-definition",
+                    workflowName = "caller-workflow",
+                    workflowYaml = "name: caller\nsteps: []\n",
+                    scopeId = "caller-scope",
+                    sourceKind = "caller_supplied",
+                    workflowId = "caller-workflow-id",
+                    revisionId = "caller-revision-id",
+                    capabilityAdmissionPlan = new
+                    {
+                        admissionDigest = "caller-digest",
+                    },
+                },
+            },
+            "scope-a");
+
+        var response = await host.Client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
+        host.InteractionService.LastRequest.Should().NotBeNull();
+        var binding = host.InteractionService.LastRequest!.ResolvedDefinitionBinding;
+        binding.Should().NotBeNull();
+        binding!.DefinitionActorId.Should().Be("wf-alpha");
+        binding.WorkflowName.Should().Be("status-report");
+        binding.WorkflowYaml.Should().Be(workflowYaml);
+        binding.ScopeId.Should().Be("scope-a");
+        binding.RunOrigin.Should().Be(WorkflowRunOrigins.ServiceInvoke);
+        binding.SourceKind.Should().Be("service_revision");
+        binding.CapabilityAdmissionPlan.Should().NotBeSameAs(admissionPlan);
+        binding.CapabilityAdmissionPlan!.AdmissionDigest.Should().Be(admissionPlan.AdmissionDigest);
+        binding.WorkflowId.Should().Be("workflow-alpha");
+        binding.RevisionId.Should().Be("rev-alpha-1");
+        binding.DefinitionActorId.Should().NotBe("caller-definition");
+        binding.CapabilityAdmissionPlan!.AdmissionDigest.Should().NotBe("caller-digest");
     }
 
     [Fact]
@@ -1114,12 +1228,10 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
                 },
                 DeploymentPlan = new ServiceDeploymentPlan
                 {
-                    WorkflowPlan = new WorkflowServiceDeploymentPlan
-                    {
-                        WorkflowName = "status-report",
-                        WorkflowYaml = "name: status_report\nsteps:\n  - run: echo member",
-                        DefinitionActorId = "wf-alpha",
-                    },
+                    WorkflowPlan = BuildInteractiveWorkflowPlan(
+                        "status-report",
+                        "name: status_report\nsteps:\n  - run: echo member",
+                        "wf-alpha"),
                 },
             },
             CancellationToken.None);
@@ -1199,12 +1311,10 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
                 },
                 DeploymentPlan = new ServiceDeploymentPlan
                 {
-                    WorkflowPlan = new WorkflowServiceDeploymentPlan
-                    {
-                        WorkflowName = "member-a",
-                        WorkflowYaml = "name: member_a\nsteps:\n  - run: echo member",
-                        DefinitionActorId = "definition-actor-member-a",
-                    },
+                    WorkflowPlan = BuildInteractiveWorkflowPlan(
+                        "member-a",
+                        "name: member_a\nsteps:\n  - run: echo member",
+                        "definition-actor-member-a"),
                 },
             },
             CancellationToken.None);
@@ -1328,12 +1438,10 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
                 },
                 DeploymentPlan = new ServiceDeploymentPlan
                 {
-                    WorkflowPlan = new WorkflowServiceDeploymentPlan
-                    {
-                        WorkflowName = "orders",
-                        WorkflowYaml = "name: orders\nsteps:\n  - run: echo orders",
-                        DefinitionActorId = "definition-actor-orders",
-                    },
+                    WorkflowPlan = BuildInteractiveWorkflowPlan(
+                        "orders",
+                        "name: orders\nsteps:\n  - run: echo orders",
+                        "definition-actor-orders"),
                 },
             },
             CancellationToken.None);
@@ -1359,5 +1467,31 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
         host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-orders");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
         host.InteractionService.LastRequest.Headers.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
+    }
+
+    private static WorkflowServiceDeploymentPlan BuildInteractiveWorkflowPlan(
+        string workflowName,
+        string workflowYaml,
+        string definitionActorId,
+        string workflowId = "",
+        string revisionId = "",
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null)
+    {
+        const ExternalCapabilityExecutionMode executionMode = ExternalCapabilityExecutionMode.Interactive;
+        return new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = workflowName,
+            WorkflowYaml = workflowYaml,
+            DefinitionActorId = definitionActorId,
+            WorkflowId = workflowId,
+            RevisionId = revisionId,
+            CapabilityAdmissionPlan = capabilityAdmissionPlan ?? WorkflowCapabilityAdmissionPlanIntegrity.Create(
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                executionMode,
+                [],
+                []),
+            ExecutionMode = executionMode,
+        };
     }
 }

@@ -110,9 +110,9 @@ Dynamic exposure、workflow definition admission 与 runtime authorization 是�
 
 1. **Current-turn exposure**：缺 NyxID typed exposure policy，因此 operation 数量为零。
 2. **Workflow definition admission**：MCP resolves only `PublishedEndpoint`; exact inventory plus authenticated binder grant resolves `AuthoredRequest`.
-3. **Runtime authorization**：managed workflow accepts only its committed call-site proof and matching authored-request grant. Durable additionally requires exact-service catalog authorization, but only for trusted `READ_ONLY` GET/HEAD/OPTIONS.
+3. **Runtime authorization**：managed workflow accepts only its committed call-site proof and matching authored-request grant. Durable additionally requires exact-service catalog authorization plus the schedule operation-authorization gate; `READ_ONLY` remains limited to GET/HEAD/OPTIONS, while `WRITE` and `DESTRUCTIVE` requests keep their admitted risk in the proof.
 
-GET/HEAD/OPTIONS are durable-capable only when the binder attests `READ_ONLY` and exact-service durable authorization exists. Without that attestation they are conservative writes: approval-required and interactive-only. POST/PUT/PATCH are always write, approval-required, interactive-only; DELETE is destructive, approval-required, interactive-only. A selector, route proof, source observation, or service durable authorization cannot replace the explicit grant or required approval.
+GET/HEAD/OPTIONS are durable-capable when the binder attests `READ_ONLY` and exact-service durable authorization exists. `POST + READ_ONLY` remains interactive-only; `PUT/PATCH/DELETE + READ_ONLY` is rejected. `WRITE` and `DESTRUCTIVE` authored requests may be durable only with the matching explicit grant, durable catalog evidence, execution mode, and schedule operation authorization. A selector, route proof, source observation, or service durable authorization cannot replace the explicit grant or policy gate.
 
 - NyxID 是实例、credential、route 与 spec 的唯一真实源；Aevatar 不维护 process-local catalog 或 spec cache。
 - Aevatar 不新增 NyxID endpoint，不绕过 proxy 直连下游，不引入第二条投影或 read model。

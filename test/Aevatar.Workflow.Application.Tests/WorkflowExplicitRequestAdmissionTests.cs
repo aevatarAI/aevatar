@@ -281,11 +281,12 @@ public sealed class WorkflowExplicitRequestAdmissionTests
     [InlineData("PUT", NyxIdOperationRisk.Write)]
     [InlineData("PATCH", NyxIdOperationRisk.Write)]
     [InlineData("DELETE", NyxIdOperationRisk.Destructive)]
-    public async Task AdmitAsync_WithDurableApprovalRequiredExplicitRequest_ShouldRequireInteractive(
+    public async Task AdmitAsync_WithExactCatalogAndConfirmation_ShouldAdmitDurableMutatingRequest(
         string method,
         NyxIdOperationRisk risk)
     {
-        var service = CreateService();
+        var handler = new UserServiceKeysHandler();
+        var service = CreateService(CreateRealSource(handler, ReadyCatalogSnapshot()));
         var workflowYaml = MutatingWorkflowYaml(method);
         var confirmation = new NyxIdExplicitRequestConfirmation
         {
@@ -297,15 +298,21 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             RevisionId = "rev-alpha",
         };
 
-        Func<Task> act = async () => await service.AdmitAsync(Request(
+        var plan = await service.AdmitAsync(Request(
             workflowYaml,
             ExternalCapabilityExecutionMode.Durable,
             [confirmation]));
 
-        var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
-        exception.Which.Readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.ContractDrift);
-        exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
-            .Be("NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED");
+        var admission = plan.InvocationAdmissions.Should().ContainSingle().Subject;
+        admission.NyxIdExplicitRequestGrant.Risk.Should().Be(risk);
+        admission.NyxIdExplicitRequestGrant.AllowedExecutionModes.Should().Equal(
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable);
+        admission.Capability.NyxIdUserRequest.ExecutionPolicy.Risk.Should().Be(risk);
+        admission.Capability.NyxIdUserRequest.ExecutionPolicy.AllowedExecutionModes.Should().Equal(
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable);
+        handler.Paths.Should().Equal("/api/v1/keys");
     }
 
     [Theory]
@@ -317,7 +324,7 @@ public sealed class WorkflowExplicitRequestAdmissionTests
         string method,
         NyxIdOperationRisk risk)
     {
-        var service = CreateService(new ExplicitRequestSource(risk));
+        var service = CreateService(new ExplicitRequestSource(risk, allowDurable: false));
         var confirmation = new NyxIdExplicitRequestConfirmation
         {
             CallSiteId = "wf-mutating/request-mutating",
@@ -440,22 +447,22 @@ public sealed class WorkflowExplicitRequestAdmissionTests
     [InlineData("HEAD", NyxIdOperationRisk.Destructive)]
     [InlineData("OPTIONS", NyxIdOperationRisk.Write)]
     [InlineData("OPTIONS", NyxIdOperationRisk.Destructive)]
-    public async Task AdmitAsync_WithDurableElevatedRiskSafeRequest_ShouldRequireInteractive(
+    public async Task AdmitAsync_WithDurableElevatedRiskSafeRequest_ShouldReturnRiskMismatch(
         string method,
         NyxIdOperationRisk currentRisk)
     {
         var service = CreateService(new ExplicitRequestSource(currentRisk));
-        var workflowYaml = SafeWorkflowYaml(method);
+        var workflowYaml = SafeReadOnlyWorkflowYaml(method);
 
         Func<Task> act = async () => await service.AdmitAsync(Request(
             workflowYaml,
             ExternalCapabilityExecutionMode.Durable,
-            [SafeConfirmation(method, currentRisk)]));
+            [SafeConfirmation(SafeReadOnlySelector(method), currentRisk)]));
 
         var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
         exception.Which.Readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.ContractDrift);
         exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
-            .Be("NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED");
+            .Be("NYXID_EXPLICIT_REQUEST_CONFIRMATION_RISK_MISMATCH");
     }
 
     [Theory]
@@ -675,14 +682,44 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             ResponseMode = NyxIdRequestResponseMode.Text,
         };
 
+    private static string SafeReadOnlyWorkflowYaml(string method) => $$"""
+        name: wf-safe
+        steps:
+          - id: request-safe
+            type: tool_call
+            capability:
+              nyxid_request:
+                user_service_id: usvc-alpha
+                method: {{method}}
+                path_template: /api/resources
+                body_mode: none
+                response_mode: text
+                risk: read_only
+            parameters:
+              tool: nyxid_proxy
+              arguments: '{}'
+        """;
+
+    private static NyxIdRequestSelector SafeReadOnlySelector(string method)
+    {
+        var selector = SafeSelector(method);
+        selector.Risk = NyxIdOperationRisk.ReadOnly;
+        return selector;
+    }
+
     private static NyxIdExplicitRequestConfirmation SafeConfirmation(
         string method,
+        NyxIdOperationRisk risk) =>
+        SafeConfirmation(SafeSelector(method), risk);
+
+    private static NyxIdExplicitRequestConfirmation SafeConfirmation(
+        NyxIdRequestSelector selector,
         NyxIdOperationRisk risk) =>
         new()
         {
             CallSiteId = "wf-safe/request-safe",
             RequestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
-                .ComputeNyxIdRequestContractDigest(SafeSelector(method)),
+                .ComputeNyxIdRequestContractDigest(selector),
             AttestedRisk = risk,
             WorkflowId = "wf-alpha",
             RevisionId = "rev-alpha",

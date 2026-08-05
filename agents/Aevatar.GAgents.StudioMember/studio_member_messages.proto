@@ -242,12 +242,16 @@ message StudioMemberRenamedEvent {
   string display_name = 1;
   string description = 2;
   google.protobuf.Timestamp updated_at_utc = 3;
+  string member_id = 4;
+  string scope_id = 5;
 }
 
 message StudioMemberImplementationUpdatedEvent {
   StudioMemberImplementationKind implementation_kind = 1;
   StudioMemberImplementationRef implementation_ref = 2;
   google.protobuf.Timestamp updated_at_utc = 3;
+  string member_id = 4;
+  string scope_id = 5;
 }
 
 message StudioMemberBindingPlatformPendingEvent {
@@ -264,6 +268,8 @@ message StudioMemberBindingCompletedEvent {
   StudioMemberImplementationRef implementation_ref = 5;
   google.protobuf.Timestamp completed_at_utc = 6;
   string expected_actor_id = 7;
+  string member_id = 8;
+  string scope_id = 9;
 }
 
 message StudioMemberPublishedBindingRecordedEvent {
@@ -278,6 +284,8 @@ message StudioMemberPublishedBindingRecordedEvent {
 message StudioMemberBindingFailedEvent {
   string binding_run_id = 1;
   StudioMemberBindingFailure failure = 2;
+  string member_id = 3;
+  string scope_id = 4;
 }
 
 message StudioMemberBindingRunRequested {

@@ -2581,6 +2581,34 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task ScheduledDispatchQueryPort_ShouldMapPinnedServiceRevision()
+    {
+        var document = new ScheduledDispatchDocument
+        {
+            ScheduleId = "workflow-revision-pinned",
+            TargetKind = ScheduledDispatchTargetKind.ServiceInvocation.ToString(),
+            ServiceId = "svc-alpha",
+            ServiceEndpointId = "chat",
+        };
+        SetRequiredStringProperty(document, "ServiceRevisionId", "rev-pinned");
+        var reader = new RecordingScheduledDispatchDocumentReader
+        {
+            Result = new ProjectionDocumentQueryResult<ScheduledDispatchDocument>
+            {
+                Items = [document],
+            },
+        };
+        var port = new ScheduledDispatchQueryPort(reader);
+
+        var result = await port.ListAsync(new ScheduledDispatchListQuery(25));
+
+        var item = result.Items.Should().ContainSingle().Which;
+        item.ServiceId.Should().Be("svc-alpha");
+        item.ServiceEndpointId.Should().Be("chat");
+        ReadRequiredStringProperty(item, "ServiceRevisionId").Should().Be("rev-pinned");
+    }
+
+    [Fact]
     public async Task ScheduledDispatchQueryPort_ShouldMapOwnerLLMRuntimeEvidence()
     {
         var document = new ScheduledDispatchDocument

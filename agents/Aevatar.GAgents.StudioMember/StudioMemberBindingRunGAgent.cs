@@ -644,6 +644,8 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
                 new StudioMemberBindingCompletedEvent
                 {
                     BindingRunId = State.BindingRunId,
+                    MemberId = State.MemberId,
+                    ScopeId = State.ScopeId,
                     PublishedServiceId = State.PlatformResult.PublishedServiceId,
                     RevisionId = State.PlatformResult.RevisionId,
                     ImplementationKind = State.PlatformResult.ImplementationKind,
@@ -661,6 +663,8 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
                 new StudioMemberBindingFailedEvent
                 {
                     BindingRunId = State.BindingRunId,
+                    MemberId = State.MemberId,
+                    ScopeId = State.ScopeId,
                     Failure = State.Failure.Clone(),
                 },
                 ct);
