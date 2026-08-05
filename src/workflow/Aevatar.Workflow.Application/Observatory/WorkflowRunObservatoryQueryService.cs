@@ -359,6 +359,7 @@ public sealed class WorkflowRunObservatoryQueryService
 
         AppendCurrentStateDiagnostics(diagnostics, snapshot);
         AppendReportDiagnostics(diagnostics, snapshot, report, steps, viewEvents);
+        AppendToolApprovalResumeRejectionDiagnostics(diagnostics, viewEvents);
         AppendAwaitingToolApprovalDiagnostic(diagnostics, snapshot, steps);
         AppendActiveStepDiagnostic(diagnostics, steps);
 
@@ -486,6 +487,27 @@ public sealed class WorkflowRunObservatoryQueryService
             Message = "Last materialized active step has not completed yet.",
             Hint = BuildStepHint(activeStep),
         });
+    }
+
+    private static void AppendToolApprovalResumeRejectionDiagnostics(
+        ICollection<ObservatoryRunDiagnostic> diagnostics,
+        IEnumerable<ObservatoryViewEvent> viewEvents)
+    {
+        foreach (var item in viewEvents.Where(static item =>
+                     string.Equals(item.Stage, "tool_approval.resume_rejected", StringComparison.Ordinal)))
+        {
+            AppendDistinct(diagnostics, new ObservatoryRunDiagnostic
+            {
+                TimestampUtc = item.TimestampUtc,
+                Severity = "warning",
+                Code = "tool_approval_resume_rejected",
+                Source = "run-report.timeline",
+                StepId = item.StepId,
+                StepType = item.StepType,
+                Message = item.Message,
+                Hint = "Refresh the pending approval identity and submit all three IDs under the nested toolApproval object.",
+            });
+        }
     }
 
     private static void AppendAwaitingToolApprovalDiagnostic(

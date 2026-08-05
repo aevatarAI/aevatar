@@ -758,6 +758,20 @@ message WorkflowToolApprovalResume
   string tool_call_id = 2;
   string approval_request_id = 3;
 }
+enum WorkflowToolApprovalResumeRejectionReason
+{
+  WORKFLOW_TOOL_APPROVAL_RESUME_REJECTION_REASON_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_APPROVAL_RESUME_REJECTION_REASON_INVALID_IDENTITY = 1;
+  WORKFLOW_TOOL_APPROVAL_RESUME_REJECTION_REASON_PENDING_APPROVAL_NOT_FOUND = 2;
+  WORKFLOW_TOOL_APPROVAL_RESUME_REJECTION_REASON_IDENTITY_MISMATCH = 3;
+}
+message WorkflowToolApprovalResumeRejectedEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  WorkflowToolApprovalResume submitted_approval = 3;
+  WorkflowToolApprovalResumeRejectionReason reason = 4;
+}
 message WorkflowResumedEvent
 {
   string run_id = 1;

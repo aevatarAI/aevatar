@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Aevatar.AGUI.Contracts;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -1111,6 +1112,9 @@ public static class ScopeServiceEndpoints
             ct);
         if (resolution.Failure != null)
             return resolution.Failure;
+
+        if (TryCreateInvalidToolApprovalResumeRequest(request, out var invalidRequest))
+            return invalidRequest;
 
         return await WorkflowCapabilityEndpoints.HandleResume(
             new WorkflowResumeInput
@@ -2444,6 +2448,30 @@ public static class ScopeServiceEndpoints
     private static string ResolveAcceptedRunId(ServiceInvocationAcceptedReceipt receipt) =>
         string.IsNullOrWhiteSpace(receipt.RunId) ? receipt.CommandId : receipt.RunId;
 
+    private static bool TryCreateInvalidToolApprovalResumeRequest(
+        ResumeScopeServiceRunHttpRequest request,
+        out IResult result)
+    {
+        var hasFlatToolApprovalIdentity = request.ExtraFields?.Keys.Any(static key =>
+            string.Equals(key, "executionId", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(key, "toolCallId", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(key, "approvalRequestId", StringComparison.OrdinalIgnoreCase)) == true;
+        if (!hasFlatToolApprovalIdentity)
+        {
+            result = null!;
+            return false;
+        }
+
+        result = Results.BadRequest(new
+        {
+            code = "INVALID_TOOL_APPROVAL_RESUME_REQUEST",
+            message = "Tool approval identity must be nested under 'toolApproval'. Use " +
+                      "{\"toolApproval\":{\"executionId\":\"...\",\"toolCallId\":\"...\",\"approvalRequestId\":\"...\"}}; " +
+                      "top-level executionId, toolCallId and approvalRequestId are not accepted.",
+        });
+        return true;
+    }
+
     private static async Task<IResult> HandleResumeRunAsync(
         HttpContext http,
         string scopeId,
@@ -2468,6 +2496,9 @@ public static class ScopeServiceEndpoints
             ct);
         if (resolution.Failure != null)
             return resolution.Failure;
+
+        if (TryCreateInvalidToolApprovalResumeRequest(request, out var invalidRequest))
+            return invalidRequest;
 
         return await WorkflowCapabilityEndpoints.HandleResume(
             new WorkflowResumeInput
@@ -4318,7 +4349,11 @@ const response = await fetch("{{invokePath}}", {
         string? UserInput = null,
         Dictionary<string, string>? Metadata = null,
         string? ActorId = null,
-        WorkflowToolApprovalResumeHttpRequest? ToolApproval = null);
+        WorkflowToolApprovalResumeHttpRequest? ToolApproval = null)
+    {
+        [JsonExtensionData]
+        public Dictionary<string, JsonElement>? ExtraFields { get; init; }
+    }
 
     public sealed record WorkflowToolApprovalResumeHttpRequest(
         string? ExecutionId,

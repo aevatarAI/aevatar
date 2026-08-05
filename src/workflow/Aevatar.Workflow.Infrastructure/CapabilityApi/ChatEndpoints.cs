@@ -487,6 +487,20 @@ public static class WorkflowCapabilityEndpoints
                 return Results.BadRequest(new { error = "actorId, runId and stepId are required." });
             }
 
+            if (input.ToolApproval != null &&
+                (string.IsNullOrWhiteSpace(input.ToolApproval.ExecutionId) ||
+                 string.IsNullOrWhiteSpace(input.ToolApproval.ToolCallId) ||
+                 string.IsNullOrWhiteSpace(input.ToolApproval.ApprovalRequestId)))
+            {
+                scope.MarkResult(StatusCodes.Status400BadRequest);
+                return Results.BadRequest(new
+                {
+                    code = "INVALID_TOOL_APPROVAL_RESUME_REQUEST",
+                    message = "toolApproval.executionId, toolApproval.toolCallId and " +
+                              "toolApproval.approvalRequestId are required together when toolApproval is provided.",
+                });
+            }
+
             var dispatch = await resumeService.DispatchAsync(
                 new WorkflowResumeCommand(
                     actorId,

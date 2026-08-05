@@ -2091,6 +2091,37 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleResume_ShouldRejectIncompleteNestedToolApprovalWithoutDispatch()
+    {
+        var service = new RecordingDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>();
+        var result = await WorkflowCapabilityEndpoints.HandleResume(
+            new WorkflowResumeInput
+            {
+                ActorId = "actor-1",
+                RunId = "run-1",
+                StepId = "tool-step",
+                Approved = true,
+                ToolApproval = new WorkflowToolApprovalResumeInput
+                {
+                    ExecutionId = "exec-1",
+                    ToolCallId = "tool-call-1",
+                    ApprovalRequestId = " ",
+                },
+            },
+            service,
+            ct: CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_TOOL_APPROVAL_RESUME_REQUEST");
+        body.Should().Contain("toolApproval.approvalRequestId");
+        service.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleResume_ShouldTreatActorIdAsOpaqueAndForwardItUnchanged()
     {
         const string opaqueActorId = "static-gagent:script-runtime:mixed-shape";

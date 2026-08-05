@@ -63,6 +63,12 @@ internal static class WorkflowArtifactFactBuilder
             return true;
         }
 
+        if (envelope.Payload.Is(WorkflowToolApprovalResumeRejectedEvent.Descriptor))
+        {
+            artifactFact = envelope.Payload.Unpack<WorkflowToolApprovalResumeRejectedEvent>();
+            return true;
+        }
+
         if (envelope.Payload.Is(WaitingForSignalEvent.Descriptor))
         {
             artifactFact = envelope.Payload.Unpack<WaitingForSignalEvent>();

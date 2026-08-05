@@ -842,6 +842,45 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
+    public void ApplyObservedPayloadToReport_ShouldMaterializeToolApprovalResumeRejection()
+    {
+        var document = new WorkflowRunInsightReportDocument
+        {
+            RootActorId = "run-tool",
+        };
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            document,
+            PackStateEvent(
+                new WorkflowToolApprovalResumeRejectedEvent
+                {
+                    RunId = "run-tool",
+                    StepId = "create_approval",
+                    SubmittedApproval = new WorkflowToolApprovalResume
+                    {
+                        ExecutionId = "exec-alpha",
+                        ToolCallId = "call-alpha",
+                        ApprovalRequestId = "approval-stale",
+                    },
+                    Reason = WorkflowToolApprovalResumeRejectionReason.IdentityMismatch,
+                },
+                2,
+                "evt-tool-approval-resume-rejected"),
+            DateTimeOffset.UnixEpoch.AddSeconds(1));
+
+        var timeline = new WorkflowExecutionReadModelMapper()
+            .ToRunReport(document)
+            .Timeline.Should().ContainSingle().Subject;
+        timeline.Stage.Should().Be("tool_approval.resume_rejected");
+        timeline.StepId.Should().Be("create_approval");
+        timeline.StepType.Should().Be("tool_call");
+        timeline.Data.Should().ContainKey("reason").WhoseValue.Should().Be("IdentityMismatch");
+        timeline.Data.Should().ContainKey("execution_id").WhoseValue.Should().Be("exec-alpha");
+        timeline.Data.Should().ContainKey("tool_call_id").WhoseValue.Should().Be("call-alpha");
+        timeline.Data.Should().ContainKey("approval_request_id").WhoseValue.Should().Be("approval-stale");
+    }
+
+    [Fact]
     public void ReportArtifact_ShouldOwnTimelineAndGraphMaterializationInputs()
     {
         var report = new WorkflowRunInsightReportDocument

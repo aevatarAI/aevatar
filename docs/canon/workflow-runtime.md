@@ -139,6 +139,10 @@ Scope-service callers approve or reject the pending call through `POST /api/scop
 
 The identifiers must come from the typed pending-approval event or read model; callers must not infer them from route identities or string patterns. There is no pre-authorization that turns authored writes into unattended or scheduled operations. Durable authored reads additionally require current `DURABLE_AUTHORIZATION_CATALOG` evidence, while durable writes/destructive requests require an admitted `PublishedEndpoint` contract with current durable authorization evidence; a UserService identity alone does not prove publication or durable authority.
 
+`executionId / toolCallId / approvalRequestId` are not valid top-level aliases. A request that places any of them at the top level is rejected with `400 INVALID_TOOL_APPROVAL_RESUME_REQUEST`; when `toolApproval` is present, all three nested fields are required. A resume without `toolApproval` remains valid for ordinary human input or human approval steps.
+
+`202 Accepted` confirms only that the validated command entered the target run actor inbox. It does not claim that the continuation was applied or that a new read model version is already visible. A typed approval identity that no longer matches the actor-owned pending call preserves the pending call and commits `WorkflowToolApprovalResumeRejectedEvent`; the run timeline and Observatory expose this as `tool_approval_resume_rejected` instead of silently ignoring the command.
+
 Published endpoint creation is owned by NyxID, not by Aevatar workflow save/bind. A NyxID admin or the catalog service creator must create the endpoint contract or run endpoint discovery; seeded third-party services normally receive endpoint contracts from operator-maintained catalog overlays. Aevatar consumes only the resulting exact `user_service_id + endpoint_id` MCP descriptor and still requires separate, current owner-scoped durable authorization catalog evidence for durable admission.
 
 ### Admission v4 与 forward-only migration
