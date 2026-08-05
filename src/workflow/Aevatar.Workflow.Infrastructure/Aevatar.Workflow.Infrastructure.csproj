@@ -36,5 +36,12 @@
   <ItemGroup>
     <EmbeddedResource Include="CapabilityApi\admin-workflow-observatory.html" />
     <EmbeddedResource Include="CapabilityApi\workflow-studio.html" />
+    <EmbeddedResource Include="CapabilityApi\studio-assistant.html" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\actor-state.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\app.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\blocks.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\protocol.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\styles.css" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\transport.js" />
   </ItemGroup>
 </Project>
