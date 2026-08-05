@@ -80,11 +80,13 @@ public class WorkflowRoleGAgent(
         }, TopologyAudience.Parent);
 
         var chatRequest = BuildChatRequestFromWorkflowIntent(intent);
+        LogWorkflowLlmInputFileRefs(intent, chatRequest);
         using var timeoutCts = intent.TimeoutMs > 0 ? new CancellationTokenSource(intent.TimeoutMs) : null;
         var streamCt = timeoutCts?.Token ?? CancellationToken.None;
         try
         {
             var replayRecord = await ExecuteWorkflowIntentStreamingChatAsync(intent, chatRequest, streamCt);
+            LogWorkflowLlmToolCalls(intent, replayRecord.ToolCalls, replayRecord.ToolReceipts);
             var pendingApproval = DetectPendingApproval(
                 replayRecord.ToolReceipts,
                 replayRecord.ToolCalls,
@@ -465,6 +467,67 @@ public class WorkflowRoleGAgent(
             OwnerRunId = Normalize(fileRef.OwnerRunId) ?? string.Empty,
             OwnerScopeId = Normalize(fileRef.OwnerScopeId) ?? string.Empty,
         };
+
+    private void LogWorkflowLlmInputFileRefs(
+        WorkflowLlmExecutionIntent intent,
+        ChatRequestEvent request)
+    {
+        var firstIntentFileRef = intent.InputFileRefs.FirstOrDefault();
+        var requestFileRefParts = request.InputParts
+            .Where(static part => part.FileRef is not null)
+            .ToArray();
+        var firstRequestPart = requestFileRefParts.FirstOrDefault();
+        var firstRequestFileRef = firstRequestPart?.FileRef;
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
+        var firstContextFileRef = toolContext.InputFileRefs.FirstOrDefault();
+
+        Logger.LogWarning(
+            "Workflow role LLM input file refs prepared. role={Role} runId={RunId} stepId={StepId} sessionId={SessionId} intentInputFileRefCount={IntentInputFileRefCount} requestInputPartCount={RequestInputPartCount} requestFileRefPartCount={RequestFileRefPartCount} toolContextInputFileRefCount={ToolContextInputFileRefCount} firstIntentFileId={FirstIntentFileId} firstIntentArtifactId={FirstIntentArtifactId} firstIntentMediaType={FirstIntentMediaType} firstRequestPartKind={FirstRequestPartKind} firstRequestFileId={FirstRequestFileId} firstRequestArtifactId={FirstRequestArtifactId} firstRequestMediaType={FirstRequestMediaType} firstContextFileId={FirstContextFileId} firstContextArtifactId={FirstContextArtifactId} firstContextMediaType={FirstContextMediaType}",
+            RoleName,
+            intent.RunId ?? string.Empty,
+            intent.StepId ?? string.Empty,
+            intent.SessionId ?? string.Empty,
+            intent.InputFileRefs.Count,
+            request.InputParts.Count,
+            requestFileRefParts.Length,
+            toolContext.InputFileRefs.Count,
+            firstIntentFileRef?.FileId ?? string.Empty,
+            firstIntentFileRef?.ArtifactId ?? string.Empty,
+            firstIntentFileRef?.MediaType ?? string.Empty,
+            firstRequestPart?.Kind.ToString() ?? string.Empty,
+            firstRequestFileRef?.FileId ?? string.Empty,
+            firstRequestFileRef?.ArtifactId ?? string.Empty,
+            firstRequestFileRef?.MediaType ?? string.Empty,
+            firstContextFileRef?.FileId ?? string.Empty,
+            firstContextFileRef?.ArtifactId ?? string.Empty,
+            firstContextFileRef?.MediaType ?? string.Empty);
+    }
+
+    private void LogWorkflowLlmToolCalls(
+        WorkflowLlmExecutionIntent intent,
+        IReadOnlyList<ToolCall> toolCalls,
+        IReadOnlyList<AgentToolReceipt> toolReceipts)
+    {
+        Logger.LogWarning(
+            "Workflow role LLM tool calls completed. role={Role} runId={RunId} stepId={StepId} sessionId={SessionId} toolCallCount={ToolCallCount} toolNames={ToolNames} toolReceiptCount={ToolReceiptCount} receiptToolNames={ReceiptToolNames} documentExtractCalled={DocumentExtractCalled} documentExtractReceiptCount={DocumentExtractReceiptCount}",
+            RoleName,
+            intent.RunId ?? string.Empty,
+            intent.StepId ?? string.Empty,
+            intent.SessionId ?? string.Empty,
+            toolCalls.Count,
+            JoinToolNames(toolCalls.Select(static toolCall => toolCall.Name)),
+            toolReceipts.Count,
+            JoinToolNames(toolReceipts.Select(static receipt => receipt.ToolName)),
+            toolCalls.Any(static toolCall => string.Equals(toolCall.Name, "document_extract", StringComparison.OrdinalIgnoreCase)) ||
+            toolReceipts.Any(static receipt => string.Equals(receipt.ToolName, "document_extract", StringComparison.OrdinalIgnoreCase)),
+            toolReceipts.Count(static receipt => string.Equals(receipt.ToolName, "document_extract", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static string JoinToolNames(IEnumerable<string?> toolNames) =>
+        string.Join(',', toolNames
+            .Select(Normalize)
+            .Where(static toolName => toolName is not null)
+            .Distinct(StringComparer.Ordinal));
 
     private static Aevatar.AI.Abstractions.ChatFileSourceKind ToChatFileSourceKind(
         WorkflowFileSourceKind sourceKind) =>
