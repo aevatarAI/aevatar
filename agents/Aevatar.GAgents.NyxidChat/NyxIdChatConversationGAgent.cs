@@ -1403,6 +1403,7 @@ public sealed class NyxIdChatConversationGAgent
                         CallId = call.CallId,
                         ToolName = call.ToolName,
                         Safety = call.Safety?.Clone(),
+                        NyxIdProvenance = call.NyxIdProvenance?.Clone(),
                     }));
                 break;
             case NyxIdChatOperationResultSignal.ResultOneofCase.Tool:

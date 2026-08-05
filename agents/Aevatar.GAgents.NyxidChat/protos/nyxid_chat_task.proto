@@ -212,6 +212,7 @@ message NyxIdChatToolStepSource {
   string tool_name = 1;
   string service_slug = 2;
   string service_id = 3;
+  optional string readiness_capability_id = 4;
 }
 
 message NyxIdChatBrowserActionStepSource {
@@ -916,6 +917,9 @@ message NyxIdChatToolCall {
   // Exact invocation safety is snapshotted by the authorized tool provider.
   // Its absence is fail-closed; consumers never infer safety from strings.
   NyxIdChatToolCallSafety safety = 4;
+  // Provider-authored NyxID identity provenance. The conversation actor copies
+  // only its safe identity fields into the durable tool step source.
+  aevatar.foundation.tools.NyxIdOperationRef nyx_id_provenance = 5;
 }
 
 message NyxIdChatLLMOperationResult {

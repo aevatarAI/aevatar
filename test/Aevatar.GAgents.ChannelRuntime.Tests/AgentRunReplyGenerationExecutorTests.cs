@@ -11,6 +11,7 @@ using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
@@ -730,6 +731,13 @@ public sealed class AgentRunReplyGenerationExecutorTests
         snapshot.CallSafety.IsReadOnly.Should().BeFalse();
         snapshot.CallSafety.IsDestructive.Should().BeTrue();
         snapshot.SideEffectKind.Should().Be("repository.update");
+        snapshot.Presentation.Should().NotBeNull();
+        snapshot.Presentation!.NyxIdOperation.ConnectedServiceId.Should()
+            .Be("connected-service-alpha");
+        snapshot.Presentation.NyxIdOperation.ServiceSlug.Should().Be("service-slug-alpha");
+        snapshot.Presentation.NyxIdOperation.CatalogServiceSlug.Should().Be("catalog-slug-alpha");
+        snapshot.Presentation.NyxIdOperation.ReadinessCapabilityId.Should()
+            .Be("readiness-capability-alpha");
     }
 
     [Fact]
@@ -1737,6 +1745,20 @@ public sealed class AgentRunReplyGenerationExecutorTests
         public string Name => name;
         public string Description => name;
         public string ParametersSchema => "{}";
+        public ToolPresentationDescriptor Presentation => new()
+        {
+            InvocationName = name,
+            DisplayName = name,
+            Kind = ToolPresentationKind.NyxIdOperation,
+            Availability = ToolAvailability.Available,
+            NyxIdOperation = new NyxIdOperationRef
+            {
+                ConnectedServiceId = "connected-service-alpha",
+                ServiceSlug = "service-slug-alpha",
+                CatalogServiceSlug = "catalog-slug-alpha",
+                ReadinessCapabilityId = "readiness-capability-alpha",
+            },
+        };
         public bool IsDestructive => true;
         public string SideEffectKind => "repository.update";
         public string? ClassifiedArguments { get; private set; }

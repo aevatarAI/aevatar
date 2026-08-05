@@ -18,6 +18,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -2417,6 +2418,13 @@ public sealed class NyxIdChatConversationGAgentTests
                             SideEffectKind = "repository.update",
                             MayChangeExternalState = true,
                         },
+                        NyxIdProvenance = new NyxIdOperationRef
+                        {
+                            ConnectedServiceId = "connected-service-alpha",
+                            ServiceSlug = "service-slug-alpha",
+                            CatalogServiceSlug = "catalog-slug-alpha",
+                            ReadinessCapabilityId = "readiness-capability-alpha",
+                        },
                     },
                 },
             },
@@ -2435,9 +2443,16 @@ public sealed class NyxIdChatConversationGAgentTests
             NyxIdChatOperationReconciledEvent.Descriptor).Should().BeTrue();
         var committedReconciliation = eventsObservedAtSuccessorDispatch[^1].EventData
             .Unpack<NyxIdChatOperationReconciledEvent>();
-        committedReconciliation.Result.Llm.ToolCalls.Should().ContainSingle()
-            .Which.ArgumentsJson.Should().BeEmpty(
+        var committedCall = committedReconciliation.Result.Llm.ToolCalls.Should()
+            .ContainSingle().Which;
+        committedCall.ArgumentsJson.Should().BeEmpty(
                 "tool arguments are transient dispatch input, not durable product facts");
+        committedCall.NyxIdProvenance.ConnectedServiceId.Should().Be("connected-service-alpha");
+        committedCall.NyxIdProvenance.ServiceSlug.Should().Be("service-slug-alpha");
+        committedCall.NyxIdProvenance.CatalogServiceSlug.Should().Be("catalog-slug-alpha");
+        committedCall.NyxIdProvenance.ReadinessCapabilityId.Should()
+            .Be("readiness-capability-alpha");
+        toolStep.Source.Tool.ReadinessCapabilityId.Should().Be("readiness-capability-alpha");
         dispatch.Calls[^1].Envelope.Payload.Unpack<NyxIdChatOperationDispatchCommand>()
             .Tool.ArgumentsJson.Should().Be("{\"repositoryId\":\"repo-alpha\"}");
         eventsObservedAtSuccessorDispatch.Should().HaveCount(afterStart.Count + 1,
@@ -2448,6 +2463,13 @@ public sealed class NyxIdChatConversationGAgentTests
         committed[^1].EventData.Is(NyxIdChatOperationDispatchedEvent.Descriptor).Should().BeTrue();
         agent.State.ActiveTask.Steps.Last().Operation.Phase.Should().Be(
             NyxIdChatOperationPhase.Dispatched);
+
+        var reactivated = CreateController(services, conversationActorId);
+        await reactivated.ActivateAsync();
+        var reactivatedSource = reactivated.State.ActiveTask.Steps.Last().Source.Tool;
+        reactivatedSource.ServiceId.Should().Be("connected-service-alpha");
+        reactivatedSource.ServiceSlug.Should().Be("service-slug-alpha");
+        reactivatedSource.ReadinessCapabilityId.Should().Be("readiness-capability-alpha");
     }
 
     [Fact]

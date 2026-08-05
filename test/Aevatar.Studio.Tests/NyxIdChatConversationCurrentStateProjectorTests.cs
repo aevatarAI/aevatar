@@ -133,6 +133,43 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldCopyAuthoritativeToolRecoverySourceWithoutInference()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new NyxIdChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-05T10:00:00Z")));
+        var state = BuildState();
+        var step = state.ActiveTask.Steps.Single(item => item.StepId == "step-alpha");
+        step.Source = new NyxIdChatStepSource
+        {
+            Tool = new NyxIdChatToolStepSource
+            {
+                ToolName = "repository_update",
+                ServiceId = "connected-service-alpha",
+                ServiceSlug = "service-slug-alpha",
+                ReadinessCapabilityId = "readiness-capability-alpha",
+            },
+        };
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new NyxIdChatOperationReconciledEvent(),
+                state,
+                version: 30,
+                eventId: "event-alpha-30",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-08-05T09:59:00Z")));
+
+        var source = dispatcher.Upserts.Should().ContainSingle().Which.ActiveTask.Steps
+            .Single(item => item.StepId == "step-alpha").Source.Tool;
+        source.ToolName.Should().Be("repository_update");
+        source.ServiceId.Should().Be("connected-service-alpha");
+        source.ServiceSlug.Should().Be("service-slug-alpha");
+        source.ReadinessCapabilityId.Should().Be("readiness-capability-alpha");
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldIgnoreNonControllerCommittedState()
     {
         var dispatcher = new RecordingWriteDispatcher();

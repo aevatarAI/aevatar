@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Tools;
+using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
@@ -673,7 +674,29 @@ public sealed class NyxIdChatTurnOperationExecutor
                                      callSafety.IsDestructive ||
                                      !string.IsNullOrWhiteSpace(snapshot.SideEffectKind),
         };
+        if (snapshot.Presentation?.SourceRefCase ==
+            ToolPresentationDescriptor.SourceRefOneofCase.NyxIdOperation)
+        {
+            result.NyxIdProvenance = SnapshotNyxIdIdentity(
+                snapshot.Presentation.NyxIdOperation);
+        }
         return result;
+    }
+
+    private static NyxIdOperationRef SnapshotNyxIdIdentity(NyxIdOperationRef source)
+    {
+        var snapshot = new NyxIdOperationRef
+        {
+            ConnectedServiceId = source.ConnectedServiceId,
+            ServiceSlug = source.ServiceSlug,
+            CatalogServiceSlug = source.CatalogServiceSlug,
+        };
+        if (source.HasReadinessCapabilityId &&
+            !string.IsNullOrWhiteSpace(source.ReadinessCapabilityId))
+        {
+            snapshot.ReadinessCapabilityId = source.ReadinessCapabilityId;
+        }
+        return snapshot;
     }
 
     private static NeedsLlmReplyEvent BuildReplyRequest(NyxIdChatOperationDispatchCommand command)

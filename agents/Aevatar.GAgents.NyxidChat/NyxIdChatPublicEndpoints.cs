@@ -25,7 +25,10 @@ public static partial class NyxIdChatEndpoints
     {
         app.MapGet("/api/chat/conversations", HandlePublicListConversationsAsync).WithTags("Chat");
         app.MapGet("/api/chat/conversations/{conversationId}", HandlePublicGetConversationAsync).WithTags("Chat");
-        app.MapGet("/api/chat/conversations/{conversationId}/state", HandlePublicGetStateAsync).WithTags("Chat");
+        app.MapGet("/api/chat/conversations/{conversationId}/state", HandlePublicGetStateAsync)
+            .WithTags("Chat")
+            .Produces<NyxIdChatConversationStateResponse>(StatusCodes.Status200OK)
+            .Produces<NyxIdChatConversationStateNotFoundResponse>(StatusCodes.Status404NotFound);
         app.MapDelete("/api/chat/conversations/{conversationId}", HandlePublicDeleteConversationAsync).WithTags("Chat");
         return app;
     }

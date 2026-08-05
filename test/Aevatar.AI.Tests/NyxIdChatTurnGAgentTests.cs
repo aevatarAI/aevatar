@@ -328,6 +328,11 @@ public sealed class NyxIdChatTurnGAgentTests
         toolCall.Safety.IsDestructive.Should().BeFalse();
         toolCall.Safety.SideEffectKind.Should().Be("tool-alpha.update");
         toolCall.Safety.MayChangeExternalState.Should().BeTrue();
+        toolCall.NyxIdProvenance.ConnectedServiceId.Should().Be("connected-service-alpha");
+        toolCall.NyxIdProvenance.ServiceSlug.Should().Be("service-slug-alpha");
+        toolCall.NyxIdProvenance.CatalogServiceSlug.Should().Be("catalog-slug-alpha");
+        toolCall.NyxIdProvenance.ReadinessCapabilityId.Should()
+            .Be("readiness-capability-alpha");
     }
 
     [Fact]
@@ -1049,7 +1054,21 @@ public sealed class NyxIdChatTurnGAgentTests
                             RequiresApproval: false,
                             IsReadOnly: false,
                             IsDestructive: false),
-                        SideEffectKind: "tool-alpha.update"),
+                        SideEffectKind: "tool-alpha.update",
+                        Presentation: new ToolPresentationDescriptor
+                        {
+                            InvocationName = AuthorizedToolCall.Name,
+                            DisplayName = "Tool Alpha",
+                            Kind = ToolPresentationKind.NyxIdOperation,
+                            Availability = ToolAvailability.Available,
+                            NyxIdOperation = new NyxIdOperationRef
+                            {
+                                ConnectedServiceId = "connected-service-alpha",
+                                ServiceSlug = "service-slug-alpha",
+                                CatalogServiceSlug = "catalog-slug-alpha",
+                                ReadinessCapabilityId = "readiness-capability-alpha",
+                            },
+                        }),
                 ]);
         }
 

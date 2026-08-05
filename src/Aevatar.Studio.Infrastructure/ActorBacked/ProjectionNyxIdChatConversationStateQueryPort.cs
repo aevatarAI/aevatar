@@ -242,7 +242,41 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 step.AvailableActions?.Skip ?? false,
                 step.AvailableActions?.Stop ?? false),
             ToDateTimeOffset(step.UpdatedAt),
-            ToOperation(step.Operation));
+            ToOperation(step.Operation),
+            ToSource(step.Source));
+
+    private static NyxIdChatConversationStepSourceSnapshot? ToSource(
+        NyxIdChatConversationStepSourceDocument? source) =>
+        source?.SourceCase switch
+        {
+            NyxIdChatConversationStepSourceDocument.SourceOneofCase.Llm =>
+                new NyxIdChatConversationStepSourceSnapshot(
+                    Llm: new NyxIdChatLLMStepSourceSnapshot(source.Llm.Model)),
+            NyxIdChatConversationStepSourceDocument.SourceOneofCase.Tool =>
+                new NyxIdChatConversationStepSourceSnapshot(
+                    Tool: new NyxIdChatToolStepSourceSnapshot(
+                        source.Tool.ToolName,
+                        NullIfEmpty(source.Tool.ServiceSlug),
+                        NullIfEmpty(source.Tool.ServiceId),
+                        source.Tool.HasReadinessCapabilityId
+                            ? NullIfEmpty(source.Tool.ReadinessCapabilityId)
+                            : null)),
+            NyxIdChatConversationStepSourceDocument.SourceOneofCase.BrowserAction =>
+                new NyxIdChatConversationStepSourceSnapshot(
+                    BrowserAction: new NyxIdChatBrowserActionStepSourceSnapshot(
+                        source.BrowserAction.Action,
+                        NullIfEmpty(source.BrowserAction.ActionRequestId))),
+            NyxIdChatConversationStepSourceDocument.SourceOneofCase.Postcondition =>
+                new NyxIdChatConversationStepSourceSnapshot(
+                    Postcondition: new NyxIdChatPostconditionStepSourceSnapshot(
+                        NullIfEmpty(source.Postcondition.ActionRequestId),
+                        NullIfEmpty(source.Postcondition.PostconditionKind))),
+            NyxIdChatConversationStepSourceDocument.SourceOneofCase.Input =>
+                new NyxIdChatConversationStepSourceSnapshot(
+                    Input: new NyxIdChatInputStepSourceSnapshot(
+                        NullIfEmpty(source.Input.RequestId))),
+            _ => null,
+        };
 
     private static NyxIdChatConversationOperationSnapshot? ToOperation(
         NyxIdChatConversationOperationDocument? operation) =>

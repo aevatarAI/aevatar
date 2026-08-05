@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -35,6 +36,13 @@ public sealed class NyxIdChatTaskLifecycleTests
                             SideEffectKind = "repository.update",
                             MayChangeExternalState = true,
                         },
+                        NyxIdProvenance = new NyxIdOperationRef
+                        {
+                            ConnectedServiceId = "connected-service-alpha",
+                            ServiceSlug = "service-slug-alpha",
+                            CatalogServiceSlug = "catalog-slug-alpha",
+                            ReadinessCapabilityId = "readiness-capability-alpha",
+                        },
                     },
                 },
             },
@@ -54,6 +62,11 @@ public sealed class NyxIdChatTaskLifecycleTests
         toolStep.Status.Should().Be(NyxIdChatStepStatus.Running);
         toolStep.Required.Should().BeTrue();
         toolStep.Source.Tool.ToolName.Should().Be("repository_update");
+        toolStep.Source.Tool.ServiceId.Should().Be("connected-service-alpha");
+        toolStep.Source.Tool.ServiceSlug.Should().Be("service-slug-alpha");
+        toolStep.Source.Tool.ReadinessCapabilityId.Should().Be("readiness-capability-alpha");
+        signal.Llm.ToolCalls.Single().NyxIdProvenance.CatalogServiceSlug.Should()
+            .Be("catalog-slug-alpha");
         toolStep.MayChangeExternalState.Should().BeTrue();
         toolStep.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotStarted);
         toolStep.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Requested);
@@ -72,6 +85,23 @@ public sealed class NyxIdChatTaskLifecycleTests
         decision.NextCommand.Tool.ToolName.Should().Be("repository_update");
         decision.NextCommand.Tool.ArgumentsJson.Should().Be("{\"repositoryId\":\"repo-alpha\"}");
         decision.NextCommand.Tool.MayChangeExternalState.Should().BeTrue();
+    }
+
+    [Fact]
+    public void LlmToolCallWithoutNyxIdProvenance_ShouldNotFabricateReadinessIdentity()
+    {
+        var state = ActiveState(NyxIdChatStepKind.Llm, "step-llm-alpha", "operation-llm-alpha");
+
+        var decision = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            state,
+            LlmWithToolCall(),
+            Now);
+
+        var toolSource = decision.State.ActiveTask.Steps.Last().Source.Tool;
+        toolSource.ToolName.Should().Be("repository_update");
+        toolSource.ServiceId.Should().BeEmpty();
+        toolSource.ServiceSlug.Should().BeEmpty();
+        toolSource.HasReadinessCapabilityId.Should().BeFalse();
     }
 
     [Fact]

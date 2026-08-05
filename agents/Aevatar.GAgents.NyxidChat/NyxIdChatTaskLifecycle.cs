@@ -343,6 +343,18 @@ public static class NyxIdChatTaskLifecycle
             OperationId = operationId,
             OperationGeneration = 1,
         };
+        var toolSource = new NyxIdChatToolStepSource { ToolName = call.ToolName };
+        if (call.NyxIdProvenance is { } provenance)
+        {
+            toolSource.ServiceSlug = provenance.ServiceSlug;
+            toolSource.ServiceId = provenance.ConnectedServiceId;
+            if (provenance.HasReadinessCapabilityId &&
+                !string.IsNullOrWhiteSpace(provenance.ReadinessCapabilityId))
+            {
+                toolSource.ReadinessCapabilityId = provenance.ReadinessCapabilityId;
+            }
+        }
+
         var step = new NyxIdChatTaskStepState
         {
             StepId = stepId,
@@ -353,7 +365,7 @@ public static class NyxIdChatTaskLifecycle
             Description = $"Run authorized tool {call.ToolName}.",
             Source = new NyxIdChatStepSource
             {
-                Tool = new NyxIdChatToolStepSource { ToolName = call.ToolName },
+                Tool = toolSource,
             },
             MayChangeExternalState = call.Safety.MayChangeExternalState,
             ExternalEffect = NyxIdChatEffectEvidence.NotStarted,

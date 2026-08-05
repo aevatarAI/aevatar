@@ -16,6 +16,7 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -757,6 +758,30 @@ public sealed class NyxIdChatPublicEndpointsTests
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         state.Queries.Should().ContainSingle().Which.Should().Be(
             new NyxIdChatConversationStateQuery("scope-alpha", "conversation-alpha", 8, "turn-alpha"));
+    }
+
+    [Fact]
+    public void StateRoute_ShouldPublishTypedOpenApiResponseSchema()
+    {
+        var app = WebApplication.CreateBuilder().Build();
+        app.MapNyxIdChatPublicEndpoints();
+        var endpoint = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(static source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Single(item => item.RoutePattern.RawText ==
+                "/api/chat/conversations/{conversationId}/state");
+
+        var responseTypes = endpoint.Metadata
+            .GetOrderedMetadata<IProducesResponseTypeMetadata>();
+
+        responseTypes.Should().Contain(item =>
+            item.StatusCode == StatusCodes.Status200OK &&
+            item.Type == typeof(NyxIdChatConversationStateResponse));
+        responseTypes.Should().Contain(item =>
+            item.StatusCode == StatusCodes.Status404NotFound &&
+            item.Type == typeof(NyxIdChatConversationStateNotFoundResponse));
+        typeof(NyxIdChatToolStepSourceSnapshot).GetProperty("ReadinessCapabilityId")
+            .Should().NotBeNull();
     }
 
     [Fact]

@@ -447,7 +447,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 argumentsJson,
                 callSafety,
                 tool.SideEffectKind ?? string.Empty,
-                BuildToolDefinitionFingerprint(tool, callSafety)));
+                BuildToolDefinitionFingerprint(tool, callSafety),
+                ToolPresentationDescriptors.Snapshot(tool, call.Name ?? string.Empty, argumentsJson)));
         }
 
         return snapshots;

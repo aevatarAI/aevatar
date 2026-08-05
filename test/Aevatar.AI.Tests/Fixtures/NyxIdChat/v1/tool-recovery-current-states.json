@@ -1,0 +1,106 @@
+[
+  {
+    "scenario": "failed",
+    "status": "current",
+    "stateVersion": 41,
+    "turnId": "turn-failed",
+    "snapshot": {
+      "actorId": "conversation-failed",
+      "scopeId": "scope-alpha",
+      "stateVersion": 41,
+      "progressSequence": 41,
+      "updatedAt": "2026-08-05T09:00:00Z",
+      "activeTask": {
+        "taskId": "task-failed",
+        "turnId": "turn-failed",
+        "status": "failed",
+        "activeStepId": "step-tool-failed",
+        "failureCode": "NYXID_CONNECTION_UNAVAILABLE",
+        "safeMessage": "The connected service is unavailable.",
+        "steps": [
+          {
+            "stepId": "step-tool-failed",
+            "order": 2,
+            "kind": "tool",
+            "status": "failed",
+            "required": true,
+            "description": "Read repository state.",
+            "source": {
+              "tool": {
+                "toolName": "repository_read",
+                "serviceSlug": "service-slug-alpha",
+                "serviceId": "connected-service-alpha",
+                "readinessCapabilityId": "readiness-capability-alpha"
+              }
+            },
+            "mayChangeExternalState": false,
+            "externalEffect": "not_applied",
+            "failureCode": "NYXID_CONNECTION_UNAVAILABLE",
+            "safeMessage": "The connected service is unavailable.",
+            "safeToSkip": false,
+            "availableActions": {
+              "retry": true,
+              "skip": false,
+              "stop": false
+            },
+            "updatedAt": "2026-08-05T09:00:00Z"
+          }
+        ]
+      },
+      "taskStatus": "failed",
+      "attentionKind": "none"
+    }
+  },
+  {
+    "scenario": "uncertain",
+    "status": "current",
+    "stateVersion": 52,
+    "turnId": "turn-uncertain",
+    "snapshot": {
+      "actorId": "conversation-uncertain",
+      "scopeId": "scope-alpha",
+      "stateVersion": 52,
+      "progressSequence": 52,
+      "updatedAt": "2026-08-05T09:05:00Z",
+      "activeTask": {
+        "taskId": "task-uncertain",
+        "turnId": "turn-uncertain",
+        "status": "failed",
+        "activeStepId": "step-tool-uncertain",
+        "failureCode": "TOOL_OUTCOME_UNKNOWN",
+        "safeMessage": "The external outcome could not be confirmed.",
+        "steps": [
+          {
+            "stepId": "step-tool-uncertain",
+            "order": 2,
+            "kind": "tool",
+            "status": "uncertain",
+            "required": true,
+            "description": "Update repository state.",
+            "source": {
+              "tool": {
+                "toolName": "repository_update",
+                "serviceSlug": "service-slug-beta",
+                "serviceId": "connected-service-beta",
+                "readinessCapabilityId": "readiness-capability-beta"
+              }
+            },
+            "mayChangeExternalState": true,
+            "externalEffect": "may_have_changed",
+            "failureCode": "TOOL_OUTCOME_UNKNOWN",
+            "safeMessage": "The external outcome could not be confirmed.",
+            "safeToSkip": false,
+            "availableActions": {
+              "retry": false,
+              "skip": false,
+              "stop": false
+            },
+            "updatedAt": "2026-08-05T09:05:00Z"
+          }
+        ]
+      },
+      "taskStatus": "failed",
+      "attentionKind": "none"
+    }
+  }
+]
