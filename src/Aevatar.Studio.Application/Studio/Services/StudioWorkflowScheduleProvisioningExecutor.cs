@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
 
 namespace Aevatar.Studio.Application.Studio.Services;
@@ -132,19 +133,29 @@ public sealed class StudioWorkflowScheduleProvisioningExecutor
                     permissionDigest,
                     timing,
                     TeamAutomationOperationKind.Reauthorize);
-                var replacement = await _schedulePort.ReplaceAsync(
-                    request with
-                    {
-                        ScheduleId = scheduleId,
-                        OperationId = replaceOperationIdentity.OperationId,
-                        IdempotencyKey = replaceOperationIdentity.IdempotencyKey,
-                        ConfirmedPolicyVersion = policyVersion,
-                    },
-                    permissionDigest,
-                    ct);
-                return StudioWorkflowScheduleProvisioningExecutionResult.Succeeded(
-                    NormalizeRequired(replacement.ScheduleId, nameof(replacement.ScheduleId)),
-                    replaceOperationIdentity.OperationId);
+                try
+                {
+                    var replacement = await _schedulePort.ReplaceAsync(
+                        request with
+                        {
+                            ScheduleId = scheduleId,
+                            OperationId = replaceOperationIdentity.OperationId,
+                            IdempotencyKey = replaceOperationIdentity.IdempotencyKey,
+                            ConfirmedPolicyVersion = policyVersion,
+                        },
+                        permissionDigest,
+                        ct);
+                    return StudioWorkflowScheduleProvisioningExecutionResult.Succeeded(
+                        NormalizeRequired(replacement.ScheduleId, nameof(replacement.ScheduleId)),
+                        replaceOperationIdentity.OperationId);
+                }
+                catch (StudioMemberAutomationPlanConflictException ex)
+                    when (IsRetryableAuthorizationPlanChange(ex))
+                {
+                    return StudioWorkflowScheduleProvisioningExecutionResult.Retry(
+                        ex.Code,
+                        ex.Message);
+                }
             }
 
             try
@@ -167,6 +178,13 @@ public sealed class StudioWorkflowScheduleProvisioningExecutor
             {
                 // Explicitly deleted schedules are permanent tombstones.
             }
+            catch (StudioMemberAutomationPlanConflictException ex)
+                when (IsRetryableAuthorizationPlanChange(ex))
+            {
+                return StudioWorkflowScheduleProvisioningExecutionResult.Retry(
+                    ex.Code,
+                    ex.Message);
+            }
         }
 
         return StudioWorkflowScheduleProvisioningExecutionResult.Failed(
@@ -181,6 +199,12 @@ public sealed class StudioWorkflowScheduleProvisioningExecutor
     private static bool IsBindingProjectionPending(string message) =>
         message.Contains("has no bound workflow", StringComparison.Ordinal) ||
         message.Contains("not assigned to team", StringComparison.Ordinal);
+
+    private static bool IsRetryableAuthorizationPlanChange(
+        StudioMemberAutomationPlanConflictException exception) =>
+        string.Equals(exception.Code, "authorization_plan_changed", StringComparison.Ordinal) &&
+        exception.AuthorizationPlanMismatchReason ==
+        ScheduledAuthorizationPlanMismatchReason.Unspecified;
 
     private static ProvisionScheduleTiming ResolveScheduleTiming(
         StudioWorkflowScheduleProvisioningExecution execution)

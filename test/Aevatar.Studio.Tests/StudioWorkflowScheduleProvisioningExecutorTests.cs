@@ -50,6 +50,91 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenAuthorizationPlanChangesBeforeWrite_ShouldRetryWithFreshPreflight()
+    {
+        var port = new RecordingSchedulePort
+        {
+            CreateException = new StudioMemberAutomationPlanConflictException(
+                "authorization_plan_changed",
+                "scheduled_invocation_authorization_plan_changed"),
+        };
+        var sut = new StudioWorkflowScheduleProvisioningExecutor(port);
+
+        var retry = await sut.ExecuteAsync(NewExecution());
+
+        retry.Success.Should().BeFalse();
+        retry.Retryable.Should().BeTrue();
+        retry.FailureCode.Should().Be("authorization_plan_changed");
+        retry.Detail.Should().Be("scheduled_invocation_authorization_plan_changed");
+
+        port.PreflightResult = NewAuthorizationResult("permission-digest-2");
+        var succeeded = await sut.ExecuteAsync(NewExecution());
+
+        succeeded.Success.Should().BeTrue();
+        port.PreflightCallCount.Should().Be(2);
+        port.ConfirmedPermissionDigests.Should().Equal(
+            "permission-digest-1",
+            "permission-digest-2");
+        port.CreateRequests.Select(static request => request.OperationId).Should().OnlyHaveUniqueItems();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenNonRetryablePlanConflictOccurs_ShouldFailClosed()
+    {
+        var port = new RecordingSchedulePort
+        {
+            CreateException = new StudioMemberAutomationPlanConflictException(
+                "schedule_target_changed",
+                "The stored schedule target changed."),
+        };
+        var sut = new StudioWorkflowScheduleProvisioningExecutor(port);
+
+        var action = () => sut.ExecuteAsync(NewExecution());
+
+        var conflict = await action.Should().ThrowAsync<StudioMemberAutomationPlanConflictException>();
+        conflict.Which.Code.Should().Be("schedule_target_changed");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenCredentialMaterializationPlanChanges_ShouldFailClosed()
+    {
+        var port = new RecordingSchedulePort
+        {
+            CreateException = new StudioMemberAutomationPlanConflictException(
+                "authorization_plan_changed",
+                "authorization_plan_changed",
+                ScheduledAuthorizationPlanMismatchReason.ScopePlanVersionsMismatch),
+        };
+        var sut = new StudioWorkflowScheduleProvisioningExecutor(port);
+
+        var action = () => sut.ExecuteAsync(NewExecution());
+
+        var conflict = await action.Should().ThrowAsync<StudioMemberAutomationPlanConflictException>();
+        conflict.Which.AuthorizationPlanMismatchReason.Should().Be(
+            ScheduledAuthorizationPlanMismatchReason.ScopePlanVersionsMismatch);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenAuthorizationPlanChangesBeforeReplacement_ShouldReturnRetryableResult()
+    {
+        var port = new RecordingSchedulePort
+        {
+            Existing = NewExistingAutomation("rev-1"),
+            ReplaceException = new StudioMemberAutomationPlanConflictException(
+                "authorization_plan_changed",
+                "scheduled_invocation_authorization_plan_changed"),
+        };
+        var sut = new StudioWorkflowScheduleProvisioningExecutor(port);
+
+        var result = await sut.ExecuteAsync(NewExecution());
+
+        result.Success.Should().BeFalse();
+        result.Retryable.Should().BeTrue();
+        result.FailureCode.Should().Be("authorization_plan_changed");
+        port.ReplaceRequests.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenLiveSchedulePinsOlderRevision_ShouldReplaceAndPinNewRevision()
     {
         var port = new RecordingSchedulePort
@@ -141,29 +226,41 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
             TargetRevisionId = revisionId,
         };
 
+    private static StudioMemberWorkflowAuthorizationResult NewAuthorizationResult(
+        string permissionDigest) =>
+        new(
+            true,
+            new ScheduledInvocationAuthorizationPlan
+            {
+                PermissionDigest = permissionDigest,
+                CredentialPolicy = new ScheduledInvocationCredentialPolicy
+                {
+                    PolicyVersion = "policy-v1",
+                },
+            },
+            ScheduledInvocationAuthorizationFailureCode.Unspecified,
+            string.Empty);
+
     private sealed class RecordingSchedulePort : IStudioMemberWorkflowSchedulePort
     {
         public StudioMemberWorkflowAuthorizationResult PreflightResult { get; set; } =
-            new(
-                true,
-                new ScheduledInvocationAuthorizationPlan
-                {
-                    PermissionDigest = "permission-digest-1",
-                    CredentialPolicy = new ScheduledInvocationCredentialPolicy
-                    {
-                        PolicyVersion = "policy-v1",
-                    },
-                },
-                ScheduledInvocationAuthorizationFailureCode.Unspecified,
-                string.Empty);
+            NewAuthorizationResult("permission-digest-1");
+
+        public int PreflightCallCount { get; private set; }
 
         public StudioMemberAutomationView? Existing { get; init; }
+
+        public Exception? CreateException { get; set; }
+
+        public Exception? ReplaceException { get; set; }
 
         public List<string> GetScheduleIds { get; } = [];
 
         public List<StudioMemberWorkflowScheduleRequest> CreateRequests { get; } = [];
 
         public List<StudioMemberWorkflowScheduleRequest> ReplaceRequests { get; } = [];
+
+        public List<string> ConfirmedPermissionDigests { get; } = [];
 
         public HashSet<string> TombstonedScheduleIds { get; } = new(StringComparer.Ordinal);
 
@@ -174,8 +271,11 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
 
         public Task<StudioMemberWorkflowAuthorizationResult> PreflightForWriteAsync(
             StudioMemberWorkflowScheduleRequest request,
-            CancellationToken ct = default) =>
-            Task.FromResult(PreflightResult);
+            CancellationToken ct = default)
+        {
+            PreflightCallCount++;
+            return Task.FromResult(PreflightResult);
+        }
 
         public Task<StudioMemberAutomationView?> GetAsync(
             string scopeId,
@@ -197,6 +297,13 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
             CancellationToken ct = default)
         {
             CreateRequests.Add(request);
+            ConfirmedPermissionDigests.Add(confirmedPermissionDigest);
+            if (CreateException is { } exception)
+            {
+                CreateException = null;
+                throw exception;
+            }
+
             var scheduleId = request.ScheduleId!;
             if (TombstonedScheduleIds.Contains(scheduleId))
                 throw new ScheduledDispatchNotFoundException(scheduleId);
@@ -210,6 +317,12 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
             CancellationToken ct = default)
         {
             ReplaceRequests.Add(request);
+            if (ReplaceException is { } exception)
+            {
+                ReplaceException = null;
+                throw exception;
+            }
+
             return Task.FromResult(NewScheduleResult(request));
         }
 
