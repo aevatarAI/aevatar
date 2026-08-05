@@ -6,6 +6,10 @@ const ACTOR_EVENT_TYPES = new Set([
   "control_changed",
   "continuation_changed",
   "step_control_changed",
+  "input_requested",
+  "input_changed",
+  "approval_requested",
+  "approval_changed",
   "action_request",
 ]);
 
@@ -29,7 +33,14 @@ export function createActorProjection(actorId = null) {
     recentTerminalTurns: [],
     task: null,
     steps: new Map(),
+    pendingInput: null,
     pendingApproval: null,
+    latestInputResolution: null,
+    latestApprovalResolution: null,
+    taskStatus: null,
+    attentionKind: "none",
+    attentionSince: null,
+    activeStepSummary: null,
     actions: new Map(),
     controlFence: null,
     latestControlResult: null,
@@ -73,6 +84,28 @@ export function reduceActorEvent(projection, event) {
       break;
     case "step_control_changed":
       next.latestStepControlResult = cloneValue(event.payload);
+      break;
+    case "input_requested":
+      next.pendingInput = cloneValue(event.payload);
+      next.attentionKind = "input";
+      next.attentionSince = event.payload.askedAt || null;
+      next.activeStepSummary = event.payload.prompt || null;
+      break;
+    case "input_changed":
+      next.latestInputResolution = cloneValue(event.payload);
+      if (next.pendingInput?.requestId === event.payload.requestId) next.pendingInput = null;
+      updateAttention(next);
+      break;
+    case "approval_requested":
+      next.pendingApproval = pendingApprovalFromEvent(event.payload);
+      next.attentionKind = "approval";
+      next.attentionSince = event.payload.askedAt || null;
+      next.activeStepSummary = event.payload.presentation?.action || event.payload.toolName || null;
+      break;
+    case "approval_changed":
+      next.latestApprovalResolution = cloneValue(event.payload);
+      if (next.pendingApproval?.approvalRequestId === event.payload.requestId) next.pendingApproval = null;
+      updateAttention(next);
       break;
     case "action_request":
       return applyActionRequest(next, projection, event.actionRequest, sequence);
@@ -161,7 +194,14 @@ export function applyCurrentStateResult(projection, envelope) {
   next.recentTerminalTurns = Array.isArray(snapshot.recentTerminalTurns)
     ? cloneValue(snapshot.recentTerminalTurns)
     : [];
+  next.pendingInput = cloneNullable(snapshot.pendingInput);
   next.pendingApproval = cloneNullable(snapshot.pendingApproval);
+  next.latestInputResolution = cloneNullable(snapshot.latestInputResolution);
+  next.latestApprovalResolution = cloneNullable(snapshot.latestApprovalResolution);
+  next.taskStatus = snapshot.taskStatus || snapshot.activeTask?.status || null;
+  next.attentionKind = snapshot.attentionKind || "none";
+  next.attentionSince = snapshot.attentionSince || null;
+  next.activeStepSummary = snapshot.activeStepSummary || null;
   next.controlFence = cloneNullable(snapshot.controlFence);
   next.latestControlResult = cloneNullable(snapshot.latestControlResult);
   next.continuation = cloneNullable(snapshot.continuationAdmission);
@@ -230,6 +270,46 @@ function applyStepChanged(projection, input) {
       steps: [...projection.steps.values()].map(cloneValue),
     };
   }
+}
+
+function pendingApprovalFromEvent(input) {
+  const presentation = input?.presentation && typeof input.presentation === "object"
+    ? input.presentation
+    : {};
+  return {
+    approvalRequestId: input.approvalRequestId,
+    turnId: input.turnId,
+    taskId: input.taskId,
+    stepId: input.stepId,
+    toolName: input.toolName || "",
+    toolCallId: input.toolCallId || "",
+    askedAt: input.askedAt || null,
+    expiresAt: input.expiresAt || null,
+    action: presentation.action || "",
+    target: presentation.target || "",
+    actorLabel: presentation.actorLabel || "",
+    reversibility: presentation.reversibility || "unknown",
+    grantBoundary: presentation.grantBoundary || "",
+    nyxidRequestId: presentation.nyxidRequestId || "",
+  };
+}
+
+function updateAttention(projection) {
+  if (projection.pendingInput) {
+    projection.attentionKind = "input";
+    projection.attentionSince = projection.pendingInput.askedAt || null;
+    projection.activeStepSummary = projection.pendingInput.prompt || null;
+    return;
+  }
+  if (projection.pendingApproval) {
+    projection.attentionKind = "approval";
+    projection.attentionSince = projection.pendingApproval.askedAt || null;
+    projection.activeStepSummary = projection.pendingApproval.action ||
+      projection.pendingApproval.toolName || null;
+    return;
+  }
+  projection.attentionKind = "none";
+  projection.attentionSince = null;
 }
 
 function applyActionRequest(next, previous, input, sequence) {
@@ -354,7 +434,10 @@ function cloneProjection(projection) {
     recentTerminalTurns: projection.recentTerminalTurns.map(cloneValue),
     task: cloneNullable(projection.task),
     steps: new Map([...projection.steps].map(([key, value]) => [key, cloneValue(value)])),
+    pendingInput: cloneNullable(projection.pendingInput),
     pendingApproval: cloneNullable(projection.pendingApproval),
+    latestInputResolution: cloneNullable(projection.latestInputResolution),
+    latestApprovalResolution: cloneNullable(projection.latestApprovalResolution),
     actions: new Map([...projection.actions].map(([key, value]) => [key, cloneValue(value)])),
     controlFence: cloneNullable(projection.controlFence),
     latestControlResult: cloneNullable(projection.latestControlResult),

@@ -88,9 +88,16 @@ const dom = {
   observationDisconnectButton: $("#observationDisconnectButton"),
   promptInput: $("#promptInput"),
   quickActions: $("#quickActions"),
+  readinessFreshness: $("#readinessFreshness"),
+  readinessList: $("#readinessList"),
+  readinessPanel: $("#readinessPanel"),
+  readinessSummary: $("#readinessSummary"),
+  refreshReadinessButton: $("#refreshReadinessButton"),
   refreshComposerServicesButton: $("#refreshComposerServicesButton"),
   recentGroup: $("#recentGroup"),
   recentSessionsList: $("#recentSessionsList"),
+  needsYouCount: $("#needsYouCount"),
+  needsYouFilterButton: $("#needsYouFilterButton"),
   removeAttachmentButton: $("#removeAttachmentButton"),
   routeClientState: $("#routeClientState"),
   routeLabel: $("#routeLabel"),
@@ -154,6 +161,9 @@ const state = {
   auth: { authenticated: false, user: null, resources: [] },
   services: [],
   connectors: { connected: [], available: [], loadedAt: 0 },
+  readiness: { subject: "", snapshot: null, loading: false, error: null, inFlight: null },
+  pendingFirstTurn: null,
+  historyFilter: "all",
   workflowSessionId: createId("workflow-session"),
   actorId: null,
   attachment: null,
@@ -219,6 +229,9 @@ function createConversationState({ actorId = null, meta = null, title = "新会�
     actorTaskElement: null,
     actorControlReceipt: null,
     actorStateRefreshTimer: null,
+    needsYouDrafts: new Map(),
+    needsYouSubmissions: new Map(),
+    approvalConfirmRequestId: null,
     meta,
     title,
     draft: "",
@@ -440,6 +453,15 @@ function bindEvents() {
   dom.composerServicesButton.addEventListener("click", toggleComposerServices);
   dom.closeComposerServicesButton.addEventListener("click", closeComposerServices);
   dom.refreshComposerServicesButton.addEventListener("click", () => void loadServices());
+  dom.refreshReadinessButton.addEventListener("click", () => void loadReadiness({ fresh: true }));
+  dom.needsYouFilterButton.addEventListener("click", () => {
+    state.historyFilter = state.historyFilter === "needs-you" ? "all" : "needs-you";
+    renderHistoryList();
+  });
+  window.addEventListener("focus", () => {
+    if (!state.auth.authenticated || !readinessNeedsRefresh()) return;
+    void loadReadiness({ fresh: true });
+  });
   dom.connectionButton.addEventListener("click", openSettings);
   dom.closeSettingsButton.addEventListener("click", closeSettings);
   dom.cancelSettingsButton.addEventListener("click", closeSettings);
@@ -536,6 +558,7 @@ function openServiceManagement(card = null) {
 }
 
 async function refreshAuthSession({ includeServices = false } = {}) {
+  let readinessSubjectChanged = false;
   try {
     const response = await fetch("/api/auth/session", { cache: "no-store" });
     const payload = await response.json();
@@ -543,6 +566,20 @@ async function refreshAuthSession({ includeServices = false } = {}) {
       ? payload
       : { authenticated: false, user: null, resources: [] };
     state.config.scopeId = payload.scopeId || "";
+    const readinessSubject = state.auth.authenticated
+      ? state.config.scopeId || String(state.auth.user?.id || "authenticated")
+      : "";
+    if (readinessSubject !== state.readiness.subject) {
+      state.pendingFirstTurn = null;
+      state.readiness = {
+        subject: readinessSubject,
+        snapshot: null,
+        loading: false,
+        error: null,
+        inFlight: null,
+      };
+      readinessSubjectChanged = true;
+    }
     if (state.auth.authenticated && includeServices) await loadServices();
     if (!state.auth.authenticated) {
       state.services = [];
@@ -552,10 +589,162 @@ async function refreshAuthSession({ includeServices = false } = {}) {
     state.auth = { authenticated: false, user: null, resources: [] };
     state.services = [];
     state.connectors = { connected: [], available: [], loadedAt: 0 };
+    state.readiness = { subject: "", snapshot: null, loading: false, error: null, inFlight: null };
+    state.pendingFirstTurn = null;
     state.config.scopeId = "";
   }
   renderAuthUi();
+  renderReadiness();
+  if (readinessSubjectChanged && state.auth.authenticated) await loadReadiness();
   return state.auth;
+}
+
+async function loadReadiness({ fresh = false } = {}) {
+  if (!state.auth.authenticated) return null;
+  const readiness = state.readiness;
+  if (readiness.inFlight) return readiness.inFlight;
+  const load = fetch(`/api/nyxid/readiness${fresh ? "?fresh=1" : ""}`, { cache: "no-store" });
+  readiness.inFlight = load;
+  readiness.loading = true;
+  readiness.error = null;
+  renderReadiness();
+  try {
+    const response = await load;
+    if (!response.ok) throw await responseError(response);
+    const snapshot = await response.json();
+    if (state.readiness !== readiness) return null;
+    readiness.snapshot = snapshot;
+  } catch (error) {
+    if (state.readiness !== readiness) return null;
+    readiness.snapshot = null;
+    readiness.error = error;
+  } finally {
+    readiness.inFlight = null;
+    readiness.loading = false;
+    if (state.readiness === readiness) {
+      renderReadiness();
+      renderActorProjection(state.activeConversation);
+    }
+  }
+  if (state.readiness !== readiness) return null;
+  if (!firstTurnReadinessBlocked()) resumePendingFirstTurn();
+  return readiness.snapshot;
+}
+
+function resumePendingFirstTurn() {
+  if (!state.pendingFirstTurn || state.activeController) return;
+  const pending = state.pendingFirstTurn;
+  state.pendingFirstTurn = null;
+  void sendPrompt(pending.prompt, {
+    attachment: pending.attachment,
+    clientRequestId: pending.clientRequestId,
+    preserveComposer: true,
+  });
+}
+
+function readinessNeedsRefresh() {
+  return Boolean(state.pendingFirstTurn) ||
+    state.readiness.snapshot?.capabilities?.some((capability) =>
+      capability.status !== "available") === true;
+}
+
+function openReadinessManagement(url) {
+  const opened = window.open(url, "nyxid-readiness");
+  if (opened) {
+    try {
+      opened.opener = null;
+    } catch {
+      // The validated NyxID window may already be cross-origin.
+    }
+    opened.focus?.();
+  } else {
+    window.location.assign(url);
+  }
+}
+
+const readinessStatusCopy = {
+  available: "可用",
+  missing: "缺失",
+  cannot_use: "不可使用",
+  cannot_check: "无法确认",
+};
+const readinessConnectionCopy = {
+  not_connected: "未连接",
+  connecting: "连接中",
+  verifying: "验证中",
+  connected: "已连接",
+  expired: "连接已过期",
+  revoked: "连接已撤销",
+  unknown: "连接状态未知",
+};
+const readinessGrantCopy = {
+  not_required: "无需授权",
+  granted: "已授权",
+  partial: "部分授权",
+  missing: "缺少授权",
+  expired: "授权已过期",
+  revoked: "授权已撤销",
+  unknown: "授权状态未知",
+};
+
+function renderReadiness() {
+  if (!dom.readinessPanel) return;
+  const authenticated = state.auth.authenticated;
+  dom.readinessPanel.classList.toggle("hidden", !authenticated);
+  if (!authenticated) return;
+  dom.refreshReadinessButton.disabled = state.readiness.loading;
+  if (state.readiness.loading) {
+    dom.readinessFreshness.textContent = "正在检查";
+    dom.readinessList.replaceChildren(el("div", "readiness-empty", "正在读取 NyxID 能力状态…"));
+    dom.readinessSummary.textContent = "正在确认首次运行所需能力。";
+    return;
+  }
+  if (state.readiness.error || !state.readiness.snapshot) {
+    dom.readinessFreshness.textContent = "状态不可用";
+    dom.readinessList.replaceChildren(el("div", "readiness-empty error", "暂时无法确认运行准备状态。"));
+    dom.readinessSummary.textContent = "尚未取得必需能力的有效证明。";
+    return;
+  }
+  const snapshot = state.readiness.snapshot;
+  const capabilities = [...snapshot.capabilities].sort((left, right) =>
+    Number(right.required) - Number(left.required));
+  dom.readinessFreshness.textContent = `检查于 ${new Date(snapshot.evaluatedAt).toLocaleString("zh-CN")}`;
+  dom.readinessList.replaceChildren(...capabilities.map((capability) => {
+    const row = el("div", `readiness-row status-${capability.status}`);
+    row.dataset.capabilityId = capability.capabilityId;
+    row.setAttribute("role", "listitem");
+    const copy = el("div", "readiness-copy");
+    copy.append(
+      el("strong", "", capability.label),
+      el("small", "", [
+        capability.required ? "必需" : "可选",
+        readinessConnectionCopy[capability.connectionState],
+        readinessGrantCopy[capability.grantState],
+      ].join(" · ")),
+    );
+    row.append(copy, el("span", "readiness-status", readinessStatusCopy[capability.status]));
+    if (capability.managementUrl) {
+      const manage = el("button", "readiness-manage", "前往 NyxID");
+      manage.type = "button";
+      manage.addEventListener("click", () => openReadinessManagement(capability.managementUrl));
+      row.append(manage);
+    }
+    return row;
+  }));
+  const blocked = capabilities.some((capability) =>
+    capability.required && capability.status !== "available");
+  dom.readinessSummary.textContent = blocked
+    ? "必需能力尚未就绪，完成配置后才能开始首次运行。"
+    : "首次运行所需能力已就绪。";
+  refreshIcons(dom.readinessPanel);
+}
+
+function firstTurnReadinessBlocked() {
+  if (state.config.surface !== "nyxid-chat" || state.actorId) return false;
+  if (state.readiness.loading) return true;
+  const capabilities = state.readiness.snapshot?.capabilities;
+  return !Array.isArray(capabilities) || capabilities.length === 0 ||
+    capabilities.some((capability) => capability.required && capability.status !== "available");
 }
 
 async function loadServices() {
@@ -1426,6 +1615,8 @@ async function logout() {
     state.auth = { authenticated: false, user: null, resources: [] };
     state.services = [];
     state.connectors = { connected: [], available: [], loadedAt: 0 };
+    state.readiness = { subject: "", snapshot: null, loading: false, error: null, inFlight: null };
+    state.pendingFirstTurn = null;
     state.config.scopeId = "";
     state.health = null;
     closeSettings();
@@ -1434,6 +1625,7 @@ async function logout() {
       if (entry !== state.activeConversation) removeConversationState(entry);
     }
     renderAuthUi();
+    renderReadiness();
   }
 }
 
@@ -1707,6 +1899,12 @@ async function loadConversations({ silent = false } = {}) {
 function renderHistoryList() {
   if (!dom.recentSessionsList) return;
   dom.recentSessionsList.replaceChildren();
+  const needsYou = state.conversations.filter((conversation) =>
+    conversation.attentionKind === "input" || conversation.attentionKind === "approval");
+  dom.needsYouCount.textContent = String(needsYou.length);
+  const filteringNeedsYou = state.historyFilter === "needs-you";
+  dom.needsYouFilterButton.setAttribute("aria-pressed", String(filteringNeedsYou));
+  dom.needsYouFilterButton.classList.toggle("active", filteringNeedsYou);
   if (state.config.surface !== "nyxid-chat") return;
   if (!state.auth.authenticated) {
     dom.recentSessionsList.append(el("div", "history-empty", "登录后显示会话"));
@@ -1726,24 +1924,38 @@ function renderHistoryList() {
     dom.recentSessionsList.append(error);
     return;
   }
-  const recent = state.conversations;
+  const recent = filteringNeedsYou ? needsYou : state.conversations;
   if (!recent.length) {
-    dom.recentSessionsList.append(el("div", "history-empty", "暂无其他生产会话"));
+    dom.recentSessionsList.append(el(
+      "div",
+      "history-empty",
+      filteringNeedsYou ? "当前没有需要处理的会话" : "暂无其他生产会话",
+    ));
     return;
   }
   for (const conversation of recent) {
-    const row = el("div", `history-row${conversation.id === state.activeConversation?.actorId ? " active" : ""}`);
+    const attentionKind = conversation.attentionKind === "input" || conversation.attentionKind === "approval"
+      ? conversation.attentionKind
+      : null;
+    const row = el(
+      "div",
+      `history-row${conversation.id === state.activeConversation?.actorId ? " active" : ""}` +
+        `${attentionKind ? " needs-you" : ""}`,
+    );
     const open = el("button", "history-session");
     open.type = "button";
     open.title = conversation.title;
     const copy = el("span", "history-session-copy");
     const conversationState = findConversationState(conversation.id);
     const running = Boolean(conversationState?.controller);
-    copy.append(
-      el("strong", "", conversation.title),
-      el("small", "", `${conversation.messageCount} 条消息 · ${formatHistoryTime(conversation.updatedAt)}` +
-        (conversationState?.run.pendingApproval ? " · 待确认" : running ? " · 运行中" : "")),
-    );
+    const meta = attentionKind
+      ? `${attentionKind === "input" ? "等待输入" : "等待批准"} · ${formatHistoryTime(conversation.attentionSince)}`
+      : `${conversation.messageCount} 条消息 · ${formatHistoryTime(conversation.updatedAt)}` +
+        (running ? " · 运行中" : "");
+    copy.append(el("strong", "", conversation.title), el("small", "", meta));
+    if (attentionKind && conversation.activeStepSummary) {
+      copy.append(el("span", "history-attention-summary", conversation.activeStepSummary));
+    }
     open.append(iconNode("message-circle"), copy);
     open.addEventListener("click", () => void loadConversation(conversation));
     const remove = el("button", "history-delete");
@@ -1860,6 +2072,7 @@ async function refreshActorState(entry, { uncursored = false } = {}) {
       restoreProjectionActionCaches(entry);
       renderActorProjection(entry);
       renderActionCards(entry);
+      if (entry === state.activeConversation) renderActiveConversationState();
       return entry.actorProjection;
     } catch (error) {
       entry.actorStateNotice = `无法恢复 actor 状态：${String(error?.message || "unknown error").slice(0, 300)}`;
@@ -1922,11 +2135,336 @@ function actorStatusCopy(status) {
   return labels[String(status || "").toLowerCase()] || String(status || "状态未知");
 }
 
+const actorEffectCopy = {
+  not_started: {
+    label: "尚未开始",
+    explanation: "外部执行尚未开始。",
+  },
+  not_applied: {
+    label: "未产生变更",
+    explanation: "Actor 证据确认外部系统没有发生变更。",
+  },
+  confirmed: {
+    label: "已确认变更",
+    explanation: "Actor 证据确认外部变更已经发生，不应重复执行。",
+  },
+  may_have_changed: {
+    label: "可能已变更",
+    explanation: "请求已越过分发边界；这既不是确认成功，也不是已证明失败。",
+  },
+};
+
+function actorStepEvidenceDetail(step) {
+  const operation = step.operation || step.externalOperation || {};
+  const message = step.safeMessage || operation.safeMessage || "";
+  const code = step.failureCode || operation.terminalCode || "";
+  return [message, code].filter(Boolean).join(" · ");
+}
+
+function actorStepManagementCapability(step) {
+  const serviceId = step?.source?.tool?.serviceId;
+  if (typeof serviceId !== "string" || !serviceId) return null;
+  return state.readiness.snapshot?.capabilities?.find((capability) =>
+    capability.capabilityId === serviceId &&
+    capability.status !== "available" &&
+    capability.managementUrl) || null;
+}
+
+function renderActorRecovery(projection) {
+  const steps = [...projection.steps.values()];
+  const hasFailure = steps.some((step) =>
+    step.status === "failed" || step.status === "uncertain" ||
+    step.externalEffect === "may_have_changed");
+  if (!hasFailure) return null;
+
+  const groups = [
+    ["已完成", steps.filter((step) =>
+      step.status === "done" && step.externalEffect !== "confirmed")],
+    ["外部已变更", steps.filter((step) => step.externalEffect === "confirmed")],
+    ["外部可能已变更", steps.filter((step) => step.externalEffect === "may_have_changed")],
+    ["失败", steps.filter((step) => step.status === "failed")],
+  ];
+  const recovery = el("div", "actor-recovery");
+  recovery.setAttribute("role", "status");
+  recovery.setAttribute("aria-live", "polite");
+  for (const [label, facts] of groups) {
+    if (!facts.length) continue;
+    const group = el("section", "actor-recovery-fact");
+    group.append(el("strong", "actor-recovery-label", label));
+    for (const step of facts) {
+      const item = el("div", "actor-recovery-item");
+      item.append(el("span", "", step.description || step.stepId || "Actor step"));
+      const detail = actorStepEvidenceDetail(step);
+      if (detail) item.append(el("small", "", detail));
+      group.append(item);
+    }
+    recovery.append(group);
+  }
+  return recovery.childElementCount ? recovery : null;
+}
+
+function needsYouKey(kind, requestId) {
+  return `${kind}:${requestId}`;
+}
+
+function pruneNeedsYouState(entry, projection) {
+  const activeKeys = new Set();
+  if (projection.pendingInput?.requestId) {
+    activeKeys.add(needsYouKey("input", projection.pendingInput.requestId));
+  }
+  if (projection.pendingApproval?.approvalRequestId) {
+    activeKeys.add(needsYouKey("approval", projection.pendingApproval.approvalRequestId));
+  }
+  for (const key of entry.needsYouDrafts.keys()) {
+    if (!activeKeys.has(key)) entry.needsYouDrafts.delete(key);
+  }
+  for (const key of entry.needsYouSubmissions.keys()) {
+    if (!activeKeys.has(key)) entry.needsYouSubmissions.delete(key);
+  }
+  if (!projection.pendingApproval ||
+      entry.approvalConfirmRequestId !== projection.pendingApproval.approvalRequestId) {
+    entry.approvalConfirmRequestId = null;
+  }
+}
+
+function renderPendingInput(entry, projection) {
+  const pending = projection.pendingInput;
+  if (!pending?.requestId) return null;
+  const key = needsYouKey("input", pending.requestId);
+  const draft = entry.needsYouDrafts.get(key) || { selectedOptionIds: new Set(), freeText: "" };
+  entry.needsYouDrafts.set(key, draft);
+  const submission = entry.needsYouSubmissions.get(key);
+  const locked = submission?.status === "pending" || submission?.status === "accepted";
+  const reliableVersion = Number.isSafeInteger(projection.stateVersion) && projection.stateVersion > 0;
+  const section = el("section", "needs-you-panel input-required");
+  section.dataset.requestId = pending.requestId;
+  const heading = el("div", "needs-you-heading");
+  heading.append(iconNode("circle-help"), el("strong", "", "需要你的输入"));
+  section.append(heading, el("p", "needs-you-prompt", pending.prompt));
+
+  const options = el("div", "needs-you-options");
+  const optionInputs = [];
+  for (const option of pending.options || []) {
+    const label = el("label", "needs-you-option");
+    const input = document.createElement("input");
+    input.type = pending.multiSelect ? "checkbox" : "radio";
+    input.name = `actor-input-${pending.requestId}`;
+    input.value = option.optionId;
+    input.checked = draft.selectedOptionIds.has(option.optionId);
+    input.disabled = locked;
+    const copy = el("span", "needs-you-option-copy");
+    copy.append(el("strong", "", option.label));
+    if (option.description) copy.append(el("small", "", option.description));
+    label.append(input, copy);
+    optionInputs.push(input);
+    input.addEventListener("change", () => {
+      if (pending.multiSelect) {
+        if (input.checked) draft.selectedOptionIds.add(option.optionId);
+        else draft.selectedOptionIds.delete(option.optionId);
+      } else {
+        draft.selectedOptionIds.clear();
+        if (input.checked) draft.selectedOptionIds.add(option.optionId);
+      }
+      if (draft.selectedOptionIds.size) {
+        draft.freeText = "";
+        if (freeText) freeText.value = "";
+      }
+      updateSubmitState();
+    });
+    options.append(label);
+  }
+  if (options.childElementCount) section.append(options);
+
+  let freeText = null;
+  if (pending.allowFreeText) {
+    freeText = document.createElement("textarea");
+    freeText.className = "needs-you-free-text";
+    freeText.rows = 3;
+    freeText.placeholder = "输入其他答案";
+    freeText.setAttribute("aria-label", "自由文本答案");
+    freeText.value = draft.freeText;
+    freeText.disabled = locked;
+    freeText.addEventListener("input", () => {
+      draft.freeText = freeText.value;
+      if (freeText.value.trim()) {
+        draft.selectedOptionIds.clear();
+        optionInputs.forEach((input) => { input.checked = false; });
+      }
+      updateSubmitState();
+    });
+    section.append(freeText);
+  }
+
+  const footer = el("div", "needs-you-actions");
+  const submit = el("button", "needs-you-primary", "提交答案");
+  submit.type = "button";
+  const status = el("span", `needs-you-state ${submission?.status || ""}`,
+    submission?.message || (!reliableVersion ? "正在同步 Actor 状态…" : ""));
+  function updateSubmitState() {
+    submit.disabled = locked || !reliableVersion ||
+      (!draft.selectedOptionIds.size && !draft.freeText.trim());
+  }
+  updateSubmitState();
+  submit.addEventListener("click", () => {
+    const answer = draft.freeText.trim()
+      ? { freeText: draft.freeText.trim() }
+      : { selectedOptionIds: [...draft.selectedOptionIds] };
+    void submitNeedsYouDecision(entry, "input", pending.requestId, {
+      type: "input.resolve",
+      answer,
+    });
+  });
+  footer.append(submit, status);
+  section.append(footer);
+  return section;
+}
+
+function renderPendingApproval(entry, projection) {
+  const pending = projection.pendingApproval;
+  if (!pending?.approvalRequestId) return null;
+  const requestId = pending.approvalRequestId;
+  const key = needsYouKey("approval", requestId);
+  const draft = entry.needsYouDrafts.get(key) || { reason: "" };
+  entry.needsYouDrafts.set(key, draft);
+  const submission = entry.needsYouSubmissions.get(key);
+  const locked = submission?.status === "pending" || submission?.status === "accepted";
+  const reliableVersion = Number.isSafeInteger(projection.stateVersion) && projection.stateVersion > 0;
+  const outsideGrant = pending.grantBoundary !== "within_grant";
+  const irreversible = pending.reversibility === "irreversible";
+  const confirming = irreversible && entry.approvalConfirmRequestId === requestId;
+  const section = el("section", `needs-you-panel approval-required${irreversible ? " dangerous" : ""}`);
+  section.dataset.requestId = requestId;
+  const heading = el("div", "needs-you-heading");
+  heading.append(iconNode(irreversible ? "triangle-alert" : "shield-alert"), el("strong", "", "需要你的批准"));
+  section.append(heading);
+
+  const facts = el("dl", "approval-facts");
+  const appendFact = (label, value) => {
+    if (!value) return;
+    facts.append(el("dt", "", label), el("dd", "", value));
+  };
+  appendFact("操作", pending.action || pending.toolName);
+  appendFact("目标", pending.target);
+  appendFact("执行者", pending.actorLabel);
+  appendFact("可逆性", pending.reversibility === "irreversible" ? "不可逆" :
+    pending.reversibility === "reversible" ? "可逆" : "未知");
+  appendFact("过期时间", pending.expiresAt ? new Date(pending.expiresAt).toLocaleString("zh-CN") : "");
+  section.append(facts);
+
+  if (outsideGrant) {
+    section.append(el(
+      "p",
+      "needs-you-boundary",
+      "该操作超出当前授权边界。授权由 NyxID 管理，Studio 不会在此批准。",
+    ));
+    const manage = el("button", "needs-you-secondary", "前往 NyxID 管理授权");
+    manage.type = "button";
+    manage.addEventListener("click", () => openServiceManagement());
+    section.append(manage);
+    return section;
+  }
+
+  const reason = document.createElement("textarea");
+  reason.className = "needs-you-reason";
+  reason.rows = 2;
+  reason.placeholder = "说明原因（可选）";
+  reason.setAttribute("aria-label", "批准或拒绝原因");
+  reason.value = draft.reason;
+  reason.disabled = locked;
+  reason.addEventListener("input", () => { draft.reason = reason.value; });
+  section.append(reason);
+
+  if (confirming) {
+    section.append(el("p", "danger-confirmation", "这是不可逆操作。请再次确认操作与目标无误。"));
+  }
+  const footer = el("div", "needs-you-actions");
+  const approve = el(
+    "button",
+    confirming ? "needs-you-danger" : "needs-you-primary",
+    confirming ? "确认批准" : irreversible ? "审查并批准" : "批准",
+  );
+  approve.type = "button";
+  approve.disabled = locked || !reliableVersion;
+  approve.addEventListener("click", () => {
+    if (irreversible && !confirming) {
+      entry.approvalConfirmRequestId = requestId;
+      renderActorProjection(entry);
+      return;
+    }
+    void submitNeedsYouDecision(entry, "approval", requestId, {
+      type: "approval.resolve",
+      approved: true,
+      reason: draft.reason.trim(),
+    });
+  });
+  const reject = el("button", "needs-you-secondary", "拒绝");
+  reject.type = "button";
+  reject.disabled = locked || !reliableVersion;
+  reject.addEventListener("click", () => void submitNeedsYouDecision(entry, "approval", requestId, {
+    type: "approval.resolve",
+    approved: false,
+    reason: draft.reason.trim(),
+  }));
+  const status = el("span", `needs-you-state ${submission?.status || ""}`,
+    submission?.message || (!reliableVersion ? "正在同步 Actor 状态…" : ""));
+  footer.append(approve, reject, status);
+  section.append(footer);
+  return section;
+}
+
+async function submitNeedsYouDecision(entry, kind, requestId, payload) {
+  const projection = entryActorProjection(entry);
+  if (!entry?.actorId || !projection || !requestId ||
+      !Number.isSafeInteger(projection.stateVersion) || projection.stateVersion <= 0) return;
+  const key = needsYouKey(kind, requestId);
+  const existing = entry.needsYouSubmissions.get(key);
+  if (existing?.status === "pending" || existing?.status === "accepted") return;
+  const clientRequestId = createId(`client-${kind}`);
+  entry.needsYouSubmissions.set(key, { status: "pending", message: "正在提交…" });
+  renderActorProjection(entry);
+  try {
+    const response = await fetch("/api/demo/chat", {
+      method: "POST",
+      headers: demoHeaders(),
+      body: JSON.stringify({
+        surface: "nyxid-chat",
+        ...payload,
+        conversationId: entry.actorId,
+        requestId,
+        clientRequestId,
+        expectedStateVersion: projection.stateVersion,
+      }),
+    });
+    if (!response.ok) throw await responseError(response);
+    await response.json().catch(() => null);
+    entry.needsYouSubmissions.set(key, {
+      status: "accepted",
+      message: "已受理，等待 Actor 确认。",
+    });
+    renderActorProjection(entry);
+    await refreshActorState(entry);
+    if (entry.actorStateRefreshTimer) window.clearTimeout(entry.actorStateRefreshTimer);
+    entry.actorStateRefreshTimer = window.setTimeout(() => {
+      entry.actorStateRefreshTimer = null;
+      void refreshActorState(entry);
+      void loadConversations({ silent: true });
+    }, 500);
+  } catch (error) {
+    entry.needsYouSubmissions.set(key, {
+      status: "error",
+      message: `提交失败：${String(error?.message || "unknown error").slice(0, 240)}`,
+    });
+    renderActorProjection(entry);
+    await refreshActorState(entry, { uncursored: true });
+  }
+}
+
 function renderActorProjection(entry) {
   if (!entry?.thread) return;
   const projection = entry.actorProjection || createActorProjection(entry.actorId);
   const hasProjection = Boolean(
-    projection.task || projection.actions.size || projection.conflicts.length || entry.actorStateNotice,
+    projection.task || projection.pendingInput || projection.pendingApproval ||
+    projection.actions.size || projection.conflicts.length || entry.actorStateNotice,
   );
   if (!hasProjection) {
     entry.actorTaskElement?.remove();
@@ -1939,7 +2477,9 @@ function renderActorProjection(entry) {
   entry.actorTaskElement = root;
   root.replaceChildren();
   const task = projection.task;
-  const status = String(task?.status || projection.latestTurn?.status || "unknown").toLowerCase();
+  const status = String(
+    task?.status || projection.taskStatus || projection.latestTurn?.status || "unknown",
+  ).toLowerCase();
   root.className = `actor-task ${status}`;
   root.dataset.actorId = projection.actorId || entry.actorId || "";
   if (task?.taskId) root.dataset.taskId = task.taskId;
@@ -1954,8 +2494,16 @@ function renderActorProjection(entry) {
   header.append(title, el("span", `actor-task-status ${status}`, status));
   root.append(header);
 
+  pruneNeedsYouState(entry, projection);
+  const pendingInput = renderPendingInput(entry, projection);
+  const pendingApproval = renderPendingApproval(entry, projection);
+  if (pendingInput) root.append(pendingInput);
+  if (pendingApproval) root.append(pendingApproval);
+
   if (task?.safeMessage) root.append(el("p", "actor-task-message", task.safeMessage));
   if (task) {
+    const recovery = renderActorRecovery(projection);
+    if (recovery) root.append(recovery);
     const steps = el("div", "actor-steps");
     for (const step of projection.steps.values()) {
       const stepStatus = String(step.status || "unknown").toLowerCase();
@@ -1967,12 +2515,15 @@ function renderActorProjection(entry) {
         el("small", "", `${actorStatusCopy(stepStatus)} · ${step.kind || "step"}`),
       );
       const facts = el("div", "actor-step-facts");
-      if (step.externalEffect) {
-        facts.append(el(
+      const effect = actorEffectCopy[step.externalEffect];
+      if (effect) {
+        const evidence = el(
           "span",
           `actor-effect ${String(step.externalEffect).replaceAll("_", "-")}`,
-          `effect: ${step.externalEffect}`,
-        ));
+          effect.label,
+        );
+        evidence.dataset.effect = step.externalEffect;
+        facts.append(evidence, el("span", "actor-effect-explanation", effect.explanation));
       }
       const operation = step.operation || step.externalOperation;
       const generation = actorOperationGeneration(step);
@@ -1985,8 +2536,23 @@ function renderActorProjection(entry) {
         ));
       }
       const controls = el("div", "actor-step-controls");
-      if (actorCan(projection, "retry", step.stepId)) {
-        const retry = el("button", "actor-retry", "重试");
+      const capability = actorStepManagementCapability(step);
+      if (capability) {
+        facts.append(el("span", "actor-readiness-fact", [
+          readinessConnectionCopy[capability.connectionState],
+          readinessGrantCopy[capability.grantState],
+        ].join(" · ")));
+        const manage = el("button", "actor-manage", "前往 NyxID");
+        manage.type = "button";
+        manage.addEventListener("click", () => openReadinessManagement(capability.managementUrl));
+        controls.append(manage);
+      }
+      if (actorCan(projection, "retry", step.stepId) && step.externalEffect !== "confirmed") {
+        const retry = el(
+          "button",
+          "actor-retry",
+          step.externalEffect === "may_have_changed" ? "Actor 授权重试" : "重试",
+        );
         retry.type = "button";
         retry.addEventListener("click", () => void submitActorControl("retry", step));
         controls.append(retry);
@@ -2158,13 +2724,18 @@ function renderActiveConversationState() {
   const entry = state.activeConversation;
   if (!entry) return;
   const running = Boolean(entry.controller);
+  const actorNeedsYou = entry.actorProjection?.pendingInput
+    ? "Input"
+    : entry.actorProjection?.pendingApproval
+      ? "Approval"
+      : null;
   setConversationTitle(entry.title || entry.meta?.title || "新会话");
   setRunningUi(running);
   const actorStatus = actorTerminalRunStatus(entry.actorProjection);
-  const status = entry.run.pendingApproval ? "running" : actorStatus || entry.run.status;
+  const status = actorNeedsYou || entry.run.pendingApproval ? "running" : actorStatus || entry.run.status;
   const labels = {
     idle: "Ready",
-    running: entry.run.pendingApproval ? "Approval" : "Running",
+    running: actorNeedsYou || entry.run.pendingApproval ? actorNeedsYou || "Approval" : "Running",
     complete: "Complete",
     blocked: "Blocked",
     error: "Error",
@@ -2172,8 +2743,10 @@ function renderActiveConversationState() {
     closed: "Closed",
   };
   setRunStatus(status, labels[status] || "Idle");
-  dom.sidebarSessionMeta.textContent = entry.run.pendingApproval
-    ? "Waiting for approval"
+  dom.sidebarSessionMeta.textContent = actorNeedsYou
+    ? actorNeedsYou === "Input" ? "Waiting for input" : "Waiting for approval"
+    : entry.run.pendingApproval
+      ? "Waiting for approval"
     : actorStatus
       ? labels[actorStatus]
       : running
@@ -2279,6 +2852,16 @@ async function sendPrompt(overridePrompt, options = {}) {
   const hasOverrideAttachment = Object.prototype.hasOwnProperty.call(options, "attachment");
   const attachment = hasOverrideAttachment ? options.attachment : state.attachment;
   if (!prompt && !attachment) return;
+  if (firstTurnReadinessBlocked()) {
+    state.pendingFirstTurn ||= {
+      prompt,
+      attachment: attachment == null ? null : structuredClone(attachment),
+      clientRequestId: createId("client-text"),
+    };
+    dom.composerStatus.textContent = "完成必需的运行准备后，将继续这条请求。";
+    dom.readinessPanel.scrollIntoView?.({ block: "nearest" });
+    return;
+  }
 
   const conversation = state.activeConversation;
   state.run = createRunState();
@@ -2287,7 +2870,7 @@ async function sendPrompt(overridePrompt, options = {}) {
   state.run.config = configPayload(state.config);
   state.run.startedAt = Date.now();
   state.run.request = { prompt, attachment };
-  state.run.clientRequestId = createId("client-text");
+  state.run.clientRequestId = options.clientRequestId || createId("client-text");
   const controller = new AbortController();
   const run = state.run;
   const runSurface = state.config.surface;
@@ -2465,6 +3048,10 @@ function handleFrame(raw) {
     case "control_changed":
     case "continuation_changed":
     case "step_control_changed":
+    case "input_requested":
+    case "input_changed":
+    case "approval_requested":
+    case "approval_changed":
     case "action_request": {
       const entry = conversationContext || state.activeConversation;
       if (!entry) break;
@@ -2478,8 +3065,22 @@ function handleFrame(raw) {
           cacheActionRequest(entry, action.request);
         }
       }
+      if (event.type === "approval_requested") {
+        state.run.approvalCard?.card?.remove();
+        state.run.approvalCard = null;
+        state.run.pendingApproval = null;
+      }
       renderActorProjection(entry);
       renderActionCards(entry);
+      if (entry === state.activeConversation) renderActiveConversationState();
+      if (["input_requested", "input_changed", "approval_requested", "approval_changed"].includes(event.type)) {
+        if (entry.actorStateRefreshTimer) window.clearTimeout(entry.actorStateRefreshTimer);
+        entry.actorStateRefreshTimer = window.setTimeout(() => {
+          entry.actorStateRefreshTimer = null;
+          void refreshActorState(entry);
+          void loadConversations({ silent: true });
+        }, 300);
+      }
       break;
     }
     case "step_started":
@@ -3003,6 +3604,9 @@ function renderMarkdown(target, source) {
 }
 
 function renderApproval(event) {
+  const actorPending = entryActorProjection(conversationContext || state.activeConversation)?.pendingApproval;
+  const requestId = event.requestId || event.approvalRequestId;
+  if (actorPending && (!requestId || actorPending.approvalRequestId === requestId)) return;
   state.run.pendingApproval = event;
   state.run.context.runId = event.runId || state.run.context.runId;
   const card = el("section", "approval-card");
@@ -3550,6 +4154,7 @@ function abortAllRuns() {
 
 function newChat(options) {
   state.conversationLoadSequence += 1;
+  state.pendingFirstTurn = null;
   const refreshHistory = options?.refreshHistory !== false;
   const previous = state.activeConversation;
   const discardPrevious = previous && !previous.actorId && !previous.controller && !previous.run.startedAt;

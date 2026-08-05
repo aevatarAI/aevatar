@@ -150,10 +150,13 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
     [Fact]
     public async Task WorkflowStudio_AssistantAssets_ShouldShipNyxIdV4FeatureParity()
     {
+        var html = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetStudioPage);
         var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
         var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
+        var readiness = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantReadiness);
         var actorState = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantActorState);
         var blocks = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantBlocks);
+        var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
         var styles = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantStyles);
 
         app.Should().Contain("import \"./transport.js\"");
@@ -161,6 +164,10 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().Contain("async function loadConversations(");
         app.Should().Contain("async function refreshActorState(");
         app.Should().Contain("async function submitActorControl(");
+        app.Should().Contain("async function submitNeedsYouDecision(");
+        app.Should().Contain("async function loadReadiness(");
+        app.Should().Contain("state.pendingFirstTurn ||=");
+        app.Should().Contain("已受理，等待 Actor 确认");
         app.Should().Contain("async function submitApproval(");
         app.Should().Contain("async function submitActionContinuation(");
         app.Should().Contain("async function selectAttachment(");
@@ -168,15 +175,151 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         protocol.Should().Contain("export function normalizeFrame(");
         protocol.Should().Contain("export function validateActionContinuation(");
         protocol.Should().Contain("schemaVersion !== 4");
+        protocol.Should().Contain("\"nyxid.input.request\": \"input_requested\"");
+        protocol.Should().Contain("\"nyxid.approval.request\": \"approval_requested\"");
         actorState.Should().Contain("export function reduceActorEvent(");
         actorState.Should().Contain("export function applyCurrentStateResult(");
+        actorState.Should().Contain("pendingInput: null");
+        actorState.Should().Contain("latestApprovalResolution: null");
+        readiness.Should().Contain("export function normalizeReadinessSnapshot(");
+        readiness.Should().Contain("Readiness snapshot contains secret fields");
+        transport.Should().Contain("/api/v1/assistant/readiness");
+        transport.Should().Contain("authorizedFetch(\"/api/chat\"");
         blocks.Should().Contain("export function buildConnectCardBlock(");
+        html.Should().Contain("id=\"readinessPanel\"");
+        html.Should().Contain("id=\"needsYouFilterButton\"");
         styles.Should().Contain(".connect-card");
+        styles.Should().Contain(".readiness-panel");
+        styles.Should().Contain(".needs-you-panel");
+        styles.Should().Contain(".history-filter");
         styles.Should().Contain("@media (max-width:");
         styles.Should().Contain("color-scheme: light");
         styles.Should().Contain("--bg: #f4f5f7");
         styles.Should().Contain("--accent: #2563eb");
         styles.Should().NotContain("data-theme");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_ReadinessAsset_ShouldRejectUnsafeOrOpenEndedEvidence()
+    {
+        var readiness = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantReadiness);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
+            const context = { URL, Date, Set, Error };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            const fixture = {
+              revision:'rev-alpha', evaluatedAt:'2026-08-01T01:02:03Z', capabilities:[{
+                capabilityId:'api-github', label:'GitHub', required:false, status:'available',
+                connectionState:'connected', grantState:'granted', requestedScopes:['repo:read'],
+                managementUrl:'https://nyx.example/keys/github', reasonCode:null
+              }]
+            };
+            const normalized = context.normalizeReadinessSnapshot(fixture, {nyxidWebUrl:'https://nyx.example'});
+            assert.equal(normalized.capabilities[0].status, 'available');
+            assert.equal(normalized.evaluatedAt, '2026-08-01T01:02:03.000Z');
+            assert.throws(() => context.normalizeReadinessSnapshot({
+              ...fixture, capabilities:[{...fixture.capabilities[0], managementUrl:'https://evil.example/keys'}]
+            }, {nyxidWebUrl:'https://nyx.example'}), /not allowed/);
+            assert.throws(() => context.normalizeReadinessSnapshot({
+              ...fixture, accessToken:'secret'
+            }, {nyxidWebUrl:'https://nyx.example'}), /secret fields/);
+            assert.throws(() => context.normalizeReadinessSnapshot({
+              ...fixture, capabilities:[{...fixture.capabilities[0], status:'maybe'}]
+            }, {nyxidWebUrl:'https://nyx.example'}), /status is invalid/);
+            """;
+
+        var result = await RunNodeAsync(script, readiness);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_ActorProjection_ShouldConvergeNeedsYouFactsFromLiveAndCurrentState()
+    {
+        var actorState = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantActorState);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8')
+              .replace(/^import[^;]+;\s*/m, '')
+              .replace(/^export /gm, '');
+            const context = { structuredClone, validateActionRequest:value => value };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            let live = context.createActorProjection('conversation-alpha');
+            live = context.reduceActorEvent(live, {type:'input_requested', sequence:23, payload:{
+              requestId:'input-alpha', turnId:'turn-alpha', taskId:'task-alpha', stepId:'step-input',
+              prompt:'Select regions', options:[{optionId:'option-sg',label:'Singapore'}],
+              allowFreeText:false, multiSelect:true, askedAt:'2026-08-01T12:00:00Z'
+            }});
+            assert.equal(live.pendingInput.requestId, 'input-alpha');
+            assert.equal(live.attentionKind, 'input');
+            live = context.reduceActorEvent(live, {type:'input_changed', sequence:24, payload:{
+              requestId:'input-alpha', clientRequestId:'client-input', outcome:'accepted'
+            }});
+            assert.equal(live.pendingInput, null);
+            assert.equal(live.latestInputResolution.requestId, 'input-alpha');
+
+            let current = context.createActorProjection('conversation-alpha');
+            const applied = context.applyCurrentStateResult(current, {status:'current', stateVersion:31, snapshot:{
+              actorId:'conversation-alpha', scopeId:'scope-alpha', stateVersion:31, progressSequence:31,
+              activeTurn:null, latestTurn:null, recentTerminalTurns:[], activeTask:null,
+              pendingInput:null, pendingApproval:{
+                approvalRequestId:'approval-alpha', turnId:'turn-alpha', taskId:'task-alpha',
+                stepId:'step-tool', toolName:'repository_delete', action:'repository.delete',
+                target:'repository:repo-alpha', reversibility:'irreversible', grantBoundary:'within_grant'
+              }, latestInputResolution:null, latestApprovalResolution:null, taskStatus:'active',
+              attentionKind:'approval', attentionSince:'2026-08-01T12:05:00Z',
+              activeStepSummary:'Delete repository.', pendingActions:[], controlFence:null,
+              latestControlResult:null, continuationAdmission:null
+            }});
+            assert.equal(applied.projection.pendingApproval.approvalRequestId, 'approval-alpha');
+            assert.equal(applied.projection.pendingApproval.reversibility, 'irreversible');
+            assert.equal(applied.projection.attentionKind, 'approval');
+            assert.equal(applied.reloadWithoutCursor, false);
+            """;
+
+        var result = await RunNodeAsync(script, actorState);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_ConversationProtocol_ShouldPreserveAuthoritativeAttentionSummary()
+    {
+        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('export function normalizeConversationIndex(');
+            const end = source.indexOf('\nexport function normalizeStoredMessages(', start);
+            assert.notEqual(start, -1);
+            assert.notEqual(end, -1);
+            const context = {};
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end).replace(/^export /, ''), context);
+            const result = context.normalizeConversationIndex({conversations:[{
+              id:'conversation-alpha', title:'Deploy', attentionKind:'approval',
+              attentionSince:'2026-08-01T12:05:00Z', activeStepSummary:'Delete repository.',
+              taskStatus:'active', stateVersion:31
+            }]});
+            assert.deepEqual(JSON.parse(JSON.stringify(result[0])), {
+              id:'conversation-alpha', title:'Deploy', serviceId:'', serviceKind:'', createdAt:null,
+              updatedAt:null, messageCount:0, llmRoute:null, llmModel:null, taskStatus:'active',
+              attentionKind:'approval', attentionSince:'2026-08-01T12:05:00Z',
+              activeStepSummary:'Delete repository.', stateVersion:31
+            });
+            """;
+
+        var result = await RunNodeAsync(script, protocol);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     [Fact]

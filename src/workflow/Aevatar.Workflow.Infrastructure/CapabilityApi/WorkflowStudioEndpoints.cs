@@ -32,6 +32,7 @@ public static class WorkflowStudioEndpoints
 
     private static readonly BackendConsoleAsset AssistantAppAsset = AssistantAsset("app.js", "text/javascript");
     private static readonly BackendConsoleAsset AssistantProtocolAsset = AssistantAsset("protocol.js", "text/javascript");
+    private static readonly BackendConsoleAsset AssistantReadinessAsset = AssistantAsset("readiness.js", "text/javascript");
     private static readonly BackendConsoleAsset AssistantActorStateAsset = AssistantAsset("actor-state.js", "text/javascript");
     private static readonly BackendConsoleAsset AssistantBlocksAsset = AssistantAsset("blocks.js", "text/javascript");
     private static readonly BackendConsoleAsset AssistantTransportAsset = AssistantAsset("transport.js", "text/javascript");
@@ -51,6 +52,9 @@ public static class WorkflowStudioEndpoints
             .WithTags("WorkflowStudio")
             .AllowAnonymous();
         app.MapGet($"{AssetsRoute}/protocol.js", GetAssistantProtocol)
+            .WithTags("WorkflowStudio")
+            .AllowAnonymous();
+        app.MapGet($"{AssetsRoute}/readiness.js", GetAssistantReadiness)
             .WithTags("WorkflowStudio")
             .AllowAnonymous();
         app.MapGet($"{AssetsRoute}/actor-state.js", GetAssistantActorState)
@@ -113,6 +117,9 @@ public static class WorkflowStudioEndpoints
 
     internal static IResult GetAssistantProtocol(HttpContext http, [FromServices] IBackendConsoleAssetService assets) =>
         ServeAsset(http, assets, AssistantProtocolAsset);
+
+    internal static IResult GetAssistantReadiness(HttpContext http, [FromServices] IBackendConsoleAssetService assets) =>
+        ServeAsset(http, assets, AssistantReadinessAsset);
 
     internal static IResult GetAssistantActorState(HttpContext http, [FromServices] IBackendConsoleAssetService assets) =>
         ServeAsset(http, assets, AssistantActorStateAsset);

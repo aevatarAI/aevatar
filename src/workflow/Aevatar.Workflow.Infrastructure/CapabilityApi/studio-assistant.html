@@ -11,12 +11,12 @@
       href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;family=Mona+Sans:wght@400;500;600;700&amp;display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260805-nyxid-parity" />
+    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260805-needs-you" />
     <script defer src="https://unpkg.com/lucide@0.563.0/dist/umd/lucide.min.js"></script>
     <script defer src="https://unpkg.com/marked@15.0.12/marked.min.js"></script>
     <script defer src="https://unpkg.com/dompurify@3.2.6/dist/purify.min.js"></script>
     <script>globalThis.__AEVATAR_ASSISTANT_CONFIG__ = __BACKEND_CONSOLE_CONFIG__;</script>
-    <script type="module" src="/workflow/studio/assets/app.js?v=20260805-nyxid-parity"></script>
+    <script type="module" src="/workflow/studio/assets/app.js?v=20260805-needs-you"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -83,7 +83,14 @@
           </div>
 
           <div class="sidebar-group recent-group" id="recentGroup">
-            <div class="group-label">Recent</div>
+            <div class="group-label history-heading">
+              <span>Recent</span>
+              <button class="history-filter" id="needsYouFilterButton" type="button" aria-pressed="false">
+                <i data-lucide="circle-alert"></i>
+                <span>Needs you</span>
+                <strong id="needsYouCount">0</strong>
+              </button>
+            </div>
             <div class="recent-session-list" id="recentSessionsList" aria-live="polite">
               <div class="history-empty">正在加载生产会话…</div>
             </div>
@@ -114,6 +121,20 @@
                   <span>使用 NyxID 登录</span>
                 </button>
               </div>
+              <section class="readiness-panel hidden" id="readinessPanel" aria-labelledby="readinessTitle">
+                <header class="readiness-header">
+                  <div>
+                    <span class="eyebrow">Before the first run</span>
+                    <h2 id="readinessTitle">运行准备</h2>
+                  </div>
+                  <button class="icon-button" id="refreshReadinessButton" type="button" aria-label="刷新运行准备状态" title="刷新">
+                    <i data-lucide="refresh-cw"></i>
+                  </button>
+                </header>
+                <p id="readinessSummary">正在检查所需能力。</p>
+                <div class="readiness-list" id="readinessList" role="list"></div>
+                <small id="readinessFreshness">尚未检查</small>
+              </section>
               <div class="quick-actions" id="quickActions" aria-label="快捷请求">
                 <button type="button" data-prompt="列出当前 workspace 中可用的 team、workflow 和已连接服务，并标出需要处理的问题。">
                   <i data-lucide="list-checks"></i>

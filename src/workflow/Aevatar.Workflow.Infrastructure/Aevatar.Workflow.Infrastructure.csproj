@@ -41,6 +41,7 @@
     <EmbeddedResource Include="CapabilityApi\StudioAssistant\app.js" />
     <EmbeddedResource Include="CapabilityApi\StudioAssistant\blocks.js" />
     <EmbeddedResource Include="CapabilityApi\StudioAssistant\protocol.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\readiness.js" />
     <EmbeddedResource Include="CapabilityApi\StudioAssistant\styles.css" />
     <EmbeddedResource Include="CapabilityApi\StudioAssistant\transport.js" />
   </ItemGroup>

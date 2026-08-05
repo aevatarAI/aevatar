@@ -60,6 +60,10 @@ const ACTOR_CUSTOM_TYPES = Object.freeze({
   "nyxid.control.changed": "control_changed",
   "nyxid.continuation.changed": "continuation_changed",
   "nyxid.step.control.changed": "step_control_changed",
+  "nyxid.input.request": "input_requested",
+  "nyxid.input.changed": "input_changed",
+  "nyxid.approval.request": "approval_requested",
+  "nyxid.approval.changed": "approval_changed",
 });
 
 const ENUMS = Object.freeze({
@@ -70,7 +74,7 @@ const ENUMS = Object.freeze({
     "planned", "waiting", "running", "done", "failed", "skipped", "cancelled", "uncertain",
   ]),
   stepKind: enumDefinition("NYX_ID_CHAT_STEP_KIND_", [
-    "llm", "tool", "browser_action", "postcondition",
+    "llm", "tool", "browser_action", "postcondition", "input",
   ]),
   effect: enumDefinition("NYX_ID_CHAT_EFFECT_EVIDENCE_", [
     "not_started", "not_applied", "confirmed", "may_have_changed",
@@ -89,6 +93,10 @@ const ENUMS = Object.freeze({
   stepControlKind: enumDefinition("NYX_ID_CHAT_STEP_CONTROL_KIND_", ["retry", "skip"]),
   transitionOutcome: enumDefinition("NYX_ID_CHAT_TRANSITION_OUTCOME_", [
     "accepted", "rejected", "idempotent",
+  ]),
+  needsYouOutcome: enumDefinition("NYX_ID_CHAT_NEEDS_YOU_RESOLUTION_OUTCOME_", ["accepted"]),
+  approvalReversibility: enumDefinition("NYX_ID_CHAT_APPROVAL_REVERSIBILITY_", [
+    "reversible", "irreversible", "unknown",
   ]),
 });
 
@@ -709,6 +717,66 @@ function normalizeActorPayload(type, payload) {
     normalizeIntegerProperty(value, "expectedStateVersion");
     return value;
   }
+  if (type === "input_requested") return normalizeInputRequest(value);
+  if (type === "input_changed") return normalizeNeedsYouResolution(value);
+  if (type === "approval_requested") return normalizeApprovalRequest(value);
+  if (type === "approval_changed") return normalizeNeedsYouResolution(value);
+  return value;
+}
+
+function normalizeInputRequest(value) {
+  for (const key of ["requestId", "turnId", "taskId", "stepId"]) {
+    value[key] = validateIdentity(value[key]);
+  }
+  if (typeof value.prompt !== "string" || !value.prompt.trim() || value.prompt.length > 4000) {
+    throw new ProtocolValidationError("Pending input prompt is invalid.");
+  }
+  value.prompt = value.prompt.trim();
+  if (typeof value.allowFreeText !== "boolean" || typeof value.multiSelect !== "boolean") {
+    throw new ProtocolValidationError("Pending input mode is invalid.");
+  }
+  if (!Array.isArray(value.options) || value.options.length > 20) {
+    throw new ProtocolValidationError("Pending input options are invalid.");
+  }
+  const optionIds = new Set();
+  value.options = value.options.map((input) => {
+    const option = cloneJsonObject(input);
+    option.optionId = validateIdentity(option.optionId);
+    if (optionIds.has(option.optionId)) {
+      throw new ProtocolValidationError("Pending input option identity is duplicated.");
+    }
+    optionIds.add(option.optionId);
+    if (typeof option.label !== "string" || !option.label.trim() || option.label.length > 240) {
+      throw new ProtocolValidationError("Pending input option label is invalid.");
+    }
+    option.label = option.label.trim();
+    option.description = typeof option.description === "string"
+      ? option.description.trim().slice(0, 600)
+      : "";
+    return option;
+  });
+  if (!value.allowFreeText && value.options.length === 0) {
+    throw new ProtocolValidationError("Pending input has no answer mode.");
+  }
+  return value;
+}
+
+function normalizeApprovalRequest(value) {
+  value.approvalRequestId = validateIdentity(value.approvalRequestId);
+  for (const key of ["turnId", "taskId", "stepId"]) {
+    value[key] = validateIdentity(value[key]);
+  }
+  if (value.presentation && typeof value.presentation === "object") {
+    value.presentation = cloneJsonObject(value.presentation);
+    normalizeEnumProperty(value.presentation, "reversibility", ENUMS.approvalReversibility);
+  }
+  return value;
+}
+
+function normalizeNeedsYouResolution(value) {
+  value.requestId = validateIdentity(value.requestId);
+  value.clientRequestId = validateIdentity(value.clientRequestId);
+  normalizeEnumProperty(value, "outcome", ENUMS.needsYouOutcome);
   return value;
 }
 
@@ -860,6 +928,13 @@ export function normalizeConversationIndex(value) {
       messageCount: Number.isFinite(Number(item.messageCount)) ? Number(item.messageCount) : 0,
       llmRoute: item.llmRoute || null,
       llmModel: item.llmModel || null,
+      taskStatus: item.taskStatus || null,
+      attentionKind: String(item.attentionKind || "none").trim().toLowerCase() || "none",
+      attentionSince: item.attentionSince || null,
+      activeStepSummary: String(item.activeStepSummary || "").trim() || null,
+      stateVersion: Number.isSafeInteger(Number(item.stateVersion))
+        ? Number(item.stateVersion)
+        : 0,
     }))
     .filter((item) => item.id)
     .sort((left, right) => {
