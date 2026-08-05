@@ -5,6 +5,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.Tools;
+using ModelContextProtocol;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using Microsoft.Extensions.Logging;
@@ -70,7 +71,9 @@ public sealed class MCPToolAdapter : IAgentTool
                        ?? [];
 
             var result = await _client.CallToolAsync(_mcpToolName, args, cancellationToken: ct);
-            var resultJson = result.Content?.ToString() ?? "";
+            var resultJson = System.Text.Json.JsonSerializer.Serialize(
+                result,
+                McpJsonUtilities.DefaultOptions);
             var isError = result.IsError == true;
             return new AgentToolTerminalOutcome(
                 resultJson,

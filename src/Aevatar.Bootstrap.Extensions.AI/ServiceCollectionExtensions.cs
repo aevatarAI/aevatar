@@ -1194,8 +1194,12 @@ public static class ServiceCollectionExtensions
                 {
                     Name = server.Name,
                     Command = server.Command,
+                    Url = server.Url,
                     Arguments = server.Args,
                     Environment = server.Env,
+                    AdditionalHeaders = server.Headers,
+                    InitializationTimeout = TimeSpan.FromMilliseconds(
+                        Math.Clamp(server.TimeoutMs, 100, 300_000)),
                 });
             }
         });

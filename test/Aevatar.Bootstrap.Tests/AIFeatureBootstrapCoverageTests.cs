@@ -571,10 +571,10 @@ public class AIFeatureBootstrapCoverageTests
                 """
                 {
                   "mcpServers": {
-                    "local": {
-                      "command": "echo",
-                      "args": ["hello"],
-                      "env": { "K": "V" }
+                    "remote": {
+                      "url": "https://mcp.example.com/mcp",
+                      "headers": { "x-tenant": "demo" },
+                      "timeoutMs": 12345
                     }
                   }
                 }
@@ -597,8 +597,10 @@ public class AIFeatureBootstrapCoverageTests
 
             var mcpOptions = provider.GetRequiredService<MCPToolsOptions>();
             mcpOptions.Servers.Should().ContainSingle();
-            mcpOptions.Servers[0].Name.Should().Be("local");
-            mcpOptions.Servers[0].Environment["K"].Should().Be("V");
+            mcpOptions.Servers[0].Name.Should().Be("remote");
+            mcpOptions.Servers[0].Url.Should().Be("https://mcp.example.com/mcp");
+            mcpOptions.Servers[0].AdditionalHeaders["x-tenant"].Should().Be("demo");
+            mcpOptions.Servers[0].InitializationTimeout.Should().Be(TimeSpan.FromMilliseconds(12345));
         }
         finally
         {
@@ -682,6 +684,29 @@ public class AIFeatureBootstrapCoverageTests
         serverConfig.Url.Should().Be("https://nyxid.example.com/mcp");
         serverConfig.HttpClient.Should().NotBeNull();
         serverConfig.HttpClient!.Timeout.Should().Be(Timeout.InfiniteTimeSpan);
+    }
+
+    [Fact]
+    public void MCPConnectorBuilder_ShouldRejectAmbiguousTransportConfiguration()
+    {
+        var builder = new MCPConnectorBuilder(
+            new VoicePresenceBootstrapTests.TestHttpClientFactory(),
+            new VoicePresenceBootstrapTests.UnusedAgentToolExecutionPort());
+        var entry = new ConnectorConfigEntry
+        {
+            Name = "ambiguous-mcp",
+            Type = "mcp",
+            MCP = new MCPConnectorConfig
+            {
+                Command = "npx",
+                Url = "https://mcp.example.com/mcp",
+            },
+        };
+
+        var ok = builder.TryBuild(entry, NullLogger.Instance, out var connector);
+
+        ok.Should().BeFalse();
+        connector.Should().BeNull();
     }
 
     private static IReadOnlyList<object> InvokeReadConfiguredProviders(
