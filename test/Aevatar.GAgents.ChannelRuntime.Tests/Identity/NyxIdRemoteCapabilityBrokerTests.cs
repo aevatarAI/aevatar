@@ -150,7 +150,10 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         scope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
         scope.Should().Contain(AevatarOAuthClientScopes.OfflineAccess);
         scope.Should().NotContain("llm:proxy", "capability scopes are requested only during token exchange");
-        query["resource"].Should().Equal(RequiredResources);
+        query.ContainsKey("resource").Should()
+            .BeFalse("NyxID narrows the authorization code — and the durable binding it mints — " +
+                     "to exactly the RFC 8707 resources sent here, discarding every optional " +
+                     "UserService the user approved on the Consent page");
         query["prompt"].Should().ContainSingle().Which.Should().Be("consent");
         query.ContainsKey("binding_grant_id").Should().BeFalse();
         query["external_subject_platform"].Should().ContainSingle().Which.Should().Be("lark");
@@ -277,7 +280,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
             codeExchange.BindingId!,
             new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy });
 
-        authorizeQuery["resource"].Should().Equal(RequiredResources);
+        authorizeQuery.ContainsKey("resource").Should().BeFalse();
         codeExchange.BindingId.Should().Be(bindingId);
         handle.AccessToken.Should().Be(accessToken);
         handler.Requests.Should().HaveCount(2);
@@ -502,21 +505,31 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         exception.Which.RequiredResources.Should().Equal(RequiredOrnnResource);
     }
 
-    [Fact]
-    public async Task IssueShortLivedByBindingIdAsync_RejectsBindingWithoutOrnnResource()
+    // Omitting `resource` at /oauth/authorize means the Consent page can no
+    // longer mark these as non-deselectable, so every one of them has to be
+    // enforced fail-closed here — not just the Ornn route that first regressed.
+    [Theory]
+    [InlineData(RequiredAevatarResource)]
+    [InlineData(RequiredLlmResource)]
+    [InlineData(RequiredOrnnResource)]
+    [InlineData(RequiredSandboxResource)]
+    public async Task IssueShortLivedByBindingIdAsync_RejectsBindingMissingAnyRequiredResource(
+        string omittedResource)
     {
+        var grantedResources = RequiredResources
+            .Where(resource => resource != omittedResource)
+            .ToArray();
         var broker = NewBroker(
             NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
-            httpHandler: StubHandler.Text(
-                HttpStatusCode.OK,
-                JsonSerializer.Serialize(new
-                {
-                    access_token = CreateAccessToken(
-                        [RequiredAevatarResource, RequiredLlmResource, RequiredSandboxResource]),
-                    token_type = "Bearer",
-                    expires_in = 300,
-                    scope = "proxy",
-                })));
+            httpHandler: new SequenceHandler(
+                TokenExchangeResponse(CreateAccessToken(grantedResources)),
+                // The catalog cannot rescue an explicitly-restricted token: the
+                // grant enumerates `resources`, so nothing else is granted.
+                UserServiceCatalogResponse(
+                    ("svc-aevatar", RequiredAevatarResource),
+                    ("svc-llm", RequiredLlmResource),
+                    ("svc-ornn", RequiredOrnnResource),
+                    ("svc-sandbox", RequiredSandboxResource))));
 
         var act = () => broker.IssueShortLivedByBindingIdAsync(
             SampleSubject(),
@@ -524,7 +537,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
             new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy });
 
         var exception = await act.Should().ThrowAsync<BindingServiceAccessMismatchException>();
-        exception.Which.RequiredResources.Should().Equal(RequiredOrnnResource);
+        exception.Which.RequiredResources.Should().Equal(omittedResource);
     }
 
     [Fact]

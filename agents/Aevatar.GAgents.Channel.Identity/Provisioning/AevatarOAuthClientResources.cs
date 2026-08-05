@@ -17,25 +17,37 @@ public static class AevatarOAuthClientResources
         return $"{nyxIdApiBaseUrl.Trim().TrimEnd('/')}/api/v1/proxy/s/{normalizedServiceSlug}";
     }
 
-    public static string[] RequiredResourceUris(
-        string nyxIdApiBaseUrl,
+    /// <summary>
+    /// NyxID service slugs the deployment must be able to reach with a sender
+    /// capability. This is a runtime floor, never a ceiling on what the user
+    /// authorized — <c>/oauth/authorize</c> sends no RFC 8707 resources, so the
+    /// Consent page owns the authorization boundary.
+    /// </summary>
+    public static string[] RequiredServiceSlugs(
         string? requiredLlmServiceSlug,
         IEnumerable<string>? additionalRequiredServiceSlugs = null)
     {
         var serviceSlugs = new List<string> { RequiredServiceSlug };
         if (!string.IsNullOrWhiteSpace(requiredLlmServiceSlug))
-            serviceSlugs.Add(requiredLlmServiceSlug);
+            serviceSlugs.Add(requiredLlmServiceSlug.Trim());
         if (additionalRequiredServiceSlugs is not null)
         {
-            serviceSlugs.AddRange(additionalRequiredServiceSlugs.Where(
-                static serviceSlug => !string.IsNullOrWhiteSpace(serviceSlug)));
+            serviceSlugs.AddRange(additionalRequiredServiceSlugs
+                .Where(static serviceSlug => !string.IsNullOrWhiteSpace(serviceSlug))
+                .Select(static serviceSlug => serviceSlug.Trim()));
         }
 
-        return serviceSlugs
+        return serviceSlugs.Distinct(StringComparer.Ordinal).ToArray();
+    }
+
+    public static string[] RequiredResourceUris(
+        string nyxIdApiBaseUrl,
+        string? requiredLlmServiceSlug,
+        IEnumerable<string>? additionalRequiredServiceSlugs = null) =>
+        RequiredServiceSlugs(requiredLlmServiceSlug, additionalRequiredServiceSlugs)
             .Select(serviceSlug => ServiceResourceUri(nyxIdApiBaseUrl, serviceSlug))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
-    }
 
     public static string[] MissingRequiredResources(
         IEnumerable<string>? resources,

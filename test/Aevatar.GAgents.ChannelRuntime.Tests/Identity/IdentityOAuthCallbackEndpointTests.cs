@@ -410,6 +410,69 @@ public sealed class IdentityOAuthCallbackEndpointTests
     }
 
     [Fact]
+    public async Task IssuedBindingMissingRequiredService_LeavesExistingBindingInPlace()
+    {
+        // Dropping RFC 8707 `resource` from /oauth/authorize means the Consent
+        // page no longer marks core services as non-deselectable, so a user can
+        // arrive here holding an under-granted incoming binding. The repair loop
+        // must be lossless: the working binding stays, the incoming one is
+        // revoked, and the user is told to re-run /init.
+        var existing = new BindingId { Value = "bnd_existing" };
+        const string incoming = "bnd_incoming";
+        var subject = SampleSubject();
+        var broker = NewBroker(
+            subject,
+            incoming,
+            expectedBindingHash: NyxIdRemoteCapabilityBroker.HashBindingId(existing.Value));
+        var capabilityBroker = (INyxIdCapabilityBroker)broker;
+        capabilityBroker
+            .IssueShortLivedByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<string>(),
+                Arg.Any<CapabilityScope>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<CapabilityHandle>>(_ => throw new BindingServiceAccessMismatchException(
+                subject,
+                ["https://nyxid.test/api/v1/proxy/s/ornn-api"]));
+        var queryPort = Substitute.For<IExternalIdentityBindingQueryPort>();
+        queryPort.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<BindingId?>(existing));
+        var bindingDispatch = new RecordingCommandDispatch<CommitBindingCommand>();
+        var bindingReplaceDispatch = new RecordingCommandDispatch<ReplaceBindingCommand>();
+        var capabilityDispatch = new RecordingCommandDispatch<ObserveBrokerCapabilityCommand>();
+
+        var result = await InvokeCallbackAsync(
+            broker,
+            queryPort,
+            bindingDispatch,
+            capabilityDispatch,
+            bindingReplaceDispatch,
+            NewOwnerScopeResolver("owner-user-1"),
+            format: "json");
+
+        await capabilityBroker.Received(1).IssueShortLivedByBindingIdAsync(
+            subject,
+            incoming,
+            Arg.Is<CapabilityScope>(scope => scope.Value == AevatarOAuthClientScopes.Proxy),
+            Arg.Any<CancellationToken>());
+        await broker.Received(1).RevokeBindingByIdAsync(incoming, Arg.Any<CancellationToken>());
+        bindingReplaceDispatch.Commands.Should().BeEmpty();
+        bindingDispatch.Commands.Should().BeEmpty();
+        capabilityDispatch.Commands.Should().BeEmpty();
+
+        using var document = await ExecuteJsonAsync(result, StatusCodes.Status409Conflict);
+        document.RootElement.GetProperty("error").GetString().Should().Be("required_service_access_missing");
+        var detail = document.RootElement.GetProperty("detail").GetString();
+        detail.Should().Contain("/init");
+        document.RootElement.GetRawText().Should().NotContainAny(
+            incoming,
+            existing.Value,
+            "auth-code",
+            "pkce-verifier",
+            "short-lived-capability");
+    }
+
+    [Fact]
     public async Task IssuedBindingAlreadyRevoked_RevokesIncomingWithoutDispatch()
     {
         const string incoming = "bnd_incoming";
