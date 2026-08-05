@@ -11,6 +11,7 @@ import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
 import { buildWorkflowActivityRunHref } from '../navigation';
+import TableScrollRegion from '../TableScrollRegion';
 import TechnicalDetails from '../TechnicalDetails';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 import { getRunOriginLabel, getRunStatusPresentation } from './runPresentation';
@@ -302,7 +303,10 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           </div>
         </div>
       ) : (
-        <div className="wa-vnext__table-wrap wa-vnext__activity-table">
+        <TableScrollRegion
+          ariaLabel={t('workflowActivityVNext.activity.title', 'Activity')}
+          className="wa-vnext__activity-table"
+        >
           <table className="wa-vnext__table">
             <thead>
               <tr>
@@ -331,7 +335,12 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                   );
                 return (
                   <tr key={run.runId}>
-                    <td>
+                    <td
+                      data-label={t(
+                        'workflowActivityVNext.activity.columnRun',
+                        'Workflow',
+                      )}
+                    >
                       <button
                         aria-label={t(
                           'workflowActivityVNext.activity.openRunAria',
@@ -356,21 +365,40 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                         <span className="wa-vnext__title">{workflowName}</span>
                       </button>
                     </td>
-                    <td>
+                    <td
+                      data-label={t(
+                        'workflowActivityVNext.activity.columnStatus',
+                        'Status',
+                      )}
+                    >
                       <span
                         className={`wa-vnext__status wa-vnext__status--${statusPresentation.className}`}
                       >
                         {statusPresentation.label}
                       </span>
                     </td>
-                    <td>{getRunOriginLabel(run.runOrigin)}</td>
-                    <td>{formatDate(run.updatedAtUtc)}</td>
+                    <td
+                      data-label={t(
+                        'workflowActivityVNext.activity.columnOrigin',
+                        'Source',
+                      )}
+                    >
+                      {getRunOriginLabel(run.runOrigin)}
+                    </td>
+                    <td
+                      data-label={t(
+                        'workflowActivityVNext.activity.columnUpdated',
+                        'Updated',
+                      )}
+                    >
+                      {formatDate(run.updatedAtUtc)}
+                    </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
-        </div>
+        </TableScrollRegion>
       )}
     </WorkflowActivityVNextShell>
   );

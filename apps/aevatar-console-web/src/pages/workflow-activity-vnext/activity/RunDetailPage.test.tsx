@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import * as React from 'react';
 import {
   cleanupTestQueryClients,
@@ -314,8 +314,21 @@ describe('Workflow Activity vNext run detail recovery', () => {
     expect(
       await screen.findByText(/"prompt": "Investigate"/),
     ).toBeInTheDocument();
+
+    const stepsRegion = screen.getByRole('region', { name: 'Steps' });
+    expect(stepsRegion).toHaveAttribute('tabindex', '0');
+    expect(
+      within(stepsRegion).getByText('step-root').closest('td'),
+    ).toHaveAttribute('data-label', 'Step');
+
     fireEvent.click(screen.getByRole('tab', { name: 'Diagnostics' }));
-    expect(screen.getByText('APPROVAL_TIMEOUT')).toBeInTheDocument();
+    const diagnosticsRegion = screen.getByRole('region', {
+      name: 'Diagnostics',
+    });
+    expect(diagnosticsRegion).toHaveAttribute('tabindex', '0');
+    expect(
+      within(diagnosticsRegion).getByText('APPROVAL_TIMEOUT').closest('td'),
+    ).toHaveAttribute('data-label', 'Code');
     expect(
       screen.getByText('Approval did not arrive before the deadline'),
     ).toBeInTheDocument();

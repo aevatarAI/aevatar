@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import * as React from 'react';
 import { history } from '@/shared/navigation/history';
 import {
@@ -206,6 +206,12 @@ describe('Workflow Activity vNext catalogue', () => {
     expect(screen.getByText('Loading workflows')).toBeInTheDocument();
     expect(await screen.findByText('Support triage')).toBeInTheDocument();
     expect(screen.getByText('Invoice review')).toBeInTheDocument();
+
+    const workflowRegion = screen.getByRole('region', { name: 'Workflows' });
+    expect(workflowRegion).toHaveAttribute('tabindex', '0');
+    expect(
+      within(workflowRegion).getByText('Support triage').closest('td'),
+    ).toHaveAttribute('data-label', 'Workflow');
 
     fireEvent.change(
       screen.getByRole('searchbox', { name: 'Search workflows' }),

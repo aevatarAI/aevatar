@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import * as React from 'react';
 import {
   cleanupTestQueryClients,
@@ -145,5 +145,11 @@ describe('Workflow Activity vNext Activity ledger', () => {
     expect(screen.queryByText('State version')).not.toBeInTheDocument();
     expect(screen.queryByText(/read model/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/recently observed/i)).not.toBeInTheDocument();
+
+    const activityRegion = screen.getByRole('region', { name: 'Activity' });
+    expect(activityRegion).toHaveAttribute('tabindex', '0');
+    expect(
+      within(activityRegion).getByText('Customer follow-up').closest('td'),
+    ).toHaveAttribute('data-label', 'Workflow');
   });
 });

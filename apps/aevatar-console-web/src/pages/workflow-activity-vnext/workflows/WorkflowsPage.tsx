@@ -17,6 +17,7 @@ import {
   buildWorkflowActivityNewHref,
   buildWorkflowActivitySectionHref,
 } from '../navigation';
+import TableScrollRegion from '../TableScrollRegion';
 import TechnicalDetails from '../TechnicalDetails';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 
@@ -291,7 +292,9 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           </div>
         </div>
       ) : (
-        <div className="wa-vnext__table-wrap">
+        <TableScrollRegion
+          ariaLabel={t('workflowActivityVNext.workflows.title', 'Workflows')}
+        >
           <table className="wa-vnext__table">
             <thead>
               <tr>
@@ -318,14 +321,31 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             <tbody>
               {rows.map((row) => (
                 <tr key={row.workflowId}>
-                  <td>
+                  <td
+                    data-label={t(
+                      'workflowActivityVNext.workflows.columnWorkflow',
+                      'Workflow',
+                    )}
+                  >
                     <span className="wa-vnext__title">{row.name}</span>
                     {row.description ? (
                       <span className="wa-vnext__sub">{row.description}</span>
                     ) : null}
                   </td>
-                  <td>{formatDate(row.updatedAtUtc)}</td>
-                  <td>
+                  <td
+                    data-label={t(
+                      'workflowActivityVNext.workflows.columnUpdated',
+                      'Updated',
+                    )}
+                  >
+                    {formatDate(row.updatedAtUtc)}
+                  </td>
+                  <td
+                    data-label={t(
+                      'workflowActivityVNext.workflows.columnActions',
+                      'Actions',
+                    )}
+                  >
                     <Space>
                       <Button
                         aria-label={t(
@@ -376,7 +396,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
               ))}
             </tbody>
           </table>
-        </div>
+        </TableScrollRegion>
       )}
     </WorkflowActivityVNextShell>
   );

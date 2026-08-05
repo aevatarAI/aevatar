@@ -47,19 +47,27 @@ export const workflowActivityVNextCss = `
 }
 .wa-vnext__nav-button:hover { background: #1d2939; color: #fff; }
 .wa-vnext__nav-button[aria-current="page"] { background: #344054; border-color: #475467; color: #fff; }
-.wa-vnext__main { background: var(--wa-surface); min-height: 0; min-width: 0; overflow: auto; }
+.wa-vnext__main { background: var(--wa-surface); min-height: 0; min-width: 0; overflow-x: hidden; overflow-y: auto; }
 .wa-vnext__mobile-nav { display: none; }
 .wa-vnext__header { align-items: center; border-bottom: 1px solid var(--wa-line); display: flex; gap: 18px; justify-content: space-between; min-height: 84px; padding: 18px 30px; }
 .wa-vnext__header h1 { font-size: 22px; line-height: 1.25; margin: 0; text-wrap: balance; }
 .wa-vnext__header p { color: var(--wa-muted); font-size: 13px; margin: 5px 0 0; }
 .wa-vnext__header-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
-.wa-vnext__content { padding: 24px 30px 56px; }
+.wa-vnext__content { min-width: 0; padding: 24px 30px 56px; }
 .wa-vnext__toolbar { align-items: end; display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; margin-bottom: 18px; }
-.wa-vnext__table-wrap { border: 1px solid var(--wa-line); overflow-x: auto; }
+.wa-vnext__table-wrap {
+  border: 1px solid var(--wa-line);
+  max-height: min(640px, calc(100dvh - 240px));
+  max-width: 100%;
+  overscroll-behavior: contain;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
 .wa-vnext__table { border-collapse: collapse; min-width: 720px; table-layout: fixed; width: 100%; }
-.wa-vnext__table th { background: var(--wa-subtle); border-bottom: 1px solid var(--wa-line); color: var(--wa-muted); font: 11px ui-monospace, monospace; height: 42px; padding: 0 12px; text-align: left; text-transform: uppercase; }
-.wa-vnext__table td { border-bottom: 1px solid var(--wa-line); height: 72px; padding: 10px 12px; vertical-align: middle; }
+.wa-vnext__table th { background: var(--wa-subtle); border-bottom: 1px solid var(--wa-line); color: var(--wa-muted); font: 11px ui-monospace, monospace; height: 42px; padding: 0 12px; position: sticky; text-align: left; text-transform: uppercase; top: 0; z-index: 2; }
+.wa-vnext__table td { border-bottom: 1px solid var(--wa-line); height: 72px; overflow-wrap: anywhere; padding: 10px 12px; vertical-align: middle; }
 .wa-vnext__table tr:last-child td { border-bottom: 0; }
+.wa-vnext__table pre { margin: 0; max-width: 100%; white-space: pre-wrap; word-break: break-word; }
 .wa-vnext__run-link { max-width: 100%; min-width: 0; overflow: hidden; }
 .wa-vnext__title { display: block; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wa-vnext__sub { color: var(--wa-muted); display: block; font-size: 12px; margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -108,7 +116,7 @@ export const workflowActivityVNextCss = `
 .wa-vnext__technical-details { color: var(--wa-muted); font-size: 12px; margin-top: 18px; max-width: 100%; }
 .wa-vnext__technical-details summary { cursor: pointer; font-weight: 650; }
 .wa-vnext__technical-details-body { background: #fff; border: 1px solid var(--wa-line); display: block; margin-top: 8px; max-width: 100%; overflow-wrap: anywhere; padding: 10px; }
-.wa-vnext button:focus-visible, .wa-vnext a:focus-visible, .wa-vnext input:focus-visible, .wa-vnext textarea:focus-visible, .wa-vnext select:focus-visible { outline: 3px solid rgba(23, 92, 211, .25); outline-offset: 2px; }
+.wa-vnext button:focus-visible, .wa-vnext a:focus-visible, .wa-vnext input:focus-visible, .wa-vnext textarea:focus-visible, .wa-vnext select:focus-visible, .wa-vnext__table-wrap:focus-visible { outline: 3px solid rgba(23, 92, 211, .25); outline-offset: 2px; }
 @media (max-width: 900px) {
   .wa-vnext { grid-template-columns: 1fr; }
   .wa-vnext__rail { display: none; }
@@ -136,6 +144,28 @@ export const workflowActivityVNextCss = `
   .wa-vnext__settings-savebar .ant-space { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
   .wa-vnext__settings-savebar .ant-btn { width: 100%; }
   .wa-vnext__state--compact { padding: 20px; }
+  .wa-vnext__table-wrap--cards:not(.wa-vnext__activity-table) { border: 0; max-height: none; overflow: visible; scrollbar-gutter: auto; }
+  .wa-vnext__table-wrap--cards:not(.wa-vnext__activity-table) .wa-vnext__table { display: block; min-width: 0; }
+  .wa-vnext__table-wrap--cards:not(.wa-vnext__activity-table) thead { display: none; }
+  .wa-vnext__table-wrap--cards:not(.wa-vnext__activity-table) tbody { display: grid; gap: 12px; }
+  .wa-vnext__table-wrap--cards:not(.wa-vnext__activity-table) tr { border: 1px solid var(--wa-line); display: block; padding: 8px 0; }
+  .wa-vnext__table-wrap--cards:not(.wa-vnext__activity-table) td {
+    align-items: start;
+    border: 0;
+    display: grid;
+    gap: 12px;
+    grid-template-columns: minmax(96px, 34%) minmax(0, 1fr);
+    height: auto;
+    min-width: 0;
+    padding: 8px 14px;
+  }
+  .wa-vnext__table-wrap--cards:not(.wa-vnext__activity-table) td::before {
+    color: var(--wa-muted);
+    content: attr(data-label);
+    font: 11px ui-monospace, monospace;
+    text-transform: uppercase;
+  }
+  .wa-vnext__table-wrap--cards:not(.wa-vnext__activity-table) td .ant-space { display: flex; flex-wrap: wrap; }
   .wa-vnext__activity-table { border: 0; overflow: visible; }
   .wa-vnext__activity-table .wa-vnext__table { display: block; min-width: 0; }
   .wa-vnext__activity-table thead { display: none; }

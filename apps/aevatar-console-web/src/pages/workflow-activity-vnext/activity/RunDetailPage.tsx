@@ -10,6 +10,7 @@ import { t } from '@/shared/i18n/messages';
 import type { WorkflowRunForkAcceptedReceipt } from '@/shared/models/workflowActivity';
 import { history } from '@/shared/navigation/history';
 import { buildWorkflowActivitySectionHref } from '../navigation';
+import TableScrollRegion from '../TableScrollRegion';
 import TechnicalDetails from '../TechnicalDetails';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 import { getRunOriginLabel, getRunStatusPresentation } from './runPresentation';
@@ -364,7 +365,9 @@ const RunDetailPage: React.FC<{
             key: 'steps',
             label: t('workflowActivityVNext.run.steps', 'Steps'),
             children: run.steps.length ? (
-              <div className="wa-vnext__table-wrap">
+              <TableScrollRegion
+                ariaLabel={t('workflowActivityVNext.run.steps', 'Steps')}
+              >
                 <table className="wa-vnext__table">
                   <thead>
                     <tr>
@@ -388,9 +391,29 @@ const RunDetailPage: React.FC<{
                   <tbody>
                     {run.steps.map((step) => (
                       <tr key={step.stepId}>
-                        <td className="wa-vnext__mono">{step.stepId}</td>
-                        <td>{step.stepType}</td>
-                        <td>
+                        <td
+                          className="wa-vnext__mono"
+                          data-label={t(
+                            'workflowActivityVNext.run.step',
+                            'Step',
+                          )}
+                        >
+                          {step.stepId}
+                        </td>
+                        <td
+                          data-label={t(
+                            'workflowActivityVNext.run.type',
+                            'Type',
+                          )}
+                        >
+                          {step.stepType}
+                        </td>
+                        <td
+                          data-label={t(
+                            'workflowActivityVNext.activity.columnStatus',
+                            'Status',
+                          )}
+                        >
                           {step.success === null
                             ? t(
                                 'workflowActivityVNext.common.pending',
@@ -406,7 +429,12 @@ const RunDetailPage: React.FC<{
                                   'Failed',
                                 )}
                         </td>
-                        <td>
+                        <td
+                          data-label={t(
+                            'workflowActivityVNext.run.output',
+                            'Output',
+                          )}
+                        >
                           {step.error ||
                             step.outputPreview ||
                             t(
@@ -414,7 +442,12 @@ const RunDetailPage: React.FC<{
                               'Unavailable',
                             )}
                         </td>
-                        <td>
+                        <td
+                          data-label={t(
+                            'workflowActivityVNext.run.requestParameters',
+                            'Request parameters',
+                          )}
+                        >
                           <pre className="wa-vnext__mono">
                             {Object.keys(step.requestParameters).length
                               ? JSON.stringify(step.requestParameters, null, 2)
@@ -428,7 +461,7 @@ const RunDetailPage: React.FC<{
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableScrollRegion>
             ) : (
               <div className="wa-vnext__state">
                 <p>
@@ -444,7 +477,12 @@ const RunDetailPage: React.FC<{
             key: 'diagnostics',
             label: t('workflowActivityVNext.run.diagnostics', 'Diagnostics'),
             children: run.diagnostics.length ? (
-              <div className="wa-vnext__table-wrap">
+              <TableScrollRegion
+                ariaLabel={t(
+                  'workflowActivityVNext.run.diagnostics',
+                  'Diagnostics',
+                )}
+              >
                 <table className="wa-vnext__table">
                   <thead>
                     <tr>
@@ -468,16 +506,42 @@ const RunDetailPage: React.FC<{
                           diagnostic.message,
                         ].join('|')}
                       >
-                        <td>{diagnostic.severity}</td>
-                        <td className="wa-vnext__mono">{diagnostic.code}</td>
-                        <td className="wa-vnext__mono">
+                        <td
+                          data-label={t(
+                            'workflowActivityVNext.run.severity',
+                            'Severity',
+                          )}
+                        >
+                          {diagnostic.severity}
+                        </td>
+                        <td
+                          className="wa-vnext__mono"
+                          data-label={t(
+                            'workflowActivityVNext.run.code',
+                            'Code',
+                          )}
+                        >
+                          {diagnostic.code}
+                        </td>
+                        <td
+                          className="wa-vnext__mono"
+                          data-label={t(
+                            'workflowActivityVNext.run.step',
+                            'Step',
+                          )}
+                        >
                           {diagnostic.stepId ||
                             t(
                               'workflowActivityVNext.common.unavailable',
                               'Unavailable',
                             )}
                         </td>
-                        <td>
+                        <td
+                          data-label={t(
+                            'workflowActivityVNext.run.message',
+                            'Message',
+                          )}
+                        >
                           {diagnostic.message}
                           {diagnostic.hint ? (
                             <span className="wa-vnext__sub">
@@ -489,7 +553,7 @@ const RunDetailPage: React.FC<{
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableScrollRegion>
             ) : (
               <div className="wa-vnext__state">
                 <p>
