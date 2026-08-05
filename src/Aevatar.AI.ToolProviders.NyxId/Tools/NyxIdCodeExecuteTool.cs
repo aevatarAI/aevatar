@@ -45,6 +45,10 @@ public sealed class NyxIdCodeExecuteTool : INyxIdBuiltInTool
     // NyxIdSshExecTool, which targets a real host and so keeps ApprovalMode.Auto.
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
+    // Workflow authoring restricts this tool to deterministic sandbox computation without
+    // external service calls. The isolated execution has no durable external effect to replay.
+    public bool IsReadOnly => true;
+
     public AgentToolReceipt? CreateResultReceipt(
         string callId,
         string toolName,

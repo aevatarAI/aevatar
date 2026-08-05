@@ -90,22 +90,30 @@ public sealed class AgentWorkflowToolSourceAdapter(
                 !string.IsNullOrWhiteSpace(request.CallerCredential?.BearerToken),
                 !string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdAccessToken),
                 !string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdOrgToken));
-            var outcome = await _toolExecutionPort.ExecuteAsync(
-                new AgentToolExecutionRequest(
-                    _tool,
-                    request.ArgumentsJson,
-                    toolContext,
-                    AgentToolApprovalContinuationMode.ActorOwned,
-                    request.ApprovalGrant == null
-                        ? null
-                        : new AgentToolApprovalGrant(
-                            toolContext.ExecutionOwner.Clone(),
-                            request.ApprovalGrant.ApprovalRequestId,
-                            request.RunId,
-                            request.ApprovalGrant.ToolName,
-                            request.ApprovalGrant.ToolCallId,
-                            AgentToolArgumentsDigest.ComputeSha256(request.ArgumentsJson))),
-                ct).ConfigureAwait(false);
+            var executionRequest = new AgentToolExecutionRequest(
+                _tool,
+                request.ArgumentsJson,
+                toolContext,
+                AgentToolApprovalContinuationMode.ActorOwned,
+                request.ApprovalGrant == null
+                    ? null
+                    : new AgentToolApprovalGrant(
+                        toolContext.ExecutionOwner.Clone(),
+                        request.ApprovalGrant.ApprovalRequestId,
+                        request.RunId,
+                        request.ApprovalGrant.ToolName,
+                        request.ApprovalGrant.ToolCallId,
+                        AgentToolArgumentsDigest.ComputeSha256(request.ArgumentsJson)));
+            var outcome = await _toolExecutionPort.ExecuteAsync(executionRequest, ct).ConfigureAwait(false);
+            if (IsActorRedeliveryAdmission(outcome))
+            {
+                outcome = await _toolExecutionPort.ExecuteAsync(
+                    executionRequest with
+                    {
+                        ExecutionAttemptKind = AgentToolExecutionAttemptKind.ActorRecovery,
+                    },
+                    ct).ConfigureAwait(false);
+            }
 
             if (outcome.Kind == AgentToolExecutionOutcomeKind.ApprovalRequired)
             {
@@ -136,6 +144,16 @@ public sealed class AgentWorkflowToolSourceAdapter(
 
             return AgentWorkflowToolReceiptOutcomeMapper.Map(outcome.Receipt, outcome.ResultJson);
         }
+
+        private static bool IsActorRedeliveryAdmission(AgentToolExecutionOutcome outcome) =>
+            outcome.Kind == AgentToolExecutionOutcomeKind.Failed &&
+            outcome.FailureStage == AgentToolExecutionFailureStage.Admission &&
+            string.Equals(
+                outcome.FailureCode,
+                "tool_execution_already_started",
+                StringComparison.Ordinal) &&
+            !outcome.TerminalInvoked &&
+            !outcome.Retryable;
 
         private static ChatFileRef ToChatFileRef(WorkflowFileRef fileRef) =>
             new()
