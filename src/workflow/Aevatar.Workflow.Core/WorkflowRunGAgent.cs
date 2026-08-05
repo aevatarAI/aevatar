@@ -73,6 +73,7 @@ public sealed partial class WorkflowRunGAgent
     private readonly ApplicationWorkflowFileArtifactOwnershipPort? _fileArtifactOwnership;
     private readonly ISecretVault? _secretVault;
     private readonly TimeProvider _timeProvider;
+    private string? _inFlightChatCommandId;
 
     public WorkflowRunGAgent(
         IActorRuntime runtime,
@@ -490,6 +491,29 @@ public sealed partial class WorkflowRunGAgent
         ArgumentNullException.ThrowIfNull(request);
         var commandId = ActiveInboundEnvelope?.Id?.Trim() ?? string.Empty;
         var correlationId = ActiveInboundEnvelope?.Propagation?.CorrelationId?.Trim() ?? string.Empty;
+        if (!TryAcquireChatCommandExecutionLease(commandId))
+            return;
+
+        try
+        {
+            var start = await PrepareChatRequestStartAsync(request, commandId, correlationId);
+            if (start == null)
+                return;
+
+            await PublishStartWorkflowOrTerminalFailureAsync(start, request.SessionId, CancellationToken.None);
+            await SendWorkflowRunStartedNotificationAsync(CancellationToken.None);
+        }
+        finally
+        {
+            ReleaseChatCommandExecutionLease(commandId);
+        }
+    }
+
+    private async Task<StartWorkflowEvent?> PrepareChatRequestStartAsync(
+        WorkflowChatRequestEvent request,
+        string commandId,
+        string correlationId)
+    {
         if (!string.IsNullOrWhiteSpace(State.LastCommandId))
         {
             if (!string.Equals(State.LastCommandId, commandId, StringComparison.Ordinal))
@@ -505,7 +529,7 @@ public sealed partial class WorkflowRunGAgent
             if (!string.Equals(State.Status, "bound", StringComparison.OrdinalIgnoreCase))
             {
                 await SendWorkflowRunStartedNotificationAsync(CancellationToken.None);
-                return;
+                return null;
             }
         }
         var runId = string.IsNullOrWhiteSpace(State.RunId)
@@ -540,7 +564,7 @@ public sealed partial class WorkflowRunGAgent
                 Success = false,
                 Error = WorkflowNotExecutableError,
             }, request.SessionId);
-            return;
+            return null;
         }
 
         // Refactor (iter163/cluster-002-first):
@@ -582,7 +606,7 @@ public sealed partial class WorkflowRunGAgent
                 Success = false,
                 Error = InputFileBindingError,
             }, request.SessionId);
-            return;
+            return null;
         }
 
         var executionContextDelta = MergeExecutionContextDeltas(
@@ -620,8 +644,27 @@ public sealed partial class WorkflowRunGAgent
             ForkSeed = request.ForkSeed,
         };
         start.InputFileRefs.Add(inputFileRefs.Select(static fileRef => fileRef.Clone()));
-        await PublishStartWorkflowOrTerminalFailureAsync(start, request.SessionId, CancellationToken.None);
-        await SendWorkflowRunStartedNotificationAsync(CancellationToken.None);
+        return start;
+    }
+
+    private bool TryAcquireChatCommandExecutionLease(string commandId)
+    {
+        if (_inFlightChatCommandId == null)
+        {
+            _inFlightChatCommandId = commandId;
+            return true;
+        }
+
+        if (string.Equals(_inFlightChatCommandId, commandId, StringComparison.Ordinal))
+            return false;
+
+        throw new InvalidOperationException("workflow run is already processing another command");
+    }
+
+    private void ReleaseChatCommandExecutionLease(string commandId)
+    {
+        if (string.Equals(_inFlightChatCommandId, commandId, StringComparison.Ordinal))
+            _inFlightChatCommandId = null;
     }
 
     [EventHandler]
