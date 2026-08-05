@@ -1871,6 +1871,9 @@ public static class ScopeServiceEndpoints
     {
         try
         {
+            var logger = http.RequestServices
+                .GetService<ILoggerFactory>()
+                ?.CreateLogger("Aevatar.GAgentService.Hosting.ScopeService");
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
@@ -1933,6 +1936,22 @@ public static class ScopeServiceEndpoints
                             ct);
                         inputParts = AppendInputParts(inputParts, uploadedParts);
                     }
+
+                    var firstInputFileRef = FirstInputFileRef(inputParts);
+                    logger?.LogWarning(
+                        "Scope workflow stream input file refs resolved. scopeId={ScopeId} serviceId={ServiceId} endpointId={EndpointId} sessionId={SessionId} implementationKind={ImplementationKind} requestInputPartCount={RequestInputPartCount} mappedInputPartCount={MappedInputPartCount} multipartFileCount={MultipartFileCount} inputFileRefCount={InputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+                        scopeId,
+                        serviceId,
+                        endpointId,
+                        request.SessionId ?? string.Empty,
+                        target.Artifact.ImplementationKind,
+                        request.InputParts?.Count ?? 0,
+                        inputParts?.Count ?? 0,
+                        requestInput.MultipartForm?.PendingFiles.Count ?? 0,
+                        CountInputFileRefs(inputParts),
+                        firstInputFileRef?.FileId ?? string.Empty,
+                        firstInputFileRef?.ArtifactId ?? firstInputFileRef?.Uri ?? string.Empty,
+                        firstInputFileRef?.MediaType ?? string.Empty);
 
                     await WorkflowCapabilityEndpoints.HandleChat(
                         http,
@@ -3996,6 +4015,17 @@ const response = await fetch("{{invokePath}}", {
                 FileRef = p.FileRef,
             }).ToList();
     }
+
+    private static int CountInputFileRefs(IReadOnlyList<ChatInputContentPart>? inputParts) =>
+        inputParts?.Count(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef)) ?? 0;
+
+    private static ChatInputFileRef? FirstInputFileRef(IReadOnlyList<ChatInputContentPart>? inputParts) =>
+        inputParts?.FirstOrDefault(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef))?.FileRef;
+
+    private static bool HasFileRefIdentity(ChatInputFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId) ||
+        !string.IsNullOrWhiteSpace(fileRef.Uri);
 
     private static IReadOnlyList<ChatInputContentPart>? AppendInputParts(
         IReadOnlyList<ChatInputContentPart>? existing,

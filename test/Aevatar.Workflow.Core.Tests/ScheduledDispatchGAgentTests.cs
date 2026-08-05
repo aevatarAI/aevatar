@@ -710,7 +710,9 @@ public sealed class ScheduledDispatchGAgentTests
             .Where(x => string.Equals(x.EventType, ScheduledDispatchEnabledEvent.Descriptor.FullName, StringComparison.Ordinal))
             .Should()
             .ContainSingle()
-            .Which.EventData.Unpack<ScheduledDispatchEnabledEvent>().Reason.Should().Be("resume");
+            .Which.EventData.Unpack<ScheduledDispatchEnabledEvent>()
+            .Should().Match<ScheduledDispatchEnabledEvent>(evt =>
+                evt.Reason == "resume" && evt.ScheduleId == "schedule-1");
     }
 
     [Fact]
@@ -925,11 +927,13 @@ public sealed class ScheduledDispatchGAgentTests
         scheduler.PurgedActors.Should().ContainSingle()
             .Which.Should().Be(ScheduleActorId);
         scheduler.Canceled.Should().BeEmpty();
-        eventStore.GetEvents(ScheduleActorId)
+        var deleted = eventStore.GetEvents(ScheduleActorId)
             .Where(x => string.Equals(x.EventType, ScheduledDispatchDeletedEvent.Descriptor.FullName, StringComparison.Ordinal))
             .Should()
             .ContainSingle()
-            .Which.EventData.Unpack<ScheduledDispatchDeletedEvent>().Reason.Should().Be("remove");
+            .Which.EventData.Unpack<ScheduledDispatchDeletedEvent>();
+        deleted.Reason.Should().Be("remove");
+        deleted.ScheduleId.Should().Be("schedule-1");
     }
 
     [Fact]
@@ -4191,6 +4195,11 @@ public sealed class ScheduledDispatchGAgentTests
         var eventTypes = eventStore.GetEvents(ScheduleActorId).Select(x => x.EventType).ToArray();
         Array.IndexOf(eventTypes, TeamAutomationDeletionRequestedEvent.Descriptor.FullName).Should()
             .BeLessThan(Array.IndexOf(eventTypes, ScheduledDispatchDeletedEvent.Descriptor.FullName));
+        var deleted = eventStore.GetEvents(ScheduleActorId)
+            .Single(x => x.EventType == ScheduledDispatchDeletedEvent.Descriptor.FullName)
+            .EventData.Unpack<ScheduledDispatchDeletedEvent>();
+        deleted.ScheduleId.Should().Be("schedule-1");
+        deleted.ScopeId.Should().Be("scope-alpha");
     }
 
     [Fact]

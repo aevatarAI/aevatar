@@ -7,7 +7,7 @@
   <!-- Shared Version Variables -->
   <PropertyGroup>
     <!-- .NET 10 platform packages (Extensions / ASP.NET Core / EF Core) -->
-    <MicrosoftExtensionsVersion>10.0.4</MicrosoftExtensionsVersion>
+    <MicrosoftExtensionsVersion>10.0.10</MicrosoftExtensionsVersion>
     <!-- Microsoft Orleans -->
     <OrleansVersion>10.0.1</OrleansVersion>
     <!-- ABP Framework (excludes LeptonXLite Theme & Studio.Client) -->
@@ -29,7 +29,7 @@
     <!-- Proto.Actor -->
     <ProtoActorVersion>1.8.0</ProtoActorVersion>
     <!-- Model Context Protocol -->
-    <McpVersion>0.4.0-preview.3</McpVersion>
+    <McpVersion>2.1.0</McpVersion>
     <!-- GraphQL Client -->
     <GraphQLClientVersion>6.1.0</GraphQLClientVersion>
     <!-- Health Checks UI -->
@@ -71,8 +71,8 @@
     <!-- .NET Runtime -->
     <PackageVersion Include="System.Text.Json" Version="10.0.0" />
     <PackageVersion Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
-    <PackageVersion Include="System.IdentityModel.Tokens.Jwt" Version="8.0.1" />
-    <PackageVersion Include="Microsoft.IdentityModel.Tokens" Version="8.0.1" />
+    <PackageVersion Include="System.IdentityModel.Tokens.Jwt" Version="8.19.2" />
+    <PackageVersion Include="Microsoft.IdentityModel.Tokens" Version="8.19.2" />
     <!-- CLI Utilities -->
     <PackageVersion Include="Spectre.Console" Version="0.54.0" />
     <PackageVersion Include="Cronos" Version="0.11.1" />
