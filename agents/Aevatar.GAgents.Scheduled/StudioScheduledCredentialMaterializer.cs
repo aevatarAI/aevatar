@@ -81,7 +81,8 @@ public sealed class StudioScheduledCredentialMaterializer : IStudioScheduledCred
                 errorCode,
                 effectsCleaned: false,
                 new InvalidOperationException(errorCode),
-                recoveryBlocked: true);
+                recoveryBlocked: true,
+                failureCode: errorCode);
         }
 
         var issued = await _apiKeyIssuer.IssueAsync(

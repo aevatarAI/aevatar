@@ -339,6 +339,7 @@ public sealed class StudioScheduledCredentialMaterializerTests
             .WithMessage("scheduled_credential_recovery_evidence_missing");
         failure.Which.EffectsCleaned.Should().BeFalse();
         failure.Which.RecoveryBlocked.Should().BeTrue();
+        failure.Which.FailureCode.Should().Be("scheduled_credential_recovery_evidence_missing");
         issuer.Events.Should().Equal("lookup");
         issuer.Issues.Should().BeEmpty();
         vault.Stores.Should().BeEmpty();

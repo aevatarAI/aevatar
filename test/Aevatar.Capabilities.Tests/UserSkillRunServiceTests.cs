@@ -337,16 +337,31 @@ public sealed class UserSkillRunServiceTests
         outcome.ErrorMessage.Should().Be("The confirmation is bound to another workflow identity.");
     }
 
-    [Fact]
-    public async Task ScheduleAsync_WhenScopePlanIsDenied_ShouldPreserveTypedProviderFailure()
+    [Theory]
+    [InlineData(
+        "api_key_scope_plan_denied",
+        "NyxID denied the requested Agent Key scope for this caller.")]
+    [InlineData(
+        "scheduled_credential_recovery_evidence_missing",
+        "The scheduled Agent Key could not be issued.")]
+    public async Task ScheduleAsync_WhenCredentialMaterializationFails_ShouldPreserveTypedProviderFailure(
+        string failureCode,
+        string expectedMessage)
     {
         var schedule = new RecordingScheduleProvisioningPort
         {
             Exception = new StudioScheduledCredentialMaterializationException(
-                "api_key_scope_plan_denied",
-                effectsCleaned: true,
-                new InvalidOperationException("api_key_scope_plan_denied"),
-                failureCode: "api_key_scope_plan_denied"),
+                failureCode,
+                effectsCleaned: !string.Equals(
+                    failureCode,
+                    "scheduled_credential_recovery_evidence_missing",
+                    StringComparison.Ordinal),
+                new InvalidOperationException(failureCode),
+                recoveryBlocked: string.Equals(
+                    failureCode,
+                    "scheduled_credential_recovery_evidence_missing",
+                    StringComparison.Ordinal),
+                failureCode: failureCode),
         };
         var service = new UserSkillRunService(
             new RecordingRemoteSkillFetcher(WorkflowSkill()),
@@ -367,8 +382,8 @@ public sealed class UserSkillRunServiceTests
             CancellationToken.None);
 
         outcome.Succeeded.Should().BeFalse();
-        outcome.ErrorCode.Should().Be("api_key_scope_plan_denied");
-        outcome.ErrorMessage.Should().Be("NyxID denied the requested Agent Key scope for this caller.");
+        outcome.ErrorCode.Should().Be(failureCode);
+        outcome.ErrorMessage.Should().Be(expectedMessage);
     }
 
     [Theory]
