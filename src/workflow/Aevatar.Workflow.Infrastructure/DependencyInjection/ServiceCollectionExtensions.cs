@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -52,6 +53,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IWorkflowToolSource>(sp =>
             sp.GetRequiredService<WorkflowSpreadsheetExtractToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, WorkflowFileExtractionAgentToolSource>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ILLMCallMiddleware, WorkflowFileRefLlmCallMiddleware>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowConnectedServiceResourceFetchToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowFileSubmitToolSource>());
         services.TryAddSingleton<
