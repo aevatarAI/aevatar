@@ -269,6 +269,9 @@ function decodeScopeScriptCatalog(
 const decodeScopeWorkflowSummaries: Decoder<ScopeWorkflowSummary[]> = (value) =>
   expectArray(value, "ScopeWorkflowSummary[]", decodeScopeWorkflowSummary);
 
+const decodeScopeWorkflowDetails: Decoder<ScopeWorkflowDetail[]> = (value) =>
+  expectArray(value, "ScopeWorkflowDetail[]", decodeScopeWorkflowDetail);
+
 const decodeScopeScriptSummaries: Decoder<ScopeScriptSummary[]> = (value) =>
   expectArray(value, "ScopeScriptSummary[]", decodeScopeScriptSummary);
 
@@ -277,6 +280,13 @@ export const scopesApi = {
     return requestJson(
       `/api/scopes/${encodeURIComponent(scopeId)}/workflows?includeSource=false`,
       decodeScopeWorkflowSummaries
+    );
+  },
+
+  listWorkflowDetails(scopeId: string): Promise<ScopeWorkflowDetail[]> {
+    return requestJson(
+      `/api/scopes/${encodeURIComponent(scopeId)}/workflows?includeSource=true`,
+      decodeScopeWorkflowDetails
     );
   },
 

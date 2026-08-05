@@ -642,7 +642,7 @@ describe('studioApi host-session requests', () => {
     ]);
   });
 
-  it('falls back to the published scope workflow detail when a scoped draft is missing', async () => {
+  it('loads committed source from the scope list when a scoped draft is missing', async () => {
     persistAuthSession({
       tokens: {
         accessToken: 'access-token',
@@ -665,31 +665,33 @@ describe('studioApi host-session requests', () => {
         } as Response;
       }
 
-      if (input === '/api/scopes/scope-1/workflows/workflow-1') {
+      if (input === '/api/scopes/scope-1/workflows?includeSource=true') {
         return {
           ok: true,
           status: 200,
-          json: async () => ({
-            available: true,
-            scopeId: 'scope-1',
-            workflow: {
+          json: async () => [
+            {
+              available: true,
               scopeId: 'scope-1',
-              workflowId: 'workflow-1',
-              displayName: 'published-demo',
-              serviceKey: 'svc-1',
-              workflowName: 'published-demo',
-              actorId: 'actor-1',
-              activeRevisionId: 'rev-1',
-              deploymentId: 'dep-1',
-              deploymentStatus: 'Running',
-              updatedAt: '2026-04-16T00:00:00Z',
+              workflow: {
+                scopeId: 'scope-1',
+                workflowId: 'workflow-1',
+                displayName: 'published-demo',
+                serviceKey: 'svc-1',
+                workflowName: 'published-demo',
+                actorId: 'actor-1',
+                activeRevisionId: 'rev-1',
+                deploymentId: 'dep-1',
+                deploymentStatus: 'Pending',
+                updatedAt: '2026-04-16T00:00:00Z',
+              },
+              source: {
+                workflowYaml: 'name: published-demo\nsteps: []\n',
+                definitionActorId: 'definition-1',
+                inlineWorkflowYamls: null,
+              },
             },
-            source: {
-              workflowYaml: 'name: published-demo\nsteps: []\n',
-              definitionActorId: 'definition-1',
-              inlineWorkflowYamls: null,
-            },
-          }),
+          ],
         } as Response;
       }
 
@@ -710,6 +712,10 @@ describe('studioApi host-session requests', () => {
       findings: [],
       updatedAtUtc: '2026-04-16T00:00:00Z',
     });
+    expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
+      '/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1',
+      '/api/scopes/scope-1/workflows?includeSource=true',
+    ]);
   });
 
   it('loads a published scope workflow detail without checking workspace drafts', async () => {

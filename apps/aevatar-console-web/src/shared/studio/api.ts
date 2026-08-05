@@ -3063,10 +3063,14 @@ export const studioApi = {
       return toWorkflowFile(draft, true);
     }
 
-    return toCommittedWorkflowFile(
-      normalizedScopeId,
-      await scopesApi.getWorkflowDetail(normalizedScopeId, workflowId)
-    );
+    const committed = (
+      await scopesApi.listWorkflowDetails(normalizedScopeId)
+    ).find((detail) => detail.workflow?.workflowId === workflowId);
+    if (!committed) {
+      throw new Error("Not Found");
+    }
+
+    return toCommittedWorkflowFile(normalizedScopeId, committed);
   },
 
   async getPublishedWorkflow(
