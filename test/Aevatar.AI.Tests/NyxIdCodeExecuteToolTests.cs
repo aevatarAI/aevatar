@@ -26,6 +26,19 @@ public class NyxIdCodeExecuteToolTests
     }
 
     [Fact]
+    public void ReplayContract_DeterministicSandboxComputation_IsReadOnlyRetryable()
+    {
+        IAgentTool tool = new NyxIdCodeExecuteTool(CreateDummyClient());
+        const string arguments = """{"language":"python","code":"print(1 + 1)"}""";
+
+        tool.GetCallSafety(arguments).Should().Be(new AgentToolCallSafety(
+            RequiresApproval: null,
+            IsReadOnly: true,
+            IsDestructive: false));
+        tool.ResolveReplayPolicy(arguments).Should().Be(AgentToolReplayPolicy.ReadOnlyRetryable);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_NoToken_ReturnsError()
     {
         var tool = new NyxIdCodeExecuteTool(CreateDummyClient());

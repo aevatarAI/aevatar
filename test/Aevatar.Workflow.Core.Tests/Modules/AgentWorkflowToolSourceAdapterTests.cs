@@ -306,6 +306,117 @@ public sealed class AgentWorkflowToolSourceAdapterTests
     }
 
     [Fact]
+    public async Task WorkflowTool_WhenAdmissionDetectsActorRedelivery_ShouldRecoverTheSameToolCall()
+    {
+        const string recoveredResult = """{"recovered":true}""";
+        var agentTool = new CapturingAgentTool();
+        var executionPort = new SequencedOutcomeExecutionPort(
+            new AgentToolExecutionOutcome(
+                AgentToolExecutionOutcomeKind.Failed,
+                string.Empty,
+                new AgentToolReceipt
+                {
+                    CallId = "call-presentation-kappa",
+                    ToolName = agentTool.Name,
+                    Status = AgentToolReceiptStatus.Error,
+                },
+                IsMutation: false,
+                FailureCode: "tool_execution_already_started",
+                SafeMessage: "This exact tool call already started and will not be replayed.",
+                AgentToolExecutionFailureStage.Admission,
+                TerminalInvoked: false,
+                Retryable: false,
+                AuditCompleted: true),
+            new AgentToolExecutionOutcome(
+                AgentToolExecutionOutcomeKind.Executed,
+                recoveredResult,
+                new AgentToolReceipt
+                {
+                    CallId = "call-presentation-kappa",
+                    ToolName = agentTool.Name,
+                    Status = AgentToolReceiptStatus.Success,
+                    ResultJson = recoveredResult,
+                },
+                IsMutation: false,
+                FailureCode: string.Empty,
+                SafeMessage: string.Empty,
+                AgentToolExecutionFailureStage.None,
+                TerminalInvoked: true,
+                Retryable: false,
+                AuditCompleted: true));
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            executionPort);
+        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+
+        var result = await tool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: """{"format":"preview"}""",
+                RunId: "run-finance-alpha",
+                StepId: "present-preview",
+                ExecutionId: "exec-recovery-zeta",
+                CallId: "call-presentation-kappa",
+                ScopeId: "scope-personal-beta",
+                CallerCredential: new WorkflowCallerCredential()),
+            CancellationToken.None);
+
+        result.ResultJson.Should().Be(recoveredResult);
+        result.Failure.Should().BeNull();
+        executionPort.Requests.Should().HaveCount(2);
+        executionPort.Requests[0].ExecutionAttemptKind.Should().Be(AgentToolExecutionAttemptKind.Initial);
+        executionPort.Requests[1].ExecutionAttemptKind.Should().Be(AgentToolExecutionAttemptKind.ActorRecovery);
+        executionPort.Requests.Select(request => request.ExecutionContext.Request.RequestId)
+            .Should().OnlyContain(requestId => requestId == "run-finance-alpha");
+        executionPort.Requests.Select(request => request.ExecutionContext.Request.CallId)
+            .Should().OnlyContain(callId => callId == "call-presentation-kappa");
+    }
+
+    [Fact]
+    public async Task WorkflowTool_WhenDuplicateFailureAlreadyInvokedTerminal_ShouldNotRecover()
+    {
+        var duplicateFailure = new AgentToolExecutionOutcome(
+            AgentToolExecutionOutcomeKind.Failed,
+            string.Empty,
+            new AgentToolReceipt
+            {
+                CallId = "call-write-lambda",
+                ToolName = "capture_context",
+                Status = AgentToolReceiptStatus.Error,
+            },
+            IsMutation: true,
+            FailureCode: "tool_execution_already_started",
+            SafeMessage: "terminal execution already ran",
+            AgentToolExecutionFailureStage.TerminalExecution,
+            TerminalInvoked: true,
+            Retryable: false,
+            AuditCompleted: true);
+        var executionPort = new FixedOutcomeExecutionPort(duplicateFailure);
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(new CapturingAgentTool())],
+            executionPort);
+        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+
+        var result = await tool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: """{"operation":"write"}""",
+                RunId: "run-write-delta",
+                StepId: "submit-write",
+                ExecutionId: "exec-write-eta",
+                CallId: "call-write-lambda",
+                ScopeId: "scope-personal-gamma",
+                CallerCredential: new WorkflowCallerCredential()),
+            CancellationToken.None);
+
+        result.Failure.Should().Be(new WorkflowToolExecutionFailure(
+            "tool_execution_already_started",
+            "terminal execution already ran",
+            TerminalInvoked: true,
+            Retryable: false));
+        executionPort.Requests.Should().ContainSingle();
+        executionPort.Requests[0].ExecutionAttemptKind.Should().Be(AgentToolExecutionAttemptKind.Initial);
+    }
+
+    [Fact]
     public async Task WorkflowTool_ShouldPreserveIssuedTimeInAdmissionIdentity()
     {
         const long issuedAtUnixMs = 1_800_000_000_000;
@@ -987,6 +1098,23 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             ct.ThrowIfCancellationRequested();
             Requests.Add(request);
             return Task.FromResult(outcome);
+        }
+    }
+
+    private sealed class SequencedOutcomeExecutionPort(params AgentToolExecutionOutcome[] outcomes)
+        : IAgentToolExecutionPort
+    {
+        private readonly Queue<AgentToolExecutionOutcome> _outcomes = new(outcomes);
+
+        public List<AgentToolExecutionRequest> Requests { get; } = [];
+
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.FromResult(_outcomes.Dequeue());
         }
     }
 
