@@ -129,8 +129,8 @@
   .purpose-banner .pb-a b { color:var(--fg); font-weight:600; }
   .purpose-banner .pb-not { margin-top:8px; font-size:11.5px; color:var(--muted-2); }
   .health-chip { display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:700; padding:2px 8px; border-radius:var(--r-pill); border:1px solid transparent; white-space:nowrap; }
-  .health-chip.sync { color:var(--ok); background:var(--ok-soft); border-color:color-mix(in oklab,var(--ok) 30%,transparent); }
-  .health-chip.lagging { color:var(--warn); background:var(--warn-soft); border-color:color-mix(in oklab,var(--warn) 30%,transparent); }
+  .health-chip.healthy { color:var(--ok); background:var(--ok-soft); border-color:color-mix(in oklab,var(--ok) 30%,transparent); }
+  .health-chip.exhausted { color:var(--warn); background:var(--warn-soft); border-color:color-mix(in oklab,var(--warn) 30%,transparent); }
   .health-chip.failing { color:var(--err); background:var(--err-soft); border-color:color-mix(in oklab,var(--err) 30%,transparent); }
   .health-chip.inactive { color:var(--muted); background:var(--neutral-soft); border-color:var(--border); }
   .scope-meaning { margin:0 0 12px; padding:12px 14px; border:1px solid var(--border); border-radius:var(--r); background:var(--panel); }
@@ -243,8 +243,8 @@
   .gauge > i { display:block; height:100%; background:var(--ok); border-radius:999px; }
   .gauge.lag > i { background:var(--warn); } .gauge.bad > i { background:var(--err); }
   .gauge-cap { font-family:var(--mono); font-size:10px; color:var(--muted-2); margin-top:3px; }
-  .lagcell { font-family:var(--mono); font-size:13px; font-weight:600; text-align:right; color:var(--muted); }
-  .lagcell.pos { color:var(--warn); } .lagcell.bad { color:var(--err); }
+  .gapcell { font-family:var(--mono); font-size:13px; font-weight:600; text-align:right; color:var(--muted); }
+  .gapcell.pos { color:var(--warn); } .gapcell.na { color:var(--muted-2); font-weight:500; }
   .failcell { font-family:var(--mono); font-size:13px; text-align:right; color:var(--muted-2); }
   .failcell.pos { color:var(--err); }
 
@@ -352,7 +352,7 @@
 <script>
 /* ===========================================================================
    数据来源标注（DATA HONESTY）：
-     LIVE（今天就有）：projection-scope 状态（active / observed vs successful version / failures）
+     LIVE（今天就有）：projection-scope 处理计数、同源版本轴与 unresolved failures
                        经 GET /api/cqrs/scopes（平台管理员可见的平台级健康视图）；scope id 内嵌的
                        nyxid 归属账户 id 经 nyxid admin 单用户端点解析为 display_name（解析失败保留原 id）。
      静态（结构永真，无 fetch）：Panel A 管道画布——一张始终成立的架构图。
@@ -386,10 +386,53 @@ function getToken(){ const raw=localStorage.getItem(TOKEN_KEY); if(!raw) return 
 function setToken(t){ localStorage.setItem(TOKEN_KEY, JSON.stringify(t)); }
 function clearToken(){ localStorage.removeItem(TOKEN_KEY); }
 function isEmbeddedInAdmin(){ try { return window.parent && window.parent !== window && window.frameElement && window.frameElement.getAttribute("data-console-frame") === "1"; } catch(e){ return false; } }
-function notifyAdminShellAuth(type, reason){
+function notifyAdminShellAuth(type, reason, rejectedAccessToken){
   if(!isEmbeddedInAdmin()) return false;
-  window.parent.postMessage({ source:"aevatar-backend-console-suite", type, reason: reason || "" }, location.origin);
+  window.parent.postMessage({ source:"aevatar-backend-console-suite", type, reason: reason || "", rejectedAccessToken:rejectedAccessToken || "" }, location.origin);
   return true;
+}
+function replacementToken(rejectedAccessToken){
+  const current=getToken();
+  return current&&current.access_token&&current.access_token!==rejectedAccessToken ? current : null;
+}
+async function requestAdminShellTokenRefresh(rejectedAccessToken){
+  const existing=replacementToken(rejectedAccessToken); if(existing) return existing;
+  if(!isEmbeddedInAdmin()) return null;
+  const requestId="auth-"+Date.now().toString(36)+"-"+randomString(10);
+  return await new Promise(resolve=>{
+    let timer=null,settled=false;
+    function finish(){
+      if(settled) return; settled=true;
+      window.removeEventListener("message",onMessage);
+      if(timer!==null) clearTimeout(timer);
+      resolve(replacementToken(rejectedAccessToken));
+    }
+    function onMessage(ev){
+      const msg=ev.data||{};
+      if(ev.origin===location.origin&&ev.source===window.parent&&msg.source==="aevatar-backend-console-suite"&&msg.type==="auth-refresh-result"&&msg.requestId===requestId) finish();
+    }
+    window.addEventListener("message",onMessage);
+    timer=setTimeout(finish,10000);
+    window.parent.postMessage({source:"aevatar-backend-console-suite",type:"auth-refresh-request",requestId,rejectedAccessToken},location.origin);
+  });
+}
+async function fetchWithConsoleAuth(path,options){
+  let token=getToken(); if(!token||!token.access_token) throw new Error("not-authenticated");
+  options=options||{};
+  function request(activeToken){
+    const headers=Object.assign({},options.headers||{},{Authorization:"Bearer "+activeToken.access_token});
+    return fetch(path,Object.assign({},options,{headers}));
+  }
+  let res=await request(token);
+  if(res.status!==401) return res;
+  let replacement=replacementToken(token.access_token);
+  if(!replacement) replacement=await requestAdminShellTokenRefresh(token.access_token);
+  if(replacement&&replacement.access_token!==token.access_token){
+    token=replacement; res=await request(token);
+    if(res.status!==401) return res;
+  }
+  signOutSilent(token.access_token);
+  const error=new Error("unauthorized"); error.status=401; throw error;
 }
 
 async function beginLogin(){
@@ -443,15 +486,15 @@ async function fetchUserInfo(){
 function toAccount(info){ return info ? { label: info.email || info.preferred_username || info.sub || "已登录" } : null; }
 
 function signOut(){ clearToken(); if(notifyAdminShellAuth("auth-required", "已登出 NyxID，请重新登录。")) return; beginLogin(); }
-function signOutSilent(){ clearToken(); state.signedIn = false; if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。")) return; render(); }
+function signOutSilent(rejectedAccessToken){ const current=getToken(); if(rejectedAccessToken&&current&&current.access_token!==rejectedAccessToken) return false;
+  if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。",rejectedAccessToken)) return true;
+  clearToken(); state.signedIn=false;
+  render(); return true; }
 
 /* scope-gated bearer fetch helper. Attaches Bearer; 401 -> re-login. Callers inspect res.status
    themselves for non-401 handling (403 forbidden, error detail). */
 async function authFetch(path){
-  const token = getToken(); if(!token) throw new Error("not-authenticated");
-  const res = await fetch(path, { headers:{ Authorization:"Bearer " + token.access_token } });
-  if(res.status === 401){ signOutSilent(); throw new Error("unauthorized"); }
-  return res;
+  return await fetchWithConsoleAuth(path);
 }
 
 /* ===========================================================================
@@ -531,7 +574,7 @@ const ICON={
    the host page passes its own active key.
    =========================================================================== */
 const SUITE_NAV=[
-  {k:"observatory",href:"/workflow/observatory",label:"观测台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'},
+  {k:"observatory",href:"/admin#/observatory",label:"观测台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'},
   {k:"studio",href:"/workflow/studio",label:"Studio",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>'},
   {k:"schedules",href:"/schedules",label:"定时任务",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>'},
   {k:"channels",href:"/channels",label:"渠道",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.6"/><path d="M12 4.5v4.9M12 14.6v4.9M4.5 12h4.9M14.6 12h4.9"/></svg>'},
@@ -557,7 +600,7 @@ const state = {
   signedIn:false,
   theme: localStorage.getItem("cqrs-theme") || null,
   scopeId:null, scopeResolved:false, scopeSource:null,
-  sort:"lag", selectedScope:null,
+  sort:"fail", selectedScope:null,
   famFilter:_deep.famFilter, ownerFilter:_deep.ownerFilter,   // Panel B facet filters (scope family / nyxid owner id)
   scopePage:1, invPages:{},      // client-side display paging (Panel B list / Panel C per-shape group)
   // scopes panel B: status one of loading | ok | empty | forbidden | error
@@ -571,21 +614,32 @@ let accountLabel = "已登录";
 function curTheme(){ const h=document.documentElement; return h.classList.contains("theme-light")?"light":h.classList.contains("theme-dark")?"dark":null; }
 function effDark(){ const t=curTheme(); if(t)return t==="dark"; return !window.matchMedia||!window.matchMedia("(prefers-color-scheme: light)").matches; }
 function applyTheme(){ const t=state.theme; document.documentElement.classList.remove("theme-light","theme-dark"); if(t)document.documentElement.classList.add("theme-"+t); }
-function lagOf(s){ return (s.observed||0) - (s.successful||0); }
-/* Health buckets: based on active + version lag + failures. lag is StateVersion delta, NOT milliseconds. */
+function gapOf(s){ return s.singleSourceVersionGap==null?null:Math.max(0,Number(s.singleSourceVersionGap)||0); }
+function oldestFailureAge(s){
+  if(!s.oldestUnresolvedFailureAt) return null;
+  const at=Date.parse(s.oldestUnresolvedFailureAt); if(!Number.isFinite(at)) return null;
+  const seconds=Math.max(0,Math.floor((Date.now()-at)/1000));
+  if(seconds<60) return seconds+" 秒";
+  if(seconds<3600) return Math.floor(seconds/60)+" 分钟";
+  if(seconds<86400) return Math.floor(seconds/3600)+" 小时";
+  return Math.floor(seconds/86400)+" 天";
+}
+/* Health is based on the durable repair backlog, never on subtraction across source actors. */
 function healthOf(s){
   if(!s || !s.active) return "inactive";
-  if((s.failures||0) > 0) return "failing";
-  if(lagOf(s) > 0) return "lagging";
-  return "sync";
+  if((s.retryExhaustedFailureCount||0) > 0) return "exhausted";
+  if((s.unresolvedFailureCount||0) > 0) return "failing";
+  return "healthy";
 }
-const HEALTH_LABEL = { sync:"同步", lagging:"滞后", failing:"失败", inactive:"未激活" };
+const HEALTH_LABEL = { healthy:"处理正常", exhausted:"重试耗尽", failing:"待修复", inactive:"未激活" };
 function healthChip(s){
   const h=healthOf(s);
-  return '<span class="health-chip '+h+'" title="'+esc(HEALTH_LABEL[h])+'：基于 active / 版本滞后(observed−successful) / failures">'+esc(HEALTH_LABEL[h])+'</span>';
+  return '<span class="health-chip '+h+'" title="'+esc(HEALTH_LABEL[h])+'：基于 active / unresolved failures / retry exhausted">'+esc(HEALTH_LABEL[h])+'</span>';
 }
-function lagTitle(){
-  return "版本滞后 = last_observed_version − last_successful_version（StateVersion 差，不是毫秒）";
+function gapTitle(s){
+  return gapOf(s)==null
+    ? "scope 含多个或没有权威 source actor，不能跨 actor 相减"
+    : "同一权威 source actor：highest_seen_version − last_successful_version";
 }
 function openAdminObservatory(scopeId){
   const hash = "#/observatory"+(scopeId ? ("?scope="+encodeURIComponent(scopeId)) : "");
@@ -660,11 +714,11 @@ const SHAPE_META = {
 function shapeMeta(shape){ return SHAPE_META[shape] || { name:String(shape||"?"), unit:"" }; }
 
 /* ===========================================================================
-   shared client-side pager — display paging for long lists (scope & lag rail rows +
+   shared client-side pager — display paging for long lists (scope processing rows +
    read-model inventory groups). Pure view state; returns null when the list fits on a
    single page, so short lists render exactly as before.
    =========================================================================== */
-const SCOPE_PAGE_SIZE = 10;   // Panel B: scope & lag-rail rows per page
+const SCOPE_PAGE_SIZE = 10;   // Panel B: scope processing rows per page
 const RM_PAGE_SIZE = 6;       // Panel C: read-model items per sink-shape group per page
 function pageCount(total, size){ return Math.max(1, Math.ceil((total||0)/size)); }
 function pageClamp(page, total, size){ return Math.min(Math.max(1, (page|0)||1), pageCount(total, size)); }
@@ -796,7 +850,7 @@ function renderCanvas(){
 }
 function defaultStrip(){
   return '<div class="sd-ic">'+ICON.info+'</div><div><div class="sd-t">悬停或聚焦任一阶段，查看其职责与真实类型名</div>'+
-    '<div class="sd-r">严格左→右：一个权威真相源向多个读副本扇出。<b style="color:var(--fg)">结构</b>（静态轨道）永真；<b style="color:var(--fg)">数据</b>（移动 token、版本/滞后徽章）才是实时的。</div></div>';
+    '<div class="sd-r">严格左→右：一个权威真相源向多个读副本扇出。<b style="color:var(--fg)">结构</b>（静态轨道）永真；<b style="color:var(--fg)">数据</b>（移动 token、处理计数与 failure backlog）才是实时的。</div></div>';
 }
 function showStage(s){
   const strip=document.getElementById("stageDetail"); if(!strip)return;
@@ -806,7 +860,7 @@ function showStage(s){
 }
 
 /* ===========================================================================
-   B) scope & lag rail — LIVE via GET /api/cqrs/scopes (platform-admin gated)
+   B) scope processing & repair rail — LIVE via GET /api/cqrs/scopes (platform-admin gated)
    =========================================================================== */
 function filteredScopes(){
   let arr=state.scopes.rows;
@@ -816,8 +870,8 @@ function filteredScopes(){
 }
 function sortedScopes(){
   const arr=filteredScopes().slice();
-  if(state.sort==="lag") arr.sort((a,b)=>lagOf(b)-lagOf(a) || b.failures-a.failures);
-  else if(state.sort==="fail") arr.sort((a,b)=>b.failures-a.failures || lagOf(b)-lagOf(a));
+  if(state.sort==="fail") arr.sort((a,b)=>(b.retryExhaustedFailureCount||0)-(a.retryExhaustedFailureCount||0) || (b.unresolvedFailureCount||0)-(a.unresolvedFailureCount||0) || String(a.oldestUnresolvedFailureAt||"~").localeCompare(String(b.oldestUnresolvedFailureAt||"~")));
+  else if(state.sort==="attempt") arr.sort((a,b)=>(b.attemptedEnvelopeTotal||0)-(a.attemptedEnvelopeTotal||0));
   else arr.sort((a,b)=>String(a.id).localeCompare(String(b.id)));
   return arr;
 }
@@ -865,7 +919,7 @@ function renderScopeRail(){
   const tag = state.scopes.status==="ok"
     ? '<span class="srctag live"><span class="dot"></span>数据来源 · LIVE</span>'
     : (state.scopes.status==="loading" ? '<span class="srctag live" style="color:var(--muted);background:var(--neutral-soft);border-color:var(--border)"><span class="dot" style="background:var(--muted)"></span>加载中…</span>' : '<span class="pending">'+ICON.warn+' 平台级</span>');
-  head.innerHTML='<h2>Scope &amp; Lag Rail</h2><div class="ph-r">'+tag+'</div>';
+  head.innerHTML='<h2>Scope Processing &amp; Repair</h2><div class="ph-r">'+tag+'</div>';
   card.appendChild(head);
 
   const rows = state.scopes.rows;
@@ -873,22 +927,21 @@ function renderScopeRail(){
 
   /* headline metrics — only meaningful when we actually have rows */
   if(st==="ok"){
-    const totalLag=rows.reduce((s,x)=>s+lagOf(x),0);
-    const lagging=rows.filter(x=>lagOf(x)>0).length;
-    const totalFail=rows.reduce((s,x)=>s+(x.failures||0),0);
+    const totalAttempted=rows.reduce((s,x)=>s+(x.attemptedEnvelopeTotal||0),0);
+    const totalSuccessful=rows.reduce((s,x)=>s+(x.successfulMaterializationTotal||0),0);
+    const totalUnresolved=rows.reduce((s,x)=>s+(x.unresolvedFailureCount||0),0);
+    const totalExhausted=rows.reduce((s,x)=>s+(x.retryExhaustedFailureCount||0),0);
     const hl=el("div",{class:"panel-body",style:"padding-bottom:0"});
     const hb=el("div",{class:"headline"});
-    const failing=rows.filter(x=>(x.failures||0)>0).length;
     const inactive=rows.filter(x=>!x.active).length;
-    const sync=rows.filter(x=>healthOf(x)==="sync").length;
     hb.innerHTML=
-      '<div class="hl '+(totalLag>0?"warn":"")+'"><div class="hl-l" title="'+esc(lagTitle())+'">Σ 版本滞后<span class="unit">versions</span></div><div class="hl-v">'+totalLag+'</div></div>'+
-      '<div class="hl '+(lagging>0?"warn":"")+'"><div class="hl-l">滞后 / 同步</div><div class="hl-v">'+lagging+' / '+sync+'</div></div>'+
-      '<div class="hl '+(totalFail>0?"bad":"")+'"><div class="hl-l">失败 scope</div><div class="hl-v">'+failing+(inactive?(' · 未激活 '+inactive):'')+'</div></div>';
+      '<div class="hl"><div class="hl-l">处理成功 / 尝试</div><div class="hl-v">'+fmt(totalSuccessful)+' / '+fmt(totalAttempted)+'</div></div>'+
+      '<div class="hl '+(totalUnresolved>0?"bad":"")+'"><div class="hl-l">未解决失败</div><div class="hl-v">'+fmt(totalUnresolved)+(inactive?(' · 未激活 '+inactive):'')+'</div></div>'+
+      '<div class="hl '+(totalExhausted>0?"warn":"")+'"><div class="hl-l">重试耗尽</div><div class="hl-v">'+fmt(totalExhausted)+'</div></div>';
     hl.appendChild(hb);
     hl.appendChild(el("div",{style:"font-size:11.5px;color:var(--muted-2);margin-top:8px"},
-      '<b style="color:var(--muted)">版本滞后 + failures = 头条。</b> observed（已见）− successful（已物化）= <b title="'+esc(lagTitle())+'">版本差</b>，不是毫秒。'+
-      ' 全 0 失败不代表业务 run 成功——只说明投影 scope 状态未报告异常。'));
+      '<b style="color:var(--muted)">repair backlog 是健康主信号。</b> 多 source actor 的版本不可相减；只有单一权威 source actor 的行才展示版本差。'+
+      ' 未解决失败为 0 不代表业务 run 成功，只说明投影 scope 没有待修复记录。'));
     card.appendChild(hl);
 
     /* family / owner facet bar — resolves opaque scope ids into navigable groups + people */
@@ -898,9 +951,9 @@ function renderScopeRail(){
     const sh=el("div",{class:"sort-h"});
     const sortBtn=(key,label)=>'<button data-sort="'+key+'" '+(state.sort===key?'aria-sort="descending"':"")+'>'+label+' '+(state.sort===key?ICON.sort:"")+'</button>';
     sh.innerHTML='<span><button data-sort="id" '+(state.sort==="id"?'aria-sort="ascending"':"")+'>scope · 归属人</button></span>'+
-      '<span class="col-gauge">observed → materialized</span>'+
-      '<span style="text-align:right" title="'+esc(lagTitle())+'">'+sortBtn("lag","版本滞后")+'</span>'+
-      '<span style="text-align:right">'+sortBtn("fail","fails")+'</span>';
+      '<span class="col-gauge">successful / attempted</span>'+
+      '<span style="text-align:right">同源 gap</span>'+
+      '<span style="text-align:right">'+sortBtn("fail","待修复")+'</span>';
     sh.querySelectorAll("button").forEach(b=>b.addEventListener("click",()=>{ state.sort=b.getAttribute("data-sort"); state.scopePage=1; render(); }));
     card.appendChild(sh);
 
@@ -909,9 +962,9 @@ function renderScopeRail(){
     const scopeStart=(state.scopePage-1)*SCOPE_PAGE_SIZE;
     const list=el("div",{role:"list"});
     allScopes.slice(scopeStart, scopeStart+SCOPE_PAGE_SIZE).forEach(s=>{
-      const lag=lagOf(s); const pct=s.observed? Math.round(s.successful/s.observed*100):100;
-      const gcls = lag===0?"":((s.failures>0||lag>15)?"bad":"lag");
-      const dotCls = s.active?(lag>0||s.failures>0?(s.failures>0?"bad":"lag"):"active"):"idle";
+      const gap=gapOf(s); const pct=s.attemptedEnvelopeTotal? Math.min(100,Math.round(s.successfulMaterializationTotal/s.attemptedEnvelopeTotal*100)):100;
+      const gcls = s.unresolvedFailureCount>0?"bad":"";
+      const dotCls = s.active?(s.unresolvedFailureCount>0?"bad":"active"):"idle";
       const fam=scopeFamily(s.id), tail=scopeTail(s.id), oid=scopeOwnerId(s.id), oname=oid?ownerCache[oid]:undefined;
       let ownerHtml="";
       if(oid){
@@ -919,15 +972,16 @@ function renderScopeRail(){
         else ownerHtml='<span class="sc-owner unresolved" title="nyxid '+esc(oid)+'（解析中或未知）"><span class="av">·</span>'+esc(oid.slice(0,8))+'</span>';
       }
       const row=el("button",{class:"scope-row",role:"listitem","aria-current":String(state.selectedScope===s.id)});
-      const human=esc(fam)+(oname?(' · '+esc(oname)):'')+(lag?(' · lag '+lag+' versions'):' · 同步');
+      const age=oldestFailureAge(s);
+      const human=esc(fam)+(oname?(' · '+esc(oname)):'')+(s.unresolvedFailureCount?(' · '+s.unresolvedFailureCount+' 条待修复'+(age?' · 最早 '+age:'')):' · 无待修复失败');
       row.innerHTML=
         '<span class="sc-id"><span class="dot s-'+dotCls+'"></span>'+
           '<span class="sc-main"><span class="sc-top"><span class="sc-fam" title="'+esc(s.id)+'">'+esc(fam)+'</span>'+ownerHtml+healthChip(s)+'</span>'+
           (tail?'<span class="sc-tail" title="'+esc(s.id)+'">'+esc(tail)+'</span>':'')+
           '<span class="sc-tail" style="opacity:.85">'+human+'</span></span></span>'+
-        '<span class="cell-gauge"><div class="gauge '+gcls+'"><i style="width:'+pct+'%"></i></div><div class="gauge-cap">'+fmt(s.successful)+' / '+fmt(s.observed)+'</div></span>'+
-        '<span class="lagcell '+(lag>0?(lag>15?"bad":"pos"):"")+'" title="'+esc(lagTitle())+'">'+(lag>0?"+"+lag:"0")+'</span>'+
-        '<span class="failcell '+(s.failures>0?"pos":"")+'">'+(s.failures||0)+'</span>';
+        '<span class="cell-gauge"><div class="gauge '+gcls+'"><i style="width:'+pct+'%"></i></div><div class="gauge-cap">'+fmt(s.successfulMaterializationTotal)+' / '+fmt(s.attemptedEnvelopeTotal)+'</div></span>'+
+        '<span class="gapcell '+(gap==null?"na":(gap>0?"pos":""))+'" title="'+esc(gapTitle(s))+'">'+(gap==null?"不可比":(gap>0?"+"+gap:"0"))+'</span>'+
+        '<span class="failcell '+(s.unresolvedFailureCount>0?"pos":"")+'" title="failed attempts '+fmt(s.failedAttemptTotal)+' · retry exhausted now '+fmt(s.retryExhaustedFailureCount)+' · exhausted history '+fmt(s.retryExhaustedTotal)+'">'+fmt(s.unresolvedFailureCount)+'</span>';
       row.addEventListener("click",()=>{ selectScope(s.id); });
       list.appendChild(row);
     });
@@ -1084,21 +1138,23 @@ function renderScopeMeaning(){
     card.appendChild(body);
     return card;
   }
-  const lag=lagOf(s), fam=scopeFamily(s.id), oid=scopeOwnerId(s.id), oname=oid?ownerCache[oid]:null;
+  const gap=gapOf(s), age=oldestFailureAge(s), fam=scopeFamily(s.id), oid=scopeOwnerId(s.id), oname=oid?ownerCache[oid]:null;
   const h=healthOf(s);
   const meaning=el("div",{class:"scope-meaning"});
   let explain="";
-  if(h==="sync") explain="投影已跟上已观察版本：读模型副本与最近成功物化水位一致。";
-  else if(h==="lagging") explain="读模型落后于已观察版本 "+lag+" 个 StateVersion。查询可能读到较旧事实；通常随物化追平，不必立刻判定业务失败。";
-  else if(h==="failing") explain="该 scope 记录了 "+(s.failures||0)+" 次投影失败。应优先查 projector/sink 错误，而不是业务 run 本身。";
+  if(h==="healthy") explain="该 scope 当前没有未解决的投影失败。多 source actor 时不会据此推断版本同步。";
+  else if(h==="exhausted") explain="至少一条未解决失败已经耗尽自动重试，需要 operator repair 或人工判断。";
+  else if(h==="failing") explain="该 scope 有 "+(s.unresolvedFailureCount||0)+" 条未解决投影失败。应优先查 projector/sink 错误，而不是业务 run 本身。";
   else explain="scope 未处于 active。可能尚未被 activation 唤醒，或已空闲。";
   meaning.innerHTML=
     '<h3>'+healthChip(s)+' <span class="mono" style="font-size:11px;color:var(--muted-2)">'+esc(fam)+'</span></h3>'+
     '<p class="sm-line"><b>人话：</b>'+esc(fam)+(oname?(' · owner '+esc(oname)):(oid?(' · owner '+esc(oid.slice(0,8))):''))+
-    (lag?(' · 版本滞后 '+lag):' · 同步')+(s.active?' · 活跃':' · 未激活')+'</p>'+
+    (gap==null?(' · '+fmt(s.sourceActorCount)+' 个 source actor 版本轴'):(gap?(' · 同源版本差 '+gap):' · 同源版本差 0'))+(s.active?' · 活跃':' · 未激活')+'</p>'+
     '<p class="sm-line"><b>含义：</b>'+esc(explain)+'</p>'+
-    '<p class="sm-line" title="'+esc(lagTitle())+'"><b>水位：</b>successful '+fmt(s.successful)+' / observed '+fmt(s.observed)+
-    ' · failures '+(s.failures||0)+'</p>'+
+    '<p class="sm-line"><b>处理：</b>received '+fmt(s.receivedEnvelopeTotal)+' · attempted '+fmt(s.attemptedEnvelopeTotal)+' · successful '+fmt(s.successfulMaterializationTotal)+' · failed attempts '+fmt(s.failedAttemptTotal)+'</p>'+
+    '<p class="sm-line"><b>修复：</b>unresolved '+fmt(s.unresolvedFailureCount)+' · retry exhausted now '+fmt(s.retryExhaustedFailureCount)+' · exhausted history '+fmt(s.retryExhaustedTotal)+
+    (age?(' · oldest '+esc(age)):'')+' · diagnostic dropped '+fmt(s.failureDiagnosticDroppedTotal)+'</p>'+
+    '<p class="sm-line" title="'+esc(gapTitle(s))+'"><b>版本轴：</b>'+(gap==null?'不可跨 source actor 比较':('single-source gap '+fmt(gap)))+'</p>'+
     '<p class="sm-line mono" style="font-size:11px;word-break:break-all;color:var(--muted-2)">'+esc(s.id)+'</p>';
   const actions=el("div",{class:"sm-actions"});
   if(oid){
@@ -1131,10 +1187,13 @@ function renderInspector(){
       '<div class="ps-b">'+esc(intro.error||"后端返回错误")+'</div>'));
   } else if(intro.status==="ok" || intro.status==="empty"){
     const detail=intro.detail||{};
+    const sourceVersions=Array.isArray(detail.sourceVersions)?detail.sourceVersions:[];
     const summary=el("div",{class:"scope-meaning"});
     summary.innerHTML=
       '<p class="sm-line"><b>Scope StateVersion：</b>'+fmt(detail.stateVersion)+'</p>'+
-      '<p class="sm-line"><b>物化水位：</b>successful '+fmt(detail.lastSuccessfulVersion)+' / observed '+fmt(detail.lastObservedVersion)+'</p>'+
+      '<p class="sm-line"><b>处理：</b>received '+fmt(detail.receivedEnvelopeTotal)+' · attempted '+fmt(detail.attemptedEnvelopeTotal)+' · successful '+fmt(detail.successfulMaterializationTotal)+' · failed attempts '+fmt(detail.failedAttemptTotal)+'</p>'+
+      '<p class="sm-line"><b>修复：</b>unresolved '+fmt(detail.unresolvedFailureCount)+' · retry exhausted now '+fmt(detail.retryExhaustedFailureCount)+' · exhausted history '+fmt(detail.retryExhaustedTotal)+' · diagnostic dropped '+fmt(detail.failureDiagnosticDroppedTotal)+'</p>'+
+      '<p class="sm-line"><b>Source 版本轴：</b>'+(sourceVersions.length?sourceVersions.map(source=>' <span class="mono" title="'+esc(source.sourceActorId||"")+'">'+esc(source.sourceActorId||"unknown")+' '+fmt(source.lastSuccessfulVersion)+' / '+fmt(source.highestSeenVersion)+' (gap '+fmt(source.versionGap)+')</span>').join(' · '):'尚无可比较版本')+'</p>'+
       '<p class="sm-line"><b>读模型刷新：</b>'+(detail.updatedAt?esc(detail.updatedAt):"未提供")+'</p>';
     body.appendChild(summary);
     body.appendChild(el("div",{style:"font-size:11px;color:var(--muted-2);margin:12px 0 8px"},"只展示元数据，不返回 payload。每条 StateVersion 来自其源 committed event；时间戳缺失时保持为空。"));
@@ -1175,9 +1234,9 @@ function renderInspector(){
 function renderPurposeBanner(){
   const box=el("section",{class:"purpose-banner","aria-label":"本页用途"});
   box.innerHTML=
-    '<p class="pb-q">本页回答：读侧投影是否健康、是否滞后于权威 actor 的已提交 StateVersion？</p>'+
+    '<p class="pb-q">本页回答：投影收到了什么、成功物化了什么、还有哪些失败需要修复？</p>'+
     '<p class="pb-a">数据来源是已物化的 <b>projection scope 状态</b> 与 <b>read-model 清单</b>（只读）。'+
-    ' <b>lag</b> 是版本差（observed − successful），<b>不是</b> wall-clock 毫秒。</p>'+
+    ' 版本差只在同一个权威 source actor 轴上展示；多 actor scope 使用处理计数、failure backlog 与 oldest age。</p>'+
     '<p class="pb-not">不回答：业务 workflow 逐步执行细节（请去「运行观测台」）。不提供 rebuild / replay / query-time 补投影。</p>';
   return box;
 }
@@ -1187,7 +1246,7 @@ function render(){
   if(!state.signedIn){ app.appendChild(renderLogin()); return; }
   const body=el("div",{class:"body"});
   body.appendChild(el("h1",{class:"page-h"},"投影观测台 · 读模型健康"));
-  body.appendChild(el("p",{class:"page-sub"},'命令如何成为已提交事件、流经投影管道、物化成可查询读模型——以及哪里健康、哪里版本滞后。读模型与实时 UI 流走<b>同一条管道</b>。'));
+  body.appendChild(el("p",{class:"page-sub"},'命令如何成为已提交事件、流经投影管道、物化成可查询读模型——以及处理计数、待修复失败和同源版本轴。读模型与实时 UI 流走<b>同一条管道</b>。'));
   body.appendChild(renderPurposeBanner());
   body.appendChild(renderCanvas());
 
@@ -1245,9 +1304,17 @@ async function loadScopes(){
     const rows = (data && Array.isArray(data.scopes) ? data.scopes : []).map(s=>({
       id: s.id,
       active: !!s.active,
-      observed: Number(s.observed||0),
-      successful: Number(s.successful||0),
-      failures: Number(s.failures||0)
+      receivedEnvelopeTotal: Number(s.receivedEnvelopeTotal||0),
+      attemptedEnvelopeTotal: Number(s.attemptedEnvelopeTotal||0),
+      successfulMaterializationTotal: Number(s.successfulMaterializationTotal||0),
+      failedAttemptTotal: Number(s.failedAttemptTotal||0),
+      retryExhaustedTotal: Number(s.retryExhaustedTotal||0),
+      retryExhaustedFailureCount: Number(s.retryExhaustedFailureCount||0),
+      unresolvedFailureCount: Number(s.unresolvedFailureCount||0),
+      oldestUnresolvedFailureAt: s.oldestUnresolvedFailureAt||null,
+      failureDiagnosticDroppedTotal: Number(s.failureDiagnosticDroppedTotal||0),
+      sourceActorCount: Number(s.sourceActorCount||0),
+      singleSourceVersionGap: s.singleSourceVersionGap==null?null:Number(s.singleSourceVersionGap)
     }));
     state.scopes = { status: rows.length? "ok":"empty", rows, detail:null };
     render();

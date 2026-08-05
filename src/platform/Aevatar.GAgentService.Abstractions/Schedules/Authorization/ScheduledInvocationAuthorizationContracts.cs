@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using System.Security.Cryptography;
 using System.Text;
 using Aevatar.Workflow.Abstractions;
@@ -7,7 +8,7 @@ namespace Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 
 public static class ScheduledInvocationAuthorizationContractVersions
 {
-    public const string Schema = "scheduled-invocation-authorization/v2";
+    public const string Schema = "scheduled-invocation-authorization/v3";
     public const string CredentialPolicy = "nyxid-api-key/scheduled-invocation/v2";
 }
 
@@ -36,7 +37,8 @@ public sealed record ScheduledInvocationAuthorizationPlanResult(
     ScheduledInvocationAuthorizationFailureCode FailureCode,
     string Detail,
     long ObservedCatalogStateVersion = 0,
-    IReadOnlyList<NyxIdUserServiceCapabilityRef>? RequiredNyxIdServices = null)
+    IReadOnlyList<NyxIdUserServiceCapabilityRef>? RequiredNyxIdServices = null,
+    ScheduledInvocationLLMRefreshRequirement? LLMRefreshRequirement = null)
 {
     public bool Success => Plan is not null;
 
@@ -52,8 +54,15 @@ public sealed record ScheduledInvocationAuthorizationPlanResult(
         ScheduledInvocationAuthorizationFailureCode failureCode,
         string detail,
         long observedCatalogStateVersion = 0,
-        IReadOnlyList<NyxIdUserServiceCapabilityRef>? requiredNyxIdServices = null) =>
-        new(null, failureCode, detail, observedCatalogStateVersion, requiredNyxIdServices);
+        IReadOnlyList<NyxIdUserServiceCapabilityRef>? requiredNyxIdServices = null,
+        ScheduledInvocationLLMRefreshRequirement? llmRefreshRequirement = null) =>
+        new(
+            null,
+            failureCode,
+            detail,
+            observedCatalogStateVersion,
+            requiredNyxIdServices,
+            llmRefreshRequirement);
 }
 
 public sealed class ValidatedScheduledInvocationAuthorizationPlan
@@ -97,12 +106,17 @@ public static class NyxIdAuthorizationCatalogIntegrity
 {
     public static string ComputeContentDigest(
         AuthorizationOwnerIdentity owner,
-        IEnumerable<NyxIdAuthorizationServiceEvidence> services)
+        IEnumerable<NyxIdAuthorizationServiceEvidence> services,
+        NyxIdAuthorizationLLMTargetEvidence? gatewayLLMTarget = null)
     {
         ArgumentNullException.ThrowIfNull(owner);
         ArgumentNullException.ThrowIfNull(services);
         var content = new NyxIdAuthorizationCatalogContent { Owner = owner.Clone() };
-        content.Services.Add(services.Select(static service => service.Clone()));
+        content.Services.Add(services
+            .Select(static service => service.Clone())
+            .OrderBy(static service => service.UserServiceId, StringComparer.Ordinal));
+        if (gatewayLLMTarget != null)
+            content.GatewayLlmTarget = gatewayLLMTarget.Clone();
         return Convert.ToHexStringLower(SHA256.HashData(content.ToByteArray()));
     }
 }
@@ -113,7 +127,8 @@ public sealed record ScheduledInvocationAuthorizationValidationResult(
     string Detail,
     long RequiredStateVersion = 0,
     long ObservedCatalogStateVersion = 0,
-    IReadOnlyList<NyxIdUserServiceCapabilityRef>? RequiredNyxIdServices = null)
+    IReadOnlyList<NyxIdUserServiceCapabilityRef>? RequiredNyxIdServices = null,
+    ScheduledInvocationLLMRefreshRequirement? LLMRefreshRequirement = null)
 {
     public bool Success => ValidatedPlan is not null;
 
@@ -128,13 +143,15 @@ public sealed record ScheduledInvocationAuthorizationValidationResult(
         ScheduledInvocationAuthorizationFailureCode failureCode,
         string detail,
         long observedCatalogStateVersion = 0,
-        IReadOnlyList<NyxIdUserServiceCapabilityRef>? requiredNyxIdServices = null) =>
+        IReadOnlyList<NyxIdUserServiceCapabilityRef>? requiredNyxIdServices = null,
+        ScheduledInvocationLLMRefreshRequirement? llmRefreshRequirement = null) =>
         new(
             null,
             failureCode,
             detail,
             ObservedCatalogStateVersion: observedCatalogStateVersion,
-            RequiredNyxIdServices: requiredNyxIdServices);
+            RequiredNyxIdServices: requiredNyxIdServices,
+            LLMRefreshRequirement: llmRefreshRequirement);
 
     public static ScheduledInvocationAuthorizationValidationResult ProjectionPending(
         long requiredStateVersion,
@@ -172,7 +189,8 @@ public sealed record NyxIdAuthorizationCatalogSnapshot(
     bool Activated = false,
     bool Cleaned = false,
     DateTimeOffset? CleanedAtUtc = null,
-    string CleanupReason = "");
+    string CleanupReason = "",
+    NyxIdAuthorizationLLMTargetEvidence? GatewayLLMTarget = null);
 
 public enum ScheduledAuthorizationPlanMismatchReason
 {
@@ -258,7 +276,8 @@ public sealed record NyxIdAuthorizationCatalogObservation(
     string ContentDigest,
     IReadOnlyList<NyxIdAuthorizationServiceEvidence> Services,
     NyxIdAuthorizationCatalogObservationCoverage Coverage = NyxIdAuthorizationCatalogObservationCoverage.FullOwner,
-    IReadOnlyList<string>? CoveredUserServiceIds = null);
+    IReadOnlyList<string>? CoveredUserServiceIds = null,
+    NyxIdAuthorizationLLMTargetEvidence? GatewayLLMTarget = null);
 
 public enum NyxIdAuthorizationCatalogRefreshStatus
 {
@@ -309,6 +328,18 @@ public sealed record ScheduledInvocationOwnerLLMEvidence(
     long StateVersion,
     ScheduledInvocationOwnerLLMSelection Selection);
 
+public sealed record ScheduledInvocationLLMRefreshRequirement(
+    LLMRouteKind RouteKind,
+    string RouteValue,
+    string NyxIdUserServiceId,
+    string ServiceSlugSnapshot,
+    string ExplicitModelId,
+    long UserConfigStateVersion);
+
+public sealed record NyxIdAuthorizationCatalogRefreshRequest(
+    IReadOnlyList<NyxIdUserServiceCapabilityRef> RequiredServices,
+    ScheduledInvocationLLMRefreshRequirement? LLMTarget);
+
 public static class ScheduledInvocationOwnerLLMSelectionPolicy
 {
     public const string GatewayRoute = "/api/v1/llm/gateway/v1";
@@ -317,10 +348,10 @@ public static class ScheduledInvocationOwnerLLMSelectionPolicy
     public static bool IsDurableSelectionValid(ScheduledInvocationOwnerLLMSelection? value) =>
         value?.RouteKind switch
         {
-            ScheduledInvocationOwnerLLMRouteKind.Gateway =>
+            LLMRouteKind.Gateway =>
                 value.RouteValue == GatewayRoute && Canonical(value.Model) &&
                 value.NyxIdUserServiceId.Length == 0 && value.ServiceSlugSnapshot.Length == 0,
-            ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService =>
+            LLMRouteKind.NyxIdUserService =>
                 Canonical(value.RouteValue) && Canonical(value.NyxIdUserServiceId) &&
                 Canonical(value.ServiceSlugSnapshot) && Canonical(value.Model) &&
                 !value.ServiceSlugSnapshot.Contains('/') &&
@@ -399,7 +430,7 @@ public interface INyxIdAuthorizationCatalogRefreshPort
     Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
         AuthorizationOwnerIdentity owner,
         string bearerToken,
-        IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices,
+        NyxIdAuthorizationCatalogRefreshRequest request,
         CancellationToken ct = default);
 
     Task<NyxIdAuthorizationCatalogRefreshResult> RefreshPersonalAsync(

@@ -15,7 +15,12 @@ internal static class WorkflowCallerCredentialToolContextMapper
         AgentWorkflowRuntimeContext workflowRuntimeContext)
     {
         var token = WorkflowCallerCredentialTokens.ParseOptional(credential?.BearerToken);
-        if (token.IsInvalid)
+        var supplementalSourceReadableToken = WorkflowCallerCredentialTokens.ParseOptional(
+            credential?.SourceReadableUserBearerToken);
+        if (WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
+                credential?.BearerToken,
+                credential?.Kind ?? NyxIdCallerCredentialKind.Unspecified,
+                credential?.SourceReadableUserBearerToken))
             throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(credential));
 
         var context = AgentToolExecutionContext.Empty with
@@ -51,18 +56,28 @@ internal static class WorkflowCallerCredentialToolContextMapper
                 AgentToolNyxIdCredentialKind.ProxyDelegation,
             _ => AgentToolNyxIdCredentialKind.Unspecified,
         };
-        var sourceReadableToken = credentialKind == AgentToolNyxIdCredentialKind.SourceReadableUserBearer
-            ? token.NormalizedBearerToken
-            : null;
+        var sourceReadableToken = supplementalSourceReadableToken.IsValid
+            ? supplementalSourceReadableToken.NormalizedBearerToken
+            : credentialKind == AgentToolNyxIdCredentialKind.SourceReadableUserBearer
+                ? token.NormalizedBearerToken
+                : null;
 
         return context with
         {
             Credentials = context.Credentials with
             {
                 NyxIdAccessToken = token.NormalizedBearerToken,
-                NyxIdOrgToken = sourceReadableToken,
-                SenderNyxIdAccessToken = sourceReadableToken,
+                NyxIdOrgToken = credentialKind == AgentToolNyxIdCredentialKind.SourceReadableUserBearer
+                    ? sourceReadableToken
+                    : null,
+                SenderNyxIdAccessToken =
+                    credentialKind == AgentToolNyxIdCredentialKind.SourceReadableUserBearer
+                        ? sourceReadableToken
+                        : null,
                 NyxIdCredentialKind = credentialKind,
+                SourceReadableNyxIdAccessToken = supplementalSourceReadableToken.IsValid
+                    ? supplementalSourceReadableToken.NormalizedBearerToken
+                    : null,
             },
         };
     }

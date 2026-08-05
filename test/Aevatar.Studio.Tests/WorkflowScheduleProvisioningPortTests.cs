@@ -50,7 +50,7 @@ public sealed class WorkflowScheduleProvisioningPortTests
                 scopeId,
                 request.TeamId ?? string.Empty,
                 ProvisionWorkflowBindingStatusNames.Accepted,
-                "/workflow/observatory"));
+                "/admin#/observatory"));
         }
     }
 }

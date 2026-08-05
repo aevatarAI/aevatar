@@ -75,7 +75,7 @@ public sealed class VoicePresenceEventPolicy
     {
         ArgumentNullException.ThrowIfNull(envelope);
 
-        var operationId = envelope.Runtime?.Deduplication?.OperationId;
+        var operationId = envelope.Runtime?.DeliveryIdentity?.OperationId;
         if (!string.IsNullOrWhiteSpace(operationId))
             return $"operation:{operationId.Trim()}";
 

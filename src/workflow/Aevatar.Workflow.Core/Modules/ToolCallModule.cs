@@ -71,6 +71,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         }
 
         var argumentsJson = ResolveArgumentsJson(request);
+        var issuedAtUnixMs = ResolveIssuedAtUnixMs(envelope);
         ctx.Logger.LogInformation("ToolCall: {StepId} → 工具 {Tool}", request.StepId, toolName);
 
         var admission = ResolveInvocationAdmission(ctx, request, toolName, out var admissionError);
@@ -100,10 +101,25 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 
         try
         {
-            var result = await ExecuteToolAsync(tool, argumentsJson, request, callId, ctx, ct, admission: admission);
+            var result = await ExecuteToolAsync(
+                tool,
+                argumentsJson,
+                request,
+                callId,
+                issuedAtUnixMs,
+                ctx,
+                ct,
+                admission: admission);
             if (result.PendingApproval != null)
             {
-                await SuspendForApprovalAsync(ctx, request, toolName, callId, result.PendingApproval, ct);
+                await SuspendForApprovalAsync(
+                    ctx,
+                    request,
+                    toolName,
+                    callId,
+                    issuedAtUnixMs,
+                    result.PendingApproval,
+                    ct);
                 return;
             }
 
@@ -161,6 +177,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         string argumentsJson,
         StepRequestEvent request,
         string callId,
+        long issuedAtUnixMs,
         IWorkflowExecutionContext ctx,
         CancellationToken ct,
         ToolApprovalGrant? approvalGrant = null,
@@ -193,7 +210,8 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 IdempotencyKey: request.IdempotencyKey ?? string.Empty,
                 ScheduleId: ctx.ScheduleId ?? string.Empty,
                 InvocationAdmission: admission,
-                LlmControl: GetLlmControl(ctx)),
+                LlmControl: GetLlmControl(ctx),
+                IssuedAtUnixMs: issuedAtUnixMs),
             ct);
     }
 
@@ -265,16 +283,15 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
+        WorkflowToolExecutionResult? result = null;
         try
         {
-            state.PendingApprovals.Remove(pendingKey);
-            await SaveStateAsync(state, ctx, ct);
-
-            var result = await ExecuteToolAsync(
+            result = await ExecuteToolAsync(
                 tool,
                 pending.ArgumentsJson,
                 resumedRequest,
                 pending.ToolCallId,
+                pending.IssuedAtUnixMs,
                 ctx,
                 ct,
                 new ToolApprovalGrant(
@@ -283,18 +300,28 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                     pending.ToolCallId),
                 admission);
 
+            if (result.Failure is { TerminalInvoked: false, Retryable: true } retryableFailure)
+            {
+                throw new InvalidOperationException(retryableFailure.ErrorMessage);
+            }
+
             if (result.PendingApproval != null)
             {
+                state.PendingApprovals.Remove(pendingKey);
+                await SaveStateAsync(state, ctx, ct);
                 await SuspendForApprovalAsync(
                     ctx,
                     resumedRequest,
                     pending.ToolName,
                     pending.ToolCallId,
+                    pending.IssuedAtUnixMs,
                     result.PendingApproval,
                     ct);
                 return;
             }
 
+            state.PendingApprovals.Remove(pendingKey);
+            await SaveStateAsync(state, ctx, ct);
             await PublishToolOutcomeAsync(
                 ctx,
                 resumedRequest,
@@ -305,6 +332,19 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         }
         catch (Exception ex)
         {
+            if (result?.Failure is { TerminalInvoked: false, Retryable: true } retryableFailure)
+            {
+                ctx.Logger.LogWarning(
+                    ex,
+                    "ToolCall: step={StepId} tool={Tool} approved replay remains pending after retryable pre-terminal failure code={FailureCode}",
+                    pending.StepId,
+                    pending.ToolName,
+                    retryableFailure.ErrorCode);
+                throw;
+            }
+
+            state.PendingApprovals.Remove(pendingKey);
+            await SaveStateAsync(state, ctx, ct);
             await PublishToolFailureAsync(ctx, pending, ex.Message, ct);
             ctx.Logger.LogWarning(
                 ex,
@@ -353,6 +393,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         StepRequestEvent request,
         string toolName,
         string callId,
+        long issuedAtUnixMs,
         WorkflowToolApprovalPendingOutcome pending,
         CancellationToken ct)
     {
@@ -368,6 +409,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             ArgumentsJson = pending.ArgumentsJson ?? string.Empty,
             IdempotencyKey = request.IdempotencyKey ?? string.Empty,
             ExternalInvocation = request.ExternalInvocation?.Clone(),
+            IssuedAtUnixMs = issuedAtUnixMs,
         };
         pendingState.InputFileRefs.Add(request.InputFileRefs.Select(static fileRef => fileRef.Clone()));
         state.PendingApprovals[BuildPendingKey(pendingState)] = pendingState;
@@ -386,7 +428,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 ToolCallId = pendingState.ToolCallId,
                 ApprovalRequestId = pendingState.ApprovalRequestId,
             },
-        }, TopologyAudience.ParentAndChildren, ct);
+        }, TopologyAudience.Self, ct);
     }
 
     private static async Task PublishToolOutcomeAsync(
@@ -499,6 +541,9 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 
         return stepId ?? executionId ?? runId ?? string.Empty;
     }
+
+    private static long ResolveIssuedAtUnixMs(EventEnvelope envelope) =>
+        envelope.Timestamp?.ToDateTimeOffset().ToUnixTimeMilliseconds() ?? 0;
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

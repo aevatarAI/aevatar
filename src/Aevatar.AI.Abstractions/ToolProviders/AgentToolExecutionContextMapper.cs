@@ -135,12 +135,16 @@ public static class AgentToolExecutionContextMapper
             new AgentToolRequestIdentity(
                 AgentToolExecutionContext.Normalize(payload.Request?.RequestId),
                 AgentToolExecutionContext.Normalize(payload.Request?.CallId),
-                AgentToolExecutionContext.Normalize(payload.Request?.IdempotencyKey)),
+                AgentToolExecutionContext.Normalize(payload.Request?.IdempotencyKey),
+                payload.Request?.IssuedAtUnixMs ?? 0,
+                AgentToolExecutionContext.Normalize(payload.Request?.OperationId)),
             new AgentToolCredentials(
                 AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdAccessToken),
                 AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdOrgToken),
                 AgentToolExecutionContext.Normalize(payload.Credentials?.SenderNyxIdAccessToken),
-                FromNyxIdCredentialKindPayload(payload.Credentials?.NyxIdCredentialKind)),
+                FromNyxIdCredentialKindPayload(payload.Credentials?.NyxIdCredentialKind),
+                AgentToolExecutionContext.Normalize(
+                    payload.Credentials?.SourceReadableNyxIdAccessToken)),
             new AgentToolCallerContext(
                 AgentToolExecutionContext.Normalize(payload.Caller?.ScopeId),
                 AgentToolExecutionContext.Normalize(payload.Caller?.OwnerSubject),
@@ -169,6 +173,7 @@ public static class AgentToolExecutionContextMapper
             InvocationSurface = FromInvocationSurfacePayload(payload.InvocationSurface),
             Chat = FromChatPayload(payload.Chat),
             InputFileRefs = FromInputFileRefsPayload(payload.InputFileRefs),
+            ExecutionOwner = payload.ExecutionOwner?.Clone() ?? new AgentToolExecutionOwner(),
         };
     }
 
@@ -183,6 +188,8 @@ public static class AgentToolExecutionContextMapper
                 RequestId = context.Request.RequestId ?? string.Empty,
                 CallId = context.Request.CallId ?? string.Empty,
                 IdempotencyKey = context.Request.IdempotencyKey ?? string.Empty,
+                IssuedAtUnixMs = context.Request.IssuedAtUnixMs,
+                OperationId = context.Request.OperationId ?? string.Empty,
             },
             Credentials = new AgentToolCredentialsPayload
             {
@@ -190,6 +197,8 @@ public static class AgentToolExecutionContextMapper
                 NyxIdOrgToken = context.Credentials.NyxIdOrgToken ?? string.Empty,
                 SenderNyxIdAccessToken = context.Credentials.SenderNyxIdAccessToken ?? string.Empty,
                 NyxIdCredentialKind = ToNyxIdCredentialKindPayload(context.Credentials.NyxIdCredentialKind),
+                SourceReadableNyxIdAccessToken =
+                    context.Credentials.SourceReadableNyxIdAccessToken ?? string.Empty,
             },
             Caller = new AgentToolCallerContextPayload
             {
@@ -219,12 +228,128 @@ public static class AgentToolExecutionContextMapper
             CredentialSource = ToCredentialSourcePayload(context.CredentialSource),
             InvocationSurface = ToInvocationSurfacePayload(context.InvocationSurface),
             SkillRecovery = ToSkillRecoveryPayload(context.SkillRecovery),
+            ExecutionOwner = context.ExecutionOwner?.Clone() ?? new AgentToolExecutionOwner(),
         };
 
         ApplyOptionalPayloads(context, payload);
         CopyExternalMetadata(context.ExternalMetadata, payload);
 
         return payload;
+    }
+
+    public static AgentToolRecoveryContextPayload ToRecoveryPayload(
+        this AgentToolExecutionContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var payload = new AgentToolRecoveryContextPayload
+        {
+            Request = new AgentToolRequestIdentityPayload
+            {
+                RequestId = context.Request.RequestId ?? string.Empty,
+                CallId = context.Request.CallId ?? string.Empty,
+                IdempotencyKey = context.Request.IdempotencyKey ?? string.Empty,
+                IssuedAtUnixMs = context.Request.IssuedAtUnixMs,
+                OperationId = context.Request.OperationId ?? string.Empty,
+            },
+            Caller = new AgentToolCallerContextPayload
+            {
+                ScopeId = context.Caller.ScopeId ?? string.Empty,
+                OwnerSubject = context.Caller.OwnerSubject ?? string.Empty,
+                ResponseId = context.Caller.ResponseId ?? string.Empty,
+                OwnerScopeId = context.Caller.OwnerScopeId ?? string.Empty,
+            },
+            Channel = ToChannelPayload(context.Channel),
+            SenderBinding = new AgentToolSenderBindingContextPayload
+            {
+                BindingId = context.SenderBinding.BindingId ?? string.Empty,
+                NyxUserId = context.SenderBinding.NyxUserId ?? string.Empty,
+                SenderTenant = context.SenderBinding.SenderTenant ?? string.Empty,
+            },
+            Routing = new LLMRequestRoutingContextPayload
+            {
+                ModelOverride = context.Routing.ModelOverride ?? string.Empty,
+                NyxIdRoutePreference = context.Routing.NyxIdRoutePreference ?? string.Empty,
+                UserMemoryPrompt = context.Routing.UserMemoryPrompt ?? string.Empty,
+            },
+            SkillRecovery = ToSkillRecoveryCheckpointPayload(context.SkillRecovery),
+            WorkflowRuntime = ToWorkflowRuntimePayload(context.WorkflowRuntime),
+            CredentialSource = ToCredentialSourcePayload(context.CredentialSource),
+            Schedule = new AgentToolScheduleContextPayload
+            {
+                ScheduleId = context.Schedule.ScheduleId ?? string.Empty,
+            },
+            NyxIdAuthority = ToNyxIdAuthorityPayload(context.NyxIdAuthority),
+            InvocationSurface = ToInvocationSurfacePayload(context.InvocationSurface),
+            Chat = ToChatPayload(context.Chat),
+            ExecutionOwner = context.ExecutionOwner?.Clone() ?? new AgentToolExecutionOwner(),
+            NyxIdCredentialKind = ToNyxIdCredentialKindPayload(
+                context.Credentials.NyxIdCredentialKind),
+            RequiresNyxIdAccessToken =
+                !string.IsNullOrWhiteSpace(context.Credentials.NyxIdAccessToken),
+            RequiresNyxIdOrgToken =
+                !string.IsNullOrWhiteSpace(context.Credentials.NyxIdOrgToken),
+            RequiresSenderNyxIdAccessToken =
+                !string.IsNullOrWhiteSpace(context.Credentials.SenderNyxIdAccessToken),
+            RequiresSourceReadableNyxIdAccessToken =
+                !string.IsNullOrWhiteSpace(context.Credentials.SourceReadableNyxIdAccessToken),
+        };
+        if (context.ToolVisibility.IsRestricted)
+            payload.ToolVisibility = ToToolVisibilityPayload(context.ToolVisibility);
+        payload.InputFileRefs.AddRange(ToInputFileRefsPayload(context.InputFileRefs));
+        if (context.Routing.MaxToolRoundsOverride.HasValue)
+            payload.Routing.MaxToolRoundsOverride = context.Routing.MaxToolRoundsOverride.Value;
+        return payload;
+    }
+
+    public static AgentToolExecutionContext FromRecoveryPayload(
+        AgentToolRecoveryContextPayload? payload)
+    {
+        if (payload is null)
+            return AgentToolExecutionContext.Empty;
+
+        return new AgentToolExecutionContext(
+            new AgentToolRequestIdentity(
+                AgentToolExecutionContext.Normalize(payload.Request?.RequestId),
+                AgentToolExecutionContext.Normalize(payload.Request?.CallId),
+                AgentToolExecutionContext.Normalize(payload.Request?.IdempotencyKey),
+                payload.Request?.IssuedAtUnixMs ?? 0,
+                AgentToolExecutionContext.Normalize(payload.Request?.OperationId)),
+            AgentToolCredentials.Empty with
+            {
+                NyxIdCredentialKind = FromNyxIdCredentialKindPayload(
+                    payload.NyxIdCredentialKind),
+            },
+            new AgentToolCallerContext(
+                AgentToolExecutionContext.Normalize(payload.Caller?.ScopeId),
+                AgentToolExecutionContext.Normalize(payload.Caller?.OwnerSubject),
+                AgentToolExecutionContext.Normalize(payload.Caller?.ResponseId),
+                AgentToolExecutionContext.Normalize(payload.Caller?.OwnerScopeId)),
+            FromChannelPayload(payload.Channel),
+            new AgentToolSenderBindingContext(
+                AgentToolExecutionContext.Normalize(payload.SenderBinding?.BindingId),
+                AgentToolExecutionContext.Normalize(payload.SenderBinding?.NyxUserId),
+                AgentToolExecutionContext.Normalize(payload.SenderBinding?.SenderTenant)),
+            FromRoutingPayload(payload.Routing),
+            AgentToolConnectedServicesContext.Empty,
+            FromWorkflowRuntimePayload(payload.WorkflowRuntime),
+            new AgentToolScheduleContext(
+                AgentToolExecutionContext.Normalize(payload.Schedule?.ScheduleId)),
+            FromCredentialSourcePayload(payload.CredentialSource),
+            FromSkillRecoveryCheckpointPayload(payload.SkillRecovery),
+            new Dictionary<string, string>(StringComparer.Ordinal))
+        {
+            ToolVisibility = FromToolVisibilityPayload(payload.ToolVisibility),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.Platform),
+                AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.Tenant),
+                AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.ExternalUserId),
+                AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.Scope)),
+            InvocationSurface = FromInvocationSurfacePayload(payload.InvocationSurface),
+            Chat = FromChatPayload(payload.Chat),
+            InputFileRefs = FromInputFileRefsPayload(payload.InputFileRefs),
+            ExecutionOwner = payload.ExecutionOwner?.Clone() ?? new AgentToolExecutionOwner(),
+        };
     }
 
     public static AgentToolExecutionContext FromMetadata(IReadOnlyDictionary<string, string>? metadata)
@@ -443,6 +568,23 @@ public static class AgentToolExecutionContextMapper
             payload.DiscoveryRequested);
     }
 
+    private static AgentSkillRecoveryContext FromSkillRecoveryCheckpointPayload(
+        AgentSkillRecoveryCheckpointPayload? payload)
+    {
+        if (payload is null)
+            return AgentSkillRecoveryContext.Empty;
+
+        return new AgentSkillRecoveryContext(
+            payload.RequireInitialOrnnSearch,
+            payload.RequireOrnnSearchOnBlocker,
+            AgentToolExecutionContext.Normalize(payload.CommandName),
+            OriginalCommand: null,
+            AgentToolExecutionContext.Normalize(payload.PrimarySkillName),
+            payload.MaxOrnnSearchAttempts,
+            CommandArguments: null,
+            payload.DiscoveryRequested);
+    }
+
     private static AgentToolCredentialSource FromCredentialSourcePayload(AgentToolCredentialSourcePayload source) =>
         source switch
         {
@@ -520,6 +662,18 @@ public static class AgentToolExecutionContextMapper
             PrimarySkillName = context.PrimarySkillName ?? string.Empty,
             MaxOrnnSearchAttempts = context.MaxOrnnSearchAttempts,
             CommandArguments = context.CommandArguments ?? string.Empty,
+            DiscoveryRequested = context.DiscoveryRequested,
+        };
+
+    private static AgentSkillRecoveryCheckpointPayload ToSkillRecoveryCheckpointPayload(
+        AgentSkillRecoveryContext context) =>
+        new()
+        {
+            RequireInitialOrnnSearch = context.RequireInitialOrnnSearch,
+            RequireOrnnSearchOnBlocker = context.RequireOrnnSearchOnBlocker,
+            CommandName = context.CommandName ?? string.Empty,
+            PrimarySkillName = context.PrimarySkillName ?? string.Empty,
+            MaxOrnnSearchAttempts = context.MaxOrnnSearchAttempts,
             DiscoveryRequested = context.DiscoveryRequested,
         };
 

@@ -16,6 +16,7 @@ public sealed class ChatRuntimeStepExecutor
     private readonly Func<AgentProfileTurnCatalog?, LLMRequest> _requestBuilder;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
     private readonly TokenBudgetTracker _budgetTracker;
+    private readonly IChatToolCheckpointPort _toolCheckpointPort;
     private readonly AgentProfileTurnCatalog? _turnCatalog;
 
     internal ChatRuntimeStepExecutor(
@@ -25,6 +26,7 @@ public sealed class ChatRuntimeStepExecutor
         Func<AgentProfileTurnCatalog?, LLMRequest> requestBuilder,
         IReadOnlyList<ILLMCallMiddleware> llmMiddlewares,
         TokenBudgetTracker budgetTracker,
+        IChatToolCheckpointPort toolCheckpointPort,
         AgentProfileTurnCatalog? turnCatalog)
     {
         _providerFactory = providerFactory;
@@ -33,6 +35,7 @@ public sealed class ChatRuntimeStepExecutor
         _requestBuilder = requestBuilder;
         _llmMiddlewares = llmMiddlewares;
         _budgetTracker = budgetTracker;
+        _toolCheckpointPort = toolCheckpointPort;
         _turnCatalog = turnCatalog;
     }
 
@@ -62,7 +65,7 @@ public sealed class ChatRuntimeStepExecutor
         var baseRequest = BuildBaseRequest(requestId, metadata, toolContext, llmControl);
         return new LLMRequest
         {
-            Messages = BuildStepMessages(messages, finalNoTools, toolReceipts),
+            Messages = BuildStepMessages(messages, round, finalNoTools, toolReceipts),
             RequestId = baseRequest.RequestId,
             Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(baseRequest.Metadata),
             CallerContext = baseRequest.CallerContext,
@@ -104,7 +107,8 @@ public sealed class ChatRuntimeStepExecutor
             _toolLoop,
             _hooks,
             _ => catalogBoundRequest,
-            llmMiddlewares: _llmMiddlewares);
+            llmMiddlewares: _llmMiddlewares,
+            toolCheckpointPort: _toolCheckpointPort);
         return ExecuteAsync(runtime, provider, catalogBoundRequest, onChunkAsync, ct);
 
         static async Task<ChatRuntimeStepLlmResult> ExecuteAsync(
@@ -132,7 +136,8 @@ public sealed class ChatRuntimeStepExecutor
         IReadOnlyList<ToolCall> toolCalls,
         IReadOnlyList<IAgentTool> authorizedTools,
         AgentToolExecutionContext authorizedToolContext,
-        CancellationToken ct)
+        CancellationToken ct,
+        AgentToolApprovalGrant? approvalGrant = null)
     {
         var runtime = new ChatRuntime(
             _providerFactory,
@@ -140,12 +145,14 @@ public sealed class ChatRuntimeStepExecutor
             _toolLoop,
             _hooks,
             _requestBuilder,
-            llmMiddlewares: _llmMiddlewares);
+            llmMiddlewares: _llmMiddlewares,
+            toolCheckpointPort: _toolCheckpointPort);
         return await runtime.ExecuteSingleToolStepAsync(
                 toolCalls,
                 authorizedTools,
                 authorizedToolContext,
-                ct)
+                ct,
+                approvalGrant)
             .ConfigureAwait(false);
     }
 
@@ -166,7 +173,8 @@ public sealed class ChatRuntimeStepExecutor
             _toolLoop,
             _hooks,
             _requestBuilder,
-            llmMiddlewares: _llmMiddlewares);
+            llmMiddlewares: _llmMiddlewares,
+            toolCheckpointPort: _toolCheckpointPort);
         var executionToolContext = _turnCatalog is null
             ? toolContext
             : baseRequest.ToolContext;
@@ -180,17 +188,17 @@ public sealed class ChatRuntimeStepExecutor
 
     private static List<ChatMessage> BuildStepMessages(
         IReadOnlyList<ChatMessage> messages,
+        int round,
         bool finalNoTools,
         IReadOnlyList<AgentToolReceipt>? toolReceipts)
     {
-        if (!finalNoTools)
-            return [..messages];
-
-        var constraints = ToolOutcomeReplyConstraintBuilder.BuildFinalNoToolsConstraints(toolOutcomes: null, toolReceipts);
-        if (constraints.Count == 0)
-            return [..messages];
-
-        return [..messages, ..constraints];
+        var constraints = ToolOutcomeReplyConstraintBuilder.BuildMutationClaimConstraints(
+            toolOutcomes: null,
+            toolReceipts);
+        return ToolOutcomeReplyConstraintBuilder.ApplyConstraints(
+            messages,
+            constraints,
+            mergeIntoExistingSystem: round == 0 && !finalNoTools);
     }
 }
 

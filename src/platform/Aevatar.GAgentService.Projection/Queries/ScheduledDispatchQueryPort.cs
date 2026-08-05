@@ -194,6 +194,7 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             document.LastCommandId ?? string.Empty,
             document.LastCorrelationId ?? string.Empty,
             document.LastError ?? string.Empty,
+            document.LastErrorCode ?? string.Empty,
             document.FireCount,
             document.FailureCount,
             document.Headers.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
@@ -248,6 +249,7 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             document.CommandId ?? string.Empty,
             document.CorrelationId ?? string.Empty,
             document.Error ?? string.Empty,
+            document.ErrorCode ?? string.Empty,
             document.Manual);
 
     private static ScheduledDispatchTargetKind ParseTargetKind(string? value) =>

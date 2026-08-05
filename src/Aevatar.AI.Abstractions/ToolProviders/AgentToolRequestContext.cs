@@ -20,6 +20,9 @@ public static class AgentToolRequestContext
     public static string? NyxIdAccessToken => s_context.Value?.Credentials.NyxIdAccessToken;
     public static string? NyxIdOrgToken => s_context.Value?.Credentials.NyxIdOrgToken;
     public static string? SenderNyxIdAccessToken => s_context.Value?.Credentials.SenderNyxIdAccessToken;
+
+    public static string? SourceReadableNyxIdAccessToken =>
+        s_context.Value?.Credentials.SourceReadableNyxIdAccessToken;
     public static AgentToolNyxIdCredentialKind NyxIdCredentialKind =>
         s_context.Value?.Credentials.NyxIdCredentialKind ?? AgentToolNyxIdCredentialKind.Unspecified;
     public static string? ScopeId => s_context.Value?.Caller.ScopeId;

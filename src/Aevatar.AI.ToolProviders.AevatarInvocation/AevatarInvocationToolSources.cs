@@ -295,7 +295,8 @@ internal sealed class ObserveRunTool : IAevatarInvocationReadOnlyTool
     public string Name => "aevatar_observe_run";
 
     public string Description =>
-        "Observe a previously accepted Aevatar run through one explicitly selected readmodel target.";
+        "Observe an already accepted Aevatar run through one explicitly selected readmodel target. " +
+        "This does not start or execute workflows; for execution requests, call aevatar_start_workflow first and observe only after a run id or command id is known.";
 
     public string ParametersSchema => AevatarInvocationToolSchemas.ObserveRun;
 

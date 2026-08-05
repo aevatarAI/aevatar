@@ -43,6 +43,7 @@ public static class ScheduledServiceInvocationPayloadPolicy
     private static void StripScheduleOwnedCredentialFields(ChatRequestEvent chatRequest)
     {
         chatRequest.ConnectorHttpAuthorization = string.Empty;
+        chatRequest.CallerSourceReadableNyxIdBearerToken = string.Empty;
         chatRequest.CallerDurableCredential = null;
         RemoveConnectorHttpAuthorizationKeys(chatRequest.Metadata);
         RemoveConnectorHttpAuthorizationKeys(chatRequest.Headers);
@@ -59,6 +60,7 @@ public static class ScheduledServiceInvocationPayloadPolicy
             chatRequest.ToolContext.Credentials.NyxIdAccessToken = string.Empty;
             chatRequest.ToolContext.Credentials.NyxIdOrgToken = string.Empty;
             chatRequest.ToolContext.Credentials.SenderNyxIdAccessToken = string.Empty;
+            chatRequest.ToolContext.Credentials.SourceReadableNyxIdAccessToken = string.Empty;
         }
     }
 

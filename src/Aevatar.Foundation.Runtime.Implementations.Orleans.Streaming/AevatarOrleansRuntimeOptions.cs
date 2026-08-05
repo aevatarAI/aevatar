@@ -7,6 +7,7 @@ public sealed class AevatarOrleansRuntimeOptions
     public const string PersistenceBackendInMemory = "InMemory";
     public const string PersistenceBackendGarnet = "Garnet";
     public const string DefaultGarnetConnectionString = "localhost:6379";
+    public const int DefaultQueueCacheSize = 32 * 1024;
 
     public string StreamBackend { get; set; } = StreamBackendInMemory;
 
@@ -20,5 +21,7 @@ public sealed class AevatarOrleansRuntimeOptions
 
     public int QueueCount { get; set; } = 8;
 
-    public int QueueCacheSize { get; set; } = 4096;
+    public int QueueCacheSize { get; set; } = DefaultQueueCacheSize;
+
+    public TimeSpan MaxEventDeliveryTime { get; set; } = TimeSpan.FromSeconds(10);
 }

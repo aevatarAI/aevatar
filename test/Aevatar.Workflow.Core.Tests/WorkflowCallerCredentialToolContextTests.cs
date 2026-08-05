@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Modules;
@@ -13,7 +14,7 @@ public sealed class WorkflowCallerCredentialToolContextTests
     {
         var tool = new RecordingAgentTool();
         var source = new SingleToolSource(tool);
-        var adapter = new AgentWorkflowToolSourceAdapter([source]);
+        var adapter = new AgentWorkflowToolSourceAdapter([source], new PassThroughExecutionPort());
         var workflowTool = (await adapter.GetToolsAsync()).Should().ContainSingle().Subject;
 
         await workflowTool.ExecuteAsync(new WorkflowToolExecutionRequest(
@@ -51,7 +52,7 @@ public sealed class WorkflowCallerCredentialToolContextTests
     {
         var tool = new RecordingAgentTool();
         var source = new SingleToolSource(tool);
-        var adapter = new AgentWorkflowToolSourceAdapter([source]);
+        var adapter = new AgentWorkflowToolSourceAdapter([source], new PassThroughExecutionPort());
         var workflowTool = (await adapter.GetToolsAsync()).Should().ContainSingle().Subject;
 
         await workflowTool.ExecuteAsync(new WorkflowToolExecutionRequest(
@@ -71,6 +72,62 @@ public sealed class WorkflowCallerCredentialToolContextTests
         tool.NyxIdOrgToken.Should().BeNull();
         tool.SenderNyxIdAccessToken.Should().BeNull();
         tool.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.ProxyDelegation);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenCallerHasDelegationAndSourceBearer_ShouldMapEachCredentialByPurpose()
+    {
+        var tool = new RecordingAgentTool();
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleToolSource(tool)],
+            new PassThroughExecutionPort());
+        var workflowTool = (await adapter.GetToolsAsync()).Should().ContainSingle().Subject;
+
+        await workflowTool.ExecuteAsync(new WorkflowToolExecutionRequest(
+            "{}",
+            "run-alpha",
+            "step-alpha",
+            "execution-alpha",
+            "call-alpha",
+            "scope-alpha",
+            new WorkflowCallerCredential
+            {
+                BearerToken = "delegation-alpha",
+                Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+                SourceReadableUserBearerToken = "source-alpha",
+            }));
+
+        tool.NyxIdAccessToken.Should().Be("delegation-alpha");
+        tool.NyxIdOrgToken.Should().BeNull();
+        tool.SenderNyxIdAccessToken.Should().BeNull();
+        tool.SourceReadableNyxIdAccessToken.Should().Be("source-alpha");
+        tool.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.ProxyDelegation);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenSupplementalSourceBearerIsNotBoundToDelegation_ShouldReject()
+    {
+        var tool = new RecordingAgentTool();
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleToolSource(tool)],
+            new PassThroughExecutionPort());
+        var workflowTool = (await adapter.GetToolsAsync()).Should().ContainSingle().Subject;
+
+        var act = () => workflowTool.ExecuteAsync(new WorkflowToolExecutionRequest(
+            "{}",
+            "run-alpha",
+            "step-alpha",
+            "execution-alpha",
+            "call-alpha",
+            "scope-alpha",
+            new WorkflowCallerCredential
+            {
+                BearerToken = "source-alpha",
+                Kind = NyxIdCallerCredentialKind.SourceReadableUserBearer,
+                SourceReadableUserBearerToken = "source-beta",
+            }));
+
+        await act.Should().ThrowAsync<ArgumentException>();
     }
 
     private sealed class SingleToolSource(IAgentTool tool) : IAgentToolSource
@@ -101,6 +158,8 @@ public sealed class WorkflowCallerCredentialToolContextTests
 
         public string? SenderNyxIdAccessToken { get; private set; }
 
+        public string? SourceReadableNyxIdAccessToken { get; private set; }
+
         public string? OwnerSubject { get; private set; }
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
@@ -112,9 +171,39 @@ public sealed class WorkflowCallerCredentialToolContextTests
             NyxIdAccessToken = AgentToolRequestContext.NyxIdAccessToken;
             NyxIdOrgToken = AgentToolRequestContext.NyxIdOrgToken;
             SenderNyxIdAccessToken = AgentToolRequestContext.SenderNyxIdAccessToken;
+            SourceReadableNyxIdAccessToken = AgentToolRequestContext.SourceReadableNyxIdAccessToken;
             OwnerSubject = AgentToolRequestContext.OwnerSubject;
             NyxIdCredentialKind = AgentToolRequestContext.NyxIdCredentialKind;
             return Task.FromResult("{}");
+        }
+    }
+
+    private sealed class PassThroughExecutionPort : IAgentToolExecutionPort
+    {
+        public async Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            string resultJson;
+            using (AgentToolContextScope.Push(request.ExecutionContext))
+                resultJson = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
+            return new AgentToolExecutionOutcome(
+                AgentToolExecutionOutcomeKind.Executed,
+                resultJson,
+                new AgentToolReceipt
+                {
+                    CallId = request.ExecutionContext.Request.CallId ?? string.Empty,
+                    ToolName = request.Tool.Name,
+                    Status = AgentToolReceiptStatus.Success,
+                    ResultJson = resultJson,
+                },
+                IsMutation: false,
+                FailureCode: string.Empty,
+                SafeMessage: string.Empty,
+                AgentToolExecutionFailureStage.None,
+                TerminalInvoked: true,
+                Retryable: false,
+                AuditCompleted: true);
         }
     }
 }

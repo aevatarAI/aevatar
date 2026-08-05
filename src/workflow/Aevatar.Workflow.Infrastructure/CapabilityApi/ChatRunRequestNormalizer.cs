@@ -4,7 +4,7 @@ using WorkflowProtocol = Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
-internal readonly record struct ChatRunRequestNormalizationResult(
+public readonly record struct ChatRunRequestNormalizationResult(
     WorkflowChatRunRequest? Request,
     WorkflowChatRunStartError Error)
 {
@@ -89,7 +89,12 @@ internal static class ChatRunRequestNormalizer
             return new CallerCredentialNormalizationResult(null, WorkflowChatRunStartError.None);
 
         var parsed = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(source.BearerToken);
-        if (parsed.IsInvalid)
+        var sourceReadable = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(
+            source.SourceReadableUserBearerToken);
+        if (WorkflowProtocol.WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
+                source.BearerToken,
+                source.Kind,
+                source.SourceReadableUserBearerToken))
             return new CallerCredentialNormalizationResult(null, WorkflowChatRunStartError.InvalidCallerCredential);
 
         var authority = NormalizeCallerNyxIdAuthority(source.NyxIdAuthority);
@@ -100,7 +105,8 @@ internal static class ChatRunRequestNormalizer
             new WorkflowCallerCredential(
                 parsed.IsMissing ? null : parsed.NormalizedBearerToken,
                 authority,
-                source.Kind),
+                source.Kind,
+                sourceReadable.NormalizedBearerToken),
             WorkflowChatRunStartError.None);
     }
 
@@ -242,6 +248,7 @@ internal static class ChatRunRequestNormalizer
             new WorkflowChatRunRequest(
                 Prompt: rawPrompt,
                 Source: sourceResult.Source!,
+                ExpectedExecutionMode: WorkflowProtocol.ExternalCapabilityExecutionMode.Interactive,
                 SessionId: NormalizeSessionId(input.SessionId),
                 InputParts: normalizedInputParts,
                 Metadata: normalizedMetadata,

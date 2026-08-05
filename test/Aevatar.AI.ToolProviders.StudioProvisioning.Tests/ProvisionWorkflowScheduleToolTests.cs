@@ -3,6 +3,10 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Tools;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
@@ -734,16 +738,22 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var tool = await DiscoverListTeamsToolAsync(teamQueryPort);
         var tools = new ToolManager();
         tools.Register(tool);
-        var executor = new StreamingToolExecutor(tools);
+        var executor = new StreamingToolExecutor(
+            tools,
+            toolExecutionPort: CreateToolExecutionPort());
         using var executionState = executor.CreateExecutionState();
 
         using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
-        executor.AddTool(executionState, new ToolCall
-        {
-            Id = "tc-list-teams",
-            Name = ListTeamsToolName,
-            ArgumentsJson = "{}",
-        });
+        var prepared = await executor.PrepareBatchAsync(
+            "studio-provisioning-test:tc-list-teams",
+            round: 0,
+            [new ToolCall
+            {
+                Id = "tc-list-teams",
+                Name = ListTeamsToolName,
+                ArgumentsJson = "{}",
+            }]);
+        executor.AddTool(executionState, prepared.Single());
 
         var results = new List<ToolExecutionResult>();
         await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
@@ -811,16 +821,22 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var tool = await DiscoverListTeamsToolAsync(teamQueryPort);
         var tools = new ToolManager();
         tools.Register(tool);
-        var executor = new StreamingToolExecutor(tools);
+        var executor = new StreamingToolExecutor(
+            tools,
+            toolExecutionPort: CreateToolExecutionPort());
         using var executionState = executor.CreateExecutionState();
 
         using var _ = PushContext(scopeId: "scope-context", ownerSubject: "owner-1", accessToken: "access-token-1");
-        executor.AddTool(executionState, new ToolCall
-        {
-            Id = "tc-list-teams-error",
-            Name = ListTeamsToolName,
-            ArgumentsJson = """{"scope_id":"scope-model"}""",
-        });
+        var prepared = await executor.PrepareBatchAsync(
+            "studio-provisioning-test:tc-list-teams-error",
+            round: 0,
+            [new ToolCall
+            {
+                Id = "tc-list-teams-error",
+                Name = ListTeamsToolName,
+                ArgumentsJson = """{"scope_id":"scope-model"}""",
+            }]);
+        executor.AddTool(executionState, prepared.Single());
 
         var results = new List<ToolExecutionResult>();
         await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
@@ -845,16 +861,22 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var tool = await DiscoverListWorkflowsToolAsync(memberQueryPort);
         var tools = new ToolManager();
         tools.Register(tool);
-        var executor = new StreamingToolExecutor(tools);
+        var executor = new StreamingToolExecutor(
+            tools,
+            toolExecutionPort: CreateToolExecutionPort());
         using var executionState = executor.CreateExecutionState();
 
         using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
-        executor.AddTool(executionState, new ToolCall
-        {
-            Id = "tc-list-workflows",
-            Name = ListWorkflowsToolName,
-            ArgumentsJson = "{}",
-        });
+        var prepared = await executor.PrepareBatchAsync(
+            "studio-provisioning-test:tc-list-workflows",
+            round: 0,
+            [new ToolCall
+            {
+                Id = "tc-list-workflows",
+                Name = ListWorkflowsToolName,
+                ArgumentsJson = "{}",
+            }]);
+        executor.AddTool(executionState, prepared.Single());
 
         var results = new List<ToolExecutionResult>();
         await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
@@ -1523,7 +1545,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         root.GetProperty("member_id").GetString().Should().Be("member-alpha");
         root.GetProperty("schedule_id").GetString().Should().Be("schedule-member-1");
         root.GetProperty("published_service_id").GetString().Should().Be("published-member-1");
-        root.GetProperty("observatory_url").GetString().Should().Be("/workflow/observatory");
+        root.GetProperty("observatory_url").GetString().Should().Be("/admin#/observatory");
     }
 
     [Fact]
@@ -2432,7 +2454,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
             team_id = "team-alpha",
             schedule_id = "schedule-1",
             studio_url = "/scopes/scope-1/teams/team-alpha/members/member-1/workflow",
-            observatory_url = "/workflow/observatory",
+            observatory_url = "/admin#/observatory",
         });
 
         var receipt = tool.CreateResultReceipt("call-1", ScheduleToolName, "{}", resultJson);
@@ -2473,7 +2495,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
             ScopeId: "scope-1",
             TeamId: "team-alpha",
             BindingStatus: "accepted",
-            ObservatoryUrl: "/workflow/observatory",
+            ObservatoryUrl: "/admin#/observatory",
             StudioUrl: "/scopes/scope-1/teams/team-alpha/members/member-1/workflow")
         {
             ScheduleId = "schedule-1",
@@ -2533,7 +2555,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         root.GetProperty("schedule_id").GetString().Should().Be("schedule-1");
         root.GetProperty("studio_url").GetString().Should()
             .Be("/scopes/scope-1/teams/team-alpha/members/member-1/workflow");
-        root.GetProperty("observatory_url").GetString().Should().Be("/workflow/observatory");
+        root.GetProperty("observatory_url").GetString().Should().Be("/admin#/observatory");
     }
 
     [Theory]
@@ -2576,7 +2598,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
             ScopeId: "owner-scope",
             TeamId: "team-alpha",
             BindingStatus: "accepted",
-            ObservatoryUrl: "/workflow/observatory",
+            ObservatoryUrl: "/admin#/observatory",
             StudioUrl: "/scopes/owner-scope/teams/team-alpha/members/member-1/workflow"));
         var tool = await DiscoverToolAsync(port);
 
@@ -2750,7 +2772,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
             ScopeId: "scope-1",
             TeamId: "team-alpha",
             BindingStatus: "accepted",
-            ObservatoryUrl: "/workflow/observatory",
+            ObservatoryUrl: "/admin#/observatory",
             StudioUrl: "/scopes/scope-1/teams/team-alpha/members/member-1/workflow")
         {
             ScheduleId = "schedule-1",
@@ -2900,14 +2922,20 @@ public sealed class ProvisionWorkflowScheduleToolTests
     {
         var tools = new ToolManager();
         tools.Register(tool);
-        var executor = new StreamingToolExecutor(tools);
+        var executor = new StreamingToolExecutor(
+            tools,
+            toolExecutionPort: CreateToolExecutionPort());
         using var executionState = executor.CreateExecutionState();
-        executor.AddTool(executionState, new ToolCall
-        {
-            Id = toolCallId,
-            Name = toolName,
-            ArgumentsJson = argumentsJson,
-        });
+        var prepared = await executor.PrepareBatchAsync(
+            $"studio-provisioning-test:{toolCallId}",
+            round: 0,
+            [new ToolCall
+            {
+                Id = toolCallId,
+                Name = toolName,
+                ArgumentsJson = argumentsJson,
+            }]);
+        executor.AddTool(executionState, prepared.Single());
 
         var results = new List<ToolExecutionResult>();
         await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
@@ -2915,6 +2943,12 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
         return results.Should().ContainSingle().Which;
     }
+
+    private static IAgentToolExecutionPort CreateToolExecutionPort() =>
+        new AdmittedAgentToolExecutor(
+            new StartingAdmissionLedger(),
+            new AppendedAuditTrail(),
+            new StableAuditIdentityHasher());
 
     private static async Task ExecuteScheduleMemberWorkflowAsync(
         RecordingMemberWorkflowSchedulePort schedulePort,
@@ -3019,7 +3053,31 @@ public sealed class ProvisionWorkflowScheduleToolTests
             new Dictionary<string, string>(StringComparer.Ordinal))
         {
             NyxIdAuthority = nyxIdAuthority ?? AgentToolNyxIdAuthorityContext.Empty,
+            ExecutionOwner = AgentToolExecutionOwners.HostService(nameof(ProvisionWorkflowScheduleToolTests)),
         });
+    }
+
+    private sealed class StartingAdmissionLedger : IAgentToolAdmissionLedger
+    {
+        public Task<AgentToolAdmissionResult> TryStartAsync(
+            AgentToolAdmissionFact fact,
+            CancellationToken ct = default) =>
+            Task.FromResult(new AgentToolAdmissionResult(AgentToolAdmissionStatus.Started));
+    }
+
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableAuditIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
     }
 
     public static TheoryData<Exception, string, string> ScheduleMemberWorkflowWritePreflightExceptionCases() => new()
@@ -3086,7 +3144,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
                 ScopeId: "scope-default",
                 TeamId: "team-alpha",
                 BindingStatus: "accepted",
-                ObservatoryUrl: "/workflow/observatory",
+                ObservatoryUrl: "/admin#/observatory",
                 StudioUrl: "/scopes/scope-default/teams/team-alpha/members/member-default/workflow");
         }
 
@@ -3666,7 +3724,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
                 MemberId: request.MemberId,
                 ScheduleId: "schedule-member-1",
                 PublishedServiceId: "published-member-1",
-                ObservatoryUrl: "/workflow/observatory",
+                ObservatoryUrl: "/admin#/observatory",
                 Status: "accepted"));
         }
     }

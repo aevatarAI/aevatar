@@ -4,10 +4,16 @@ public static class AgentToolSourceReadableNyxIdCredential
 {
     public static string? ResolveBearerToken(AgentToolCredentials? credentials)
     {
-        if (credentials?.NyxIdCredentialKind != AgentToolNyxIdCredentialKind.SourceReadableUserBearer)
+        if (credentials?.NyxIdCredentialKind == AgentToolNyxIdCredentialKind.SourceReadableUserBearer)
+            return Normalize(credentials.NyxIdAccessToken);
+        if (credentials?.NyxIdCredentialKind != AgentToolNyxIdCredentialKind.ProxyDelegation)
             return null;
 
-        var token = credentials.NyxIdAccessToken;
+        return Normalize(credentials.SourceReadableNyxIdAccessToken);
+    }
+
+    private static string? Normalize(string? token)
+    {
         if (string.IsNullOrWhiteSpace(token))
             return null;
 

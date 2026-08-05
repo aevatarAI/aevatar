@@ -64,6 +64,7 @@ internal sealed class NyxIdAuthorizationCatalogRepairRefreshPort
             refreshId,
             startedAt,
             requiredServiceIds: null,
+            llmTarget: null,
             (refreshIdentity, refreshStartedAt, dispatchCancellation) =>
                 _repairCommandPort.BeginRepairRefreshAsync(
                     normalizedOwner,

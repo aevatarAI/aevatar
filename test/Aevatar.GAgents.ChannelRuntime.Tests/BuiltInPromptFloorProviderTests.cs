@@ -36,7 +36,7 @@ public sealed class BuiltInPromptFloorProviderTests
     [InlineData("grant the requester access BEFORE you return the link")]
     [InlineData("organization-scoped sharing mechanism")]
     [InlineData("provider-specific typed sharing tool")]
-    [InlineData("use_skill(skill=\"nyxid\")")]
+    [InlineData("use_skill(skill=\"nyxid-service-discovery\")")]
     [InlineData("then call `nyxid_service_inventory`")]
     [InlineData("temporary read failure")]
     [InlineData("binding is explicitly missing or revoked")]
@@ -54,11 +54,11 @@ public sealed class BuiltInPromptFloorProviderTests
     }
 
     [Fact]
-    public void Floor_LoadsNyxIdSkillBeforeReadingSenderInventory()
+    public void Floor_LoadsNyxIdDiscoverySkillBeforeReadingSenderInventory()
     {
         var floor = FloorContent();
         var skillCall = floor.IndexOf(
-            "first call `use_skill(skill=\"nyxid\")`",
+            "first call `use_skill(skill=\"nyxid-service-discovery\")`",
             StringComparison.Ordinal);
         var inventoryCall = floor.IndexOf(
             "then call `nyxid_service_inventory`",

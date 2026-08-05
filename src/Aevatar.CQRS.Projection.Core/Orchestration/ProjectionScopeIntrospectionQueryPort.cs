@@ -57,8 +57,19 @@ public sealed class ProjectionScopeIntrospectionQueryPort : IProjectionScopeIntr
             document.ObservationAttached,
             document.Released,
             document.StateVersion,
-            document.LastObservedVersion,
-            document.LastSuccessfulVersion,
-            document.FailureCount,
+            document.ReceivedEnvelopeTotal,
+            document.AttemptedEnvelopeTotal,
+            document.SuccessfulMaterializationTotal,
+            document.FailedAttemptTotal,
+            document.RetryExhaustedTotal,
+            document.RetryExhaustedFailureCount,
+            document.UnresolvedFailureCount,
+            document.OldestUnresolvedFailureAtUtc?.ToDateTimeOffset(),
+            document.FailureDiagnosticDroppedTotal,
+            document.SourceVersions.Select(source => new ProjectionSourceVersionSnapshot(
+                source.SourceActorId,
+                source.HighestSeenVersion,
+                source.LastSuccessfulVersion,
+                source.VersionGap)).ToList(),
             document.UpdatedAt);
 }

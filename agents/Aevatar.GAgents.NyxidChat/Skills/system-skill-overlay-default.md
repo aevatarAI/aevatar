@@ -15,18 +15,19 @@ Use the provider-specific typed sharing tool, loaded provider skill, or exact co
 
 **Fallback when you have no usable id:** if you cannot resolve a real provider identity for the person, or the member grant is rejected by the provider, do NOT return an inaccessible link. Use the provider's safe organization-scoped sharing mechanism when available, then return the link and say you shared it at the organization scope because the personal id was not resolvable. Never make a resource public to the entire internet unless the user explicitly asked for that and the provider surface confirms it is allowed.
 
-### Loading NyxID and Ornn manuals via use_skill
+### Loading NyxID service and Ornn skills via use_skill
 
-The NyxID and Ornn user manuals live on the Ornn skill platform, not in the kernel, so curators can update them without redeploying the bot. You learn the canonical, up-to-date usage by loading the relevant skill.
+NyxID service procedures and Ornn user manuals live on the Ornn skill platform, not in the kernel, so curators can update them without redeploying the bot. Learn the canonical, up-to-date usage by loading the skill for the requested operation.
 
-For a read-only request asking which services the caller already has connected, first call `use_skill(skill="nyxid")`, then call `nyxid_service_inventory`. The loaded skill supplies current NyxID semantics; the typed tool supplies the current sender's live inventory. Do not call `code_execute`, a sandbox CLI, or `nyxid service list` for this read. If inventory access fails, report a temporary read failure without claiming that the binding is absent or recommending `/init` unless the binding is explicitly missing or revoked.
+For a read-only request asking which services the caller already has connected, first call `use_skill(skill="nyxid-service-discovery")`, then call `nyxid_service_inventory`. The loaded skill supplies current NyxID semantics; the typed tool supplies the current sender's live inventory. Do not call `code_execute`, a sandbox CLI, or `nyxid service list` for this read. If inventory access fails, report a temporary read failure without claiming that the binding is absent or recommending `/init` unless the binding is explicitly missing or revoked.
 
-**Before doing any of the following, call `use_skill(skill="nyxid")` first** to load the authoritative NyxID manual:
-- Account / profile / MFA / sessions / consents
-- Current connected-service inventory, service catalog browsing, or connecting a new service (OAuth / device-code / API key flows)
-- API key, node, organization, approval, notification management
-- Diagnosing NyxID error codes (`approval_required`, `unauthorized`, `node_offline`, etc.)
-- Anything that would otherwise need `nyxid_account`, `nyxid_status`, `nyxid_profile`, `nyxid_mfa`, `nyxid_sessions`, `nyxid_catalog`, `nyxid_services`, `nyxid_endpoints`, `nyxid_external_keys`, `nyxid_api_keys`, `nyxid_nodes`, `nyxid_approvals`, `nyxid_notifications`, `nyxid_providers`, `nyxid_orgs`, `nyxid_admin`, or `nyxid_proxy`
+Load the narrow NyxID service skill that matches the request:
+- `use_skill(skill="nyxid-service-connect")` for connecting, adding, reconnecting, or authorizing a service
+- `use_skill(skill="nyxid-service-discovery")` for connected-service inventory, catalog browsing, readiness, health, or ownership
+- `use_skill(skill="nyxid-service-maintenance")` for editing, rerouting, enabling, disabling, repairing, rotating, or deleting a service
+- `use_skill(skill="nyxid-service-call")` for invoking a connected service
+
+For other NyxID account, security, node, organization, approval, notification, or error-code work, call `ornn_search_skills` with the concrete task and load the best current match instead of guessing a generic skill name.
 
 **Before driving the Ornn API directly via the AI Agent CLI, call `use_skill(skill="ornn-agent-manual-cli")`** to load the Ornn agent manual.
 
@@ -59,7 +60,7 @@ Quick reference:
 - Select an exact instance from `<connected-services>` or typed capability discovery; do not use `nyxid_proxy` as a discovery surface
 - Provide exact `service_id` + slug + path + method + body → make the proxied request; copy the id and slug from the same trusted entry
 
-**Critical**: Proxy paths are relative to the service's base URL returned by live `nyxid_proxy` discovery. Do NOT duplicate version prefixes already in that URL. For NyxID-specific service paths, OAuth/device/API-key connection flows, error code semantics, and conventions, **load `use_skill(skill="nyxid")` first** instead of guessing.
+**Critical**: Proxy paths are relative to the service's base URL returned by live `nyxid_proxy` discovery. Do NOT duplicate version prefixes already in that URL. Load `nyxid-service-call` for invocation conventions and `nyxid-service-connect` for OAuth/device/API-key connection flows instead of guessing.
 
 **GitHub PAT fallback**: when the exact `api-github` UserService returns 401/403/404 on a path that could require private-repo access or `read:project` scope (e.g. private org repos, `/projects/*`, `/orgs/*/projects`), retry the *same* path against the separately listed exact `api-github-pat` UserService only when the current trusted listing or live discovery returned both entries. Use each entry's own `user_service_id` and slug snapshot; never reuse or derive an id. `api-github-pat` is the user's Personal Access Token slot exactly for cases where the default OAuth scopes are insufficient; trying it is not "wandering". Apply the same rule to parallel provider patterns only when both routes are available for this turn.
 
@@ -67,7 +68,7 @@ Quick reference:
 
 ### Aevatar-specific tool details
 
-These are **aevatar-internal** tools, not on Ornn's `nyxid` skill — they manage state local to this aevatar deployment.
+These are **aevatar-internal** tools, not part of the external NyxID service skills — they manage state local to this aevatar deployment.
 
 #### External workflow capability admission
 
@@ -100,10 +101,10 @@ Use the channel registration tool surface exposed in the current turn to create 
 
 **Stage 2: Existing-bot inspection** — when Nyx already has the provider bot/route but Aevatar no longer replies or the local registration list is empty.
 
-1. Inspect upstream provider state first with the NyxID/channel tools available in this turn. For NyxID-side details, `use_skill(skill="nyxid")`.
+1. Inspect upstream provider state first with the NyxID/channel tools available in this turn. For NyxID-side service details, load `nyxid-service-discovery` or `nyxid-service-maintenance` according to the task.
 2. If the upstream route is healthy but the local list is still empty, repair the Aevatar registration mirror through the channel registration surface.
 
-**Stage 3: Advanced provider capabilities** — only when the user needs proactive sends, typed provider tools, delivery target bindings, document updates, approval actions, or active chat lookup. Ensure NyxID has a usable outbound provider service from the exact typed listing. If not, `use_skill(skill="nyxid")` to drive the catalog connection flow.
+**Stage 3: Advanced provider capabilities** — only when the user needs proactive sends, typed provider tools, delivery target bindings, document updates, approval actions, or active chat lookup. Ensure NyxID has a usable outbound provider service from the exact typed listing. If not, load `nyxid-service-connect` to drive the catalog connection flow.
 
 For advanced provider API operations outside the current relay reply, prefer the provider-specific typed tools or loaded skills that are exposed for the current turn.
 

@@ -27,7 +27,7 @@ import {
 } from '@/shared/agui/runtimeEventSemantics';
 import {
   buildConversationHeaders,
-  normalizeUserLlmRoute,
+  resolveSavedConversationLlmConfig,
 } from '../chat/chatConversationConfig';
 import {
   Button,
@@ -3754,61 +3754,33 @@ const StudioPage: React.FC = () => {
       ),
     [userLlmSettingsQuery.data?.routeOptions],
   );
-  const effectiveWorkflowDryRunRoute = useMemo(
-    () => normalizeUserLlmRoute(userLlmSettingsQuery.data?.effectiveRoute),
-    [userLlmSettingsQuery.data?.effectiveRoute],
+  const workflowDryRunLlmConfig = useMemo(
+    () => resolveSavedConversationLlmConfig(userLlmSettingsQuery.data),
+    [userLlmSettingsQuery.data],
   );
-  const effectiveWorkflowProviderModels = useMemo(
-    () =>
-      (userLlmSettingsQuery.data?.modelGroupsByRoute ?? [])
-        .filter(
-          (group) =>
-            normalizeUserLlmRoute(group.routeValue) ===
-            effectiveWorkflowDryRunRoute,
-        )
-        .flatMap((group) => group.models)
-        .filter((model) => trimOptional(model)),
-    [
-      effectiveWorkflowDryRunRoute,
-      userLlmSettingsQuery.data?.modelGroupsByRoute,
-    ],
-  );
-  const effectiveWorkflowDryRunModel = useMemo(() => {
-    const preferredModel = trimOptional(userLlmSettingsQuery.data?.defaultModel);
-    const canReusePreferredModel =
-      Boolean(preferredModel) &&
-      (
-        effectiveWorkflowProviderModels.length === 0 ||
-        effectiveWorkflowProviderModels.includes(preferredModel)
-      );
-
-    if (preferredModel && canReusePreferredModel) {
-      return preferredModel;
-    }
-
-    return (
-      effectiveWorkflowProviderModels[0] ||
-      preferredModel ||
-      ''
-    );
-  }, [
-    effectiveWorkflowProviderModels,
-    userLlmSettingsQuery.data?.defaultModel,
-  ]);
   const workflowDryRunHeaders = useMemo(
     () =>
-      buildConversationHeaders(
-        effectiveWorkflowDryRunRoute,
-        effectiveWorkflowDryRunModel,
-      ),
-    [effectiveWorkflowDryRunModel, effectiveWorkflowDryRunRoute],
+      workflowDryRunLlmConfig.status === 'ready'
+        ? buildConversationHeaders(
+            workflowDryRunLlmConfig.route,
+            workflowDryRunLlmConfig.model,
+          )
+        : undefined,
+    [workflowDryRunLlmConfig],
   );
-  const workflowDryRunRouteLabel = userLlmSettingsQuery.data?.effectiveRouteLabel ||
-    effectiveWorkflowDryRunRoute ||
-    'Config default';
+  const workflowDryRunRouteLabel = workflowDryRunLlmConfig.status === 'system_default'
+    ? 'Config default'
+    : workflowDryRunLlmConfig.routeLabel;
   const workflowDryRunBlockedReason = useMemo(() => {
     if (userLlmSettingsQuery.isLoading) {
       return t("pages.studio.index.studio.provider", "Studio is checking available providers. Try running again shortly.");
+    }
+
+    if (workflowDryRunLlmConfig.status === 'action_required') {
+      return t(
+        "pages.studio.index.llm.selection.action.required",
+        "The saved LLM selection needs attention in Settings before this workflow can run.",
+      );
     }
 
     if (readyUserRoutes.length === 0) {
@@ -3816,7 +3788,11 @@ const StudioPage: React.FC = () => {
     }
 
     return '';
-  }, [readyUserRoutes.length, userLlmSettingsQuery.isLoading]);
+  }, [
+    readyUserRoutes.length,
+    userLlmSettingsQuery.isLoading,
+    workflowDryRunLlmConfig.status,
+  ]);
   const matchingWorkspaceWorkflow = useMemo(
     () =>
       visibleWorkflowSummaries.find((item) => item.name === templateWorkflow) ??
@@ -11025,7 +11001,11 @@ const StudioPage: React.FC = () => {
       buildWorkflowYamls={buildWorkflowYamlBundle}
       runMetadata={workflowDryRunHeaders}
       dryRunRouteLabel={workflowDryRunRouteLabel}
-      dryRunModelLabel={effectiveWorkflowDryRunModel || undefined}
+      dryRunModelLabel={
+        workflowDryRunLlmConfig.status === 'ready'
+          ? workflowDryRunLlmConfig.model || 'Provider default'
+          : undefined
+      }
       dryRunBlockedReason={workflowDryRunBlockedReason || undefined}
       onOpenRunSetup={() => history.push('/chat')}
       availableStepTypes={availableStepTypes}

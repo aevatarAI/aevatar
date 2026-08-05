@@ -8,6 +8,8 @@ namespace Aevatar.BackendConsole.Hosting;
 
 public static class BackendConsoleHostingServiceCollectionExtensions
 {
+    private const string OfflineAccessScope = "offline_access";
+
     public static IServiceCollection AddBackendConsoleStaticAssets(
         this IServiceCollection services,
         IConfiguration configuration)
@@ -43,6 +45,7 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         };
         ApplyFallbacks(configuration, options);
         ApplyHostEnvironmentOverrides(options);
+        NormalizeOidcScope(options);
         NormalizeOidcResources(configuration, options);
         return options;
     }
@@ -72,6 +75,20 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         options.NyxApiBaseUrl = EnvironmentOverride("HOST_BACKEND_CONSOLE_NYX_API_BASE_URL", options.NyxApiBaseUrl);
         options.StorageKey = EnvironmentOverride("HOST_BACKEND_CONSOLE_STORAGE_KEY", options.StorageKey);
         options.DefaultReturnPath = EnvironmentOverride("HOST_BACKEND_CONSOLE_DEFAULT_RETURN_PATH", options.DefaultReturnPath);
+    }
+
+    private static void NormalizeOidcScope(BackendConsoleOptions options)
+    {
+        var scopes = options.OidcScope
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (scopes.Length == 0)
+            return;
+
+        options.OidcScope = string.Join(
+            ' ',
+            scopes.Append(OfflineAccessScope).Distinct(StringComparer.Ordinal));
     }
 
     private static void NormalizeOidcResources(

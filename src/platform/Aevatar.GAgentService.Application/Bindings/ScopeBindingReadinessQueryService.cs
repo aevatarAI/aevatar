@@ -12,17 +12,21 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
     private readonly IServiceLifecycleQueryPort _serviceLifecycleQueryPort;
     private readonly IServiceServingQueryPort _serviceServingQueryPort;
     private readonly IServiceRevisionCatalogQueryReader _revisionCatalogQueryReader;
+    private readonly IServiceInvocationCatalogQueryReader _invocationCatalogQueryReader;
     private readonly ScopeWorkflowCapabilityOptions _options;
 
     public ScopeBindingReadinessQueryService(
         IServiceLifecycleQueryPort serviceLifecycleQueryPort,
         IServiceServingQueryPort serviceServingQueryPort,
         IServiceRevisionCatalogQueryReader revisionCatalogQueryReader,
+        IServiceInvocationCatalogQueryReader invocationCatalogQueryReader,
         IOptions<ScopeWorkflowCapabilityOptions> options)
     {
         _serviceLifecycleQueryPort = serviceLifecycleQueryPort ?? throw new ArgumentNullException(nameof(serviceLifecycleQueryPort));
         _serviceServingQueryPort = serviceServingQueryPort ?? throw new ArgumentNullException(nameof(serviceServingQueryPort));
         _revisionCatalogQueryReader = revisionCatalogQueryReader ?? throw new ArgumentNullException(nameof(revisionCatalogQueryReader));
+        _invocationCatalogQueryReader = invocationCatalogQueryReader
+            ?? throw new ArgumentNullException(nameof(invocationCatalogQueryReader));
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new InvalidOperationException("Scope workflow capability options are required.");
     }
@@ -138,6 +142,22 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
                 ObservedAtUtc: observedAtUtc);
         }
 
+        var invocationCatalog = await _invocationCatalogQueryReader.GetAsync(identity, ct).ConfigureAwait(false);
+        if (!IsInvocationCatalogReady(invocationCatalog, serviceEndpointIds, eligibleTarget))
+        {
+            return new ScopeBindingReadinessSnapshot(
+                normalizedScopeId,
+                normalizedServiceId,
+                ScopeBindingReadinessStatus.InvocationCatalogNotReady,
+                ServiceCatalogVisible: true,
+                ServingSetVisible: true,
+                EligibleServingTargetVisible: true,
+                InvokeReady: false,
+                RevisionId: eligibleTarget.RevisionId,
+                DeploymentId: eligibleTarget.DeploymentId,
+                ObservedAtUtc: invocationCatalog?.ObservedAt ?? observedAtUtc);
+        }
+
         return new ScopeBindingReadinessSnapshot(
             normalizedScopeId,
             normalizedServiceId,
@@ -149,6 +169,30 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
             RevisionId: eligibleTarget.RevisionId,
             DeploymentId: eligibleTarget.DeploymentId,
             ObservedAtUtc: observedAtUtc);
+    }
+
+    private static bool IsInvocationCatalogReady(
+        ServiceInvocationCatalogSnapshot? catalog,
+        IReadOnlyList<string> endpointIds,
+        ServiceServingTargetSnapshot target)
+    {
+        if (catalog == null)
+            return false;
+
+        var targetEntries = catalog.Entries
+            .Where(entry =>
+                string.Equals(entry.SelectedRevisionId, target.RevisionId, StringComparison.Ordinal) &&
+                string.Equals(entry.SelectedDeploymentId, target.DeploymentId, StringComparison.Ordinal))
+            .ToArray();
+        if (endpointIds.Count == 0)
+        {
+            return targetEntries.Length > 0 &&
+                   targetEntries.All(entry => entry.ReadinessStatus == ServiceInvokeReadinessStatus.Ready);
+        }
+
+        return endpointIds.All(endpointId => targetEntries.Any(entry =>
+            string.Equals(entry.EndpointId, endpointId, StringComparison.Ordinal) &&
+            entry.ReadinessStatus == ServiceInvokeReadinessStatus.Ready));
     }
 
     private static IReadOnlyList<string> GetServiceEndpointIds(ServiceCatalogSnapshot service) =>

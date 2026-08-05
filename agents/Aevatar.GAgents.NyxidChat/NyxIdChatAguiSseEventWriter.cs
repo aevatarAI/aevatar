@@ -220,6 +220,46 @@ internal static class NyxIdChatAguiSseEventWriter
             return true;
         }
 
+        if (string.Equals(
+                customEvent.Name,
+                NyxIdChatConversationAguiFrameBuilder.InputRequestEventName,
+                StringComparison.Ordinal) &&
+            customEvent.Payload.Is(NyxIdChatPendingInputState.Descriptor))
+        {
+            payload = customEvent.Payload.Unpack<NyxIdChatPendingInputState>();
+            return true;
+        }
+
+        if (string.Equals(
+                customEvent.Name,
+                NyxIdChatConversationAguiFrameBuilder.InputChangedEventName,
+                StringComparison.Ordinal) &&
+            customEvent.Payload.Is(NyxIdChatInputResolutionState.Descriptor))
+        {
+            payload = customEvent.Payload.Unpack<NyxIdChatInputResolutionState>();
+            return true;
+        }
+
+        if (string.Equals(
+                customEvent.Name,
+                NyxIdChatConversationAguiFrameBuilder.ApprovalRequestEventName,
+                StringComparison.Ordinal) &&
+            customEvent.Payload.Is(NyxIdChatPendingApprovalState.Descriptor))
+        {
+            payload = customEvent.Payload.Unpack<NyxIdChatPendingApprovalState>();
+            return true;
+        }
+
+        if (string.Equals(
+                customEvent.Name,
+                NyxIdChatConversationAguiFrameBuilder.ApprovalChangedEventName,
+                StringComparison.Ordinal) &&
+            customEvent.Payload.Is(NyxIdChatApprovalResolutionState.Descriptor))
+        {
+            payload = customEvent.Payload.Unpack<NyxIdChatApprovalResolutionState>();
+            return true;
+        }
+
         return false;
     }
 

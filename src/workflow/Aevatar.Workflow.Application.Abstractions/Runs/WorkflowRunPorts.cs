@@ -2,11 +2,19 @@ using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
+public enum WorkflowYamlParseErrorCode
+{
+    None = 0,
+    InvalidYaml = 1,
+    ResourceLimit = 2,
+}
+
 public sealed record WorkflowYamlParseResult(
     string WorkflowName,
     string Error,
     WorkflowAuthorizationDependencies? AuthorizationDependencies = null,
-    ExternalCapabilityReadiness? ExternalCapabilityReadiness = null)
+    ExternalCapabilityReadiness? ExternalCapabilityReadiness = null,
+    WorkflowYamlParseErrorCode ErrorCode = WorkflowYamlParseErrorCode.None)
 {
     public bool Succeeded => string.IsNullOrWhiteSpace(Error);
 
@@ -17,12 +25,14 @@ public sealed record WorkflowYamlParseResult(
 
     public static WorkflowYamlParseResult Invalid(
         string error,
-        ExternalCapabilityReadiness? externalCapabilityReadiness = null) =>
+        ExternalCapabilityReadiness? externalCapabilityReadiness = null,
+        WorkflowYamlParseErrorCode errorCode = WorkflowYamlParseErrorCode.InvalidYaml) =>
         new(
             string.Empty,
             error ?? "Workflow YAML is invalid.",
             null,
-            externalCapabilityReadiness?.Clone());
+            externalCapabilityReadiness?.Clone(),
+            errorCode);
 }
 
 public sealed record WorkflowInlineYamlBundleParseResult(
@@ -30,7 +40,8 @@ public sealed record WorkflowInlineYamlBundleParseResult(
     string EntryWorkflowYaml,
     IReadOnlyDictionary<string, string> WorkflowYamlsByName,
     string Error,
-    ExternalCapabilityReadiness? ExternalCapabilityReadiness = null)
+    ExternalCapabilityReadiness? ExternalCapabilityReadiness = null,
+    WorkflowYamlParseErrorCode ErrorCode = WorkflowYamlParseErrorCode.None)
 {
     public bool Succeeded => string.IsNullOrWhiteSpace(Error);
 
@@ -46,13 +57,15 @@ public sealed record WorkflowInlineYamlBundleParseResult(
 
     public static WorkflowInlineYamlBundleParseResult Invalid(
         string error,
-        ExternalCapabilityReadiness? externalCapabilityReadiness = null) =>
+        ExternalCapabilityReadiness? externalCapabilityReadiness = null,
+        WorkflowYamlParseErrorCode errorCode = WorkflowYamlParseErrorCode.InvalidYaml) =>
         new(
             string.Empty,
             string.Empty,
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
             string.IsNullOrWhiteSpace(error) ? "Workflow YAML is invalid." : error,
-            externalCapabilityReadiness?.Clone());
+            externalCapabilityReadiness?.Clone(),
+            errorCode);
 }
 
 public enum WorkflowActorKind
@@ -67,6 +80,7 @@ public sealed record WorkflowDefinitionBinding(
     string WorkflowName,
     string WorkflowYaml,
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,
+    ExternalCapabilityExecutionMode ExpectedExecutionMode,
     string ScopeId = "",
     string RunOrigin = "",
     string ScheduleId = "",
@@ -92,6 +106,7 @@ public sealed record WorkflowActorBinding(
     string WorkflowName,
     string WorkflowYaml,
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,
+    ExternalCapabilityExecutionMode ExpectedExecutionMode,
     string ScopeId = "",
     long SourceVersion = 0,
     string SourceEventId = "",
@@ -110,7 +125,8 @@ public sealed record WorkflowActorBinding(
             string.Empty,
             string.Empty,
             string.Empty,
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            ExternalCapabilityExecutionMode.Unspecified);
 
     public bool IsWorkflowCapable => ActorKind != WorkflowActorKind.Unsupported;
 
@@ -130,19 +146,22 @@ public sealed record WorkflowActorBinding(
 public sealed record WorkflowRunBindingQuery(
     string ScopeId,
     IReadOnlyList<string> DefinitionActorIds,
-    int Take = 50);
+    int Take = 50,
+    IReadOnlyList<string>? RunIds = null);
 
 public sealed record WorkflowRunForkSeedView(
     string SourceRunId,
     string Status,
     string WorkflowYaml,
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,
+    ExternalCapabilityExecutionMode ExpectedExecutionMode,
     IReadOnlyDictionary<string, string> Variables,
     IReadOnlyList<string> CompletedStepIds,
     string LastFailedStepId,
     string FinalError,
     string ScopeId = "",
-    IReadOnlyDictionary<string, WorkflowStepIdempotencyView>? IdempotencyByStepId = null)
+    IReadOnlyDictionary<string, WorkflowStepIdempotencyView>? IdempotencyByStepId = null,
+    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null)
 {
     public WorkflowRunForkSeedView()
         : this(
@@ -150,12 +169,14 @@ public sealed record WorkflowRunForkSeedView(
             string.Empty,
             string.Empty,
             new Dictionary<string, string>(StringComparer.Ordinal),
+            ExternalCapabilityExecutionMode.Unspecified,
             new Dictionary<string, string>(StringComparer.Ordinal),
             [],
             string.Empty,
             string.Empty,
             string.Empty,
-            new Dictionary<string, WorkflowStepIdempotencyView>(StringComparer.Ordinal))
+            new Dictionary<string, WorkflowStepIdempotencyView>(StringComparer.Ordinal),
+            null)
     {
     }
 }
@@ -212,6 +233,7 @@ public interface IWorkflowRunBindingReader
 public interface IWorkflowRunForkSeedQueryPort
 {
     Task<WorkflowRunForkSeedView?> GetForkSeedAsync(
+        string scopeId,
         string runId,
         CancellationToken ct = default);
 }
@@ -251,12 +273,13 @@ public interface IWorkflowDefinitionProvisioningPort
         string actorId,
         string workflowYaml,
         string workflowName,
-        IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
-        string? scopeId = null,
-        string? sourceKind = null,
-        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
-        string? workflowId = null,
-        string? revisionId = null,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+        string? scopeId,
+        string? sourceKind,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+        string? workflowId,
+        string? revisionId,
+        ExternalCapabilityExecutionMode expectedExecutionMode,
         CancellationToken ct = default);
 }
 

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -7,7 +8,7 @@ using Google.Protobuf;
 
 namespace Aevatar.AI.ToolProviders.Binding.Tools;
 
-public sealed class InspectExternalWorkflowCapabilityReadinessTool : IAgentTool
+public sealed class InspectExternalWorkflowCapabilityReadinessTool : ExternalWorkflowCapabilityReadOnlyTool
 {
     private readonly IExternalWorkflowCapabilityReadinessPort _readinessPort;
 
@@ -17,15 +18,15 @@ public sealed class InspectExternalWorkflowCapabilityReadinessTool : IAgentTool
         _readinessPort = readinessPort;
     }
 
-    public string Name => "inspect_external_workflow_capability_readiness";
+    public override string Name => "inspect_external_workflow_capability_readiness";
 
-    public string Description =>
+    public override string Description =>
         "Inspect point-in-time readiness for one exact workflow capability and execution mode. " +
         "Returns typed blockers and trusted remediation locators without returning credentials. " +
         "This selector diagnostic does not allocate a workflow revision or return bind confirmations, " +
         "so it must not replace preview_workflow_explicit_requests for authored workflow YAML.";
 
-    public string ParametersSchema => """
+    public override string ParametersSchema => """
         {
           "type": "object",
           "properties": {
@@ -97,16 +98,7 @@ public sealed class InspectExternalWorkflowCapabilityReadinessTool : IAgentTool
         }
         """;
 
-    public bool IsReadOnly => true;
-
-    public AgentToolReceipt? CreateResultReceipt(
-        string callId,
-        string toolName,
-        string argumentsJson,
-        string resultJson) =>
-        BindingToolResultReceipts.CreateReadiness(Name, callId, toolName, resultJson);
-
-    public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+    public override async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         try
         {
@@ -244,6 +236,14 @@ public sealed class InspectExternalWorkflowCapabilityReadinessTool : IAgentTool
             requestObject[propertyName] = normalize(text);
         }
     }
+
+    protected override bool IsVerifiedResult(JsonElement result) =>
+        result.TryGetProperty("execution_mode", out var executionMode) &&
+        executionMode.ValueKind == JsonValueKind.String &&
+        result.TryGetProperty("status", out var status) &&
+        status.ValueKind == JsonValueKind.String &&
+        result.TryGetProperty("selected_selector", out var selectedSelector) &&
+        selectedSelector.ValueKind == JsonValueKind.Object;
 
     private static bool TryParseExecutionMode(
         string? value,

@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Tools;
 using Aevatar.AI.Abstractions;
 using FluentAssertions;
 
@@ -19,6 +21,9 @@ public sealed class AgentToolReceiptContractTests
         ((int)AgentToolReceiptApprovalMode.NeverRequire).Should().Be(1);
         ((int)AgentToolReceiptApprovalMode.AlwaysRequire).Should().Be(2);
         ((int)AgentToolReceiptApprovalMode.Auto).Should().Be(3);
+        ((int)AgentToolReceiptEffect.Unspecified).Should().Be(0);
+        ((int)AgentToolReceiptEffect.ReadOnly).Should().Be(1);
+        ((int)AgentToolReceiptEffect.Mutating).Should().Be(2);
         AgentToolReceipt.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => (field.FieldNumber, field.Name))
             .Should()
@@ -39,7 +44,8 @@ public sealed class AgentToolReceiptContractTests
                 (14, "result_json"),
                 (15, "managed_workflow_handoff"),
                 (16, "workflow_run_delivery"),
-                (17, "authorization_required"));
+                (17, "authorization_required"),
+                (18, "effect"));
 
         AgentToolReceipt.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => field.Name)
@@ -76,5 +82,54 @@ public sealed class AgentToolReceiptContractTests
                 (4, "reason"),
                 (5, "continuation_turn_id"));
         ToolApprovalDecisionEvent.Descriptor.FindFieldByNumber(2).Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(false, AgentToolReceiptEffect.ReadOnly)]
+    [InlineData(true, AgentToolReceiptEffect.Mutating)]
+    public void AgentToolReceiptFactory_ShouldStampDynamicCallEffect(
+        bool mutating,
+        AgentToolReceiptEffect expectedEffect)
+    {
+        var tool = new DynamicSafetyTool();
+        var argumentsJson = mutating ? "{\"mutating\":true}" : "{}";
+        var receipt = AgentToolReceiptFactory.CreateError(
+            tool,
+            "call-1",
+            tool.Name,
+            tool.GetCallSafety(argumentsJson),
+            "{}",
+            "failed",
+            "failed");
+
+        receipt.Effect.Should().Be(expectedEffect);
+    }
+
+    [Fact]
+    public void AgentToolReceiptEffectPolicy_ShouldKeepApprovalSeparateFromReadOnlyEffect()
+    {
+        var effect = AgentToolReceiptEffectPolicy.FromCallSafety(
+            new AgentToolCallSafety(
+                RequiresApproval: true,
+                IsReadOnly: true,
+                IsDestructive: false),
+            sideEffectKind: null);
+
+        effect.Should().Be(AgentToolReceiptEffect.ReadOnly);
+    }
+
+    private sealed class DynamicSafetyTool : IAgentTool
+    {
+        public string Name => "dynamic_tool";
+        public string Description => Name;
+        public string ParametersSchema => "{}";
+
+        public AgentToolCallSafety GetCallSafety(string argumentsJson) => new(
+            RequiresApproval: false,
+            IsReadOnly: !argumentsJson.Contains("true", StringComparison.Ordinal),
+            IsDestructive: false);
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
     }
 }

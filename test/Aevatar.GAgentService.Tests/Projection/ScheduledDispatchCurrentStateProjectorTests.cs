@@ -519,7 +519,7 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         {
             OwnerLlmSelection = new ScheduledInvocationOwnerLLMSelection
             {
-                RouteKind = ScheduledInvocationOwnerLLMRouteKind.Gateway,
+                RouteKind = LLMRouteKind.Gateway,
                 RouteValue = "/api/v1/llm/gateway/v1",
                 Model = "fallback-model",
             },
@@ -534,7 +534,7 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
             },
             OwnerLlmSelection = new ScheduledInvocationOwnerLLMSelection
             {
-                RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+                RouteKind = LLMRouteKind.NyxIdUserService,
                 RouteValue = "/api/v1/proxy/s/chrono-llm-public",
                 NyxIdUserServiceId = "us-chrono",
                 ServiceSlugSnapshot = "chrono-llm-public",
@@ -565,10 +565,10 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
     }
 
     [Theory]
-    [InlineData(ScheduledInvocationOwnerLLMRouteKind.Unspecified, "unspecified", "")]
-    [InlineData(ScheduledInvocationOwnerLLMRouteKind.Gateway, "gateway", "/api/v1/llm/gateway/v1")]
+    [InlineData(LLMRouteKind.Unspecified, "unspecified", "")]
+    [InlineData(LLMRouteKind.Gateway, "gateway", "/api/v1/llm/gateway/v1")]
     public async Task ProjectAsync_ShouldExposeExplicitRouteKindFromTargetAuthorizationFact(
-        ScheduledInvocationOwnerLLMRouteKind routeKind,
+        LLMRouteKind routeKind,
         string expectedRouteKind,
         string route)
     {
@@ -591,7 +591,7 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
             {
                 RouteKind = routeKind,
                 RouteValue = route,
-                Model = routeKind == ScheduledInvocationOwnerLLMRouteKind.Gateway ? "gpt-5.5" : string.Empty,
+                Model = routeKind == LLMRouteKind.Gateway ? "gpt-5.5" : string.Empty,
             },
         };
 
@@ -608,6 +608,54 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         ReadRequiredStringProperty(document!, "OwnerLlmRouteKind").Should().Be(expectedRouteKind);
         ReadRequiredStringProperty(document, "OwnerLlmRoute").Should().Be(route);
         document.StateVersion.Should().Be(24);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldMaterializeTypedScheduleFailureEvidence()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-02T00:00:00+00:00")));
+        var state = CreateServiceInvocationState(
+            "schedule-admission-failure",
+            new ServiceIdentity
+            {
+                TenantId = "scope-alpha",
+                AppId = "app-alpha",
+                Namespace = "default",
+                ServiceId = "svc-alpha",
+            });
+        state.LastError = "Workflow definition is invalid.";
+        state.LastErrorCode = "WORKFLOW_DEFINITION_INVALID";
+        state.FireCount = 1;
+        state.FailureCount = 1;
+        state.FireRecords["fire-alpha"] = new ScheduledDispatchFireRecordState
+        {
+            IdempotencyKey = "fire-alpha",
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-02T01:00:00+00:00")),
+            CompletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-02T01:00:01+00:00")),
+            Error = "Workflow definition is invalid.",
+            ErrorCode = "WORKFLOW_DEFINITION_INVALID",
+            Status = ScheduledDispatchFireStatusState.Failed,
+        };
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:schedule-admission-failure"),
+            WrapCommitted(
+                state,
+                version: 25,
+                eventId: "evt-admission-failure",
+                observedAt: DateTimeOffset.Parse("2026-08-02T01:00:02+00:00")));
+
+        var document = await store.GetAsync("schedule-admission-failure");
+        document.Should().NotBeNull();
+        document!.LastError.Should().Be("Workflow definition is invalid.");
+        document.LastErrorCode.Should().Be("WORKFLOW_DEFINITION_INVALID");
+        var fire = document.FireRecords.Should().ContainSingle().Subject;
+        fire.Error.Should().Be("Workflow definition is invalid.");
+        fire.ErrorCode.Should().Be("WORKFLOW_DEFINITION_INVALID");
+        fire.TargetActorId.Should().BeEmpty();
     }
 
     private static ScheduledDispatchProjectionContext CreateContext(string rootActorId) =>

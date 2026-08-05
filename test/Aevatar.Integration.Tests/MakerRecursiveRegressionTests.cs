@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.AI.Core;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Foundation.Core.TypeSystem;
@@ -79,6 +80,8 @@ public class MakerRecursiveRegressionTests
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
+        services.AddSingleton<IAgentToolExecutionPort>(
+            WorkflowGAgentTestBase.UnexpectedAgentToolExecutionPort.Instance);
         services.AddAevatarAgentKindRegistry(RegisterAssistantRoleKind);
         services.AddWorkflowMakerExtensions();
         services.AddSingleton<ILLMProvider>(provider);
@@ -109,6 +112,7 @@ public class MakerRecursiveRegressionTests
             {
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "maker_regression",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
@@ -127,6 +131,7 @@ public class MakerRecursiveRegressionTests
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "maker_regression",
                 RunId = "maker-regression-run",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation

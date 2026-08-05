@@ -5,6 +5,7 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Orleans.Runtime;
 using System.Reflection;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
@@ -16,7 +17,7 @@ public sealed class OrleansActorTransportDispatchTests
     {
         var grainFactory = DispatchProxy.Create<IGrainFactory, SingleRuntimeActorGrainFactory>();
 
-        var act = () => new OrleansActorDispatchPort(grainFactory, null!);
+        var act = () => new OrleansActorDispatchPort(grainFactory, null!, new EmptyGrainContextAccessor());
 
         act.Should().Throw<ArgumentNullException>()
             .WithParameterName("streams");
@@ -27,10 +28,22 @@ public sealed class OrleansActorTransportDispatchTests
     {
         var streams = new RecordingStreamProvider();
 
-        var act = () => new OrleansActorDispatchPort(null!, streams);
+        var act = () => new OrleansActorDispatchPort(null!, streams, new EmptyGrainContextAccessor());
 
         act.Should().Throw<ArgumentNullException>()
             .WithParameterName("grainFactory");
+    }
+
+    [Fact]
+    public void Constructor_WhenGrainContextAccessorIsNull_ShouldThrowArgumentNullException()
+    {
+        var grainFactory = DispatchProxy.Create<IGrainFactory, SingleRuntimeActorGrainFactory>();
+        var streams = new RecordingStreamProvider();
+
+        var act = () => new OrleansActorDispatchPort(grainFactory, streams, null!);
+
+        act.Should().Throw<ArgumentNullException>()
+            .WithParameterName("grainContextAccessor");
     }
 
     [Fact]
@@ -42,7 +55,8 @@ public sealed class OrleansActorTransportDispatchTests
         ((SingleRuntimeActorGrainFactory)(object)grainFactory).Grain = grain;
         var dispatchPort = new OrleansActorDispatchPort(
             grainFactory,
-            streams);
+            streams,
+            new EmptyGrainContextAccessor());
         var envelope = new EventEnvelope { Payload = Any.Pack(new StringValue { Value = "payload" }) };
 
         await dispatchPort.DispatchAsync("actor-0", envelope, CancellationToken.None);
@@ -60,7 +74,10 @@ public sealed class OrleansActorTransportDispatchTests
         var streams = new RecordingStreamProvider();
         var grainFactory = DispatchProxy.Create<IGrainFactory, SingleRuntimeActorGrainFactory>();
         ((SingleRuntimeActorGrainFactory)(object)grainFactory).Grain = grain;
-        var dispatchPort = new OrleansActorDispatchPort(grainFactory, streams);
+        var dispatchPort = new OrleansActorDispatchPort(
+            grainFactory,
+            streams,
+            new EmptyGrainContextAccessor());
         var envelope = new EventEnvelope();
 
         Func<Task> dispatchWithBlankActorId = async () =>
@@ -88,7 +105,8 @@ public sealed class OrleansActorTransportDispatchTests
         ((SingleRuntimeActorGrainFactory)(object)grainFactory).Grain = grain;
         var dispatchPort = new OrleansActorDispatchPort(
             grainFactory,
-            streams);
+            streams,
+            new EmptyGrainContextAccessor());
         var envelope = new EventEnvelope { Payload = Any.Pack(new StringValue { Value = "payload" }) };
 
         var act = () => dispatchPort.DispatchAsync("actor-0", envelope, CancellationToken.None);
@@ -170,6 +188,11 @@ public sealed class OrleansActorTransportDispatchTests
         public Task DeactivateAsync() => Task.CompletedTask;
 
         public Task PurgeAsync() => Task.CompletedTask;
+    }
+
+    private sealed class EmptyGrainContextAccessor : IGrainContextAccessor
+    {
+        public IGrainContext GrainContext => null!;
     }
 
     private class SingleRuntimeActorGrainFactory : DispatchProxy

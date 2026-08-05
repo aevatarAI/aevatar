@@ -2063,102 +2063,6 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_CreatesApprovalMiddlewarePerTurn()
-    {
-        var approvalHandler = new CountingApprovalHandler();
-        var generator = new NyxIdConversationReplyGenerator(
-            new ToolCallingProviderFactory(),
-            BuiltInPromptFloorProvider,
-            toolSources: [new SingleToolSource(new ApprovalRequiredTool())],
-            approvalHandler: approvalHandler);
-
-        for (var i = 0; i < 4; i++)
-        {
-            var reply = await generator.GenerateReplyAsync(
-                new ChatActivity
-                {
-                    Id = $"msg-approval-{i}",
-                    Conversation = new ConversationReference { CanonicalKey = $"lark:dm:user-{i}" },
-                    Content = new MessageContent { Text = "run tool" },
-                },
-                new Dictionary<string, string>(),
-                streamingSink: null,
-                CancellationToken.None);
-
-            reply.Text.Should().Be("done");
-        }
-
-        approvalHandler.RequestCount.Should().Be(4);
-    }
-
-    [Fact]
-    public async Task GenerateReplyAsync_WhenApprovalHandlerMissingAndToolRequiresApproval_ShouldDenyWithoutExecutingTool()
-    {
-        var tool = new ApprovalRequiredTool();
-        var generator = new NyxIdConversationReplyGenerator(
-            new ToolResultEchoingProviderFactory(),
-            BuiltInPromptFloorProvider,
-            toolSources: [new SingleToolSource(tool)]);
-
-        var reply = await generator.GenerateReplyAsync(
-            new ChatActivity
-            {
-                Id = "msg-no-handler-approval",
-                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-no-handler" },
-                Content = new MessageContent { Text = "run tool" },
-            },
-            new Dictionary<string, string>(),
-            streamingSink: null,
-            CancellationToken.None);
-
-        reply.Text.Should().Contain("approval-gated tools cannot run here");
-        reply.Text.Should().NotContain("An approval request has been sent.");
-        reply.Text.Should().NotContain("\"approval_required\":true");
-        tool.ExecuteCount.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task GenerateReplyAsync_WhenSenderBoundMutationHasNoSenderToken_ShouldDenyBeforeApprovalAndExecution()
-    {
-        var tool = new ApprovalRequiredTool();
-        var approvalHandler = new CountingApprovalHandler();
-        var providerFactory = new ToolResultEchoingProviderFactory();
-        var generator = new NyxIdConversationReplyGenerator(
-            providerFactory,
-            BuiltInPromptFloorProvider,
-            toolSources: [new SingleToolSource(tool)],
-            approvalHandler: approvalHandler);
-
-        var reply = await generator.GenerateReplyAsync(
-            new ChatActivity
-            {
-                Id = "msg-sender-bound-no-token-write",
-                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-sender-bound-no-token" },
-                Content = new MessageContent { Text = "run tool" },
-            },
-            new Dictionary<string, string>(),
-            Control(token: "owner-token"),
-            ToolContext("bnd_sender"),
-            streamingSink: null,
-            CancellationToken.None);
-
-        providerFactory.Requests.Should().HaveCount(2);
-        var toolResult = providerFactory.Requests[1].Messages
-            .Should()
-            .ContainSingle(message => message.Role == "tool")
-            .Subject
-            .Content;
-        toolResult.Should().Contain("credential_denied");
-        toolResult.Should().Contain("Owner credentials were not used");
-        toolResult.Should().Contain("/init");
-        reply.Text.Should().Contain("credential_denied");
-        reply.Text.Should().Contain("Owner credentials were not used");
-        reply.Text.Should().Contain("/init");
-        approvalHandler.RequestCount.Should().Be(0);
-        tool.ExecuteCount.Should().Be(0);
-    }
-
-    [Fact]
     public async Task GenerateReplyAsync_WithLocalSkillCatalog_AddsLocalSkillsWithoutRemoteFetcherWarning()
     {
         var logger = new ListLogger<NyxIdConversationReplyGenerator>();
@@ -2245,7 +2149,7 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     // Tools whose outcome lands off-chat (e.g. aevatar_provision_workflow_schedule, which
-    // delivers its scheduled runs to /workflow/observatory, never a chat/bot) self-declare the
+    // delivers its scheduled runs to /admin#/observatory, never a chat/bot) self-declare the
     // generic AgentToolCapabilities.ExcludeFromDirectChannelChat marker. The channel/Lark
     // conversation agent must hide ANY tool carrying that capability — keyed off the capability,
     // not the tool name — otherwise it could route a Lark user's request away from their chat.
@@ -2374,7 +2278,8 @@ public sealed class ConversationReplyGeneratorTests
             [
                 new SingleToolSource(new UseSkillTool(catalog, scopeWorkflowCommandPort: commandPort)),
             ],
-            localSkillCatalog: catalog);
+            localSkillCatalog: catalog,
+            toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort());
 
         var reply = await generator.GenerateReplyAsync(
             new ChatActivity
@@ -2451,7 +2356,9 @@ public sealed class ConversationReplyGeneratorTests
             executionEvents);
         var inventoryHandler = new RecordingNyxIdInventoryHandler(executionEvents);
         var nyxIdOptions = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var toolExecutionPort = new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort();
         var inventorySource = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            toolExecutionPort,
             nyxIdOptions,
             new FixedNyxIdApiClientFactory(new NyxIdApiClient(
                 nyxIdOptions,
@@ -2470,7 +2377,8 @@ public sealed class ConversationReplyGeneratorTests
             },
             remoteSkillAccessTokenResolver: new ChannelRemoteSkillAccessTokenResolver(
                 skillCapabilityIssuer,
-                NullLogger<ChannelRemoteSkillAccessTokenResolver>.Instance));
+                NullLogger<ChannelRemoteSkillAccessTokenResolver>.Instance),
+            toolExecutionPort: toolExecutionPort);
         var sink = new RecordingStreamingSink();
         var toolContext = AgentToolExecutionContext.Empty with
         {
@@ -2630,7 +2538,8 @@ public sealed class ConversationReplyGeneratorTests
             relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
             {
                 StreamingPlaceholderText = "…",
-            });
+            },
+            toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort());
         var skillRecovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
             RequireOrnnSearchOnBlocker: true,
@@ -2727,7 +2636,8 @@ public sealed class ConversationReplyGeneratorTests
                     "chrono_storage_query",
                     "Error: Invalid URI: The hostname could not be parsed.",
                     AgentToolReceiptStatus.Error)),
-            ]);
+            ],
+            toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort());
         var skillRecovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
             RequireOrnnSearchOnBlocker: true,
@@ -2778,7 +2688,8 @@ public sealed class ConversationReplyGeneratorTests
             [
                 new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n- **goal**")),
                 new SingleToolSource(new FixedResultTool("use_skill", "# goal\n## Instructions\nExecute the goal command.")),
-            ]);
+            ],
+            toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort());
         var skillRecovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
             RequireOrnnSearchOnBlocker: true,
@@ -2826,7 +2737,8 @@ public sealed class ConversationReplyGeneratorTests
             toolSources:
             [
                 new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n* project-summary")),
-            ]);
+            ],
+            toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort());
         var skillRecovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
             RequireOrnnSearchOnBlocker: true,
@@ -2858,21 +2770,19 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_AppliesSenderPrefsOverChainOwnerDefault()
+    public async Task GenerateReplyAsync_AppliesCompleteSenderSelectionOverOwnerSelection()
     {
         // Issue #513 phase 3: when the inbound carries a sender binding-id,
-        // sender prefs override the upstream-pinned bot-owner prefs field-
-        // by-field. The owner's metadata is already in the input (channel
+        // sender prefs override the upstream-pinned bot-owner selection as one fact. The owner's metadata is already in the input (channel
         // turn runner pins it via OwnerLlmConfigApplier in production), so
         // the generator only has to layer sender overrides where the sender
         // actually set a value.
         var providerFactory = new RecordingProviderFactory();
         var prefsStore = new ScopedStubPreferencesStore
         {
-            // Sender (binding-id) has chosen a model but left route blank.
             ByBinding =
             {
-                ["bnd_sender"] = new NyxIdUserLlmPreferences("sender-model", string.Empty, MaxToolRounds: 0),
+                ["bnd_sender"] = SenderPreferences(),
             },
         };
         var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, preferencesStore: prefsStore);
@@ -2885,7 +2795,7 @@ public sealed class ConversationReplyGeneratorTests
                 Content = new MessageContent { Text = "hello" },
             },
             new Dictionary<string, string>(),
-            Control("owner-model", "/api/v1/proxy/s/owner", 9),
+            Control("owner-model", "/api/v1/proxy/s/owner", 9, "owner-token", "sender-token"),
             ToolContext("bnd_sender"),
             streamingSink: null,
             CancellationToken.None);
@@ -2894,10 +2804,8 @@ public sealed class ConversationReplyGeneratorTests
         request.Metadata.Should().NotBeNull();
         request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
         var toolContext = request.ToolContext!;
-        // Sender's model wins (non-empty).
         toolContext.Routing.ModelOverride.Should().Be("sender-model");
-        // Sender left route blank → owner's upstream-pinned route stays.
-        toolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
+        toolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/sender");
         // Sender left max-rounds at 0 → owner's upstream-pinned value stays.
         toolContext.Routing.MaxToolRoundsOverride.Should().Be(9);
     }
@@ -3198,10 +3106,7 @@ public sealed class ConversationReplyGeneratorTests
         {
             ByBinding =
             {
-                ["bnd_sender"] = new NyxIdUserLlmPreferences(
-                    "sender-model",
-                    "/api/v1/proxy/s/sender",
-                    MaxToolRounds: 7),
+                ["bnd_sender"] = SenderPreferences(7),
             },
         };
         var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, preferencesStore: prefsStore);
@@ -3255,10 +3160,7 @@ public sealed class ConversationReplyGeneratorTests
         {
             ByBinding =
             {
-                ["bnd_sender"] = new NyxIdUserLlmPreferences(
-                    "sender-model",
-                    "/api/v1/proxy/s/sender",
-                    MaxToolRounds: 7),
+                ["bnd_sender"] = SenderPreferences(7),
             },
         };
         var generator = new NyxIdConversationReplyGenerator(
@@ -3343,10 +3245,7 @@ public sealed class ConversationReplyGeneratorTests
         {
             ByBinding =
             {
-                ["bnd_sender"] = new NyxIdUserLlmPreferences(
-                    "sender-model",
-                    "/api/v1/proxy/s/sender",
-                    MaxToolRounds: 7),
+                ["bnd_sender"] = SenderPreferences(7),
             },
         };
         var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, preferencesStore: prefsStore);
@@ -3367,9 +3266,9 @@ public sealed class ConversationReplyGeneratorTests
         var request = providerFactory.Requests.Should().ContainSingle().Subject;
         request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
         var requestToolContext = request.ToolContext!;
-        requestToolContext.Routing.ModelOverride.Should().Be("sender-model");
+        requestToolContext.Routing.ModelOverride.Should().Be("owner-model");
         requestToolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
-        requestToolContext.Routing.MaxToolRoundsOverride.Should().Be(7);
+        requestToolContext.Routing.MaxToolRoundsOverride.Should().Be(5);
         requestToolContext.Credentials.NyxIdAccessToken.Should().Be("owner-token");
         requestToolContext.Credentials.NyxIdOrgToken.Should().Be("owner-token");
         requestToolContext.SenderBinding.BindingId.Should().Be("bnd_sender");
@@ -3377,14 +3276,14 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WhenSenderHasNoRoutePreference_ShouldStillPromoteSenderTokenForTools()
+    public async Task GenerateReplyAsync_WithSenderSelection_ShouldPromoteSenderTokenForTools()
     {
         var providerFactory = new RecordingProviderFactory();
         var prefsStore = new ScopedStubPreferencesStore
         {
             ByBinding =
             {
-                ["bnd_sender"] = new NyxIdUserLlmPreferences("sender-model", string.Empty, MaxToolRounds: 0),
+                ["bnd_sender"] = SenderPreferences(),
             },
         };
         var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, preferencesStore: prefsStore);
@@ -3404,7 +3303,7 @@ public sealed class ConversationReplyGeneratorTests
 
         var toolContext = providerFactory.Requests.Should().ContainSingle().Subject.ToolContext!;
         toolContext.Routing.ModelOverride.Should().Be("sender-model");
-        toolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
+        toolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/sender");
         toolContext.Credentials.NyxIdAccessToken.Should().Be("sender-token");
         toolContext.Credentials.NyxIdOrgToken.Should().Be("sender-token");
         toolContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
@@ -3424,7 +3323,7 @@ public sealed class ConversationReplyGeneratorTests
     // now falls back only the LLM route while preserving sender binding.
     public const string MatrixUnbound = "unbound";
     public const string MatrixBoundEmpty = "bound_empty_prefs";
-    public const string MatrixBoundModelOnly = "bound_model_only";
+    public const string MatrixBoundSelection = "bound_selection";
     public const string MatrixOwnerNone = "owner_none";
     public const string MatrixOwnerPartial = "owner_partial_model_only";
     public const string MatrixOwnerFull = "owner_full";
@@ -3436,9 +3335,9 @@ public sealed class ConversationReplyGeneratorTests
     [InlineData(MatrixBoundEmpty, MatrixOwnerNone, null, null, null)]
     [InlineData(MatrixBoundEmpty, MatrixOwnerPartial, "owner-model", null, null)]
     [InlineData(MatrixBoundEmpty, MatrixOwnerFull, "owner-model", "/api/v1/proxy/s/owner", "9")]
-    [InlineData(MatrixBoundModelOnly, MatrixOwnerNone, "sender-model", null, null)]
-    [InlineData(MatrixBoundModelOnly, MatrixOwnerPartial, "sender-model", null, null)]
-    [InlineData(MatrixBoundModelOnly, MatrixOwnerFull, "sender-model", "/api/v1/proxy/s/owner", "9")]
+    [InlineData(MatrixBoundSelection, MatrixOwnerNone, "sender-model", "/api/v1/proxy/s/sender", null)]
+    [InlineData(MatrixBoundSelection, MatrixOwnerPartial, "sender-model", "/api/v1/proxy/s/sender", null)]
+    [InlineData(MatrixBoundSelection, MatrixOwnerFull, "sender-model", "/api/v1/proxy/s/sender", "9")]
     public async Task GenerateReplyAsync_OverrideMatrix_BindingTimesOwnerPrefs(
         string bindingState,
         string ownerState,
@@ -3455,11 +3354,8 @@ public sealed class ConversationReplyGeneratorTests
                 // Lookup returns the default empty record (no entry in
                 // ByBinding), so SetIfFilled writes nothing.
                 break;
-            case MatrixBoundModelOnly:
-                prefsStore.ByBinding["bnd_sender"] = new NyxIdUserLlmPreferences(
-                    DefaultModel: "sender-model",
-                    PreferredRoute: string.Empty,
-                    MaxToolRounds: 0);
+            case MatrixBoundSelection:
+                prefsStore.ByBinding["bnd_sender"] = SenderPreferences();
                 break;
         }
 
@@ -3476,6 +3372,8 @@ public sealed class ConversationReplyGeneratorTests
                 control = Control("owner-model", "/api/v1/proxy/s/owner", 9);
                 break;
         }
+        if (bindingState == MatrixBoundSelection)
+            control = (control ?? LLMControlContext.Empty) with { SenderNyxIdAccessToken = "sender-token" };
 
         var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, preferencesStore: prefsStore);
         await generator.GenerateReplyAsync(
@@ -3517,7 +3415,7 @@ public sealed class ConversationReplyGeneratorTests
             Lookups.Add(null);
             if (ThrowOnLookup)
                 throw new InvalidOperationException("simulated projection outage");
-            return Task.FromResult(new NyxIdUserLlmPreferences(string.Empty, string.Empty));
+            return Task.FromResult(NyxIdUserLlmPreferences.Empty);
         }
 
         public Task<NyxIdUserLlmPreferences> GetForBindingAsync(string bindingId, CancellationToken cancellationToken = default)
@@ -3527,9 +3425,25 @@ public sealed class ConversationReplyGeneratorTests
                 throw new InvalidOperationException("simulated projection outage");
             return Task.FromResult(ByBinding.TryGetValue(bindingId, out var prefs)
                 ? prefs
-                : new NyxIdUserLlmPreferences(string.Empty, string.Empty));
+                : NyxIdUserLlmPreferences.Empty);
         }
     }
+
+    private static NyxIdUserLlmPreferences SenderPreferences(int maxToolRounds = 0) => new(
+        new LLMSelection
+        {
+            RouteKind = LLMRouteKind.NyxIdUserService,
+            RouteValue = "/api/v1/proxy/s/sender",
+            NyxIdUserServiceId = "us-sender",
+            ServiceSlugSnapshot = "sender",
+            ModelSelection = new LLMModelSelection
+            {
+                Kind = LLMModelSelectionKind.ExplicitModel,
+                ModelId = "sender-model",
+            },
+        },
+        LLMSelectionPersistenceStatus.Ready,
+        maxToolRounds);
 
     private sealed class StubSystemSkillOverlayProvider(string? overlayMarkdown) : ISystemSkillOverlayProvider
     {
@@ -4379,17 +4293,6 @@ public sealed class ConversationReplyGeneratorTests
         {
             ExecuteCount++;
             return Task.FromResult("""{"executed":true}""");
-        }
-    }
-
-    private sealed class CountingApprovalHandler : IToolApprovalHandler
-    {
-        public int RequestCount { get; private set; }
-
-        public Task<ToolApprovalResult> RequestApprovalAsync(ToolApprovalRequest request, CancellationToken ct)
-        {
-            RequestCount++;
-            return Task.FromResult(ToolApprovalResult.Denied("test denial"));
         }
     }
 

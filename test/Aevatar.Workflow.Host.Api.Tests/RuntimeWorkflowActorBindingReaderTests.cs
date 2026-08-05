@@ -14,6 +14,7 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
     {
         typeof(WorkflowActorBinding).GetProperty("WorkflowId").Should().NotBeNull();
         typeof(WorkflowActorBinding).GetProperty("RevisionId").Should().NotBeNull();
+        typeof(WorkflowActorBinding).GetProperty("ExpectedExecutionMode").Should().NotBeNull();
     }
 
     [Fact]
@@ -57,6 +58,7 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
                 SourceKind = "service_revision",
                 WorkflowId = "wf-alpha",
                 RevisionId = "rev-alpha",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Durable,
                 CapabilityAdmissionPlan = capabilityAdmissionPlan,
                 InlineWorkflowYamls = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
@@ -77,7 +79,35 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
         result.SourceKind.Should().Be("service_revision");
         result.WorkflowId.Should().Be("wf-alpha");
         result.RevisionId.Should().Be("rev-alpha");
+        result.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
         result.CapabilityAdmissionPlan!.AdmissionDigest.Should().Be(capabilityAdmissionPlan.AdmissionDigest);
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldUseCapabilityAdmissionExecutionMode_WhenProjectedExpectedModeMissing()
+    {
+        var capabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "yaml",
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
+        var reader = CreateReader(
+            getDocumentAsync: (_, _) => Task.FromResult<WorkflowActorBindingDocument?>(new WorkflowActorBindingDocument
+            {
+                Id = "actor-legacy",
+                ActorId = "actor-legacy",
+                ActorKind = WorkflowActorKind.Definition,
+                DefinitionActorId = "actor-legacy",
+                WorkflowName = "legacy",
+                WorkflowYaml = "yaml",
+                CapabilityAdmissionPlan = capabilityAdmissionPlan,
+            }));
+
+        var result = await reader.GetAsync("actor-legacy", CancellationToken.None);
+
+        result.Should().NotBeNull();
+        result!.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
     }
 
     [Fact]
@@ -157,6 +187,9 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
                 query.Filters.Should().Contain(filter =>
                     filter.FieldPath == nameof(WorkflowActorBindingDocument.DefinitionActorId) &&
                     filter.Operator == ProjectionDocumentFilterOperator.In);
+                query.Filters.Should().Contain(filter =>
+                    filter.FieldPath == nameof(WorkflowActorBindingDocument.RunId) &&
+                    filter.Operator == ProjectionDocumentFilterOperator.In);
 
                 return Task.FromResult(new ProjectionDocumentQueryResult<WorkflowActorBindingDocument>
                 {
@@ -178,7 +211,8 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
             new WorkflowRunBindingQuery(
                 " scope-1 ",
                 ["definition-1", "definition-2", "definition-1", " "],
-                Take: 500),
+                Take: 500,
+                RunIds: ["run-2", "run-2", " "]),
             CancellationToken.None);
 
         result.Should().ContainSingle();

@@ -423,6 +423,7 @@ internal static class RunAuditAnnotations
             ServiceRunStatus.Completed => "completed",
             ServiceRunStatus.Failed => "failed",
             ServiceRunStatus.Stopped => "stopped",
+            ServiceRunStatus.OutcomeUncertain => "outcome_uncertain",
             _ => "unspecified",
         };
 
@@ -536,7 +537,10 @@ public abstract class AuditTranslatorBase<TEvent> : IAuditCommittedEventTranslat
     protected static AuditLifecyclePhase LifecyclePhase(ServiceRunStatus status) => status switch
     {
         ServiceRunStatus.Accepted => AuditLifecyclePhase.Accepted,
-        ServiceRunStatus.Completed or ServiceRunStatus.Failed or ServiceRunStatus.Stopped =>
+        ServiceRunStatus.Completed or
+            ServiceRunStatus.Failed or
+            ServiceRunStatus.Stopped or
+            ServiceRunStatus.OutcomeUncertain =>
             AuditLifecyclePhase.Terminal,
         _ => AuditLifecyclePhase.Running,
     };
@@ -546,13 +550,16 @@ public abstract class AuditTranslatorBase<TEvent> : IAuditCommittedEventTranslat
         ServiceRunStatus.Completed => AuditTerminalOutcome.Succeeded,
         ServiceRunStatus.Failed => AuditTerminalOutcome.Failed,
         ServiceRunStatus.Stopped => AuditTerminalOutcome.Cancelled,
+        ServiceRunStatus.OutcomeUncertain => AuditTerminalOutcome.Unspecified,
         _ => AuditTerminalOutcome.Unspecified,
     };
 
     protected static AuditFailure? BuildRunFailure(ServiceRunStatus status) =>
-        status == ServiceRunStatus.Failed
+        status is ServiceRunStatus.Failed or ServiceRunStatus.OutcomeUncertain
             ? Failure(
-                "service_run_failed",
+                status == ServiceRunStatus.Failed
+                    ? "service_run_failed"
+                    : "service_run_outcome_uncertain",
                 AuditFailureCategory.Execution,
                 AuditLifecyclePhase.Running)
             : null;

@@ -17,6 +17,7 @@ using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
@@ -33,6 +34,30 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
     private const string OwnScope = "scope-alice";
     private const string OtherScope = "scope-bob";
     private const string RawToken = "eyJhbGciOiJVTklUIn0.eyJzdWIiOiJ1c2VyLTEyMyJ9.c2lnbmF0dXJlLXZhbHVl";
+
+    [Fact]
+    public async Task PageRoutes_ShouldExposeOnlyTheAdminEmbeddedRenderer()
+    {
+        await using var app = await CreateRouteAuditAppAsync(
+            new RecordingAuditTrailAppender(),
+            new FakeObservatory(),
+            new FakeAdminQuery(),
+            new FakeAuthorizer(elevated: true),
+            new FakeDirectory());
+        using var client = CreateClient(app);
+
+        (await client.GetAsync("/workflow/observatory")).StatusCode.Should().Be(System.Net.HttpStatusCode.NotFound);
+        (await client.GetAsync("/workflow/observatory/callback")).StatusCode.Should().Be(System.Net.HttpStatusCode.NotFound);
+
+        var routePatterns = app.Services.GetServices<EndpointDataSource>()
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Select(endpoint => endpoint.RoutePattern.RawText)
+            .ToList();
+        routePatterns.Should().Contain("/admin/workflow-observatory");
+        routePatterns.Should().NotContain("/workflow/observatory");
+        routePatterns.Should().NotContain("/workflow/observatory/callback");
+    }
 
     [Fact]
     public async Task ListRuns_NoScope_UsesOwnScope_AndNeverCallsAuthorizerOrAdminQuery()

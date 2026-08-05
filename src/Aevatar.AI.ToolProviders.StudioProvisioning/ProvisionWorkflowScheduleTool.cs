@@ -13,7 +13,7 @@ namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 /// <c>aevatar_provision_workflow_schedule</c> — the Team-owned workflow scheduling
 /// tool. It provisions a runnable workflow (member create inside a confirmed Team →
 /// bind inline YAML → <c>ScheduleKind=Workflow</c> scheduled-dispatch) so its recurring
-/// runs surface in <c>/workflow/observatory</c>.
+/// runs surface in <c>/admin#/observatory</c>.
 ///
 /// The tool takes ONLY workflow/scheduling inputs from the LLM. The owning scope and
 /// owning scope and NyxID caller identity come from distinct typed fields in the
@@ -42,7 +42,7 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool
     public string Name => "aevatar_provision_workflow_schedule";
 
     public string Description =>
-        "Schedule a runnable Aevatar workflow under a confirmed Studio Team whose recurring runs appear in /workflow/observatory (never a chat/bot). " +
+        "Schedule a runnable Aevatar workflow under a confirmed Studio Team whose recurring runs appear in /admin#/observatory (never a chat/bot). " +
         "Supply team_id, the workflow body inline as workflow_yaml, plus a display_name; the tool creates the member inside that Team, binds the YAML, " +
         "and creates a workflow-kind scheduled dispatch under the caller's scope. Do not call this tool until the user has selected an existing Team or confirmed a new Team. " +
         "The workflow_yaml is validated synchronously before anything is created: an invalid document returns a typed error " +

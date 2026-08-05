@@ -1,3 +1,6 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
+
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
 public static class UserLlmPreferenceWriteCore
@@ -31,15 +34,31 @@ public static class UserLlmPreferenceWriteCore
             : throw new InvalidOperationException($"LLM user service '{id}' is not selectable.");
     }
 
-    public static UserLlmSelectionValue BuildGatewaySelection() => new(
-        UserLlmSelectionKind.Gateway,
-        UserConfigLlmRouteDefaults.Gateway,
-        string.Empty,
-        string.Empty);
+    public static LLMSelection BuildResetSelection() => new()
+    {
+        RouteKind = LLMRouteKind.Unspecified,
+        ModelSelection = new LLMModelSelection { Kind = LLMModelSelectionKind.Unspecified },
+    };
 
-    public static UserLlmSelectionValue BuildInventorySelection(UserLlmOption option)
+    public static LLMSelection BuildGatewaySelection(LLMModelSelection modelSelection)
+    {
+        ArgumentNullException.ThrowIfNull(modelSelection);
+        var selection = new LLMSelection
+        {
+            RouteKind = LLMRouteKind.Gateway,
+            RouteValue = UserConfigLlmRouteDefaults.Gateway,
+            ModelSelection = modelSelection.Clone(),
+        };
+        LLMSelectionPolicy.ValidateSelection(selection);
+        return selection;
+    }
+
+    public static LLMSelection BuildInventorySelection(
+        UserLlmOption option,
+        LLMModelSelection modelSelection)
     {
         ArgumentNullException.ThrowIfNull(option);
+        ArgumentNullException.ThrowIfNull(modelSelection);
         EnsureSelectable(option);
         var identity = option.Identity;
         if (identity is not { Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory } ||
@@ -50,11 +69,16 @@ public static class UserLlmPreferenceWriteCore
 
         var slug = NormalizeOptional(option.ServiceSlug) ??
                    throw new InvalidOperationException("LLM selection requires a service slug.");
-        return new UserLlmSelectionValue(
-            UserLlmSelectionKind.NyxIdUserService,
-            $"/api/v1/proxy/s/{slug}",
-            identity.NyxIdUserServiceId.Trim(),
-            slug);
+        var selection = new LLMSelection
+        {
+            RouteKind = LLMRouteKind.NyxIdUserService,
+            RouteValue = $"/api/v1/proxy/s/{slug}",
+            NyxIdUserServiceId = identity.NyxIdUserServiceId.Trim(),
+            ServiceSlugSnapshot = slug,
+            ModelSelection = modelSelection.Clone(),
+        };
+        LLMSelectionPolicy.ValidateSelection(selection);
+        return selection;
     }
 
     public static UserLlmOption? ChoosePreferredOption(IEnumerable<UserLlmOption> options)

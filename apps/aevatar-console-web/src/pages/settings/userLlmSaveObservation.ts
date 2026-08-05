@@ -14,6 +14,7 @@ export type PendingUserLlmSave<TDraft> = {
   readonly submittedDraft: TDraft;
   readonly expectedCommittedDraft: TDraft;
   readonly selectionLabel: string;
+  readonly commandId?: string;
   readonly phase: "saving" | "accepted" | "accepted_unobserved";
 };
 
@@ -25,21 +26,6 @@ type ObserveUserLlmSaveInput<TSample> = {
   readonly onResponse?: (sample: TSample) => void;
   readonly onTransientError?: (error: unknown) => void;
 };
-
-export function expectedCommittedUserLlmModel(input: {
-  readonly kind: "gateway" | "nyx_id_user_service";
-  readonly submittedModel: string;
-  readonly optionDefaultModel?: string | null;
-}): string {
-  const explicitModel = input.submittedModel.trim();
-  if (explicitModel) {
-    return explicitModel;
-  }
-
-  return input.kind === "gateway"
-    ? ""
-    : String(input.optionDefaultModel ?? "").trim();
-}
 
 export async function observeUserLlmSave<TSample>(
   input: ObserveUserLlmSaveInput<TSample>,
@@ -59,7 +45,9 @@ export async function observeUserLlmSave<TSample>(
 
       active = false;
       attemptGeneration += 1;
-      timers.forEach((timer) => window.clearTimeout(timer));
+      timers.forEach((timer) => {
+        window.clearTimeout(timer);
+      });
       currentController?.abort();
       currentController = null;
       resolve({ attempts, phase });

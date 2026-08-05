@@ -1,4 +1,6 @@
 using System.Reflection;
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -9,6 +11,13 @@ namespace Aevatar.Studio.Tests;
 
 public sealed class UserConfigGAgentStateTests
 {
+    [Fact]
+    public void UpdateCommand_ShouldReserveLegacyDefaultModelMutation()
+    {
+        UpdateUserConfigCommand.Descriptor.FindFieldByName("default_model").Should().BeNull();
+        UpdateUserConfigCommand.Descriptor.FindFieldByNumber(1).Should().BeNull();
+    }
+
     [Fact]
     public void EventEndpoints_ShouldExposeOnlyConfigDelta()
     {
@@ -35,17 +44,11 @@ public sealed class UserConfigGAgentStateTests
     }
 
     [Fact]
-    public void UserLlmSelection_NyxIdUserService_ShouldRoundTripThroughProtobuf()
+    public void LLMSelection_NyxIdUserService_ShouldRoundTripThroughProtobuf()
     {
-        var selection = new Aevatar.GAgents.UserConfig.UserLlmSelection
-        {
-            RouteKind = UserLlmRouteKind.NyxIdUserService,
-            RouteValue = "/api/v1/proxy/s/chrono-llm-public",
-            NyxIdUserServiceId = "us-alpha",
-            ServiceSlugSnapshot = "chrono-llm-public",
-        };
+        var selection = UserServiceSelection("gpt-5.5");
 
-        var roundTrip = Aevatar.GAgents.UserConfig.UserLlmSelection.Parser.ParseFrom(selection.ToByteArray());
+        var roundTrip = LLMSelection.Parser.ParseFrom(selection.ToByteArray());
         roundTrip.Should().BeEquivalentTo(selection);
     }
 
@@ -54,14 +57,12 @@ public sealed class UserConfigGAgentStateTests
     {
         var command = new UpdateUserConfigCommand
         {
-            DefaultModel = string.Empty,
             MaxToolRounds = 0,
             GithubUsername = string.Empty,
         };
 
         var roundTrip = UpdateUserConfigCommand.Parser.ParseFrom(command.ToByteArray());
 
-        roundTrip.HasDefaultModel.Should().BeTrue();
         roundTrip.HasRuntimeMode.Should().BeFalse();
         roundTrip.HasLocalRuntimeBaseUrl.Should().BeFalse();
         roundTrip.HasRemoteRuntimeBaseUrl.Should().BeFalse();
@@ -71,136 +72,112 @@ public sealed class UserConfigGAgentStateTests
     }
 
     [Fact]
-    public void BuildUpdatedEvent_ShouldPreserveOmittedFieldsAndReturnFullStateEvent()
+    public void BuildUpdatedEvent_WithExplicitSelection_ShouldDeriveBothCompatibilityFields()
+    {
+        var selection = UserServiceSelection("gpt-5.5");
+
+        var committed = UserConfigGAgent.BuildUpdatedEvent(
+            new UserConfigGAgentState(),
+            new UpdateUserConfigCommand { LlmSelection = selection });
+
+        committed.LlmSelection.Should().BeEquivalentTo(selection);
+        committed.DefaultModel.Should().Be("gpt-5.5");
+        committed.PreferredLlmRoute.Should().Be("/api/v1/proxy/s/chrono-llm-public");
+    }
+
+    [Fact]
+    public void BuildUpdatedEvent_WithNonLlmDelta_ShouldPreserveLegacyFieldsByteForByte()
     {
         var state = new UserConfigGAgentState
         {
-            DefaultModel = "gpt-5.4",
+            DefaultModel = " legacy-model ",
+            PreferredLlmRoute = " legacy-route ",
             RuntimeMode = "remote",
             LocalRuntimeBaseUrl = "http://127.0.0.1:5080",
             RemoteRuntimeBaseUrl = "https://runtime.example.com",
             MaxToolRounds = 12,
             GithubUsername = "octocat",
-            LlmSelection = GatewaySelection(),
-            PreferredLlmRoute = UserConfigLlmRouteDefaults.Gateway,
         };
 
-        var committed = UserConfigGAgent.BuildUpdatedEvent(state, new UpdateUserConfigCommand
-        {
-            DefaultModel = "gpt-5.5",
-        });
+        var committed = UserConfigGAgent.BuildUpdatedEvent(
+            state,
+            new UpdateUserConfigCommand { GithubUsername = "updated" });
 
-        committed.DefaultModel.Should().Be("gpt-5.5");
+        committed.DefaultModel.Should().Be(" legacy-model ");
+        committed.PreferredLlmRoute.Should().Be(" legacy-route ");
         committed.RuntimeMode.Should().Be("remote");
         committed.LocalRuntimeBaseUrl.Should().Be("http://127.0.0.1:5080");
         committed.RemoteRuntimeBaseUrl.Should().Be("https://runtime.example.com");
         committed.MaxToolRounds.Should().Be(12);
-        committed.GithubUsername.Should().Be("octocat");
-        committed.LlmSelection.Should().BeEquivalentTo(GatewaySelection());
-        committed.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        committed.GithubUsername.Should().Be("updated");
+        committed.LlmSelection.Should().BeNull();
     }
 
-    [Theory]
-    [MemberData(nameof(InvalidSelections))]
-    public void BuildUpdatedEvent_WithInvalidSelection_ShouldReject(
-        string _,
-        Aevatar.GAgents.UserConfig.UserLlmSelection selection,
-        string expectedError)
+    [Fact]
+    public void BuildUpdatedEvent_WithReset_ShouldCommitCompleteUnspecifiedSelection()
+    {
+        var reset = LLMSelectionPolicy.SystemDefaultSelection();
+
+        var committed = UserConfigGAgent.BuildUpdatedEvent(
+            new UserConfigGAgentState
+            {
+                DefaultModel = "legacy-model",
+                PreferredLlmRoute = "legacy-route",
+            },
+            new UpdateUserConfigCommand { LlmSelection = reset });
+
+        committed.LlmSelection.Should().BeEquivalentTo(reset);
+        committed.LlmSelection.ModelSelection.Should().NotBeNull();
+        committed.LlmSelection.ModelSelection.Kind.Should().Be(LLMModelSelectionKind.Unspecified);
+        committed.DefaultModel.Should().BeEmpty();
+        committed.PreferredLlmRoute.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void HistoricalFourFieldSelection_ShouldRemainIncompleteAfterRoundTrip()
+    {
+        var historical = new LLMSelection
+        {
+            RouteKind = LLMRouteKind.NyxIdUserService,
+            RouteValue = "/api/v1/proxy/s/chrono-llm-public",
+            NyxIdUserServiceId = "us-alpha",
+            ServiceSlugSnapshot = "chrono-llm-public",
+        };
+
+        var copy = LLMSelection.Parser.ParseFrom(historical.ToByteArray());
+
+        copy.ModelSelection.Should().BeNull();
+        FluentActions.Invoking(() => LLMSelectionPolicy.ValidateSelection(copy))
+            .Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public void BuildUpdatedEvent_WithPartialSelection_ShouldReject()
     {
         var act = () => UserConfigGAgent.BuildUpdatedEvent(
             new UserConfigGAgentState(),
-            new UpdateUserConfigCommand { LlmSelection = selection });
+            new UpdateUserConfigCommand
+            {
+                LlmSelection = new LLMSelection
+                {
+                    RouteKind = LLMRouteKind.Gateway,
+                    RouteValue = LLMSelectionPolicy.GatewayRoute,
+                },
+            });
 
-        act.Should().Throw<InvalidOperationException>().WithMessage(expectedError);
+        act.Should().Throw<InvalidOperationException>();
     }
 
-    public static TheoryData<string, Aevatar.GAgents.UserConfig.UserLlmSelection, string> InvalidSelections =>
-        new()
-        {
-            {
-                "unspecified kind",
-                new Aevatar.GAgents.UserConfig.UserLlmSelection
-                {
-                    RouteValue = UserConfigLlmRouteDefaults.Gateway,
-                },
-                "user_llm_selection_invalid"
-            },
-            {
-                "noncanonical Gateway route",
-                new Aevatar.GAgents.UserConfig.UserLlmSelection
-                {
-                    RouteKind = UserLlmRouteKind.Gateway,
-                    RouteValue = "/api/v1/llm/gateway/v2",
-                },
-                "user_llm_selection_invalid"
-            },
-            {
-                "Gateway with ID",
-                new Aevatar.GAgents.UserConfig.UserLlmSelection
-                {
-                    RouteKind = UserLlmRouteKind.Gateway,
-                    RouteValue = UserConfigLlmRouteDefaults.Gateway,
-                    NyxIdUserServiceId = "us-alpha",
-                },
-                "user_llm_selection_invalid"
-            },
-            {
-                "service selection missing route",
-                new Aevatar.GAgents.UserConfig.UserLlmSelection
-                {
-                    RouteKind = UserLlmRouteKind.NyxIdUserService,
-                    NyxIdUserServiceId = "us-alpha",
-                    ServiceSlugSnapshot = "chrono-llm-public",
-                },
-                "user_llm_selection_invalid"
-            },
-            {
-                "service selection missing ID",
-                new Aevatar.GAgents.UserConfig.UserLlmSelection
-                {
-                    RouteKind = UserLlmRouteKind.NyxIdUserService,
-                    RouteValue = "/api/v1/proxy/s/chrono-llm-public",
-                    ServiceSlugSnapshot = "chrono-llm-public",
-                },
-                "user_llm_selection_invalid"
-            },
-            {
-                "service selection missing slug",
-                new Aevatar.GAgents.UserConfig.UserLlmSelection
-                {
-                    RouteKind = UserLlmRouteKind.NyxIdUserService,
-                    RouteValue = "/api/v1/proxy/s/chrono-llm-public",
-                    NyxIdUserServiceId = "us-alpha",
-                },
-                "user_llm_selection_invalid"
-            },
-            {
-                "route and slug mismatch",
-                new Aevatar.GAgents.UserConfig.UserLlmSelection
-                {
-                    RouteKind = UserLlmRouteKind.NyxIdUserService,
-                    RouteValue = "/api/v1/proxy/s/other-llm-public",
-                    NyxIdUserServiceId = "us-alpha",
-                    ServiceSlugSnapshot = "chrono-llm-public",
-                },
-                "user_llm_selection_invalid"
-            },
-            {
-                "whitespace around route ID and slug",
-                new Aevatar.GAgents.UserConfig.UserLlmSelection
-                {
-                    RouteKind = UserLlmRouteKind.NyxIdUserService,
-                    RouteValue = " /api/v1/proxy/s/chrono-llm-public ",
-                    NyxIdUserServiceId = " us-alpha ",
-                    ServiceSlugSnapshot = " chrono-llm-public ",
-                },
-                "user_llm_selection_not_canonical"
-            },
-        };
-
-    private static Aevatar.GAgents.UserConfig.UserLlmSelection GatewaySelection() => new()
+    private static LLMSelection UserServiceSelection(string modelId) => new()
     {
-        RouteKind = UserLlmRouteKind.Gateway,
-        RouteValue = UserConfigLlmRouteDefaults.Gateway,
+        RouteKind = LLMRouteKind.NyxIdUserService,
+        RouteValue = "/api/v1/proxy/s/chrono-llm-public",
+        NyxIdUserServiceId = "us-alpha",
+        ServiceSlugSnapshot = "chrono-llm-public",
+        ModelSelection = new LLMModelSelection
+        {
+            Kind = LLMModelSelectionKind.ExplicitModel,
+            ModelId = modelId,
+        },
     };
 }

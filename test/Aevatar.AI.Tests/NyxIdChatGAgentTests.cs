@@ -8,16 +8,24 @@ using System.Diagnostics.Metrics;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Observability;
+using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -567,16 +575,18 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
-    public async Task ActivateAsync_WithPendingHistoryInitialization_ShouldRepublishTypedSelfSignal()
+    public async Task ActivateAsync_WithPendingHistoryInitialization_ShouldScheduleTypedSelfCallback()
     {
         var registry = new RecordingGAgentActorRegistryCommandPort();
         var eventStore = new InMemoryEventStoreForTests();
         var initialDispatch = new RecordingSelfDispatchPort();
+        var callbacks = new RecordingRuntimeCallbackScheduler();
         using var provider = BuildServiceProvider(
             registry,
             new RecordingActorRuntime(),
             new RecordingChatHistoryCommandPort(),
-            eventStore);
+            eventStore,
+            callbacks);
         const string actorId = "nyxid-chat-history-reactivation";
         var initialAgent = CreateConversationAgent(provider, actorId, initialDispatch);
         await initialAgent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
@@ -591,7 +601,12 @@ public class NyxIdChatGAgentTests
         await recovered.ActivateAsync();
 
         recovered.State.PendingHistoryInitialization.ToByteString().Should().Equal(pending.ToByteString());
-        var signal = recoveryDispatch.Calls.Should().ContainSingle().Which.Envelope.Payload
+        recoveryDispatch.Calls.Should().BeEmpty();
+        var callback = callbacks.TimeoutRequests.Should().ContainSingle().Which;
+        callback.TriggerEnvelope.Propagation.CorrelationId.Should().Be(pending.OperationId);
+        callback.TriggerEnvelope.Runtime.DeliveryIdentity.OperationId.Should().Be(
+            "history-initialization-dispatch-1b202924688a5c7b8a414ea320a55afc");
+        var signal = callback.TriggerEnvelope.Payload
             .Unpack<NyxIdChatHistoryInitializationDispatchRequested>();
         signal.OperationId.Should().Be(pending.OperationId);
         signal.Attempt.Should().Be(pending.Attempt);
@@ -1117,7 +1132,7 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
-    public async Task HandleChatRequest_CancellationBeforeAuthorityBatch_ShouldPersistNeitherFact()
+    public async Task HandleChatRequest_DeadlineBeforeAuthorityBatch_ShouldPersistOnlyTimeoutTerminal()
     {
         const int timeoutMs = 1_000;
         const string actorId = "nyxid-chat-authority-pre-batch-cancel";
@@ -1151,20 +1166,21 @@ public class NyxIdChatGAgentTests
         });
         await blockingSource.Started;
 
-        try
-        {
-            timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
-            await FluentActions.Awaiting(() => handling).Should().ThrowAsync<OperationCanceledException>();
-        }
-        finally
-        {
-            blockingSource.Release();
-        }
+        timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+        await handling;
 
         var events = await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId);
         events.Should().NotContain(stateEvent =>
             stateEvent.EventData.Is(RoleChatSessionStartedEvent.Descriptor) ||
             stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor));
+        var timeout = events
+            .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+            .Should().ContainSingle().Which;
+        timeout.SessionId.Should().Be(sessionId);
+        timeout.Outcome.Should().Be(RoleChatSessionOutcome.Failed);
+        timeout.FailureCode.Should().Be("LLM_TIMEOUT");
+        blockingSource.CancellationObserved.Should().BeTrue();
         publisher.Published.OfType<TextMessageStartEvent>().Should().BeEmpty();
     }
 
@@ -1586,7 +1602,8 @@ public class NyxIdChatGAgentTests
             provider,
             "nyxid-chat-history",
             llmProviderFactory,
-            timeProvider: new FixedTimeProvider(now));
+            timeProvider: new FixedTimeProvider(now),
+            loopbackHistoryDelivery: true);
 
         await agent.ActivateAsync();
         await agent.HandleChatRequest(new ChatRequestEvent
@@ -1636,6 +1653,240 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
+    public async Task Activation_ShouldRetryPendingDirectChatHistoryDelivery_Idempotently()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var history = new RecordingChatHistoryCommandPort
+        {
+            SaveException = new InvalidOperationException("history unavailable"),
+        };
+        using var provider = BuildServiceProvider(historyCommandPort: history, eventStore: store);
+        const string actorId = "nyxid-chat-history-activation-retry";
+        var first = CreateAgent(
+            provider,
+            actorId,
+            new StreamingToolLoopProviderFactory(
+                [[new LLMStreamChunk { DeltaContent = "durable answer" }]]),
+            loopbackHistoryDelivery: true);
+
+        await first.ActivateAsync();
+        await first.HandleChatRequest(new ChatRequestEvent
+        {
+            ScopeId = "scope-a",
+            Prompt = "persist this",
+            SessionId = "turn-history-retry",
+        });
+
+        first.State.Sessions["turn-history-retry"].HistoryDeliveryStatus.Should()
+            .Be(RoleChatHistoryDeliveryStatus.Prepared);
+        history.Saved.Should().BeEmpty();
+        await first.DeactivateAsync();
+
+        history.SaveException = null;
+        var recovered = CreateAgent(provider, actorId, loopbackHistoryDelivery: true);
+        await recovered.ActivateAsync();
+
+        recovered.State.Sessions["turn-history-retry"].HistoryDeliveryStatus.Should()
+            .Be(RoleChatHistoryDeliveryStatus.Dispatched);
+        recovered.State.Sessions["turn-history-retry"].HistoryDeliveryAttempt.Should().Be(1);
+        history.Saved.Should().ContainSingle().Which.Messages.Should()
+            .OnlyContain(static message => message.TurnId == "turn-history-retry");
+        (await store.GetEventsAsync(actorId))
+            .Count(stateEvent => stateEvent.EventData.Is(NyxIdDirectChatHistoryDispatchedEvent.Descriptor))
+            .Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(RoleChatSessionOutcome.Completed, "completed")]
+    [InlineData(RoleChatSessionOutcome.Failed, "error")]
+    public async Task DirectChatHistory_ShouldReconcileDeliveredOutcomeUncertainWithStableIdentity(
+        RoleChatSessionOutcome reconciledOutcome,
+        string expectedStatus)
+    {
+        var store = new InMemoryEventStoreForTests();
+        var history = new RecordingChatHistoryCommandPort();
+        using var services = BuildServiceProvider(historyCommandPort: history, eventStore: store);
+        var actorId = $"nyxid-chat-history-reconciliation-{expectedStatus}";
+        const string sessionId = "turn-history-reconciliation";
+        await AppendCommittedEventsAsync(
+            services,
+            actorId,
+            new RoleChatSessionStartedEvent
+            {
+                SessionId = sessionId,
+                ScopeId = "scope-a",
+                Prompt = "perform side effect",
+            },
+            new RoleChatSessionProgressedEvent
+            {
+                SessionId = sessionId,
+                Sequence = 1,
+                ToolStarted = new RoleChatToolStartedProgress
+                {
+                    CallId = "call-side-effect",
+                    ToolName = "side_effecting_tool",
+                },
+            });
+        var first = CreateAgent(services, actorId, loopbackHistoryDelivery: true);
+        await first.ActivateAsync();
+
+        await first.HandleIncompleteSessionFinalizationRequestedAsync(
+            new RoleChatIncompleteSessionFinalizationRequested
+            {
+                SessionId = sessionId,
+                ExpectedLastProgressSequence = 1,
+            });
+
+        var firstSession = first.State.Sessions[sessionId];
+        firstSession.HistoryDeliveryStatus.Should().Be(RoleChatHistoryDeliveryStatus.Dispatched);
+        firstSession.HistoryDeliveryAttempt.Should().Be(1);
+        var deliveryId = firstSession.HistoryDeliveryId;
+        var uncertainAssistant = history.Saved.Should().ContainSingle().Which.Messages[1];
+        uncertainAssistant.Status.Should().Be("outcome_uncertain");
+        uncertainAssistant.Content.Should().Contain("outcome could not be confirmed");
+        await first.DeactivateAsync();
+
+        var version = await store.GetVersionAsync(actorId);
+        await store.AppendAsync(
+            actorId,
+            [StateEventFor(actorId, version + 1, new RoleChatSessionCompletedEvent
+            {
+                SessionId = sessionId,
+                Prompt = "perform side effect",
+                Content = reconciledOutcome == RoleChatSessionOutcome.Completed ? "confirmed result" : string.Empty,
+                Outcome = reconciledOutcome,
+                FailureCode = reconciledOutcome == RoleChatSessionOutcome.Failed ? "CONFIRMED_FAILURE" : string.Empty,
+                SafeMessage = reconciledOutcome == RoleChatSessionOutcome.Failed ? "The operation failed." : string.Empty,
+                TerminalTime = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-02T08:00:00Z")),
+            })],
+            expectedVersion: version);
+        var recovered = CreateAgent(services, actorId, loopbackHistoryDelivery: true);
+
+        await recovered.ActivateAsync();
+
+        var reconciledSession = recovered.State.Sessions[sessionId];
+        reconciledSession.HistoryDeliveryStatus.Should().Be(RoleChatHistoryDeliveryStatus.Dispatched);
+        reconciledSession.HistoryDeliveryAttempt.Should().Be(2);
+        reconciledSession.HistoryDeliveryId.Should().Be(deliveryId);
+        history.Saved.Should().HaveCount(2);
+        history.Saved.SelectMany(saved => saved.Messages).Should()
+            .OnlyContain(message => message.TurnId == sessionId);
+        history.Saved[0].Messages.Select(message => message.Id).Should()
+            .Equal(history.Saved[1].Messages.Select(message => message.Id));
+        history.Saved[1].Messages[1].Status.Should().Be(expectedStatus);
+    }
+
+    [Fact]
+    public async Task PendingDirectChatHistoryOutbox_ShouldRemainNonTrimmableAtAdmissionCapacity()
+    {
+        var store = new InMemoryEventStoreForTests();
+        using var services = BuildServiceProvider(
+            historyCommandPort: new RecordingChatHistoryCommandPort(),
+            eventStore: store);
+        const string actorId = "nyxid-chat-history-capacity";
+        var events = new List<IMessage>
+        {
+            new RoleChatSessionStartedEvent
+            {
+                SessionId = "history-pending",
+                ScopeId = "scope-a",
+                Prompt = "preserve history",
+            },
+            new RoleChatSessionCompletedEvent
+            {
+                SessionId = "history-pending",
+                Prompt = "preserve history",
+                Content = "durable answer",
+                Outcome = RoleChatSessionOutcome.Completed,
+            },
+        };
+        events.AddRange(Enumerable.Range(1, 127).Select(index => (IMessage)new RoleChatSessionStartedEvent
+        {
+            SessionId = $"incomplete-{index}",
+            Prompt = $"prompt-{index}",
+        }));
+        await AppendCommittedEventsAsync(services, actorId, events.ToArray());
+        var llm = new StreamingToolLoopProviderFactory(
+            [[new LLMStreamChunk { DeltaContent = "must not run" }]]);
+        var agent = CreateAgent(services, actorId, llm);
+        var publisher = new RecordingEventPublisher { FailHistoryDeliveryRequests = true };
+        agent.EventPublisher = publisher;
+        await agent.ActivateAsync();
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "capacity-overflow",
+            CommandAttemptId = "capacity-attempt",
+            Prompt = "reject this",
+        });
+
+        agent.State.Sessions.Should().HaveCount(128);
+        agent.State.Sessions.Should().ContainKey("history-pending");
+        agent.State.Sessions["history-pending"].HistoryDeliveryStatus.Should()
+            .Be(RoleChatHistoryDeliveryStatus.Prepared);
+        agent.State.Sessions.Should().NotContainKey("capacity-overflow");
+        llm.StreamRequests.Should().BeEmpty();
+        (await store.GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(RoleChatCommandAttemptRejectedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatCommandAttemptRejectedEvent>())
+            .Should().ContainSingle(rejection =>
+                rejection.RequestedSessionId == "capacity-overflow" &&
+                rejection.Reason == RoleChatCommandAttemptRejectionReason.CapacityExhausted);
+    }
+
+    [Fact]
+    public async Task HistoryRequestPublishFailure_ShouldNotPolluteCommittedTerminalOrActivation()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var history = new RecordingChatHistoryCommandPort();
+        using var services = BuildServiceProvider(historyCommandPort: history, eventStore: store);
+        const string actorId = "nyxid-chat-history-request-failure";
+        var first = CreateAgent(
+            services,
+            actorId,
+            new StreamingToolLoopProviderFactory(
+                [[new LLMStreamChunk { DeltaContent = "durable answer" }]]));
+        var firstPublisher = new RecordingEventPublisher { FailHistoryDeliveryRequests = true };
+        first.EventPublisher = firstPublisher;
+
+        await first.ActivateAsync();
+        await first.HandleChatRequest(new ChatRequestEvent
+        {
+            ScopeId = "scope-a",
+            Prompt = "persist this",
+            SessionId = "turn-history-publish-failure",
+            RunContext = new RoleChatRunContext
+            {
+                RunId = "run-history-publish-failure",
+                CommandId = "command-history-publish-failure",
+                CorrelationId = "correlation-history-publish-failure",
+                CompletionNotificationActorId = "service-run:scope-a:service-a:run-history-publish-failure",
+            },
+        });
+
+        first.State.Sessions["turn-history-publish-failure"].Completed.Should().BeTrue();
+        first.State.Sessions["turn-history-publish-failure"].HistoryDeliveryStatus.Should()
+            .Be(RoleChatHistoryDeliveryStatus.Prepared);
+        first.State.Sessions["turn-history-publish-failure"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.Dispatched);
+        firstPublisher.Published.OfType<NyxIdDirectChatHistoryDeliveryRequested>().Should().ContainSingle();
+        firstPublisher.Published.OfType<RoleChatSessionCompletedEvent>().Should().ContainSingle();
+        history.Saved.Should().BeEmpty();
+        await first.DeactivateAsync();
+
+        var recovered = CreateAgent(services, actorId);
+        var recoveredPublisher = new RecordingEventPublisher { FailHistoryDeliveryRequests = true };
+        recovered.EventPublisher = recoveredPublisher;
+
+        await recovered.ActivateAsync();
+
+        recovered.State.Sessions["turn-history-publish-failure"].HistoryDeliveryStatus.Should()
+            .Be(RoleChatHistoryDeliveryStatus.Prepared);
+        recoveredPublisher.Published.OfType<NyxIdDirectChatHistoryDeliveryRequested>().Should().ContainSingle();
+        history.Saved.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleChatRequest_DifferentTurnsOnSameActor_ShouldShareHistoryAndArchiveTurnIds()
     {
         var history = new RecordingChatHistoryCommandPort();
@@ -1645,7 +1896,11 @@ public class NyxIdChatGAgentTests
                 [new LLMStreamChunk { DeltaContent = "first answer" }],
                 [new LLMStreamChunk { DeltaContent = "second answer" }],
             ]);
-        var agent = CreateAgent(provider, "nyxid-chat-multi-turn", llmProviderFactory);
+        var agent = CreateAgent(
+            provider,
+            "nyxid-chat-multi-turn",
+            llmProviderFactory,
+            loopbackHistoryDelivery: true);
 
         await agent.ActivateAsync();
         await agent.HandleChatRequest(new ChatRequestEvent
@@ -1728,6 +1983,7 @@ public class NyxIdChatGAgentTests
             SessionId = "turn-client-request-1",
         };
         await agent.HandleChatRequest(replayedRequest);
+        await DeliverPublishedHistoryRequestsAsync(agent, publisher);
         var providerCallsAfterFirstTurn = llmProviderFactory.StreamRequests.Count;
         clock.Advance(TimeSpan.FromMinutes(1));
 
@@ -1738,11 +1994,8 @@ public class NyxIdChatGAgentTests
         publisher.Published.OfType<TextMessageEndEvent>()
             .Should().HaveCount(2)
             .And.OnlyContain(evt => evt.SessionId == "turn-client-request-1");
-        history.Saved.Should().HaveCount(2);
-        history.Saved[0].Messages.Select(static message => message.Timestamp)
-            .Should().Equal(history.Saved[1].Messages.Select(static message => message.Timestamp));
+        history.Saved.Should().ContainSingle();
         history.Saved[0].Messages.Should().OnlyContain(static message => message.TurnId == "turn-client-request-1");
-        history.Saved[1].Messages.Should().OnlyContain(static message => message.TurnId == "turn-client-request-1");
 
         clock.Advance(TimeSpan.FromMinutes(1));
         await agent.HandleChatRequest(new ChatRequestEvent
@@ -1751,6 +2004,7 @@ public class NyxIdChatGAgentTests
             Prompt = "later prompt",
             SessionId = "turn-client-request-2",
         });
+        await DeliverPublishedHistoryRequestsAsync(agent, publisher);
 
         llmProviderFactory.StreamRequests.Should().HaveCount(providerCallsAfterFirstTurn + 1);
         llmProviderFactory.StreamRequests[^1].Messages
@@ -1762,8 +2016,16 @@ public class NyxIdChatGAgentTests
                 ("user", "later prompt"));
         toolCallCount.Should().Be(1);
         agent.State.MessageCount.Should().Be(2);
-        history.Saved.Should().HaveCount(3);
+        history.Saved.Should().HaveCount(2);
         history.Saved[^1].Messages.Should().OnlyContain(static message => message.TurnId == "turn-client-request-2");
+    }
+
+    private static async Task DeliverPublishedHistoryRequestsAsync(
+        NyxIdChatGAgent agent,
+        RecordingEventPublisher publisher)
+    {
+        foreach (var request in publisher.Published.OfType<NyxIdDirectChatHistoryDeliveryRequested>())
+            await agent.HandleDirectChatHistoryDeliveryRequestedAsync(request);
     }
 
     [Fact]
@@ -1791,7 +2053,8 @@ public class NyxIdChatGAgentTests
             provider,
             "nyxid-chat-blocked-history",
             llmProviderFactory,
-            [new StaticToolSource([new VerifiedMissingServiceTool()])]);
+            [new StaticToolSource([new VerifiedMissingServiceTool()])],
+            loopbackHistoryDelivery: true);
 
         await agent.ActivateAsync();
         await agent.HandleChatRequest(new ChatRequestEvent
@@ -1895,6 +2158,7 @@ public class NyxIdChatGAgentTests
             SessionId = "turn-real-unauthorized",
             LlmControl = new LLMControlContextPayload { NyxIdAccessToken = "request-token-secret" },
         });
+        await DeliverPublishedHistoryRequestsAsync(agent, publisher);
 
         var completed = (await eventStore.GetEventsAsync(actorId))
             .Where(evt => evt.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
@@ -1997,7 +2261,8 @@ public class NyxIdChatGAgentTests
             services,
             actorId,
             llmProviderFactory,
-            [new StaticToolSource([new NyxIdProxyTool(client)])]);
+            [new StaticToolSource([new NyxIdProxyTool(client)])],
+            loopbackHistoryDelivery: true);
 
         await agent.ActivateAsync();
         await agent.HandleChatRequest(new ChatRequestEvent
@@ -2072,7 +2337,8 @@ public class NyxIdChatGAgentTests
             provider,
             "nyxid-chat-safe-failure-history",
             new ThrowingStreamingProviderFactory(
-                new InvalidOperationException("provider failed with bearer-secret credential")));
+                new InvalidOperationException("provider failed with bearer-secret credential")),
+            loopbackHistoryDelivery: true);
 
         await agent.ActivateAsync();
         await agent.HandleChatRequest(new ChatRequestEvent
@@ -2196,8 +2462,13 @@ public class NyxIdChatGAgentTests
         callbackScheduler ??= new NoopRuntimeCallbackScheduler();
         var services = new ServiceCollection()
             .AddSingleton(eventStore)
+            .AddSingleton<ISecretVault, InMemorySecretVault>()
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddSingleton(callbackScheduler)
+            .AddSingleton<IAuditTrailAppender, AppendedAuditTrail>()
+            .AddSingleton<IAuditActorIdentityHasher, StableIdentityHasher>()
+            .AddSingleton<IAgentToolAdmissionLedger>(AlwaysStartingAgentToolAdmissionLedger.Instance)
+            .AddSingleton<IAgentToolExecutionPort, AdmittedAgentToolExecutor>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
 
         if (registryCommandPort is not null)
@@ -2219,15 +2490,20 @@ public class NyxIdChatGAgentTests
         IEnumerable<IAgentToolSource>? toolSources = null,
         NyxIdRelayOptions? relayOptions = null,
         TimeProvider? timeProvider = null,
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer = null)
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer = null,
+        RoleChatExecutionOptions? chatExecutionOptions = null,
+        bool loopbackHistoryDelivery = false)
     {
         var agent = new NyxIdChatGAgent(
             new SystemSkillOverlayPromptInjectionTests.StubBuiltInPromptFloorProvider(),
+            provider.GetRequiredService<IAgentToolExecutionPort>(),
             llmProviderFactory: llmProviderFactory,
             toolSources: toolSources,
             relayOptions: relayOptions,
             timeProvider: timeProvider,
-            turnCatalogMaterializer: turnCatalogMaterializer)
+            turnCatalogMaterializer: turnCatalogMaterializer,
+            chatExecutionOptions: chatExecutionOptions,
+            chatToolRecoverySecretVault: provider.GetRequiredService<ISecretVault>())
         {
             Services = provider,
             EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -2236,6 +2512,8 @@ public class NyxIdChatGAgentTests
         var setId = typeof(Aevatar.Foundation.Core.GAgentBase)
             .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)!;
         setId.Invoke(agent, [actorId]);
+        if (loopbackHistoryDelivery)
+            agent.EventPublisher = new DirectChatHistoryLoopbackPublisher(agent);
         return agent;
     }
 
@@ -2244,9 +2522,10 @@ public class NyxIdChatGAgentTests
         string actorId,
         IActorDispatchPort? dispatchPort = null)
     {
+        var actorDispatchPort = dispatchPort ?? new NoopActorDispatchPort();
         var agent = new NyxIdChatConversationGAgent(
             provider.GetService<IActorRuntime>() ?? new RecordingActorRuntime(),
-            dispatchPort ?? new NoopActorDispatchPort(),
+            actorDispatchPort,
             TimeProvider.System)
         {
             Services = provider,
@@ -2256,6 +2535,9 @@ public class NyxIdChatGAgentTests
         var setId = typeof(Aevatar.Foundation.Core.GAgentBase)
             .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)!;
         setId.Invoke(agent, [actorId]);
+        agent.EventPublisher = new NyxIdChatTestSelfEventPublisher(
+            actorId,
+            actorDispatchPort);
         return agent;
     }
 
@@ -2339,6 +2621,17 @@ public class NyxIdChatGAgentTests
         await provider.GetRequiredService<IEventStore>()
             .AppendAsync(actorId, stateEvents, expectedVersion: 0);
     }
+
+    private static StateEvent StateEventFor(string actorId, long version, IMessage evt) =>
+        new()
+        {
+            EventId = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Version = version,
+            EventType = evt.Descriptor.FullName,
+            EventData = Any.Pack(evt),
+            AgentId = actorId,
+        };
 
     private static ChatRouteResolver NewChatRouteResolver() =>
         new(new StaticChatRouteFallbackProvider(string.Empty));
@@ -2499,6 +2792,7 @@ public class NyxIdChatGAgentTests
     private sealed class RecordingChatHistoryCommandPort(List<string>? operations = null) : IChatHistoryCommandPort
     {
         public Exception? InitializeException { get; init; }
+        public Exception? SaveException { get; set; }
         public List<ChatHistoryConversationInitialization> Initializations { get; } = [];
         public List<SavedChatHistory> Saved { get; } = [];
         public List<(string ScopeId, string ConversationId)> Deleted { get; } = [];
@@ -2532,6 +2826,9 @@ public class NyxIdChatGAgentTests
             IReadOnlyList<StoredChatMessage> messages,
             CancellationToken ct = default)
         {
+            if (SaveException is not null)
+                return Task.FromException(SaveException);
+
             Saved.Add(new SavedChatHistory(scopeId, conversationId, meta, messages.ToArray()));
             return Task.CompletedTask;
         }
@@ -3118,6 +3415,21 @@ public class NyxIdChatGAgentTests
             Task.FromResult(execute(argumentsJson));
     }
 
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
+    }
+
     private sealed class VerifiedMissingServiceTool : IAgentTool
     {
         public string Name => "nyxid_require_service";
@@ -3153,6 +3465,7 @@ public class NyxIdChatGAgentTests
 
     private sealed class RecordingEventPublisher : IEventPublisher
     {
+        public bool FailHistoryDeliveryRequests { get; init; }
         public List<IMessage> Published { get; } = [];
 
         public Task PublishAsync<TEvent>(
@@ -3168,6 +3481,8 @@ public class NyxIdChatGAgentTests
             _ = sourceEnvelope;
             _ = options;
             Published.Add(evt);
+            if (FailHistoryDeliveryRequests && evt is NyxIdDirectChatHistoryDeliveryRequested)
+                return Task.FromException(new InvalidOperationException("simulated history request publish failure"));
             return Task.CompletedTask;
         }
 
@@ -3193,5 +3508,34 @@ public class NyxIdChatGAgentTests
             _ = audience;
             return PublishAsync(evt, TopologyAudience.Self, ct, sourceEnvelope, options);
         }
+    }
+
+    private sealed class DirectChatHistoryLoopbackPublisher(NyxIdChatGAgent agent) : IEventPublisher
+    {
+        public Task PublishAsync<TEvent>(
+            TEvent evt,
+            TopologyAudience direction = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage =>
+            direction == TopologyAudience.Self && evt is NyxIdDirectChatHistoryDeliveryRequested request
+                ? agent.HandleDirectChatHistoryDeliveryRequestedAsync(request)
+                : Task.CompletedTask;
+
+        public Task SendToAsync<TEvent>(
+            string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage => Task.CompletedTask;
+
+        public Task PublishCommittedStateEventAsync(
+            CommittedStateEventPublished evt,
+            ObserverAudience audience = ObserverAudience.CommittedFacts,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null) => Task.CompletedTask;
     }
 }

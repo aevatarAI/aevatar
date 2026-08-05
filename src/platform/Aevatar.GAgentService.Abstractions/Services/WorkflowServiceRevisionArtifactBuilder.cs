@@ -26,6 +26,20 @@ public static class WorkflowServiceRevisionArtifactBuilder
             throw new InvalidOperationException("workflow authorization dependencies are required.");
         }
 
+        if (capabilityAdmissionPlan.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
+            !Enum.IsDefined(capabilityAdmissionPlan.ExecutionMode))
+        {
+            throw new InvalidOperationException("workflow capability admission execution mode is required.");
+        }
+
+        if (workflowSpec.ExpectedExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
+            !Enum.IsDefined(workflowSpec.ExpectedExecutionMode) ||
+            workflowSpec.ExpectedExecutionMode != capabilityAdmissionPlan.ExecutionMode)
+        {
+            throw new InvalidOperationException(
+                "workflow expected execution mode must match the capability admission plan.");
+        }
+
         var admittedCapabilities =
             WorkflowCapabilityAdmissionPlanIntegrity.DistinctCapabilities(capabilityAdmissionPlan);
         var authorizationEvidence = new WorkflowRevisionAuthorizationEvidence
@@ -49,6 +63,7 @@ public static class WorkflowServiceRevisionArtifactBuilder
             DefinitionActorId = workflowSpec.DefinitionActorId ?? string.Empty,
             AuthorizationEvidence = authorizationEvidence,
             CapabilityAdmissionPlan = capabilityAdmissionPlan.Clone(),
+            ExecutionMode = capabilityAdmissionPlan.ExecutionMode,
         };
         workflowPlan.InlineWorkflowYamls.Add(workflowSpec.InlineWorkflowYamls);
         if (bindingIdentity is { } explicitBindingIdentity)

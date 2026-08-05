@@ -176,7 +176,7 @@ public sealed class ProjectionScopeGAgentBaseTests
                 processed++;
                 return ProjectionScopeDispatchResult.Success(2, "event-type");
             });
-        agent.State.LastObservedVersion = 26;
+        agent.State.HighestSeenVersion = 26;
         var envelope = BuildForwardedCommittedObservationEnvelope("projection-scope-mixed-publishers", version: 2);
 
         await agent.HandleObservedEnvelopeAsync(envelope);
@@ -255,7 +255,39 @@ public sealed class ProjectionScopeGAgentBaseTests
         await agent.HandleReplayAsync(new ReplayProjectionFailuresCommand { MaxItems = 1 });
 
         processed.Should().Be(1);
+        agent.State.ReceivedEnvelopeTotal.Should().Be(0, "replay is an attempt, not a newly received envelope");
+        agent.State.AttemptedEnvelopeTotal.Should().Be(1);
+        agent.State.SuccessfulMaterializationTotal.Should().Be(1);
         agent.State.Failures.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleReplayAsync_WhenMaterializationFails_ShouldUpdateOriginalFailureWithoutDuplicatingBacklog()
+    {
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-replay-failure",
+            onProcess: _ => throw new InvalidOperationException("still failing"),
+            eventSourcing: new TrackingEventSourcing(),
+            recordFailureBeforeThrow: true);
+        agent.State.Active = false;
+        await agent.InitializeForTestAsync();
+        agent.State.Active = true;
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-original",
+            EventType = "type.googleapis.com/aevatar.TestEvent",
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-replay-failure",
+                version: 1),
+        });
+
+        await agent.HandleReplayAsync(new ReplayProjectionFailuresCommand { MaxItems = 1 });
+
+        agent.State.Failures.Should().ContainSingle().Which.FailureId.Should().Be("failure-original");
+        agent.State.Failures[0].Attempts.Should().Be(1);
+        agent.State.ReceivedEnvelopeTotal.Should().Be(0, "replay is an attempt, not a newly received envelope");
+        agent.State.AttemptedEnvelopeTotal.Should().Be(1);
+        agent.State.FailedAttemptTotal.Should().Be(1);
     }
 
     [Fact]
@@ -276,16 +308,16 @@ public sealed class ProjectionScopeGAgentBaseTests
         string scopeId,
         Func<EventEnvelope, ProjectionScopeDispatchResult> onProcess,
         IEventSourcingBehavior<ProjectionScopeState>? eventSourcing = null,
-        ProjectionRuntimeMode runtimeMode = ProjectionRuntimeMode.DurableMaterialization)
+        ProjectionRuntimeMode runtimeMode = ProjectionRuntimeMode.DurableMaterialization,
+        bool recordFailureBeforeThrow = false)
     {
-        var agent = new TestScopeAgent(onProcess, runtimeMode);
+        var agent = new TestScopeAgent(onProcess, runtimeMode, recordFailureBeforeThrow);
 
         typeof(GAgentBase)
             .GetProperty(nameof(GAgentBase.Id), BindingFlags.Instance | BindingFlags.Public)!
             .SetValue(agent, scopeId);
 
-        if (eventSourcing is not null)
-            agent.EventSourcing = eventSourcing;
+        agent.EventSourcing = eventSourcing ?? new TrackingEventSourcing();
 
         agent.State.RootActorId = "root-actor";
         agent.State.ProjectionKind = "test-kind";
@@ -352,25 +384,39 @@ public sealed class ProjectionScopeGAgentBaseTests
     {
         private readonly Func<EventEnvelope, ProjectionScopeDispatchResult> _onProcess;
         private readonly ProjectionRuntimeMode _runtimeMode;
+        private readonly bool _recordFailureBeforeThrow;
 
         public TestScopeAgent(
             Func<EventEnvelope, ProjectionScopeDispatchResult> onProcess,
-            ProjectionRuntimeMode runtimeMode = ProjectionRuntimeMode.DurableMaterialization)
+            ProjectionRuntimeMode runtimeMode = ProjectionRuntimeMode.DurableMaterialization,
+            bool recordFailureBeforeThrow = false)
         {
             _onProcess = onProcess;
             _runtimeMode = runtimeMode;
+            _recordFailureBeforeThrow = recordFailureBeforeThrow;
         }
 
         protected override ProjectionRuntimeMode RuntimeMode => _runtimeMode;
 
         public Task InitializeForTestAsync() => OnActivateAsync(CancellationToken.None);
 
-        protected override ValueTask<ProjectionScopeDispatchResult> ProcessObservationCoreAsync(
+        protected override async ValueTask<ProjectionScopeDispatchResult> ProcessObservationCoreAsync(
             TestContext context,
             EventEnvelope envelope,
             CancellationToken ct)
         {
-            return ValueTask.FromResult(_onProcess(envelope));
+            if (_recordFailureBeforeThrow)
+            {
+                await RecordDispatchFailureAsync(
+                    "projection-execution",
+                    envelope.Id,
+                    envelope.Payload?.TypeUrl ?? string.Empty,
+                    1,
+                    "still failing",
+                    envelope);
+            }
+
+            return _onProcess(envelope);
         }
     }
 
@@ -379,22 +425,50 @@ public sealed class ProjectionScopeGAgentBaseTests
 
     private sealed class TrackingEventSourcing : IEventSourcingBehavior<ProjectionScopeState>
     {
+        private readonly List<IMessage> _pending = [];
         public int DiscardCallCount { get; private set; }
-        public EventStoreCommitResult ConfirmResult { get; init; } = new();
-        public long CurrentVersion => ConfirmResult.LatestVersion;
-        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage { }
-        public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default) =>
-            Task.FromResult(ConfirmResult);
+        public long CurrentVersion { get; private set; }
+        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage => _pending.Add(evt);
+        public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
+        {
+            var result = new EventStoreCommitResult();
+            foreach (var evt in _pending)
+            {
+                CurrentVersion++;
+                result.CommittedEvents.Add(new StateEvent
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                    Version = CurrentVersion,
+                    EventType = evt.Descriptor.FullName,
+                    EventData = Any.Pack(evt),
+                });
+            }
+
+            result.LatestVersion = CurrentVersion;
+            _pending.Clear();
+            return Task.FromResult(result);
+        }
         public Task PersistSnapshotAsync(ProjectionScopeState currentState, CancellationToken ct = default) =>
             Task.CompletedTask;
         public Task<ProjectionScopeState?> ReplayAsync(string agentId, CancellationToken ct = default) =>
             Task.FromResult<ProjectionScopeState?>(null);
-        public void DiscardPendingEvents() => DiscardCallCount++;
+        public void DiscardPendingEvents()
+        {
+            DiscardCallCount++;
+            _pending.Clear();
+        }
         public ProjectionScopeState TransitionState(ProjectionScopeState current, IMessage evt) =>
             evt switch
             {
+                ProjectionScopeEnvelopeReceivedEvent received =>
+                    ProjectionScopeStateApplier.ApplyEnvelopeReceived(current, received),
+                ProjectionScopeEnvelopeAttemptedEvent attempted =>
+                    ProjectionScopeStateApplier.ApplyEnvelopeAttempted(current, attempted),
                 ProjectionScopeWatermarkAdvancedEvent watermark =>
                     ProjectionScopeStateApplier.ApplyWatermarkAdvanced(current, watermark),
+                ProjectionScopeDispatchFailedEvent failed =>
+                    ProjectionScopeStateApplier.ApplyDispatchFailed(current, failed),
                 ProjectionScopeFailureReplayedEvent replayed =>
                     ProjectionScopeStateApplier.ApplyFailureReplayed(current, replayed),
                 _ => current,

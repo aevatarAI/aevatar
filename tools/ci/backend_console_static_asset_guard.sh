@@ -26,7 +26,7 @@ asset_files=(
   "src/Aevatar.Mainnet.Host.Api/Cqrs/cqrs-observatory.html"
   "src/Aevatar.Mainnet.Host.Api/Voice/voice-console.html"
   "src/Aevatar.Mainnet.Host.Api/Skills/workflow-skills.html"
-  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-observatory.html"
+  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/admin-workflow-observatory.html"
   "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-studio.html"
   "agents/channels/Aevatar.GAgents.Channel.NyxIdRelay/channels.html"
 )
@@ -37,7 +37,7 @@ config_asset_files=(
   "src/Aevatar.Mainnet.Host.Api/Cqrs/cqrs-observatory.html"
   "src/Aevatar.Mainnet.Host.Api/Voice/voice-console.html"
   "src/Aevatar.Mainnet.Host.Api/Skills/workflow-skills.html"
-  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-observatory.html"
+  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/admin-workflow-observatory.html"
   "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-studio.html"
   "agents/channels/Aevatar.GAgents.Channel.NyxIdRelay/channels.html"
 )
@@ -76,7 +76,7 @@ for file in "${asset_files[@]}"; do
     continue
   fi
 
-  host_fact_hits="$(rg -n -P 'https://nyx\.chrono-ai\.fun|https://nyx-api\.chrono-ai\.fun|37a93189-2734-406e-bca1-7dbdf25c5a53|aevatar-console:nyxid:pkce|openid profile email proxy' "${path}" || true)"
+  host_fact_hits="$(rg -n -P 'https://nyx\.chrono-ai\.fun|https://nyx-api\.chrono-ai\.fun|37a93189-2734-406e-bca1-7dbdf25c5a53|aevatar-console:nyxid:pkce|openid profile email (?:offline_access )?proxy' "${path}" || true)"
   if [[ -n "${host_fact_hits}" ]]; then
     echo "${host_fact_hits}"
     echo "${file}: backend console page assets must not hardcode Nyx/OIDC host facts."

@@ -4,7 +4,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Foundation.Runtime.Deduplication;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Core.GAgents;
@@ -401,15 +400,10 @@ public sealed class ServiceRunGAgentTests
             .BeOfType<ServiceRunTerminalNotificationRetryFiredEvent>().Subject;
         retry.DeliveryId.Should().Be("delivery-1");
         retry.Attempt.Should().Be(1);
-        recovery.Options!.Delivery!.DeduplicationOperationId.Should()
+        recovery.Options!.Delivery!.OperationId.Should()
             .Be("service-run-terminal-retry:delivery-1:1");
 
         var recoveryEnvelope = BuildSelfEnvelope(actor.Id, retry, recovery.Options);
-        var deduplicator = new MemoryCacheDeduplicator();
-        RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, recoveryEnvelope, out var recoveryKey)
-            .Should().BeTrue();
-        (await deduplicator.TryRecordAsync(recoveryKey)).Should().BeTrue();
-        (await deduplicator.TryRecordAsync(recoveryKey)).Should().BeFalse();
 
         scheduler.ScheduleException = null;
         await actor.HandleEventAsync(recoveryEnvelope);
@@ -417,7 +411,7 @@ public sealed class ServiceRunGAgentTests
         attemptTwo.CallbackId.Should().Be("service-run-terminal-retry:delivery-1");
         attemptTwo.TriggerEnvelope.Payload.Unpack<ServiceRunTerminalNotificationRetryFiredEvent>()
             .Attempt.Should().Be(2);
-        attemptTwo.TriggerEnvelope.Runtime!.Deduplication!.OperationId.Should()
+        attemptTwo.TriggerEnvelope.Runtime!.DeliveryIdentity!.OperationId.Should()
             .Be("service-run-terminal-retry:delivery-1:2");
 
         publisher.SendException = null;
@@ -516,14 +510,14 @@ public sealed class ServiceRunGAgentTests
         await actor.HandleEventAsync(callback);
 
         publisher.Sends.Should().HaveCount(2);
-        publisher.Sends.Select(static send => send.Options!.Delivery!.DeduplicationOperationId)
+        publisher.Sends.Select(static send => send.Options!.Delivery!.OperationId)
             .Should().OnlyContain(static operationId => operationId == "service-run-terminal-delivery-1");
         actor.State.TerminalNotificationDeliveryStatus.Should()
             .Be(ServiceRunTerminalNotificationDeliveryStatus.Dispatched);
     }
 
     [Fact]
-    public async Task RetryCallbackEnvelopes_ShouldKeepStableCallbackId_AndDeduplicatePerAttempt()
+    public async Task RetryCallbackEnvelopes_ShouldKeepStableCallbackId_AndUseDistinctDeliveryIdentityPerAttempt()
     {
         var scheduler = new RecordingRuntimeCallbackScheduler();
         var publisher = new RecordingEventPublisher
@@ -539,31 +533,22 @@ public sealed class ServiceRunGAgentTests
         await RegisterNotificationRunAsync(actor, DateTimeOffset.UtcNow.AddMinutes(1));
         await actor.HandleRoleChatCompletedAsync(BuildTerminalEvent(actor.Id));
         var attemptOne = scheduler.TimeoutRequests.Should().ContainSingle().Subject;
-        var attemptOneOperationId = attemptOne.TriggerEnvelope.Runtime?.Deduplication?.OperationId;
+        var attemptOneOperationId = attemptOne.TriggerEnvelope.Runtime?.DeliveryIdentity?.OperationId;
 
         attemptOne.TriggerEnvelope.Payload.Unpack<ServiceRunTerminalNotificationRetryFiredEvent>()
             .Attempt.Should().Be(1);
         attemptOneOperationId.Should().Be("service-run-terminal-retry:delivery-1:1");
-        var deduplicator = new MemoryCacheDeduplicator();
-        RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, attemptOne.TriggerEnvelope, out var attemptOneKey)
-            .Should().BeTrue();
-        (await deduplicator.TryRecordAsync(attemptOneKey)).Should().BeTrue();
-        (await deduplicator.TryRecordAsync(attemptOneKey)).Should().BeFalse();
 
         await actor.HandleEventAsync(attemptOne.TriggerEnvelope);
 
         scheduler.TimeoutRequests.Should().HaveCount(2);
         var attemptTwo = scheduler.TimeoutRequests[1];
-        var attemptTwoOperationId = attemptTwo.TriggerEnvelope.Runtime?.Deduplication?.OperationId;
+        var attemptTwoOperationId = attemptTwo.TriggerEnvelope.Runtime?.DeliveryIdentity?.OperationId;
         attemptTwo.CallbackId.Should().Be(attemptOne.CallbackId);
         attemptTwo.TriggerEnvelope.Payload.Unpack<ServiceRunTerminalNotificationRetryFiredEvent>()
             .Attempt.Should().Be(2);
         attemptTwoOperationId.Should().Be("service-run-terminal-retry:delivery-1:2");
         attemptTwoOperationId.Should().NotBe(attemptOneOperationId);
-        RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, attemptTwo.TriggerEnvelope, out var attemptTwoKey)
-            .Should().BeTrue();
-        attemptTwoKey.Should().NotBe(attemptOneKey);
-        (await deduplicator.TryRecordAsync(attemptTwoKey)).Should().BeTrue();
     }
 
     [Theory]
@@ -806,6 +791,65 @@ public sealed class ServiceRunGAgentTests
     }
 
     [Fact]
+    public async Task TerminalRedelivery_AfterCommitAndReactivation_ShouldNotReapplyStateOrSideEffect()
+    {
+        const string actorId = "service-run:tenant-1:svc-1:run-1";
+        const string operationId = "role-chat-terminal:run-1";
+        var eventStore = new InMemoryEventStore();
+        var firstPublisher = new RecordingEventPublisher();
+        var first = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            eventStore,
+            actorId,
+            static () => new ServiceRunGAgent());
+        first.EventPublisher = firstPublisher;
+        await first.ActivateAsync();
+        await RegisterNotificationRunAsync(first, DateTimeOffset.UtcNow.AddMinutes(1));
+        var terminalEnvelope = BuildInboundEnvelope(BuildTerminalEvent(actorId), "role-actor-1");
+        terminalEnvelope.Id = "role-chat-terminal-envelope-1";
+        terminalEnvelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId = operationId;
+
+        await first.HandleEventAsync(terminalEnvelope);
+
+        var committedVersion = await eventStore.GetVersionAsync(actorId);
+        var authoritativeVersion = first.State.LastAppliedEventVersion;
+        first.State.Record!.Status.Should().Be(ServiceRunStatus.Failed);
+        first.State.Record.LastError.Should().Be("failed");
+        first.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.Dispatched);
+        authoritativeVersion.Should().Be(committedVersion);
+        firstPublisher.Sends.Should().ContainSingle()
+            .Which.Options!.Delivery!.OperationId.Should()
+            .Be("service-run-terminal-delivery-1");
+
+        // The handler committed successfully, but the transport ACK is assumed lost before process exit.
+        var recoveredPublisher = new RecordingEventPublisher();
+        var recovered = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            eventStore,
+            actorId,
+            static () => new ServiceRunGAgent());
+        recovered.EventPublisher = recoveredPublisher;
+        await recovered.ActivateAsync();
+
+        await recovered.HandleEventAsync(terminalEnvelope.Clone());
+
+        recovered.State.Record!.Status.Should().Be(ServiceRunStatus.Failed);
+        recovered.State.Record.LastError.Should().Be("failed");
+        recovered.State.LastAppliedEventVersion.Should().Be(authoritativeVersion);
+        (await eventStore.GetVersionAsync(actorId)).Should().Be(committedVersion);
+        firstPublisher.Sends.Count.Should().Be(1);
+        recoveredPublisher.Sends.Should().BeEmpty();
+        var committedEvents = await eventStore.GetEventsAsync(actorId);
+        committedEvents.Count(stateEvent => stateEvent.EventData.Is(ServiceRunStatusUpdatedEvent.Descriptor))
+            .Should().Be(1);
+        committedEvents.Count(stateEvent =>
+                stateEvent.EventData.Is(ServiceRunTerminalNotificationPreparedEvent.Descriptor))
+            .Should().Be(1);
+        committedEvents.Count(stateEvent =>
+                stateEvent.EventData.Is(ServiceRunTerminalNotificationDispatchedEvent.Descriptor))
+            .Should().Be(1);
+    }
+
+    [Fact]
     public async Task TerminalSendCancellation_ShouldPropagateWithoutSchedulingRetry()
     {
         var scheduler = new RecordingRuntimeCallbackScheduler();
@@ -994,6 +1038,152 @@ public sealed class ServiceRunGAgentTests
             .Which.Event.Should().BeOfType<ServiceRunTerminalNotification>()
             .Which.TerminalAt.Should().Be(Timestamp.FromDateTimeOffset(
                 DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_000)));
+    }
+
+    [Fact]
+    public async Task HandleRoleChatCompletedAsync_ShouldRetainOutcomeUncertain()
+    {
+        var publisher = new RecordingEventPublisher();
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:tenant-1:svc-1:run-1",
+            static () => new ServiceRunGAgent());
+        actor.EventPublisher = publisher;
+        var record = BuildRecord("run-1");
+        record.TargetActorId = "role-actor-1";
+        record.CompletionNotificationTarget = new ServiceRunCompletionNotificationTarget
+        {
+            ActorId = "work-order:tenant-1:wo-1",
+            DeliveryId = "delivery-1",
+            ExpiresAtUnixMs = long.MaxValue,
+        };
+        await actor.HandleRegisterAsync(new RegisterServiceRunRequested { Record = record });
+        var terminal = BuildTerminalEvent(actor.Id);
+        terminal.Outcome = RoleChatSessionOutcome.OutcomeUncertain;
+        terminal.FailureCode = "SESSION_OUTCOME_UNCERTAIN";
+        terminal.SafeMessage = "The chat outcome could not be confirmed.";
+
+        await actor.HandleRoleChatCompletedAsync(terminal);
+
+        actor.State.Record!.Status.Should().Be(ServiceRunStatus.OutcomeUncertain);
+        actor.State.Record.LastError.Should().Be("The chat outcome could not be confirmed.");
+        actor.State.PendingTerminalNotification.Should().BeNull();
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.Unspecified);
+        publisher.Sends.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(RoleChatSessionOutcome.Completed, ServiceRunStatus.Completed)]
+    [InlineData(RoleChatSessionOutcome.Failed, ServiceRunStatus.Failed)]
+    public async Task HandleRoleChatCompletedAsync_ShouldNotifyOnceAfterOutcomeUncertainIsReconciled(
+        RoleChatSessionOutcome reconciledOutcome,
+        ServiceRunStatus reconciledStatus)
+    {
+        var publisher = new RecordingEventPublisher();
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:tenant-1:svc-1:run-1",
+            static () => new ServiceRunGAgent());
+        actor.EventPublisher = publisher;
+        await RegisterNotificationRunAsync(actor, DateTimeOffset.MaxValue);
+        var uncertain = BuildTerminalEvent(actor.Id);
+        uncertain.Outcome = RoleChatSessionOutcome.OutcomeUncertain;
+        uncertain.FailureCode = "SESSION_OUTCOME_UNCERTAIN";
+        uncertain.SafeMessage = "The chat outcome could not be confirmed.";
+
+        await actor.HandleRoleChatCompletedAsync(uncertain);
+
+        actor.State.PendingTerminalNotification.Should().BeNull();
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.Unspecified);
+        publisher.Sends.Should().BeEmpty();
+
+        var reconciled = uncertain.Clone();
+        reconciled.Outcome = reconciledOutcome;
+        reconciled.Content = reconciledOutcome == RoleChatSessionOutcome.Completed
+            ? "confirmed output"
+            : string.Empty;
+        reconciled.FailureCode = reconciledOutcome == RoleChatSessionOutcome.Failed
+            ? "CONFIRMED_FAILURE"
+            : string.Empty;
+        reconciled.SafeMessage = reconciledOutcome == RoleChatSessionOutcome.Failed
+            ? "confirmed failure"
+            : string.Empty;
+
+        await actor.HandleRoleChatCompletedAsync(reconciled);
+        await actor.HandleRoleChatCompletedAsync(reconciled.Clone());
+
+        actor.State.Record!.Status.Should().Be(reconciledStatus);
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.Dispatched);
+        actor.State.PendingTerminalNotification.Should().BeNull();
+        publisher.Sends.Should().ContainSingle();
+    }
+
+    [Theory]
+    [InlineData(ServiceRunStatus.Completed)]
+    [InlineData(ServiceRunStatus.Failed)]
+    public async Task HandleUpdateStatusAsync_ShouldReconcileOutcomeUncertain(
+        ServiceRunStatus reconciledStatus)
+    {
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:run-uncertain-reconcile",
+            static () => new ServiceRunGAgent());
+        await actor.HandleRegisterAsync(new RegisterServiceRunRequested
+        {
+            Record = BuildRecord("run-uncertain-reconcile"),
+        });
+        await actor.HandleUpdateStatusAsync(new UpdateServiceRunStatusRequested
+        {
+            RunId = "run-uncertain-reconcile",
+            Status = ServiceRunStatus.OutcomeUncertain,
+            LastError = "outcome uncertain",
+        });
+
+        await actor.HandleUpdateStatusAsync(new UpdateServiceRunStatusRequested
+        {
+            RunId = "run-uncertain-reconcile",
+            Status = reconciledStatus,
+            LastOutput = reconciledStatus == ServiceRunStatus.Completed ? "confirmed output" : null,
+            LastError = reconciledStatus == ServiceRunStatus.Failed ? "confirmed failure" : null,
+        });
+
+        actor.State.Record!.Status.Should().Be(reconciledStatus);
+    }
+
+    [Theory]
+    [InlineData(ServiceRunStatus.Completed, ServiceRunStatus.Failed)]
+    [InlineData(ServiceRunStatus.Failed, ServiceRunStatus.Completed)]
+    [InlineData(ServiceRunStatus.Completed, ServiceRunStatus.OutcomeUncertain)]
+    public async Task HandleUpdateStatusAsync_ShouldRejectConflictingAbsorbingTerminalTransition(
+        ServiceRunStatus currentStatus,
+        ServiceRunStatus conflictingStatus)
+    {
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:run-terminal-conflict",
+            static () => new ServiceRunGAgent());
+        await actor.HandleRegisterAsync(new RegisterServiceRunRequested
+        {
+            Record = BuildRecord("run-terminal-conflict"),
+        });
+        await actor.HandleUpdateStatusAsync(new UpdateServiceRunStatusRequested
+        {
+            RunId = "run-terminal-conflict",
+            Status = currentStatus,
+        });
+
+        var act = () => actor.HandleUpdateStatusAsync(new UpdateServiceRunStatusRequested
+        {
+            RunId = "run-terminal-conflict",
+            Status = conflictingStatus,
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already terminal*cannot adopt*");
+        actor.State.Record!.Status.Should().Be(currentStatus);
     }
 
     [Fact]
@@ -1223,9 +1413,9 @@ public sealed class ServiceRunGAgentTests
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(actorId, TopologyAudience.Self),
             Runtime = new EnvelopeRuntime
             {
-                Deduplication = new DeliveryDeduplication
+                DeliveryIdentity = new DeliveryIdentity
                 {
-                    OperationId = options.Delivery!.DeduplicationOperationId,
+                    OperationId = options.Delivery!.OperationId,
                 },
             },
         };

@@ -74,6 +74,13 @@ public sealed class NyxIdChatConversationCurrentStateProjector
             LatestTurn = ToTurn(state.LatestTurn),
             ActiveTask = ToTask(state.ActiveTask),
             PendingApproval = ToPendingApproval(state.PendingApproval),
+            PendingInput = ToPendingInput(state.PendingInput),
+            LatestInputResolution = ToInputResolution(state.LatestInputResolution),
+            LatestApprovalResolution = ToApprovalResolution(state.LatestApprovalResolution),
+            TaskStatus = ToWireName(state.Attention?.TaskStatus ?? NyxIdChatTaskStatus.Unspecified),
+            AttentionKind = ToWireName(state.Attention?.AttentionKind ?? NyxIdChatAttentionKind.Unspecified),
+            AttentionSince = state.Attention?.AttentionSince?.Clone(),
+            ActiveStepSummary = state.Attention?.ActiveStepSummary ?? string.Empty,
             ControlFence = ToControlFence(state.ControlFence),
             LatestControlResult = ToControlFence(state.LatestControlResult),
             ContinuationAdmission = ToContinuationAdmission(state.ContinuationAdmission),
@@ -211,6 +218,67 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                 StepId = approval.StepId,
                 ToolName = approval.ToolName,
                 ExpiresAt = approval.ExpiresAt?.Clone(),
+                AskedAt = approval.AskedAt?.Clone(),
+                Action = approval.Presentation?.Action ?? string.Empty,
+                Target = approval.Presentation?.Target ?? string.Empty,
+                ActorLabel = approval.Presentation?.ActorLabel ?? string.Empty,
+                Reversibility = ToWireName(
+                    approval.Presentation?.Reversibility ??
+                    NyxIdChatApprovalReversibility.Unspecified),
+                GrantBoundary = approval.Presentation?.GrantBoundary ?? string.Empty,
+                NyxidRequestId = approval.Presentation?.NyxidRequestId ?? string.Empty,
+            };
+
+    private static NyxIdChatConversationPendingInputDocument? ToPendingInput(
+        NyxIdChatPendingInputState? input)
+    {
+        if (input is null)
+            return null;
+
+        var document = new NyxIdChatConversationPendingInputDocument
+        {
+            RequestId = input.RequestId,
+            TurnId = input.TurnId,
+            TaskId = input.TaskId,
+            StepId = input.StepId,
+            Prompt = input.Prompt,
+            AskedAt = input.AskedAt?.Clone(),
+            AllowFreeText = input.AllowFreeText,
+            MultiSelect = input.MultiSelect,
+        };
+        document.Options.AddRange(input.Options.Select(static option =>
+            new NyxIdChatConversationInputOptionDocument
+            {
+                OptionId = option.OptionId,
+                Label = option.Label,
+                Description = option.Description,
+            }));
+        return document;
+    }
+
+    private static NyxIdChatConversationInputResolutionDocument? ToInputResolution(
+        NyxIdChatInputResolutionState? resolution) =>
+        resolution is null
+            ? null
+            : new NyxIdChatConversationInputResolutionDocument
+            {
+                RequestId = resolution.RequestId,
+                ClientRequestId = resolution.ClientRequestId,
+                Outcome = ToWireName(resolution.Outcome),
+                CommittedAt = resolution.CommittedAt?.Clone(),
+            };
+
+    private static NyxIdChatConversationApprovalResolutionDocument? ToApprovalResolution(
+        NyxIdChatApprovalResolutionState? resolution) =>
+        resolution is null
+            ? null
+            : new NyxIdChatConversationApprovalResolutionDocument
+            {
+                RequestId = resolution.RequestId,
+                ClientRequestId = resolution.ClientRequestId,
+                Outcome = ToWireName(resolution.Outcome),
+                Approved = resolution.Approved,
+                CommittedAt = resolution.CommittedAt?.Clone(),
             };
 
     private static NyxIdChatConversationControlFenceDocument? ToControlFence(
@@ -376,6 +444,29 @@ public sealed class NyxIdChatConversationCurrentStateProjector
         NyxIdChatStepKind.Tool => "tool",
         NyxIdChatStepKind.BrowserAction => "browser_action",
         NyxIdChatStepKind.Postcondition => "postcondition",
+        NyxIdChatStepKind.Input => "input",
+        _ => string.Empty,
+    };
+
+    private static string ToWireName(NyxIdChatAttentionKind kind) => kind switch
+    {
+        NyxIdChatAttentionKind.None => "none",
+        NyxIdChatAttentionKind.Input => "input",
+        NyxIdChatAttentionKind.Approval => "approval",
+        _ => string.Empty,
+    };
+
+    private static string ToWireName(NyxIdChatApprovalReversibility value) => value switch
+    {
+        NyxIdChatApprovalReversibility.Reversible => "reversible",
+        NyxIdChatApprovalReversibility.Irreversible => "irreversible",
+        NyxIdChatApprovalReversibility.Unknown => "unknown",
+        _ => string.Empty,
+    };
+
+    private static string ToWireName(NyxIdChatNeedsYouResolutionOutcome outcome) => outcome switch
+    {
+        NyxIdChatNeedsYouResolutionOutcome.Accepted => "accepted",
         _ => string.Empty,
     };
 

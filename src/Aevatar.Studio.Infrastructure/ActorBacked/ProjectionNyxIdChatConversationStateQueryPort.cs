@@ -109,6 +109,63 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
         return NyxIdChatConversationStateQueryResult.Current(ToSnapshot(document));
     }
 
+    public async Task<IReadOnlyDictionary<string, NyxIdChatConversationAttentionSummary>>
+        GetAttentionSummariesAsync(
+            string scopeId,
+            IReadOnlyCollection<string> actorIds,
+            CancellationToken ct = default)
+    {
+        var normalizedScopeId = NormalizeIdentity(scopeId);
+        var normalizedActorIds = actorIds?
+            .Select(NormalizeIdentity)
+            .Where(static actorId => actorId is not null)
+            .Select(static actorId => actorId!)
+            .Distinct(StringComparer.Ordinal)
+            .Take(200)
+            .ToArray() ?? [];
+        if (normalizedScopeId is null || normalizedActorIds.Length == 0)
+            return new Dictionary<string, NyxIdChatConversationAttentionSummary>();
+
+        var result = await _documentReader.QueryAsync(new ProjectionDocumentQuery
+        {
+            Filters =
+            [
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(NyxIdChatConversationCurrentStateDocument.ScopeId),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString(normalizedScopeId),
+                },
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(NyxIdChatConversationCurrentStateDocument.ConversationActorId),
+                    Operator = ProjectionDocumentFilterOperator.In,
+                    Value = ProjectionDocumentValue.FromStrings(normalizedActorIds),
+                },
+            ],
+            Take = normalizedActorIds.Length,
+        }, ct).ConfigureAwait(false);
+
+        var requested = normalizedActorIds.ToHashSet(StringComparer.Ordinal);
+        return result.Items
+            .Where(document =>
+                requested.Contains(document.ConversationActorId) &&
+                string.Equals(document.Id, document.ActorId, StringComparison.Ordinal) &&
+                string.Equals(document.ActorId, document.ConversationActorId, StringComparison.Ordinal) &&
+                string.Equals(document.ScopeId, normalizedScopeId, StringComparison.Ordinal) &&
+                document.StateVersion > 0)
+            .ToDictionary(
+                static document => document.ConversationActorId,
+                static document => new NyxIdChatConversationAttentionSummary(
+                    document.ConversationActorId,
+                    document.TaskStatus,
+                    document.AttentionKind,
+                    ToDateTimeOffset(document.AttentionSince),
+                    NullIfEmpty(document.ActiveStepSummary),
+                    document.StateVersion),
+                StringComparer.Ordinal);
+    }
+
     private static NyxIdChatConversationStateSnapshot ToSnapshot(
         NyxIdChatConversationCurrentStateDocument document) =>
         new(
@@ -125,7 +182,14 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
             document.PendingActions.Select(ToAction).ToArray(),
             ToControlFence(document.ControlFence),
             ToControlFence(document.LatestControlResult),
-            ToContinuationAdmission(document.ContinuationAdmission));
+            ToContinuationAdmission(document.ContinuationAdmission),
+            ToPendingInput(document.PendingInput),
+            ToInputResolution(document.LatestInputResolution),
+            ToApprovalResolution(document.LatestApprovalResolution),
+            NullIfEmpty(document.TaskStatus),
+            NullIfEmpty(document.AttentionKind),
+            ToDateTimeOffset(document.AttentionSince),
+            NullIfEmpty(document.ActiveStepSummary));
 
     private static NyxIdChatConversationTurnSnapshot? ToTurn(
         NyxIdChatConversationTurnDocument? turn) =>
@@ -212,7 +276,54 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 approval.TaskId,
                 approval.StepId,
                 approval.ToolName,
-                ToDateTimeOffset(approval.ExpiresAt));
+                ToDateTimeOffset(approval.ExpiresAt),
+                ToDateTimeOffset(approval.AskedAt),
+                NullIfEmpty(approval.Action),
+                NullIfEmpty(approval.Target),
+                NullIfEmpty(approval.ActorLabel),
+                NullIfEmpty(approval.Reversibility),
+                NullIfEmpty(approval.GrantBoundary),
+                NullIfEmpty(approval.NyxidRequestId));
+
+    private static NyxIdChatPendingInputSnapshot? ToPendingInput(
+        NyxIdChatConversationPendingInputDocument? input) =>
+        input == null
+            ? null
+            : new NyxIdChatPendingInputSnapshot(
+                input.RequestId,
+                input.TurnId,
+                input.TaskId,
+                input.StepId,
+                input.Prompt,
+                input.Options.Select(static option =>
+                    new NyxIdChatInputOptionSnapshot(
+                        option.OptionId,
+                        option.Label,
+                        NullIfEmpty(option.Description))).ToArray(),
+                ToDateTimeOffset(input.AskedAt),
+                input.AllowFreeText,
+                input.MultiSelect);
+
+    private static NyxIdChatInputResolutionSnapshot? ToInputResolution(
+        NyxIdChatConversationInputResolutionDocument? resolution) =>
+        resolution == null
+            ? null
+            : new NyxIdChatInputResolutionSnapshot(
+                resolution.RequestId,
+                resolution.ClientRequestId,
+                resolution.Outcome,
+                ToDateTimeOffset(resolution.CommittedAt));
+
+    private static NyxIdChatApprovalResolutionSnapshot? ToApprovalResolution(
+        NyxIdChatConversationApprovalResolutionDocument? resolution) =>
+        resolution == null
+            ? null
+            : new NyxIdChatApprovalResolutionSnapshot(
+                resolution.RequestId,
+                resolution.ClientRequestId,
+                resolution.Outcome,
+                resolution.Approved,
+                ToDateTimeOffset(resolution.CommittedAt));
 
     private static NyxIdChatControlFenceSnapshot? ToControlFence(
         NyxIdChatConversationControlFenceDocument? fence) =>

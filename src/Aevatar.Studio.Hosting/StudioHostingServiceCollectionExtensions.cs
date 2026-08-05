@@ -44,6 +44,7 @@ internal static class StudioHostingServiceCollectionExtensions
                 json.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
                 json.JsonSerializerOptions.DefaultIgnoreCondition =
                     System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull;
+                json.JsonSerializerOptions.AllowDuplicateProperties = false;
             });
         services.AddHttpContextAccessor();
         services.AddHttpClient();

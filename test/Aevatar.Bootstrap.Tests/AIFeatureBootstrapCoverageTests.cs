@@ -101,6 +101,7 @@ public class AIFeatureBootstrapCoverageTests
     public void AddAevatarAIFeatures_ShouldRegisterCoreServicesWithExplicitApiKey()
     {
         var services = new ServiceCollection();
+        VoicePresenceBootstrapTests.AddToolExecutionAuditDependencies(services);
         var config = new ConfigurationBuilder().Build();
 
         services.AddAevatarAIFeatures(config, options =>
@@ -229,6 +230,7 @@ public class AIFeatureBootstrapCoverageTests
         services.AddSingleton<IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>>(
             new EmptyVoicePresenceCapabilityReader());
         AddVoicePresenceTestCredentialResolver(services);
+        VoicePresenceBootstrapTests.AddToolExecutionAuditDependencies(services);
 
         services.AddAevatarAIFeatures(config, options =>
         {
@@ -293,6 +295,7 @@ public class AIFeatureBootstrapCoverageTests
         services.AddSingleton<IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>>(
             new EmptyVoicePresenceCapabilityReader());
         AddVoicePresenceTestCredentialResolver(services);
+        VoicePresenceBootstrapTests.AddToolExecutionAuditDependencies(services);
 
         services.AddAevatarAIFeatures(config, options =>
         {
@@ -605,47 +608,11 @@ public class AIFeatureBootstrapCoverageTests
     }
 
     [Fact]
-    public async Task AddAevatarAIFeatures_ShouldRegisterWorkflowToolSourceAdapterForAgentTools()
-    {
-        var source = new StubAgentToolSource([new StubAgentTool("demo_tool", """{"ok":true}""")]);
-        var services = new ServiceCollection()
-            .AddSingleton<IAgentToolSource>(source);
-        var config = new ConfigurationBuilder().Build();
-
-        services.AddAevatarAIFeatures(config, options => options.EnableMEAIProviders = false);
-
-        await using var provider = services.BuildServiceProvider();
-        // Yield capability follows the actor, never the container (#2004): bootstrap must
-        // not hand a yielding handler to surfaces without a pending-approval continuation.
-        provider.GetService<IToolApprovalHandler>().Should().BeNull();
-        provider.GetServices<IToolCallMiddleware>().Should().NotContain(x => x is ToolApprovalMiddleware);
-
-        var workflowSource = provider.GetServices<IWorkflowToolSource>()
-            .Should()
-            .ContainSingle()
-            .Subject;
-        var tool = (await workflowSource.GetToolsAsync())
-            .Should()
-            .ContainSingle()
-            .Subject;
-
-        tool.Name.Should().Be("demo_tool");
-        var result = await tool.ExecuteAsync(
-            new WorkflowToolExecutionRequest(
-                ArgumentsJson: "{}",
-                RunId: "run-1",
-                StepId: "step-1",
-                ExecutionId: "exec-1",
-                CallId: "call-1",
-                ScopeId: "scope-1",
-                CallerCredential: new WorkflowCallerCredential()));
-        result.ResultJson.Should().Be("""{"ok":true}""");
-    }
-
-    [Fact]
     public void MCPConnectorBuilder_ShouldValidateCommandAndBuildConnector()
     {
-        var builder = new MCPConnectorBuilder();
+        var builder = new MCPConnectorBuilder(
+            new VoicePresenceBootstrapTests.TestHttpClientFactory(),
+            new VoicePresenceBootstrapTests.UnusedAgentToolExecutionPort());
 
         var invalidEntry = new ConnectorConfigEntry
         {
@@ -684,7 +651,9 @@ public class AIFeatureBootstrapCoverageTests
     [Fact]
     public void MCPConnectorBuilder_ShouldSupportRemoteUrlConfiguration()
     {
-        var builder = new MCPConnectorBuilder();
+        var builder = new MCPConnectorBuilder(
+            new VoicePresenceBootstrapTests.TestHttpClientFactory(),
+            new VoicePresenceBootstrapTests.UnusedAgentToolExecutionPort());
         var entry = new ConnectorConfigEntry
         {
             Name = "nyxid_mcp",
@@ -797,37 +766,6 @@ public class AIFeatureBootstrapCoverageTests
         public void Set(string key, string value) => _values[key] = value;
 
         public void Remove(string key) => _values.Remove(key);
-    }
-
-    private sealed class StubAgentToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
-    {
-        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
-        {
-            _ = ct;
-            return Task.FromResult(tools);
-        }
-    }
-
-    private sealed class StubAgentTool(string name, string resultJson) : IAgentTool
-    {
-        public string Name { get; } = name;
-        public string Description => "test tool";
-        public string ParametersSchema => """{"type":"object"}""";
-
-        public AgentToolReceipt? CreateSuccessReceipt(string callId, string toolName, string result) =>
-            new()
-            {
-                CallId = callId,
-                ToolName = toolName,
-                Status = AgentToolReceiptStatus.Success,
-            };
-
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
-        {
-            _ = argumentsJson;
-            _ = ct;
-            return Task.FromResult(resultJson);
-        }
     }
 
     private static void WriteFlatSecrets(string path, IReadOnlyDictionary<string, string> values)

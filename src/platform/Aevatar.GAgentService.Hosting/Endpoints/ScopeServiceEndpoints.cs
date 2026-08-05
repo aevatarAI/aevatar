@@ -1,7 +1,10 @@
+using System.Text.Json;
+using Aevatar.AGUI.Contracts;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Audit;
 using Aevatar.Audit.Hosting.EndpointAudit;
+using Aevatar.Capabilities;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -13,30 +16,28 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.ScopeScripts;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
-using Aevatar.Capabilities;
+using Aevatar.GAgentService.Hosting.Serialization;
+using Aevatar.GAgentService.Hosting.Sse;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
-using Aevatar.GAgentService.Hosting.Serialization;
-using Aevatar.AGUI.Contracts;
-using Aevatar.GAgentService.Hosting.Sse;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using System.Text.Json;
 using WorkflowRunOrigins = Aevatar.Workflow.Abstractions.WorkflowRunOrigins;
 using WorkflowSagaStatus = Aevatar.Workflow.Abstractions.WorkflowSagaStatus;
 
@@ -204,22 +205,36 @@ public static class ScopeServiceEndpoints
 
             var normalizedPrompt = request.Prompt?.Trim() ?? string.Empty;
             var llmControl = await BuildScopedLlmControlAsync(http, ct);
-            var chatRequest = new WorkflowChatRunRequest(
-                Prompt: normalizedPrompt,
-                Source: WorkflowChatSource.InlineYamlBundle(request.WorkflowYamls),
-                SessionId: request.SessionId,
-                InputParts: MapWorkflowChatInputParts(requestInput.InputParts),
-                Metadata: scopedHeaders,
-                ScopeId: scopeId,
-                CallerCredential: callerCredential.Credential,
-                LlmControl: ToWorkflowLlmControl(llmControl),
-                Headers: scopedHeaders);
+            var chatInput = new ChatInput
+            {
+                Prompt = normalizedPrompt,
+                InputParts = requestInput.InputParts,
+                WorkflowYamls = request.WorkflowYamls,
+                SessionId = request.SessionId,
+                ScopeId = scopeId,
+                Metadata = scopedHeaders,
+                Headers = scopedHeaders,
+                LlmControl = ToChatLlmControlInput(llmControl),
+            };
 
             if (eventFormat == ScopeWorkflowEndpoints.ScopeWorkflowStreamEventFormat.Agui)
             {
+                var normalizedRequest = await WorkflowCapabilityEndpoints.NormalizeChatInputAsync(
+                    chatInput,
+                    workflowFileIngressPort,
+                    trustedCallerCredential: callerCredential.Credential,
+                    cancellationToken: ct,
+                    trustedScopeId: scopeId);
+                if (!normalizedRequest.Succeeded)
+                {
+                    var (statusCode, code, message) = ScopeWorkflowEndpoints.MapRunStartError(normalizedRequest.Error);
+                    await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
+                    return;
+                }
+
                 await ScopeWorkflowEndpoints.HandleAguiStreamAsync(
                     http,
-                    chatRequest,
+                    normalizedRequest.Request!,
                     chatRunService,
                     ct);
                 return;
@@ -227,18 +242,7 @@ public static class ScopeServiceEndpoints
 
             await WorkflowCapabilityEndpoints.HandleChat(
                 http,
-                new ChatInput
-                {
-                    Prompt = normalizedPrompt,
-                    InputParts = requestInput.InputParts,
-                    WorkflowYamls = chatRequest.Source.InlineBundle?.YamlDocuments
-                        .Select(static document => document.Yaml)
-                        .ToArray(),
-                    SessionId = chatRequest.SessionId,
-                    ScopeId = scopeId,
-                    Headers = scopedHeaders,
-                    LlmControl = ToChatLlmControlInput(llmControl),
-                },
+                chatInput,
                 chatRunService,
                 ct);
         }
@@ -489,7 +493,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (TryCreateMemberRouteAccessDeniedResult(http, scopeId, memberId, out var denied))
                 return denied;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
@@ -835,7 +839,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+            if (await TryWriteMemberRouteAccessDeniedAsync(http, scopeId, memberId, ct))
                 return;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
@@ -887,7 +891,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (TryCreateMemberRouteAccessDeniedResult(http, scopeId, memberId, out var denied))
                 return denied;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
@@ -1247,7 +1251,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (TryCreateMemberRouteAccessDeniedResult(http, scopeId, memberId, out var denied))
                 return denied;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
@@ -1326,7 +1330,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (TryCreateMemberRouteAccessDeniedResult(http, scopeId, memberId, out var denied))
                 return denied;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
@@ -1381,7 +1385,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (TryCreateMemberRouteAccessDeniedResult(http, scopeId, memberId, out var denied))
                 return denied;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
@@ -1448,7 +1452,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (TryCreateMemberRouteAccessDeniedResult(http, scopeId, memberId, out var denied))
                 return denied;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
@@ -1491,7 +1495,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (TryCreateMemberRouteAccessDeniedResult(http, scopeId, memberId, out var denied))
                 return denied;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
@@ -1534,7 +1538,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (TryCreateMemberRouteAccessDeniedResult(http, scopeId, memberId, out var denied))
                 return denied;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
@@ -1577,11 +1581,8 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (TryCreateMemberRouteAccessDeniedResult(http, scopeId, memberId, out var denied))
                 return denied;
-
-            if (AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out var memberDenied))
-                return memberDenied;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
                 new MemberPublishedServiceResolveRequest(scopeId, memberId),
@@ -2342,6 +2343,19 @@ public static class ScopeServiceEndpoints
                 catalogReader,
                 revisionCatalogReader,
                 ct);
+
+            if (payload.Is(ChatRequestEvent.Descriptor))
+            {
+                var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+                if (!callerCredential.Succeeded)
+                {
+                    var (statusCode, code, message) =
+                        ScopeWorkflowEndpoints.MapRunStartError(callerCredential.Error);
+                    return Results.Json(new { code, message }, statusCode: statusCode);
+                }
+
+                payload = ProjectHttpCallerCredential(payload, callerCredential.Credential);
+            }
 
             var receipt = await invocationPort.InvokeAsync(new ServiceInvocationRequest
             {
@@ -3417,6 +3431,7 @@ const response = await fetch("{{invokePath}}", {
             ServiceRunStatus.Completed => WorkflowRunCompletionStatus.Completed,
             ServiceRunStatus.Failed => WorkflowRunCompletionStatus.Failed,
             ServiceRunStatus.Stopped => WorkflowRunCompletionStatus.Stopped,
+            ServiceRunStatus.OutcomeUncertain => WorkflowRunCompletionStatus.Unknown,
             _ => WorkflowRunCompletionStatus.Unknown,
         };
 
@@ -3426,6 +3441,7 @@ const response = await fetch("{{invokePath}}", {
             ServiceRunStatus.Completed => true,
             ServiceRunStatus.Failed => false,
             ServiceRunStatus.Stopped => false,
+            ServiceRunStatus.OutcomeUncertain => null,
             _ => null,
         };
 
@@ -3644,6 +3660,9 @@ const response = await fetch("{{invokePath}}", {
             Prompt = prompt,
             ScopeId = scopeId,
             ConnectorHttpAuthorization = ToConnectorHttpAuthorization(callerCredential),
+            CallerNyxIdCredentialKind = ToAgentToolNyxIdCredentialKind(callerCredential?.Kind),
+            CallerSourceReadableNyxIdBearerToken =
+                callerCredential?.SourceReadableUserBearerToken?.Trim() ?? string.Empty,
         };
         if (headers != null)
         {
@@ -3671,6 +3690,30 @@ const response = await fetch("{{invokePath}}", {
         var token = callerCredential?.BearerToken?.Trim();
         return string.IsNullOrWhiteSpace(token) ? string.Empty : $"Bearer {token}";
     }
+
+    private static Any ProjectHttpCallerCredential(
+        Any payload,
+        WorkflowCallerCredential? callerCredential)
+    {
+        var sanitized = ScheduledServiceInvocationPayloadPolicy
+            .StripScheduleOwnedCredentialFields(payload)
+            .Unpack<ChatRequestEvent>();
+        sanitized.ConnectorHttpAuthorization = ToConnectorHttpAuthorization(callerCredential);
+        sanitized.CallerNyxIdCredentialKind = ToAgentToolNyxIdCredentialKind(callerCredential?.Kind);
+        sanitized.CallerSourceReadableNyxIdBearerToken =
+            callerCredential?.SourceReadableUserBearerToken?.Trim() ?? string.Empty;
+        return Any.Pack(sanitized);
+    }
+
+    private static AgentToolNyxIdCredentialKindPayload ToAgentToolNyxIdCredentialKind(
+        Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind? kind) => kind switch
+        {
+            Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.SourceReadableUserBearer =>
+                AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
+            Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.ProxyDelegation =>
+                AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+            _ => AgentToolNyxIdCredentialKindPayload.Unspecified,
+        };
 
     private static void EnsureWorkflowStreamTarget(
         ServiceInvocationResolvedTarget target,
@@ -3706,6 +3749,7 @@ const response = await fetch("{{invokePath}}", {
             plan.WorkflowName,
             plan.WorkflowYaml,
             plan.InlineWorkflowYamls,
+            plan.ExecutionMode,
             scopeId.Trim(),
             string.IsNullOrWhiteSpace(request.RunOrigin)
                 ? WorkflowRunOrigins.ServiceInvoke
@@ -3756,27 +3800,6 @@ const response = await fetch("{{invokePath}}", {
             MaxToolRoundsOverride = control.MaxToolRoundsOverride,
             UserMemoryPrompt = control.UserMemoryPrompt,
         };
-    }
-
-    private static WorkflowLlmControl? ToWorkflowLlmControl(LLMControlContext? control)
-    {
-        if (control == null)
-            return null;
-
-        var model = NormalizeOptional(control.ModelOverride);
-        var userMemoryPrompt = NormalizeOptional(control.UserMemoryPrompt);
-        var routePreference = NormalizeOptional(control.NyxIdRoutePreference);
-        var maxToolRounds = control.MaxToolRoundsOverride is > 0
-            ? control.MaxToolRoundsOverride
-            : null;
-        if (model == null && userMemoryPrompt == null && routePreference == null && maxToolRounds == null)
-            return null;
-
-        return new WorkflowLlmControl(
-            ModelOverride: model,
-            MaxToolRoundsOverride: maxToolRounds,
-            UserMemoryPrompt: userMemoryPrompt,
-            RoutePreference: routePreference);
     }
 
     private static async Task<LLMControlContext?> BuildScopedLlmControlAsync(
@@ -3938,92 +3961,9 @@ const response = await fetch("{{invokePath}}", {
                 MediaType = p.MediaType,
                 Uri = p.Uri,
                 Name = p.Name,
+                InlineFile = p.InlineFile,
+                FileRef = p.FileRef,
             }).ToList();
-    }
-
-    private static IReadOnlyList<WorkflowChatInputPart>? MapWorkflowChatInputParts(
-        IReadOnlyList<ChatInputContentPart>? parts)
-    {
-        if (parts is not { Count: > 0 })
-            return null;
-
-        var inputParts = new List<WorkflowChatInputPart>(parts.Count);
-        foreach (var part in parts)
-        {
-            if (part == null || string.IsNullOrWhiteSpace(part.Type))
-                continue;
-
-            if (!TryParseWorkflowChatInputPartKind(part.Type, out var kind))
-                continue;
-
-            inputParts.Add(new WorkflowChatInputPart
-            {
-                Kind = kind,
-                Text = string.IsNullOrWhiteSpace(part.Text) ? null : part.Text,
-                DataBase64 = part.DataBase64,
-                MediaType = part.FileRef?.MediaType ?? part.MediaType,
-                Uri = part.FileRef?.ArtifactId ?? part.FileRef?.Uri ?? part.Uri,
-                Name = part.FileRef?.FileName ?? part.FileRef?.Name ?? part.Name,
-                FileRef = MapFileArtifactRef(part.FileRef),
-            });
-        }
-
-        return inputParts.Count == 0 ? null : inputParts;
-    }
-
-    private static bool TryParseWorkflowChatInputPartKind(
-        string raw,
-        out WorkflowChatInputPartKind kind)
-    {
-        kind = raw.Trim().ToLowerInvariant() switch
-        {
-            "text" => WorkflowChatInputPartKind.Text,
-            "image" => WorkflowChatInputPartKind.Image,
-            "audio" => WorkflowChatInputPartKind.Audio,
-            "video" => WorkflowChatInputPartKind.Video,
-            "file" => WorkflowChatInputPartKind.File,
-            _ => WorkflowChatInputPartKind.Unspecified,
-        };
-
-        return kind != WorkflowChatInputPartKind.Unspecified;
-    }
-
-    private static FileArtifactRef? MapFileArtifactRef(ChatInputFileRef? fileRef)
-    {
-        if (fileRef == null)
-            return null;
-
-        return new FileArtifactRef
-        {
-            FileId = fileRef.FileId,
-            ArtifactId = fileRef.ArtifactId ?? fileRef.Uri,
-            SourceKind = MapFileArtifactSourceKind(fileRef.SourceKind),
-            SourceMessageId = fileRef.SourceMessageId,
-            SourceResourceKey = fileRef.SourceResourceKey,
-            FileName = fileRef.FileName ?? fileRef.Name,
-            MediaType = fileRef.MediaType,
-            Sha256 = fileRef.Sha256,
-            CreatedAtUnixMs = fileRef.CreatedAtUnixMs ?? 0,
-            ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs ?? 0,
-            OwnerRunId = fileRef.OwnerRunId,
-            OwnerScopeId = fileRef.OwnerScopeId,
-        };
-    }
-
-    private static FileArtifactSourceKind MapFileArtifactSourceKind(string? raw)
-    {
-        var key = string.IsNullOrWhiteSpace(raw)
-            ? string.Empty
-            : raw.Trim().ToLowerInvariant().Replace("-", string.Empty).Replace("_", string.Empty);
-        return key switch
-        {
-            "chatinput" or "chat" => FileArtifactSourceKind.ChatInput,
-            "formupload" or "form" => FileArtifactSourceKind.FormUpload,
-            "connectedserviceresource" or "connectedservice" => FileArtifactSourceKind.ConnectedServiceResource,
-            "externalresource" or "external" => FileArtifactSourceKind.ExternalResource,
-            "generated" => FileArtifactSourceKind.Generated,
-            _ => FileArtifactSourceKind.Unspecified,
-        };
     }
 
     private static IReadOnlyList<ChatInputContentPart>? AppendInputParts(
@@ -4296,6 +4236,32 @@ const response = await fetch("{{invokePath}}", {
     private static string BuildScopeServiceRunNotFoundMessage(string scopeId, string serviceId, string runId) =>
         $"Run '{runId}' was not found on service '{serviceId}' in scope '{scopeId}'.";
 
+    private static bool TryCreateMemberRouteAccessDeniedResult(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        out IResult denied)
+    {
+        return AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(
+            http,
+            scopeId,
+            memberId,
+            out denied);
+    }
+
+    private static async Task<bool> TryWriteMemberRouteAccessDeniedAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        CancellationToken ct)
+    {
+        return await AevatarMemberAccessGuard.TryWriteMemberAccessDeniedAsync(
+            http,
+            scopeId,
+            memberId,
+            ct);
+    }
+
     private static async Task WriteJsonErrorResponseAsync(
         HttpContext http,
         int statusCode,
@@ -4385,7 +4351,9 @@ const response = await fetch("{{invokePath}}", {
         string? DataBase64 = null,
         string? MediaType = null,
         string? Uri = null,
-        string? Name = null);
+        string? Name = null,
+        ChatInputInlineFile? InlineFile = null,
+        ChatInputFileRef? FileRef = null);
 
     public sealed record ResumeScopeServiceRunHttpRequest(
         string? StepId,

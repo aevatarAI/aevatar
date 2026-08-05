@@ -3,6 +3,10 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Tools;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Studio.Application.Provisioning;
 using FluentAssertions;
 using Xunit;
@@ -98,23 +102,29 @@ public sealed class CreateStudioMemberWorkflowDraftToolTests
         using var _ = PushContext("scope-alpha");
         var tools = new ToolManager();
         tools.Register(tool);
-        var executor = new StreamingToolExecutor(tools);
+        var executor = new StreamingToolExecutor(
+            tools,
+            toolExecutionPort: CreateToolExecutionPort());
         using var state = executor.CreateExecutionState();
 
-        executor.AddTool(state, new ToolCall
-        {
-            Id = "call-draft",
-            Name = tool.Name,
-            ArgumentsJson = """
-                {
-                  "team_id": "team-alpha",
-                  "display_name": "X Digest",
-                  "workflow_yaml": "name: x_digest\nsteps: []\n",
-                  "member_id": "m-alpha",
-                  "workflow_id": "wf-alpha"
-                }
-                """,
-        });
+        var prepared = await executor.PrepareBatchAsync(
+            "studio-provisioning-test:call-draft",
+            round: 0,
+            [new ToolCall
+            {
+                Id = "call-draft",
+                Name = tool.Name,
+                ArgumentsJson = """
+                    {
+                      "team_id": "team-alpha",
+                      "display_name": "X Digest",
+                      "workflow_yaml": "name: x_digest\nsteps: []\n",
+                      "member_id": "m-alpha",
+                      "workflow_id": "wf-alpha"
+                    }
+                    """,
+            }]);
+        executor.AddTool(state, prepared.Single());
 
         var results = new List<ToolExecutionResult>();
         await foreach (var result in executor.GetRemainingResultsAsync(state, CancellationToken.None))
@@ -318,10 +328,19 @@ public sealed class CreateStudioMemberWorkflowDraftToolTests
         return tools.Single(item => item.Name == ToolName);
     }
 
+    private static IAgentToolExecutionPort CreateToolExecutionPort() =>
+        new AdmittedAgentToolExecutor(
+            new StartingAdmissionLedger(),
+            new AppendedAuditTrail(),
+            new StableAuditIdentityHasher());
+
     private static AgentToolContextScope PushContext(string? scopeId, string? ownerScopeId = null) =>
         AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
         {
+            Request = new AgentToolRequestIdentity("request-draft", null),
             Caller = new AgentToolCallerContext(scopeId, "owner-alpha", "response-alpha", ownerScopeId),
+            ExecutionOwner = AgentToolExecutionOwners.HostService(
+                nameof(CreateStudioMemberWorkflowDraftToolTests)),
         });
 
     private static string? ErrorCode(string output)
@@ -374,5 +393,28 @@ public sealed class CreateStudioMemberWorkflowDraftToolTests
                     "NYXID_OPERATION_SELECTION_REQUIRED",
                     "Select an exact NyxID operation before binding this draft.")]));
         }
+    }
+
+    private sealed class StartingAdmissionLedger : IAgentToolAdmissionLedger
+    {
+        public Task<AgentToolAdmissionResult> TryStartAsync(
+            AgentToolAdmissionFact fact,
+            CancellationToken ct = default) =>
+            Task.FromResult(new AgentToolAdmissionResult(AgentToolAdmissionStatus.Started));
+    }
+
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableAuditIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
     }
 }

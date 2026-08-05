@@ -53,6 +53,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().NotContain("var NYX_AUTHORITY=BACKEND_CONSOLE_CONFIG.authority");
             html.Should().Contain("searchParams.append('resource'");
             html.Should().Contain("function observatoryFrameSource()");
+            html.Should().Contain("'/admin/workflow-observatory'");
+            html.Should().NotContain("'/workflow/observatory'");
             html.Should().NotContain("function bindObservatory(");
         }
         else if (path == "/auto/callback")
@@ -62,6 +64,9 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         else
         {
             html.Should().Contain("searchParams.append(\"resource\"");
+            html.Should().Contain("async function fetchWithConsoleAuth(");
+            html.Should().Contain("requestAdminShellTokenRefresh(");
+            html.Should().Contain("rejectedAccessToken");
             html.Should().Contain(path == "/workflow/skills"
                 ? "f.append(\"resource\""
                 : "form.append(\"resource\"");
@@ -74,9 +79,14 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         await using var app = await CreateAppAsync();
         var html = await app.GetTestClient().GetStringAsync("/admin");
 
-        html.Should().Contain("if(!AUDIT_LOADING) loadAuditTrail();");
-        html.Should().Contain("if((curParts()[0]||defaultModule())==='audit')");
-        html.Should().Contain("toast('正在刷新审计日志');");
+        // 进入模块：首访 reset 加载；重进保留已展示行、静默换新（stale-while-revalidate）
+        html.Should().Contain("if(!AUDIT_LOADING) loadAuditTrail(!AUDIT_LOADED);");
+        html.Should().Contain("async function loadAuditTrail(reset){");
+        html.Should().Contain("if(reset){ AUDIT_DATA=[]; AUDIT_CURSOR=null; AUDIT_HAS_MORE=false; AUDIT_WATERMARK=null; }");
+        // 头部 ⟳ 统一走 refreshActiveModule：audit 分支真实拉新，不再假装刷新
+        html.Should().Contain("refreshActiveModule();");
+        html.Should().Contain("if(module==='audit'){ loadAuditTrail(false); toast('正在刷新审计日志'); return; }");
+        html.Should().NotContain("toast('已刷新（最终一致 readmodel）')");
         html.Should().NotContain(
             "if(!AUDIT_LOADED||AUDIT_LOADING){ if(!AUDIT_LOADING) loadAuditTrail(); }");
     }
@@ -106,7 +116,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().NotContain("var skillOption=ev.target.closest('[data-ap-skill-option]')");
         html.Should().NotContain("data-ap-skill-search");
         html.Should().Contain("/api/workflow/skills/'+encodeURIComponent(guid)+'/exact");
-        html.Should().Contain("loadAgentProfileBindings()");
+        html.Should().Contain("loadAgentProfileBindings(owner,request)");
         html.Should().Contain("AGENT_PROFILE_STATE.systemBinding&&AGENT_PROFILE_STATE.systemBinding.etag");
         html.Should().Contain("agentProfileField('Maximum tools','maximumTools'");
         html.Should().Contain("仅影响新建实例");
@@ -123,6 +133,224 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().NotContain("data-ap-new-slug");
         html.Should().Contain("@media (max-width:768px)");
         html.Should().NotContain("data-ap-field=\"rawJson\"");
+    }
+
+    [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldSwitchOwnersFromCacheAndIgnoreStaleRefreshes()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [
+                html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '(')
+              ].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start)
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            function deferred() {
+              let resolve, reject;
+              const promise = new Promise((ok, fail) => { resolve = ok; reject = fail; });
+              return {promise, resolve, reject};
+            }
+            async function waitForRequestCount(count) {
+              while (requests.length < count) await new Promise(resolve => setImmediate(resolve));
+            }
+
+            const requests = [], renders = [];
+            const context = {
+              structuredClone,
+              ACCOUNT:{admin:true,scope:'scope-alpha'},
+              AGENT_PROFILE_REQUEST:0,
+              AGENT_PROFILE_AUTHORITY:'scope-alpha|true',
+              AGENT_PROFILE_OWNER_SNAPSHOTS:{mine:null,system:null},
+              AGENT_PROFILE_STATE:{owner:'mine',status:'all',search:'',items:[],selected:null,
+                detail:null,loaded:false,loading:false,error:null,forbidden:false,dirty:false,
+                createFlow:null,etag:null,binding:null,systemBinding:null,rolloutDraft:null,
+                diagnostics:[],skillProofs:{}},
+              render() {
+                const state = context.AGENT_PROFILE_STATE;
+                renders.push({owner:state.owner,selected:state.selected,
+                  detail:state.detail && state.detail.displayName});
+              },
+              agentProfileResetSkillSearch() {},
+              agentProfileScope() { return 'scope-alpha'; },
+              agentProfileCollectionEndpoint() {
+                return context.AGENT_PROFILE_STATE.owner === 'system'
+                  ? '/api/admin/agent-profiles'
+                  : '/api/scopes/scope-alpha/agent-profiles';
+              },
+              agentProfileItemEndpoint(item) {
+                return item.ownerKind === 'system'
+                  ? '/api/admin/agent-profiles/' + item.profileSlug
+                  : '/api/scopes/scope-alpha/agent-profiles/' + item.profileSlug;
+              },
+              agentProfileProblem(status) { return {kind:'error',title:'HTTP ' + status}; },
+              agentProfileNormalizeItem(item, owner) {
+                return Object.assign({ownerKind:owner === 'system' ? 'system' : 'scope',
+                  profileId:'',profileSlug:'',displayName:'',purpose:'',publishedRevision:0,
+                  available:true,isDefault:false,etag:null}, item);
+              },
+              agentProfileReconcilePending() {},
+              agentProfileAdvanceCreate() { return Promise.resolve(false); },
+              agentProfileCanWrite() { return true; },
+              agentProfileRuntime() {
+                return {activationMode:'SHADOW',members:[],maximumToolPolicy:{},
+                  recoveryToolPolicy:{}};
+              },
+              agentProfileEmptyDraft() { return {runtimeProfile:{members:[]}}; },
+              agentProfileUnionNames(existing, additions) {
+                return [...new Set([...(existing || []), ...(additions || [])])];
+              },
+              agentProfileRolloutFromBinding() {
+                return {enabled:false,cohortBasisPoints:0};
+              },
+              agentProfileStatus() { return ''; },
+              agentProfileSkillsSectionHtml(_, disabled) {
+                return '<span data-skills-disabled="' + disabled + '"></span>';
+              },
+              agentProfileDiagnosticsHtml() { return ''; },
+              agentProfileLifecycleState() {
+                return {label:'idle',tone:'draft',description:'idle'};
+              },
+              agentProfilePublicSummaryHtml() { return ''; },
+              agentProfileCreateHtml() { return ''; },
+              esc(value) { return String(value == null ? '' : value); },
+              agentProfileJson(path) {
+                const request = deferred();
+                requests.push(Object.assign({path}, request));
+                return request.promise;
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('agentProfileRequestIsCurrent', 'agentProfileSaveOwnerSnapshot')}
+              ${functionSource('agentProfileSaveOwnerSnapshot', 'agentProfileRestoreOwnerSnapshot')}
+              ${functionSource('agentProfileRestoreOwnerSnapshot', 'agentProfileSwitchOwner')}
+              ${functionSource('agentProfileSwitchOwner', 'agentProfileResetSkillSearch')}
+              ${functionSource('loadAgentProfileBindings', 'agentProfileApplyBinding')}
+              ${functionSource('agentProfileApplyBinding', 'loadAgentProfiles')}
+              ${functionSource('loadAgentProfiles', 'loadAgentProfileDetail')}
+              ${functionSource('loadAgentProfileDetail', 'agentProfileRows')}
+              ${functionSource('agentProfileField', 'agentProfileSelect')}
+              ${functionSource('agentProfileSelect', 'agentProfileHidden')}
+              ${functionSource('agentProfileActionBarHtml', 'agentProfileRefreshActionState')}
+              ${functionSource('agentProfileEditorHtml', 'agentProfileCollectFields')}
+            `, context);
+
+            vm.runInContext(`
+              AGENT_PROFILE_STATE.items=[{ownerKind:'scope',profileId:'mine-cached-id',
+                profileSlug:'mine-cached',displayName:'Mine cached'}];
+              AGENT_PROFILE_STATE.selected='mine-cached';
+              AGENT_PROFILE_STATE.detail={ownerKind:'scope',profileId:'mine-cached-id',
+                profileSlug:'mine-cached',displayName:'Mine cached'};
+              AGENT_PROFILE_STATE.etag='mine-etag';
+              AGENT_PROFILE_STATE.binding={target:null};
+              AGENT_PROFILE_STATE.loaded=true;
+              agentProfileSaveOwnerSnapshot('mine');
+
+              AGENT_PROFILE_STATE.owner='system';
+              AGENT_PROFILE_STATE.items=[{ownerKind:'system',profileId:'system-cached-id',
+                profileSlug:'system-cached',displayName:'System cached'}];
+              AGENT_PROFILE_STATE.selected='system-cached';
+              AGENT_PROFILE_STATE.detail={ownerKind:'system',profileId:'system-cached-id',
+                profileSlug:'system-cached',displayName:'System cached'};
+              AGENT_PROFILE_STATE.etag='system-etag';
+              AGENT_PROFILE_STATE.loaded=true;
+              agentProfileSaveOwnerSnapshot('system');
+              AGENT_PROFILE_STATE.loading=true;
+              var refreshingSystemEditor=agentProfileEditorHtml();
+              if(!refreshingSystemEditor.includes('data-ap-field="rolloutEnabled" disabled'))
+                throw new Error('cached system rollout fields stay read-only while refreshing');
+              if(!refreshingSystemEditor.includes('data-ap-field="cohortBasisPoints" type="number" value="0" disabled'))
+                throw new Error('cached cohort field stays read-only while refreshing');
+              AGENT_PROFILE_STATE.loading=false;
+              agentProfileRestoreOwnerSnapshot('mine');
+            `, context);
+            context.AGENT_PROFILE_STATE.loading = true;
+            const refreshingEditor = vm.runInContext('agentProfileEditorHtml()', context);
+            assert.match(refreshingEditor, /data-ap-field="displayName"[^>]* disabled/,
+              'cached editor fields stay read-only until the authoritative refresh settles');
+            assert.match(refreshingEditor, /data-ap-action="save" disabled/,
+              'cached editor actions stay disabled until the authoritative refresh settles');
+            context.AGENT_PROFILE_STATE.loading = false;
+
+            (async function() {
+              const systemLoad = vm.runInContext("agentProfileSwitchOwner('system')", context);
+              assert.equal(context.AGENT_PROFILE_STATE.detail.displayName, 'System cached');
+              assert.equal(renders.at(-1).detail, 'System cached');
+              assert.deepEqual(requests.slice(0, 3).map(request => request.path), [
+                '/api/admin/agent-profiles?take=100',
+                '/api/scopes/scope-alpha/agent-profile-bindings/nyxid.chat',
+                '/api/admin/agent-profile-bindings/nyxid.chat'
+              ]);
+
+              requests[0].resolve({body:{items:[{ownerKind:'system',
+                profileId:'stale-system-id',profileSlug:'stale-system',
+                displayName:'Stale system'}]}});
+              await waitForRequestCount(4);
+              assert.equal(requests.length, 4);
+              assert.equal(requests[3].path, '/api/admin/agent-profiles/stale-system');
+
+              const mineLoad = vm.runInContext("agentProfileSwitchOwner('mine')", context);
+              assert.equal(context.AGENT_PROFILE_STATE.detail.displayName, 'Mine cached');
+              assert.equal(requests.length, 7, 'the next owner refresh starts without waiting');
+
+              requests[1].resolve({body:{target:{profileId:'stale-system-id'}}});
+              requests[2].resolve({body:{target:{profileId:'stale-system-id'}}});
+              requests[3].resolve({body:{displayName:'Stale system detail'},
+                etag:'stale-system-etag'});
+              await systemLoad;
+              assert.equal(context.AGENT_PROFILE_STATE.owner, 'mine');
+              assert.equal(context.AGENT_PROFILE_STATE.detail.displayName, 'Mine cached');
+              assert.equal(context.AGENT_PROFILE_STATE.items[0].profileSlug, 'mine-cached');
+
+              requests[4].resolve({body:{items:[{ownerKind:'scope',profileId:'mine-fresh-id',
+                profileSlug:'mine-fresh',displayName:'Mine fresh'}]}});
+              await waitForRequestCount(8);
+              assert.equal(requests.length, 8,
+                'detail starts after the list without waiting for either binding');
+              assert.equal(requests[7].path,
+                '/api/scopes/scope-alpha/agent-profiles/mine-fresh');
+
+              requests[7].resolve({body:{displayName:'Mine fresh detail'},etag:'mine-fresh-etag'});
+              requests[5].resolve({body:{target:{ownerKind:'scope',profileId:'mine-fresh-id'}}});
+              requests[6].resolve({body:{target:null}});
+              await mineLoad;
+
+              assert.equal(context.AGENT_PROFILE_STATE.loading, false);
+              assert.equal(context.AGENT_PROFILE_STATE.items[0].profileSlug, 'mine-fresh');
+              assert.equal(context.AGENT_PROFILE_STATE.items[0].isDefault, true);
+              assert.equal(context.AGENT_PROFILE_STATE.detail.displayName, 'Mine fresh detail');
+              assert.equal(context.AGENT_PROFILE_STATE.etag, 'mine-fresh-etag');
+
+              context.ACCOUNT.scope = 'scope-beta';
+              const staleAuthorityRequest = context.AGENT_PROFILE_REQUEST;
+              assert.equal(vm.runInContext('agentProfileSyncAuthority()', context), true);
+              assert.equal(vm.runInContext(
+                `agentProfileRequestIsCurrent('mine', ${staleAuthorityRequest})`, context),
+                false, 'authority changes invalidate already in-flight reads');
+              assert.equal(context.AGENT_PROFILE_STATE.items.length, 0);
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
     }
 
     [Fact]
@@ -300,6 +528,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             }
 
             const context = {
+              AGENT_PROFILE_REQUEST:0,
               AGENT_PROFILE_STATE:{
                 detail:{draft:{runtimeProfile:{maximumToolPolicy:{toolNames:[],toolSetRefs:[]},
                   members:[{intentId:'old',skillRef:{guid:'old-guid',literalVersion:'1.0'},
@@ -1374,6 +1603,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             }
 
             const context = {
+              AGENT_PROFILE_REQUEST:0,
               AGENT_PROFILE_STATE:{
                 items:[{ownerKind:'scope',profileSlug:'aevatar-operator'}],
                 createFlow:{owner:'mine',slug:'aevatar-operator',stage:'catalog'},
@@ -1386,6 +1616,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
                   profileSlug:'aevatar-operator',draft:null}};
               },
               agentProfileReconcilePending() {}, render() {}
+              ,agentProfileRequestIsCurrent() { return true; }
+              ,agentProfileSaveOwnerSnapshot() { return false; }
             };
             vm.createContext(context);
             vm.runInContext(`
@@ -1909,6 +2141,14 @@ public sealed class BackendConsoleStaticAssetEndpointTests
                 failure:{code:'authorization_required',category:'authorization',sanitizedMessage:'Authorization required.'},
                 provenance:{chat:{surface:'nyxid_assistant',conversationId:'conversation-alpha',turnId:'turn-alpha',taskId:'task-alpha',stepId:'step-alpha',actionRequestId:null}}
               },{
+                id:'audit-tool-zeta', occurredAtUtc:'2026-08-01T00:00:02Z',
+                operationName:'search_current_state', operationKind:'Tool',
+                lifecyclePhase:'terminal', terminalOutcome:'succeeded',
+                auditActorId:'audit_actor:full-zeta', scopeId:'scope-zeta',
+                target:{kind:'tool',id:'search_current_state'},
+                correlation:{callId:'call-zeta',correlationId:'correlation-zeta'}, failure:null,
+                provenance:{chat:{surface:'workflow_chat',conversationId:'conversation-zeta-with-long-id',turnId:'turn-zeta',taskId:'task-zeta',stepId:'step-zeta',actionRequestId:null}}
+              },{
                 id:'audit-action-alpha', occurredAtUtc:'2026-08-01T00:00:01Z',
                 operationName:'chat.action.requested', operationKind:'Authorization',
                 lifecyclePhase:'accepted', terminalOutcome:null,
@@ -1937,7 +2177,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               ${functionSource('chatActivityApplyPage','loadChatActivity')}
               ${functionSource('loadChatActivity','loadChatActivityMore')}
               ${functionSource('chatActivityKind','chatActivityShortId')}
-              ${functionSource('chatActivityShortId','chatActivityTable')}
+              ${functionSource('chatActivityShortId','chatActivityConversationGroups')}
+              ${functionSource('chatActivityConversationGroups','chatActivityTable')}
               ${functionSource('chatActivityTable','chatActivityInspector')}
               ${functionSource('chatActivityInspector','chatActivityGate')}
               ${functionSource('chatActivityFilters','chatActivityRoot')}
@@ -1970,12 +2211,32 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               assert.match(table,/request_nyxid_connect/);
               assert.match(table,/failed/);
               assert.match(table,/accepted/);
+              assert.match(table,/succeeded/);
               assert.match(table,/conversation-alpha/);
+              assert.match(table,/conversation-zeta-with-long-id/);
               assert.match(table,/turn-alpha/);
               assert.match(table,/title="conversation-alpha"/);
               assert.match(table,/tabindex="0"/);
+              const groups = table.match(/<details class="chat-activity-conversation"[^>]*>/g)||[];
+              assert.equal(groups.length,2);
+              assert.match(groups[0],/data-conversation="conversation-zeta-with-long-id"/);
+              assert.match(groups[0],/ open(?: |>|$)/);
+              assert.match(groups[1],/data-conversation="conversation-alpha"/);
+              assert.doesNotMatch(groups[1],/ open(?: |>|$)/);
+              assert.match(table,/<summary class="chat-activity-conversation-summary">/);
+              assert.match(table,/2 个 Conversation/);
+              assert.match(table,/2 条 Activity/);
+              context.chatActivityApplyPage({records:[{
+                ...response.records[0], id:'audit-tool-alpha-older', occurredAtUtc:'2026-07-31T23:59:59Z'
+              }],coverage:{}},true);
+              const mergedTable = context.chatActivityTable();
+              const mergedGroups = mergedTable.match(/<details class="chat-activity-conversation"[^>]*>/g)||[];
+              assert.equal(mergedGroups.length,2);
+              assert.match(mergedGroups[0],/data-conversation="conversation-zeta-with-long-id"/);
+              assert.match(mergedTable,/data-conversation="conversation-alpha"[\s\S]*?3 条 Activity/);
+              assert.match(mergedTable,/4 条 Activity/);
 
-              const inspector = context.chatActivityInspector(response.records[1]);
+              const inspector = context.chatActivityInspector(response.records[2]);
               assert.match(inspector,/task-alpha/);
               assert.match(inspector,/step-alpha/);
               assert.match(inspector,/action-alpha/);
@@ -2044,7 +2305,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
 
             const frame = vm.runInContext('viewObservatoryFrame().html', context);
             assert.equal(frame.title, '运行观测台');
-            assert.equal(frame.src, '/workflow/observatory?scope=scope-alpha&status=failed&origin=schedule%2Capi&definition=wf-alpha&schedule=sched-alpha&from=2026-07-29T00%3A00%3A00Z&to=2026-07-30T00%3A00%3A00Z&run=run-alpha&tab=steps');
+            assert.equal(frame.src, '/admin/workflow-observatory?scope=scope-alpha&status=failed&origin=schedule%2Capi&definition=wf-alpha&schedule=sched-alpha&from=2026-07-29T00%3A00%3A00Z&to=2026-07-30T00%3A00%3A00Z&run=run-alpha&tab=steps');
             assert.equal(vm.runInContext('observatoryHash', context)({scope:'scope-alpha',run:'run-alpha',tab:'steps',ignored:'no'}), '#/observatory?scope=scope-alpha&run=run-alpha&tab=steps');
             assert.equal(vm.runInContext('observatoryHash', context)({scope:'mine',tab:'timeline'}), '#/observatory');
             """;
@@ -2080,22 +2341,54 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             vm.runInContext(`
               ${functionSource('adminRouteKey', 'readAdminViewState')}
               ${functionSource('readAdminViewState', 'writeAdminViewState')}
-              ${functionSource('writeAdminViewState', 'canReuseEmbeddedView')}
-              ${functionSource('canReuseEmbeddedView', 'adminPaneScrollTop')}
+              ${functionSource('writeAdminViewState', 'adminPaneScrollTop')}
               ${functionSource('adminPaneScrollTop', 'captureAdminViewState')}
               ${functionSource('replaceViewHtml', 'setAdminImmersive')}
               ${functionSource('setAdminImmersive', 'breadcrumb')}
+              ${functionSource('activateDockFrame', 'render')}
             `, context);
 
             vm.runInContext('writeAdminViewState', context)(storage, 'console:test:admin:view', '#/audit?result=failed', 540);
             vm.runInContext('writeAdminViewState', context)(storage, 'console:test:admin:view', '#/fleet', 80);
             assert.equal(vm.runInContext('readAdminViewState', context)(storage, 'console:test:admin:view', '#/audit?result=failed'), 540);
             assert.equal(vm.runInContext('readAdminViewState', context)(storage, 'console:test:admin:view', '#/fleet'), 80);
-            assert.equal(vm.runInContext('canReuseEmbeddedView', context)('observatory', 'observatory', true), true);
-            assert.equal(vm.runInContext('canReuseEmbeddedView', context)('observatory', 'cqrs', true), false);
-            assert.equal(vm.runInContext('canReuseEmbeddedView', context)('observatory', 'observatory', false), false);
             assert.equal(vm.runInContext('adminPaneScrollTop', context)({scrollTop:0,scrollHeight:100,clientHeight:100,getAttribute(){return '640';}}), 640);
             assert.equal(vm.runInContext('adminPaneScrollTop', context)({scrollTop:0,scrollHeight:900,clientHeight:300,getAttribute(){return '640';}}), 0);
+
+            // dock 常驻 iframe：裸路径返回不动 src（保留内部状态）；带 query 深链更新 src；切模块只翻 active，不销毁
+            function frameStub(key, src){
+              const frame = {
+                src: src,
+                attrs: {'data-persistent-view': key, 'data-frame-source': src},
+                getAttribute(name){ return frame.attrs[name] == null ? null : frame.attrs[name]; },
+                setAttribute(name, value){ frame.attrs[name] = String(value); },
+              };
+              frame.classList = { toggle(cls, on){ frame.activeFlag = !!on; } };
+              return frame;
+            }
+            const obsFrame = frameStub('observatory', '/admin/workflow-observatory?run=abc');
+            const studioFrame = frameStub('workflow-studio', '/workflow/studio');
+            const dock = {
+              querySelector(sel){
+                if (sel.indexOf('"observatory"') >= 0) return obsFrame;
+                if (sel.indexOf('"workflow-studio"') >= 0) return studioFrame;
+                return null;
+              },
+              querySelectorAll(){ return [obsFrame, studioFrame]; },
+              insertAdjacentHTML(){ assert.fail('existing dock frames must be reused, not recreated'); }
+            };
+            const activate = vm.runInContext('activateDockFrame', context);
+            activate(dock, {persistentKey:'observatory', frameSource:'/admin/workflow-observatory', html:''});
+            assert.equal(obsFrame.src, '/admin/workflow-observatory?run=abc');
+            assert.equal(obsFrame.activeFlag, true);
+            assert.equal(studioFrame.activeFlag, false);
+            activate(dock, {persistentKey:'observatory', frameSource:'/admin/workflow-observatory?run=zzz', html:''});
+            assert.equal(obsFrame.src, '/admin/workflow-observatory?run=zzz');
+            assert.equal(obsFrame.attrs['data-frame-source'], '/admin/workflow-observatory?run=zzz');
+            activate(dock, {persistentKey:'workflow-studio', frameSource:'/workflow/studio', html:''});
+            assert.equal(studioFrame.activeFlag, true);
+            assert.equal(obsFrame.activeFlag, false);
+            assert.equal(obsFrame.src, '/admin/workflow-observatory?run=zzz');
 
             const oldScroll = {scrollTop:420};
             const nextScroll = {scrollTop:0};
@@ -2171,14 +2464,18 @@ public sealed class BackendConsoleStaticAssetEndpointTests
 
         cqrs.Should().Contain("function renderPurposeBanner()");
         cqrs.Should().Contain("function healthOf(s)");
-        cqrs.Should().Contain("版本滞后");
+        cqrs.Should().Contain("未解决失败");
+        cqrs.Should().Contain("singleSourceVersionGap");
         cqrs.Should().Contain("Envelope Inspector");
         cqrs.Should().Contain("function loadScopeIntrospection(scopeActorId)");
         cqrs.Should().Contain("尚无最近 committed envelope 元数据");
         cqrs.Should().Contain("function openAdminObservatory(scopeId)");
         cqrs.Should().Contain("function readDeepLinkFilters()");
-        cqrs.Should().Contain("本页回答：读侧投影是否健康");
-        cqrs.Should().Contain("StateVersion 差，不是毫秒");
+        cqrs.Should().Contain("本页回答：投影收到了什么");
+        cqrs.Should().Contain("版本差只在同一个权威 source actor 轴上展示");
+        cqrs.Should().NotContain("observed − successful");
+        cqrs.Should().Contain("if((s.retryExhaustedFailureCount||0) > 0)");
+        cqrs.Should().NotContain("if((s.retryExhaustedTotal||0) > 0)");
     }
 
     [Fact]
@@ -2221,8 +2518,15 @@ public sealed class BackendConsoleStaticAssetEndpointTests
                 return { ok:true, status:200, async json() { return {
                   scopeActorId: empty ? 'scope-empty' : 'scope/alpha',
                   stateVersion:12,
-                  lastObservedVersion:11,
-                  lastSuccessfulVersion:10,
+                  receivedEnvelopeTotal:12,
+                  attemptedEnvelopeTotal:11,
+                  successfulMaterializationTotal:10,
+                  failedAttemptTotal:1,
+                  retryExhaustedTotal:0,
+                  retryExhaustedFailureCount:0,
+                  unresolvedFailureCount:1,
+                  failureDiagnosticDroppedTotal:0,
+                  sourceVersions:[{sourceActorId:'actor-alpha',highestSeenVersion:11,lastSuccessfulVersion:10,versionGap:1}],
                   updatedAt:'2026-07-30T08:00:00Z'
                 }; } };
               }
@@ -2295,6 +2599,159 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         admin.Should().Contain("if(!loginResourcesGranted())");
         admin.Should().Contain("当前登录未授权技能服务");
         admin.Should().Contain("data-act=\"skAuthorize\"");
+    }
+
+    [Fact]
+    public async Task AdminShell_Authentication_ShouldRefreshTokensBeforeExpiryAndRetryOneUnauthorizedRequest()
+    {
+        await using var app = await CreateAppAsync();
+        var admin = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('var OIDC=');
+            const end = html.indexOf('/* ② 系统状态', start);
+            assert.notEqual(start, -1, 'admin auth script must exist');
+            assert.notEqual(end, -1, 'admin auth script boundary must exist');
+
+            const stored = new Map();
+            const calls = [];
+            let phase = 'proactive';
+            let releaseRefresh = null;
+            function response(status, body) {
+              return {
+                status,
+                ok: status >= 200 && status < 300,
+                json: async () => body,
+                text: async () => JSON.stringify(body ?? {}),
+              };
+            }
+            const localStorage = {
+              getItem: key => stored.has(key) ? stored.get(key) : null,
+              setItem: (key, value) => stored.set(key, value),
+              removeItem: key => stored.delete(key),
+            };
+            const context = {
+              BACKEND_CONSOLE_CONFIG: {
+                authority: 'https://id.example.test',
+                clientId: 'client-example',
+                scope: 'openid profile',
+                resources: [],
+                storageKey: 'console:test',
+              },
+              location: {origin:'https://console.example.test',pathname:'/admin',hash:''},
+              localStorage,
+              sessionStorage: {setItem(){},removeItem(){}},
+              fetch: async (input, init) => {
+                calls.push({input:String(input),init});
+                if(String(input) === 'https://id.example.test/oauth/token') {
+                  if(phase === 'logout') {
+                    return await new Promise(resolve => {
+                      releaseRefresh = () => resolve(response(200, {
+                        access_token: 'late-access',
+                        refresh_token: 'late-refresh',
+                        expires_in: 900,
+                        token_type: 'Bearer',
+                      }));
+                    });
+                  }
+                  return response(200, {
+                    access_token: phase === 'proactive' ? 'proactive-access' : phase === 'embedded' ? 'embedded-access' : 'retry-access',
+                    refresh_token: phase === 'proactive' ? 'proactive-refresh' : phase === 'embedded' ? 'embedded-refresh' : 'retry-refresh',
+                    expires_in: 900,
+                    token_type: 'Bearer',
+                  });
+                }
+                if(phase === 'stale' && calls.filter(call => call.input === '/api/probe').length === 1) {
+                  stored.set('console:test:token', JSON.stringify({
+                    access_token:'already-refreshed-access',refresh_token:'already-refreshed-refresh',expires_in:900,obtained_at:Date.now()
+                  }));
+                  return response(401, {});
+                }
+                if(phase === 'retry' && calls.filter(call => call.input === '/api/probe').length === 1) {
+                  return response(401, {});
+                }
+                return response(200, {ok:true});
+              },
+              setTimeout: () => 1,
+              clearTimeout() {},
+              document: {getElementById:()=>null,body:{appendChild(){}},createElement:()=>({classList:{add(){},remove(){}},innerHTML:''})},
+              renderAcctW() {},
+              renderLoginGate() {},
+              crypto: {getRandomValues(){},subtle:{}},
+              alert() {},
+              URL,
+              URLSearchParams,
+              TextEncoder,
+              Uint8Array,
+              console,
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            (async function(){
+              context.setToken({access_token:'expiring-access',refresh_token:'expiring-refresh',expires_in:30,obtained_at:Date.now()});
+              const proactive = await context.adminApi('/api/probe');
+              assert.equal(proactive.status, 200);
+              assert.equal(calls.length, 2);
+              assert.equal(calls[0].input, 'https://id.example.test/oauth/token');
+              assert.match(calls[0].init.body, /grant_type=refresh_token/);
+              assert.match(calls[0].init.body, /refresh_token=expiring-refresh/);
+              assert.equal(calls[1].init.headers.Authorization, 'Bearer proactive-access');
+              assert.equal(JSON.parse(stored.get('console:test:token')).refresh_token, 'proactive-refresh');
+
+              phase = 'retry';
+              calls.length = 0;
+              context.setToken({access_token:'active-access',refresh_token:'active-refresh',expires_in:3600,obtained_at:Date.now()});
+              const retried = await context.adminApi('/api/probe');
+              assert.equal(retried.status, 200);
+              assert.equal(calls.length, 3);
+              assert.equal(calls[0].init.headers.Authorization, 'Bearer active-access');
+              assert.equal(calls[1].input, 'https://id.example.test/oauth/token');
+              assert.equal(calls[2].init.headers.Authorization, 'Bearer retry-access');
+              assert.equal(JSON.parse(stored.get('console:test:token')).refresh_token, 'retry-refresh');
+
+              phase = 'stale';
+              calls.length = 0;
+              context.setToken({access_token:'stale-access',refresh_token:'stale-refresh',expires_in:3600,obtained_at:Date.now()});
+              const staleRetried = await context.adminApi('/api/probe');
+              assert.equal(staleRetried.status, 200);
+              assert.equal(calls.length, 2, 'a stale 401 retries directly with the token already in storage');
+              assert.equal(calls[1].init.headers.Authorization, 'Bearer already-refreshed-access');
+              assert.equal(JSON.parse(stored.get('console:test:token')).access_token, 'already-refreshed-access');
+
+              phase = 'embedded';
+              calls.length = 0;
+              const posted = [];
+              context.setToken({access_token:'embedded-old',refresh_token:'embedded-old-refresh',expires_in:3600,obtained_at:Date.now()});
+              await context.handleEmbeddedAuthRefresh({origin:'https://console.example.test',source:{postMessage(message,origin){posted.push({message,origin});}}},
+                {requestId:'request-alpha',rejectedAccessToken:'embedded-old'});
+              assert.equal(posted.length, 1);
+              assert.equal(posted[0].message.type, 'auth-refresh-result');
+              assert.equal(posted[0].message.refreshed, true);
+              assert.equal(JSON.parse(stored.get('console:test:token')).access_token, 'embedded-access');
+
+              assert.equal(context.showLoginGate('stale rejection', 'embedded-old'), false);
+              assert.equal(JSON.parse(stored.get('console:test:token')).access_token, 'embedded-access', 'stale auth-required must preserve the new token');
+              assert.equal(context.showLoginGate('current rejection', 'embedded-access'), true);
+              assert.equal(stored.has('console:test:token'), false, 'only the currently rejected token may be cleared');
+
+              phase = 'logout';
+              context.setToken({access_token:'logout-access',refresh_token:'logout-refresh',expires_in:3600,obtained_at:Date.now()});
+              const pendingRefresh = context.refreshAccessToken(true);
+              while(!releaseRefresh) await new Promise(resolve => setImmediate(resolve));
+              context.clearToken();
+              releaseRefresh();
+              assert.equal(await pendingRefresh, null);
+              assert.equal(stored.has('console:test:token'), false, 'a late refresh response must not restore a logged-out session');
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, admin);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     private static string ScheduleRequestSnippet(string html, string scheduleCall)

@@ -11,7 +11,7 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowConsoleStaticAssetEndpointTests
 {
     [Theory]
-    [InlineData("observatory", "Workflow Run Observatory")]
+    [InlineData("admin-observatory", "Workflow Run Observatory")]
     [InlineData("studio", "Workflow Studio")]
     public async Task WorkflowStaticShellEndpoints_ShouldRenderInjectedEmbeddedAssets(string endpoint, string marker)
     {
@@ -22,8 +22,8 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         http.Response.Body = new MemoryStream();
         var assets = http.RequestServices.GetRequiredService<IBackendConsoleAssetService>();
 
-        var result = endpoint == "observatory"
-            ? WorkflowRunObservatoryEndpoints.GetObservatoryPage(http, assets)
+        var result = endpoint == "admin-observatory"
+            ? WorkflowRunObservatoryEndpoints.GetAdminObservatoryFrame(http, assets)
             : WorkflowStudioEndpoints.GetStudioPage(http, assets);
 
         await result.ExecuteAsync(http);
@@ -39,11 +39,16 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         html.Should().Contain("https://api.example.test/api/v1/proxy/s/aevatar");
         html.Should().Contain("searchParams.append(\"resource\"");
         html.Should().Contain("form.append(\"resource\"");
+        html.Should().Contain("async function fetchWithConsoleAuth(");
+        html.Should().Contain("requestAdminShellTokenRefresh(");
+        html.Should().Contain("rejectedAccessToken");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
         html.Should().NotContain("https://nyx.chrono-ai.fun");
         html.Should().NotContain("37a93189-2734-406e-bca1-7dbdf25c5a53");
-        if (endpoint == "observatory")
+        if (endpoint == "admin-observatory")
         {
+            html.Should().Contain("if(window.top !== window) return;");
+            html.Should().Contain("location.replace(\"/admin#/observatory\"");
             html.Should().Contain("const url = CFG.nyxidApi + \"/api/v1/admin/users");
             html.Should().NotContain("const url = CFG.authority + \"/api/v1/admin/users");
             html.Should().Contain("\"aria-label\":\"完整 run id\"");
@@ -51,6 +56,110 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             html.Should().Contain("detail.diagnostics");
             html.Should().NotContain("indexOf(\":run:\")");
         }
+        else
+        {
+            html.Should().Contain("const OBS = \"/admin#/observatory\"");
+            html.Should().NotContain("const OBS = \"/workflow/observatory\"");
+        }
+    }
+
+    [Fact]
+    public async Task WorkflowObservatory_Authentication_ShouldPreserveRefreshedTokensAndDelegateCurrentTokenRefresh()
+    {
+        var html = await GetObservatoryHtmlAsync();
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('function getToken(){');
+            const end = html.indexOf('\nfunction navigateAdminShell(', start);
+            assert.notEqual(start, -1, 'workflow auth helpers must exist');
+            assert.notEqual(end, -1, 'workflow auth helper boundary must exist');
+
+            const records = new Map();
+            const listeners = new Set();
+            const messages = [];
+            const fetchCalls = [];
+            let scenario = 'stale';
+            let releaseFirst = null;
+            let signOutRejectedToken = null;
+            function response(status) { return {status, ok:status >= 200 && status < 300}; }
+            const localStorage = {
+              getItem:key => records.has(key) ? records.get(key) : null,
+              setItem:(key,value) => records.set(key,value),
+              removeItem:key => records.delete(key),
+            };
+            const parent = {
+              postMessage(message) {
+                messages.push(message);
+                if(message.type !== 'auth-refresh-request') return;
+                setImmediate(() => {
+                  if(scenario === 'refresh-success') {
+                    records.set('console:test:token', JSON.stringify({access_token:'parent-refreshed',refresh_token:'parent-refresh'}));
+                  }
+                  for(const listener of [...listeners]) listener({
+                    origin:'https://console.example.test', source:parent,
+                    data:{source:'aevatar-backend-console-suite',type:'auth-refresh-result',requestId:message.requestId,refreshed:scenario === 'refresh-success'}
+                  });
+                });
+              }
+            };
+            const window = {
+              parent,
+              frameElement:{getAttribute:name => name === 'data-console-frame' ? '1' : null},
+              addEventListener:(type,listener) => { if(type === 'message') listeners.add(listener); },
+              removeEventListener:(type,listener) => { if(type === 'message') listeners.delete(listener); },
+            };
+            const context = {
+              TOKEN_KEY:'console:test:token', localStorage, window,
+              location:{origin:'https://console.example.test'},
+              randomString:() => 'request-suffix',
+              fetch:async (path,init) => {
+                fetchCalls.push({path,init});
+                if(scenario === 'stale' && fetchCalls.length === 1) {
+                  return await new Promise(resolve => { releaseFirst = () => resolve(response(401)); });
+                }
+                if((scenario === 'refresh-success' || scenario === 'refresh-failure') && fetchCalls.length === 1) return response(401);
+                return response(200);
+              },
+              signOutSilent:token => { signOutRejectedToken = token; return true; },
+              setTimeout, clearTimeout, setImmediate, Date, Promise, Error, console,
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            (async function(){
+              records.set('console:test:token', JSON.stringify({access_token:'old-access',refresh_token:'old-refresh'}));
+              const staleRequest = context.fetchWithConsoleAuth('/api/probe');
+              while(!releaseFirst) await new Promise(resolve => setImmediate(resolve));
+              records.set('console:test:token', JSON.stringify({access_token:'fresh-access',refresh_token:'fresh-refresh'}));
+              releaseFirst();
+              assert.equal((await staleRequest).status, 200);
+              assert.equal(fetchCalls.length, 2);
+              assert.equal(fetchCalls[0].init.headers.Authorization, 'Bearer old-access');
+              assert.equal(fetchCalls[1].init.headers.Authorization, 'Bearer fresh-access');
+              assert.equal(JSON.parse(records.get('console:test:token')).access_token, 'fresh-access');
+              assert.equal(messages.length, 0, 'an already refreshed token does not ask the parent to rotate again');
+
+              scenario = 'refresh-success'; fetchCalls.length = 0; messages.length = 0;
+              records.set('console:test:token', JSON.stringify({access_token:'current-access',refresh_token:'current-refresh'}));
+              assert.equal((await context.fetchWithConsoleAuth('/api/probe')).status, 200);
+              assert.equal(messages.length, 1);
+              assert.equal(messages[0].type, 'auth-refresh-request');
+              assert.equal(messages[0].rejectedAccessToken, 'current-access');
+              assert.equal(fetchCalls[1].init.headers.Authorization, 'Bearer parent-refreshed');
+
+              scenario = 'refresh-failure'; fetchCalls.length = 0; messages.length = 0; signOutRejectedToken = null;
+              records.set('console:test:token', JSON.stringify({access_token:'rejected-current',refresh_token:'rejected-refresh'}));
+              await assert.rejects(() => context.fetchWithConsoleAuth('/api/probe'), /unauthorized/);
+              assert.equal(signOutRejectedToken, 'rejected-current');
+              assert.equal(JSON.parse(records.get('console:test:token')).access_token, 'rejected-current', 'the iframe delegates final compare-and-clear to the parent shell');
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     [Fact]
@@ -103,6 +212,22 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext('buildApprovalRequest', context)(detail, approval, true, ''))), {
               path: '/api/scopes/scope-alpha/runs/run-alpha:resume',
               body: { stepId: 'review', approved: true }
+            });
+            const toolDetail = { summary: detail.summary, steps: [
+              { stepId: 'unsafe-tool', suspensionType: 'tool_approval', completedAtUtc: null },
+              { stepId: 'create-approval', suspensionType: 'tool_approval', completedAtUtc: null, toolApproval: {
+                executionId: 'exec-alpha', toolName: 'nyxid_proxy', toolCallId: 'call-alpha', approvalRequestId: 'approval-alpha'
+              } }
+            ] };
+            const toolApproval = vm.runInContext('findActiveApproval', context)(toolDetail);
+            assert.equal(toolApproval.stepId, 'create-approval');
+            assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext('buildApprovalRequest', context)(toolDetail, toolApproval, true, ''))), {
+              path: '/api/scopes/scope-alpha/runs/run-alpha:resume',
+              body: {
+                stepId: 'create-approval',
+                approved: true,
+                toolApproval: { executionId: 'exec-alpha', toolCallId: 'call-alpha', approvalRequestId: 'approval-alpha' }
+              }
             });
             assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext('detailTabIds()', context))),
               ['timeline', 'steps', 'diagnostics', 'logs', 'artifacts', 'graph']);
@@ -253,7 +378,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         };
         http.Response.Body = new MemoryStream();
         var assets = http.RequestServices.GetRequiredService<IBackendConsoleAssetService>();
-        await WorkflowRunObservatoryEndpoints.GetObservatoryPage(http, assets).ExecuteAsync(http);
+        await WorkflowRunObservatoryEndpoints.GetAdminObservatoryFrame(http, assets).ExecuteAsync(http);
         http.Response.Body.Position = 0;
         using var reader = new StreamReader(http.Response.Body);
         return await reader.ReadToEndAsync();

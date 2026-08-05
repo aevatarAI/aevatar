@@ -25,6 +25,9 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         "Managed workflow NyxID proxy calls require an admitted operation proof.";
     private const string OperationAdmissionRequiredResult =
         """{"error":true,"error_code":"NYXID_OPERATION_ADMISSION_REQUIRED","message":"Managed workflow NyxID proxy calls require an admitted operation proof."}""";
+    private const string AccessTokenMissingErrorCode = "NYXID_ACCESS_TOKEN_MISSING";
+    private const string AccessTokenMissingErrorMessage =
+        "No NyxID access token available. User must be authenticated.";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -185,7 +188,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         (await ExecuteWithOutcomeAsync(string.Empty, Name, argumentsJson, ct)).ResultJson;
 
-    public async Task<AgentToolExecutionOutcome> ExecuteWithOutcomeAsync(
+    public async Task<AgentToolTerminalOutcome> ExecuteWithOutcomeAsync(
         string callId,
         string toolName,
         string argumentsJson,
@@ -206,7 +209,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             validPolicy && policy!.Approval == AgentToolOperationApproval.Required,
             wouldBlock);
         if (wouldBlock && _managedWorkflowAdmissionMode == NyxIdManagedWorkflowAdmissionMode.Enforce)
-            return new AgentToolExecutionOutcome(OperationAdmissionRequiredResult);
+            return new AgentToolTerminalOutcome(OperationAdmissionRequiredResult);
 
         return context?.OperationAdmission is { } admission
             ? await ExecuteAdmittedOperationAsync(
@@ -215,7 +218,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 toolName,
                 argumentsJson,
                 ct)
-            : new AgentToolExecutionOutcome(await ExecuteCoreAsync(argumentsJson, ct));
+            : new AgentToolTerminalOutcome(await ExecuteCoreAsync(argumentsJson, ct));
     }
 
     private static bool IsValidExecutionPolicy(AgentToolOperationExecutionPolicy? policy)
@@ -355,7 +358,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
     /// and schemas, so this path never accepts caller route fields and never issues an HTTP request
     /// before the whole request has been validated against the proof.
     /// </summary>
-    private async Task<AgentToolExecutionOutcome> ExecuteAdmittedOperationAsync(
+    private async Task<AgentToolTerminalOutcome> ExecuteAdmittedOperationAsync(
         AgentToolOperationAdmission admission,
         string callId,
         string toolName,
@@ -370,35 +373,40 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 "[nyxid_proxy] Admitted request rejected. identity={Identity} code={Code}",
                 FormatAdmissionIdentity(admission.Identity),
                 failure.Code);
-            var failureResult = JsonSerializer.Serialize(new
-            {
-                error = true,
-                error_code = failure.Code,
-                message = failure.Message,
-            });
-            return new AgentToolExecutionOutcome(
-                failureResult,
-                NyxIdProxyReceiptFactory.CreateError(
-                    callId,
-                    toolName,
-                    admission.ServiceInstanceId,
-                    failure.Code,
-                    failure.Message,
-                    failureResult));
+            return CreateAdmittedFailureOutcome(
+                admission,
+                callId,
+                toolName,
+                failure.Code,
+                failure.Message);
         }
 
         var request = build.Request!;
         var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
         {
-            return new AgentToolExecutionOutcome(request.FileArtifact
-                ? FileArtifactError("missing_nyxid_access_token", "No NyxID access token available. User must be authenticated.")
-                : """{"error":"No NyxID access token available. User must be authenticated."}""");
+            return CreateAdmittedFailureOutcome(
+                admission,
+                callId,
+                toolName,
+                AccessTokenMissingErrorCode,
+                AccessTokenMissingErrorMessage);
         }
 
-        var revalidationFailure = await RevalidateAdmittedOperationAsync(admission, token, ct);
+        // Admission reads the catalog through the source-readable caller authority. Revalidate
+        // against that same view while retaining the delegation token for the exact proxy request.
+        var authorityToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
+                                 AgentToolRequestContext.Current?.Credentials) ?? token;
+        var revalidationFailure = await RevalidateAdmittedOperationAsync(admission, authorityToken, ct);
         if (revalidationFailure is not null)
-            return new AgentToolExecutionOutcome(revalidationFailure);
+        {
+            return CreateAdmittedFailureOutcome(
+                admission,
+                callId,
+                toolName,
+                revalidationFailure.Code,
+                revalidationFailure.Message);
+        }
 
         _logger.LogInformation(
             "[nyxid_proxy] admitted {Method} slug={Slug} identity={Identity}",
@@ -428,9 +436,8 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             request.Body,
             request.Headers,
             ct);
-        var authorityFailure = !response.Succeeded &&
-                               admission.Identity is AgentToolOperationIdentity.AuthoredRequest
-            ? MapAuthoredExactRouteFailure(response.Content, admission.ServiceInstanceId, request.Slug)
+        var authorityFailure = !response.Succeeded
+            ? MapExactRouteFailure(response.Content, admission.ServiceInstanceId, request.Slug)
             : null;
         var result = authorityFailure is { } authorityError
             ? AdmissionDriftError(authorityError.ErrorCode, authorityError.ErrorMessage)
@@ -457,10 +464,10 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 serviceLabel: null,
                 request.Path,
                 response.Content);
-        return new AgentToolExecutionOutcome(result, receipt);
+        return new AgentToolTerminalOutcome(result, receipt);
     }
 
-    private async Task<string?> RevalidateAdmittedOperationAsync(
+    private async Task<NyxIdOperationRequestFailure?> RevalidateAdmittedOperationAsync(
         AgentToolOperationAdmission admission,
         string token,
         CancellationToken ct)
@@ -474,7 +481,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
 
         if (admission.Identity is not AgentToolOperationIdentity.PublishedEndpoint publishedEndpoint)
         {
-            return AdmissionDriftError(
+            return new NyxIdOperationRequestFailure(
                 "NYXID_OPERATION_IDENTITY_NOT_SUPPORTED",
                 "The admitted request identity is not supported by published endpoint revalidation.");
         }
@@ -486,10 +493,24 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             TimeSpan.FromMinutes(5));
         var service = catalog.Services.SingleOrDefault(candidate =>
             string.Equals(candidate.UserServiceId, admission.ServiceInstanceId, StringComparison.Ordinal));
-        if (service is null ||
-            !string.Equals(service.ServiceSlug, admission.ServiceSlug, StringComparison.Ordinal))
+        if (service is null)
         {
-            return AdmissionDriftError(
+            // A source catalog and the execution delegation can expose different visibility
+            // windows for the same exact UserService. Read-only proofs may let NyxID's exact
+            // route make the final live authority decision; writes remain fail-closed here.
+            if (!catalog.AccessDenied &&
+                !catalog.SourceUnavailable &&
+                CanUseExactReadOnlyAuthority(admission))
+                return null;
+
+            return new NyxIdOperationRequestFailure(
+                "NYXID_OPERATION_AUTHORITY_DRIFT",
+                "The live NyxID service authority no longer matches the admitted operation.");
+        }
+
+        if (!string.Equals(service.ServiceSlug, admission.ServiceSlug, StringComparison.Ordinal))
+        {
+            return new NyxIdOperationRequestFailure(
                 "NYXID_OPERATION_AUTHORITY_DRIFT",
                 "The live NyxID service authority no longer matches the admitted operation.");
         }
@@ -502,7 +523,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         if (endpoint is null ||
             !string.Equals(endpoint.ContractDigest, admission.ContractDigest, StringComparison.Ordinal))
         {
-            return AdmissionDriftError(
+            return new NyxIdOperationRequestFailure(
                 "NYXID_OPERATION_CONTRACT_DRIFT",
                 "The live NyxID endpoint no longer matches the admitted contract.");
         }
@@ -510,7 +531,11 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         return null;
     }
 
-    private static (string ErrorCode, string ErrorMessage)? MapAuthoredExactRouteFailure(
+    private static bool CanUseExactReadOnlyAuthority(AgentToolOperationAdmission admission) =>
+        admission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly &&
+        admission.HttpMethod is "GET" or "HEAD" or "OPTIONS";
+
+    private static (string ErrorCode, string ErrorMessage)? MapExactRouteFailure(
         string response,
         string serviceInstanceId,
         string serviceSlug)
@@ -518,10 +543,10 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         if (!TryReadNyxIdTextProxyFailure(response, out var httpStatus, out var error, out var errorCode, out var message))
             return null;
 
-        return MapAuthoredExactRouteError(httpStatus, error, errorCode, message, serviceInstanceId, serviceSlug);
+        return MapExactRouteError(httpStatus, error, errorCode, message, serviceInstanceId, serviceSlug);
     }
 
-    private static (string ErrorCode, string ErrorMessage)? MapAuthoredExactRouteFailure(
+    private static (string ErrorCode, string ErrorMessage)? MapExactRouteFailure(
         NyxIdProxyBinaryResponse response,
         string serviceInstanceId,
         string serviceSlug)
@@ -532,10 +557,10 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             return null;
         }
 
-        return MapAuthoredExactRouteError(response.HttpStatus, error, errorCode, message, serviceInstanceId, serviceSlug);
+        return MapExactRouteError(response.HttpStatus, error, errorCode, message, serviceInstanceId, serviceSlug);
     }
 
-    private static (string ErrorCode, string ErrorMessage)? MapAuthoredExactRouteError(
+    private static (string ErrorCode, string ErrorMessage)? MapExactRouteError(
         int httpStatus,
         string error,
         int errorCode,
@@ -688,7 +713,26 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
     private static string AdmissionDriftError(string code, string message) =>
         JsonSerializer.Serialize(new { error = true, error_code = code, message });
 
-    private async Task<AgentToolExecutionOutcome> ExecuteAdmittedFileArtifactAsync(
+    private static AgentToolTerminalOutcome CreateAdmittedFailureOutcome(
+        AgentToolOperationAdmission admission,
+        string callId,
+        string toolName,
+        string errorCode,
+        string errorMessage)
+    {
+        var result = AdmissionDriftError(errorCode, errorMessage);
+        return new AgentToolTerminalOutcome(
+            result,
+            NyxIdProxyReceiptFactory.CreateError(
+                callId,
+                toolName,
+                admission.ServiceInstanceId,
+                errorCode,
+                errorMessage,
+                result));
+    }
+
+    private async Task<AgentToolTerminalOutcome> ExecuteAdmittedFileArtifactAsync(
         string effectiveToken,
         NyxIdOperationRequest request,
         string callId,
@@ -697,14 +741,14 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         CancellationToken ct)
     {
         if (_fileArtifactIngress == null)
-            return new AgentToolExecutionOutcome(FileArtifactError("file_artifact_ingress_unavailable", "Host has not registered workflow file artifact ingress."));
+            return new AgentToolTerminalOutcome(FileArtifactError("file_artifact_ingress_unavailable", "Host has not registered workflow file artifact ingress."));
 
         var context = AgentToolRequestContext.Current;
         var workflowRuntime = context?.WorkflowRuntime ?? AgentWorkflowRuntimeContext.Empty;
         var callerScopeId = Normalize(context?.Caller.ScopeId);
         var ownerRunId = Normalize(workflowRuntime.ParentRunId);
         if (!workflowRuntime.HasManagedParent || callerScopeId == null || ownerRunId == null)
-            return new AgentToolExecutionOutcome(FileArtifactError("managed_workflow_context_required", "response_mode=file_artifact requires a managed workflow runtime context and caller scope."));
+            return new AgentToolTerminalOutcome(FileArtifactError("managed_workflow_context_required", "response_mode=file_artifact requires a managed workflow runtime context and caller scope."));
 
         var response = await _client.ProxyGetBinaryResponseAsync(
             effectiveToken,
@@ -717,14 +761,14 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
 
         if (authoredServiceInstanceId is not null)
         {
-            var authorityFailure = MapAuthoredExactRouteFailure(
+            var authorityFailure = MapExactRouteFailure(
                 response,
                 authoredServiceInstanceId,
                 request.Slug);
             if (authorityFailure is { } failure)
             {
                 var result = AdmissionDriftError(failure.ErrorCode, failure.ErrorMessage);
-                return new AgentToolExecutionOutcome(
+                return new AgentToolTerminalOutcome(
                     result,
                     NyxIdProxyReceiptFactory.CreateError(
                         callId,
@@ -744,7 +788,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             callerScopeId,
             ownerRunId,
             ct);
-        return new AgentToolExecutionOutcome(
+        return new AgentToolTerminalOutcome(
             completion.ResultJson,
             completion.Succeeded
                 ? NyxIdProxyReceiptFactory.CreateSuccess(

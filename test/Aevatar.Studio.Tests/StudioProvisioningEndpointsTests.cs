@@ -356,6 +356,33 @@ public sealed class StudioProvisioningEndpointsTests
     }
 
     [Fact]
+    public async Task HandleProvisionWorkflowAsync_ShouldReturnTypedNotFound_WhenTeamDoesNotExist()
+    {
+        const string missingTeamId = "team-missing";
+        var service = new RecordingProvisioningService
+        {
+            ProvisionException = new StudioTeamNotFoundException(ScopeId, missingTeamId),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor", Caller: Caller)
+            {
+                TeamId = missingTeamId,
+            },
+            service,
+            CancellationToken.None);
+
+        AssertIsJsonStatus(result, StatusCodes.Status404NotFound);
+        var value = result.GetType().GetProperty("Value")?.GetValue(result);
+        value.Should().NotBeNull();
+        value!.GetType().GetProperty("code")?.GetValue(value)
+            .Should().Be("STUDIO_TEAM_NOT_FOUND");
+        service.ProvisionInvoked.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task HandleProvisionWorkflowAsync_ShouldReturnRetryableProjectionPending()
     {
         var service = new RecordingProvisioningService
@@ -426,7 +453,7 @@ public sealed class StudioProvisioningEndpointsTests
         ScopeId: ScopeId,
         TeamId: TeamId,
         BindingStatus: ProvisionWorkflowBindingStatusNames.Accepted,
-        ObservatoryUrl: "/workflow/observatory")
+        ObservatoryUrl: "/admin#/observatory")
     {
         BindingRunId = "bind-run-1",
         ScheduleId = ScheduleId,

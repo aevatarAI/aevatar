@@ -2,6 +2,7 @@ using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -21,7 +22,7 @@ public sealed class NyxIdCodexExecToolTests
         var tool = new NyxIdCodexExecTool(CreateDummyClient());
 
         tool.Name.Should().Be("codex_exec");
-        tool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
         tool.RequiresApproval("{}").Should().BeTrue();
         tool.Description.Should().Contain("private NyxID-backed SSH");
         tool.Description.Should().Contain("managed isolated sandbox");
@@ -42,13 +43,12 @@ public sealed class NyxIdCodexExecToolTests
     }
 
     [Fact]
-    public void RequiresApproval_WhenSshBypassEnabled_AppliesOnlyToPrivateSsh()
+    public void ApprovalPolicy_RequiresPrivateSshButAllowsManagedSandbox()
     {
-        var tool = new NyxIdCodexExecTool(
-            CreateDummyClient(),
-            new NyxIdToolOptions { BypassSshExecApproval = true });
+        var tool = new NyxIdCodexExecTool(CreateDummyClient());
 
-        tool.RequiresApproval("""{"target":{"kind":"private_ssh"}}""").Should().BeFalse();
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        tool.RequiresApproval("""{"target":{"kind":"private_ssh"}}""").Should().BeTrue();
         tool.RequiresApproval("""{"target":{"kind":"managed_sandbox"}}""").Should().BeFalse();
         tool.RequiresApproval("{}").Should().BeTrue();
         tool.RequiresApproval("""{"target":{"kind":"unknown"}}""").Should().BeTrue();
@@ -169,7 +169,14 @@ public sealed class NyxIdCodexExecToolTests
     {
         var port = new RecordingManagedPort();
         var tool = new NyxIdCodexExecTool([port], new NyxIdToolOptions());
-        SetToken("caller-token");
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolExecutionContext.Empty.Credentials with
+            {
+                NyxIdAccessToken = "caller-token",
+                NyxIdCredentialKind = AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+            },
+        };
         try
         {
             const string arguments = """
@@ -194,6 +201,71 @@ public sealed class NyxIdCodexExecToolTests
                 CodexExecutionWorkspace.WorkspaceOneofCase.EmptyGit);
             port.Request.Caller.NyxIdAccessToken.Should().Be("caller-token");
             port.Request.TimeoutSeconds.Should().Be(180);
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ManagedTargetUsesSourceReadableBearerInsteadOfProxyDelegation()
+    {
+        var port = new RecordingManagedPort();
+        var tool = new NyxIdCodexExecTool([port], new NyxIdToolOptions());
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "delegation-alpha",
+                "org-alpha",
+                "sender-alpha",
+                AgentToolNyxIdCredentialKind.ProxyDelegation,
+                "source-alpha"),
+        };
+        try
+        {
+            await tool.ExecuteAsync("""
+                {
+                  "target": { "kind": "managed_sandbox" },
+                  "workspace": { "kind": "empty_git" },
+                  "prompt": "Reply with exactly CODEX_EXEC_READY"
+                }
+                """);
+
+            port.Request.Should().NotBeNull();
+            port.Request!.Caller.NyxIdAccessToken.Should().Be("source-alpha");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ManagedTargetDoesNotTreatOrganizationOrSenderCredentialAsSourceReadable()
+    {
+        var port = new RecordingManagedPort();
+        var tool = new NyxIdCodexExecTool([port], new NyxIdToolOptions());
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "delegation-alpha",
+                "source-alpha",
+                "source-beta",
+                AgentToolNyxIdCredentialKind.ProxyDelegation),
+        };
+        try
+        {
+            await tool.ExecuteAsync("""
+                {
+                  "target": { "kind": "managed_sandbox" },
+                  "workspace": { "kind": "empty_git" },
+                  "prompt": "Reply with exactly CODEX_EXEC_READY"
+                }
+                """);
+
+            port.Request.Should().NotBeNull();
+            port.Request!.Caller.NyxIdAccessToken.Should().BeNull();
         }
         finally
         {
@@ -235,6 +307,98 @@ public sealed class NyxIdCodexExecToolTests
         var exception = await act.Should().ThrowAsync<CodexExecutionException>();
         exception.Which.Failure.Kind.Should().Be(CodexExecutionFailureKind.ProvisioningFailed);
         exception.Which.Failure.Code.Should().Be("sandbox_provisioning_failed");
+    }
+
+    [Fact]
+    public void CreateResultReceipt_WhenManagedResultSucceeded_ReportsVerifiedSuccess()
+    {
+        var tool = new NyxIdCodexExecTool(CreateDummyClient());
+
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            "codex_exec",
+            "{}",
+            """{"status":"succeeded","target":"managed_sandbox","output":"done","exit_code":0,"diagnostic_id":"diag","elapsed_ms":42}""");
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.CallId.Should().Be("call-1");
+        receipt.ToolName.Should().Be("codex_exec");
+    }
+
+    [Fact]
+    public void CreateResultReceipt_WhenPrivateSshExitedCleanly_ReportsVerifiedSuccess()
+    {
+        var tool = new NyxIdCodexExecTool(CreateDummyClient());
+
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            "codex_exec",
+            "{}",
+            """{"exit_code":0,"stdout":"done","stderr":"","duration_ms":42,"timed_out":false}""");
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+    }
+
+    [Theory]
+    [InlineData(
+        """{"error":"invalid_target","detail":"'target.kind' is required."}""",
+        "invalid_target",
+        "'target.kind' is required.")]
+    [InlineData(
+        """{"error":"ssh_timeout","detail":"NyxID did not return an SSH exec response within 45s."}""",
+        "ssh_timeout",
+        "NyxID did not return an SSH exec response within 45s.")]
+    [InlineData(
+        """{"error":"No NyxID access token available. User must be authenticated."}""",
+        "codex_exec_failed",
+        "No NyxID access token available. User must be authenticated.")]
+    public void CreateResultReceipt_WhenToolReturnedErrorJson_CarriesStableFailureCode(
+        string resultJson,
+        string expectedCode,
+        string expectedMessage)
+    {
+        var tool = new NyxIdCodexExecTool(CreateDummyClient());
+
+        var receipt = tool.CreateResultReceipt("call-1", "codex_exec", "{}", resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be(expectedCode);
+        receipt.ErrorMessage.Should().Be(expectedMessage);
+        receipt.ResultJson.Should().Contain(expectedCode);
+    }
+
+    [Theory]
+    [InlineData("""{"exit_code":2,"stdout":"","stderr":"boom","timed_out":false}""", "codex_exec_nonzero_exit")]
+    [InlineData("""{"exit_code":0,"stdout":"","stderr":"","timed_out":true}""", "codex_exec_timed_out")]
+    public void CreateResultReceipt_WhenPrivateSshFailed_ReportsTypedError(
+        string resultJson,
+        string expectedCode)
+    {
+        var tool = new NyxIdCodexExecTool(CreateDummyClient());
+
+        var receipt = tool.CreateResultReceipt("call-1", "codex_exec", "{}", resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be(expectedCode);
+    }
+
+    [Theory]
+    [InlineData("not json at all")]
+    [InlineData("[]")]
+    [InlineData("""{"status":"running"}""")]
+    [InlineData("""{"exit_code":0}""")]
+    [InlineData("""{"exit_code":0,"timed_out":null}""")]
+    [InlineData("""{"exit_code":0,"timed_out":"false"}""")]
+    [InlineData("""{"stdout":"no terminal markers"}""")]
+    public void CreateResultReceipt_WhenOutcomeIsAmbiguous_StaysUnknown(string resultJson)
+    {
+        var tool = new NyxIdCodexExecTool(CreateDummyClient());
+
+        tool.CreateResultReceipt("call-1", "codex_exec", "{}", resultJson).Should().BeNull();
     }
 
     private static string DecodePrompt(string command)

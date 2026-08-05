@@ -62,7 +62,12 @@ public sealed class DefaultServiceRuntimeActivatorTests
                 {
                     WorkflowName = "workflow",
                     WorkflowYaml = "name: workflow",
+                    ExecutionMode = ExternalCapabilityExecutionMode.Durable,
                     DefinitionActorId = "workflow-definition-1",
+                    CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+                    {
+                        ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+                    },
                 },
             },
         };
@@ -195,7 +200,12 @@ public sealed class DefaultServiceRuntimeActivatorTests
                 {
                     WorkflowName = "workflow",
                     WorkflowYaml = "name: workflow",
+                    ExecutionMode = ExternalCapabilityExecutionMode.Durable,
                     DefinitionActorId = string.Empty,
+                    CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+                    {
+                        ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+                    },
                 },
             },
         };
@@ -278,7 +288,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
         var capabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
             "name: workflow",
             new Dictionary<string, string> { ["child"] = "name: child" },
-            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable,
             [],
             []);
         var artifact = new PreparedServiceRevisionArtifact
@@ -292,6 +302,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
                 {
                     WorkflowName = "workflow",
                     WorkflowYaml = "name: workflow",
+                    ExecutionMode = ExternalCapabilityExecutionMode.Durable,
                     DefinitionActorId = "workflow-definition-1",
                     WorkflowId = "wf-activation-alpha",
                     RevisionId = "rev-activation-alpha",
@@ -344,7 +355,12 @@ public sealed class DefaultServiceRuntimeActivatorTests
                 {
                     WorkflowName = "workflow",
                     WorkflowYaml = "name: workflow",
+                    ExecutionMode = ExternalCapabilityExecutionMode.Durable,
                     DefinitionActorId = "workflow-definition-1",
+                    CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+                    {
+                        ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+                    },
                 },
             },
         };
@@ -570,12 +586,13 @@ public sealed class DefaultServiceRuntimeActivatorTests
             string actorId,
             string workflowYaml,
             string workflowName,
-            IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
-            string? scopeId = null,
-            string? sourceKind = null,
-            WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
-            string? workflowId = null,
-            string? revisionId = null,
+            IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+            string? scopeId,
+            string? sourceKind,
+            WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+            string? workflowId,
+            string? revisionId,
+            ExternalCapabilityExecutionMode expectedExecutionMode,
             CancellationToken ct = default)
         {
             RecordBind(actorId, workflowYaml, workflowName, inlineWorkflowYamls, ExplicitBindCalls);
@@ -617,6 +634,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
         string planRevisionId)
     {
         var admissionPlan = new WorkflowCapabilityAdmissionPlan();
+        admissionPlan.ExecutionMode = ExternalCapabilityExecutionMode.Durable;
         admissionPlan.InvocationAdmissions.Add(new WorkflowCapabilityInvocationAdmission
         {
             CallSiteId = "workflow/request-alpha",
@@ -633,6 +651,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
                 {
                     WorkflowName = "workflow",
                     WorkflowYaml = "name: workflow",
+                    ExecutionMode = ExternalCapabilityExecutionMode.Durable,
                     WorkflowId = "wf-activation-alpha",
                     RevisionId = planRevisionId,
                     CapabilityAdmissionPlan = admissionPlan,

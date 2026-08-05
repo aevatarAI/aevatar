@@ -172,6 +172,8 @@ message WorkflowCallerCredential {
   aevatar.credentials.DurableCallerCredentialRef durable_caller_credential = 3;
   WorkflowCallerNyxIdAuthority nyx_id_authority = 4;
   NyxIdCallerCredentialKind kind = 5;
+  string source_readable_user_bearer_token = 6;
+  aevatar.credentials.RuntimeSecretReference source_readable_user_bearer_runtime_secret_reference = 7;
 }
 
 message WorkflowCallerNyxIdAuthority {
@@ -219,6 +221,7 @@ message WorkflowChatRequestEvent {
   WorkflowExternalIngressContext external_ingress = 12;
   WorkflowCompletionNotificationTarget completion_notification_target = 13;
   WorkflowConversationContext conversation_context = 14;
+  string current_turn_id = 15;
 }
 
 enum WorkflowConversationRole {
@@ -242,6 +245,7 @@ message WorkflowConversationContext {
   repeated WorkflowConversationMessage messages = 4;
   bool truncated = 5;
   int32 max_message_count = 6;
+  string current_turn_id = 7;
 }
 
 message WorkflowRunForkSeed
@@ -297,6 +301,7 @@ message BindWorkflowRunDefinitionEvent
   // Committed call-site admission proof copied from the authoritative Definition binding.
   // The Run actor owns this copy for its whole lifetime; runtime never re-reads the Definition.
   WorkflowCapabilityAdmissionPlan capability_admission_plan = 9;
+  ExternalCapabilityExecutionMode expected_execution_mode = 10;
 }
 
 // Idempotent provisioning command for a stable Run actor identity. The first
@@ -320,6 +325,7 @@ message BindWorkflowDefinitionEvent
   WorkflowCapabilityAdmissionPlan capability_admission_plan = 7;
   string workflow_id = 8;
   string revision_id = 9;
+  ExternalCapabilityExecutionMode expected_execution_mode = 10;
 }
 
 enum WorkflowServiceGrantPolicy {
@@ -351,6 +357,7 @@ message WorkflowRunExecutionStartedEvent
   WorkflowCompletionNotificationTarget completion_notification_target = 10;
   string workflow_command_id = 11;
   string workflow_correlation_id = 12;
+  string current_turn_id = 13;
 }
 message WorkflowRunExecutionContextDelta
 {
@@ -491,6 +498,7 @@ enum TransformOperationKind {
   TRANSFORM_OPERATION_KIND_MIN = 6;
   TRANSFORM_OPERATION_KIND_MAX = 7;
   TRANSFORM_OPERATION_KIND_GROUP_BY = 8;
+  TRANSFORM_OPERATION_KIND_TEMPLATE = 9;
 }
 
 enum TransformAggregateKind {
@@ -506,6 +514,7 @@ message TransformOperationSpec {
   string key = 3;
   string value = 4;
   TransformAggregateKind aggregate = 5;
+  string template = 6;
 }
 
 enum WorkflowHumanApprovalTimeoutDefaultDecision {
@@ -809,6 +818,12 @@ message WorkflowRoleReplyToolCall
   bool success = 5;
   string error = 6;
 }
+message WorkflowArtifactSourceIdentity
+{
+  string publisher_actor_id = 1;
+  string committed_event_id = 2;
+  int64 committed_state_version = 3;
+}
 message WorkflowRoleReplyRecordedEvent
 {
   string run_id = 1;
@@ -820,6 +835,7 @@ message WorkflowRoleReplyRecordedEvent
   string prompt = 7;
   bool content_emitted = 8;
   repeated WorkflowRoleReplyToolCall tool_calls = 9;
+  WorkflowArtifactSourceIdentity source = 10;
 }
 
 message WorkflowLlmExecutionIntent
@@ -876,16 +892,6 @@ message WorkflowLlmInvocationStartedEvent
   string role_actor_id = 4;
 }
 
-message WorkflowLlmStreamChunkEvent
-{
-  string run_id = 1;
-  string step_id = 2;
-  string session_id = 3;
-  string role_actor_id = 4;
-  string delta_content = 5;
-  string delta_reasoning_content = 6;
-}
-
 message WorkflowLlmInvocationCompletedEvent
 {
   string run_id = 1;
@@ -898,6 +904,61 @@ message WorkflowLlmInvocationCompletedEvent
   string error = 8;
   WorkflowUsageMetrics usage = 9;
   WorkflowManagedHandoffOutcome managed_handoff = 10;
+  WorkflowInteractiveAuthorizationRequirement authorization_requirement = 11;
+}
+
+message WorkflowInteractiveAuthorizationRequirement
+{
+  string service_slug = 1;
+  repeated string requested_scopes = 2;
+  string reason_code = 3;
+  string safe_message = 4;
+}
+
+message WorkflowInteractiveCatalogServiceActionParams
+{
+  string service_slug = 1;
+  repeated string requested_scopes = 2;
+}
+
+message WorkflowInteractiveActionParams
+{
+  WorkflowInteractiveCatalogServiceActionParams catalog_service = 1;
+}
+
+// Presentation-safe schema-v4 request. It intentionally mirrors NyxID's wire
+// field names while keeping workflow and nyxid.chat state contracts isolated.
+message WorkflowInteractiveActionRequestWirePayload
+{
+  int32 schema_version = 1;
+  string actor_id = 2;
+  string origin_turn_id = 3;
+  string task_id = 4;
+  string step_id = 5;
+  string action_request_id = 6;
+  string action = 7;
+  WorkflowInteractiveActionParams params = 8;
+}
+
+message WorkflowInteractiveActionHandoffCommand
+{
+  string handoff_id = 1;
+  string scope_id = 2;
+  string owner_subject = 3;
+  string source_workflow_actor_id = 4;
+  WorkflowInteractiveActionRequestWirePayload request = 5;
+}
+
+message WorkflowInteractiveActionHandoffDispatchedEvent
+{
+  string handoff_id = 1;
+  WorkflowInteractiveActionRequestWirePayload request = 2;
+  WorkflowLlmInvocationCompletedEvent terminal_continuation = 3;
+}
+
+message WorkflowInteractiveActionContinuationDispatchedEvent
+{
+  string handoff_id = 1;
 }
 
 message WorkflowManagedHandoffOutcome
@@ -1113,6 +1174,8 @@ message WorkflowConnectorAttemptCompletedEvent {
   string error = 7;
   map<string, string> annotations = 8;
   string execution_id = 9;
+  optional bool terminal_invoked = 10;
+  optional bool retryable = 11;
 }
 message WorkflowSignalBufferedEvent
 {

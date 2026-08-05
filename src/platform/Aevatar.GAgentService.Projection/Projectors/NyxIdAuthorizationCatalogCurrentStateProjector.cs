@@ -59,6 +59,8 @@ public sealed class NyxIdAuthorizationCatalogCurrentStateProjector
             CleanedAt = state.CleanedAt?.ToDateTimeOffset(),
             CleanupReason = state.CleanupReason,
         };
+        if (state.GatewayLlmTarget != null)
+            document.GatewayLlmTarget = state.GatewayLlmTarget.Clone();
         if (state.ObservedAt != null)
             document.ObservedAt = state.ObservedAt.ToDateTimeOffset();
         if (state.FreshUntil != null)

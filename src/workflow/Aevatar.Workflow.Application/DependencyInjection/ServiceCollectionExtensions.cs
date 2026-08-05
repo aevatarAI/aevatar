@@ -4,15 +4,16 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
+using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Observatory;
-using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Projections;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
-using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.ExternalCapabilities;
 using Aevatar.Workflow.Application.Observatory;
 using Aevatar.Workflow.Application.Queries;
@@ -21,7 +22,6 @@ using Aevatar.Workflow.Application.RunForks;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Application.Schedules;
 using Aevatar.Workflow.Application.Workflows;
-using Aevatar.Foundation.Abstractions.EventSourcing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -38,6 +38,21 @@ public static class ServiceCollectionExtensions
         configureRegistry?.Invoke(options);
         var runBehaviorOptions = new WorkflowRunBehaviorOptions();
         configureRunBehavior?.Invoke(runBehaviorOptions);
+        if (runBehaviorOptions.AcceptedObservationTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(configureRunBehavior),
+                "Workflow accepted observation timeout must be positive.");
+        }
+        if (runBehaviorOptions.ChatHistoryReservationObservationTimeout <= TimeSpan.Zero ||
+            runBehaviorOptions.ChatHistoryReservationObservationInterval <= TimeSpan.Zero ||
+            runBehaviorOptions.ChatHistoryReservationObservationInterval >
+            runBehaviorOptions.ChatHistoryReservationObservationTimeout)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(configureRunBehavior),
+                "Chat history reservation observation timing must be positive and the interval must not exceed the timeout.");
+        }
         services.AddSingleton(runBehaviorOptions);
         services.TryAddTransient<ExternalWorkflowCapabilityReadinessService>();
         services.TryAddTransient<IExternalWorkflowCapabilityListPort>(provider =>
@@ -46,6 +61,8 @@ public static class ServiceCollectionExtensions
             provider.GetRequiredService<ExternalWorkflowCapabilityReadinessService>());
         services.TryAddTransient<IWorkflowExternalCapabilityAdmissionService,
             WorkflowExternalCapabilityAdmissionService>();
+        services.TryAddTransient<IWorkflowArtifactCompatibilityPreflight,
+            WorkflowArtifactCompatibilityPreflight>();
         services.TryAddTransient<IWorkflowExplicitRequestPreviewService,
             WorkflowExplicitRequestPreviewService>();
         services.TryAddTransient<IWorkflowDraftRunCapabilityAdmissionService,
@@ -55,13 +72,25 @@ public static class ServiceCollectionExtensions
         {
             var catalog = new WorkflowDefinitionCatalog();
             if (options.RegisterBuiltInDirectWorkflow)
-                catalog.Register("direct", WorkflowDefinitionCatalog.BuiltInDirectYaml);
+                catalog.Register(
+                    "direct",
+                    WorkflowDefinitionCatalog.BuiltInDirectYaml,
+                    Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode.Interactive);
             if (options.RegisterBuiltInStudioWorkflow)
-                catalog.Register("studio", WorkflowDefinitionCatalog.BuiltInStudioYaml);
+                catalog.Register(
+                    "studio",
+                    WorkflowDefinitionCatalog.BuiltInStudioYaml,
+                    Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode.Interactive);
             if (options.RegisterBuiltInAutoWorkflow)
-                catalog.Register("auto", WorkflowDefinitionCatalog.CreateBuiltInAutoYaml());
+                catalog.Register(
+                    "auto",
+                    WorkflowDefinitionCatalog.CreateBuiltInAutoYaml(),
+                    Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode.Interactive);
             if (options.RegisterBuiltInAutoReviewWorkflow)
-                catalog.Register("auto_review", WorkflowDefinitionCatalog.CreateBuiltInAutoReviewYaml());
+                catalog.Register(
+                    "auto_review",
+                    WorkflowDefinitionCatalog.CreateBuiltInAutoReviewYaml(),
+                    Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode.Interactive);
 
             return catalog;
         });
@@ -128,7 +157,8 @@ public static class ServiceCollectionExtensions
                 sp.GetService<Microsoft.Extensions.Logging.ILogger<DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>>(),
                 sp.GetRequiredService<ICommandObservationLifecycle<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>(),
                 sp.GetRequiredService<ICommandReceiptFactory<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>>(),
-                sp.GetRequiredService<ICommandObservationScopeLeasePreparation<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>()));
+                sp.GetRequiredService<ICommandObservationScopeLeasePreparation<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>(),
+                acceptedObservationTimeout: sp.GetRequiredService<WorkflowRunBehaviorOptions>().AcceptedObservationTimeout));
         services.AddSingleton<IWorkflowChatRunInteractionPort>(sp =>
             new WorkflowChatRunInteractionService(
                 sp.GetRequiredService<IWorkflowRunActorResolver>(),
@@ -137,7 +167,8 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>(),
                 sp.GetRequiredService<WorkflowDirectFallbackPolicy>(),
                 sp.GetService<IWorkflowChatHistoryTerminalDeliveryPort>(),
-                sp.GetService<IWorkflowChatHistoryCreateRecoveryReadPort>()));
+                sp.GetService<IWorkflowChatHistoryCreateRecoveryReadPort>(),
+                sp.GetRequiredService<WorkflowRunBehaviorOptions>()));
         services.TryAddSingleton<IWorkflowRunReportExportPort, NoopWorkflowRunReportExporter>();
         // Refactor (iter18/cluster-005):
         //   Old pattern: accepted-only dispatch used a detached live-sink monitor service
@@ -171,7 +202,11 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<RegistryBackedWorkflowCatalogPort>());
         services.TryAddSingleton<IWorkflowCapabilitiesPort>(sp =>
             sp.GetRequiredService<RegistryBackedWorkflowCatalogPort>());
-        services.AddSingleton<IWorkflowExecutionQueryApplicationService, WorkflowExecutionQueryApplicationService>();
+        services.AddSingleton<WorkflowExecutionQueryApplicationService>();
+        services.AddSingleton<IWorkflowExecutionQueryApplicationService>(sp =>
+            sp.GetRequiredService<WorkflowExecutionQueryApplicationService>());
+        services.AddSingleton<IWorkflowExecutionScopeQueryApplicationService>(sp =>
+            sp.GetRequiredService<WorkflowExecutionQueryApplicationService>());
         // 06-19-workflow-run-observatory (C2): scope-enforcement seam for the read-only run viewer.
         // 06-20-observatory-admin-cross-scope (G3): one instance backs both the scope-bound reads and the
         // separate cross-scope admin query contract.

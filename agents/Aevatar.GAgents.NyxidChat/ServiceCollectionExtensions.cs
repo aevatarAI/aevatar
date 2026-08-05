@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.AI.Core.DependencyInjection;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
@@ -33,6 +34,7 @@ using Aevatar.AGUI.Contracts;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -55,6 +57,7 @@ public static class ServiceCollectionExtensions
         services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(NyxIdChatGAgent).Assembly));
 
         services.AddCqrsCore();
+        services.AddAgentToolExecution();
         services.AddToolSetRegistry();
         if (configuration is null)
             services.AddNyxIdApiAccess();
@@ -152,6 +155,10 @@ public static class ServiceCollectionExtensions
         }
         services.TryAddSingleton<BuiltInPromptFloorProvider>();
         services.TryAddSingleton<IBuiltInPromptFloorProvider>(sp => sp.GetRequiredService<BuiltInPromptFloorProvider>());
+        services.TryAddSingleton<IUserMemoryPromptContextProvider>(sp =>
+            new UserMemoryPromptContextProvider(
+                sp.GetService<IUserMemoryQueryPort>(),
+                sp.GetRequiredService<ILogger<UserMemoryPromptContextProvider>>()));
         services.TryAddSingleton<ChannelRemoteSkillAccessTokenResolver>(sp =>
             new ChannelRemoteSkillAccessTokenResolver(
                 sp.GetService<INyxIdSkillCapabilityIssuer>(),
@@ -164,20 +171,19 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IBuiltInPromptFloorProvider>(),
                 ResolveChannelToolSources(sp),
                 sp.GetServices<IAgentRunMiddleware>(),
-                sp.GetServices<IToolCallMiddleware>(),
                 sp.GetServices<ILLMCallMiddleware>(),
                 sp.GetService<LocalSkillCatalog>(),
                 sp.GetService<IRemoteSkillFetcher>(),
                 sp.GetService<NyxIdRelayOptions>(),
                 sp.GetService<INyxIdUserLlmPreferencesStore>(),
-                sp.GetService<IUserMemoryStore>(),
+                sp.GetService<IUserMemoryPromptContextProvider>(),
                 larkClient: sp.GetService<ILarkNyxClient>(),
                 fileIngressPort: sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactIngressPort>(),
                 fileArtifactReadPort: sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactReadPort>(),
-                approvalHandler: null,
                 logger: sp.GetService<ILogger<NyxIdConversationReplyGenerator>>(),
                 overlayProvider: sp.GetService<ISystemSkillOverlayProvider>(),
                 larkOutboundClientFactory: sp.GetService<ILarkOutboundClientFactory>(),
+                toolExecutionPort: sp.GetRequiredService<IAgentToolExecutionPort>(),
                 remoteSkillAccessTokenResolver: sp.GetService<IRemoteSkillAccessTokenResolver>()));
         services.TryAddSingleton<ChannelNyxIdConnectedServiceInventoryToolSource>();
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();

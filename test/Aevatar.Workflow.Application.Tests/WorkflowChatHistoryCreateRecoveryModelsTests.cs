@@ -1,4 +1,6 @@
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using WorkflowChatInputPartKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Application.Tests;
@@ -153,6 +155,7 @@ public sealed class WorkflowChatHistoryCreateRecoveryModelsTests
         new(
             "deploy report",
             source,
+            ExternalCapabilityExecutionMode.Interactive,
             ScopeId: "scope-alpha",
             ChatConversation: WorkflowChatConversationIntent.Create(),
             Metadata: metadata);
@@ -168,6 +171,7 @@ public sealed class WorkflowChatHistoryCreateRecoveryModelsTests
         new(
             prompt,
             source ?? WorkflowChatSource.DefinitionActor("actor-alpha", "direct"),
+            ExternalCapabilityExecutionMode.Interactive,
             SessionId: sessionId,
             InputParts:
             [

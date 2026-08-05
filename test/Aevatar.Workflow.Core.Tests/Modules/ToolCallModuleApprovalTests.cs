@@ -52,6 +52,8 @@ public sealed class ToolCallModuleApprovalTests
         suspended.ToolApproval.ToolName.Should().Be("danger");
         suspended.ToolApproval.ToolCallId.Should().Be("workflow:run-1:danger_step:exec-1");
         suspended.ToolApproval.ApprovalRequestId.Should().Be("approval-1");
+        ctx.Published.Single(x => x.Event is WorkflowSuspendedEvent)
+            .Direction.Should().Be(TopologyAudience.Self);
         var state = ctx.LoadState<ToolCallModuleState>("tool_call");
         state.PendingApprovals.Should().ContainKey("run-1:danger_step:exec-1:workflow:run-1:danger_step:exec-1:approval-1");
         var pendingState = state.PendingApprovals.Values.Should().ContainSingle().Subject;
@@ -62,6 +64,7 @@ public sealed class ToolCallModuleApprovalTests
     [Fact]
     public async Task ApprovedResume_ShouldReplayOriginalToolArgumentsWithTypedGrantAndClearPendingState()
     {
+        var issuedAt = new DateTimeOffset(2026, 7, 31, 10, 11, 12, TimeSpan.Zero);
         var pending = new WorkflowToolApprovalPendingOutcome(
             ApprovalRequestId: "approval-1",
             ToolName: "danger",
@@ -87,7 +90,11 @@ public sealed class ToolCallModuleApprovalTests
             """{"danger":true}""",
             "exec-1",
             [fileRef],
-            "idem-approval-1");
+            "idem-approval-1",
+            issuedAt);
+        ctx.LoadState<ToolCallModuleState>("tool_call")
+            .PendingApprovals.Values.Should().ContainSingle()
+            .Which.IssuedAtUnixMs.Should().Be(issuedAt.ToUnixTimeMilliseconds());
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -108,6 +115,9 @@ public sealed class ToolCallModuleApprovalTests
 
         tool.Requests.Should().HaveCount(2);
         tool.Requests[1].ArgumentsJson.Should().Be("""{"danger":true}""");
+        tool.Requests.Select(request => request.IssuedAtUnixMs)
+            .Should().OnlyContain(value => value == issuedAt.ToUnixTimeMilliseconds());
+        tool.Requests.Count(request => request.ApprovalGrant is not null).Should().Be(1);
         tool.Requests[1].InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-replay");
         tool.Requests[1].IdempotencyKey.Should().Be("idem-approval-1");
         tool.Requests[1].ApprovalGrant.Should().NotBeNull();
@@ -184,6 +194,62 @@ public sealed class ToolCallModuleApprovalTests
         stepCompleted.Output.Should().Be(resultJson);
         stepCompleted.Error.Should().Contain("The service request failed.");
         ctx.LoadState<ToolCallModuleState>("tool_call").PendingApprovals.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ApprovedResume_WhenPreTerminalFailureIsRetryable_ShouldKeepPendingAndRetryTurn()
+    {
+        var pending = new WorkflowToolApprovalPendingOutcome(
+            ApprovalRequestId: "approval-1",
+            ToolName: "danger",
+            ToolCallId: "workflow:run-1:danger_step:exec-1",
+            ArgumentsJson: """{"danger":true}""",
+            ApprovalMode: "AlwaysRequire",
+            IsReadOnly: false,
+            IsDestructive: true);
+        var tool = new ScriptedWorkflowTool(
+            "danger",
+            request => request.ApprovalGrant is null
+                ? new WorkflowToolExecutionResult(string.Empty, PendingApproval: pending)
+                : WorkflowToolExecutionResult.Failed(
+                    """{"error":"tool_admission_unavailable"}""",
+                    "tool_admission_unavailable",
+                    "The durable tool admission ledger is unavailable.",
+                    terminalInvoked: false,
+                    retryable: true));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            "danger_step",
+            """{"danger":true}""",
+            "exec-1");
+        ctx.Published.Clear();
+
+        var action = () => module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-1",
+                StepId = "danger_step",
+                Approved = true,
+                ToolApproval = new WorkflowToolApprovalResume
+                {
+                    ExecutionId = "exec-1",
+                    ToolCallId = "workflow:run-1:danger_step:exec-1",
+                    ApprovalRequestId = "approval-1",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("The durable tool admission ledger is unavailable.");
+        ctx.LoadState<ToolCallModuleState>("tool_call").PendingApprovals.Should().ContainSingle();
+        ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallCompletedEvent>().Should().BeEmpty();
+        ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Should().BeEmpty();
     }
 
     [Fact]
@@ -280,7 +346,8 @@ public sealed class ToolCallModuleApprovalTests
         string input,
         string executionId,
         IReadOnlyList<WorkflowFileRef>? inputFileRefs = null,
-        string idempotencyKey = "")
+        string idempotencyKey = "",
+        DateTimeOffset? issuedAt = null)
     {
         var request = new StepRequestEvent
         {
@@ -295,7 +362,7 @@ public sealed class ToolCallModuleApprovalTests
         request.InputFileRefs.Add(inputFileRefs?.Select(static fileRef => fileRef.Clone()) ?? []);
 
         await module.HandleAsync(
-            Envelope(request),
+            Envelope(request, issuedAt),
             ctx,
             CancellationToken.None);
     }
@@ -310,11 +377,11 @@ public sealed class ToolCallModuleApprovalTests
             MediaType = "text/plain",
         };
 
-    private static EventEnvelope Envelope(IMessage evt) =>
+    private static EventEnvelope Envelope(IMessage evt, DateTimeOffset? issuedAt = null) =>
         new()
         {
             Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Timestamp = Timestamp.FromDateTimeOffset(issuedAt ?? DateTimeOffset.UtcNow),
             Payload = Any.Pack(evt),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
         };

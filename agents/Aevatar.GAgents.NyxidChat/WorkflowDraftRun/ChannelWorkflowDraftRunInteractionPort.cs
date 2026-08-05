@@ -8,6 +8,7 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
+using ExternalCapabilityExecutionMode = Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode;
 
 namespace Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
 
@@ -72,7 +73,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
             },
             Runtime = new EnvelopeRuntime
             {
-                Deduplication = new DeliveryDeduplication
+                DeliveryIdentity = new DeliveryIdentity
                 {
                     OperationId = commandId,
                 },
@@ -111,6 +112,8 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
                 ct);
         }
 
+        // This observer is transient by design. It only publishes typed frames/completion
+        // back to the run actor; the actor-owned durable deadline guarantees termination.
         _ = Task.Run(
             () => ExecuteWorkflowInteractionAsync(runActorId, request.Clone(), CancellationToken.None),
             CancellationToken.None);
@@ -336,6 +339,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         return new WorkflowChatRunRequest(
             Prompt: request.Prompt ?? string.Empty,
             Source: WorkflowChatSource.DefinitionActor(source.DefinitionActorId, source.WorkflowName),
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             SessionId: request.RunId,
             InputParts: inputParts,
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal)

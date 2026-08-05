@@ -1,4 +1,6 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -17,6 +19,7 @@ using Aevatar.GAgentService.Tests.Projection;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgentService.Tests.Core;
 
@@ -77,6 +80,115 @@ public sealed class ServiceRevisionCatalogGAgentTests
         var replayed = CreateAgent(eventStore, adapter, actorId);
         await replayed.ActivateAsync();
         replayed.State.Revisions["r1"].Status.Should().Be(ServiceRevisionStatus.Published);
+    }
+
+    [Fact]
+    public async Task PrepareAndPublish_ShouldReusePublishedRevision_AndRefreshInvocationObservation()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity("svc-published");
+        const string revisionId = "rev-published";
+        var prepareCalls = 0;
+        var adapter = new RecordingAdapter(_ =>
+        {
+            prepareCalls++;
+            if (prepareCalls > 2)
+                throw new InvalidOperationException("persisted admission evidence is stale");
+
+            return Task.FromResult(
+                GAgentServiceTestKit.CreatePreparedStaticArtifact(
+                    identity,
+                    revisionId,
+                    GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat-readonly")));
+        });
+        var dispatchPort = new RecordingActorDispatchPort();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            adapter,
+            ServiceActorIds.RevisionCatalog(identity),
+            dispatchPort);
+
+        await agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, revisionId),
+        });
+        await agent.HandlePrepareRevisionAsync(new PrepareServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+        });
+        await agent.HandlePublishRevisionAsync(new PublishServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+        });
+
+        await agent.HandlePrepareRevisionAsync(new PrepareServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+        });
+        await agent.HandlePublishRevisionAsync(new PublishServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+        });
+
+        prepareCalls.Should().Be(2);
+        agent.State.Revisions[revisionId].Status.Should().Be(ServiceRevisionStatus.Published);
+        dispatchPort.Calls.Should().HaveCount(5);
+        var replayObservation = dispatchPort.Calls[^1].Envelope.Payload.Unpack<ObserveServiceInvocationRevisionsCommand>();
+        replayObservation.SourceRevisionVersion.Should().Be(3);
+        replayObservation.Revisions[revisionId].Status.Should().Be(ServiceRevisionStatus.Published);
+    }
+
+    [Fact]
+    public async Task Replay_ShouldPreservePublishedRevision_WhenLegacyDuplicatePrepareRecordedFailure()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity("svc-legacy-replay");
+        const string revisionId = "rev-legacy-replay";
+        var actorId = ServiceActorIds.RevisionCatalog(identity);
+        var adapter = new RecordingAdapter(_ => Task.FromResult(
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, revisionId)));
+        var agent = CreateAgent(eventStore, adapter, actorId);
+
+        await agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, revisionId),
+        });
+        await agent.HandlePrepareRevisionAsync(new PrepareServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+        });
+        await agent.HandlePublishRevisionAsync(new PublishServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+        });
+        await eventStore.AppendAsync(
+            actorId,
+            [new StateEvent
+            {
+                EventId = "legacy-duplicate-prepare-failed",
+                Version = 4,
+                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                EventData = Any.Pack(new ServiceRevisionPreparationFailedEvent
+                {
+                    Identity = identity.Clone(),
+                    RevisionId = revisionId,
+                    FailureReason = "persisted admission evidence is stale",
+                    OccurredAt = Timestamp.FromDateTime(DateTime.UtcNow),
+                }),
+            }],
+            expectedVersion: 3);
+
+        var replayed = CreateAgent(eventStore, adapter, actorId);
+        await replayed.ActivateAsync();
+
+        replayed.State.Revisions[revisionId].Status.Should().Be(ServiceRevisionStatus.Published);
+        replayed.State.Revisions[revisionId].FailureReason.Should().BeEmpty();
+        replayed.State.LastAppliedEventVersion.Should().Be(4);
     }
 
     [Fact]
@@ -187,6 +299,38 @@ public sealed class ServiceRevisionCatalogGAgentTests
             .WithMessage("prepare failed");
         agent.State.Revisions["r1"].Status.Should().Be(ServiceRevisionStatus.PreparationFailed);
         agent.State.Revisions["r1"].FailureReason.Should().Be("prepare failed");
+    }
+
+    [Fact]
+    public async Task HandlePrepareRevisionAsync_ShouldNotCommitFailure_WhenPreparedFactPublicationFails()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity("svc-publication-failure");
+        const string revisionId = "rev-publication-failure";
+        var agent = CreateAgent(
+            eventStore,
+            new RecordingAdapter(_ => Task.FromResult(
+                GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, revisionId))),
+            ServiceActorIds.RevisionCatalog(identity),
+            configureServices: services =>
+                services.AddSingleton<ICommittedStatePublicationHook>(new RejectPreparedPublicationHook()));
+
+        await agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, revisionId),
+        });
+
+        var act = () => agent.HandlePrepareRevisionAsync(new PrepareServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+        });
+
+        await act.Should().ThrowAsync<CommittedStatePublicationException>();
+        agent.State.Revisions[revisionId].Status.Should().Be(ServiceRevisionStatus.Prepared);
+        var committedEvents = await eventStore.GetEventsAsync(ServiceActorIds.RevisionCatalog(identity));
+        committedEvents.Should().HaveCount(2);
+        committedEvents[^1].EventData.Is(ServiceRevisionPreparedEvent.Descriptor).Should().BeTrue();
     }
 
     [Fact]
@@ -423,7 +567,8 @@ public sealed class ServiceRevisionCatalogGAgentTests
         InMemoryEventStore eventStore,
         IServiceImplementationAdapter adapter,
         string actorId,
-        IActorDispatchPort? dispatchPort = null)
+        IActorDispatchPort? dispatchPort = null,
+        Action<IServiceCollection>? configureServices = null)
     {
         return GAgentServiceTestKit.CreateStatefulAgent<ServiceRevisionCatalogGAgent, ServiceRevisionCatalogState>(
             eventStore,
@@ -431,7 +576,8 @@ public sealed class ServiceRevisionCatalogGAgentTests
             () => new ServiceRevisionCatalogGAgent(
                 dispatchPort ?? GAgentServiceTestKit.NoOpDispatchPort,
                 [adapter],
-                new PreparedServiceRevisionArtifactAssembler()));
+                new PreparedServiceRevisionArtifactAssembler()),
+            configureServices);
     }
 
     private static ServiceDeploymentManagerGAgent CreateDeploymentAgent(
@@ -526,5 +672,17 @@ public sealed class ServiceRevisionCatalogGAgentTests
             PrepareServiceRevisionRequest request,
             CancellationToken ct = default) =>
             _prepare(request);
+    }
+
+    private sealed class RejectPreparedPublicationHook : ICommittedStatePublicationHook
+    {
+        public Task BeforePublishAsync(CommittedStatePublicationContext context, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (context.Published.StateEvent?.EventData?.Is(ServiceRevisionPreparedEvent.Descriptor) == true)
+                throw new InvalidOperationException("prepared fact projection unavailable");
+
+            return Task.CompletedTask;
+        }
     }
 }

@@ -85,6 +85,7 @@ public sealed class WorkflowActorBindingProjector
             SourceKind = evt.SourceKind?.Trim() ?? string.Empty,
             WorkflowId = evt.WorkflowId ?? string.Empty,
             RevisionId = evt.RevisionId ?? string.Empty,
+            ExpectedExecutionMode = evt.ExpectedExecutionMode,
         };
         if (evt.CapabilityAdmissionPlan is not null)
             document.CapabilityAdmissionPlan = evt.CapabilityAdmissionPlan.Clone();
@@ -106,7 +107,10 @@ public sealed class WorkflowActorBindingProjector
             WorkflowName = NormalizeWorkflowName(evt.WorkflowName),
             WorkflowYaml = evt.WorkflowYaml ?? string.Empty,
             ScopeId = evt.ScopeId?.Trim() ?? string.Empty,
+            ExpectedExecutionMode = evt.ExpectedExecutionMode,
         };
+        if (evt.CapabilityAdmissionPlan is not null)
+            document.CapabilityAdmissionPlan = evt.CapabilityAdmissionPlan.Clone();
         ReplaceInlineWorkflowYamls(document.InlineWorkflowYamls, evt.InlineWorkflowYamls);
         return document;
     }

@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Workflow.Abstractions;
 using System.Text.Json.Serialization;
 
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
@@ -69,10 +70,11 @@ public sealed record WorkflowCallerCredential(
     string? BearerToken = null,
     WorkflowCallerNyxIdAuthority? NyxIdAuthority = null,
     Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind Kind =
-        Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.Unspecified)
+        Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.Unspecified,
+    string? SourceReadableUserBearerToken = null)
 {
     public override string ToString() =>
-        $"{nameof(WorkflowCallerCredential)} {{ BearerToken = [REDACTED], NyxIdAuthorityPresent = {NyxIdAuthority is not null} }}";
+        $"{nameof(WorkflowCallerCredential)} {{ BearerToken = [REDACTED], SourceReadableUserBearerToken = [REDACTED], NyxIdAuthorityPresent = {NyxIdAuthority is not null} }}";
 }
 
 public sealed record WorkflowExternalIngressContext(
@@ -105,7 +107,8 @@ public sealed record WorkflowConversationExecutionContext(
     long StateVersion,
     IReadOnlyList<WorkflowConversationExecutionMessage> Messages,
     bool Truncated,
-    int MaxMessageCount);
+    int MaxMessageCount,
+    string CurrentTurnId = "");
 
 public enum WorkflowChatConversationIntentKind
 {
@@ -243,6 +246,7 @@ public sealed record WorkflowChatSource
 public sealed record WorkflowChatRunRequest(
     string Prompt,
     WorkflowChatSource Source,
+    ExternalCapabilityExecutionMode ExpectedExecutionMode,
     string? SessionId = null,
     IReadOnlyList<WorkflowChatInputPart>? InputParts = null,
     IReadOnlyDictionary<string, string>? Metadata = null,
@@ -259,6 +263,7 @@ public sealed record WorkflowChatRunRequest(
     WorkflowExternalIngressContext? ExternalIngress = null,
     WorkflowChatConversationIntent? ChatConversation = null,
     WorkflowConversationExecutionContext? ConversationContext = null,
+    [property: JsonIgnore] string? CurrentTurnId = null,
     [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null,
     [property: JsonIgnore] WorkflowCompletionNotificationTarget? CompletionNotificationTarget = null,
     [property: JsonIgnore] WorkflowDefinitionBinding? ResolvedDefinitionBinding = null) : ICommandContextSeed

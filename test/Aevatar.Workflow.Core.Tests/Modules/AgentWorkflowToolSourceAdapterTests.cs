@@ -1,7 +1,5 @@
 using Aevatar.AI.Abstractions;
-using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.Core.Middleware;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Integration.AI;
@@ -53,7 +51,9 @@ public sealed class AgentWorkflowToolSourceAdapterTests
     public async Task WorkflowTool_ShouldMapExplicitRequestAdmissionToProviderNeutralToolContext()
     {
         var agentTool = new CapturingAgentTool();
-        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            new PassThroughExecutionPort());
         var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
         var invocationAdmission = ExplicitRequestInvocationAdmission();
         var requestContractDigest = invocationAdmission.NyxIdExplicitRequestGrant.RequestContractDigest;
@@ -110,7 +110,9 @@ public sealed class AgentWorkflowToolSourceAdapterTests
     public async Task WorkflowTool_ShouldRejectExplicitRequestAdmissionWhenGrantPolicyDoesNotMatch()
     {
         var agentTool = new CapturingAgentTool();
-        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            new PassThroughExecutionPort());
         var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
         var invocationAdmission = ExplicitRequestInvocationAdmission();
         invocationAdmission.Capability.NyxIdUserRequest.ExecutionPolicy.Risk =
@@ -201,7 +203,9 @@ public sealed class AgentWorkflowToolSourceAdapterTests
     public async Task WorkflowTool_ShouldMapWorkflowRequestToAgentToolExecutionContext()
     {
         var agentTool = new CapturingAgentTool();
-        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            new PassThroughExecutionPort());
         var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
 
         var result = await tool.ExecuteAsync(
@@ -222,6 +226,19 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                     },
                 },
                 RuntimeContext: WorkflowToolRuntimeContext.Empty,
+                InputFileRefs:
+                [
+                    new WorkflowFileRef
+                    {
+                        FileId = "wf-file-1",
+                        ArtifactId = "workflow-file://wf-file-1",
+                        SourceKind = WorkflowFileSourceKind.ChatInput,
+                        FileName = "invoice.pdf",
+                        MediaType = "application/pdf",
+                        OwnerRunId = "run-1",
+                        OwnerScopeId = "scope-1",
+                    },
+                ],
                 IdempotencyKey: "idem-agent-tool-1",
                 ScheduleId: " schedule-1 "),
             CancellationToken.None);
@@ -244,18 +261,28 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         agentTool.ObservedCallId.Should().Be("call-1");
         agentTool.ObservedIdempotencyKey.Should().Be("idem-agent-tool-1");
         agentTool.ObservedScheduleId.Should().Be("schedule-1");
+        agentTool.ObservedInputFileRefs.Should().ContainSingle().Which.Should().BeEquivalentTo(new ChatFileRef
+        {
+            FileId = "wf-file-1",
+            ArtifactId = "workflow-file://wf-file-1",
+            SourceKind = ChatFileSourceKind.ChatInput,
+            FileName = "invoice.pdf",
+            MediaType = "application/pdf",
+            OwnerRunId = "run-1",
+            OwnerScopeId = "scope-1",
+        });
         agentTool.ObservedExternalMetadata.Should().NotContainKey("ExecutionId");
         AgentToolRequestContext.Current.Should().BeNull();
     }
 
     [Fact]
-    public async Task WorkflowTool_ShouldExecuteAgentToolThroughToolMiddlewareChain()
+    public async Task WorkflowTool_ShouldExecuteAgentToolThroughAdmissionPort()
     {
         var agentTool = new CapturingAgentTool();
-        var middleware = new RewritingToolCallMiddleware();
+        var executionPort = new PassThroughExecutionPort();
         var adapter = new AgentWorkflowToolSourceAdapter(
             [new SingleAgentToolSource(agentTool)],
-            [middleware]);
+            executionPort);
         var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
 
         var result = await tool.ExecuteAsync(
@@ -269,49 +296,126 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 CallerCredential: new WorkflowCallerCredential()),
             CancellationToken.None);
 
-        agentTool.ObservedArgumentsJson.Should().Be("""{"rewritten":true}""");
-        result.ResultJson.Should().Be("""{"middleware":true}""");
-        middleware.NextExecuted.Should().BeTrue();
+        result.ResultJson.Should().Be("""{"observed":true}""");
+        var executionRequest = executionPort.Requests.Should().ContainSingle().Subject;
+        executionRequest.ArgumentsJson.Should().Be("""{"original":true}""");
+        executionRequest.ApprovalContinuationMode.Should().Be(AgentToolApprovalContinuationMode.ActorOwned);
+        executionRequest.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.WorkflowRun);
+        executionRequest.ExecutionOwner.OwnerId.Should().Be("run-1");
         AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowTool_ShouldPreserveIssuedTimeInAdmissionIdentity()
+    {
+        const long issuedAtUnixMs = 1_800_000_000_000;
+        var executionPort = new PassThroughExecutionPort();
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(new CapturingAgentTool())],
+            executionPort);
+        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+
+        await tool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: "{}",
+                RunId: "run-1",
+                StepId: "step-1",
+                ExecutionId: "exec-1",
+                CallId: "call-1",
+                ScopeId: "scope-1",
+                CallerCredential: new WorkflowCallerCredential(),
+                RuntimeContext: WorkflowToolRuntimeContext.Empty,
+                IssuedAtUnixMs: issuedAtUnixMs),
+            CancellationToken.None);
+
+        executionPort.Requests.Should().ContainSingle()
+            .Which.ExecutionContext.Request.IssuedAtUnixMs.Should().Be(issuedAtUnixMs);
     }
 
     [Fact]
     public async Task WorkflowTool_WhenApprovalDenied_ShouldFailClosedWithoutExecutingAgentTool()
     {
         var agentTool = new CapturingAgentTool(ToolApprovalMode.AlwaysRequire);
-        var approvalHandler = new ScriptedApprovalHandler(ToolApprovalResult.Denied("blocked"));
+        var executionPort = new FixedOutcomeExecutionPort(CreateOutcome(
+            AgentToolExecutionOutcomeKind.Denied,
+            AgentToolReceiptStatus.Denied,
+            resultJson: """{"error":"blocked"}""",
+            failureCode: "approval_denied",
+            safeMessage: "blocked"));
         var adapter = new AgentWorkflowToolSourceAdapter(
             [new SingleAgentToolSource(agentTool)],
-            approvalHandler: approvalHandler);
+            executionPort);
         var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
 
-        await FluentActions.Awaiting(() => tool.ExecuteAsync(
-                new WorkflowToolExecutionRequest(
-                    ArgumentsJson: "{}",
-                    RunId: "run-1",
-                    StepId: "step-1",
-                    ExecutionId: "exec-1",
-                    CallId: "call-1",
-                    ScopeId: "scope-1",
-                    CallerCredential: new WorkflowCallerCredential()),
-                CancellationToken.None))
-            .Should()
-            .ThrowAsync<InvalidOperationException>()
-            .WithMessage("*ApprovalDenied*blocked*");
+        var result = await tool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: "{}",
+                RunId: "run-1",
+                StepId: "step-1",
+                ExecutionId: "exec-1",
+                CallId: "call-1",
+                ScopeId: "scope-1",
+                CallerCredential: new WorkflowCallerCredential()),
+            CancellationToken.None);
 
+        result.ResultJson.Should().Be("""{"error":"blocked"}""");
+        result.Failure.Should().Be(new WorkflowToolExecutionFailure(
+            "approval_denied",
+            "blocked",
+            TerminalInvoked: false,
+            Retryable: false));
         agentTool.ExecuteCount.Should().Be(0);
-        approvalHandler.Requests.Should().ContainSingle();
+        executionPort.Requests.Should().ContainSingle();
         AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowTool_WhenAdmissionFailureIsRetryable_ShouldReturnTypedFailure()
+    {
+        var agentTool = new CapturingAgentTool(ToolApprovalMode.AlwaysRequire);
+        var executionPort = new FixedOutcomeExecutionPort(CreateOutcome(
+            AgentToolExecutionOutcomeKind.Failed,
+            AgentToolReceiptStatus.Error,
+            resultJson: """{"error":"tool_admission_unavailable"}""",
+            failureCode: "tool_admission_unavailable",
+            safeMessage: "The durable tool admission ledger is unavailable.",
+            terminalInvoked: false,
+            retryable: true));
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            executionPort);
+        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+
+        var result = await tool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: """{"mutation":true}""",
+                RunId: "run-1",
+                StepId: "step-1",
+                ExecutionId: "exec-1",
+                CallId: "call-1",
+                ScopeId: "scope-1",
+                CallerCredential: new WorkflowCallerCredential()),
+            CancellationToken.None);
+
+        result.Failure.Should().NotBeNull();
+        result.Failure!.ErrorCode.Should().Be("tool_admission_unavailable");
+        result.Failure.ErrorMessage.Should().Be("The durable tool admission ledger is unavailable.");
+        result.Failure.TerminalInvoked.Should().BeFalse();
+        result.Failure.Retryable.Should().BeTrue();
+        agentTool.ExecuteCount.Should().Be(0);
     }
 
     [Fact]
     public async Task WorkflowTool_WhenApprovalPending_ShouldReturnTypedPendingOutcomeWithoutExecutingAgentTool()
     {
         var agentTool = new CapturingAgentTool(ToolApprovalMode.AlwaysRequire);
-        var approvalHandler = new ScriptedApprovalHandler(ToolApprovalResult.Yielded("approval-1"));
+        var executionPort = new FixedOutcomeExecutionPort(CreateOutcome(
+            AgentToolExecutionOutcomeKind.ApprovalRequired,
+            AgentToolReceiptStatus.ApprovalRequired,
+            approvalRequestId: "approval-1"));
         var adapter = new AgentWorkflowToolSourceAdapter(
             [new SingleAgentToolSource(agentTool)],
-            approvalHandler: approvalHandler);
+            executionPort);
         var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
 
         var result = await tool.ExecuteAsync(
@@ -326,10 +430,9 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             CancellationToken.None);
 
         agentTool.ExecuteCount.Should().Be(0);
-        approvalHandler.Requests.Should().ContainSingle();
+        executionPort.Requests.Should().ContainSingle();
         result.PendingApproval.Should().NotBeNull();
-        result.PendingApproval!.ApprovalRequestId.Should().Be(approvalHandler.Requests.Single().RequestId);
-        result.PendingApproval.ApprovalRequestId.Should().NotBeNullOrWhiteSpace();
+        result.PendingApproval!.ApprovalRequestId.Should().Be("approval-1");
         result.PendingApproval.ToolName.Should().Be("capture_context");
         result.PendingApproval.ToolCallId.Should().Be("call-1");
         result.PendingApproval.ArgumentsJson.Should().Be("""{"danger":true}""");
@@ -338,76 +441,37 @@ public sealed class AgentWorkflowToolSourceAdapterTests
     }
 
     [Fact]
-    public async Task WorkflowTool_ShouldYieldProofBoundWriteUntilMatchingApprovalGrant()
-    {
-        var agentTool = new ProofPolicyAgentTool();
-        var approvalHandler = new ScriptedApprovalHandler(ToolApprovalResult.Yielded("approval-write"));
-        var adapter = new AgentWorkflowToolSourceAdapter(
-            [new SingleAgentToolSource(agentTool)],
-            approvalHandler: approvalHandler);
-        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
-        var admission = WriteInvocationAdmission();
-        var request = new WorkflowToolExecutionRequest(
-            ArgumentsJson: "{}",
-            RunId: "run-alpha",
-            StepId: "write-alpha",
-            ExecutionId: "exec-alpha",
-            CallId: "call-alpha",
-            ScopeId: "scope-alpha",
-            CallerCredential: new WorkflowCallerCredential(),
-            RuntimeContext: new WorkflowToolRuntimeContext(
-                "workflow-run-actor-alpha",
-                "run-alpha",
-                "write-alpha",
-                "run-alpha",
-                1),
-            InvocationAdmission: admission);
-
-        var pending = await tool.ExecuteAsync(request, CancellationToken.None);
-
-        pending.PendingApproval.Should().NotBeNull();
-        agentTool.ExecuteCount.Should().Be(0);
-        approvalHandler.Requests.Should().ContainSingle().Which.IsDestructive.Should().BeFalse();
-
-        var resumed = await tool.ExecuteAsync(request with
-        {
-            ApprovalGrant = new Aevatar.Workflow.Core.Modules.ToolApprovalGrant(
-                pending.PendingApproval!.ApprovalRequestId,
-                agentTool.Name,
-                "call-alpha"),
-        }, CancellationToken.None);
-
-        resumed.ResultJson.Should().Be("""{"executed":true}""");
-        agentTool.ExecuteCount.Should().Be(1);
-    }
-
-    [Fact]
-    public async Task WorkflowTool_ShouldUseSingleCanonicalApprovalMiddlewareWhenHostRegistersDuplicate()
+    public async Task WorkflowTool_ShouldMapDurableApprovalGrantToAdmissionPort()
     {
         var agentTool = new CapturingAgentTool(ToolApprovalMode.AlwaysRequire);
-        var canonicalHandler = new ScriptedApprovalHandler(ToolApprovalResult.Approved());
-        var duplicateHandler = new ScriptedApprovalHandler(ToolApprovalResult.Denied("duplicate"));
+        var executionPort = new PassThroughExecutionPort();
         var adapter = new AgentWorkflowToolSourceAdapter(
             [new SingleAgentToolSource(agentTool)],
-            [new ToolApprovalMiddleware(duplicateHandler)],
-            canonicalHandler);
+            executionPort);
         var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
 
         var result = await tool.ExecuteAsync(
             new WorkflowToolExecutionRequest(
-                ArgumentsJson: "{}",
+                ArgumentsJson: """{"mutation":true}""",
                 RunId: "run-1",
                 StepId: "step-1",
                 ExecutionId: "exec-1",
                 CallId: "call-1",
                 ScopeId: "scope-1",
-                CallerCredential: new WorkflowCallerCredential()),
+                CallerCredential: new WorkflowCallerCredential(),
+                RuntimeContext: WorkflowToolRuntimeContext.Empty,
+                ApprovalGrant: new ToolApprovalGrant("approval-1", "capture_context", "call-1")),
             CancellationToken.None);
 
         result.ResultJson.Should().Be("""{"observed":true}""");
         agentTool.ExecuteCount.Should().Be(1);
-        canonicalHandler.Requests.Should().ContainSingle();
-        duplicateHandler.Requests.Should().BeEmpty();
+        var grant = executionPort.Requests.Should().ContainSingle().Which.ApprovalGrant;
+        grant.Should().NotBeNull();
+        grant!.ApprovalRequestId.Should().Be("approval-1");
+        grant.RequestId.Should().Be("run-1");
+        grant.ToolName.Should().Be("capture_context");
+        grant.ToolCallId.Should().Be("call-1");
+        grant.ArgumentsSha256.Should().Be(AgentToolArgumentsDigest.ComputeSha256("""{"mutation":true}"""));
         AgentToolRequestContext.Current.Should().BeNull();
     }
 
@@ -415,7 +479,9 @@ public sealed class AgentWorkflowToolSourceAdapterTests
     public async Task WorkflowTool_ShouldMapRuntimeContextToAgentToolExecutionContext()
     {
         var agentTool = new CapturingAgentTool();
-        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            new PassThroughExecutionPort());
         var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
 
         await tool.ExecuteAsync(
@@ -456,7 +522,9 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         string? expectedScopeId)
     {
         var agentTool = new CapturingAgentTool();
-        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            new PassThroughExecutionPort());
         var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
 
         await tool.ExecuteAsync(
@@ -481,7 +549,9 @@ public sealed class AgentWorkflowToolSourceAdapterTests
     public async Task WorkflowTool_ShouldPreserveRuntimeContextWhenWorkflowCredentialIsMissing(string authorization)
     {
         var agentTool = new CapturingAgentTool();
-        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            new PassThroughExecutionPort());
         var workflowTool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
 
         await workflowTool.ExecuteAsync(
@@ -520,7 +590,9 @@ public sealed class AgentWorkflowToolSourceAdapterTests
     public async Task WorkflowTool_ShouldRejectMalformedWorkflowCredential(string authorization)
     {
         var agentTool = new CapturingAgentTool();
-        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            new PassThroughExecutionPort());
         var workflowTool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
 
         await FluentActions.Awaiting(() => workflowTool.ExecuteAsync(
@@ -554,7 +626,9 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 ErrorMessage = "The service request failed.",
                 ResultJson = safeResult,
             });
-        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            new PassThroughExecutionPort());
         var workflowTool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
 
         var result = await workflowTool.ExecuteAsync(
@@ -578,8 +652,12 @@ public sealed class AgentWorkflowToolSourceAdapterTests
     public async Task WorkflowTool_WhenResultHasNoReceipt_ShouldFailWithUnknownOutcome()
     {
         const string resultJson = """{"error":true,"status":503,"historical":true}""";
+        const string unknownResultJson =
+            """{"status":"unknown","message":"The tool outcome could not be verified."}""";
         var agentTool = new ResultReceiptAgentTool(resultJson, receipt: null);
-        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            new PassThroughExecutionPort());
         var workflowTool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
 
         var result = await workflowTool.ExecuteAsync(
@@ -594,8 +672,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             CancellationToken.None);
 
         result.Failure.Should().NotBeNull();
-        result.ResultJson.Should().Be(
-            """{"status":"unknown","message":"The tool outcome could not be verified."}""");
+        result.ResultJson.Should().Be(unknownResultJson);
         result.Failure!.ErrorCode.Should().Be("tool_outcome_unknown");
         result.Failure.ErrorMessage.Should().Be("The tool outcome could not be verified.");
     }
@@ -646,6 +723,8 @@ public sealed class AgentWorkflowToolSourceAdapterTests
 
         public string? ObservedScheduleId { get; private set; }
 
+        public IReadOnlyList<ChatFileRef> ObservedInputFileRefs { get; private set; } = [];
+
         public IReadOnlyDictionary<string, string> ObservedExternalMetadata { get; private set; } =
             new Dictionary<string, string>(StringComparer.Ordinal);
 
@@ -682,6 +761,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             ObservedCallId = AgentToolRequestContext.CallId;
             ObservedIdempotencyKey = AgentToolRequestContext.IdempotencyKey;
             ObservedScheduleId = AgentToolRequestContext.Current?.Schedule.ScheduleId;
+            ObservedInputFileRefs = AgentToolRequestContext.Current?.InputFileRefs ?? [];
             ObservedExternalMetadata = AgentToolRequestContext.Current?.ExternalMetadata
                 ?? new Dictionary<string, string>(StringComparer.Ordinal);
             ObservedWorkflowRuntime = AgentToolRequestContext.Current?.WorkflowRuntime
@@ -851,34 +931,94 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         }
     }
 
-    private sealed class RewritingToolCallMiddleware : IToolCallMiddleware
+    private sealed class PassThroughExecutionPort : IAgentToolExecutionPort
     {
-        public bool NextExecuted { get; private set; }
+        public List<AgentToolExecutionRequest> Requests { get; } = [];
 
-        public async Task InvokeAsync(ToolCallContext context, Func<Task> next)
+        public async Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
         {
-            context.ArgumentsJson = """{"rewritten":true}""";
-            await next();
-            NextExecuted = true;
-            context.Result = """{"middleware":true}""";
+            Requests.Add(request);
+            string resultJson;
+            using (AgentToolContextScope.Push(request.ExecutionContext))
+                resultJson = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
+            var receipt = request.Tool.CreateResultReceipt(
+                    request.ExecutionContext.Request.CallId ?? string.Empty,
+                    request.Tool.Name,
+                    request.ArgumentsJson,
+                    resultJson)
+                ?? new AgentToolReceipt
+                {
+                    CallId = request.ExecutionContext.Request.CallId ?? string.Empty,
+                    ToolName = request.Tool.Name,
+                    Status = AgentToolReceiptStatus.Unspecified,
+                    ResultJson =
+                        "{\"status\":\"unknown\",\"message\":\"The tool outcome could not be verified.\"}",
+                    ErrorCode = "tool_outcome_unknown",
+                    ErrorMessage = "The tool outcome could not be verified.",
+                };
+            var safeResultJson = receipt.Status == AgentToolReceiptStatus.Unspecified
+                ? receipt.ResultJson
+                : resultJson;
+
+            return new AgentToolExecutionOutcome(
+                AgentToolExecutionOutcomeKind.Executed,
+                safeResultJson,
+                receipt,
+                IsMutation: !request.Tool.IsReadOnly,
+                FailureCode: string.Empty,
+                SafeMessage: string.Empty,
+                AgentToolExecutionFailureStage.None,
+                TerminalInvoked: true,
+                Retryable: false,
+                AuditCompleted: true);
         }
     }
 
-    private sealed class ScriptedApprovalHandler(params ToolApprovalResult[] results) : IToolApprovalHandler
+    private sealed class FixedOutcomeExecutionPort(AgentToolExecutionOutcome outcome) : IAgentToolExecutionPort
     {
-        private readonly Queue<ToolApprovalResult> _results = new(results);
+        public List<AgentToolExecutionRequest> Requests { get; } = [];
 
-        public List<ToolApprovalRequest> Requests { get; } = [];
-
-        public Task<ToolApprovalResult> RequestApprovalAsync(ToolApprovalRequest request, CancellationToken ct)
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Requests.Add(request);
-            return Task.FromResult(_results.TryDequeue(out var result)
-                ? result
-                : ToolApprovalResult.Denied("missing scripted result"));
+            return Task.FromResult(outcome);
         }
     }
+
+    private static AgentToolExecutionOutcome CreateOutcome(
+        AgentToolExecutionOutcomeKind kind,
+        AgentToolReceiptStatus status,
+        string resultJson = "",
+        string failureCode = "",
+        string safeMessage = "",
+        string approvalRequestId = "",
+        bool? terminalInvoked = null,
+        bool retryable = false) =>
+        new(
+            kind,
+            resultJson,
+            new AgentToolReceipt
+            {
+                CallId = "call-1",
+                ToolName = "capture_context",
+                Status = status,
+                ApprovalMode = AgentToolReceiptApprovalMode.AlwaysRequire,
+                IsDestructive = true,
+                ApprovalRequestId = approvalRequestId,
+                ResultJson = resultJson,
+            },
+            IsMutation: true,
+            failureCode,
+            safeMessage,
+            AgentToolExecutionFailureStage.None,
+            TerminalInvoked: terminalInvoked ?? kind == AgentToolExecutionOutcomeKind.Executed,
+            Retryable: retryable,
+            AuditCompleted: true);
 
     private sealed class SingleAgentToolSource(IAgentTool tool) : IAgentToolSource
     {

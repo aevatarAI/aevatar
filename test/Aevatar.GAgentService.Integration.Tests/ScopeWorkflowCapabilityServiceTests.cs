@@ -176,7 +176,8 @@ public sealed class ScopeWorkflowApplicationServicesTests
             string.Empty,
             "approval",
             "name: approval",
-            new Dictionary<string, string>());
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Durable);
 
         var service = new ScopeWorkflowQueryApplicationService(
             queryPort,
@@ -235,7 +236,8 @@ public sealed class ScopeWorkflowApplicationServicesTests
             string.Empty,
             "approval",
             "name: approval",
-            new Dictionary<string, string>());
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Durable);
         bindingReader.Bindings[runActorId] = new WorkflowActorBinding(
             WorkflowActorKind.Run,
             runActorId,
@@ -243,7 +245,8 @@ public sealed class ScopeWorkflowApplicationServicesTests
             "run-1",
             "approval",
             string.Empty,
-            new Dictionary<string, string>());
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Durable);
 
         var service = new ScopeWorkflowQueryApplicationService(
             queryPort,

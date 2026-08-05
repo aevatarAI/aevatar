@@ -506,6 +506,7 @@ public sealed class StudioMemberService : IStudioMemberService
             ScopeBindingReadinessStatus.ServiceCatalogTargetMissing => StudioMemberInvocationReadinessStatusNames.ServiceCatalogTargetMissing,
             ScopeBindingReadinessStatus.TrafficViewTargetMissing => StudioMemberInvocationReadinessStatusNames.TrafficViewTargetMissing,
             ScopeBindingReadinessStatus.PreparedArtifactMissing => StudioMemberInvocationReadinessStatusNames.PreparedArtifactMissing,
+            ScopeBindingReadinessStatus.InvocationCatalogNotReady => StudioMemberInvocationReadinessStatusNames.InvocationCatalogNotReady,
             _ => StudioMemberInvocationReadinessStatusNames.Unknown,
         };
 
@@ -526,6 +527,8 @@ public sealed class StudioMemberService : IStudioMemberService
                     "The selected endpoint is not visible in the service catalog yet.",
                 StudioMemberInvocationReadinessStatusNames.TrafficViewTargetMissing =>
                     "Runtime traffic view has not observed the serving target yet.",
+                StudioMemberInvocationReadinessStatusNames.InvocationCatalogNotReady =>
+                    "Invocation readiness has not observed the selected endpoint revision yet.",
                 _ => "Invocation readiness is not available yet.",
             };
 

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Abstractions.Workflows;
 
@@ -60,12 +61,12 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     /// persisting + scheduling it as a real <c>member</c> via the channel-free
     /// <c>aevatar_provision_workflow_schedule</c> tool (Team-owned member create → bind inline YAML →
     /// <c>ScheduleKind=Workflow</c> dispatch) so its runs surface in
-    /// <c>/workflow/observatory</c> — never a chat/bot, never a prose ornn skill as the deliverable.
+    /// <c>/admin#/observatory</c> — never a chat/bot, never a prose ornn skill as the deliverable.
     /// </para>
     ///
     /// <para>
-    /// It deliberately does NOT steer to the loose <c>workflow_create_def</c> + <c>aevatar_start_workflow &lt;name&gt;</c>
-    /// path: that authors a file-only definition and then runs it by name, which inside the managed workflow
+    /// It deliberately does NOT steer to the loose <c>workflow_create_def</c> + run-by-name path:
+    /// that authors a file-only definition and then runs it by name, which inside the managed workflow
     /// context resolves the target by name against an unprovisioned definition actor and hangs for 30s
     /// (<c>SubWorkflowDefinitionResolution</c> timeout). The member/provision path binds the inline YAML directly
     /// and never goes through by-name loose-definition resolution.
@@ -82,8 +83,9 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     /// The role carries an <c>allowed_tools</c> allowlist (parsed by <c>WorkflowParser</c> →
     /// <c>RoleDefinition.AgentToolScope</c>, intersected with any step scope by the execution kernel →
     /// <c>ToolVisibility</c>). It INCLUDES Studio team/member/draft creation, web authoring research, member workflow binding,
-    /// <c>aevatar_provision_workflow_schedule</c> + the observe tools and EXCLUDES both the Lark <c>scheduled_agent_creator</c> and the hanging loose-definition tools
-    /// (<c>workflow_create_def</c>/<c>update</c>/<c>read</c>/<c>list_defs</c>, <c>aevatar_start_workflow</c>);
+    /// Studio managed-runtime-safe Aevatar invocation, <c>aevatar_provision_workflow_schedule</c> + the observe tools and EXCLUDES
+    /// both the Lark <c>scheduled_agent_creator</c>, unmanaged workflow starts, and the hanging loose-definition tools
+    /// (<c>workflow_create_def</c>/<c>update</c>/<c>read</c>/<c>list_defs</c>);
     /// the allowlist is the lever that keeps those out of the studio surface entirely (prompt steering alone is
     /// unreliable while a tool is visible).
     /// </para>
@@ -92,13 +94,13 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
         name: studio
         description: >
           Studio authoring surface: workflow-first, Observatory-delivered. Author a runnable workflow,
-          provision it as a persisted member, and schedule its runs so results appear in /workflow/observatory.
+          provision it as a persisted member, and schedule its runs so results appear in /admin#/observatory.
         roles:
           - id: studio
             name: Studio Agent
             system_prompt: |
               You are the Aevatar Studio agent. You help the user create Studio teams/members and build real
-              **workflows** whose workflow run records remain visible in the Observatory (/workflow/observatory).
+              **workflows** whose workflow run records remain visible in the Observatory (/admin#/observatory).
               External message delivery is allowed as an authored workflow step when the user explicitly requests it;
               it does not replace Observatory run visibility or independently forward the assistant's terminal answer.
 
@@ -147,13 +149,23 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                 "list services", "我的 services 有哪些", or "show my services" and context does not
                 clearly indicate NyxID or Studio published workflow services, ask whether they mean
                 Studio published workflow services or NyxID connected services.
-              - For "what can I connect", service templates, catalog, or available integrations,
-                call `nyxid_catalog`; pass `slug` only when the user names an exact catalog service.
+              - For browsing questions such as "what can I connect", service templates, catalog, or
+                available integrations, call `nyxid_catalog`; pass `slug` only when the user names an
+                exact catalog service.
+              - For every connect, add, or authorize request, `nyxid_catalog` is mandatory discovery.
+                Treat a service name from the user as `catalogIdentityCandidate`, never as an exact slug.
+                Resolve it from a current-turn catalog result; only the exact returned `slug` may enter
+                `nyxid_require_service.service_slug`. Never pass a provider slug, display name, or guessed
+                value. Then always call `nyxid_require_service` with that slug and the scopes selected from
+                the same catalog entry. For a bare source-code-hosting connection, select its repository
+                access scope instead of omitting scopes. Never end the turn after catalog discovery or
+                replace the typed readiness result with prose.
               - For LLM-capable services, model availability, LLM routes, or "which models can I use
                 through NyxID", call `nyxid_llm_status`.
-              - Use `nyxid_require_service` when the user asks whether a required external service is
-                ready/connected for a workflow or operation. Report readiness honestly and ask the user
-                to connect or authorize the missing service when needed.
+              - Use `nyxid_require_service` as the final typed readiness gate when the user asks whether
+                a required external service is ready/connected or asks to connect, add, or authorize one.
+                A missing-service blocker from this tool is the authority for the interactive
+                `service.connect` handoff; prose and catalog results are not substitutes.
               - For explicit current-turn API calls, use the admitted per-operation connected-service tool
                 exposed for the caller's NyxID services. For workflow authoring, use the structured operation discovery flow below
                 instead of copying current-turn proxy route arguments. Never ask the user for credentials,
@@ -337,7 +349,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               6. If the user asks Chat to create or schedule a workflow and there is no existing member to bind,
                  call `aevatar_provision_workflow_schedule` only after Team ownership is confirmed. Do not call `aevatar_provision_workflow_schedule` until a Team has been selected or created; pass that confirmed `team_id`
                  with `workflow_yaml` and `display_name`. This creates its own persisted workflow member
-                 inside the Team whose runs land in /workflow/observatory and whose workflow is editable from the
+                 inside the Team whose runs land in /admin#/observatory and whose workflow is editable from the
                  returned Studio URL.
                  Scheduling rules:
                  - If the request is recurring — it says 每天, 每周, 每月, 每隔, 定时, daily, weekly, monthly, hourly,
@@ -363,7 +375,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               8. `aevatar_bind_member_workflow`, `aevatar_schedule_member_workflow`, and `aevatar_provision_workflow_schedule` return Accepted receipts
                  (binding/scheduling/run are asynchronous) — do NOT claim the workflow "ran successfully" from
                  those receipts. Use `aevatar_observe_run` (and `aevatar_read_workflow_run_artifact` for outputs)
-                 to watch demo/scheduled runs, and tell the user to open /workflow/observatory to see runs. Report
+                 to watch demo/scheduled runs, and tell the user to open /admin#/observatory to see runs. Report
                  honestly: state that the workflow was accepted/bound or provisioned, then report any observed run
                  status — never optimistically assume success.
               9. Specialized provider or skill-discovery tools are not the default path for external service calls.
@@ -376,7 +388,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               Hard rules:
               - The deliverable is either an editable, explicitly non-runnable draft when neither an exact external
                 descriptor nor a verified official request contract is available, a runnable workflow bound to the requested Studio member, or a Team-owned
-                provisioned workflow whose runs are visible in /workflow/observatory and whose workflow is reachable
+                provisioned workflow whose runs are visible in /admin#/observatory and whose workflow is reachable
                 from the returned Studio URL. Do NOT publish a prose skill as the answer to "build/automate/schedule X".
               - For an existing Team/Member workflow page, binding goes through `aevatar_bind_member_workflow`.
                 Scheduling that existing member's workflow goes through `aevatar_schedule_member_workflow`.
@@ -403,6 +415,9 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - aevatar_bind_member_workflow
               - aevatar_schedule_member_workflow
               - aevatar_provision_workflow_schedule
+              - aevatar_invoke_gagent
+              - aevatar_invoke_team
+              - aevatar_invoke_member
               - aevatar_observe_run
               - aevatar_read_workflow_run_artifact
               - web_search
@@ -460,13 +475,21 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
             includeExecuteStep: false);
 
     /// <inheritdoc />
-    public void Register(string name, string yaml)
+    public void Register(
+        string name,
+        string yaml,
+        ExternalCapabilityExecutionMode expectedExecutionMode)
     {
-        Register(name, yaml, "builtin");
+        Register(name, yaml, expectedExecutionMode, "builtin");
     }
 
-    public void Register(string name, string yaml, string sourceKind)
+    public void Register(
+        string name,
+        string yaml,
+        ExternalCapabilityExecutionMode expectedExecutionMode,
+        string sourceKind)
     {
+        EnsureExpectedExecutionMode(expectedExecutionMode);
         var normalizedName = NormalizeName(name);
         var normalizedSourceKind = string.IsNullOrWhiteSpace(sourceKind)
             ? "builtin"
@@ -478,11 +501,13 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                 normalizedName,
                 yaml,
                 WorkflowDefinitionActorId.Format(normalizedName),
+                expectedExecutionMode,
                 normalizedSourceKind),
             (_, _) => new WorkflowDefinitionRegistration(
                 normalizedName,
                 yaml,
                 WorkflowDefinitionActorId.Format(normalizedName),
+                expectedExecutionMode,
                 normalizedSourceKind));
     }
 
@@ -509,6 +534,15 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
             throw new ArgumentException("Workflow name is required.", nameof(workflowName));
 
         return workflowName.Trim();
+    }
+
+    private static void EnsureExpectedExecutionMode(ExternalCapabilityExecutionMode executionMode)
+    {
+        if (executionMode == ExternalCapabilityExecutionMode.Unspecified || !Enum.IsDefined(executionMode))
+            throw new ArgumentOutOfRangeException(
+                nameof(executionMode),
+                executionMode,
+                "Workflow expected execution mode is required.");
     }
 
     private static string BuildAutoWorkflowYaml(

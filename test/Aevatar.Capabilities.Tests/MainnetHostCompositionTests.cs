@@ -6,6 +6,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Application.CodexExecution;
 using Aevatar.AI.Infrastructure.ChronoSandbox;
+using Aevatar.AI.Infrastructure.ToolExecution;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
@@ -21,8 +22,12 @@ using Aevatar.AI.ToolProviders.StudioProvisioning;
 using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.AI.ToolProviders.Workflow;
+using Aevatar.Authentication.Abstractions;
 using Aevatar.Audit.Core.Identity;
+using Aevatar.Audit.Core.DependencyInjection;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Abstractions;
@@ -82,12 +87,32 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Trace;
 
 namespace Aevatar.Capabilities.Tests;
 
 [Collection(ProcessEnvSerialCollection.Name)]
 public sealed class MainnetHostCompositionTests
 {
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldExportProjectionAndKafkaTelemetry()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        builder.Services.Should().Contain(descriptor => descriptor.ServiceType == typeof(MeterProvider));
+        builder.Services.Should().Contain(descriptor => descriptor.ServiceType == typeof(TracerProvider));
+        AevatarHostObservabilityExtensions.CoreMeterNames.Should().Contain("Aevatar.CQRS.Projection");
+        AevatarHostObservabilityExtensions.CoreMeterNames.Should().Contain("Aevatar.Kafka.Transport");
+    }
+
     [Fact]
     public void MainnetHost_ShouldExposeAnActorBackedNyxIdChatProfileResolver()
     {
@@ -115,25 +140,6 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
-    public void AddAevatarMainnetHost_ShouldConfigureWebSearchBackendOnFirstWebToolRegistration()
-    {
-        using var home = new TemporaryAevatarHomeScope();
-        var builder = CreateBuilder();
-
-        builder.AddAevatarMainnetHost(options =>
-        {
-            options.EnableConnectorBootstrap = false;
-            options.EnableCors = false;
-        });
-
-        using var app = builder.Build();
-        var options = app.Services.GetRequiredService<WebToolOptions>();
-
-        options.NyxIdBaseUrl.Should().Be("https://nyx-api.chrono-ai.fun");
-        options.NyxIdSearchSlug.Should().Be("api-firecrawl");
-    }
-
-    [Fact]
     public void GAgentServiceAndStudioCapabilities_ShouldOwnTheirCompositionDependencies()
     {
         using var home = new TemporaryAevatarHomeScope();
@@ -150,6 +156,7 @@ public sealed class MainnetHostCompositionTests
         builder.AddMainnetDistributedOrleansHost();
         builder.AddAevatarPlatform(options => options.EnableMakerExtensions = true);
         builder.AddGAgentServiceCapabilityBundle();
+        builder.Services.AddAuditTrailCore(builder.Configuration);
         builder.Services.AddMainnetAgentProjectionDocumentStores(builder.Configuration);
         builder.Services.AddSingleton(Substitute.For<IScheduledAgentCredentialLifecycle>());
         builder.Services.AddSingleton(Substitute.For<INyxIdApiClientFactory>());
@@ -355,14 +362,7 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<IRemoteToolApprovalNotificationPort>()
             .Should()
             .BeOfType<NyxIdRelayRemoteToolApprovalNotificationPort>();
-        // Yield capability follows the actor, never the container (#2004): a DI-global
-        // yielding handler hands "I will resume you" to surfaces with no pending-approval
-        // continuation, stranding dead-letter approvals. RoleGAgent wires its own handler;
-        // every other surface must fall through to MissingApprovalHandler and fail closed.
-        app.Services.GetServices<IToolApprovalHandler>().Should().BeEmpty();
-        app.Services.GetServices<IToolCallMiddleware>()
-            .Should()
-            .NotContain(middleware => middleware is ToolApprovalMiddleware);
+        app.Services.GetRequiredService<IAgentToolExecutionPort>().Should().NotBeNull();
 
         await app.StopAsync();
     }
@@ -1040,6 +1040,46 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void AddAevatarMainnetHost_WithoutAuditTrailAppender_ShouldFailDuringBuild()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        builder.Services.RemoveAll<IAuditTrailAppender>();
+
+        var act = () => builder.Build();
+
+        act.Should()
+            .Throw<Exception>()
+            .WithMessage("*IAuditTrailAppender*");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WithoutAuditActorIdentityHasher_ShouldFailDuringBuild()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        builder.Services.RemoveAll<IAuditActorIdentityHasher>();
+
+        var act = () => builder.Build();
+
+        act.Should()
+            .Throw<Exception>()
+            .WithMessage("*IAuditActorIdentityHasher*");
+    }
+
+    [Fact]
     public void AddAevatarMainnetHost_WhenSkipHmacVerificationEnabledInProduction_ShouldThrow()
     {
         // Security fail-fast wiring: the host must abort startup if device-event HMAC
@@ -1092,13 +1132,15 @@ public sealed class MainnetHostCompositionTests
     {
         // Regression guard (2026-06-03 prod incident): enabling
         // HostOptions.ServicesStartConcurrently raced the co-hosted Orleans silo
-        // reaching Active. Grain-calling startup services (WorkflowDefinitionBootstrap,
-        // ChannelBotRegistration, AevatarOAuthClientBootstrap, HealthProbeStartup,
+        // reaching Active. Grain-calling startup services (ChannelBotRegistration,
+        // AevatarOAuthClientBootstrap, HealthProbeStartup,
         // StreamingProxyChatLifecycleContinuationRunner) fired before the silo could
         // create activations -> "Unable to create local activation. Rejecting now."
         // -> AggregateException -> CrashLoopBackOff. Sequential startup (the Generic
         // Host default) runs hosted services in registration order so Kestrel binds
         // the probe port and the Orleans silo reaches Active before grain-callers run.
+        // WorkflowDefinitionBootstrap materializes actor state in StartedAsync after
+        // both of those StartAsync phases have completed.
         using var home = new TemporaryAevatarHomeScope();
         var builder = CreateBuilder();
 
@@ -1204,6 +1246,130 @@ public sealed class MainnetHostCompositionTests
         var descriptor = builder.Services.Last(service =>
             service.ServiceType == typeof(IIdentityAssertionReplayGuard));
         descriptor.ImplementationType.Should().Be(typeof(DistributedIdentityAssertionReplayGuard));
+    }
+
+    [Theory]
+    [InlineData(" ", " https://nyx-api.example.test ", "https://nyx-api.example.test")]
+    [InlineData("urn:custom:aevatar-api", "https://nyx-api.example.test", "urn:custom:aevatar-api")]
+    public void AddAevatarMainnetHost_ShouldUseNyxIdApiAudienceWhenDeploymentOmitsIt(
+        string configuredAudience,
+        string nyxIdApiBaseUrl,
+        string expectedAudience)
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        using var audience = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__Authentication__Audience",
+            configuredAudience);
+        using var apiBaseUrl = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__ApiBaseUrl",
+            nyxIdApiBaseUrl);
+        var audienceKey = $"{AevatarAuthenticationOptions.SectionName}:Audience";
+        var builder = CreateBuilder(environmentName: Environments.Production);
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        builder.Configuration[audienceKey].Should().Be(expectedAudience);
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WhenAudienceAndNyxIdApiBaseUrlAreMissingInProduction_ShouldFailClosed()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        using var audience = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__Authentication__Audience",
+            " ");
+        using var apiBaseUrl = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__ApiBaseUrl",
+            " ");
+        var builder = CreateBuilder(environmentName: Environments.Production);
+
+        var act = () => builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage(
+                "Aevatar:Authentication:Audience is required when authentication is enabled outside Development.");
+    }
+
+    [Theory]
+    [InlineData("Development", typeof(InMemoryAgentToolAdmissionLedger))]
+    [InlineData("Testing", typeof(InMemoryAgentToolAdmissionLedger))]
+    [InlineData("Production", typeof(DistributedAgentToolAdmissionLedger))]
+    public void AddAevatarMainnetHost_ShouldSelectAdmissionLedgerByEnvironment(
+        string environmentName,
+        System.Type expectedLedgerType)
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(environmentName: environmentName);
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        var descriptor = builder.Services.Last(service =>
+            service.ServiceType == typeof(IAgentToolAdmissionLedger));
+        descriptor.ImplementationType.Should().Be(expectedLedgerType);
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldOwnConfiguredAdmissionReplayLifetime()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(environmentName: Environments.Production);
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [MainnetHostBuilderExtensions.AgentToolAdmissionMaximumRequestLifetimeKey] = "06:00:00",
+            [MainnetHostBuilderExtensions.AgentToolAdmissionFutureClockSkewKey] = "00:02:00",
+        });
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        var descriptor = builder.Services.Last(service =>
+            service.ServiceType == typeof(AgentToolAdmissionPolicy));
+        descriptor.ImplementationInstance.Should().Be(new AgentToolAdmissionPolicy(
+            TimeSpan.FromHours(6),
+            TimeSpan.FromMinutes(2)));
+    }
+
+    [Theory]
+    [InlineData(null, "aevatar:mainnet:agent-tool-admission:v1:")]
+    [InlineData("aevatar:mainnet-test:agent-tool-admission:v2:", "aevatar:mainnet-test:agent-tool-admission:v2:")]
+    public void AddAevatarMainnetHost_ShouldOwnAdmissionLedgerKeyPrefix(
+        string? configuredPrefix,
+        string expectedPrefix)
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(environmentName: Environments.Production);
+        if (configuredPrefix is not null)
+        {
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [MainnetHostBuilderExtensions.AgentToolAdmissionKeyPrefixKey] = configuredPrefix,
+            });
+        }
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        var descriptor = builder.Services.Last(service =>
+            service.ServiceType == typeof(AgentToolAdmissionLedgerOptions));
+        descriptor.ImplementationInstance.Should().Be(new AgentToolAdmissionLedgerOptions(expectedPrefix));
     }
 
     [Theory]

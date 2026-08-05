@@ -5,6 +5,27 @@ using Google.Protobuf;
 
 namespace Aevatar.Workflow.Abstractions;
 
+public enum WorkflowCapabilityAdmissionCompatibilityFailure
+{
+    None = 0,
+    RebindRequiredSchema = 1,
+    SchemaMismatch = 2,
+    ExecutionModeMismatch = 3,
+    DefinitionDigestMismatch = 4,
+    InvocationMismatch = 5,
+    InvocationOrderingInvalid = 6,
+    AdmissionProofInvalid = 7,
+    DurableOwnerInvalid = 8,
+    RequiredSourceMissing = 9,
+    AdmissionDigestMismatch = 10,
+}
+
+public sealed record WorkflowCapabilityAdmissionCompatibilityResult(
+    WorkflowCapabilityAdmissionCompatibilityFailure Failure)
+{
+    public bool Succeeded => Failure == WorkflowCapabilityAdmissionCompatibilityFailure.None;
+}
+
 public static class WorkflowCapabilityAdmissionPlanIntegrity
 {
     public const string SchemaVersion = "external-capability-admission.v4";
@@ -190,28 +211,115 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         string? workflowId = null,
         string? revisionId = null)
     {
+        var evaluation = EvaluateCompatibility(
+            plan,
+            workflowYaml,
+            inlineWorkflowYamls,
+            executionMode,
+            expectedInvocations,
+            workflowId,
+            revisionId);
+        if (evaluation.Result.Succeeded)
+            return;
+        throw evaluation.Exception ??
+              new InvalidOperationException("Workflow capability admission compatibility validation failed.");
+    }
+
+    public static WorkflowCapabilityAdmissionCompatibilityResult CheckCompatibility(
+        WorkflowCapabilityAdmissionPlan plan,
+        string workflowYaml,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+        ExternalCapabilityExecutionMode executionMode,
+        IEnumerable<ExternalToolInvocationSpec> expectedInvocations,
+        string? workflowId = null,
+        string? revisionId = null) =>
+        EvaluateCompatibility(
+            plan,
+            workflowYaml,
+            inlineWorkflowYamls,
+            executionMode,
+            expectedInvocations,
+            workflowId,
+            revisionId).Result;
+
+    private static CompatibilityEvaluation EvaluateCompatibility(
+        WorkflowCapabilityAdmissionPlan plan,
+        string workflowYaml,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+        ExternalCapabilityExecutionMode executionMode,
+        IEnumerable<ExternalToolInvocationSpec> expectedInvocations,
+        string? workflowId,
+        string? revisionId)
+    {
         ArgumentNullException.ThrowIfNull(plan);
         if (RequiresRebind(plan.SchemaVersion))
-            throw new WorkflowCapabilityAdmissionRebindRequiredException();
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.RebindRequiredSchema,
+                new WorkflowCapabilityAdmissionRebindRequiredException());
+        }
         if (!string.Equals(plan.SchemaVersion, SchemaVersion, StringComparison.Ordinal))
-            throw new InvalidOperationException("Workflow capability admission schema version is invalid.");
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.SchemaMismatch,
+                new InvalidOperationException("Workflow capability admission schema version is invalid."));
+        }
         if (plan.ExternalCapabilities.Count != 0)
-            throw new InvalidOperationException("Workflow capability admission v4 cannot contain legacy external capabilities.");
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.SchemaMismatch,
+                new InvalidOperationException(
+                    "Workflow capability admission v4 cannot contain legacy external capabilities."));
+        }
 
         if (executionMode == ExternalCapabilityExecutionMode.Unspecified ||
             plan.ExecutionMode != executionMode)
         {
-            throw new InvalidOperationException("Workflow capability admission execution mode does not match the binding request.");
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.ExecutionModeMismatch,
+                new InvalidOperationException(
+                    "Workflow capability admission execution mode does not match the binding request."));
         }
 
-        var expected = expectedInvocations
+        var expected = (expectedInvocations ?? throw new ArgumentNullException(nameof(expectedInvocations)))
             .Select(static invocation => invocation.Clone())
             .OrderBy(static invocation => invocation.CallSiteId, StringComparer.Ordinal)
             .ToArray();
-        ValidateExternalInvocations(expected);
+        try
+        {
+            ValidateExternalInvocations(expected);
+        }
+        catch (Exception exception) when (IsStructuralValidationException(exception))
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.InvocationMismatch,
+                exception);
+        }
+
         var actual = plan.InvocationAdmissions.ToArray();
-        ValidateInvocationAdmissions(actual, executionMode);
-        var bindingIdentity = ResolveExplicitRequestBindingIdentity(actual, workflowId, revisionId);
+        try
+        {
+            ValidateInvocationAdmissions(actual, executionMode);
+        }
+        catch (Exception exception) when (IsStructuralValidationException(exception))
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.AdmissionProofInvalid,
+                exception);
+        }
+
+        (string WorkflowId, string RevisionId)? bindingIdentity;
+        try
+        {
+            bindingIdentity = ResolveExplicitRequestBindingIdentity(actual, workflowId, revisionId);
+        }
+        catch (Exception exception) when (IsStructuralValidationException(exception))
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.AdmissionProofInvalid,
+                exception);
+        }
+
         var expectedDefinitionDigest = bindingIdentity is null
             ? ComputeDefinitionDigest(workflowYaml, inlineWorkflowYamls)
             : ComputeDefinitionDigest(
@@ -220,18 +328,54 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                 bindingIdentity.Value.WorkflowId,
                 bindingIdentity.Value.RevisionId);
         if (!FixedTimeEquals(plan.DefinitionDigest, expectedDefinitionDigest))
-            throw new InvalidOperationException("Workflow capability admission definition digest does not match the bound definition.");
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.DefinitionDigestMismatch,
+                new InvalidOperationException(
+                    "Workflow capability admission definition digest does not match the bound definition."));
+        }
         if (!IsSortedByCallSite(actual))
-            throw new InvalidOperationException("Workflow capability invocation admissions are not canonically ordered.");
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.InvocationOrderingInvalid,
+                new InvalidOperationException(
+                    "Workflow capability invocation admissions are not canonically ordered."));
+        }
+        if (!IsSortedBySourceStamp(plan.SourceStamps))
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.InvocationOrderingInvalid,
+                new InvalidOperationException(
+                    "Workflow capability admission source stamps are not canonically ordered."));
+        }
         if (expected.Length != actual.Length)
-            throw new InvalidOperationException("Workflow capability invocation admissions do not match the bound definition.");
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.InvocationMismatch,
+                new InvalidOperationException(
+                    "Workflow capability invocation admissions do not match the bound definition."));
+        }
         for (var index = 0; index < expected.Length; index++)
         {
-            if (!string.Equals(expected[index].CallSiteId, actual[index].CallSiteId, StringComparison.Ordinal) ||
-                !SelectorMatchesCapability(expected[index].Selector, actual[index].Capability))
+            bool selectorMatches;
+            try
             {
-                throw new InvalidOperationException(
-                    "Workflow capability invocation admissions do not match the bound definition.");
+                selectorMatches = SelectorMatchesCapability(expected[index].Selector, actual[index].Capability);
+            }
+            catch (Exception exception) when (IsStructuralValidationException(exception))
+            {
+                return Failed(
+                    WorkflowCapabilityAdmissionCompatibilityFailure.InvocationMismatch,
+                    exception);
+            }
+
+            if (!string.Equals(expected[index].CallSiteId, actual[index].CallSiteId, StringComparison.Ordinal) ||
+                !selectorMatches)
+            {
+                return Failed(
+                    WorkflowCapabilityAdmissionCompatibilityFailure.InvocationMismatch,
+                    new InvalidOperationException(
+                        "Workflow capability invocation admissions do not match the bound definition."));
             }
         }
 
@@ -245,27 +389,47 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         if (requiresDurableAuthorizationCatalog &&
             !HasDurableAuthorizationCatalogSource(plan.SourceStamps))
         {
-            throw new InvalidOperationException(
-                "Workflow capability admission durable authorization catalog source is required.");
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.RequiredSourceMissing,
+                new InvalidOperationException(
+                    "Workflow capability admission durable authorization catalog source is required."));
         }
         if (!HasRequiredSourceEvidence(executionMode, expectedCapabilityArray, plan.SourceStamps))
-            throw new InvalidOperationException("Workflow capability admission required source evidence is invalid.");
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.RequiredSourceMissing,
+                new InvalidOperationException(
+                    "Workflow capability admission required source evidence is invalid."));
+        }
         if (requiresDurableAuthorizationCatalog)
         {
             if (!IsCanonicalDurableAuthorizationOwner(plan.DurableAuthorizationOwner))
             {
-                throw new InvalidOperationException(
-                    "Workflow capability admission durable authorization owner is invalid.");
+                return Failed(
+                    WorkflowCapabilityAdmissionCompatibilityFailure.DurableOwnerInvalid,
+                    new InvalidOperationException(
+                        "Workflow capability admission durable authorization owner is invalid."));
             }
         }
         else if (plan.DurableAuthorizationOwner is not null)
         {
-            throw new InvalidOperationException(
-                "Workflow capability admission durable authorization owner is not applicable.");
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.DurableOwnerInvalid,
+                new InvalidOperationException(
+                    "Workflow capability admission durable authorization owner is not applicable."));
         }
 
         if (!FixedTimeEquals(plan.AdmissionDigest, ComputeAdmissionDigest(plan)))
-            throw new InvalidOperationException("Workflow capability admission digest is invalid.");
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.AdmissionDigestMismatch,
+                new InvalidOperationException("Workflow capability admission digest is invalid."));
+        }
+
+        return new CompatibilityEvaluation(
+            new WorkflowCapabilityAdmissionCompatibilityResult(
+                WorkflowCapabilityAdmissionCompatibilityFailure.None),
+            null);
     }
 
     public static IReadOnlyList<ExternalWorkflowCapabilityRef> DistinctCapabilities(
@@ -714,6 +878,25 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                 admissions.Select(static admission => admission.CallSiteId)
                     .OrderBy(static id => id, StringComparer.Ordinal),
                 StringComparer.Ordinal);
+
+    private static bool IsSortedBySourceStamp(
+        IEnumerable<ExternalCapabilitySourceStamp> sourceStamps)
+    {
+        var keys = sourceStamps.Select(SourceKey).ToArray();
+        return keys.SequenceEqual(keys.Order(StringComparer.Ordinal), StringComparer.Ordinal);
+    }
+
+    private static bool IsStructuralValidationException(Exception exception) =>
+        exception is InvalidOperationException or ArgumentException;
+
+    private static CompatibilityEvaluation Failed(
+        WorkflowCapabilityAdmissionCompatibilityFailure failure,
+        Exception exception) =>
+        new(new WorkflowCapabilityAdmissionCompatibilityResult(failure), exception);
+
+    private sealed record CompatibilityEvaluation(
+        WorkflowCapabilityAdmissionCompatibilityResult Result,
+        Exception? Exception);
 
     public static bool RequiresDurableAuthorizationCatalog(
         ExternalCapabilityExecutionMode executionMode,

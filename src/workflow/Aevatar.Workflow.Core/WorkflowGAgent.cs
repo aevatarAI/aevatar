@@ -21,16 +21,18 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
     public async Task BindWorkflowDefinitionAsync(
         string workflowYaml,
         string? workflowName,
-        IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
-        string? scopeId = null,
-        string? sourceKind = null,
-        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
-        string? workflowId = null,
-        string? revisionId = null,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+        string? scopeId,
+        string? sourceKind,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+        string? workflowId,
+        string? revisionId,
+        ExternalCapabilityExecutionMode expectedExecutionMode,
         CancellationToken ct = default)
     {
+        EnsureExpectedExecutionMode(expectedExecutionMode);
         EnsureWorkflowNameCanBind(workflowName);
-        EnsureExistingBindingIdentityCanBind(capabilityAdmissionPlan, workflowId, revisionId);
+        EnsureExistingBindingCanBind(capabilityAdmissionPlan, workflowId, revisionId, expectedExecutionMode);
         var bindDefinitionEvent = new BindWorkflowDefinitionEvent
         {
             WorkflowName = workflowName ?? string.Empty,
@@ -38,6 +40,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             SourceKind = sourceKind?.Trim() ?? string.Empty,
             WorkflowId = workflowId ?? string.Empty,
             RevisionId = revisionId ?? string.Empty,
+            ExpectedExecutionMode = expectedExecutionMode,
         };
         if (scopeId is not null)
             bindDefinitionEvent.ScopeId = scopeId.Trim();
@@ -58,6 +61,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
                 bindDefinitionEvent.InlineWorkflowYamls,
                 dependencies,
                 capabilityAdmissionPlan,
+                expectedExecutionMode,
                 bindDefinitionEvent.WorkflowId,
                 bindDefinitionEvent.RevisionId);
             bindDefinitionEvent.AuthorizationDependencies = dependencies;
@@ -77,7 +81,8 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             request.SourceKind,
             request.CapabilityAdmissionPlan,
             request.WorkflowId,
-            request.RevisionId);
+            request.RevisionId,
+            request.ExpectedExecutionMode);
 
     [EventHandler]
     public Task HandleSubWorkflowDefinitionResolveRequested(SubWorkflowDefinitionResolveRequestedEvent request) =>
@@ -126,6 +131,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         next.CapabilityAdmissionPlan = evt.CapabilityAdmissionPlan?.Clone();
         next.WorkflowId = evt.WorkflowId ?? string.Empty;
         next.RevisionId = evt.RevisionId ?? string.Empty;
+        next.ExpectedExecutionMode = evt.ExpectedExecutionMode;
 
         var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
         next.Compiled = compileResult.Compiled;
@@ -134,11 +140,19 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         return next;
     }
 
-    private void EnsureExistingBindingIdentityCanBind(
+    private void EnsureExistingBindingCanBind(
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
         string? workflowId,
-        string? revisionId)
+        string? revisionId,
+        ExternalCapabilityExecutionMode expectedExecutionMode)
     {
+        if (State.ExpectedExecutionMode != ExternalCapabilityExecutionMode.Unspecified &&
+            State.ExpectedExecutionMode != expectedExecutionMode)
+        {
+            throw new InvalidOperationException(
+                "Workflow definition is already bound to a different expected execution mode.");
+        }
+
         var existingRequiresExplicitIdentity = WorkflowCapabilityAdmissionPlanIntegrity
             .RequiresExplicitRequestBindingIdentity(State.CapabilityAdmissionPlan);
         var requestedRequiresExplicitIdentity = WorkflowCapabilityAdmissionPlanIntegrity
@@ -229,6 +243,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         IReadOnlyDictionary<string, string> inlineWorkflowYamls,
         WorkflowAuthorizationDependencies dependencies,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+        ExternalCapabilityExecutionMode expectedExecutionMode,
         string? workflowId,
         string? revisionId)
     {
@@ -243,10 +258,16 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             capabilityAdmissionPlan,
             workflowYaml,
             inlineWorkflowYamls,
-            capabilityAdmissionPlan.ExecutionMode,
+            expectedExecutionMode,
             dependencies.ExternalInvocations,
             workflowId,
             revisionId);
+    }
+
+    private static void EnsureExpectedExecutionMode(ExternalCapabilityExecutionMode executionMode)
+    {
+        if (executionMode == ExternalCapabilityExecutionMode.Unspecified || !Enum.IsDefined(executionMode))
+            throw new InvalidOperationException("Workflow expected execution mode is required.");
     }
 
     private WorkflowCompilationResult EvaluateWorkflowCompilation(string yaml)

@@ -504,7 +504,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 return;
             }
 
-            await DispatchStepAsync(next, evt.Output ?? string.Empty, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
+            await DispatchStepAsync(next, evt.Output ?? string.Empty, state.InputFileRefs, state, WorkflowStepDispatchKind.Forward, ctx, ct);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
@@ -1097,7 +1097,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     }
                     else
                     {
-                        await DispatchStepAsync(next, output, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
+                        await DispatchStepAsync(next, output, state.InputFileRefs, state, WorkflowStepDispatchKind.Forward, ctx, ct);
                     }
 
                     return true;
@@ -1118,7 +1118,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     var fallbackInput = string.IsNullOrWhiteSpace(evt.Output)
                         ? evt.Error ?? string.Empty
                         : evt.Output;
-                    await DispatchStepAsync(fallback, fallbackInput, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
+                    await DispatchStepAsync(fallback, fallbackInput, state.InputFileRefs, state, WorkflowStepDispatchKind.Forward, ctx, ct);
                     return true;
                 }
             default:
@@ -1151,6 +1151,17 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         try
         {
             var fileRefs = inputFileRefs.Select(static fileRef => fileRef.Clone()).ToArray();
+            var firstFileRef = fileRefs.FirstOrDefault();
+            ctx.Logger.LogWarning(
+                "Workflow step input file refs dispatching. runId={RunId} stepId={StepId} stepType={StepType} dispatchKind={DispatchKind} inputFileRefCount={InputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+                state.RunId,
+                step.Id,
+                WorkflowPrimitiveCatalog.ToCanonicalType(step.Type),
+                dispatchKind,
+                fileRefs.Length,
+                firstFileRef?.FileId ?? string.Empty,
+                firstFileRef?.ArtifactId ?? string.Empty,
+                firstFileRef?.MediaType ?? string.Empty);
             var request = BuildStepRequest(step, input, fileRefs, state, ctx);
             var idempotency = ResolveAndPersistStepIdempotency(step, state);
             request.IdempotencyKey = idempotency.IdempotencyKey;
@@ -1329,9 +1340,11 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         return resolved;
     }
 
-    private static bool ShouldDeferWhileParameterEvaluation(string canonicalStepType, string parameterKey) =>
-        string.Equals(canonicalStepType, "while", StringComparison.OrdinalIgnoreCase) &&
-        (string.Equals(parameterKey, "condition", StringComparison.OrdinalIgnoreCase) ||
+    private static bool ShouldDeferLoopParameterEvaluation(string canonicalStepType, string parameterKey) =>
+        (string.Equals(canonicalStepType, "while", StringComparison.OrdinalIgnoreCase) &&
+         string.Equals(parameterKey, "condition", StringComparison.OrdinalIgnoreCase)) ||
+        ((string.Equals(canonicalStepType, "foreach", StringComparison.OrdinalIgnoreCase) ||
+          string.Equals(canonicalStepType, "while", StringComparison.OrdinalIgnoreCase)) &&
          parameterKey.StartsWith("sub_param_", StringComparison.OrdinalIgnoreCase));
 
     private static bool IsTimeoutError(string? error) =>
@@ -1878,7 +1891,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.Variables["input"] = input;
         foreach (var (key, value) in step.Parameters)
         {
-            if (ShouldDeferWhileParameterEvaluation(canonicalStepType, key))
+            if (ShouldDeferLoopParameterEvaluation(canonicalStepType, key))
             {
                 request.Parameters[key] = value;
                 continue;

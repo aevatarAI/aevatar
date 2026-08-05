@@ -22,7 +22,7 @@ namespace Aevatar.Studio.Application.Studio.Services;
 public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSchedulePort
 {
     private const string WorkflowInvokeEndpointId = "chat";
-    private const string ObservatoryPath = "/workflow/observatory";
+    private const string ObservatoryPath = "/admin#/observatory";
     private const string DedicatedCredentialProvisioningKind =
         "dedicated_scheduled_invocation_agent_key";
     private const string ProvisioningBearerCapabilityScope = "proxy";
@@ -144,6 +144,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         var refresh = await RefreshRecoverableNyxIdCatalogSnapshotAsync(
             resolved.AuthorizationRequest,
             first.RequiredNyxIdServices,
+            first.LLMRefreshRequirement,
             cancellationToken => ResolveProvisioningBearerTokenAsync(request, cancellationToken),
             first.FailureCode,
             first.Detail,
@@ -194,6 +195,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         var refresh = await RefreshRecoverableNyxIdCatalogSnapshotAsync(
             authorizationRequest,
             first.RequiredNyxIdServices,
+            first.LLMRefreshRequirement,
             provisioningBearerTokenResolver,
             first.FailureCode,
             first.Detail,
@@ -856,6 +858,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
     private async Task<CatalogRefreshRecoveryResult> RefreshRecoverableNyxIdCatalogSnapshotAsync(
         ScheduledInvocationAuthorizationRequest authorizationRequest,
         IReadOnlyList<NyxIdUserServiceCapabilityRef>? resolvedRequiredServices,
+        ScheduledInvocationLLMRefreshRequirement? llmRefreshRequirement,
         Func<CancellationToken, Task<string>> provisioningBearerTokenResolver,
         ScheduledInvocationAuthorizationFailureCode failureCode,
         string detail,
@@ -863,7 +866,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         CancellationToken ct)
     {
         var requiredServices = ResolveCatalogRefreshRequiredServices(authorizationRequest, resolvedRequiredServices);
-        if (resolvedRequiredServices is { Count: 0 } && requiredServices.Count == 0)
+        if (resolvedRequiredServices is { Count: 0 } &&
+            requiredServices.Count == 0 &&
+            llmRefreshRequirement == null)
         {
             return CatalogRefreshRecoveryResult.Failed(
                 failureCode,
@@ -895,7 +900,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             refresh = await _catalogRefreshPort.RefreshAsync(
                 authorizationRequest.Owner,
                 bearerToken,
-                requiredServices,
+                new NyxIdAuthorizationCatalogRefreshRequest(
+                    requiredServices,
+                    llmRefreshRequirement),
                 ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -1502,7 +1509,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             ScopeId = scopeId,
         };
         if (fact?.OwnerLLMSelection is { } selection &&
-            selection.RouteKind != ScheduledInvocationOwnerLLMRouteKind.Unspecified)
+            selection.RouteKind != LLMRouteKind.Unspecified)
         {
             if (!ScheduledInvocationOwnerLLMSelectionPolicy.IsDurableSelectionValid(selection))
                 throw new InvalidOperationException("scheduled_owner_llm_selection_invalid");

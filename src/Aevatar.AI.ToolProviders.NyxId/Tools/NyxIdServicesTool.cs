@@ -12,6 +12,16 @@ public sealed class NyxIdServicesTool : INyxIdBuiltInTool, IAgentToolCapabilityD
     private const string ResultInvalidCode = "NYXID_SERVICES_RESULT_INVALID";
     private const string ResultInvalidMessage = "The NyxID services result could not be verified.";
     private const string ArgumentsInvalidCode = "NYXID_SERVICES_ARGUMENTS_INVALID";
+    private static readonly NyxIdClosedActionParser<NyxIdServicesAction> ActionParser = new(
+    [
+        new("list", NyxIdServicesAction.List, new(false, true, false)),
+        new("show", NyxIdServicesAction.Show, new(false, true, false)),
+        new("create", NyxIdServicesAction.Create, new(true, false, false)),
+        new("update", NyxIdServicesAction.Update, new(true, false, false)),
+        new("route", NyxIdServicesAction.Route, new(true, false, false)),
+        new("delete", NyxIdServicesAction.Delete, new(true, false, true)),
+        new("rotate_credential", NyxIdServicesAction.RotateCredential, new(true, false, true)),
+    ]);
 
     public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
 
@@ -25,13 +35,13 @@ public sealed class NyxIdServicesTool : INyxIdBuiltInTool, IAgentToolCapabilityD
         "Manage the user's connected services in NyxID. " +
         "Actions: list, show, create, update, delete, rotate_credential, route.";
 
-    public string ParametersSchema => """
+    public string ParametersSchema => $$"""
         {
           "type": "object",
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "show", "create", "delete", "update", "rotate_credential", "route"],
+              "enum": {{ActionParser.ActionNamesJson}},
               "description": "Action to perform (default: list)"
             },
             "id": {
@@ -74,12 +84,25 @@ public sealed class NyxIdServicesTool : INyxIdBuiltInTool, IAgentToolCapabilityD
         }
         """;
 
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+
+    public AgentToolCallSafety GetCallSafety(string argumentsJson) =>
+        ActionParser.Classify(argumentsJson);
+
     public AgentToolReceipt? CreateResultReceipt(
         string callId,
         string toolName,
         string argumentsJson,
         string resultJson)
     {
+        var parsed = ActionParser.Parse(argumentsJson);
+        if (!parsed.IsValid ||
+            parsed.Action != NyxIdServicesAction.List &&
+            parsed.Action != NyxIdServicesAction.Show)
+        {
+            return NyxIdManagedToolReceiptFactory.TryCreate(callId, toolName, resultJson);
+        }
+
         var args = ToolArgs.Parse(argumentsJson);
         if (args.HasParseError)
             return ErrorReceipt(callId, toolName, ArgumentsInvalidCode, "NyxID services arguments are invalid.");
@@ -94,18 +117,16 @@ public sealed class NyxIdServicesTool : INyxIdBuiltInTool, IAgentToolCapabilityD
             if (TryReadErrorReceiptCode(root, out var errorCode))
                 return ErrorReceipt(callId, toolName, errorCode, RequestFailedMessage);
 
-            var action = NormalizeAction(args.Str("action", "list"));
-            return action switch
+            return parsed.Action switch
             {
-                "list" when NyxIdUserServiceListJson.HasServiceCollection(root) =>
+                NyxIdServicesAction.List when NyxIdUserServiceListJson.HasServiceCollection(root) =>
                     Receipt(callId, toolName, AgentToolReceiptStatus.Success, resultJson),
-                "show" when IsVerifiedShowResult(root, args.Str("id")) =>
+                NyxIdServicesAction.Show when IsVerifiedShowResult(root, args.Str("id")) =>
                     Receipt(callId, toolName, AgentToolReceiptStatus.Success, resultJson),
-                "show" when string.IsNullOrWhiteSpace(args.Str("id")) =>
+                NyxIdServicesAction.Show when string.IsNullOrWhiteSpace(args.Str("id")) =>
                     ErrorReceipt(callId, toolName, ArgumentsInvalidCode, "'id' is required for show."),
-                "list" or "show" =>
+                _ =>
                     ErrorReceipt(callId, toolName, ResultInvalidCode, ResultInvalidMessage),
-                _ => null,
             };
         }
         catch (JsonException)
@@ -120,27 +141,35 @@ public sealed class NyxIdServicesTool : INyxIdBuiltInTool, IAgentToolCapabilityD
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
+        var parsed = ActionParser.Parse(argumentsJson);
+        if (!parsed.IsValid)
+            return NyxIdClosedActionParser<NyxIdServicesAction>.InvalidActionJson;
+
         var args = ToolArgs.Parse(argumentsJson);
-        var action = args.Str("action", "list");
         var id = args.Str("id");
 
-        return action switch
+        return parsed.Action switch
         {
-            "show" when !string.IsNullOrWhiteSpace(id) =>
+            NyxIdServicesAction.Show when !string.IsNullOrWhiteSpace(id) =>
                 await _client.GetServiceAsync(token, id, ct),
-            "delete" when !string.IsNullOrWhiteSpace(id) =>
+            NyxIdServicesAction.Delete when !string.IsNullOrWhiteSpace(id) =>
                 await _client.DeleteServiceAsync(token, id, ct),
-            "create" => await CreateServiceAsync(token, args, ct),
-            "update" when !string.IsNullOrWhiteSpace(id) =>
+            NyxIdServicesAction.Create => await CreateServiceAsync(token, args, ct),
+            NyxIdServicesAction.Update when !string.IsNullOrWhiteSpace(id) =>
                 await UpdateServiceAsync(token, id, args, ct),
-            "rotate_credential" when !string.IsNullOrWhiteSpace(id) =>
+            NyxIdServicesAction.RotateCredential when !string.IsNullOrWhiteSpace(id) =>
                 await RotateCredentialAsync(token, id, args, ct),
-            "route" when !string.IsNullOrWhiteSpace(id) =>
+            NyxIdServicesAction.Route when !string.IsNullOrWhiteSpace(id) =>
                 await RouteServiceAsync(token, id, args, ct),
 
-            "show" or "delete" or "update" or "rotate_credential" or "route" =>
-                $"{{\"error\":\"'id' is required for {action}\",\"received\":{args.Raw}}}",
-            _ => await _client.ListServicesAsync(token, ct),
+            NyxIdServicesAction.Show or
+            NyxIdServicesAction.Delete or
+            NyxIdServicesAction.Update or
+            NyxIdServicesAction.RotateCredential or
+            NyxIdServicesAction.Route =>
+                $"{{\"error\":\"'id' is required for {parsed.Name}\",\"received\":{args.Raw}}}",
+            NyxIdServicesAction.List => await _client.ListServicesAsync(token, ct),
+            _ => NyxIdClosedActionParser<NyxIdServicesAction>.InvalidActionJson,
         };
     }
 
@@ -194,7 +223,10 @@ public sealed class NyxIdServicesTool : INyxIdBuiltInTool, IAgentToolCapabilityD
             if (doc.RootElement.TryGetProperty("api_key_id", out var ak))
                 apiKeyId = ak.GetString();
         }
-        catch { /* ignore */ }
+        catch (JsonException)
+        {
+            return """{"error":"NyxID returned an invalid service response"}""";
+        }
 
         if (string.IsNullOrWhiteSpace(apiKeyId))
             return """{"error":"Could not find api_key_id for this service"}""";
@@ -215,9 +247,6 @@ public sealed class NyxIdServicesTool : INyxIdBuiltInTool, IAgentToolCapabilityD
 
         return await _client.UpdateServiceAsync(token, id, JsonSerializer.Serialize(payload), ct);
     }
-
-    private static string NormalizeAction(string? action) =>
-        string.IsNullOrWhiteSpace(action) ? "list" : action.Trim().ToLowerInvariant();
 
     private static bool IsVerifiedShowResult(JsonElement root, string? requestedId)
     {
@@ -285,4 +314,15 @@ public sealed class NyxIdServicesTool : INyxIdBuiltInTool, IAgentToolCapabilityD
             ErrorCode = errorCode ?? string.Empty,
             ErrorMessage = errorMessage ?? string.Empty,
         };
+}
+
+internal enum NyxIdServicesAction
+{
+    List,
+    Show,
+    Create,
+    Update,
+    Route,
+    Delete,
+    RotateCredential,
 }

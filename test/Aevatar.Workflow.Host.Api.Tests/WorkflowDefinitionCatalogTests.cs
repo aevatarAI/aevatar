@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Core;
@@ -15,24 +16,53 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public class WorkflowDefinitionCatalogTests
 {
+    private static readonly string[] StudioManagedRuntimeAevatarInvocationToolNames =
+    [
+        "aevatar_invoke_gagent",
+        "aevatar_invoke_team",
+        "aevatar_invoke_member",
+        "aevatar_observe_run",
+        "aevatar_read_workflow_run_artifact",
+    ];
+
     [Fact]
     public void Register_And_GetYaml()
     {
         var registry = new WorkflowDefinitionCatalog();
-        registry.Register("test", "name: test\nsteps: []");
+        registry.Register(
+            "test",
+            "name: test\nsteps: []",
+            ExternalCapabilityExecutionMode.Interactive);
 
         registry.GetYaml("test").Should().Contain("name: test");
         registry.GetYaml("TEST").Should().NotBeNull(); // Case-insensitive lookup.
         registry.GetYaml("nonexistent").Should().BeNull();
         registry.GetDefinition("test")!.DefinitionActorId.Should().Be(WorkflowDefinitionActorId.Format("test"));
+        registry.GetDefinition("test")!.ExpectedExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Interactive);
+    }
+
+    [Fact]
+    public void Register_WithUnspecifiedMode_ShouldReject()
+    {
+        var registry = new WorkflowDefinitionCatalog();
+
+        var act = () => registry.Register(
+            "test",
+            "name: test\nsteps: []",
+            ExternalCapabilityExecutionMode.Unspecified);
+
+        act.Should().Throw<ArgumentOutOfRangeException>()
+            .WithMessage("*execution mode is required*");
+        registry.GetNames().Should().BeEmpty();
     }
 
     [Fact]
     public void GetNames_ReturnsAll()
     {
         var registry = new WorkflowDefinitionCatalog();
-        registry.Register("alpha", "a");
-        registry.Register("beta", "b");
+        registry.Register("alpha", "a", ExternalCapabilityExecutionMode.Interactive);
+        registry.Register("beta", "b", ExternalCapabilityExecutionMode.Interactive);
 
         registry.GetNames().Should().HaveCount(2);
     }
@@ -112,7 +142,10 @@ public class WorkflowDefinitionCatalogTests
             File.WriteAllText(Path.Combine(tmpDir, "direct.yaml"), "name: direct\nsteps:\n  - id: from_file\n");
 
             var registry = new WorkflowDefinitionCatalog();
-            registry.Register("direct", "name: direct\nsteps:\n  - id: built_in\n");
+            registry.Register(
+                "direct",
+                "name: direct\nsteps:\n  - id: built_in\n",
+                ExternalCapabilityExecutionMode.Interactive);
             var loader = new WorkflowDefinitionFileLoader();
 
             var count = loader.LoadInto(
@@ -228,7 +261,7 @@ public class WorkflowDefinitionCatalogTests
         role.SystemPrompt.Should().Contain("NOT create a separate `wf-...` member");
         role.SystemPrompt.Should().Contain("Do not call `aevatar_provision_workflow_schedule` until a Team has been selected or created");
         role.SystemPrompt.Should().Contain("pass that confirmed `team_id`");
-        role.SystemPrompt.Should().Contain("/workflow/observatory");
+        role.SystemPrompt.Should().Contain("/admin#/observatory");
         role.SystemPrompt.Should().Contain("Do NOT");
         // Honesty: the receipt is Accepted (async), not a success claim.
         role.SystemPrompt.Should().Contain("Accepted");
@@ -252,8 +285,9 @@ public class WorkflowDefinitionCatalogTests
         role.SystemPrompt.Should().NotContain("workflow_create_def");
         role.SystemPrompt.Should().NotContain("aevatar_start_workflow");
 
-        // The allowlist is the lever that keeps both the Lark scheduler and the hanging loose-definition
-        // tools out of the studio surface, and brings the channel-free provision tool in.
+        // The allowlist is the lever that keeps hanging loose-definition and unmanaged workflow-start
+        // tools out of the studio surface, while admitting the direct invocation tools that are safe
+        // under the Studio managed workflow runtime.
         role.AgentToolScope.Should().NotBeNull();
         var allowed = role.AgentToolScope!.AllowedToolNames;
         allowed.Should().Contain("aevatar_list_teams");
@@ -272,8 +306,7 @@ public class WorkflowDefinitionCatalogTests
         allowed.Should().Contain("aevatar_bind_member_workflow");
         allowed.Should().Contain("aevatar_schedule_member_workflow");
         allowed.Should().Contain("aevatar_provision_workflow_schedule");
-        allowed.Should().Contain("aevatar_observe_run");
-        allowed.Should().Contain("aevatar_read_workflow_run_artifact");
+        allowed.Should().Contain(StudioManagedRuntimeAevatarInvocationToolNames);
         allowed.Should().Contain("web_search");
         allowed.Should().Contain("web_fetch");
         // The loose-definition path (file-only create + run-by-name) hangs 30s on an unprovisioned
@@ -309,6 +342,20 @@ public class WorkflowDefinitionCatalogTests
         role.SystemPrompt.Should().Contain("Do NOT use `aevatar_list_workflows`");
         role.SystemPrompt.Should().Contain("The user does not need to say NyxID for an external capability request");
         role.SystemPrompt.Should().Contain("first look for a matching NyxID connected service");
+        role.SystemPrompt.Should().Contain("For every connect, add, or authorize request");
+        role.SystemPrompt.Should().Contain("`nyxid_catalog` is mandatory discovery");
+        role.SystemPrompt.Should().Contain("`catalogIdentityCandidate`");
+        role.SystemPrompt.Should().Contain("only the exact returned `slug` may enter");
+        role.SystemPrompt.Should().Contain("Never pass a provider slug, display name");
+        role.SystemPrompt.Should().Contain("guessed").And.Contain("value");
+        role.SystemPrompt.Should().Contain("For a bare source-code-hosting connection");
+        role.SystemPrompt.Should().Contain("repository");
+        role.SystemPrompt.Should().Contain("access scope instead of omitting scopes");
+        role.SystemPrompt.Should().Contain("Then always call `nyxid_require_service`");
+        role.SystemPrompt.Should().Contain("Never end the turn after catalog discovery");
+        role.SystemPrompt.Should().Contain("the authority for the interactive");
+        role.SystemPrompt.Should().Contain("`service.connect` handoff");
+        role.SystemPrompt.Should().Contain("prose and catalog results are not substitutes");
         role.SystemPrompt.Should().Contain("use the admitted per-operation connected-service tool");
         role.SystemPrompt.Should().Contain("Do not call a provider-specific chat tool first");
         role.SystemPrompt.Should().Contain("`list_external_workflow_capabilities`");
@@ -507,8 +554,14 @@ public class WorkflowDefinitionCatalogTests
     public void Catalog_ShouldRegisterStudioWorkflowAlongsideDirect()
     {
         var registry = new WorkflowDefinitionCatalog();
-        registry.Register("direct", WorkflowDefinitionCatalog.BuiltInDirectYaml);
-        registry.Register("studio", WorkflowDefinitionCatalog.BuiltInStudioYaml);
+        registry.Register(
+            "direct",
+            WorkflowDefinitionCatalog.BuiltInDirectYaml,
+            ExternalCapabilityExecutionMode.Interactive);
+        registry.Register(
+            "studio",
+            WorkflowDefinitionCatalog.BuiltInStudioYaml,
+            ExternalCapabilityExecutionMode.Interactive);
 
         registry.GetYaml("studio").Should().Contain("name: studio");
         registry.GetDefinition("studio")!.DefinitionActorId

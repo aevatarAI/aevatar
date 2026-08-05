@@ -498,7 +498,8 @@ message ScheduledDispatchDocument {
   string owner_llm_user_service_id = 61;
   string owner_llm_service_slug = 62;
   string owner_llm_model = 63;
-  string service_revision_id = 64;
+  string last_error_code = 64;
+  string service_revision_id = 65;
 }
 
 enum TeamAutomationLifecycleStatusDocument {
@@ -533,4 +534,5 @@ message ScheduledDispatchFireRecordDocument {
   string correlation_id = 6;
   string error = 7;
   bool manual = 8;
+  string error_code = 9;
 }

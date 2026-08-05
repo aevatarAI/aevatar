@@ -109,6 +109,8 @@ internal sealed class WorkflowRunCommittedStateRedactionHook : ICommittedStatePu
 
         if (!string.IsNullOrWhiteSpace(delta.CallerCredential?.BearerToken))
             delta.CallerCredential.BearerToken = string.Empty;
+        if (!string.IsNullOrWhiteSpace(delta.CallerCredential?.SourceReadableUserBearerToken))
+            delta.CallerCredential.SourceReadableUserBearerToken = string.Empty;
         if (delta.CallerCredential?.DurableCallerCredential != null)
             delta.CallerCredential.DurableCallerCredential = null;
         if (delta.CallerCredential?.NyxIdAuthority != null)

@@ -76,7 +76,6 @@ public sealed class WorkflowCapabilityAdmissionHttpContextTests
     [InlineData("delegation_only", null, "delegation-token")]
     [InlineData("both_valid", "bearer-token", null)]
     [InlineData("missing", null, null)]
-    [InlineData("valid_authorization_with_malformed_delegation", "bearer-token", null)]
     public void Create_ShouldApplyCanonicalCallerCredentialSelection(
         string scenario,
         string? expectedSourceReadableToken,
@@ -98,6 +97,7 @@ public sealed class WorkflowCapabilityAdmissionHttpContextTests
 
     [Theory]
     [InlineData("malformed_authorization_with_delegation")]
+    [InlineData("valid_authorization_with_malformed_delegation")]
     [InlineData("duplicate_authorization")]
     [InlineData("duplicate_delegation")]
     public void Create_WithInvalidCallerCredentialSelection_ShouldFailClosed(string scenario)

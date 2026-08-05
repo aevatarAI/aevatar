@@ -6,6 +6,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -21,6 +22,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
     private readonly IScriptRuntimeCommandPort? _scriptRuntimeCommandPort;
     private readonly IWorkflowRunProvisioningPort _workflowRunProvisioningPort;
     private readonly IServiceRunRegistrationPort _serviceRunRegistrationPort;
+    private readonly IWorkflowArtifactCompatibilityPreflight _artifactPreflight;
     private readonly ILogger<DefaultServiceInvocationDispatcher> _logger;
 
     public DefaultServiceInvocationDispatcher(
@@ -28,12 +30,14 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         IScriptRuntimeCommandPort? scriptRuntimeCommandPort,
         IWorkflowRunProvisioningPort workflowRunProvisioningPort,
         IServiceRunRegistrationPort serviceRunRegistrationPort,
+        IWorkflowArtifactCompatibilityPreflight artifactPreflight,
         ILogger<DefaultServiceInvocationDispatcher>? logger = null)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _scriptRuntimeCommandPort = scriptRuntimeCommandPort;
         _workflowRunProvisioningPort = workflowRunProvisioningPort ?? throw new ArgumentNullException(nameof(workflowRunProvisioningPort));
         _serviceRunRegistrationPort = serviceRunRegistrationPort ?? throw new ArgumentNullException(nameof(serviceRunRegistrationPort));
+        _artifactPreflight = artifactPreflight ?? throw new ArgumentNullException(nameof(artifactPreflight));
         _logger = logger ?? NullLogger<DefaultServiceInvocationDispatcher>.Instance;
     }
 
@@ -135,6 +139,11 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             ?? throw new InvalidOperationException("Workflow services require ChatRequestEvent payload.");
         var callerCredential = BuildWorkflowCallerCredential(chatRequest, request);
         var plan = target.Artifact.DeploymentPlan.WorkflowPlan;
+        if (plan.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
+            !System.Enum.IsDefined(plan.ExecutionMode))
+        {
+            throw new InvalidOperationException("Workflow service deployment execution mode is required.");
+        }
         var bindingIdentity = WorkflowServiceDeploymentPlanIntegrity.ResolveBindingIdentity(
             target.Artifact,
             target.Service.RevisionId);
@@ -146,6 +155,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             plan.WorkflowName,
             plan.WorkflowYaml,
             plan.InlineWorkflowYamls,
+            plan.ExecutionMode,
             ResolveAuthoritativeScopeId(request, chatRequest),
             string.IsNullOrWhiteSpace(request.RunOrigin)
                 ? WorkflowRunOrigins.ServiceInvoke
@@ -213,6 +223,15 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                 "Requested Run identity requires IWorkflowRunIdentityExecutionPort support.");
         }
 
+        await _artifactPreflight.ValidateAsync(
+            new WorkflowArtifactCompatibilityRequest(
+                definition.WorkflowYaml,
+                definition.InlineWorkflowYamls,
+                definition.CapabilityAdmissionPlan?.Clone(),
+                definition.ExpectedExecutionMode,
+                definition.WorkflowId,
+                definition.RevisionId),
+            ct);
         var registration = await RegisterRunAsync(
             target,
             request,
@@ -453,7 +472,8 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
 
             if (!string.IsNullOrWhiteSpace(source.ConnectorHttpAuthorization) ||
                 !string.IsNullOrWhiteSpace(source.LlmControl?.NyxIdAccessToken) ||
-                !string.IsNullOrWhiteSpace(source.LlmControl?.NyxIdOrgToken))
+                !string.IsNullOrWhiteSpace(source.LlmControl?.NyxIdOrgToken) ||
+                !string.IsNullOrWhiteSpace(source.CallerSourceReadableNyxIdBearerToken))
             {
                 throw new InvalidOperationException(
                     "caller_durable_credential must not be combined with raw workflow caller credentials.");
@@ -477,7 +497,10 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
 
         if (string.IsNullOrWhiteSpace(invocationRequest.ScheduleId))
         {
-            var connectorCredential = BuildWorkflowCallerCredentialFromConnectorAuthorization(source.ConnectorHttpAuthorization);
+            var connectorCredential = BuildWorkflowCallerCredentialFromConnectorAuthorization(
+                source.ConnectorHttpAuthorization,
+                source.CallerSourceReadableNyxIdBearerToken,
+                source.CallerNyxIdCredentialKind);
             if (!string.IsNullOrWhiteSpace(connectorCredential.BearerToken))
                 return connectorCredential;
         }
@@ -485,17 +508,68 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         return BuildWorkflowCallerCredentialFromToken(source.LlmControl?.NyxIdAccessToken);
     }
 
-    private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredentialFromConnectorAuthorization(string? connectorHttpAuthorization)
+    private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredentialFromConnectorAuthorization(
+        string? connectorHttpAuthorization,
+        string? sourceReadableUserBearerToken,
+        AgentToolNyxIdCredentialKindPayload credentialKind)
     {
+        var sourceReadable = WorkflowCallerCredentialTokens.ParseOptional(sourceReadableUserBearerToken);
+        if (sourceReadable.IsInvalid)
+        {
+            throw new ArgumentException(
+                "Workflow caller source-readable bearer token is invalid.",
+                nameof(sourceReadableUserBearerToken));
+        }
+
         if (string.IsNullOrWhiteSpace(connectorHttpAuthorization))
+        {
+            if (sourceReadable.IsValid ||
+                credentialKind != AgentToolNyxIdCredentialKindPayload.Unspecified)
+            {
+                throw new ArgumentException(
+                    "Typed workflow caller credentials require an execution bearer token.",
+                    nameof(connectorHttpAuthorization));
+            }
             return new Aevatar.Workflow.Abstractions.WorkflowCallerCredential();
+        }
 
         const string bearerPrefix = "Bearer ";
         var authorization = connectorHttpAuthorization.Trim();
         if (!authorization.StartsWith(bearerPrefix, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Connector HTTP authorization must use the Bearer scheme.", nameof(connectorHttpAuthorization));
 
-        return BuildWorkflowCallerCredentialFromToken(authorization[bearerPrefix.Length..]);
+        var credential = BuildWorkflowCallerCredentialFromToken(authorization[bearerPrefix.Length..]);
+        switch (credentialKind)
+        {
+            case AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer:
+                if (sourceReadable.IsValid)
+                {
+                    throw new ArgumentException(
+                        "A supplemental source-readable caller credential requires a typed proxy delegation credential.",
+                        nameof(sourceReadableUserBearerToken));
+                }
+                credential.Kind = NyxIdCallerCredentialKind.SourceReadableUserBearer;
+                break;
+            case AgentToolNyxIdCredentialKindPayload.ProxyDelegation:
+                credential.Kind = NyxIdCallerCredentialKind.ProxyDelegation;
+                if (sourceReadable.IsValid)
+                {
+                    credential.SourceReadableUserBearerToken =
+                        sourceReadable.NormalizedBearerToken ?? string.Empty;
+                }
+                break;
+            case AgentToolNyxIdCredentialKindPayload.Unspecified:
+                if (sourceReadable.IsValid)
+                {
+                    throw new ArgumentException(
+                        "A supplemental source-readable caller credential requires a typed proxy delegation credential.",
+                        nameof(sourceReadableUserBearerToken));
+                }
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(credentialKind));
+        }
+        return credential;
     }
 
     private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredentialFromToken(string? bearerToken)

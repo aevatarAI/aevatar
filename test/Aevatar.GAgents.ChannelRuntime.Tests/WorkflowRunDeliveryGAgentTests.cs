@@ -62,6 +62,20 @@ public sealed class WorkflowRunDeliveryGAgentTests
     }
 
     [Fact]
+    public async Task CompletedTerminalWithoutOutput_ShouldDeliverExplicitNoResultMessage()
+    {
+        var handler = new RecordingJsonHandler();
+        var context = await CreateContextAsync(handler);
+        await ReserveAndStartAsync(context);
+        var terminal = Terminal(context.TimeProvider);
+        terminal.Output = "   ";
+
+        await context.Agent.HandleEventAsync(Envelope(terminal, WorkflowActorId));
+
+        AssertDelivered(context.Agent, handler, "Workflow run completed without a result to display.");
+    }
+
+    [Fact]
     public async Task TerminalBeforeReserve_ShouldSurviveUntilReservationAndStart()
     {
         var handler = new RecordingJsonHandler();

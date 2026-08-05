@@ -17,6 +17,7 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     private readonly StudioMemberBindingRunStateApplier _agent = new();
 
     [Theory]
+    [InlineData(nameof(StudioMemberBindingRunGAgent.HandleAdmissionWatchdogFired))]
     [InlineData(nameof(StudioMemberBindingRunGAgent.HandlePlatformBindingWatchdogFired))]
     [InlineData(nameof(StudioMemberBindingRunGAgent.HandlePlatformBindingFailed))]
     public void PlatformBindingContinuationHandlers_ShouldAllowSelfHandling(string handlerName)
@@ -64,6 +65,78 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         var duplicate = NewRequested();
 
         _agent.IsSameRequest(state.Request, duplicate.Request, state.RequestHash).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WhenAdmissionPending_ShouldRestoreAdmissionWatchdog()
+    {
+        var state = _agent.Apply(new StudioMemberBindingRunState(), NewRequested());
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = NewHandlerAgent(state, publisher, scheduler);
+
+        await agent.ActivateAsync();
+
+        publisher.SentMessages.Should().ContainSingle(message =>
+            message.Event is StudioMemberBindAdmissionRequested);
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-admission-watchdog:bind-1");
+    }
+
+    [Fact]
+    public async Task HandleRequested_WhenAdmissionPendingIsRedelivered_ShouldRestoreAdmissionWatchdog()
+    {
+        var requested = NewRequested();
+        var state = _agent.Apply(new StudioMemberBindingRunState(), requested);
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = NewHandlerAgent(state, publisher, scheduler);
+
+        await agent.HandleRequested(requested);
+
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-admission-watchdog:bind-1");
+        publisher.SentMessages.Should().ContainSingle(message =>
+            message.Event is StudioMemberBindAdmissionRequested);
+    }
+
+    [Fact]
+    public async Task HandleAdmissionWatchdogFired_WhenAdmissionPending_ShouldRedispatchAndReschedule()
+    {
+        var state = _agent.Apply(new StudioMemberBindingRunState(), NewRequested());
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = NewHandlerAgent(state, publisher, scheduler);
+
+        await agent.HandleAdmissionWatchdogFired(new StudioMemberBindingAdmissionWatchdogFired
+        {
+            BindingRunId = "bind-1",
+        });
+
+        publisher.SentMessages.Should().ContainSingle(message =>
+            message.Event is StudioMemberBindAdmissionRequested);
+        var callback = scheduler.Timeouts.Should().ContainSingle().Subject;
+        callback.CallbackId.Should().Be("studio-member-binding-admission-watchdog:bind-1");
+        callback.TriggerEnvelope.Payload.Unpack<StudioMemberBindingAdmissionWatchdogFired>()
+            .BindingRunId.Should().Be("bind-1");
+    }
+
+    [Fact]
+    public async Task HandleAdmissionWatchdogFired_AfterAdmission_ShouldBeIgnored()
+    {
+        var requested = _agent.Apply(new StudioMemberBindingRunState(), NewRequested());
+        var admitted = ApplyAdmitted(requested);
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = NewHandlerAgent(admitted, publisher, scheduler);
+
+        await agent.HandleAdmissionWatchdogFired(new StudioMemberBindingAdmissionWatchdogFired
+        {
+            BindingRunId = "bind-1",
+        });
+
+        publisher.SentMessages.Should().BeEmpty();
+        scheduler.Timeouts.Should().BeEmpty();
     }
 
     [Fact]
@@ -612,14 +685,19 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     private sealed class RecordingEventSourcing(StudioMemberBindingRunState replayState)
         : IEventSourcingBehavior<StudioMemberBindingRunState>
     {
-        public long CurrentVersion => 0;
+        private readonly List<IMessage> _pending = [];
+        public long CurrentVersion { get; private set; }
 
-        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage
+        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage =>
+            _pending.Add(evt);
+
+        public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
         {
+            var result = EventSourcingTestCommit.From(_pending, CurrentVersion);
+            CurrentVersion = result.LatestVersion;
+            _pending.Clear();
+            return Task.FromResult(result);
         }
-
-        public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default) =>
-            Task.FromResult(new EventStoreCommitResult());
 
         public Task PersistSnapshotAsync(StudioMemberBindingRunState currentState, CancellationToken ct = default) =>
             Task.CompletedTask;
@@ -629,6 +707,7 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
         public void DiscardPendingEvents()
         {
+            _pending.Clear();
         }
 
         public StudioMemberBindingRunState TransitionState(StudioMemberBindingRunState current, IMessage evt) =>

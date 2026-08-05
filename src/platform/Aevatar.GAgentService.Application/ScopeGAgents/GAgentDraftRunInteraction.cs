@@ -428,6 +428,7 @@ internal sealed class GAgentDraftRunCommandEnvelopeFactory
             Prompt = command.Prompt,
             SessionId = sessionId,
             ScopeId = command.ScopeId,
+            CommandAttemptId = context.CommandId,
         };
 
         CopyHeaders(chatRequest.Headers, context.Headers);
@@ -543,7 +544,12 @@ internal sealed class GAgentDraftRunCompletionPolicy
                 completion = GAgentDraftRunCompletionStatus.RunFinished;
                 return true;
             case AGUIEvent.EventOneofCase.RunError:
-                completion = GAgentDraftRunCompletionStatus.Failed;
+                completion = string.Equals(
+                    evt.RunError.Code,
+                    GAgentRunFailureCodes.OutcomeUncertain,
+                    StringComparison.Ordinal)
+                    ? GAgentDraftRunCompletionStatus.OutcomeUncertain
+                    : GAgentDraftRunCompletionStatus.Failed;
                 return true;
             default:
                 return false;
@@ -637,6 +643,7 @@ internal sealed class GAgentDraftRunDurableCompletionResolver
             GAgentRunTerminalStatus.TextMessageCompleted => new(true, GAgentDraftRunCompletionStatus.TextMessageCompleted),
             GAgentRunTerminalStatus.RunFinished => new(true, GAgentDraftRunCompletionStatus.RunFinished),
             GAgentRunTerminalStatus.Failed => new(true, GAgentDraftRunCompletionStatus.Failed),
+            GAgentRunTerminalStatus.OutcomeUncertain => new(true, GAgentDraftRunCompletionStatus.OutcomeUncertain),
             _ => CommandDurableCompletionObservation<GAgentDraftRunCompletionStatus>.Incomplete,
         };
 }

@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using WorkflowCallerCredentialTokens = Aevatar.Workflow.Abstractions.WorkflowCallerCredentialTokens;
+using ExternalCapabilityExecutionMode = Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode;
 
 namespace Aevatar.Mainnet.Host.Api.Skills;
 
@@ -13,7 +14,7 @@ namespace Aevatar.Mainnet.Host.Api.Skills;
 // persisted target) is a separate path.
 internal sealed class UserSkillRunService : IUserSkillRunService
 {
-    private const string ObservatoryRunPathPrefix = "/workflow/observatory?run=";
+    private const string ObservatoryRunPathPrefix = "/admin#/observatory?run=";
 
     private readonly IRemoteSkillFetcher _remoteSkillFetcher;
     private readonly ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> _chatRunDispatch;
@@ -51,6 +52,7 @@ internal sealed class UserSkillRunService : IUserSkillRunService
         var request = new WorkflowChatRunRequest(
             Prompt: prompt ?? string.Empty,
             Source: WorkflowChatSource.InlineYamlBundle(yamls),
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             ScopeId: scopeId,
             CallerCredential: callerCredential);
 

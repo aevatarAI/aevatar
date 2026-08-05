@@ -86,6 +86,7 @@ public sealed class WorkflowParser
     /// <exception cref="InvalidOperationException">YAML 为空或缺少必填字段时抛出。</exception>
     public WorkflowDefinition Parse(string yaml)
     {
+        WorkflowYamlResourceGuard.Validate(yaml);
         ValidateRootSchema(yaml);
         var raw = D.Deserialize<Raw>(yaml) ?? throw new InvalidOperationException("YAML 为空");
         return new WorkflowDefinition
@@ -1047,6 +1048,7 @@ public sealed class WorkflowParser
         AddIfMissing(parameters, "value_field", s.ValueField);
         AddIfMissing(parameters, "field", s.Field);
         AddIfMissing(parameters, "aggregate", s.Aggregate);
+        AddIfMissing(parameters, "template", s.Template);
     }
 
     private static TransformOperationSpec? MapTransformOperation(
@@ -1078,6 +1080,7 @@ public sealed class WorkflowParser
         spec.Key = GetParameter(parameters, "key", "group_key", "group_by").Trim();
         spec.Value = GetParameter(parameters, "value", "value_field", "field").Trim();
         spec.Aggregate = ParseTransformAggregateKind(GetParameter(parameters, "aggregate", "agg").Trim());
+        spec.Template = GetParameter(parameters, "template");
         return spec;
     }
 
@@ -1189,6 +1192,7 @@ public sealed class WorkflowParser
             "min" => TransformOperationKind.Min,
             "max" => TransformOperationKind.Max,
             "groupby" => TransformOperationKind.GroupBy,
+            "template" => TransformOperationKind.Template,
             _ => TransformOperationKind.Unspecified,
         };
 
@@ -1477,6 +1481,7 @@ public sealed class WorkflowParser
         public string? ValueField { get; set; }
         public string? Field { get; set; }
         public string? Aggregate { get; set; }
+        public string? Template { get; set; }
         public object? AllowedTools { get; set; }
         public object? ToolSets { get; set; }
         public RawStepCapability? Capability { get; set; }

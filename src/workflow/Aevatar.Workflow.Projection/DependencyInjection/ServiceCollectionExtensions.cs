@@ -11,6 +11,7 @@ using Aevatar.Workflow.Projection.Workflows;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
+using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.Runtime;
@@ -92,6 +93,7 @@ public static class ServiceCollectionExtensions
             context => new WorkflowExecutionRuntimeLease(context));
         services.TryAddSingleton<IProjectionSessionEventCodec<WorkflowRunEventEnvelope>, WorkflowRunEventSessionCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<WorkflowRunEventEnvelope>, ProjectionSessionEventHub<WorkflowRunEventEnvelope>>();
+        AddWorkflowDefinitionBindObservation(services);
         services.TryAddSingleton<WorkflowExecutionCurrentStateQueryPort>();
         services.TryAddSingleton<WorkflowExecutionArtifactQueryPort>();
         services.TryAddSingleton<WorkflowRunForkSeedReadModelMapper>();
@@ -112,6 +114,12 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<ProjectionWorkflowActorBindingReader>());
         services.TryAddSingleton<IWorkflowExecutionProjectionPort>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionPort>());
+        services.TryAddSingleton<
+            IWorkflowDefinitionBindObservationScopeLeasePreparationPort,
+            WorkflowDefinitionBindObservationScopeLeasePreparationPort>();
+        services.TryAddSingleton<
+            IWorkflowDefinitionBindObservationProjectionPort,
+            WorkflowDefinitionBindObservationProjectionPort>();
         services.TryAddSingleton<IWorkflowExecutionCurrentStateQueryPort>(sp =>
             sp.GetRequiredService<WorkflowExecutionCurrentStateQueryPort>());
         services.TryAddSingleton<IWorkflowRunForkSeedQueryPort>(sp =>
@@ -131,6 +139,9 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             WorkflowExecutionMaterializationContext,
             WorkflowExecutionCurrentStateProjector>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<WorkflowDefinitionBindObservationProjectionContext>,
+            WorkflowDefinitionBindObservationSessionEventProjector>());
         services.AddProjectionArtifactMaterializer<
             WorkflowExecutionMaterializationContext,
             WorkflowExternalApprovalContinuationProjector>();
@@ -167,5 +178,23 @@ public static class ServiceCollectionExtensions
         services.AddAuditCommittedFactMaterializer<WorkflowExecutionMaterializationContext>();
         services.AddAuditCommittedFactMaterializer<WorkflowBindingProjectionContext>();
         return services;
+    }
+
+    private static void AddWorkflowDefinitionBindObservation(IServiceCollection services)
+    {
+        services.AddEventSinkProjectionRuntimeCore<
+            WorkflowDefinitionBindObservationProjectionContext,
+            WorkflowDefinitionBindObservationRuntimeLease,
+            EventEnvelope,
+            ProjectionSessionScopeGAgent<WorkflowDefinitionBindObservationProjectionContext>>(
+            scopeKey => new WorkflowDefinitionBindObservationProjectionContext
+            {
+                SessionId = scopeKey.SessionId,
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            context => new WorkflowDefinitionBindObservationRuntimeLease(context));
+        services.TryAddSingleton<WorkflowBindingSessionEventCodec>();
+        services.TryAddSingleton<WorkflowDefinitionBindObservationSessionEventHub>();
     }
 }

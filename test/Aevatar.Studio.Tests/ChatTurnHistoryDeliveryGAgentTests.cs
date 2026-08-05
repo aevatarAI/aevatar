@@ -9,6 +9,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Studio.Tests;
 
@@ -53,6 +54,7 @@ public sealed class ChatTurnHistoryDeliveryGAgentTests
     [InlineData(ChatTurnTerminalStatus.Failed, "safe terminal text", "source_failed", "", "source_failed: safe terminal text")]
     [InlineData(ChatTurnTerminalStatus.Stopped, "safe terminal text", "source_stopped", "", "source_stopped")]
     [InlineData(ChatTurnTerminalStatus.Blocked, "Connect a private source to continue.", "source_blocked", "Connect a private source to continue.", "")]
+    [InlineData(ChatTurnTerminalStatus.OutcomeUncertain, "The outcome could not be confirmed.", "SESSION_OUTCOME_UNCERTAIN", "The outcome could not be confirmed.", "SESSION_OUTCOME_UNCERTAIN: The outcome could not be confirmed.")]
     public async Task SourceTerminalNotification_ShouldMapClosedStatusToExactAppend(
         ChatTurnTerminalStatus status,
         string text,
@@ -133,6 +135,44 @@ public sealed class ChatTurnHistoryDeliveryGAgentTests
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*terminal conflicts*");
         dispatch.Calls.Should().ContainSingle();
+    }
+
+    [Theory]
+    [InlineData(ChatTurnTerminalStatus.Completed)]
+    [InlineData(ChatTurnTerminalStatus.Failed)]
+    public async Task SourceTerminal_ShouldRedispatchStableDeliveryForAllowedUncertainReconciliation(
+        ChatTurnTerminalStatus reconciledStatus)
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = await CreateAgentAsync(new RecordingActorRuntime(), dispatch);
+        await agent.HandleEventAsync(Envelope(SourceReserve(), "chat-history-command-port"));
+        await agent.HandleEventAsync(Envelope(SourceTerminal(
+            ChatTurnTerminalStatus.OutcomeUncertain,
+            "The outcome could not be confirmed.",
+            "SESSION_OUTCOME_UNCERTAIN"), SourceActorId));
+        await agent.HandleEventAsync(Envelope(AppendResult(true), "chat-conversation"));
+        var reconciled = SourceTerminal(
+            reconciledStatus,
+            reconciledStatus == ChatTurnTerminalStatus.Completed ? "confirmed result" : "confirmed failure",
+            reconciledStatus == ChatTurnTerminalStatus.Failed ? "CONFIRMED_FAILURE" : string.Empty);
+        reconciled.ObservedAtUnixMs++;
+
+        await agent.HandleEventAsync(Envelope(reconciled, SourceActorId));
+
+        dispatch.Calls.Should().HaveCount(2);
+        var first = dispatch.Calls[0].Envelope;
+        var second = dispatch.Calls[1].Envelope;
+        first.Payload.Unpack<AppendChatTurnCommand>().Turn.TerminalStatus.Should()
+            .Be(ChatTurnTerminalStatus.OutcomeUncertain);
+        second.Payload.Unpack<AppendChatTurnCommand>().Turn.TerminalStatus.Should().Be(reconciledStatus);
+        first.EnsureRuntime().EnsureDeliveryIdentity().OperationId.Should()
+            .Be($"chat-history-append:{DeliveryId}:1");
+        second.EnsureRuntime().EnsureDeliveryIdentity().OperationId.Should()
+            .Be($"chat-history-append:{DeliveryId}:2");
+        agent.State.DeliveryId.Should().Be(DeliveryId);
+        agent.State.AppendAttempt.Should().Be(2);
+        agent.State.Status.Should().Be(ChatTurnHistoryDeliveryStatus.AppendDispatched);
+        agent.State.TerminalStatus.Should().Be(reconciledStatus);
     }
 
     [Fact]
@@ -332,7 +372,8 @@ public sealed class ChatTurnHistoryDeliveryGAgentTests
 
         var agent = new ChatTurnHistoryDeliveryGAgent(
             runtime,
-            dispatch)
+            dispatch,
+            NullLogger<ChatTurnHistoryDeliveryGAgent>.Instance)
         {
             Services = services,
             EventSourcingBehaviorFactory =

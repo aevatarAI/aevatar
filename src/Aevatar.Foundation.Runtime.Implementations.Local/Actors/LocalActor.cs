@@ -1,7 +1,6 @@
 using System.Threading.Channels;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Actors;
-using Aevatar.Foundation.Runtime.Deduplication;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Microsoft.Extensions.Logging;
@@ -19,7 +18,6 @@ public sealed class LocalActor : IActor
     private readonly IStreamProvider _streams;
     private readonly ILogger _logger;
     private readonly IActorDeactivationHookDispatcher? _deactivationHookDispatcher;
-    private readonly IEventDeduplicator? _deduplicator;
     private Task? _mailboxPump;
     private IAsyncDisposable? _selfSubscription;
     private string? _parentId;
@@ -29,15 +27,13 @@ public sealed class LocalActor : IActor
         string id,
         IStreamProvider streams,
         ILogger logger,
-        IActorDeactivationHookDispatcher? deactivationHookDispatcher = null,
-        IEventDeduplicator? deduplicator = null)
+        IActorDeactivationHookDispatcher? deactivationHookDispatcher = null)
     {
         Agent = agent;
         Id = id;
         _streams = streams;
         _logger = logger;
         _deactivationHookDispatcher = deactivationHookDispatcher;
-        _deduplicator = deduplicator;
     }
 
     public string Id { get; }
@@ -192,19 +188,6 @@ public sealed class LocalActor : IActor
         var scopeCreated = false;
         try
         {
-            if (_deduplicator != null &&
-                RuntimeEnvelopeDeduplication.TryBuildDedupKey(Id, item.Envelope, out var dedupKey) &&
-                !await _deduplicator.TryRecordAsync(dedupKey))
-            {
-                _logger.LogDebug(
-                    "LocalActor {Id} dropped duplicate envelope {EnvelopeId} with dedup key {DedupKey}",
-                    Id,
-                    item.Envelope.Id,
-                    dedupKey);
-                item.Completion.SetResult();
-                return;
-            }
-
             scope = EventHandleScope.Begin(_logger, Id, item.Envelope, Agent.GetType().FullName ?? Agent.GetType().Name);
             scopeCreated = true;
             await Agent.HandleEventAsync(item.Envelope);
@@ -216,9 +199,13 @@ public sealed class LocalActor : IActor
                 scope.MarkError(ex);
             _logger.LogError(ex, "LocalActor {Id} failed to handle event", Id);
             if (item.PropagateFailure)
+            {
                 item.Completion.SetException(ex);
+            }
             else
+            {
                 item.Completion.SetResult();
+            }
         }
         finally
         {

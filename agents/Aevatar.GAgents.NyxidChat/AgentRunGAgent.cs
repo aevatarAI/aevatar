@@ -568,6 +568,14 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 executionRequest,
                 CancellationToken.None);
             _authorizedToolStep = execution.AuthorizedToolStep;
+            _logger.LogWarning(
+                "Agent run LLM step executor completed. runId={RunId} correlation={CorrelationId} step={StepIndex} toolCallCount={ToolCallCount} pendingAuthorizationCount={PendingAuthorizationCount} transientAuthorizationCaptured={TransientAuthorizationCaptured}",
+                executionRequest.RunId,
+                executionRequest.Request.CorrelationId,
+                executionRequest.StepIndex,
+                execution.Continuation.LlmStepResult?.ToolCalls.Count ?? 0,
+                execution.Continuation.LlmStepResult?.PendingToolAuthorizations.Count ?? 0,
+                execution.AuthorizedToolStep is not null);
             await PublishAsync(
                 execution.Continuation,
                 TopologyAudience.Self,
@@ -591,20 +599,51 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     private async Task DispatchToolStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
     {
+        var authorizedToolStep = _authorizedToolStep;
+        _authorizedToolStep = null;
+        var durableAuthorizationAvailable = !stepState.PendingToolAuthorizationConsumed &&
+                                            stepState.PendingToolAuthorizations.Count > 0;
+        var matchedTransientAuthorization = authorizedToolStep?.Matches(
+            new AgentRunReplyStepExecutionRequest(
+                stepState.RunId,
+                Id,
+                stepState.Attempt,
+                stepState.NextStepIndex,
+                request.Clone(),
+                stepState.Clone())) == true;
+        var allowDurableAuthorization = authorizedToolStep is null && durableAuthorizationAvailable;
+        _logger.LogWarning(
+            "Agent run tool step executor dispatching. runId={RunId} correlation={CorrelationId} step={StepIndex} pendingToolCallCount={PendingToolCallCount} pendingAuthorizationCount={PendingAuthorizationCount} pendingAuthorizationConsumed={PendingAuthorizationConsumed} transientAuthorizationPresent={TransientAuthorizationPresent} transientAuthorizationMatched={TransientAuthorizationMatched} durableAuthorizationAvailable={DurableAuthorizationAvailable} durableAuthorizationAllowed={DurableAuthorizationAllowed}",
+            stepState.RunId,
+            stepState.CorrelationId,
+            stepState.NextStepIndex,
+            stepState.PendingToolCalls.Count,
+            stepState.PendingToolAuthorizations.Count,
+            stepState.PendingToolAuthorizationConsumed,
+            authorizedToolStep is not null,
+            matchedTransientAuthorization,
+            durableAuthorizationAvailable,
+            allowDurableAuthorization);
+        if (matchedTransientAuthorization || allowDurableAuthorization)
+        {
+            stepState = MarkPendingToolAuthorizationConsumed(stepState);
+            await PersistStepStateAsync(stepState);
+        }
+
         var executionRequest = new AgentRunReplyStepExecutionRequest(
             stepState.RunId,
             Id,
             stepState.Attempt,
             stepState.NextStepIndex,
             request.Clone(),
-            stepState.Clone());
-        var authorizedToolStep = _authorizedToolStep;
-        _authorizedToolStep = null;
+            stepState.Clone(),
+            AllowDurableToolAuthorization: allowDurableAuthorization);
+
         try
         {
             var continuation = await _generationExecutor.BuildToolStepContinuationAsync(
                 executionRequest,
-                authorizedToolStep,
+                matchedTransientAuthorization ? authorizedToolStep : null,
                 CancellationToken.None);
             await PublishAsync(
                 continuation,
@@ -700,7 +739,10 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             hasReplyText ? string.Empty : $"Reply generator returned an empty response ({emptyReplyDiagnostics}).",
             stepState.AppendedHistory.ToArray(),
             stepState.ToolReceipts.ToArray(),
-            stepState.PendingToolCalls.ToArray());
+            stepState.AppendedHistory
+                .SelectMany(static message => message.ToolCalls)
+                .Select(AgentRunReplyStepMappers.ToProto)
+                .ToArray());
     }
 
     // When an LLM turn fails terminally, surface an actionable hint for the one failure the user
@@ -1076,6 +1118,13 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         if (!hasResult)
         {
+            _logger.LogWarning(
+                "Agent run received tool step request. runId={RunId} correlation={CorrelationId} step={StepIndex} pendingToolCallCount={PendingToolCallCount} pendingAuthorizationCount={PendingAuthorizationCount}",
+                stepState.RunId,
+                stepState.CorrelationId,
+                stepState.NextStepIndex,
+                stepState.PendingToolCalls.Count,
+                stepState.PendingToolAuthorizations.Count);
             await DispatchToolStepExecutorAsync(request, stepState);
             return;
         }
@@ -1108,6 +1157,10 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.PendingToolCalls.Clear();
         if (result.ToolCalls.Count > 0)
             next.PendingToolCalls.AddRange(result.ToolCalls.Select(call => call.Clone()));
+        next.PendingToolAuthorizations.Clear();
+        if (result.PendingToolAuthorizations.Count > 0)
+            next.PendingToolAuthorizations.AddRange(result.PendingToolAuthorizations.Select(authorization => authorization.Clone()));
+        next.PendingToolAuthorizationConsumed = false;
 
         if (!string.IsNullOrEmpty(result.Content) ||
             !string.IsNullOrEmpty(result.ReasoningContent) ||
@@ -1148,6 +1201,13 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         _authorizedToolStep = null;
     }
 
+    private static AgentRunReplyStepState MarkPendingToolAuthorizationConsumed(AgentRunReplyStepState current)
+    {
+        var next = current.Clone();
+        next.PendingToolAuthorizationConsumed = true;
+        return next;
+    }
+
     // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
     //   Old pattern: AgentRunReplyGenerationExecutor cloned/mutated AgentRunReplyStepState and the actor persisted that full state.
     //   New principle: Executor returns typed IO facts; actor applies deterministic step-state transition inside event handling.
@@ -1159,6 +1219,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var next = current.Clone();
         next.NextStepIndex = completedStepIndex;
         next.PendingToolCalls.Clear();
+        next.PendingToolAuthorizations.Clear();
+        next.PendingToolAuthorizationConsumed = false;
         next.Messages.AddRange(result.ResultMessages.Select(message => message.Clone()));
         next.AppendedHistory.AddRange(
             result.ResultMessages.Select(AgentRunReplyStepMappers.ToConversationHistoryEntry));
@@ -1178,6 +1240,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.NextStepIndex = nextStepIndex;
         next.FinalNoToolsStep = true;
         next.PendingToolCalls.Clear();
+        next.PendingToolAuthorizations.Clear();
         next.AccumulatedText = string.Empty;
         next.LastFinishReason = string.Empty;
         next.HasStreamedTextContent = false;
@@ -1335,24 +1398,30 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         IReadOnlyList<Aevatar.AI.Abstractions.AgentToolReceipt>? toolReceipts = null,
         IReadOnlyList<AgentRunToolCall>? toolCalls = null)
     {
-        var renderedReplyText = RenderReplyWithReceipts(replyText, toolReceipts, toolCalls);
+        var delivery = AgentToolReceiptDeliveryPolicy.Build(
+            replyText,
+            outboundIntent,
+            appendedHistory,
+            toolReceipts,
+            toolCalls,
+            _toolReceiptRenderer);
         await PersistReplyProducedAsync(
             request,
             runId,
-            renderedReplyText,
-            outboundIntent,
+            delivery.ReplyText,
+            delivery.OutboundIntent,
             terminalState,
             errorCode,
             errorSummary,
-            appendedHistory,
+            delivery.AppendedHistory,
             toolReceipts);
 
         if (await TryCompleteCardStreamedReplyAsync(
                 request,
                 runId,
-                renderedReplyText,
-                outboundIntent,
-                appendedHistory ?? []))
+                delivery.ReplyText,
+                delivery.OutboundIntent,
+                delivery.AppendedHistory))
         {
             return;
         }
@@ -1360,12 +1429,12 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         await DispatchReadyEventAsync(
             request,
             runId,
-            renderedReplyText,
-            outboundIntent,
+            delivery.ReplyText,
+            delivery.OutboundIntent,
             terminalState,
             errorCode,
             errorSummary,
-            appendedHistory);
+            delivery.AppendedHistory);
 
         // Past the point of user-visible delivery. State persistence failures and cleanup
         // scheduling failures MUST NOT propagate out — otherwise HandleStartAsync's outer
@@ -1560,24 +1629,6 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 Completion = completion.Clone(),
             },
         ]);
-    }
-
-    private string RenderReplyWithReceipts(
-        string replyText,
-        IReadOnlyList<Aevatar.AI.Abstractions.AgentToolReceipt>? toolReceipts,
-        IReadOnlyList<AgentRunToolCall>? toolCalls)
-    {
-        if (toolReceipts is not { Count: > 0 })
-            return replyText ?? string.Empty;
-
-        var rendered = _toolReceiptRenderer.Render(toolReceipts, toolCalls ?? []);
-        if (string.IsNullOrWhiteSpace(rendered))
-            return replyText ?? string.Empty;
-
-        if (string.IsNullOrWhiteSpace(replyText))
-            return rendered;
-
-        return $"{replyText.TrimEnd()}\n\n{rendered}";
     }
 
     private async Task PersistReplyDispatchedAsync(NeedsLlmReplyEvent request, string runId)

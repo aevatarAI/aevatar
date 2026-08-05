@@ -22,10 +22,23 @@ public sealed record ProjectionScopeIntrospectionSnapshot(
     bool ObservationAttached,
     bool Released,
     long StateVersion,
-    long LastObservedVersion,
-    long LastSuccessfulVersion,
-    int FailureCount,
+    long ReceivedEnvelopeTotal,
+    long AttemptedEnvelopeTotal,
+    long SuccessfulMaterializationTotal,
+    long FailedAttemptTotal,
+    long RetryExhaustedTotal,
+    int RetryExhaustedFailureCount,
+    int UnresolvedFailureCount,
+    DateTimeOffset? OldestUnresolvedFailureAt,
+    long FailureDiagnosticDroppedTotal,
+    IReadOnlyList<ProjectionSourceVersionSnapshot> SourceVersions,
     DateTimeOffset UpdatedAt);
+
+public sealed record ProjectionSourceVersionSnapshot(
+    string SourceActorId,
+    long HighestSeenVersion,
+    long LastSuccessfulVersion,
+    long VersionGap);
 
 public sealed record ProjectionObservedEnvelopeSnapshot(
     string EventId,

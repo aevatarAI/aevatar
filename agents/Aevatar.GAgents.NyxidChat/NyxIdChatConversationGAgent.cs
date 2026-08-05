@@ -10,6 +10,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,6 +23,7 @@ public sealed class NyxIdChatConversationGAgent
     : GAgentBase<NyxIdChatConversationGAgentState>
 {
     private const string SharedInputHistoryText = "Shared input content.";
+    private static readonly TimeSpan ActivationRecoveryDelay = TimeSpan.FromMilliseconds(1);
     private static readonly TimeSpan HistoryInitializationRetryDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan HistoryReservationRetryDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan HistoryTerminalRetryDelay = TimeSpan.FromSeconds(5);
@@ -55,8 +57,9 @@ public sealed class NyxIdChatConversationGAgent
 
     protected override NyxIdChatConversationGAgentState TransitionState(
         NyxIdChatConversationGAgentState current,
-        IMessage evt) =>
-        StateTransitionMatcher
+        IMessage evt)
+    {
+        var next = StateTransitionMatcher
             .Match(current, evt)
             .On<AgentProfileBoundEvent>(ApplyAgentProfileBound)
             .On<NyxIdChatConversationCreationStartedEvent>(ApplyConversationCreationStarted)
@@ -78,81 +81,42 @@ public sealed class NyxIdChatConversationGAgent
             .On<NyxIdChatContinuationAdmissionCommittedEvent>(ApplyContinuationAdmissionCommitted)
             .On<NyxIdChatStepControlCommittedEvent>(ApplyStepControlCommitted)
             .On<NyxIdChatActionRequestedEvent>(ApplyActionRequested)
+            .On<NyxIdChatInputRequestedEvent>(ApplyInputRequested)
+            .On<NyxIdChatInputResolutionCommittedEvent>(ApplyInputResolutionCommitted)
+            .On<NyxIdChatApprovalResolutionCommittedEvent>(ApplyApprovalResolutionCommitted)
             .OrCurrent();
+        return NyxIdChatNeedsYouDecisions.RefreshAttention(next);
+    }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
 
+        if (State.PendingInputRequest is not null && State.PendingInput is null)
+            await DispatchInputRequestContinuationAsync(State.PendingInputRequest, ct);
+
         if (State.PendingHistoryInitialization is { } pendingInitialization)
         {
-            await DispatchHistoryInitializationContinuationAsync(
-                    pendingInitialization,
-                    ct);
+            await ScheduleActivationHistoryInitializationAsync(pendingInitialization, ct);
         }
 
-        if (State.HistoryDeliveryReservation is
-            { Dispatched: false } pendingReservation)
+        var hasPendingHistoryReservation = false;
+        if (State.HistoryDeliveryReservation is { Dispatched: false } pendingReservation)
         {
-            try
-            {
-                await ReserveHistoryDeliveryAsync(pendingReservation, ct);
-                await PersistDomainEventAsync(new NyxIdChatHistoryDeliveryReservationDispatchedEvent
-                {
-                    DeliveryId = pendingReservation.DeliveryId,
-                    SourceCommandId = pendingReservation.SourceCommandId,
-                    DispatchedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-                }, CancellationToken.None);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception exception)
-            {
-                Logger.LogWarning(
-                    "NyxIdChat pending history reservation recovery failed: actor={ActorId} delivery={DeliveryId} exceptionType={ExceptionType}",
-                    Id,
-                    pendingReservation.DeliveryId,
-                    exception.GetType().Name);
-                await ScheduleHistoryReservationRetryAsync(pendingReservation);
-            }
+            hasPendingHistoryReservation = true;
+            await ScheduleActivationHistoryReservationAsync(pendingReservation, ct);
         }
 
-        if (State.PendingHistoryTerminal is { } pendingTerminal)
+        if (State.PendingHistoryTerminal is { } pendingTerminal &&
+            State.HistoryDeliveryReservation?.Dispatched == true)
         {
-            await DispatchPendingHistoryTerminalAsync();
+            await ScheduleActivationHistoryTerminalAsync(pendingTerminal, ct);
         }
 
-        var operation = ResolveOutstandingRecoveryOperation(State);
-        if (operation?.Key is null)
+        if (hasPendingHistoryReservation)
             return;
 
-        var version = CurrentCommittedVersion();
-        var kind = operation.Kind == NyxIdChatStepKind.Postcondition &&
-                   operation.Phase == NyxIdChatOperationPhase.Requested
-            ? NyxIdChatRecoveryKind.PostconditionRedispatch
-            : NyxIdChatRecoveryKind.InterruptedOperationReconciliation;
-        var signal = new NyxIdChatRecoveryRequestedSignal
-        {
-            Key = operation.Key.Clone(),
-            ExpectedStateVersion = version,
-            Kind = kind,
-        };
-        var envelope = new EventEnvelope
-        {
-            Id = $"{operation.Key.OperationId}:recovery:{version}",
-            Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-            Payload = Any.Pack(signal),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication(
-                Id,
-                TopologyAudience.Self),
-            Propagation = new EnvelopePropagation
-            {
-                CorrelationId = operation.Key.OperationId,
-            },
-        };
-        await _actorDispatchPort.DispatchAsync(Id, envelope, ct);
+        await ScheduleOutstandingOperationRecoveryAsync(ct);
     }
 
     [EventHandler(AllowSelfHandling = true)]
@@ -265,6 +229,186 @@ public sealed class NyxIdChatConversationGAgent
         }
     }
 
+    [EventHandler]
+    public async Task HandleWorkflowInteractiveActionHandoffAsync(
+        WorkflowInteractiveActionHandoffCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ValidateWorkflowInteractiveActionHandoff(command);
+        var wireRequest = command.Request;
+        var registry = Services.GetRequiredService<NyxIdAssistantActionRegistry>();
+        var validated = registry.ResolveCatalogServiceConnect(
+            wireRequest.Params.CatalogService.ServiceSlug,
+            wireRequest.Params.CatalogService.RequestedScopes);
+
+        if (!string.IsNullOrWhiteSpace(State.ConversationActorId))
+        {
+            if (!string.Equals(State.ConversationActorId, Id, StringComparison.Ordinal) ||
+                !string.Equals(State.ScopeId, command.ScopeId, StringComparison.Ordinal) ||
+                !string.Equals(State.OwnerSubject, command.OwnerSubject, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "A workflow action handoff cannot replace the conversation authority.");
+            }
+
+            var existing = State.PendingActions
+                .Concat(State.RecentActions)
+                .FirstOrDefault(candidate => string.Equals(
+                    candidate.ActionRequestId,
+                    wireRequest.ActionRequestId,
+                    StringComparison.Ordinal));
+            if (existing is null ||
+                !WorkflowInteractiveActionMatches(existing, wireRequest, validated))
+            {
+                throw new InvalidOperationException(
+                    "A workflow action handoff identity was reused with different content.");
+            }
+
+            return;
+        }
+
+        var commandId = ActiveInboundEnvelope?.Id ?? command.HandoffId;
+        var correlationId = ActiveInboundEnvelope?.Propagation?.CorrelationId ?? commandId;
+        await PersistDomainEventAsync(new NyxIdChatConversationCreationStartedEvent
+        {
+            ScopeId = command.ScopeId,
+            ActorId = Id,
+            CreatedLocally = true,
+            CommandId = commandId,
+            CorrelationId = correlationId,
+            OwnerSubject = command.OwnerSubject,
+        }, CancellationToken.None);
+
+        var receipt = await Services.GetRequiredService<IGAgentActorRegistryCommandPort>()
+            .RegisterActorAsync(
+                new GAgentActorRegistration(
+                    command.ScopeId,
+                    NyxIdChatServiceDefaults.GAgentKind,
+                    Id),
+                CancellationToken.None);
+        if (!receipt.IsAdmissionVisible)
+        {
+            throw new InvalidOperationException(
+                "The workflow action actor registration is not admission visible.");
+        }
+
+        await PersistDomainEventAsync(new NyxIdChatConversationRegistrationAcceptedEvent
+        {
+            ScopeId = command.ScopeId,
+            ActorId = Id,
+            CommandId = commandId,
+            CorrelationId = correlationId,
+            State = PrepareHistoryInitializationState(command.ScopeId),
+        }, CancellationToken.None);
+
+        var now = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
+        var actionBase = State.Clone();
+        actionBase.ActiveTurn = new NyxIdChatTurnState
+        {
+            TurnId = wireRequest.OriginTurnId,
+            TaskId = wireRequest.TaskId,
+            ClientRequestId = command.HandoffId,
+            CommandId = commandId,
+            Status = NyxIdChatTurnStatus.Active,
+            CreatedAt = now.Clone(),
+        };
+        actionBase.LatestTurn = actionBase.ActiveTurn.Clone();
+        actionBase.ActiveTask = new NyxIdChatTaskState
+        {
+            TurnId = wireRequest.OriginTurnId,
+            TaskId = wireRequest.TaskId,
+            Status = NyxIdChatTaskStatus.Active,
+            CreatedAt = now.Clone(),
+            UpdatedAt = now.Clone(),
+        };
+        actionBase.ProgressSequence = Math.Max(1, State.ProgressSequence + 1);
+        actionBase.UpdatedAt = now.Clone();
+
+        var actionRequest = new NyxIdChatActionRequestState
+        {
+            SchemaVersion = validated.Definition.SchemaVersion,
+            RegistryRevision = validated.Definition.RegistryRevision,
+            ConversationActorId = Id,
+            OriginTurnId = wireRequest.OriginTurnId,
+            TaskId = wireRequest.TaskId,
+            StepId = wireRequest.StepId,
+            ActionRequestId = wireRequest.ActionRequestId,
+            Action = validated.Definition.Action,
+            Params = validated.Params.Clone(),
+            AdvisoryRisk = validated.Definition.AdvisoryRisk,
+            RememberEligible = validated.Definition.RememberEligible,
+            RequestedAt = now.Clone(),
+        };
+        var decision = NyxIdChatBrowserActions.CommitRequest(actionBase, actionRequest, now);
+        if (!decision.ShouldCommit || decision.Outcome != NyxIdChatTransitionOutcome.Accepted)
+        {
+            throw new InvalidOperationException(
+                "The workflow action handoff could not establish an action request.");
+        }
+
+        var actionState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
+        await PersistDomainEventAsync(new NyxIdChatActionRequestedEvent
+        {
+            Request = decision.Request.Clone(),
+            Task = actionState.ActiveTask.Clone(),
+            OriginTurn = actionState.ActiveTurn.Clone(),
+            State = actionState,
+        }, CancellationToken.None);
+    }
+
+    private void ValidateWorkflowInteractiveActionHandoff(
+        WorkflowInteractiveActionHandoffCommand command)
+    {
+        var request = command.Request;
+        if (request is null ||
+            !IsValidWorkflowActionActorId(Id) ||
+            !string.Equals(request.ActorId, Id, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(command.HandoffId) ||
+            string.IsNullOrWhiteSpace(command.ScopeId) ||
+            string.IsNullOrWhiteSpace(command.OwnerSubject) ||
+            string.IsNullOrWhiteSpace(command.SourceWorkflowActorId) ||
+            request.SchemaVersion != NyxIdAssistantActionRegistry.SupportedSchemaVersion ||
+            !string.Equals(request.Action, "service.connect", StringComparison.Ordinal) ||
+            request.Params?.CatalogService is null ||
+            string.IsNullOrWhiteSpace(request.Params.CatalogService.ServiceSlug) ||
+            string.IsNullOrWhiteSpace(request.OriginTurnId) ||
+            string.IsNullOrWhiteSpace(request.TaskId) ||
+            string.IsNullOrWhiteSpace(request.StepId) ||
+            string.IsNullOrWhiteSpace(request.ActionRequestId))
+        {
+            throw new InvalidOperationException(
+                "The workflow interactive action handoff is invalid.");
+        }
+    }
+
+    private static bool IsValidWorkflowActionActorId(string actorId)
+    {
+        const string prefix = "nyxid-chat-";
+        if (!actorId.StartsWith(prefix, StringComparison.Ordinal) ||
+            actorId.Length <= prefix.Length ||
+            actorId.Length > 128)
+        {
+            return false;
+        }
+
+        return actorId[prefix.Length..].All(static character =>
+            char.IsAsciiLetterOrDigit(character) || character is '_' or '-');
+    }
+
+    private static bool WorkflowInteractiveActionMatches(
+        NyxIdChatActionRequestState existing,
+        WorkflowInteractiveActionRequestWirePayload wireRequest,
+        NyxIdAssistantActionValidation validated) =>
+        existing.SchemaVersion == wireRequest.SchemaVersion &&
+        string.Equals(existing.RegistryRevision, validated.Definition.RegistryRevision, StringComparison.Ordinal) &&
+        string.Equals(existing.ConversationActorId, wireRequest.ActorId, StringComparison.Ordinal) &&
+        string.Equals(existing.OriginTurnId, wireRequest.OriginTurnId, StringComparison.Ordinal) &&
+        string.Equals(existing.TaskId, wireRequest.TaskId, StringComparison.Ordinal) &&
+        string.Equals(existing.StepId, wireRequest.StepId, StringComparison.Ordinal) &&
+        string.Equals(existing.ActionRequestId, wireRequest.ActionRequestId, StringComparison.Ordinal) &&
+        existing.Action == validated.Definition.Action &&
+        existing.Params.ToByteString().Equals(validated.Params.ToByteString());
+
     [EventHandler(AllowSelfHandling = true)]
     public async Task HandleHistoryInitializationDispatchRequestedAsync(
         NyxIdChatHistoryInitializationDispatchRequested signal)
@@ -369,6 +513,7 @@ public sealed class NyxIdChatConversationGAgent
                 DispatchedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
             }, CancellationToken.None);
             await DispatchPendingHistoryTerminalAsync();
+            await ScheduleOutstandingOperationRecoveryAsync(CancellationToken.None);
         }
         catch (OperationCanceledException)
         {
@@ -648,7 +793,8 @@ public sealed class NyxIdChatConversationGAgent
             OperationId = BuildStableIdentity("operation", Id, command.TurnId, command.TaskId, "llm", "1"),
             OperationGeneration = 1,
         };
-        var next = BuildStartedState(command, operationKey, turnAuthority, now);
+        var next = NyxIdChatNeedsYouDecisions.RefreshAttention(
+            BuildStartedState(command, operationKey, turnAuthority, now));
         next.HistoryDeliveryReservation = BuildHistoryDeliveryReservation(command);
 
         await PersistDomainEventAsync(new NyxIdChatTurnStartedEvent
@@ -674,7 +820,7 @@ public sealed class NyxIdChatConversationGAgent
         }
         catch (Exception exception)
         {
-            await PersistFirstDispatchFailureAsync(
+            await PersistOperationDispatchFailureAsync(
                     operationKey,
                     "NYXID_CHAT_HISTORY_RESERVATION_FAILED",
                     "The chat turn could not reserve its transcript delivery.",
@@ -711,7 +857,7 @@ public sealed class NyxIdChatConversationGAgent
         if (!decision.ShouldCommit)
             return;
 
-        var nextState = decision.State.Clone();
+        var nextState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
         var terminalPrepared = PrepareHistoryTerminalOutbox(nextState);
 
         await PersistDomainEventAsync(new NyxIdChatControlFenceCommittedEvent
@@ -743,7 +889,7 @@ public sealed class NyxIdChatConversationGAgent
             return;
         }
 
-        var fencedState = decision.FencedState.Clone();
+        var fencedState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.FencedState);
         var terminalPrepared = PrepareHistoryTerminalOutbox(fencedState);
         await PersistDomainEventAsync(new NyxIdChatControlFenceCommittedEvent
         {
@@ -760,7 +906,7 @@ public sealed class NyxIdChatConversationGAgent
             return;
         }
 
-        var continuationState = decision.State.Clone();
+        var continuationState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
         continuationState.PendingHistoryTerminal = State.PendingHistoryTerminal?.Clone();
 
         await PersistDomainEventAsync(new NyxIdChatContinuationAdmissionCommittedEvent
@@ -788,7 +934,7 @@ public sealed class NyxIdChatConversationGAgent
             now);
         if (decision.ShouldCommit)
         {
-            var nextState = decision.State.Clone();
+            var nextState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
             var terminalPrepared = PrepareHistoryTerminalOutbox(nextState);
             await PersistDomainEventAsync(new NyxIdChatStepControlCommittedEvent
             {
@@ -821,7 +967,7 @@ public sealed class NyxIdChatConversationGAgent
         if (!decision.ShouldCommit)
             return;
 
-        var nextState = decision.State.Clone();
+        var nextState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
         var terminalPrepared = PrepareHistoryTerminalOutbox(nextState);
 
         await PersistDomainEventAsync(new NyxIdChatStepControlCommittedEvent
@@ -832,6 +978,78 @@ public sealed class NyxIdChatConversationGAgent
 
         if (terminalPrepared)
             await DispatchPendingHistoryTerminalAsync();
+    }
+
+    [EventHandler(AllowSelfHandling = true)]
+    public async Task HandleInputRequestAsync(NyxIdChatInputRequestCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var decision = NyxIdChatNeedsYouDecisions.RequestInput(
+            State,
+            command,
+            Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
+        if (!decision.ShouldCommit || decision.Resolution is null)
+            return;
+
+        await PersistDomainEventAsync(new NyxIdChatInputRequestedEvent
+        {
+            PendingInput = decision.Resolution.Clone(),
+            State = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State),
+        }, CancellationToken.None);
+    }
+
+    [EventHandler]
+    public async Task HandleInputResolveAsync(NyxIdChatInputResolveCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var decision = NyxIdChatNeedsYouDecisions.ResolveInput(
+            State,
+            command,
+            CurrentCommittedVersion(),
+            Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
+        if (!decision.ShouldCommit || decision.Resolution is null)
+            return;
+
+        await PersistDomainEventAsync(new NyxIdChatInputResolutionCommittedEvent
+        {
+            Resolution = decision.Resolution.Clone(),
+            State = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State),
+        }, CancellationToken.None);
+
+        if (decision.NextCommand is not null)
+        {
+            await DispatchAuthorizedOperationAsync(
+                decision.NextCommand,
+                command.CorrelationId,
+                Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
+        }
+    }
+
+    [EventHandler]
+    public async Task HandleApprovalResolveAsync(NyxIdChatApprovalResolveCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var decision = NyxIdChatNeedsYouDecisions.ResolveApproval(
+            State,
+            command,
+            CurrentCommittedVersion(),
+            Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
+        if (!decision.ShouldCommit || decision.Resolution is null)
+            return;
+
+        await PersistDomainEventAsync(new NyxIdChatApprovalResolutionCommittedEvent
+        {
+            Resolution = decision.Resolution.Clone(),
+            State = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State),
+        }, CancellationToken.None);
+
+        if (decision.NextCommand is not null)
+        {
+            await DispatchAuthorizedOperationAsync(
+                decision.NextCommand,
+                command.CorrelationId,
+                Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
+        }
     }
 
     [EventHandler]
@@ -852,7 +1070,7 @@ public sealed class NyxIdChatConversationGAgent
         }
         if (decision.ShouldCommit)
         {
-            var nextState = decision.State.Clone();
+            var nextState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
             if (decision.Outcome == NyxIdChatTransitionOutcome.Accepted &&
                 decision.Admission.Status ==
                 NyxIdChatContinuationAdmissionStatus.Accepted)
@@ -907,7 +1125,7 @@ public sealed class NyxIdChatConversationGAgent
                     exception.GetType().Name);
                 if (decision.NextCommand?.Key is not null)
                 {
-                    await PersistFirstDispatchFailureAsync(
+                    await PersistOperationDispatchFailureAsync(
                             decision.NextCommand.Key,
                             "NYXID_CHAT_HISTORY_RESERVATION_FAILED",
                             "The chat turn could not reserve its transcript delivery.",
@@ -974,7 +1192,7 @@ public sealed class NyxIdChatConversationGAgent
         if (decision.Outcome != NyxIdChatTransitionOutcome.Accepted)
             return;
 
-        var nextState = decision.State.Clone();
+        var nextState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
         nextState.ProgressSequence = State.ProgressSequence + 1;
         nextState.UpdatedAt = now.Clone();
         var terminalPrepared = PrepareHistoryTerminalOutbox(nextState);
@@ -1028,6 +1246,7 @@ public sealed class NyxIdChatConversationGAgent
             if (!lateEvidence.ShouldCommit)
                 return;
 
+            var lateState = NyxIdChatNeedsYouDecisions.RefreshAttention(lateEvidence.State);
             await PersistDomainEventAsync(new NyxIdChatLateOperationEvidenceCommittedEvent
             {
                 Key = signal.Key.Clone(),
@@ -1036,9 +1255,9 @@ public sealed class NyxIdChatConversationGAgent
                 ToolReceipt = BuildDurableReceiptEvidence(signal.Tool?.Receipt),
                 TerminalCode = lateEvidence.TerminalCode,
                 SafeMessage = lateEvidence.SafeMessage,
-                ProgressSequence = lateEvidence.State.ProgressSequence,
+                ProgressSequence = lateState.ProgressSequence,
                 CommittedAt = now.Clone(),
-                State = lateEvidence.State.Clone(),
+                State = lateState,
             }, CancellationToken.None);
             return;
         }
@@ -1053,7 +1272,7 @@ public sealed class NyxIdChatConversationGAgent
             if (!actionDecision.ShouldCommit)
                 return;
 
-            var actionState = actionDecision.State.Clone();
+            var actionState = NyxIdChatNeedsYouDecisions.RefreshAttention(actionDecision.State);
             var actionTerminalPrepared = PrepareHistoryTerminalOutbox(actionState);
 
             await PersistDomainEventAsync(new NyxIdChatOperationReconciledEvent
@@ -1095,7 +1314,7 @@ public sealed class NyxIdChatConversationGAgent
                 if (!actionDecision.ShouldCommit)
                     return;
 
-                var actionState = actionDecision.State.Clone();
+                var actionState = NyxIdChatNeedsYouDecisions.RefreshAttention(actionDecision.State);
                 var authorizationTerminalPrepared = PrepareHistoryTerminalOutbox(actionState);
 
                 await PersistDomainEventAsync(new NyxIdChatActionRequestedEvent
@@ -1129,7 +1348,7 @@ public sealed class NyxIdChatConversationGAgent
         if (decision.Outcome != NyxIdChatTransitionOutcome.Accepted)
             return;
 
-        var nextState = decision.State.Clone();
+        var nextState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
         nextState.ProgressSequence = State.ProgressSequence + 1;
         nextState.UpdatedAt = now.Clone();
         var terminalText = signal.ResultCase ==
@@ -1150,33 +1369,20 @@ public sealed class NyxIdChatConversationGAgent
         if (terminalPrepared)
             await DispatchPendingHistoryTerminalAsync();
 
+        if (decision.InputRequest is not null)
+        {
+            await DispatchInputRequestContinuationAsync(
+                decision.InputRequest,
+                CancellationToken.None);
+        }
+
         if (decision.NextCommand is null)
             return;
 
-        var turnActorId = NyxIdChatTurnActorIds.ForTurn(Id, signal.Key.TurnId);
-        var envelope = new EventEnvelope
-        {
-            Id = decision.NextCommand.Key.OperationId,
-            Timestamp = now.Clone(),
-            Payload = Any.Pack(decision.NextCommand),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = turnActorId },
-            },
-            Propagation = new EnvelopePropagation
-            {
-                CorrelationId = ActiveInboundEnvelope?.Propagation?.CorrelationId
-                    ?? signal.Key.OperationId,
-            },
-        };
-        await _actorDispatchPort
-            .DispatchAsync(turnActorId, envelope, CancellationToken.None);
-
-        await PersistDomainEventAsync(new NyxIdChatOperationDispatchedEvent
-        {
-            Key = decision.NextCommand.Key.Clone(),
-            DispatchedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-        }, CancellationToken.None);
+        await DispatchAuthorizedOperationAsync(
+            decision.NextCommand,
+            ActiveInboundEnvelope?.Propagation?.CorrelationId ?? signal.Key.OperationId,
+            now);
     }
 
     private static NyxIdChatOperationResultSignal BuildDurableResultEvidence(
@@ -1231,6 +1437,7 @@ public sealed class NyxIdChatConversationGAgent
             ApprovalMode = receipt.ApprovalMode,
             IsDestructive = receipt.IsDestructive,
             SideEffectKind = receipt.SideEffectKind,
+            Effect = receipt.Effect,
             SubjectKind = receipt.SubjectKind,
             SubjectId = receipt.SubjectId,
             SubjectVersion = receipt.SubjectVersion,
@@ -1328,6 +1535,12 @@ public sealed class NyxIdChatConversationGAgent
         next.RecentStepControlResults.AddRange(
             State.RecentStepControlResults.Select(static result => result.Clone()));
         next.LatestStepControlResult = State.LatestStepControlResult?.Clone();
+        next.RecentInputResolutions.AddRange(
+            State.RecentInputResolutions.Select(static result => result.Clone()));
+        next.LatestInputResolution = State.LatestInputResolution?.Clone();
+        next.RecentApprovalResolutions.AddRange(
+            State.RecentApprovalResolutions.Select(static result => result.Clone()));
+        next.LatestApprovalResolution = State.LatestApprovalResolution?.Clone();
         next.PendingActions.AddRange(
             State.PendingActions.Select(static action => action.Clone()));
         next.RecentActions.AddRange(
@@ -1352,7 +1565,7 @@ public sealed class NyxIdChatConversationGAgent
         return safe;
     }
 
-    private static Aevatar.AI.Abstractions.ChatRequestEvent BuildTransientChatRequest(
+    private Aevatar.AI.Abstractions.ChatRequestEvent BuildTransientChatRequest(
         NyxIdChatStartTurnCommand command)
     {
         var request = new Aevatar.AI.Abstractions.ChatRequestEvent
@@ -1361,7 +1574,7 @@ public sealed class NyxIdChatConversationGAgent
             SessionId = command.TurnId.Trim(),
             ScopeId = command.ScopeId.Trim(),
             CommandAttemptId = command.CommandId.Trim(),
-            ToolContext = command.ToolContext?.Clone(),
+            ToolContext = BuildActorOwnedToolContext(command.ToolContext).ToPayload(),
             LlmControl = command.LlmControl?.Clone(),
         };
         request.InputParts.AddRange(command.InputParts.Select(static part => part.Clone()));
@@ -1383,7 +1596,7 @@ public sealed class NyxIdChatConversationGAgent
         try
         {
             var toolContext = LLMControlContextMapper.FromPayload(command.LlmControl)
-                .ToToolContext(AgentToolExecutionContextMapper.FromPayload(command.ToolContext));
+                .ToToolContext(BuildActorOwnedToolContext(command.ToolContext));
             return (await _turnCatalogMaterializer.PrepareAsync(
                     profile,
                     command.TurnId.Trim(),
@@ -1404,6 +1617,13 @@ public sealed class NyxIdChatConversationGAgent
                 AgentProfileTurnDegradationReason.MaterializationFailed);
         }
     }
+
+    private AgentToolExecutionContext BuildActorOwnedToolContext(
+        AgentToolExecutionContextPayload? payload) =>
+        AgentToolExecutionContextMapper.FromPayload(payload) with
+        {
+            ExecutionOwner = AgentToolExecutionOwners.Actor(Id),
+        };
 
     private static AgentProfileTurnAuthorityState RestrictedEmptyAuthority(
         string sessionId,
@@ -1877,6 +2097,21 @@ public sealed class NyxIdChatConversationGAgent
         return next;
     }
 
+    private static NyxIdChatConversationGAgentState ApplyInputRequested(
+        NyxIdChatConversationGAgentState current,
+        NyxIdChatInputRequestedEvent evt) =>
+        evt.State?.Clone() ?? current;
+
+    private static NyxIdChatConversationGAgentState ApplyInputResolutionCommitted(
+        NyxIdChatConversationGAgentState current,
+        NyxIdChatInputResolutionCommittedEvent evt) =>
+        evt.State?.Clone() ?? current;
+
+    private static NyxIdChatConversationGAgentState ApplyApprovalResolutionCommitted(
+        NyxIdChatConversationGAgentState current,
+        NyxIdChatApprovalResolutionCommittedEvent evt) =>
+        evt.State?.Clone() ?? current;
+
     private NyxIdChatHistoryDeliveryReservationState BuildHistoryDeliveryReservation(
         NyxIdChatStartTurnCommand command)
     {
@@ -2080,6 +2315,201 @@ public sealed class NyxIdChatConversationGAgent
         return true;
     }
 
+    private async Task ScheduleActivationHistoryInitializationAsync(
+        NyxIdChatHistoryInitializationOutbox pending,
+        CancellationToken ct)
+    {
+        try
+        {
+            await ScheduleSelfDurableTimeoutAsync(
+                BuildStableIdentity(
+                    "history-initialization-activation",
+                    pending.OperationId,
+                    pending.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                ActivationRecoveryDelay,
+                new NyxIdChatHistoryInitializationDispatchRequested
+                {
+                    OperationId = pending.OperationId,
+                    Attempt = pending.Attempt,
+                },
+                new EventEnvelopePublishOptions
+                {
+                    Propagation = new EventEnvelopePropagationOverrides
+                    {
+                        CorrelationId = pending.OperationId,
+                    },
+                    Delivery = new EventEnvelopeDeliveryOptions
+                    {
+                        OperationId = BuildStableIdentity(
+                            "history-initialization-dispatch",
+                            pending.OperationId,
+                            pending.Attempt.ToString(
+                                System.Globalization.CultureInfo.InvariantCulture)),
+                    },
+                },
+                ct: ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning(
+                "NyxIdChat history initialization activation recovery scheduling failed: actor={ActorId} operation={OperationId} attempt={Attempt} exceptionType={ExceptionType}",
+                Id,
+                pending.OperationId,
+                pending.Attempt,
+                exception.GetType().Name);
+            throw;
+        }
+    }
+
+    private async Task ScheduleActivationHistoryReservationAsync(
+        NyxIdChatHistoryDeliveryReservationState pending,
+        CancellationToken ct)
+    {
+        try
+        {
+            await ScheduleSelfDurableTimeoutAsync(
+                BuildStableIdentity(
+                    "history-reservation-activation",
+                    pending.DeliveryId,
+                    pending.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                ActivationRecoveryDelay,
+                new NyxIdChatHistoryDeliveryReservationDispatchRequested
+                {
+                    DeliveryId = pending.DeliveryId,
+                    Attempt = pending.Attempt,
+                },
+                ct: ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning(
+                "NyxIdChat history reservation activation recovery scheduling failed: actor={ActorId} delivery={DeliveryId} attempt={Attempt} exceptionType={ExceptionType}",
+                Id,
+                pending.DeliveryId,
+                pending.Attempt,
+                exception.GetType().Name);
+            throw;
+        }
+    }
+
+    private async Task ScheduleActivationHistoryTerminalAsync(
+        NyxIdChatHistoryTerminalOutbox pending,
+        CancellationToken ct)
+    {
+        try
+        {
+            await ScheduleSelfDurableTimeoutAsync(
+                BuildStableIdentity(
+                    "history-terminal-activation",
+                    pending.DeliveryId,
+                    pending.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                ActivationRecoveryDelay,
+                new NyxIdChatHistoryTerminalDispatchRequested
+                {
+                    DeliveryId = pending.DeliveryId,
+                    Attempt = pending.Attempt,
+                },
+                new EventEnvelopePublishOptions
+                {
+                    Propagation = new EventEnvelopePropagationOverrides
+                    {
+                        CorrelationId = pending.SourceCommandId,
+                    },
+                    Delivery = new EventEnvelopeDeliveryOptions
+                    {
+                        OperationId = BuildStableIdentity(
+                            "history-terminal-dispatch",
+                            pending.DeliveryId,
+                            pending.Attempt.ToString(
+                                System.Globalization.CultureInfo.InvariantCulture)),
+                    },
+                },
+                ct: ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning(
+                "NyxIdChat history terminal activation recovery scheduling failed: actor={ActorId} delivery={DeliveryId} attempt={Attempt} exceptionType={ExceptionType}",
+                Id,
+                pending.DeliveryId,
+                pending.Attempt,
+                exception.GetType().Name);
+            throw;
+        }
+    }
+
+    private Task ScheduleOutstandingOperationRecoveryAsync(CancellationToken ct)
+    {
+        var operation = ResolveOutstandingRecoveryOperation(State);
+        return operation?.Key is null
+            ? Task.CompletedTask
+            : ScheduleActivationRecoveryAsync(operation, ct);
+    }
+
+    private async Task ScheduleActivationRecoveryAsync(
+        NyxIdChatOperationState operation,
+        CancellationToken ct)
+    {
+        var version = CurrentCommittedVersion();
+        var kind = operation.Kind == NyxIdChatStepKind.Postcondition &&
+                   operation.Phase == NyxIdChatOperationPhase.Requested
+            ? NyxIdChatRecoveryKind.PostconditionRedispatch
+            : NyxIdChatRecoveryKind.InterruptedOperationReconciliation;
+        try
+        {
+            await ScheduleSelfDurableTimeoutAsync(
+                BuildStableIdentity(
+                    "operation-recovery-activation",
+                    operation.Key.OperationId,
+                    version.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                ActivationRecoveryDelay,
+                new NyxIdChatRecoveryRequestedSignal
+                {
+                    Key = operation.Key.Clone(),
+                    ExpectedStateVersion = version,
+                    Kind = kind,
+                },
+                new EventEnvelopePublishOptions
+                {
+                    Propagation = new EventEnvelopePropagationOverrides
+                    {
+                        CorrelationId = operation.Key.OperationId,
+                    },
+                    Delivery = new EventEnvelopeDeliveryOptions
+                    {
+                        OperationId = $"{operation.Key.OperationId}:recovery:{version}",
+                    },
+                },
+                ct: ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning(
+                "NyxIdChat operation activation recovery scheduling failed: actor={ActorId} operation={OperationId} version={StateVersion} exceptionType={ExceptionType}",
+                Id,
+                operation.Key.OperationId,
+                version,
+                exception.GetType().Name);
+            throw;
+        }
+    }
+
     private Task DispatchPendingHistoryTerminalAsync()
     {
         var pending = State.PendingHistoryTerminal;
@@ -2097,21 +2527,25 @@ public sealed class NyxIdChatConversationGAgent
             DeliveryId = pending.DeliveryId,
             Attempt = pending.Attempt,
         };
-        var envelope = new EventEnvelope
-        {
-            Id = BuildStableIdentity(
-                "history-terminal-dispatch",
-                pending.DeliveryId,
-                pending.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-            Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-            Payload = Any.Pack(signal),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication(Id, TopologyAudience.Self),
-            Propagation = new EnvelopePropagation
+        return PublishAsync(
+            signal,
+            TopologyAudience.Self,
+            ct,
+            new EventEnvelopePublishOptions
             {
-                CorrelationId = pending.SourceCommandId,
-            },
-        };
-        return _actorDispatchPort.DispatchAsync(Id, envelope, ct);
+                Propagation = new EventEnvelopePropagationOverrides
+                {
+                    CorrelationId = pending.SourceCommandId,
+                },
+                Delivery = new EventEnvelopeDeliveryOptions
+                {
+                    OperationId = BuildStableIdentity(
+                        "history-terminal-dispatch",
+                        pending.DeliveryId,
+                        pending.Attempt.ToString(
+                            System.Globalization.CultureInfo.InvariantCulture)),
+                },
+            });
     }
 
     private static ChatHistoryTurnTerminalStatus ToHistoryTerminalStatus(
@@ -2124,7 +2558,7 @@ public sealed class NyxIdChatConversationGAgent
             _ => throw new ArgumentOutOfRangeException(nameof(status), status, null),
         };
 
-    private async Task PersistFirstDispatchFailureAsync(
+    private async Task PersistOperationDispatchFailureAsync(
         NyxIdChatOperationKey operationKey,
         string failureCode,
         string safeMessage,
@@ -2133,7 +2567,7 @@ public sealed class NyxIdChatConversationGAgent
         if (exception is not null)
         {
             Logger.LogWarning(
-                "NyxIdChat first operation dispatch stage failed: actor={ActorId} operation={OperationId} code={FailureCode} exceptionType={ExceptionType}",
+                "NyxIdChat operation dispatch stage failed: actor={ActorId} operation={OperationId} code={FailureCode} exceptionType={ExceptionType}",
                 Id,
                 operationKey.OperationId,
                 failureCode,
@@ -2146,10 +2580,9 @@ public sealed class NyxIdChatConversationGAgent
         if (step is null)
             return;
 
-        // A transient start command carries the only runtime execution
-        // capability. Once its first dispatch path fails, this exact turn
-        // cannot be reconstructed as an automatic retry, so close it rather
-        // than advertising a recovery action that cannot be honored.
+        // The transient command carries the only runtime execution capability.
+        // Once dispatch fails, committed state cannot reconstruct it, so close
+        // the operation instead of leaving a running step with no continuation.
         step.RetryInputRebuildable = false;
         var failure = new NyxIdChatOperationResultSignal
         {
@@ -2168,7 +2601,7 @@ public sealed class NyxIdChatConversationGAgent
         if (decision.Outcome != NyxIdChatTransitionOutcome.Accepted)
             return;
 
-        var next = decision.State.Clone();
+        var next = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
         next.ProgressSequence = State.ProgressSequence + 1;
         next.UpdatedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
         var terminalPrepared = PrepareHistoryTerminalOutbox(next);
@@ -2194,22 +2627,45 @@ public sealed class NyxIdChatConversationGAgent
             OperationId = pending.OperationId,
             Attempt = pending.Attempt,
         };
-        var envelope = new EventEnvelope
-        {
-            Id = BuildStableIdentity(
-                "history-initialization-dispatch",
-                pending.OperationId,
-                pending.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-            Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-            Payload = Any.Pack(signal),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication(Id, TopologyAudience.Self),
-            Propagation = new EnvelopePropagation
+        return PublishAsync(
+            signal,
+            TopologyAudience.Self,
+            ct,
+            new EventEnvelopePublishOptions
             {
-                CorrelationId = pending.OperationId,
-            },
-        };
-        return _actorDispatchPort.DispatchAsync(Id, envelope, ct);
+                Propagation = new EventEnvelopePropagationOverrides
+                {
+                    CorrelationId = pending.OperationId,
+                },
+                Delivery = new EventEnvelopeDeliveryOptions
+                {
+                    OperationId = BuildStableIdentity(
+                        "history-initialization-dispatch",
+                        pending.OperationId,
+                        pending.Attempt.ToString(
+                            System.Globalization.CultureInfo.InvariantCulture)),
+                },
+            });
     }
+
+    private Task DispatchInputRequestContinuationAsync(
+        NyxIdChatInputRequestCommand command,
+        CancellationToken ct)
+        => SendToAsync(
+            Id,
+            command,
+            ct,
+            new EventEnvelopePublishOptions
+            {
+                Propagation = new EventEnvelopePropagationOverrides
+                {
+                    CorrelationId = command.RequestId,
+                },
+                Delivery = new EventEnvelopeDeliveryOptions
+                {
+                    OperationId = $"{command.RequestId}:materialize",
+                },
+            });
 
     private async Task PersistRegistrationUnavailableAndCompensateAsync(
         string scopeId,
@@ -2302,8 +2758,33 @@ public sealed class NyxIdChatConversationGAgent
                 CorrelationId = NormalizeOptional(correlationId) ?? command.Key.OperationId,
             },
         };
-        await _actorDispatchPort
-            .DispatchAsync(turnActorId, envelope, CancellationToken.None);
+        try
+        {
+            var admission = await _actorDispatchPort
+                .DispatchAsync(turnActorId, envelope, CancellationToken.None);
+            if (!admission.Accepted)
+            {
+                await PersistOperationDispatchFailureAsync(
+                    command.Key,
+                    "NYXID_CHAT_OPERATION_DISPATCH_REJECTED",
+                    "The chat operation was not accepted for dispatch.");
+                return;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            await PersistOperationDispatchFailureAsync(
+                command.Key,
+                "NYXID_CHAT_OPERATION_DISPATCH_FAILED",
+                "The chat operation could not be dispatched.",
+                exception);
+            return;
+        }
+
         await PersistDomainEventAsync(new NyxIdChatOperationDispatchedEvent
         {
             Key = command.Key.Clone(),
@@ -2330,7 +2811,7 @@ public sealed class NyxIdChatConversationGAgent
         }
         catch (Exception exception)
         {
-            await PersistFirstDispatchFailureAsync(
+            await PersistOperationDispatchFailureAsync(
                     operationKey,
                     "NYXID_CHAT_TURN_ACTOR_CREATE_FAILED",
                     "The chat turn could not start its execution actor.",
@@ -2348,7 +2829,7 @@ public sealed class NyxIdChatConversationGAgent
         }
         catch (Exception exception)
         {
-            await PersistFirstDispatchFailureAsync(
+            await PersistOperationDispatchFailureAsync(
                     operationKey,
                     "NYXID_CHAT_TURN_ACTOR_LINK_FAILED",
                     "The chat turn could not attach its execution actor.",
@@ -2376,7 +2857,7 @@ public sealed class NyxIdChatConversationGAgent
                 .DispatchAsync(turnActor.Id, envelope, CancellationToken.None);
             if (!admission.Accepted)
             {
-                await PersistFirstDispatchFailureAsync(
+                await PersistOperationDispatchFailureAsync(
                         operationKey,
                         "NYXID_CHAT_OPERATION_DISPATCH_REJECTED",
                         "The chat operation was not accepted for dispatch.");
@@ -2389,7 +2870,7 @@ public sealed class NyxIdChatConversationGAgent
         }
         catch (Exception exception)
         {
-            await PersistFirstDispatchFailureAsync(
+            await PersistOperationDispatchFailureAsync(
                     operationKey,
                     "NYXID_CHAT_OPERATION_DISPATCH_FAILED",
                     "The chat operation could not be dispatched.",

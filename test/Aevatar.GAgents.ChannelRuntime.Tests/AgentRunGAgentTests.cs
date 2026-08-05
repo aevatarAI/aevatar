@@ -1,5 +1,6 @@
 using System.Text;
 using System.Runtime.CompilerServices;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Lark;
@@ -678,7 +679,7 @@ public sealed class AgentRunGAgentTests
         var (actorId, envelope) = dispatchPort.Dispatches.Single();
         actorId.Should().Be(ExpectedRunActorId("run-dispatch"));
         envelope.Id.Should().Be("agent-run-start:run-dispatch");
-        envelope.Runtime.Deduplication.OperationId.Should().Be("agent-run-start:run-dispatch");
+        envelope.Runtime.DeliveryIdentity.OperationId.Should().Be("agent-run-start:run-dispatch");
         envelope.Propagation.CorrelationId.Should().Be("corr-dispatch");
         var command = envelope.Payload.Unpack<AgentRunStartRequested>();
         command.Request.RunId.Should().Be("run-dispatch");
@@ -1102,7 +1103,7 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
-    public async Task HandleNextLlmStepAsync_WhenLlmContinuationIsReplayed_ShouldClearMatchingCapability()
+    public async Task HandleNextLlmStepAsync_WhenLlmContinuationIsReplayed_ShouldExecuteFromDurableAuthorization()
     {
         var executor = new CapabilityTrackingReplyGenerationExecutor();
         var publisher = new RecordingSelfEventPublisher();
@@ -1119,11 +1120,11 @@ public sealed class AgentRunGAgentTests
         await runtime.HandleNextToolStepAsync(toolRequest);
 
         executor.ToolStepAuthorizationPresence.Should().Equal(false);
-        executor.ToolExecutionCount.Should().Be(0);
+        executor.ToolExecutionCount.Should().Be(1);
     }
 
     [Fact]
-    public async Task HandleNextToolStepAsync_WhenToolRequestArrivesBeforeLlmResult_ShouldClearMatchingCapability()
+    public async Task HandleNextToolStepAsync_WhenToolRequestArrivesBeforeLlmResult_ShouldExecuteFromDurableAuthorization()
     {
         var executor = new CapabilityTrackingReplyGenerationExecutor();
         var publisher = new RecordingSelfEventPublisher();
@@ -1141,11 +1142,55 @@ public sealed class AgentRunGAgentTests
         await runtime.HandleNextToolStepAsync(reconciledToolRequest);
 
         executor.ToolStepAuthorizationPresence.Should().Equal(false);
-        executor.ToolExecutionCount.Should().Be(0);
+        executor.ToolExecutionCount.Should().Be(1);
     }
 
     [Fact]
-    public async Task HandleNextToolStepAsync_AfterActorRestart_ShouldRejectWhenCapabilityIsMissing()
+    public async Task HandleNextToolStepAsync_AfterActorRestart_ShouldExecuteWhenDurableAuthorizationExists()
+    {
+        var executor = new CapabilityTrackingReplyGenerationExecutor();
+        var publisher = new RecordingSelfEventPublisher();
+        var restartedRuntime = CreateCapabilityTestAgent(executor, publisher, nextStepIndex: 2);
+        restartedRuntime.State.GenerationStep!.PendingToolCalls.Add(
+            CapabilityTrackingReplyGenerationExecutor.ToolCall.Clone());
+        restartedRuntime.State.GenerationStep.PendingToolAuthorizations.Add(
+            CapabilityTrackingReplyGenerationExecutor.Authorization.Clone());
+        var toolRequest = BuildCapabilityToolStepRequest(
+            runId: restartedRuntime.State.RunId,
+            correlationId: restartedRuntime.State.CorrelationId,
+            stepIndex: 2);
+
+        await restartedRuntime.HandleNextToolStepAsync(toolRequest);
+
+        executor.ToolStepAuthorizationPresence.Should().Equal(false);
+        executor.ToolExecutionCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandleNextToolStepAsync_AfterActorRestart_ShouldExecuteWhenDurableAuthorizationSurvivesProtobufRoundTrip()
+    {
+        var executor = new CapabilityTrackingReplyGenerationExecutor();
+        var publisher = new RecordingSelfEventPublisher();
+        var restartedRuntime = CreateCapabilityTestAgent(executor, publisher, nextStepIndex: 2);
+        restartedRuntime.State.GenerationStep!.PendingToolCalls.Add(
+            CapabilityTrackingReplyGenerationExecutor.ToolCall.Clone());
+        restartedRuntime.State.GenerationStep.PendingToolAuthorizations.Add(
+            CapabilityTrackingReplyGenerationExecutor.Authorization.Clone());
+        SetState(restartedRuntime, RoundTrip(restartedRuntime.State));
+        var toolRequest = BuildCapabilityToolStepRequest(
+            runId: restartedRuntime.State.RunId,
+            correlationId: restartedRuntime.State.CorrelationId,
+            stepIndex: 2);
+
+        await restartedRuntime.HandleNextToolStepAsync(toolRequest);
+
+        executor.ToolStepAuthorizationPresence.Should().Equal(false);
+        executor.DurableAuthorizationAllowed.Should().Equal(true);
+        executor.ToolExecutionCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandleNextToolStepAsync_AfterActorRestart_ShouldRejectWhenDurableAuthorizationIsMissing()
     {
         var executor = new CapabilityTrackingReplyGenerationExecutor();
         var publisher = new RecordingSelfEventPublisher();
@@ -1160,6 +1205,29 @@ public sealed class AgentRunGAgentTests
         await restartedRuntime.HandleNextToolStepAsync(toolRequest);
 
         executor.ToolStepAuthorizationPresence.Should().Equal(false);
+        executor.ToolExecutionCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleNextToolStepAsync_AfterActorRestart_ShouldRejectWhenDurableAuthorizationWasConsumed()
+    {
+        var executor = new CapabilityTrackingReplyGenerationExecutor();
+        var publisher = new RecordingSelfEventPublisher();
+        var restartedRuntime = CreateCapabilityTestAgent(executor, publisher, nextStepIndex: 2);
+        restartedRuntime.State.GenerationStep!.PendingToolCalls.Add(
+            CapabilityTrackingReplyGenerationExecutor.ToolCall.Clone());
+        restartedRuntime.State.GenerationStep.PendingToolAuthorizations.Add(
+            CapabilityTrackingReplyGenerationExecutor.Authorization.Clone());
+        restartedRuntime.State.GenerationStep.PendingToolAuthorizationConsumed = true;
+        var toolRequest = BuildCapabilityToolStepRequest(
+            runId: restartedRuntime.State.RunId,
+            correlationId: restartedRuntime.State.CorrelationId,
+            stepIndex: 2);
+
+        await restartedRuntime.HandleNextToolStepAsync(toolRequest);
+
+        executor.ToolStepAuthorizationPresence.Should().Equal(false);
+        executor.DurableAuthorizationAllowed.Should().Equal(false);
         executor.ToolExecutionCount.Should().Be(0);
     }
 
@@ -1494,7 +1562,10 @@ public sealed class AgentRunGAgentTests
                 LocalRuntimeBaseUrl: "http://localhost",
                 RemoteRuntimeBaseUrl: "https://example.com",
                 GithubUsername: null,
-                MaxToolRounds: 11)));
+                MaxToolRounds: 11,
+                LlmSelection: UserServiceSelection(
+                    "anthropic-via-bot-owner",
+                    "gpt-4o-bot-owner"))));
 
         var runtime = CreateRunAgent(
             actorRuntime,
@@ -1871,10 +1942,7 @@ public sealed class AgentRunGAgentTests
         {
             ByBinding =
             {
-                ["bnd-user-1"] = new NyxIdUserLlmPreferences(
-                    "sender-model",
-                    "/api/v1/proxy/s/sender",
-                    MaxToolRounds: 7),
+                ["bnd-user-1"] = SenderPreferences(7),
             },
         };
         var replyGenerator = new NyxIdConversationReplyGenerator(
@@ -1898,7 +1966,8 @@ public sealed class AgentRunGAgentTests
                 LocalRuntimeBaseUrl: "http://localhost",
                 RemoteRuntimeBaseUrl: "https://example.com",
                 GithubUsername: null,
-                MaxToolRounds: 11)));
+                MaxToolRounds: 11,
+                LlmSelection: UserServiceSelection("owner", "owner-model"))));
 
         var runtime = CreateRunAgent(
             actorRuntime,
@@ -1978,7 +2047,8 @@ public sealed class AgentRunGAgentTests
                     new RecordingAgentTool("scheduled_agent_creator", toolOrder, """{"accepted":true,"agent_id":"agent-1"}"""),
                 ]),
             ],
-            localSkillCatalog: new LocalSkillCatalog());
+            localSkillCatalog: new LocalSkillCatalog(),
+            toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort());
         var actorRuntime = new DispatchingActorRuntime(("conversation:c", targetActor));
         var runtime = CreateRunAgent(
             actorRuntime,
@@ -3476,7 +3546,10 @@ public sealed class AgentRunGAgentTests
                 LocalRuntimeBaseUrl: "http://localhost",
                 RemoteRuntimeBaseUrl: "https://example.com",
                 GithubUsername: null,
-                MaxToolRounds: 11)));
+                MaxToolRounds: 11,
+                LlmSelection: UserServiceSelection(
+                    "anthropic-via-bot-owner",
+                    "gpt-4o-bot-owner"))));
 
         var runtime = CreateRunAgent(
             actorRuntime,
@@ -3736,6 +3809,9 @@ public sealed class AgentRunGAgentTests
 
         throw new InvalidOperationException("Unable to set agent id via reflection.");
     }
+
+    private static AgentRunGAgentState RoundTrip(AgentRunGAgentState state) =>
+        AgentRunGAgentState.Parser.ParseFrom(state.ToByteArray());
 
     private static void SetState(AgentRunGAgent agent, AgentRunGAgentState state)
     {
@@ -4024,9 +4100,20 @@ public sealed class AgentRunGAgentTests
             ArgumentsJson = "{}",
         };
 
+        public static AgentRunPendingToolAuthorization Authorization { get; } = new()
+        {
+            Call = ToolCall.Clone(),
+            HasRequiresApproval = true,
+            RequiresApproval = false,
+            IsReadOnly = true,
+            IsDestructive = false,
+            SideEffectKind = "use.skill",
+        };
+
         public int ToolExecutionCount { get; private set; }
 
         public List<bool> ToolStepAuthorizationPresence { get; } = [];
+        public List<bool> DurableAuthorizationAllowed { get; } = [];
 
         public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
             AgentRunReplyGenerationExecutionRequest request,
@@ -4039,6 +4126,7 @@ public sealed class AgentRunGAgentTests
         {
             var result = new AgentRunLlmStepResult();
             result.ToolCalls.Add(ToolCall.Clone());
+            result.PendingToolAuthorizations.Add(Authorization.Clone());
             var continuation = new AgentRunNextLlmStepRequestedEvent
             {
                 RunId = request.RunId,
@@ -4069,9 +4157,10 @@ public sealed class AgentRunGAgentTests
             CancellationToken ct)
         {
             ToolStepAuthorizationPresence.Add(authorizedToolStep is not null);
+            DurableAuthorizationAllowed.Add(request.AllowDurableToolAuthorization);
             var result = authorizedToolStep?.Matches(request) == true
                 ? await authorizedToolStep.ExecuteAsync(ct)
-                : new AgentRunToolStepResult { AdvanceRound = true };
+                : ExecuteDurableAuthorizationIfMatched(request);
             return new AgentRunNextToolStepRequestedEvent
             {
                 RunId = request.RunId,
@@ -4083,6 +4172,26 @@ public sealed class AgentRunGAgentTests
                 ToolStepResult = result,
             };
         }
+
+        private AgentRunToolStepResult ExecuteDurableAuthorizationIfMatched(AgentRunReplyStepExecutionRequest request)
+        {
+            if (request.AllowDurableToolAuthorization &&
+                request.StepState.PendingToolAuthorizationConsumed &&
+                request.StepState.PendingToolCalls.Count == 1 &&
+                request.StepState.PendingToolAuthorizations.Count == 1 &&
+                ToolCallMatches(request.StepState.PendingToolCalls[0]) &&
+                ToolCallMatches(request.StepState.PendingToolAuthorizations[0].Call))
+            {
+                ToolExecutionCount++;
+            }
+
+            return new AgentRunToolStepResult { AdvanceRound = true };
+        }
+
+        private static bool ToolCallMatches(AgentRunToolCall call) =>
+            string.Equals(call.Id, ToolCall.Id, StringComparison.Ordinal) &&
+            string.Equals(call.Name, ToolCall.Name, StringComparison.Ordinal) &&
+            string.Equals(call.ArgumentsJson, ToolCall.ArgumentsJson, StringComparison.Ordinal);
     }
 
     private sealed class RecordingSelfEventPublisher : IEventPublisher
@@ -4318,18 +4427,14 @@ public sealed class AgentRunGAgentTests
                         var config = await _userConfigQueryPort.GetAsync(
                             UserConfigResourceKey.ForOwnerScope(scopeId),
                             ct);
-                        control = control with
-                        {
-                            ModelOverride = string.IsNullOrWhiteSpace(config.DefaultModel)
-                                ? control.ModelOverride
-                                : config.DefaultModel.Trim(),
-                            NyxIdRoutePreference = string.IsNullOrWhiteSpace(config.PreferredLlmRoute)
-                                ? control.NyxIdRoutePreference
-                                : config.PreferredLlmRoute.Trim(),
-                            MaxToolRoundsOverride = config.MaxToolRounds > 0
-                                ? config.MaxToolRounds
-                                : control.MaxToolRoundsOverride,
-                        };
+                        control = new OwnerLlmConfig(
+                                config.LlmSelection?.Clone() ?? LLMSelectionPolicy.SystemDefaultSelection(),
+                                LLMSelectionPolicy.ClassifyPersisted(
+                                    config.LlmSelection,
+                                    config.PreferredLlmRoute,
+                                    config.DefaultModel),
+                                config.MaxToolRounds)
+                            .ApplyTo(control);
                     }
                 }
             }
@@ -4491,9 +4596,11 @@ public sealed class AgentRunGAgentTests
                 throw new InvalidOperationException(
                     $"Simulated persistence failure for event type {typeof(TFailEvent).Name}");
             }
-            CurrentVersion += _pending.Count;
+
+            var result = BuildCommitResult(_pending, CurrentVersion);
+            CurrentVersion = result.LatestVersion;
             _pending.Clear();
-            return Task.FromResult(new EventStoreCommitResult { LatestVersion = CurrentVersion });
+            return Task.FromResult(result);
         }
 
         public Task PersistSnapshotAsync(TState currentState, CancellationToken ct = default) =>
@@ -4522,12 +4629,10 @@ public sealed class AgentRunGAgentTests
 
         public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
         {
-            CurrentVersion += _pending.Count;
+            var result = BuildCommitResult(_pending, CurrentVersion);
+            CurrentVersion = result.LatestVersion;
             _pending.Clear();
-            return Task.FromResult(new EventStoreCommitResult
-            {
-                LatestVersion = CurrentVersion,
-            });
+            return Task.FromResult(result);
         }
 
         public Task PersistSnapshotAsync(TState currentState, CancellationToken ct = default) =>
@@ -4542,6 +4647,28 @@ public sealed class AgentRunGAgentTests
         }
 
         public TState TransitionState(TState current, IMessage evt) => transition(current, evt);
+    }
+
+    private static EventStoreCommitResult BuildCommitResult(
+        IEnumerable<IMessage> pending,
+        long currentVersion)
+    {
+        var result = new EventStoreCommitResult();
+        foreach (var evt in pending)
+        {
+            currentVersion++;
+            result.CommittedEvents.Add(new StateEvent
+            {
+                EventId = Guid.NewGuid().ToString("N"),
+                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                Version = currentVersion,
+                EventType = evt.Descriptor.FullName,
+                EventData = Any.Pack(evt),
+            });
+        }
+
+        result.LatestVersion = currentVersion;
+        return result;
     }
 
     private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler
@@ -4743,7 +4870,7 @@ public sealed class AgentRunGAgentTests
         public Task<NyxIdUserLlmPreferences> GetOwnerAsync(CancellationToken cancellationToken = default)
         {
             Lookups.Add(null);
-            return Task.FromResult(new NyxIdUserLlmPreferences(string.Empty, string.Empty));
+            return Task.FromResult(NyxIdUserLlmPreferences.Empty);
         }
 
         public Task<NyxIdUserLlmPreferences> GetForBindingAsync(string bindingId, CancellationToken cancellationToken = default)
@@ -4751,9 +4878,27 @@ public sealed class AgentRunGAgentTests
             Lookups.Add(bindingId);
             return Task.FromResult(ByBinding.TryGetValue(bindingId, out var prefs)
                 ? prefs
-                : new NyxIdUserLlmPreferences(string.Empty, string.Empty));
+                : NyxIdUserLlmPreferences.Empty);
         }
     }
+
+    private static NyxIdUserLlmPreferences SenderPreferences(int maxToolRounds) => new(
+        UserServiceSelection("sender", "sender-model"),
+        LLMSelectionPersistenceStatus.Ready,
+        maxToolRounds);
+
+    private static LLMSelection UserServiceSelection(string serviceSlug, string modelId) => new()
+    {
+        RouteKind = LLMRouteKind.NyxIdUserService,
+        RouteValue = $"/api/v1/proxy/s/{serviceSlug}",
+        NyxIdUserServiceId = $"us-{serviceSlug}",
+        ServiceSlugSnapshot = serviceSlug,
+        ModelSelection = new LLMModelSelection
+        {
+            Kind = LLMModelSelectionKind.ExplicitModel,
+            ModelId = modelId,
+        },
+    };
 
     private sealed class SingleReplyProviderFactory(string replyText) : ILLMProviderFactory, ILLMProvider
     {

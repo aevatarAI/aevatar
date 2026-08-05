@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Aevatar.RoleStreamingWriteAmplification</AssemblyName>
+    <RootNamespace>Aevatar.RoleStreamingWriteAmplification</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../src/Aevatar.AI.Core/Aevatar.AI.Core.csproj" />
+    <ProjectReference Include="../../../src/Aevatar.AI.LLMProviders.MEAI/Aevatar.AI.LLMProviders.MEAI.csproj" />
+    <ProjectReference Include="../../../src/Aevatar.AI.LLMProviders.NyxId/Aevatar.AI.LLMProviders.NyxId.csproj" />
+    <ProjectReference Include="../../../src/Aevatar.AI.LLMProviders.Tornado/Aevatar.AI.LLMProviders.Tornado.csproj" />
+    <ProjectReference Include="../../../src/Aevatar.CQRS.Projection.Core/Aevatar.CQRS.Projection.Core.csproj" />
+    <ProjectReference Include="../../../src/Aevatar.CQRS.Projection.Providers.InMemory/Aevatar.CQRS.Projection.Providers.InMemory.csproj" />
+    <ProjectReference Include="../../../src/Aevatar.CQRS.Projection.Runtime/Aevatar.CQRS.Projection.Runtime.csproj" />
+    <ProjectReference Include="../../../src/Aevatar.Foundation.Runtime/Aevatar.Foundation.Runtime.csproj" />
+    <ProjectReference Include="../../../src/Aevatar.Foundation.Runtime.Implementations.Local/Aevatar.Foundation.Runtime.Implementations.Local.csproj" />
+    <ProjectReference Include="../../../src/Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet/Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="StackExchange.Redis" />
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="measurement_role_current_state_read_model.proto" GrpcServices="None" />
+    <None Update="streaming-write-amplification.config.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="role-contention.config.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="provider-normalization.config.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

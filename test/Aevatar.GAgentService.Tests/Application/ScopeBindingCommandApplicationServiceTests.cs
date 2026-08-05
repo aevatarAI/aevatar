@@ -2161,6 +2161,8 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                         DefaultOptions.DefaultServiceId),
                     AuthorizationEvidence = authorizationEvidence,
                     CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
+                    ExecutionMode = capabilityAdmissionPlan?.ExecutionMode ??
+                                    ExternalCapabilityExecutionMode.Interactive,
                 },
             },
         };
@@ -2465,12 +2467,13 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             string actorId,
             string workflowYaml,
             string workflowName,
-            IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
-            string? scopeId = null,
-            string? sourceKind = null,
-            WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
-            string? workflowId = null,
-            string? revisionId = null,
+            IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+            string? scopeId,
+            string? sourceKind,
+            WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+            string? workflowId,
+            string? revisionId,
+            ExternalCapabilityExecutionMode expectedExecutionMode,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
 

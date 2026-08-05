@@ -27,6 +27,8 @@ public sealed class ScheduledDispatchGAgentTests
     private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
     private const string TeamCredentialExpiryCallbackId = "scheduled-dispatch-team-credential-expiry";
     private const string ManualFireIdempotencyKey = "manual-fire";
+    private const string LegacyUnmarkedEnvelopeRetiredError =
+        "Scheduled dispatch envelope target is retired because it lacks trusted internal authority.";
 
     [Fact]
     public void AuthorizationFactState_ShouldReserveRemovedRuntimeNodeGrantTopology()
@@ -57,6 +59,266 @@ public sealed class ScheduledDispatchGAgentTests
             field.Number == 11 && field.Name == "catalog_policy_version");
         authority.Field.Should().Contain(field =>
             field.Number == 12 && field.Name == "catalog_evaluated_at");
+    }
+
+    [Fact]
+    public void EnvelopeAuthorityState_ShouldUseStableProtocolValuesAndFieldNumber()
+    {
+        ((int)ScheduledDispatchEnvelopeAuthorityState.Unspecified).Should().Be(0);
+        ((int)ScheduledDispatchEnvelopeAuthorityState.TrustedInternal).Should().Be(1);
+        ScheduledDispatchTargetState.Descriptor.Fields
+            .InFieldNumberOrder()
+            .Should()
+            .ContainSingle(field =>
+                field.FieldNumber == 7 && field.Name == "envelope_authority");
+    }
+
+    [Fact]
+    public async Task HandleConfigureAsync_WithUnmarkedEnvelopeTarget_ShouldRequireTrustedInternalAuthority()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        var command = CreateConfigureCommand(target: new ScheduledDispatchTargetState
+        {
+            Kind = ScheduledDispatchTargetKindState.Envelope,
+            ActorId = "actor-cross-owner",
+            Envelope = CreateTriggerEnvelope("actor-cross-owner", new Empty()),
+        });
+
+        var act = () => agent.HandleConfigureAsync(command);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*trusted internal authority*");
+        eventStore.GetEvents(ScheduleActorId).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleConfigureAsync_WithUnknownEnvelopeAuthority_ShouldRejectBeforePersistingEvents()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        var command = CreateConfigureCommand(target: new ScheduledDispatchTargetState
+        {
+            Kind = ScheduledDispatchTargetKindState.Envelope,
+            ActorId = "actor-unknown-authority",
+            Envelope = CreateTriggerEnvelope("actor-unknown-authority", new Empty()),
+            EnvelopeAuthority = (ScheduledDispatchEnvelopeAuthorityState)99,
+        });
+
+        var act = () => agent.HandleConfigureAsync(command);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*trusted internal authority*");
+        eventStore.GetEvents(ScheduleActorId).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleConfigureAsync_WithUnspecifiedTargetKind_ShouldRequireTypedTargetBeforePersistingEvents()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        var command = CreateConfigureCommand(target: new ScheduledDispatchTargetState
+        {
+            Kind = ScheduledDispatchTargetKindState.Unspecified,
+        });
+
+        var act = () => agent.HandleConfigureAsync(command);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*typed target is required*");
+        eventStore.GetEvents(ScheduleActorId).Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("create")]
+    [InlineData("update")]
+    [InlineData("ensure-create")]
+    [InlineData("ensure-update")]
+    public async Task ConfigureEntryPoints_WithMissingTypedTarget_ShouldRejectBeforePersistingEvents(
+        string operation)
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        if (operation is "update" or "ensure-update")
+            await agent.HandleConfigureAsync(CreateConfigureCommand(enabled: false));
+
+        var create = CreateConfigureCommand(enabled: false);
+        create.Target = null;
+        var update = CreateUpdateCommand(enabled: false);
+        update.Target = null;
+        var ensure = CreateEnsureCommand(enabled: false);
+        ensure.Target = null;
+        var eventCountBefore = eventStore.GetEvents(ScheduleActorId).Count;
+        var configuredEventCountBefore = eventStore.GetEvents(ScheduleActorId)
+            .Count(x => string.Equals(
+                x.EventType,
+                ScheduledDispatchConfiguredEvent.Descriptor.FullName,
+                StringComparison.Ordinal));
+        Func<Task> act = operation switch
+        {
+            "create" => () => agent.HandleConfigureAsync(create),
+            "update" => () => agent.HandleConfigureAsync(update),
+            "ensure-create" or "ensure-update" => () => agent.HandleEnsureAsync(ensure),
+            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, null),
+        };
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*typed target is required*");
+        eventStore.GetEvents(ScheduleActorId).Should().HaveCount(eventCountBefore);
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => string.Equals(
+                x.EventType,
+                ScheduledDispatchConfiguredEvent.Descriptor.FullName,
+                StringComparison.Ordinal))
+            .Should()
+            .Be(configuredEventCountBefore);
+    }
+
+    [Fact]
+    public async Task OnActivateAsync_WithEnabledLegacyUnmarkedEnvelopeSnapshot_ShouldRetireAndPurgeWithoutDispatch()
+    {
+        var eventStore = new TestEventStore();
+        var actorDispatch = new RecordingActorDispatchPort();
+        var serviceDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(
+            eventStore,
+            actorDispatch,
+            scheduler,
+            serviceDispatch,
+            snapshotStore: new TestSnapshotStore(
+                CreateLegacyUnmarkedEnvelopeSnapshot(enabled: true),
+                version: 0));
+
+        await agent.ActivateAsync();
+
+        agent.State.Enabled.Should().BeFalse();
+        scheduler.PurgedActors.Should().ContainSingle().Which.Should().Be(ScheduleActorId);
+        actorDispatch.Dispatches.Should().BeEmpty();
+        serviceDispatch.Requests.Should().BeEmpty();
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(
+                x.EventType,
+                ScheduledDispatchDisabledEvent.Descriptor.FullName,
+                StringComparison.Ordinal))
+            .Should()
+            .ContainSingle();
+        scheduler.TimeoutRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task OnActivateAsync_WithDisabledLegacyUnmarkedEnvelopeSnapshot_ShouldPurgeWithoutPersistingOrScheduling()
+    {
+        var eventStore = new TestEventStore();
+        var actorDispatch = new RecordingActorDispatchPort();
+        var serviceDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(
+            eventStore,
+            actorDispatch,
+            scheduler,
+            serviceDispatch,
+            snapshotStore: new TestSnapshotStore(
+                CreateLegacyUnmarkedEnvelopeSnapshot(enabled: false),
+                version: 0));
+
+        await agent.ActivateAsync();
+
+        agent.State.Enabled.Should().BeFalse();
+        eventStore.GetEvents(ScheduleActorId).Should().BeEmpty();
+        scheduler.PurgedActors.Should().ContainSingle().Which.Should().Be(ScheduleActorId);
+        scheduler.TimeoutRequests.Should().BeEmpty();
+        actorDispatch.Dispatches.Should().BeEmpty();
+        serviceDispatch.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_WithLegacyUnmarkedEnvelopeTarget_ShouldThrowRetirementErrorBeforeDispatch()
+    {
+        var eventStore = new TestEventStore();
+        var actorDispatch = new RecordingActorDispatchPort();
+        var serviceDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var agent = CreateAgent(
+            eventStore,
+            actorDispatch,
+            serviceInvocationDispatch: serviceDispatch,
+            snapshotStore: new TestSnapshotStore(
+                CreateLegacyUnmarkedEnvelopeSnapshot(enabled: false),
+                version: 0));
+        await agent.ActivateAsync();
+
+        var act = () => agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero)),
+            Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage(LegacyUnmarkedEnvelopeRetiredError);
+        actorDispatch.Dispatches.Should().BeEmpty();
+        serviceDispatch.Requests.Should().BeEmpty();
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(
+                x.EventType,
+                ScheduledDispatchFireStartedEvent.Descriptor.FullName,
+                StringComparison.Ordinal))
+            .Should()
+            .BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_AutomaticWithLegacyUnmarkedEnvelopeTarget_ShouldDisableAndPurgeWithoutDispatch()
+    {
+        var eventStore = new TestEventStore();
+        var actorDispatch = new RecordingActorDispatchPort();
+        var serviceDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(
+            eventStore,
+            actorDispatch,
+            scheduler,
+            serviceDispatch,
+            snapshotStore: new TestSnapshotStore(
+                CreateLegacyUnmarkedEnvelopeSnapshot(enabled: true),
+                version: 0));
+        await agent.ActivateAsync();
+        scheduler.PurgedActors.Clear();
+
+        var command = new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero)),
+            Manual = false,
+        };
+
+        await agent.HandleFireAsync(command);
+        await agent.HandleFireAsync(command);
+
+        agent.State.Enabled.Should().BeFalse();
+        scheduler.PurgedActors.Should().HaveCount(2)
+            .And.OnlyContain(actorId => actorId == ScheduleActorId);
+        actorDispatch.Dispatches.Should().BeEmpty();
+        serviceDispatch.Requests.Should().BeEmpty();
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(
+                x.EventType,
+                ScheduledDispatchFireStartedEvent.Descriptor.FullName,
+                StringComparison.Ordinal))
+            .Should()
+            .BeEmpty();
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => string.Equals(
+                x.EventType,
+                ScheduledDispatchDisabledEvent.Descriptor.FullName,
+                StringComparison.Ordinal))
+            .Should()
+            .Be(1);
     }
 
     [Fact]
@@ -1010,18 +1272,26 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
-    public async Task HandleFireAsync_ShouldDispatchStoredEnvelopeToConfiguredNonWorkflowTarget()
+    public async Task HandleFireAsync_WithTrustedInternalEnvelope_ShouldDispatchStoredEnvelopeToConfiguredNonWorkflowTarget()
     {
         var eventStore = new TestEventStore();
         var dispatch = new RecordingActorDispatchPort();
         var agent = CreateAgent(eventStore, dispatch);
         await agent.ActivateAsync();
+        var triggerEnvelope = CreateTriggerEnvelope("generic-agent-1", new ChatRequestEvent
+        {
+            Prompt = "generic scheduled prompt",
+        });
         await agent.HandleConfigureAsync(CreateConfigureCommand(
             targetActorId: "generic-agent-1",
-            triggerEnvelope: CreateTriggerEnvelope("generic-agent-1", new ChatRequestEvent
+            triggerEnvelope: triggerEnvelope,
+            target: new ScheduledDispatchTargetState
             {
-                Prompt = "generic scheduled prompt",
-            }),
+                Kind = ScheduledDispatchTargetKindState.Envelope,
+                ActorId = "generic-agent-1",
+                Envelope = triggerEnvelope.Clone(),
+                EnvelopeAuthority = ScheduledDispatchEnvelopeAuthorityState.TrustedInternal,
+            },
             enabled: false));
 
         var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 10, 0, 0, TimeSpan.Zero);
@@ -1047,6 +1317,8 @@ public sealed class ScheduledDispatchGAgentTests
         chatRequest.Metadata.Should().NotContainKey("workflow.schedule_id");
         chatRequest.Metadata.Should().NotContainKey("workflow.scheduled_fire_at_utc");
         agent.State.FireRecords[idempotencyKey].TargetActorId.Should().Be("generic-agent-1");
+        agent.State.Target!.EnvelopeAuthority.Should().Be(
+            ScheduledDispatchEnvelopeAuthorityState.TrustedInternal);
     }
 
     [Fact]
@@ -1738,7 +2010,7 @@ public sealed class ScheduledDispatchGAgentTests
             },
             OwnerLlmSelection = new ScheduledInvocationOwnerLLMSelection
             {
-                RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+                RouteKind = LLMRouteKind.NyxIdUserService,
                 RouteValue = "/api/v1/proxy/s/chrono-llm-public",
                 NyxIdUserServiceId = "nyx-llm-service-alpha",
                 ServiceSlugSnapshot = "chrono-llm-public",
@@ -1968,6 +2240,73 @@ public sealed class ScheduledDispatchGAgentTests
         agent.State.FailureCount.Should().Be(1);
         agent.State.LastError.Should().Be("exchange failed");
         agent.State.FireRecords[idempotencyKey].Status.Should().Be(ScheduledDispatchFireStatusState.Failed);
+    }
+
+    [Theory]
+    [InlineData("WORKFLOW_DEFINITION_INVALID", "Workflow definition is invalid.")]
+    [InlineData("NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED", "Workflow uses a retired NyxID tool contract.")]
+    [InlineData("CAPABILITY_ADMISSION_REBIND_REQUIRED", "Saved workflow and capability admission no longer match.")]
+    public async Task HandleFireAsync_WhenWorkflowAdmissionIsRejected_ShouldRecordSafeTypedFailure(
+        string code,
+        string safeMessage)
+    {
+        var eventStore = new TestEventStore();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort
+        {
+            DispatchException = CreateWorkflowAdmissionException(code, safeMessage),
+        };
+        var agent = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort(),
+            serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                CredentialRequirementTargetKind = ScheduledDispatchCredentialRequirementTargetKindState.WorkflowService,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "svc-alpha" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+                        {
+                            Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                            {
+                                Platform = "lark",
+                                Tenant = "tenant-alpha",
+                                ExternalUserId = "user-alpha",
+                            },
+                            Scope = "proxy",
+                        },
+                    },
+                },
+            }));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
+        });
+
+        agent.State.FireCount.Should().Be(1);
+        agent.State.FailureCount.Should().Be(1);
+        agent.State.LastError.Should().Be(safeMessage);
+        agent.State.LastErrorCode.Should().Be(code);
+        var record = agent.State.FireRecords[ManualFireIdempotencyKey];
+        record.Status.Should().Be(ScheduledDispatchFireStatusState.Failed);
+        record.Error.Should().Be(safeMessage);
+        record.ErrorCode.Should().Be(code);
+        record.TargetActorId.Should().BeEmpty();
+        agent.State.ToString().Should().NotContain("workflow yaml");
+        agent.State.ToString().Should().NotContain(nameof(ScheduledWorkflowAdmissionException));
     }
 
     [Fact]
@@ -5044,7 +5383,7 @@ public sealed class ScheduledDispatchGAgentTests
         ("authorization-catalog-evaluated", configured =>
             configured.Target.ServiceInvocation.AuthorizationFact.Authority.CatalogEvaluatedAt.Seconds++),
         ("owner-llm-route-kind", configured => configured.Target.ServiceInvocation.AuthorizationFact
-            .OwnerLlmSelection.RouteKind = ScheduledInvocationOwnerLLMRouteKind.Unspecified),
+            .OwnerLlmSelection.RouteKind = LLMRouteKind.Unspecified),
         ("owner-llm-route", configured => configured.Target.ServiceInvocation.AuthorizationFact
             .OwnerLlmSelection.RouteValue = "route-substituted"),
         ("owner-llm-service", configured => configured.Target.ServiceInvocation.AuthorizationFact
@@ -5220,7 +5559,7 @@ public sealed class ScheduledDispatchGAgentTests
 
     private static ScheduledInvocationOwnerLLMSelection CreateOwnerLLMSelection() => new()
     {
-        RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+        RouteKind = LLMRouteKind.NyxIdUserService,
         RouteValue = "/api/v1/proxy/s/chrono-llm-public",
         NyxIdUserServiceId = "nyx-llm-service-alpha",
         ServiceSlugSnapshot = "chrono-llm-public",
@@ -5288,6 +5627,10 @@ public sealed class ScheduledDispatchGAgentTests
         SetAgentId(agent, ScheduleActorId);
         return agent;
     }
+
+    private static ScheduledWorkflowAdmissionException CreateWorkflowAdmissionException(
+        string code,
+        string safeMessage) => new(code, safeMessage);
 
     private static EventEnvelope CreateFiredCallbackEnvelope(
         RuntimeCallbackTimeoutRequest request,
@@ -5436,7 +5779,29 @@ public sealed class ScheduledDispatchGAgentTests
             Kind = ScheduledDispatchTargetKindState.Envelope,
             ActorId = targetActorId,
             Envelope = triggerEnvelope?.Clone(),
+            EnvelopeAuthority = ScheduledDispatchEnvelopeAuthorityState.TrustedInternal,
         };
+
+    private static ScheduledDispatchState CreateLegacyUnmarkedEnvelopeSnapshot(bool enabled)
+    {
+        var triggerEnvelope = CreateTriggerEnvelope("legacy-target-actor", new Empty());
+        return new ScheduledDispatchState
+        {
+            ScheduleId = "schedule-1",
+            DisplayName = "Legacy unmarked envelope schedule",
+            TargetActorId = "legacy-target-actor",
+            TriggerEnvelope = triggerEnvelope,
+            CronExpression = "*/15 * * * *",
+            Timezone = "UTC",
+            Enabled = enabled,
+            Target = new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.Envelope,
+                ActorId = "legacy-target-actor",
+                Envelope = triggerEnvelope.Clone(),
+            },
+        };
+    }
 
     private static ChatRequestEvent CreateCredentialBearingChatRequest(string prompt) =>
         new()

@@ -6,6 +6,8 @@ using YamlDotNet.Core;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 using YamlDotNet.RepresentationModel;
+using WorkflowYamlResourceGuard = Aevatar.Workflow.Core.Primitives.WorkflowYamlResourceGuard;
+using WorkflowYamlResourceLimitException = Aevatar.Workflow.Core.Primitives.WorkflowYamlResourceLimitException;
 
 namespace Aevatar.Studio.Infrastructure.Serialization;
 
@@ -57,12 +59,20 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         }
 
         var findings = new List<ValidationFinding>();
-        YamlStream stream = new();
+        YamlStream stream;
 
         try
         {
+            WorkflowYamlResourceGuard.Validate(yaml);
+            stream = new YamlStream();
             using var reader = new StringReader(yaml);
             stream.Load(reader);
+        }
+        catch (WorkflowYamlResourceLimitException exception)
+        {
+            return new WorkflowParseResult(
+                null,
+                [ValidationFinding.Error("/", exception.Message, code: "yaml_resource_limit")]);
         }
         catch (YamlException exception)
         {

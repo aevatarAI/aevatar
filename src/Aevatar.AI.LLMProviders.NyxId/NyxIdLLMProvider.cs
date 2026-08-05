@@ -2,6 +2,7 @@ using System.ClientModel.Primitives;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Microsoft.Extensions.AI;
@@ -47,6 +48,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
     private readonly Uri _authorityBase;
     private readonly Func<string?> _accessTokenAccessor;
     private readonly ILogger _logger;
+    private readonly IAgentToolExecutionPort? _toolExecutionPort;
 
     public NyxIdLLMProvider(
         string name,
@@ -54,7 +56,8 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         string nyxEndpoint,
         Func<string?> accessTokenAccessor,
         string? defaultRoutePreference = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        IAgentToolExecutionPort? toolExecutionPort = null)
     {
         if (string.IsNullOrWhiteSpace(name))
             throw new ArgumentException("Provider name is required.", nameof(name));
@@ -74,6 +77,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         _authorityBase = ResolveAuthorityBase(_defaultNyxEndpoint);
         _accessTokenAccessor = accessTokenAccessor ?? throw new ArgumentNullException(nameof(accessTokenAccessor));
         _logger = logger ?? NullLogger.Instance;
+        _toolExecutionPort = toolExecutionPort;
     }
 
     public string Name { get; }
@@ -343,7 +347,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 
         var client = new OpenAI.OpenAIClient(new System.ClientModel.ApiKeyCredential(accessToken), options);
         var chatClient = client.GetChatClient(request.Model!).AsIChatClient();
-        return new MEAILLMProvider(routeName, chatClient, _logger);
+        return new MEAILLMProvider(routeName, chatClient, _logger, _toolExecutionPort);
     }
 
     private LLMRequest NormalizeRequest(LLMRequest request)

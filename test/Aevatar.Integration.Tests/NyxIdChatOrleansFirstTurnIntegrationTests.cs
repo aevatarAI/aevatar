@@ -6,6 +6,7 @@ using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Tests.Shared;
@@ -13,6 +14,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Orleans;
 using Orleans.Hosting;
@@ -39,6 +41,56 @@ public sealed class NyxIdChatOrleansFirstTurnIntegrationTests
                 history,
                 executor,
                 conversation => conversation.HandleEnvelopeAsync(CreateStartEnvelope(conversationActorId)));
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task TurnReactivation_WithAdmittedOperation_ShouldCompleteRecoveryAfterActivation()
+    {
+        var conversationActorId = $"nyxid-chat-{Guid.NewGuid():N}";
+        var turnActorId = NyxIdChatTurnActorIds.ForTurn(
+            conversationActorId,
+            "turn-recovery");
+        var history = new RecordingChatHistoryCommandPort();
+        var executor = new FixedTurnOperationExecutor();
+        var eventStore = new SignalingEventStore();
+        var host = await StartSiloHostAsync(history, executor, eventStore);
+
+        try
+        {
+            var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
+            var conversation = grainFactory.GetGrain<IRuntimeActorGrain>(conversationActorId);
+            (await conversation.InitializeAgentByKindAsync(NyxIdChatServiceDefaults.GAgentKind))
+                .Should().BeTrue();
+
+            var turn = grainFactory.GetGrain<IRuntimeActorGrain>(turnActorId);
+            (await turn.InitializeAgentByKindAsync(NyxIdChatServiceDefaults.TurnGAgentKind))
+                .Should().BeTrue();
+            await turn.DeactivateAsync();
+
+            await eventStore.AppendAsync(
+                turnActorId,
+                [CreateTurnAdmission(turnActorId, conversationActorId)],
+                expectedVersion: 0);
+
+            var reactivated = grainFactory.GetGrain<IRuntimeActorGrain>(turnActorId);
+            (await reactivated.IsInitializedAsync().WaitAsync(TimeSpan.FromSeconds(5)))
+                .Should().BeTrue();
+            var committed = await eventStore.WaitForTurnRecoveryAsync(
+                turnActorId,
+                TimeSpan.FromSeconds(10));
+
+            committed.Select(static item => item.EventData.TypeUrl).Should().Equal(
+                Any.Pack(new NyxIdChatTurnOperationAdmittedEvent()).TypeUrl,
+                Any.Pack(new NyxIdChatTurnOperationCompletedEvent()).TypeUrl,
+                Any.Pack(new NyxIdChatTurnOperationDeliveredEvent()).TypeUrl);
+            executor.CallCount.Should().Be(0,
+                "activation recovery must not repeat operation I/O");
         }
         finally
         {
@@ -91,7 +143,8 @@ public sealed class NyxIdChatOrleansFirstTurnIntegrationTests
 
     private static Task<IHost> StartSiloHostAsync(
         IChatHistoryCommandPort history,
-        INyxIdChatTurnOperationExecutor executor) =>
+        INyxIdChatTurnOperationExecutor executor,
+        SignalingEventStore? eventStore = null) =>
         SharedOrleansPortAllocator.StartHostAsync(ports => Host.CreateDefaultBuilder()
             .UseOrleans(siloBuilder =>
             {
@@ -115,8 +168,40 @@ public sealed class NyxIdChatOrleansFirstTurnIntegrationTests
                 services.AddSingleton(history);
                 services.AddSingleton(executor);
                 services.AddSingleton(TimeProvider.System);
+                if (eventStore is not null)
+                {
+                    services.Replace(ServiceDescriptor.Singleton<IEventStore>(eventStore));
+                    services.Replace(
+                        ServiceDescriptor.Singleton<IEventStoreMaintenance>(eventStore));
+                }
             })
             .Build());
+
+    private static StateEvent CreateTurnAdmission(
+        string turnActorId,
+        string conversationActorId) =>
+        new()
+        {
+            EventId = "turn-recovery-admission",
+            AgentId = turnActorId,
+            Version = 1,
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            EventType = NyxIdChatTurnOperationAdmittedEvent.Descriptor.FullName,
+            EventData = Any.Pack(new NyxIdChatTurnOperationAdmittedEvent
+            {
+                Key = new NyxIdChatOperationKey
+                {
+                    ConversationActorId = conversationActorId,
+                    TurnId = "turn-recovery",
+                    TaskId = "task-recovery",
+                    StepId = "step-recovery",
+                    OperationId = "operation-recovery",
+                    OperationGeneration = 1,
+                },
+                OperationKind = NyxIdChatStepKind.Llm,
+                AdmittedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            }),
+        };
 
     private static byte[] CreateStartEnvelope(string conversationActorId) =>
         new EventEnvelope
@@ -200,5 +285,60 @@ public sealed class NyxIdChatOrleansFirstTurnIntegrationTests
             string conversationId,
             CancellationToken ct = default) =>
             Task.FromResult(ChatHistoryDeleteResult.Accepted());
+    }
+
+    private sealed class SignalingEventStore : IEventStore, IEventStoreMaintenance
+    {
+        private readonly InMemoryEventStore _inner = new();
+        private readonly TaskCompletionSource<string> _turnRecovery =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            var batch = events.ToArray();
+            var result = await _inner.AppendAsync(agentId, batch, expectedVersion, ct);
+            if (batch.Any(static item =>
+                    item.EventData.Is(NyxIdChatTurnOperationDeliveredEvent.Descriptor)))
+            {
+                _turnRecovery.TrySetResult(agentId);
+            }
+
+            return result;
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId,
+            long? fromVersion = null,
+            CancellationToken ct = default) =>
+            _inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(
+            string agentId,
+            CancellationToken ct = default) =>
+            _inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(
+            string agentId,
+            long toVersion,
+            CancellationToken ct = default) =>
+            _inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+
+        public Task<bool> ResetStreamAsync(
+            string agentId,
+            CancellationToken ct = default) =>
+            _inner.ResetStreamAsync(agentId, ct);
+
+        public async Task<IReadOnlyList<StateEvent>> WaitForTurnRecoveryAsync(
+            string actorId,
+            TimeSpan timeout)
+        {
+            var recoveredActorId = await _turnRecovery.Task.WaitAsync(timeout);
+            recoveredActorId.Should().Be(actorId);
+            return await GetEventsAsync(actorId);
+        }
     }
 }

@@ -6,6 +6,10 @@ using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.Binding.Models;
 using Aevatar.AI.ToolProviders.Binding.Ports;
 using Aevatar.AI.ToolProviders.Binding.Tools;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Workflow.Abstractions;
@@ -178,23 +182,35 @@ public class BindingToolsTests
             new StubExternalWorkflowCapabilityListPort(discovery));
         var tools = new ToolManager();
         tools.Register(tool);
-        var executor = new StreamingToolExecutor(tools);
-        using var executionState = executor.CreateExecutionState();
-
-        AgentToolRequestContext.Current = CapabilityContext(
+        var executionContext = CapabilityContext(
             "owner-scope-alpha",
             "caller-subject-alpha",
             "caller-bearer-alpha",
-            "organization-bearer-alpha");
+            "organization-bearer-alpha") with
+        {
+            Request = new AgentToolRequestIdentity("binding-tools-request", null),
+            ExecutionOwner = AgentToolExecutionOwners.HostService(nameof(BindingToolsTests)),
+        };
+        var executor = new StreamingToolExecutor(
+            tools,
+            toolContext: executionContext,
+            toolExecutionPort: CreateToolExecutionPort());
+        using var executionState = executor.CreateExecutionState();
+
+        AgentToolRequestContext.Current = executionContext;
 
         try
         {
-            executor.AddTool(executionState, new ToolCall
-            {
-                Id = "tc-list-external-workflow-capabilities",
-                Name = tool.Name,
-                ArgumentsJson = "{}",
-            });
+            var prepared = await executor.PrepareBatchAsync(
+                "binding-tools-test:tc-list-external-workflow-capabilities",
+                round: 0,
+                [new ToolCall
+                {
+                    Id = "tc-list-external-workflow-capabilities",
+                    Name = tool.Name,
+                    ArgumentsJson = "{}",
+                }]);
+            executor.AddTool(executionState, prepared.Single());
 
             var results = new List<ToolExecutionResult>();
             await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
@@ -211,6 +227,66 @@ public class BindingToolsTests
             receipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.NeverRequire);
             receipt.SideEffectKind.Should().BeEmpty();
             receipt.ResultJson.Should().Be(toolResult.Result);
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExternalWorkflowCapabilityReadTools_ShouldEmitTypedResultReceipts()
+    {
+        IAgentTool listTool = new ListExternalWorkflowCapabilitiesTool(
+            new StubExternalWorkflowCapabilityListPort(
+                new ExternalWorkflowCapabilityDiscoveryResult()));
+        IAgentTool readinessTool = new InspectExternalWorkflowCapabilityReadinessTool(
+            new StubExternalWorkflowCapabilityReadinessPort());
+        AgentToolRequestContext.Current = CapabilityContext(
+            "scope-receipt-alpha",
+            "caller-receipt-alpha",
+            "caller-bearer-alpha",
+            "organization-bearer-alpha");
+
+        try
+        {
+            var listResult = await listTool.ExecuteAsync("{}");
+            var listReceipt = listTool.CreateResultReceipt(
+                "call-list-alpha",
+                listTool.Name,
+                "{}",
+                listResult);
+
+            listReceipt.Should().NotBeNull();
+            listReceipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+            listReceipt.CallId.Should().Be("call-list-alpha");
+            listReceipt.ToolName.Should().Be("list_external_workflow_capabilities");
+            listReceipt.ResultJson.Should().Be(listResult);
+
+            const string readinessArguments =
+                """
+                {
+                  "selector": {
+                    "nyx_id_operation": {
+                      "user_service_id": "us-receipt-alpha",
+                      "endpoint_id": "endpoint-receipt-beta"
+                    }
+                  },
+                  "execution_mode": "interactive"
+                }
+                """;
+            var readinessResult = await readinessTool.ExecuteAsync(readinessArguments);
+            var readinessReceipt = readinessTool.CreateResultReceipt(
+                "call-readiness-beta",
+                readinessTool.Name,
+                readinessArguments,
+                readinessResult);
+
+            readinessReceipt.Should().NotBeNull();
+            readinessReceipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+            readinessReceipt.CallId.Should().Be("call-readiness-beta");
+            readinessReceipt.ToolName.Should().Be("inspect_external_workflow_capability_readiness");
+            readinessReceipt.ResultJson.Should().Be(readinessResult);
         }
         finally
         {
@@ -271,20 +347,79 @@ public class BindingToolsTests
     }
 
     [Fact]
-    public async Task ExternalWorkflowCapabilityToolSupport_PreservesProxyDelegationCredentialKind()
+    public void ExternalWorkflowCapabilityReadTools_ShouldPreserveErrorsAndRejectUnstructuredResults()
+    {
+        IAgentTool tool = new ListExternalWorkflowCapabilitiesTool(
+            new StubExternalWorkflowCapabilityListPort(
+                new ExternalWorkflowCapabilityDiscoveryResult()));
+
+        const string errorResult = """{"error":"safe discovery failure"}""";
+        var errorReceipt = tool.CreateResultReceipt(
+            "call-error-alpha",
+            tool.Name,
+            "{}",
+            errorResult);
+
+        errorReceipt.Should().NotBeNull();
+        errorReceipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        errorReceipt.ErrorCode.Should().Be("external_workflow_capability_query_failed");
+        errorReceipt.ResultJson.Should().Be(errorResult);
+        tool.CreateResultReceipt("call-invalid-beta", tool.Name, "{}", "not-json")
+            .Should().BeNull();
+        tool.CreateResultReceipt("call-unverified-gamma", tool.Name, "{}", "{}")
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ExternalWorkflowCapabilityToolSupport_UsesSupplementalSourceCredentialForDelegatedCaller()
     {
         var listPort = new StubExternalWorkflowCapabilityListPort(
             new ExternalWorkflowCapabilityDiscoveryResult());
         var tool = new ListExternalWorkflowCapabilitiesTool(listPort);
         AgentToolRequestContext.Current = CapabilityContext(
-            "owner-scope-alpha",
-            "caller-subject-alpha",
-            "delegation-alpha",
+            "owner-scope-m-alpha",
+            "caller-subject-wf-alpha",
+            "delegation-svc-alpha",
             "organization-bearer-alpha") with
         {
             Credentials = new AgentToolCredentials(
-                "delegation-alpha",
+                "delegation-svc-alpha",
                 "organization-bearer-alpha",
+                null,
+                AgentToolNyxIdCredentialKind.ProxyDelegation,
+                "source-readable-wf-alpha"),
+        };
+
+        try
+        {
+            await tool.ExecuteAsync("{}");
+
+            var credential = listPort.Request!.Access.NyxIdCallerCredential!;
+            credential.Kind.Should().Be(NyxIdCallerCredentialKind.SourceReadableUserBearer);
+            credential.SourceReadableUserBearerToken.Should().Be("source-readable-wf-alpha");
+            credential.ProxyDelegationToken.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExternalWorkflowCapabilityToolSupport_PreservesDelegationWhenSupplementalSourceCredentialIsAbsent()
+    {
+        var listPort = new StubExternalWorkflowCapabilityListPort(
+            new ExternalWorkflowCapabilityDiscoveryResult());
+        var tool = new ListExternalWorkflowCapabilitiesTool(listPort);
+        AgentToolRequestContext.Current = CapabilityContext(
+            "owner-scope-m-beta",
+            "caller-subject-wf-beta",
+            "delegation-svc-beta",
+            "organization-bearer-beta") with
+        {
+            Credentials = new AgentToolCredentials(
+                "delegation-svc-beta",
+                "organization-bearer-beta",
                 null,
                 AgentToolNyxIdCredentialKind.ProxyDelegation),
         };
@@ -295,7 +430,7 @@ public class BindingToolsTests
 
             var credential = listPort.Request!.Access.NyxIdCallerCredential!;
             credential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
-            credential.ProxyDelegationToken.Should().Be("delegation-alpha");
+            credential.ProxyDelegationToken.Should().Be("delegation-svc-beta");
             credential.SourceReadableUserBearerToken.Should().BeNull();
         }
         finally
@@ -1296,6 +1431,35 @@ public class BindingToolsTests
                 AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
             NyxIdAuthority = new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", callerSubject),
         };
+
+    private static IAgentToolExecutionPort CreateToolExecutionPort() =>
+        new AdmittedAgentToolExecutor(
+            new StartingAdmissionLedger(),
+            new AppendedAuditTrail(),
+            new StableAuditIdentityHasher());
+
+    private sealed class StartingAdmissionLedger : IAgentToolAdmissionLedger
+    {
+        public Task<AgentToolAdmissionResult> TryStartAsync(
+            AgentToolAdmissionFact fact,
+            CancellationToken ct = default) =>
+            Task.FromResult(new AgentToolAdmissionResult(AgentToolAdmissionStatus.Started));
+    }
+
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableAuditIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
+    }
 
     private static string? ReadError(string json)
     {

@@ -92,6 +92,40 @@ public sealed class NyxIdChatPublicEndpointsTests
     }
 
     [Fact]
+    public async Task FirstText_WithProxyDelegation_ShouldPreserveCredentialKind()
+    {
+        var chat = new RecordingInteraction<NyxIdChatCommand>();
+        var context = CreateContext("scope-alpha", services => services
+            .AddSingleton<ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(chat)
+            .AddSingleton<ICommandInteractionService<NyxIdActionContinuationCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(new RecordingInteraction<NyxIdActionContinuationCommand>())
+            .AddSingleton<IScopeResourceAdmissionPort>(new RecordingAdmissionPort()));
+        context.Request.Headers["X-NyxID-Delegation-Token"] = "proxy-delegation";
+        context.Response.Body = new MemoryStream();
+
+        await NyxIdChatEndpoints.HandlePublicChatAsync(context, Parse("""
+            {
+              "type": "text",
+              "clientRequestId": "proxy-request",
+              "prompt": "hello"
+            }
+            """));
+
+        var command = chat.Commands.Should().ContainSingle().Which;
+        var envelope = new NyxIdChatCommandEnvelopeFactory().CreateEnvelope(
+            command,
+            new CommandContext(
+                command.ActorId,
+                "command-alpha",
+                "correlation-alpha",
+                new Dictionary<string, string>()));
+        var credentials = AgentToolExecutionContextMapper.FromPayload(
+            envelope.Payload.Unpack<NyxIdChatConversationCreateCommand>().FirstTurn.ToolContext).Credentials;
+        credentials.NyxIdAccessToken.Should().Be("proxy-delegation");
+        credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.ProxyDelegation);
+        AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(credentials).Should().BeNull();
+    }
+
+    [Fact]
     public async Task ContinuedText_ShouldReuseConversationAndAuthorizeIt()
     {
         var chat = new RecordingInteraction<NyxIdChatCommand>();
@@ -344,12 +378,14 @@ public sealed class NyxIdChatPublicEndpointsTests
     }
 
     [Fact]
-    public async Task Approval_ShouldUseHeaderIdempotencyIdentity_ForContinuationTurn()
+    public async Task Approval_ShouldDispatchTypedCommandWithHeaderIdempotencyIdentity()
     {
-        var approval = new RecordingInteraction<NyxIdApprovalCommand>();
+        var dispatch = new RecordingDispatchPort();
         var context = CreateContext("scope-alpha", services => services
-            .AddSingleton<ICommandInteractionService<NyxIdApprovalCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(approval)
-            .AddSingleton<IScopeResourceAdmissionPort>(new RecordingAdmissionPort()));
+            .AddSingleton<IScopeResourceAdmissionPort>(new RecordingAdmissionPort())
+            .AddSingleton<IActorDispatchPort>(dispatch)
+            .AddSingleton<INyxIdChatControlCommandPort, NyxIdChatControlCommandPort>());
+        context.Request.Path = "/api/chat";
         context.Request.Headers.Authorization = "Bearer delegated-token";
         context.Request.Headers["Idempotency-Key"] = "header-approval";
         context.Response.Body = new MemoryStream();
@@ -359,21 +395,70 @@ public sealed class NyxIdChatPublicEndpointsTests
               "type": "approval.resolve",
               "conversationId": "conversation-alpha",
               "requestId": "approval-alpha",
-              "approved": true
+              "approved": true,
+              "reason": "Proceed",
+              "expectedStateVersion": 17
             }
             """));
 
-        approval.Commands.Should().ContainSingle().Which.TurnId.Should().Be(
-            NyxIdChatPublicIdentity.CreateTurnId("conversation-alpha", "header-approval"));
+        context.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var command = dispatch.Dispatches.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatApprovalResolveCommand>();
+        command.ScopeId.Should().Be("scope-alpha");
+        command.ConversationActorId.Should().Be("conversation-alpha");
+        command.RequestId.Should().Be("approval-alpha");
+        command.ClientRequestId.Should().Be("header-approval");
+        command.Approved.Should().BeTrue();
+        command.Reason.Should().Be("Proceed");
+        command.ExpectedStateVersion.Should().Be(17);
+        context.Response.Headers.Location.ToString().Should().Be(
+            "/api/chat/conversations/conversation-alpha/state");
+    }
+
+    [Fact]
+    public async Task Input_ShouldDispatchTypedCommandWithBodyIdempotencyIdentity()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var context = CreateContext("scope-alpha", services => services
+            .AddSingleton<IScopeResourceAdmissionPort>(new RecordingAdmissionPort())
+            .AddSingleton<IActorDispatchPort>(dispatch)
+            .AddSingleton<INyxIdChatControlCommandPort, NyxIdChatControlCommandPort>());
+        context.Request.Headers.Authorization = "Bearer delegated-token";
+        context.Request.Headers["Idempotency-Key"] = "header-input";
+        context.Response.Body = new MemoryStream();
+
+        await NyxIdChatEndpoints.HandlePublicChatAsync(context, Parse("""
+            {
+              "type": "input.resolve",
+              "conversationId": "conversation-alpha",
+              "requestId": "input-alpha",
+              "clientRequestId": "body-input",
+              "answer": {"selectedOptionIds": ["option-a", "option-b"]},
+              "expectedStateVersion": 19
+            }
+            """));
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var command = dispatch.Dispatches.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatInputResolveCommand>();
+        command.ScopeId.Should().Be("scope-alpha");
+        command.ConversationActorId.Should().Be("conversation-alpha");
+        command.RequestId.Should().Be("input-alpha");
+        command.ClientRequestId.Should().Be("body-input");
+        command.Answer.AnswerCase.Should().Be(NyxIdChatInputAnswer.AnswerOneofCase.Selection);
+        command.Answer.Selection.OptionIds.Should().Equal("option-a", "option-b");
+        command.ToolContext.Credentials.NyxIdAccessToken.Should().Be("delegated-token");
+        command.ExpectedStateVersion.Should().Be(19);
     }
 
     [Fact]
     public async Task Approval_ShouldRejectMissingExplicitDecision()
     {
-        var approval = new RecordingInteraction<NyxIdApprovalCommand>();
+        var dispatch = new RecordingDispatchPort();
         var context = CreateContext("scope-alpha", services => services
-            .AddSingleton<ICommandInteractionService<NyxIdApprovalCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(approval)
-            .AddSingleton<IScopeResourceAdmissionPort>(new RecordingAdmissionPort()));
+            .AddSingleton<IScopeResourceAdmissionPort>(new RecordingAdmissionPort())
+            .AddSingleton<IActorDispatchPort>(dispatch)
+            .AddSingleton<INyxIdChatControlCommandPort, NyxIdChatControlCommandPort>());
         context.Request.Headers.Authorization = "Bearer delegated-token";
         context.Request.Headers["Idempotency-Key"] = "header-approval";
         context.Response.Body = new MemoryStream();
@@ -387,7 +472,30 @@ public sealed class NyxIdChatPublicEndpointsTests
             """));
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
-        approval.Commands.Should().BeEmpty();
+        dispatch.Dispatches.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("input.resolve", "\"answer\":\"Option A\"")]
+    [InlineData("approval.resolve", "\"approved\":true")]
+    public async Task NeedsYouResolution_ShouldRequireObservedActorVersion(
+        string type,
+        string decisionField)
+    {
+        var dispatch = new RecordingDispatchPort();
+        var context = CreateContext("scope-alpha", services => services
+            .AddSingleton<IScopeResourceAdmissionPort>(new RecordingAdmissionPort())
+            .AddSingleton<IActorDispatchPort>(dispatch)
+            .AddSingleton<INyxIdChatControlCommandPort, NyxIdChatControlCommandPort>());
+        context.Request.Headers["Idempotency-Key"] = "header-needs-you";
+        context.Response.Body = new MemoryStream();
+
+        await NyxIdChatEndpoints.HandlePublicChatAsync(context, Parse(
+            $"{{\"type\":\"{type}\",\"conversationId\":\"conversation-alpha\"," +
+            $"\"requestId\":\"request-alpha\",{decisionField}}}"));
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        dispatch.Dispatches.Should().BeEmpty();
     }
 
     [Fact]
@@ -417,7 +525,22 @@ public sealed class NyxIdChatPublicEndpointsTests
     public async Task ListConversations_ShouldFilterNyxIdHistoryAndRejectAmbiguousScope()
     {
         var history = new RecordingHistoryPort();
-        var context = CreateContext("scope-alpha", services => services.AddSingleton<IChatHistoryQueryPort>(history));
+        var state = new RecordingStateQueryPort
+        {
+            AttentionSummaries = new Dictionary<string, NyxIdChatConversationAttentionSummary>
+            {
+                ["conversation-alpha"] = new(
+                    "conversation-alpha",
+                    "active",
+                    "input",
+                    DateTimeOffset.Parse("2026-08-01T12:00:00Z"),
+                    "Choose a deployment region.",
+                    23),
+            },
+        };
+        var context = CreateContext("scope-alpha", services => services
+            .AddSingleton<IChatHistoryQueryPort>(history)
+            .AddSingleton<INyxIdChatConversationStateQueryPort>(state));
         var response = await ExecutePublicRouteAsync(
             context,
             HttpMethods.Get,
@@ -427,11 +550,20 @@ public sealed class NyxIdChatPublicEndpointsTests
         history.Requests.Should().ContainSingle().Which.Should().Be(
             new ChatHistoryIndexPageRequest("scope-alpha", 50, "cursor-alpha"));
         using var body = JsonDocument.Parse(response.Body);
-        body.RootElement.GetProperty("conversations").EnumerateArray()
-            .Select(static item => item.GetProperty("id").GetString())
-            .Should().Equal("conversation-alpha");
+        var conversation = body.RootElement.GetProperty("conversations").EnumerateArray()
+            .Should().ContainSingle().Subject;
+        conversation.GetProperty("id").GetString().Should().Be("conversation-alpha");
+        conversation.GetProperty("taskStatus").GetString().Should().Be("active");
+        conversation.GetProperty("attentionKind").GetString().Should().Be("input");
+        conversation.GetProperty("activeStepSummary").GetString().Should()
+            .Be("Choose a deployment region.");
+        conversation.GetProperty("stateVersion").GetInt64().Should().Be(23);
+        state.AttentionRequests.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            ("scope-alpha", (IReadOnlyCollection<string>)["conversation-alpha"]));
 
-        var ambiguous = CreateContext("scope-alpha", services => services.AddSingleton<IChatHistoryQueryPort>(history));
+        var ambiguous = CreateContext("scope-alpha", services => services
+            .AddSingleton<IChatHistoryQueryPort>(history)
+            .AddSingleton<INyxIdChatConversationStateQueryPort>(state));
         ((ClaimsIdentity)ambiguous.User.Identity!).AddClaim(new Claim("workflow.scope_id", "scope-beta"));
         var denied = await ExecutePublicRouteAsync(
             ambiguous,
@@ -466,6 +598,32 @@ public sealed class NyxIdChatPublicEndpointsTests
         admission.Targets.Should().ContainSingle().Which.Operation.Should().Be(ScopeResourceOperation.Use);
         using var body = JsonDocument.Parse(response.Body);
         body.RootElement.GetProperty("stateVersion").GetInt64().Should().Be(9);
+        body.RootElement.GetProperty("projectionStatus").GetString().Should().Be("current");
+    }
+
+    [Fact]
+    public async Task TranscriptRoute_ShouldExposeAcknowledgedPendingConversation()
+    {
+        var history = new RecordingHistoryPort
+        {
+            MessagesResult = ChatHistoryConversationMessagesResult.Pending(),
+        };
+        var admission = new RecordingAdmissionPort();
+        var context = CreateContext("scope-alpha", services => services
+            .AddSingleton<IChatHistoryQueryPort>(history)
+            .AddSingleton<IScopeResourceAdmissionPort>(admission));
+
+        var response = await ExecutePublicRouteAsync(
+            context,
+            HttpMethods.Get,
+            "/api/chat/conversations/{conversationId}",
+            new RouteValueDictionary { ["conversationId"] = "conversation-alpha" });
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        using var body = JsonDocument.Parse(response.Body);
+        body.RootElement.GetProperty("projectionStatus").GetString().Should().Be("pending");
+        body.RootElement.GetProperty("stateVersion").GetInt64().Should().Be(0);
+        body.RootElement.GetProperty("messages").GetArrayLength().Should().Be(0);
     }
 
     [Fact]
@@ -527,9 +685,10 @@ public sealed class NyxIdChatPublicEndpointsTests
                 {
                     ["Aevatar:Authentication:Enabled"] = "false",
                 })
-                .Build())
+            .Build())
             .AddSingleton<IHostEnvironment>(new TestHostEnvironment { EnvironmentName = Environments.Development })
             .AddSingleton<IChatHistoryQueryPort>(new RecordingHistoryPort())
+            .AddSingleton<INyxIdChatConversationStateQueryPort>(new RecordingStateQueryPort())
             .BuildServiceProvider();
         var context = new DefaultHttpContext { RequestServices = services };
 
@@ -730,6 +889,9 @@ public sealed class NyxIdChatPublicEndpointsTests
     private sealed class RecordingStateQueryPort : INyxIdChatConversationStateQueryPort
     {
         public List<NyxIdChatConversationStateQuery> Queries { get; } = [];
+        public List<(string ScopeId, IReadOnlyCollection<string> ActorIds)> AttentionRequests { get; } = [];
+        public IReadOnlyDictionary<string, NyxIdChatConversationAttentionSummary> AttentionSummaries { get; init; } =
+            new Dictionary<string, NyxIdChatConversationAttentionSummary>();
 
         public Task<NyxIdChatConversationStateQueryResult> GetAsync(
             NyxIdChatConversationStateQuery query,
@@ -737,6 +899,17 @@ public sealed class NyxIdChatPublicEndpointsTests
         {
             Queries.Add(query);
             return Task.FromResult(NyxIdChatConversationStateQueryResult.NotModified(9, query.TurnId));
+        }
+
+        public Task<IReadOnlyDictionary<string, NyxIdChatConversationAttentionSummary>>
+            GetAttentionSummariesAsync(
+                string scopeId,
+                IReadOnlyCollection<string> actorIds,
+                CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            AttentionRequests.Add((scopeId, actorIds.ToArray()));
+            return Task.FromResult(AttentionSummaries);
         }
     }
 

@@ -14,6 +14,7 @@ public enum WorkflowChatHistoryCreateRecoveryStatus
     Failed = 5,
     AppendCommitted = 6,
     AppendRejected = 7,
+    TerminalReconciliationPrepared = 8,
 }
 
 public sealed record WorkflowChatHistoryCreateRecovery(
@@ -34,6 +35,11 @@ public interface IWorkflowChatHistoryCreateRecoveryReadPort
     Task<WorkflowChatHistoryCreateRecovery?> GetAsync(
         string scopeId,
         string commandId,
+        CancellationToken ct = default);
+
+    Task<WorkflowChatHistoryCreateRecovery?> GetByConversationAsync(
+        string scopeId,
+        string conversationId,
         CancellationToken ct = default);
 }
 

@@ -577,6 +577,14 @@ public partial class NyxIdChatEndpointsCoverageTests
             Queries.Add(query);
             return Task.FromResult(Result);
         }
+
+        public Task<IReadOnlyDictionary<string, NyxIdChatConversationAttentionSummary>>
+            GetAttentionSummariesAsync(
+                string scopeId,
+                IReadOnlyCollection<string> actorIds,
+                CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyDictionary<string, NyxIdChatConversationAttentionSummary>>(
+                new Dictionary<string, NyxIdChatConversationAttentionSummary>());
     }
 
     [Theory]

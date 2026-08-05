@@ -387,6 +387,7 @@ public sealed record ScheduledDispatchSummary(
     string LastCommandId,
     string LastCorrelationId,
     string LastError,
+    string LastErrorCode,
     int FireCount,
     int FailureCount,
     IReadOnlyDictionary<string, string> Headers,
@@ -446,6 +447,7 @@ public sealed record ScheduledDispatchFireRecord(
     string CommandId,
     string CorrelationId,
     string Error,
+    string ErrorCode,
     bool Manual);
 
 public sealed record ScheduledDispatchDetail(
@@ -696,6 +698,28 @@ public interface IScheduledServiceInvocationDispatchPort
     Task<ScheduledServiceInvocationDispatchReceipt> DispatchAsync(
         ScheduledServiceInvocationDispatchRequest dispatch,
         CancellationToken ct = default);
+}
+
+public sealed class ScheduledWorkflowAdmissionException : InvalidOperationException
+{
+    public ScheduledWorkflowAdmissionException(string stableCode, string safeMessage)
+        : base(string.IsNullOrWhiteSpace(safeMessage)
+            ? "Workflow admission was rejected."
+            : safeMessage.Trim())
+    {
+        StableCode = stableCode?.Trim() switch
+        {
+            "WORKFLOW_DEFINITION_INVALID" => "WORKFLOW_DEFINITION_INVALID",
+            "NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED" =>
+                "NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED",
+            "CAPABILITY_ADMISSION_REBIND_REQUIRED" => "CAPABILITY_ADMISSION_REBIND_REQUIRED",
+            _ => "WORKFLOW_ADMISSION_REJECTED",
+        };
+        SafeMessage = Message;
+    }
+
+    public string StableCode { get; }
+    public string SafeMessage { get; }
 }
 
 public interface IScheduledServiceInvocationCredentialExchangePort

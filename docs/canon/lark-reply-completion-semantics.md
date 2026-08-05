@@ -300,7 +300,7 @@ Nyx relay terminal reply 必须经 channel-relay `/reply` 使用长效 bot agent
   - [ ] 实现 Usage 重排（early-usage buffer + merge to last chunk）
   - [ ] 保证 stream-local 唯一 `IsLast = true` chunk
 - [ ] 测试：
-  - [x] dispatcher handoff 测试：typed `run_id` 派生 actor id / envelope id / dedup operation id
+  - [x] dispatcher handoff 测试：typed `run_id` 派生 actor id / envelope id / delivery operation id
   - [x] duplicate / stale admission 测试落在 `AgentRunGAgent`
   - [ ] AgentRunGAgent terminal short-circuit 五类 late signal 各 1 测试
   - [ ] `ConversationGAgent` 失败 delivery 路径测试（lark 4xx / 5xx）

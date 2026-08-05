@@ -18,7 +18,10 @@ public sealed class AevatarAuthenticationOptions
     /// <summary>OIDC discovery authority URL (e.g. "https://idp.example.com").</summary>
     public string Authority { get; set; } = string.Empty;
 
-    /// <summary>Expected JWT audience. Empty means audience validation is skipped.</summary>
+    /// <summary>
+    /// Expected external JWT audience. Required outside Development when authentication is enabled;
+    /// Development may leave it empty to opt out of audience validation.
+    /// </summary>
     public string Audience { get; set; } = string.Empty;
 
     /// <summary>Whether to require HTTPS for the authority metadata endpoint. Default: true.</summary>

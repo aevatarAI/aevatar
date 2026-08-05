@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
@@ -97,6 +98,15 @@ public sealed class WorkflowInfrastructureCoverageTests
 
         toolNames.Should().Contain("document_extract");
         toolNames.Should().Contain("spreadsheet_extract");
+        var agentToolNames = new List<string>();
+        foreach (var agentToolSource in provider.GetServices<IAgentToolSource>())
+        {
+            var agentTools = await agentToolSource.DiscoverToolsAsync();
+            agentToolNames.AddRange(agentTools.Select(x => x.Name));
+        }
+
+        agentToolNames.Should().Contain("document_extract");
+        agentToolNames.Should().Contain("spreadsheet_extract");
         provider.GetRequiredService<IOptions<WorkflowSpreadsheetExtractOptions>>()
             .Value.MaxRowsPerSheet.Should().Be(50);
         services.Should().Contain(x =>
@@ -1026,7 +1036,10 @@ public sealed class WorkflowInfrastructureCoverageTests
     public async Task RegistryWorkflowDefinitionResolver_ShouldTrimLookup_AndReturnNullForBlank()
     {
         var registry = new WorkflowDefinitionCatalog();
-        registry.Register("direct", "name: direct");
+        registry.Register(
+            "direct",
+            "name: direct",
+            Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode.Interactive);
         var resolver = new RegistryWorkflowDefinitionResolver(registry);
 
         (await resolver.GetWorkflowYamlAsync(" direct ", CancellationToken.None)).Should().Contain("name: direct");

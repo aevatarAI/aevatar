@@ -39,18 +39,33 @@ public sealed class ProjectionScopeIntrospectionQueryPortTests
             Id = "scope-alpha", ScopeActorId = "scope-alpha", RootActorId = "root-alpha",
             ProjectionKind = "search-index", SessionId = "session-alpha",
             Mode = ProjectionScopeMode.SessionObservation, Active = true, ObservationAttached = true,
-            Released = false, StateVersion = 44, LastObservedVersion = 41,
-            LastSuccessfulVersion = 40, FailureCount = 2, UpdatedAt = updatedAt,
+            Released = false, StateVersion = 44, ReceivedEnvelopeTotal = 43,
+            AttemptedEnvelopeTotal = 42, SuccessfulMaterializationTotal = 40,
+            FailedAttemptTotal = 3, RetryExhaustedTotal = 1, RetryExhaustedFailureCount = 1,
+            UnresolvedFailureCount = 2,
+            FailureDiagnosticDroppedTotal = 5, UpdatedAt = updatedAt,
         };
+        document.SourceVersions.Add(new ProjectionSourceVersionStatus
+        {
+            SourceActorId = "actor-alpha",
+            HighestSeenVersion = 41,
+            LastSuccessfulVersion = 40,
+            VersionGap = 1,
+        });
         var sut = new ProjectionScopeIntrospectionQueryPort(new RecordingReader(document));
 
         var result = await sut.GetAsync("scope-alpha");
 
-        result.Should().Be(new ProjectionScopeIntrospectionSnapshot(
+        result.Should().BeEquivalentTo(new ProjectionScopeIntrospectionSnapshot(
             ScopeActorId: "scope-alpha", RootActorId: "root-alpha", ProjectionKind: "search-index",
             SessionId: "session-alpha", Mode: ProjectionRuntimeMode.SessionObservation, Active: true,
-            ObservationAttached: true, Released: false, StateVersion: 44, LastObservedVersion: 41,
-            LastSuccessfulVersion: 40, FailureCount: 2, UpdatedAt: updatedAt));
+            ObservationAttached: true, Released: false, StateVersion: 44, ReceivedEnvelopeTotal: 43,
+            AttemptedEnvelopeTotal: 42, SuccessfulMaterializationTotal: 40, FailedAttemptTotal: 3,
+            RetryExhaustedTotal: 1, RetryExhaustedFailureCount: 1, UnresolvedFailureCount: 2,
+            OldestUnresolvedFailureAt: null,
+            FailureDiagnosticDroppedTotal: 5,
+            SourceVersions: [new ProjectionSourceVersionSnapshot("actor-alpha", 41, 40, 1)],
+            UpdatedAt: updatedAt));
     }
 
     [Theory]

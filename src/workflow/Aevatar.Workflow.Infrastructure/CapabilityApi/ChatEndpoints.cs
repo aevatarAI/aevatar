@@ -1,12 +1,12 @@
 using System.Net.WebSockets;
 using System.Text.Json;
-using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using Aevatar.Workflow.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
@@ -53,7 +53,7 @@ public static class WorkflowCapabilityEndpoints
         WorkflowWebhookIngressEndpoints.Map(group);
         WorkflowExternalApprovalCallbackEndpoints.Map(group);
         // 06-19-workflow-run-observatory (C2): read-only, scope-gated run viewer. Maps its own absolute
-        // routes (page /workflow/observatory + data /api/workflow/observatory/*) on the root app.
+        // routes (admin frame /admin/workflow-observatory + data /api/workflow/observatory/*) on the root app.
         app.MapWorkflowRunObservatory();
         // Workflow studio: conversational orchestration surface, gated behind the same OIDC login as the
         // observatory. Mount + login only this increment (page /workflow/studio + /workflow/studio/callback).
@@ -68,6 +68,23 @@ public static class WorkflowCapabilityEndpoints
             http.RequestServices.GetRequiredService<IWorkflowChatRunInteractionPort>(),
             http.RequestServices.GetRequiredService<WorkflowMultipartChatRequestParser>(),
             ct);
+
+    public static ValueTask<ChatRunRequestNormalizationResult> NormalizeChatInputAsync(
+        ChatInput input,
+        IFileArtifactIngressPort? fileIngressPort,
+        IReadOnlyDictionary<string, string>? defaultMetadata = null,
+        Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential? trustedCallerCredential = null,
+        CancellationToken cancellationToken = default,
+        string? trustedScopeId = null,
+        bool allowEmptyInputForResolvedMemberWorkflow = false) =>
+        ChatRunRequestNormalizer.NormalizeAsync(
+            input,
+            fileIngressPort,
+            defaultMetadata,
+            trustedCallerCredential,
+            cancellationToken,
+            trustedScopeId,
+            allowEmptyInputForResolvedMemberWorkflow);
 
     internal static async Task HandleChatPost(
         HttpContext http,
@@ -730,6 +747,13 @@ public static class WorkflowCapabilityEndpoints
                 return Results.BadRequest(new { error = "sourceRunId and startAtStepId are required." });
             }
 
+            if (http == null ||
+                !Aevatar.Capabilities.AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var trustedScopeId))
+            {
+                scope.MarkResult(StatusCodes.Status401Unauthorized);
+                return Results.Unauthorized();
+            }
+
             var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
             if (!callerCredential.Succeeded)
             {
@@ -749,7 +773,7 @@ public static class WorkflowCapabilityEndpoints
                     input.Input,
                     NormalizeOptional(input.CommandId),
                     NormalizeOptional(input.CorrelationId),
-                    ScopeId: NormalizeOptional(input.ScopeId),
+                    ScopeId: trustedScopeId,
                     CallerCredential: callerCredential.Credential),
                 ct);
 
@@ -1147,6 +1171,13 @@ public static class WorkflowCapabilityEndpoints
         {
             ArgumentNullException.ThrowIfNull(ex);
 
+            if (FindException<CommandObservationTimeoutException>(ex) != null)
+            {
+                return (
+                    "RUN_OBSERVATION_TIMEOUT",
+                    "Run was accepted but did not become observable before the deadline.");
+            }
+
             return IsCompatibilityFailure(ex)
                 ? (
                     CompatibilityErrorCode,
@@ -1162,11 +1193,25 @@ public static class WorkflowCapabilityEndpoints
 
             for (var current = ex; current != null; current = current.InnerException)
             {
+                if (current is WorkflowExpectedExecutionModeCompatibilityException)
+                    return true;
                 if (current.Message.Contains(DescriptorMissingMarker, StringComparison.Ordinal))
                     return true;
             }
 
             return false;
+        }
+
+        private static TException? FindException<TException>(Exception ex)
+            where TException : Exception
+        {
+            for (var current = ex; current != null; current = current.InnerException)
+            {
+                if (current is TException matched)
+                    return matched;
+            }
+
+            return null;
         }
     }
 

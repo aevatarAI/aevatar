@@ -39,9 +39,11 @@ public static class ServiceCollectionExtensions
         services.RemoveAll(typeof(IStateStore<>));
         services.RemoveAll(typeof(IEventSourcingSnapshotStore<>));
         services.RemoveAll(typeof(IEventSourcingBehaviorFactory<>));
+        services.RemoveAll<ICommittedStatePublicationStateStore>();
         services.TryAddSingleton<IRuntimeActorStateBindingAccessor, AsyncLocalRuntimeActorStateBindingAccessor>();
         services.TryAddTransient(typeof(IStateStore<>), typeof(RuntimeActorGrainStateStore<>));
         services.TryAddTransient(typeof(IEventSourcingSnapshotStore<>), typeof(RuntimeActorGrainEventSourcingSnapshotStore<>));
+        services.TryAddTransient<ICommittedStatePublicationStateStore, RuntimeActorGrainCommittedStatePublicationStateStore>();
         services.TryAddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         if (IsPersistenceBackend(options, AevatarOrleansRuntimeOptions.PersistenceBackendGarnet))
         {
@@ -64,7 +66,6 @@ public static class ServiceCollectionExtensions
         }
 
         services.TryAddSingleton<IActorDeactivationHookDispatcher, ActorDeactivationHookDispatcher>();
-        services.TryAddSingleton<IEventDeduplicator, MemoryCacheDeduplicator>();
 
         services.TryAddSingleton<IAgentContextAccessor, AsyncLocalAgentContextAccessor>();
         services.TryAddSingleton<ICorrelationLinkPolicy, DefaultCorrelationLinkPolicy>();
@@ -108,7 +109,9 @@ public static class ServiceCollectionExtensions
             builder.AddPersistentStreams(
                 options.StreamProviderName,
                 (sp, _) => ResolveQueueAdapterFactory(sp),
-                _ => { });
+                configurator => configurator.ConfigurePullingAgent(
+                    pullingAgent => pullingAgent.Configure(
+                        configured => configured.MaxEventDeliveryTime = options.MaxEventDeliveryTime)));
         }
         else if (IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendInMemory))
         {
@@ -126,6 +129,7 @@ public static class ServiceCollectionExtensions
                 orleansOptions.GarnetConnectionString = options.GarnetConnectionString;
                 orleansOptions.QueueCount = options.QueueCount;
                 orleansOptions.QueueCacheSize = options.QueueCacheSize;
+                orleansOptions.MaxEventDeliveryTime = options.MaxEventDeliveryTime;
             });
         });
 
@@ -146,6 +150,9 @@ public static class ServiceCollectionExtensions
 
         if (isKafkaProviderStream && !isGarnetPersistence)
             throw new InvalidOperationException("Kafka strict provider Orleans stream backend requires Garnet persistence for distributed stream pub/sub correctness.");
+
+        if (isKafkaProviderStream && options.MaxEventDeliveryTime <= TimeSpan.Zero)
+            throw new InvalidOperationException("Kafka strict provider max event delivery time must be positive.");
 
         if (isGarnetPersistence && string.IsNullOrWhiteSpace(options.GarnetConnectionString))
             throw new InvalidOperationException("ActorRuntime Orleans Garnet connection string is required.");

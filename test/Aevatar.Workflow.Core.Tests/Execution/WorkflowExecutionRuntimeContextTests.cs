@@ -284,6 +284,37 @@ public sealed class WorkflowExecutionRuntimeContextTests
     }
 
     [Fact]
+    public async Task WorkflowCallerCredentialRuntimeAccess_ShouldStoreAndRecoverDistinctExecutionAndSourceReadableCredentials()
+    {
+        var runtimeSecrets = new InMemoryRuntimeSecretStore();
+        var host = new RecordingStateHost(runtimeSecrets);
+
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+            host,
+            new WorkflowCallerCredential
+            {
+                BearerToken = "delegation-alpha",
+                Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+                SourceReadableUserBearerToken = "source-alpha",
+            });
+
+        var state = host.ExecutionContextState.CallerCredential!;
+        state.BearerToken.Should().BeEmpty();
+        state.SourceReadableUserBearerToken.Should().BeEmpty();
+        state.RuntimeSecretReference.Should().NotBeNull();
+        state.SourceReadableUserBearerRuntimeSecretReference.Should().NotBeNull();
+        state.RuntimeSecretReference.Ref.Should().NotBe(
+            state.SourceReadableUserBearerRuntimeSecretReference.Ref);
+
+        var resolved = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(host);
+
+        resolved.Found.Should().BeTrue();
+        resolved.Credential.BearerToken.Should().Be("delegation-alpha");
+        resolved.Credential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        resolved.Credential.SourceReadableUserBearerToken.Should().Be("source-alpha");
+    }
+
+    [Fact]
     public async Task WorkflowCallerCredentialRuntimeAccess_ShouldPersistAndRecoverCredentialKind()
     {
         var host = new RecordingStateHost(new InMemoryRuntimeSecretStore());
@@ -545,6 +576,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
                         CallerCredential = new WorkflowCallerCredential
                         {
                             BearerToken = "secret",
+                            SourceReadableUserBearerToken = "source-secret",
                             DurableCallerCredential = durableRef.Clone(),
                             NyxIdAuthority = CreateCallerAuthority(),
                         },
@@ -559,6 +591,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
                     CallerCredential = new WorkflowCallerCredentialState
                     {
                         BearerToken = "secret",
+                        SourceReadableUserBearerToken = "source-secret",
                         DurableCallerCredential = durableRef.Clone(),
                         NyxIdAuthority = CreateCallerAuthority(),
                     },
@@ -576,10 +609,12 @@ public sealed class WorkflowExecutionRuntimeContextTests
 
         var updateEvent = published.StateEvent.EventData.Unpack<WorkflowRunExecutionContextUpdatedEvent>();
         updateEvent.ExecutionContextDelta.CallerCredential!.BearerToken.Should().BeEmpty();
+        updateEvent.ExecutionContextDelta.CallerCredential.SourceReadableUserBearerToken.Should().BeEmpty();
         updateEvent.ExecutionContextDelta.CallerCredential.DurableCallerCredential.Should().BeNull();
         updateEvent.ExecutionContextDelta.CallerCredential.NyxIdAuthority.Should().BeNull();
         var stateRoot = published.StateRoot.Unpack<WorkflowRunState>();
         stateRoot.ExecutionContext.CallerCredential!.BearerToken.Should().BeEmpty();
+        stateRoot.ExecutionContext.CallerCredential.SourceReadableUserBearerToken.Should().BeEmpty();
         stateRoot.ExecutionContext.CallerCredential.DurableCallerCredential.Should().BeNull();
         stateRoot.ExecutionContext.CallerCredential.NyxIdAuthority.Should().BeNull();
     }
@@ -603,6 +638,52 @@ public sealed class WorkflowExecutionRuntimeContextTests
             (IWorkflowExecutionContext)context);
         credential.Found.Should().BeFalse();
         credential.Credential.BearerToken.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkflowCallerCredentialRuntimeAccess_ShouldFailClosed_WhenSupplementalRuntimeReferenceCannotResolve()
+    {
+        var runtimeSecrets = new InMemoryRuntimeSecretStore();
+        var host = new RecordingStateHost(runtimeSecrets);
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+            host,
+            new WorkflowCallerCredential
+            {
+                BearerToken = "delegation-alpha",
+                Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+                SourceReadableUserBearerToken = "source-alpha",
+            });
+        host.ExecutionContextState.CallerCredential!
+            .SourceReadableUserBearerRuntimeSecretReference.Ref = "missing";
+
+        var credential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(host);
+
+        credential.Found.Should().BeFalse();
+        credential.Credential.BearerToken.Should().BeEmpty();
+        credential.Credential.SourceReadableUserBearerToken.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkflowCallerCredentialRuntimeAccess_ShouldFailClosed_WhenSupplementalReferenceKindIsNotDelegation()
+    {
+        var runtimeSecrets = new InMemoryRuntimeSecretStore();
+        var host = new RecordingStateHost(runtimeSecrets);
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+            host,
+            new WorkflowCallerCredential
+            {
+                BearerToken = "delegation-alpha",
+                Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+                SourceReadableUserBearerToken = "source-alpha",
+            });
+        host.ExecutionContextState.CallerCredential!.Kind =
+            NyxIdCallerCredentialKind.SourceReadableUserBearer;
+
+        var credential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(host);
+
+        credential.Found.Should().BeFalse();
+        credential.Credential.BearerToken.Should().BeEmpty();
+        credential.Credential.SourceReadableUserBearerToken.Should().BeEmpty();
     }
 
     [Fact]
@@ -1187,7 +1268,10 @@ public sealed class WorkflowExecutionRuntimeContextTests
             state.CallerCredential = new WorkflowCallerCredentialState
             {
                 BearerToken = delta.CallerCredential.BearerToken,
+                SourceReadableUserBearerToken = delta.CallerCredential.SourceReadableUserBearerToken,
                 RuntimeSecretReference = delta.CallerCredential.RuntimeSecretReference?.Clone(),
+                SourceReadableUserBearerRuntimeSecretReference =
+                    delta.CallerCredential.SourceReadableUserBearerRuntimeSecretReference?.Clone(),
                 DurableCallerCredential = delta.CallerCredential.DurableCallerCredential?.Clone(),
                 NyxIdAuthority = delta.CallerCredential.NyxIdAuthority?.Clone(),
                 Kind = delta.CallerCredential.Kind,

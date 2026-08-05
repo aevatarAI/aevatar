@@ -47,6 +47,13 @@ outcome could not be verified.”
   definitions, not connected inventory; after resolving the catalog slug for a
   connect/add/authorize outcome, the model must call `nyxid_require_service` and must
   not substitute CLI or credential instructions.
+- Treat the user-facing service name as a candidate identity. Every connect/add/authorize
+  turn must read the current NyxID catalog, and only the exact slug returned by that read
+  may enter `nyxid_require_service.service_slug`. The readiness tool re-verifies that slug
+  against the authoritative catalog before it can produce an authorization receipt.
+- Requested scopes come from the same current catalog entry. A catalog entry with a scope
+  menu cannot produce a connection card from an empty scope set; a bare source-code-hosting
+  connection selects the entry's repository-access scope.
 - Preserve the existing readiness branch semantics at the provider boundary:
   - `Ready` returns a typed `Success` receipt with no action;
   - `ServiceRegistrationRequired` returns `AuthorizationRequired`, producing the
@@ -57,7 +64,8 @@ outcome could not be verified.”
 
 - Keep the persisted Agent Profile actor/read-model as the routing authority.
 - Do not restore the deleted rollout profile files or configuration.
-- Do not widen discovery intent tool policy or add language/provider/slug heuristics.
+- Do not widen discovery intent tool policy or add language/provider/slug heuristics. Human
+  names remain candidates until a current-turn catalog read resolves them.
 - Do not create actions in an HTTP endpoint, infer actions from prose, execute a
   command twice, or change NyxID/NyxID Chat frontend code.
 - Preserve current ready, blocked, failed, cancelled, pending-action, exact-retry,

@@ -51,6 +51,12 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         WorkflowChatRunRequest request,
         CancellationToken ct = default)
     {
+        if (request.ExpectedExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
+            !Enum.IsDefined(request.ExpectedExecutionMode))
+        {
+            throw new InvalidOperationException("Workflow expected execution mode is required.");
+        }
+
         // Refactor (iter112/cluster-3): Old pattern: resolver rebuilt source from legacy request mirrors. New principle: Application consumes the typed WorkflowChatSource as the single command source.
         var source = request.Source;
         var requestedWorkflowName = ResolveRequestedWorkflowName(source);
@@ -157,6 +163,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 workflowNameForRun,
                 workflowYamlForRun,
                 inlineWorkflowYamlMapForRun,
+                request.ExpectedExecutionMode,
                 scopeIdForRun,
                 hasInlineWorkflowYamls ? WorkflowRunOrigins.Draft : WorkflowRunOrigins.AdHocChat,
                 SourceKind: draftAdmission.Admission?.SourceKind ?? string.Empty,
@@ -184,12 +191,21 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         WorkflowChatRunRequest request,
         CancellationToken ct)
     {
+        var expectedExecutionMode = request.ExpectedExecutionMode;
         var sourceBinding = await _bindingReader.GetAsync(actorId, ct);
         if (sourceBinding == null)
             return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.AgentNotFound);
 
         if (!sourceBinding.IsWorkflowCapable)
             return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.AgentTypeNotSupported);
+
+        if (sourceBinding.ExpectedExecutionMode != expectedExecutionMode)
+        {
+            return new WorkflowActorResolutionResult(
+                null,
+                workflowNameForRun,
+                WorkflowChatRunStartError.WorkflowBindingMismatch);
+        }
 
         var boundWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(sourceBinding.WorkflowName);
 
@@ -226,6 +242,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                     workflowNameForRun,
                     workflowYamlForRun,
                     inlineWorkflowYamlMapForRun,
+                    expectedExecutionMode,
                     scopeIdForRun,
                     WorkflowRunOrigins.Draft,
                     SourceKind: draftAdmission.Admission?.SourceKind ?? string.Empty,
@@ -273,6 +290,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 boundWorkflowName,
                 workflowYamlFromSource,
                 sourceBinding.InlineWorkflowYamls,
+                expectedExecutionMode,
                 ResolveScopeId(sourceBinding.ScopeId, scopeIdHint),
                 WorkflowRunOrigins.AdHocChat,
                 SourceKind: sourceBinding.SourceKind,
@@ -346,6 +364,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 resolvedDefinitionBinding.WorkflowYaml ?? string.Empty,
                 resolvedDefinitionBinding.InlineWorkflowYamls
                     ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                resolvedDefinitionBinding.ExpectedExecutionMode,
                 ResolveScopeId(resolvedDefinitionBinding.ScopeId, scopeIdHint),
                 string.IsNullOrWhiteSpace(resolvedDefinitionBinding.RunOrigin)
                     ? WorkflowRunOrigins.AdHocChat

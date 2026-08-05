@@ -34,7 +34,7 @@ public sealed class RunScriptRuntimeCommandEnvelopeFactory
                 CompletionNotificationExpiresAtUnixMs = command.CompletionNotificationExpiresAtUnixMs,
             });
         envelope.Id = context.CommandId;
-        envelope.EnsureRuntime().EnsureDeduplication().OperationId = context.CommandId;
+        envelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId = context.CommandId;
         return envelope;
     }
 }

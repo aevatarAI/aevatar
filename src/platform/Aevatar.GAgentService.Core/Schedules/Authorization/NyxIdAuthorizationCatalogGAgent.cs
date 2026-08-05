@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -206,7 +208,8 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         var contentDigest = coverageKind == NyxIdAuthorizationCatalogObservationCoverageKind.RequiredServiceSubset
             ? NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
                 command.Owner,
-                MergeServices(State.Services, command.Services))
+                MergeServices(State.Services, command.Services),
+                command.GatewayLlmTarget ?? State.GatewayLlmTarget)
             : command.ContentDigest.Trim();
         var observed = new NyxIdAuthorizationCatalogObservedEvent
         {
@@ -223,6 +226,8 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             CoverageKind = coverageKind,
         };
         observed.Services.Add(command.Services.Select(static service => service.Clone()));
+        if (command.GatewayLlmTarget != null)
+            observed.GatewayLlmTarget = command.GatewayLlmTarget.Clone();
         observed.CoveredUserServiceIds.Add(command.CoveredUserServiceIds);
         await PersistRefreshTransitionAsync(
             observed,
@@ -440,6 +445,9 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         next.Services.Add(coverageKind == NyxIdAuthorizationCatalogObservationCoverageKind.RequiredServiceSubset
             ? MergeServices(state.Services, evt.Services)
             : evt.Services.Select(static service => service.Clone()));
+        next.GatewayLlmTarget = coverageKind == NyxIdAuthorizationCatalogObservationCoverageKind.RequiredServiceSubset
+            ? evt.GatewayLlmTarget?.Clone() ?? state.GatewayLlmTarget?.Clone()
+            : evt.GatewayLlmTarget?.Clone();
         return next;
     }
 
@@ -673,7 +681,10 @@ public sealed class NyxIdAuthorizationCatalogGAgent
                 throw new InvalidOperationException("Catalog content digest is required.");
             if (!string.Equals(
                     command.ContentDigest.Trim(),
-                    NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(command.Owner, command.Services),
+                    NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+                        command.Owner,
+                        command.Services,
+                        command.GatewayLlmTarget),
                     StringComparison.Ordinal))
             {
                 throw new InvalidOperationException("Catalog content digest does not match the typed authorization evidence.");
@@ -681,7 +692,16 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         }
         else
         {
-            ValidateCoveredServiceIds(command.CoveredUserServiceIds, command.Services);
+            if (command.CoveredUserServiceIds.Count == 0 && command.Services.Count == 0)
+            {
+                if (command.GatewayLlmTarget == null)
+                    throw new InvalidOperationException(
+                        "Targeted catalog observations require service or Gateway LLM evidence.");
+            }
+            else
+            {
+                ValidateCoveredServiceIds(command.CoveredUserServiceIds, command.Services);
+            }
         }
 
         string? previousServiceId = null;
@@ -699,6 +719,8 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             }
             previousServiceId = serviceId;
         }
+        if (command.GatewayLlmTarget != null)
+            ValidateLLMTarget(command.GatewayLlmTarget, null);
     }
 
     private static void ValidateCoveredServiceIds(
@@ -790,6 +812,71 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             service.NodeIds.Count != 0)
         {
             throw new InvalidOperationException("Direct catalog services cannot carry node authorization evidence.");
+        }
+
+        if (service.LlmTarget != null)
+            ValidateLLMTarget(service.LlmTarget, service);
+    }
+
+    private static void ValidateLLMTarget(
+        NyxIdAuthorizationLLMTargetEvidence target,
+        NyxIdAuthorizationServiceEvidence? parentService)
+    {
+        if (target.ModelCatalog == null)
+            throw new InvalidOperationException("LLM target model catalog is required.");
+        LLMSelectionPolicy.ValidateCatalog(target.ModelCatalog);
+
+        if (target.ObservedAt == null ||
+            target.FreshUntil == null ||
+            target.FreshUntil.CompareTo(target.ObservedAt) <= 0 ||
+            target.EvaluatedAt == null ||
+            string.IsNullOrWhiteSpace(target.AuthorityContractVersion) ||
+            !string.Equals(
+                target.AuthorityContractVersion,
+                target.AuthorityContractVersion.Trim(),
+                StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(target.AuthorityPolicyVersion) ||
+            !string.Equals(
+                target.AuthorityPolicyVersion,
+                target.AuthorityPolicyVersion.Trim(),
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("LLM target authority evidence is incomplete.");
+        }
+
+        switch (target.RouteKind)
+        {
+            case LLMRouteKind.Gateway when parentService == null:
+                if (!string.Equals(
+                        target.RouteValue,
+                        LLMSelectionPolicy.GatewayRoute,
+                        StringComparison.Ordinal) ||
+                    target.NyxIdUserServiceId.Length != 0 ||
+                    target.ServiceSlugSnapshot.Length != 0)
+                {
+                    throw new InvalidOperationException("Gateway LLM target identity is invalid.");
+                }
+                return;
+            case LLMRouteKind.NyxIdUserService when parentService != null:
+                if (!string.Equals(
+                        target.NyxIdUserServiceId,
+                        parentService.UserServiceId,
+                        StringComparison.Ordinal) ||
+                    !string.Equals(
+                        target.ServiceSlugSnapshot,
+                        parentService.ServiceSlug,
+                        StringComparison.Ordinal) ||
+                    !string.Equals(
+                        target.RouteValue,
+                        $"/api/v1/proxy/s/{parentService.ServiceSlug}",
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        "Service LLM target identity does not match its parent service.");
+                }
+                return;
+            default:
+                throw new InvalidOperationException("LLM target route kind is invalid for its catalog owner.");
         }
     }
 

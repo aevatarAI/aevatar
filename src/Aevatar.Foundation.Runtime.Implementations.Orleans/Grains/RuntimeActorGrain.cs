@@ -12,7 +12,7 @@ using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Runtime.Callbacks;
-using Aevatar.Foundation.Runtime.Deduplication;
+using Aevatar.Foundation.Runtime.Delivery;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
@@ -32,7 +32,6 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     // unbound retries the registry probe, which amplifies a persistent
     // misconfiguration into per-envelope I/O.
     private bool _identityResolutionAttempted;
-    private IEventDeduplicator? _deduplicator;
     private IEnvelopePropagationPolicy _propagationPolicy =
         new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy());
     private Aevatar.Foundation.Abstractions.IStreamProvider _streams = null!;
@@ -54,7 +53,6 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
     public override async Task OnActivateAsync(CancellationToken cancellationToken)
     {
-        _deduplicator = ServiceProvider.GetService<IEventDeduplicator>();
         _propagationPolicy = ServiceProvider.GetService<IEnvelopePropagationPolicy>() ?? _propagationPolicy;
         _streams = ServiceProvider.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>();
         _stateBindingAccessor = ServiceProvider.GetService<IRuntimeActorStateBindingAccessor>();
@@ -85,10 +83,16 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         _identityResolutionAttempted = true;
 
         var identity = _state.State.Identity;
-        if (identity != null && !string.IsNullOrWhiteSpace(identity.Kind))
+        if (identity == null)
+            return;
+
+        if (string.IsNullOrWhiteSpace(identity.Kind))
         {
-            await BindAgentByKindAsync(identity.Kind, ct);
+            throw new InvalidOperationException(
+                $"Persisted runtime identity for actor '{SafeGetActorIdForLog()}' has no agent kind.");
         }
+
+        await BindAgentByKindAsync(identity.Kind, ct, throwOnFailure: true);
     }
 
     public override async Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
@@ -172,45 +176,14 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
     private async Task HandleEnvelopeAsyncCore(byte[] envelopeBytes, bool propagateFailure)
     {
-        if (_agent == null)
-        {
-            // Only attempt resolution when OnActivateAsync hasn't already
-            // tried — otherwise a persistent misconfiguration (missing
-            // [GAgent] registration, etc.) amplifies into a per-envelope
-            // registry probe.
-            if (!_identityResolutionAttempted)
-                await ResumeFromPersistedIdentityAsync(CancellationToken.None);
-
-            if (_agent == null)
-            {
-                if (!string.IsNullOrWhiteSpace(_state.State.Identity?.Kind))
-                {
-                    _logger.LogWarning(
-                        "Dropping envelope for actor {ActorId}: initialization failed",
-                        this.GetPrimaryKeyString());
-                }
-                else
-                {
-                    _logger.LogDebug(
-                        "Dropping envelope for actor {ActorId}: no agent identity configured",
-                        this.GetPrimaryKeyString());
-                }
-
-                return;
-            }
-        }
-
         var envelope = EventEnvelope.Parser.ParseFrom(envelopeBytes);
         propagateFailure = propagateFailure || ShouldPropagateDirectDispatchFailure(envelope);
-        if (await TryHandleCompatibilityRetryAsync(envelope, propagateFailure))
+
+        if (!await EnsureAgentAvailableForEnvelopeAsync(envelope, propagateFailure))
             return;
 
-        if (_deduplicator != null &&
-            RuntimeEnvelopeDeduplication.TryBuildDedupKey(this.GetPrimaryKeyString(), envelope, out var dedupKey))
-        {
-            if (!await _deduplicator.TryRecordAsync(dedupKey))
-                return;
-        }
+        if (await TryHandleCompatibilityRetryAsync(envelope, propagateFailure))
+            return;
 
         if (VisitedActorChain.ShouldDropForReceiver(envelope, this.GetPrimaryKeyString()))
             return;
@@ -267,17 +240,69 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             }
         }
 
+        await HandleAgentEnvelopeAsync(envelope, propagateFailure);
+    }
+
+    private async Task<bool> EnsureAgentAvailableForEnvelopeAsync(
+        EventEnvelope envelope,
+        bool propagateFailure)
+    {
+        if (_agent != null)
+            return true;
+
+        // Only attempt resolution when OnActivateAsync has not already tried. Otherwise a
+        // persistent missing registration would amplify into per-envelope registry I/O.
+        if (!_identityResolutionAttempted)
+            await ResumeFromPersistedIdentityAsync(CancellationToken.None);
+
+        if (_agent != null)
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(_state.State.Identity?.Kind))
+        {
+            _logger.LogWarning(
+                "Runtime actor {ActorId} is unavailable; applying terminal failure policy to the envelope",
+                this.GetPrimaryKeyString());
+        }
+        else
+        {
+            _logger.LogDebug(
+                "Runtime actor {ActorId} has no agent identity; applying terminal failure policy to the envelope",
+                this.GetPrimaryKeyString());
+        }
+
+        AgentMetrics.RecordEnvelopeTerminalFailure(
+            AgentMetrics.FailureReasonActorUnavailable,
+            ResolveTerminalFailureDisposition(propagateFailure));
+        if (propagateFailure)
+        {
+            throw new InvalidOperationException(
+                $"Runtime actor '{this.GetPrimaryKeyString()}' is unavailable for envelope '{envelope.Id}'.");
+        }
+
+        return false;
+    }
+
+    private async Task HandleAgentEnvelopeAsync(EventEnvelope envelope, bool propagateFailure)
+    {
         using var scope = EventHandleScope.Begin(_logger, this.GetPrimaryKeyString(), envelope);
         try
         {
             using var stateBinding = _stateBindingAccessor?.Bind(_state);
-            await _agent.HandleEventAsync(envelope);
+            await _agent!.HandleEventAsync(envelope);
         }
         catch (Exception ex)
         {
             scope.MarkError(ex);
-            if (await TryScheduleRetryAsync(envelope, ex))
-                return;
+            try
+            {
+                if (await TryScheduleRetryAsync(envelope, ex))
+                    return;
+            }
+            catch
+            {
+                throw;
+            }
 
             _logger.LogError(
                 ex,
@@ -286,8 +311,13 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 envelope.Id,
                 envelope.Payload?.TypeUrl ?? "(none)");
 
+            AgentMetrics.RecordEnvelopeTerminalFailure(
+                AgentMetrics.FailureReasonHandlerRetryExhausted,
+                ResolveTerminalFailureDisposition(propagateFailure));
             if (propagateFailure)
+            {
                 throw;
+            }
         }
     }
 
@@ -372,7 +402,10 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         await _state.ClearStateAsync();
     }
 
-    private async Task<AgentImplementation?> BindAgentByKindAsync(string kind, CancellationToken ct = default)
+    private async Task<AgentImplementation?> BindAgentByKindAsync(
+        string kind,
+        CancellationToken ct = default,
+        bool throwOnFailure = false)
     {
         var registry = ServiceProvider?.GetService<IAgentKindRegistry>();
         if (registry == null)
@@ -381,6 +414,12 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 "Cannot bind actor {ActorId} by kind '{Kind}': IAgentKindRegistry not registered.",
                 SafeGetActorIdForLog(),
                 kind);
+            if (throwOnFailure)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot resume actor '{SafeGetActorIdForLog()}' because IAgentKindRegistry is not registered.");
+            }
+
             return null;
         }
 
@@ -396,10 +435,13 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 "Unable to resolve agent kind '{Kind}' for actor {ActorId}.",
                 kind,
                 SafeGetActorIdForLog());
+            if (throwOnFailure)
+                throw;
+
             return null;
         }
 
-        if (!await BindAgentAsync(implementation, ct))
+        if (!await BindAgentAsync(implementation, ct, throwOnFailure))
             return null;
 
         // Track the *canonical* kind from the registry, not the caller's
@@ -424,7 +466,10 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
     }
 
-    private async Task<bool> BindAgentAsync(AgentImplementation implementation, CancellationToken ct)
+    private async Task<bool> BindAgentAsync(
+        AgentImplementation implementation,
+        CancellationToken ct,
+        bool throwOnFailure)
     {
         try
         {
@@ -440,6 +485,26 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             _agent = agent;
             return true;
         }
+        catch (Exception ex) when (IsCommittedStatePublicationActivationFailure(ex))
+        {
+            _logger.LogError(
+                ex,
+                "Committed-state publication recovery prevented activation of grain actor {ActorId} for kind '{Kind}' (impl '{ImplClr}').",
+                SafeGetActorIdForLog(),
+                implementation.Metadata.Kind,
+                implementation.Metadata.ImplementationClrTypeName);
+            throw;
+        }
+        catch (Exception ex) when (throwOnFailure)
+        {
+            _logger.LogError(
+                ex,
+                "Failed to resume persisted grain actor {ActorId} for kind '{Kind}' (impl '{ImplClr}').",
+                SafeGetActorIdForLog(),
+                implementation.Metadata.Kind,
+                implementation.Metadata.ImplementationClrTypeName);
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogError(
@@ -451,6 +516,10 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             return false;
         }
     }
+
+    private static bool IsCommittedStatePublicationActivationFailure(Exception exception) =>
+        exception is CommittedStatePublicationException
+            or CommittedStatePublicationRecoveryException;
 
     private void InjectDependencies(IAgent agent, string actorId)
     {
@@ -562,7 +631,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
     private string BuildRuntimeRetryCallbackId(EventEnvelope envelope, int nextAttempt)
     {
-        var originId = RuntimeEnvelopeDeduplication.ResolveOriginId(envelope) ?? envelope.Id;
+        var originId = RuntimeEnvelopeDeliveryIdentity.ResolveDeliveryLineageId(envelope) ?? envelope.Id;
 
         if (string.IsNullOrWhiteSpace(originId))
             originId = envelope.Id ?? Guid.NewGuid().ToString("N");
@@ -595,6 +664,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             envelope.Id,
             envelope.Payload?.TypeUrl ?? "(none)");
 
+        AgentMetrics.RecordEnvelopeTerminalFailure(
+            AgentMetrics.FailureReasonCompatibilityRetryExhausted,
+            ResolveTerminalFailureDisposition(propagateFailure));
         if (propagateFailure)
             throw compatibilityException;
 
@@ -603,4 +675,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
     private static bool ShouldPropagateDirectDispatchFailure(EventEnvelope envelope) =>
         envelope.Runtime?.Dispatch?.PropagateFailure == true;
+
+    private static string ResolveTerminalFailureDisposition(bool propagateFailure) =>
+        propagateFailure
+            ? AgentMetrics.FailureDispositionPropagated
+            : AgentMetrics.FailureDispositionReturned;
 }

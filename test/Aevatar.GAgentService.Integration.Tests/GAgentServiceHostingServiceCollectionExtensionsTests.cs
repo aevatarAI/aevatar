@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -143,6 +144,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             .AddInMemoryCollection(new Dictionary<string, string?>())
             .Build();
         services.AddSingleton<ILLMProviderFactory>(new ThrowingLlmProviderFactory());
+        services.AddSingleton<IAgentToolExecutionPort, UnusedAgentToolExecutionPort>();
 
         services.AddGAgentServiceCapability(configuration);
 
@@ -447,6 +449,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             options.AutoMapCapabilities = false;
         });
         builder.Services.AddSingleton<ILLMProviderFactory, UnusedLlmProviderFactory>();
+        builder.Services.AddSingleton<IAgentToolExecutionPort, UnusedAgentToolExecutionPort>();
         builder.AddGAgentServiceCapabilityBundle();
         UseRepositoryWorkflowDefinitions(builder.Services);
 
@@ -456,6 +459,9 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         await app.StartAsync();
 
         app.Services.GetRequiredService<IProjectionWriteDispatcher<WorkflowCatalogCurrentStateDocument>>()
+            .Should()
+            .NotBeNull();
+        app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowActorBindingDocument, string>>()
             .Should()
             .NotBeNull();
         AssertNoWorkflowCapabilitiesStartupArtifactServices(builder.Services);
@@ -500,6 +506,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             options.EnableScriptingCapability = false;
         });
         builder.Services.AddSingleton<ILLMProviderFactory, UnusedLlmProviderFactory>();
+        builder.Services.AddSingleton<IAgentToolExecutionPort, UnusedAgentToolExecutionPort>();
         builder.AddGAgentServiceCapabilityBundle();
         UseRepositoryWorkflowDefinitions(builder.Services);
 
@@ -592,6 +599,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         provider.GetRequiredService<IProjectionDocumentReader<ServiceRolloutCommandObservationReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<UserConfigCurrentStateDocument, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<WorkflowActorBindingDocument, string>>().Should().NotBeNull();
         AssertNoWorkflowCapabilitiesStartupArtifactServices(services);
         services.Count(x => x.ServiceType == typeof(IProjectionDocumentReader<ServiceCatalogReadModel, string>)).Should().Be(1);
     }
@@ -645,6 +653,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         provider.GetRequiredService<IProjectionDocumentReader<GAgentRunTerminalReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowCatalogCurrentStateDocument>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<WorkflowActorBindingDocument, string>>().Should().NotBeNull();
         AssertNoWorkflowCapabilitiesStartupArtifactServices(services);
     }
 
@@ -822,6 +831,14 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             throw new InvalidOperationException("The hosting startup test must not execute LLM requests.");
 
         public IReadOnlyList<string> GetAvailableProviders() => [];
+    }
+
+    private sealed class UnusedAgentToolExecutionPort : IAgentToolExecutionPort
+    {
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("The hosting composition test must not execute agent tools.");
     }
 
     private sealed class UnusedExternalIdentityBindingQueryPort : IExternalIdentityBindingQueryPort

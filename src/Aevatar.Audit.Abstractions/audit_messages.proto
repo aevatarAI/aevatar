@@ -99,6 +99,13 @@ enum AuditChatSurface {
   AUDIT_CHAT_SURFACE_WORKFLOW_CHAT = 2;
 }
 
+enum AuditToolExecutionPhase {
+  AUDIT_TOOL_EXECUTION_PHASE_UNSPECIFIED = 0;
+  AUDIT_TOOL_EXECUTION_PHASE_RUNNING = 1;
+  AUDIT_TOOL_EXECUTION_PHASE_WAITING_APPROVAL = 2;
+  AUDIT_TOOL_EXECUTION_PHASE_TERMINAL = 3;
+}
+
 message AuditTarget {
   string kind = 1;
   string id = 2;
@@ -166,6 +173,12 @@ message AuditRedaction {
   bool values_sanitized = 3;
 }
 
+message AuditToolExecution {
+  string arguments_sha256 = 1;
+  AuditToolExecutionPhase execution_phase = 2;
+  bool is_mutation = 3;
+}
+
 message AuditRecord {
   string audit_id = 1;
   google.protobuf.Timestamp occurred_at = 2;
@@ -197,6 +210,7 @@ message AuditRecord {
   AuditFailure failure = 28;
   AuditExecutionProvenance provenance = 29;
   AuditRedaction redaction = 30;
+  AuditToolExecution tool_execution = 31;
 }
 
 message AuditTrailDocument {
@@ -231,4 +245,7 @@ message AuditTrailDocument {
   string subject = 29;
   string source = 30;
   string trace_id = 31;
+  string tool_arguments_sha256 = 32;
+  bool tool_is_mutation = 33;
+  AuditToolExecutionPhase tool_execution_phase = 34;
 }

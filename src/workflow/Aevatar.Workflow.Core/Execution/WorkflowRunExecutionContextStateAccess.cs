@@ -42,10 +42,25 @@ internal static class WorkflowRunExecutionContextStateAccess
         };
         var authority = NormalizeCallerNyxIdAuthority(credential?.NyxIdAuthority, nameof(credential));
         var parsed = WorkflowCallerCredentialTokens.ParseOptional(credential?.BearerToken);
-        if (parsed.IsInvalid)
+        var sourceReadable = WorkflowCallerCredentialTokens.ParseOptional(
+            credential?.SourceReadableUserBearerToken);
+        if (parsed.IsInvalid || sourceReadable.IsInvalid)
             throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(credential));
-        if (HasDurableCallerCredential(credential?.DurableCallerCredential) && parsed.IsValid)
+        if (HasDurableCallerCredential(credential?.DurableCallerCredential) &&
+            (parsed.IsValid || sourceReadable.IsValid))
             throw new ArgumentException("Workflow caller credential must not carry both durable and bearer credentials.", nameof(credential));
+        if (!parsed.IsValid && sourceReadable.IsValid)
+        {
+            throw new ArgumentException(
+                "Workflow caller source-readable bearer requires an execution credential.",
+                nameof(credential));
+        }
+        if (sourceReadable.IsValid && credential?.Kind != NyxIdCallerCredentialKind.ProxyDelegation)
+        {
+            throw new ArgumentException(
+                "Workflow caller source-readable bearer can supplement only a proxy delegation credential.",
+                nameof(credential));
+        }
         if (HasDurableCallerCredential(credential?.DurableCallerCredential))
         {
             delta.CallerCredential = new WorkflowCallerCredential
@@ -79,6 +94,14 @@ internal static class WorkflowRunExecutionContextStateAccess
                 OwnerRunId = "run-1",
                 OwnerStepId = WorkflowCallerCredentialRuntimeContextAccess.OwnerStepId,
             },
+            SourceReadableUserBearerRuntimeSecretReference = sourceReadable.IsValid
+                ? new RuntimeSecretReference
+                {
+                    Purpose = CredentialSecretPurposes.WorkflowCallerSourceReadableUserBearerToken,
+                    OwnerRunId = "run-1",
+                    OwnerStepId = WorkflowCallerCredentialRuntimeContextAccess.SourceReadableOwnerStepId,
+                }
+                : null,
             NyxIdAuthority = authority,
             Kind = credential!.Kind,
         };
@@ -142,6 +165,11 @@ internal static class WorkflowRunExecutionContextStateAccess
             credential = new WorkflowCallerCredential();
             return false;
         }
+        if (HasRuntimeSecretReference(callerCredential?.SourceReadableUserBearerRuntimeSecretReference))
+        {
+            credential = new WorkflowCallerCredential();
+            return false;
+        }
 
         return TryGetLegacyCallerCredential(callerCredential, out credential);
     }
@@ -167,6 +195,15 @@ internal static class WorkflowRunExecutionContextStateAccess
         WorkflowCallerCredentialState? callerCredential,
         CancellationToken ct)
     {
+        var hasRuntimeSecret = HasRuntimeSecretReference(callerCredential?.RuntimeSecretReference);
+        var hasSourceReadableRuntimeSecret = HasRuntimeSecretReference(
+            callerCredential?.SourceReadableUserBearerRuntimeSecretReference);
+        if (hasSourceReadableRuntimeSecret &&
+            (!hasRuntimeSecret || callerCredential?.Kind != NyxIdCallerCredentialKind.ProxyDelegation))
+        {
+            return (false, new WorkflowCallerCredential());
+        }
+
         if (HasDurableCallerCredential(callerCredential?.DurableCallerCredential))
         {
             var resolved = await TryResolveDurableCallerCredentialAsync(
@@ -183,17 +220,25 @@ internal static class WorkflowRunExecutionContextStateAccess
                 : (false, new WorkflowCallerCredential());
         }
 
-        if (HasRuntimeSecretReference(callerCredential?.RuntimeSecretReference))
+        if (hasRuntimeSecret)
         {
             var resolved = await TryResolveRuntimeSecretAsync(source, callerCredential!.RuntimeSecretReference, ct);
-            return resolved.Found
-                ? (true, new WorkflowCallerCredential
+            if (!resolved.Found)
+                return (false, new WorkflowCallerCredential());
+
+            var sourceReadable = await TryResolveOptionalRuntimeSecretAsync(
+                source,
+                callerCredential.SourceReadableUserBearerRuntimeSecretReference,
+                ct);
+            return sourceReadable.RequiredAndMissing
+                ? (false, new WorkflowCallerCredential())
+                : (true, new WorkflowCallerCredential
                 {
                     BearerToken = resolved.Secret,
+                    SourceReadableUserBearerToken = sourceReadable.Secret ?? string.Empty,
                     NyxIdAuthority = callerCredential.NyxIdAuthority?.Clone(),
                     Kind = callerCredential.Kind,
-                })
-                : (false, new WorkflowCallerCredential());
+                });
         }
 
         if (TryNormalizeCallerNyxIdAuthority(callerCredential?.NyxIdAuthority, out var authority))
@@ -215,11 +260,18 @@ internal static class WorkflowRunExecutionContextStateAccess
         out WorkflowCallerCredential credential)
     {
         var parsed = WorkflowCallerCredentialTokens.ParseOptional(callerCredential?.BearerToken);
-        if (parsed.IsValid)
+        var sourceReadable = WorkflowCallerCredentialTokens.ParseOptional(
+            callerCredential?.SourceReadableUserBearerToken);
+        if (parsed.IsValid &&
+            !WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
+                parsed.NormalizedBearerToken,
+                callerCredential?.Kind ?? NyxIdCallerCredentialKind.Unspecified,
+                sourceReadable.NormalizedBearerToken))
         {
             credential = new WorkflowCallerCredential
             {
                 BearerToken = parsed.NormalizedBearerToken ?? string.Empty,
+                SourceReadableUserBearerToken = sourceReadable.NormalizedBearerToken ?? string.Empty,
                 NyxIdAuthority = callerCredential?.NyxIdAuthority?.Clone(),
                 Kind = callerCredential?.Kind ?? NyxIdCallerCredentialKind.Unspecified,
             };
@@ -228,6 +280,20 @@ internal static class WorkflowRunExecutionContextStateAccess
 
         credential = new WorkflowCallerCredential();
         return false;
+    }
+
+    private static async Task<(bool RequiredAndMissing, string? Secret)> TryResolveOptionalRuntimeSecretAsync(
+        object source,
+        RuntimeSecretReference? reference,
+        CancellationToken ct)
+    {
+        if (!HasRuntimeSecretReference(reference))
+            return (false, null);
+
+        var resolved = await TryResolveRuntimeSecretAsync(source, reference, ct);
+        return resolved.Found
+            ? (false, resolved.Secret)
+            : (true, null);
     }
 
     internal static async Task<(bool Found, string Secret)> TryResolveRuntimeSecretAsync(
@@ -403,6 +469,8 @@ internal static class WorkflowRunExecutionContextStateAccess
         var clone = source?.Clone() ?? new WorkflowRunExecutionContextState();
         if (!string.IsNullOrWhiteSpace(clone.CallerCredential?.BearerToken))
             clone.CallerCredential.BearerToken = string.Empty;
+        if (!string.IsNullOrWhiteSpace(clone.CallerCredential?.SourceReadableUserBearerToken))
+            clone.CallerCredential.SourceReadableUserBearerToken = string.Empty;
         if (clone.CallerCredential?.DurableCallerCredential != null)
             clone.CallerCredential.DurableCallerCredential = null;
         if (clone.CallerCredential?.NyxIdAuthority != null)

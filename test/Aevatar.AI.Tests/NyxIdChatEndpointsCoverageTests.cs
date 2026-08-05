@@ -1077,8 +1077,11 @@ public partial class NyxIdChatEndpointsCoverageTests
         var context = CreateAuthorizedStreamContext();
         context.RequestServices = new ServiceCollection()
             .AddLogging()
-            .AddSingleton<INyxIdUserLlmPreferencesStore>(new StubPreferencesStore("relay-model", "/relay-route", 7))
-            .AddSingleton<IUserMemoryStore>(new StubUserMemoryStore("remember this"))
+            .AddSingleton<INyxIdUserLlmPreferencesStore>(new StubPreferencesStore(
+                "relay-model",
+                "/api/v1/proxy/s/relay-provider",
+                7))
+            .AddSingleton<IUserMemoryPromptContextProvider>(new StubUserMemoryPromptContextProvider("remember this"))
             .BuildServiceProvider();
         context.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
         context.Request.Headers.Authorization = "Bearer forwarded-access-token";
@@ -1128,7 +1131,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             NyxIdOrgToken: null,
             SenderNyxIdAccessToken: null,
             ModelOverride: "relay-model",
-            NyxIdRoutePreference: "/relay-route",
+            NyxIdRoutePreference: "/api/v1/proxy/s/relay-provider",
             MaxToolRoundsOverride: 7,
             UserMemoryPrompt: "remember this"));
         context.Response.Body.Position = 0;
@@ -3932,26 +3935,33 @@ public partial class NyxIdChatEndpointsCoverageTests
 
     private sealed class StubPreferencesStore(string model, string route, int maxToolRounds) : INyxIdUserLlmPreferencesStore
     {
+        private readonly NyxIdUserLlmPreferences _preferences = new(
+            new LLMSelection
+            {
+                RouteKind = LLMRouteKind.NyxIdUserService,
+                RouteValue = route,
+                NyxIdUserServiceId = "us-relay",
+                ServiceSlugSnapshot = "relay-provider",
+                ModelSelection = new LLMModelSelection
+                {
+                    Kind = LLMModelSelectionKind.ExplicitModel,
+                    ModelId = model,
+                },
+            },
+            LLMSelectionPersistenceStatus.Ready,
+            maxToolRounds);
+
         public Task<NyxIdUserLlmPreferences> GetOwnerAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(new NyxIdUserLlmPreferences(model, route, maxToolRounds));
+            Task.FromResult(_preferences);
 
         public Task<NyxIdUserLlmPreferences> GetForBindingAsync(string bindingId, CancellationToken cancellationToken = default) =>
-            Task.FromResult(new NyxIdUserLlmPreferences(model, route, maxToolRounds));
+            Task.FromResult(_preferences);
     }
 
-    private sealed class StubUserMemoryStore(string promptSection) : IUserMemoryStore
+    private sealed class StubUserMemoryPromptContextProvider(string promptSection)
+        : IUserMemoryPromptContextProvider
     {
-        public Task<UserMemoryDocument> GetAsync(CancellationToken ct = default) =>
-            Task.FromResult(UserMemoryDocument.Empty);
-
-        public Task SaveAsync(UserMemoryDocument document, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task<UserMemoryEntry> AddEntryAsync(string category, string content, string source, CancellationToken ct = default) =>
-            Task.FromResult(new UserMemoryEntry("id", category, content, source, 0, 0));
-
-        public Task<bool> RemoveEntryAsync(string id, CancellationToken ct = default) => Task.FromResult(true);
-
-        public Task<string> BuildPromptSectionAsync(int maxChars = 2000, CancellationToken ct = default) =>
+        public Task<string> BuildAsync(int maxChars, CancellationToken ct = default) =>
             Task.FromResult(promptSection);
     }
 

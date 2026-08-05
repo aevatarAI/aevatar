@@ -15,6 +15,10 @@ owner: eanzhao
 3. 统一投影链路中的分支协作（读模型分支 + workflow run-event 实时分支）。
 4. 当前支持的流类型、多模态输入输出与后续演进路径。
 
+Execution state、derived prompt context、conversation transcript 与 user memory 的 owner、
+retention 和 recovery 边界统一见
+[conversation-context-and-memory.md](conversation-context-and-memory.md)。
+
 不包含内容：
 
 1. Workflow YAML 业务编排语义细节（由 Workflow Core 文档负责）。
@@ -53,6 +57,73 @@ NyxID direct Responses / Messages / Chat Completions 的 `LlmSessionGAgent` 使�
 1. `docs/canon/cqrs-projection.md:43`
 2. `docs/canon/cqrs-projection.md:46`
 3. `docs/canon/overview.md:79`
+
+### 2.2 Role chat turn deadline 边界
+
+`RoleGAgent` 及其 Workflow/NyxID/Chatbot Classifier 交互入口使用 Host-owned 最大 turn deadline，默认为
+120000 ms，Host 可通过 `Aevatar:AI:MaxTurnDeadlineMs` 设置严格正数上限。请求中的
+`timeout_ms` 仅能收紧该上限：缺省、零、负数或超过 Host cap 都使用 Host cap，
+调用方无法关闭总 deadline。
+
+deadline token 沿 `ChatStreamAsync` 的异步枚举、tool discovery/materialization 与当前 turn
+发起的 tool call 传递。到期后 actor 提交 `RoleChatSessionCompletedEvent`，其
+`outcome = FAILED` 且 `failure_code = LLM_TIMEOUT`，再由统一 committed-event 投影/观察链
+对外发布终态。不使用 actor self timer 中断当前挂起 turn，也不在 query path
+补跑终态。Role stream consumer 在处理每个 chunk 以及正常结束枚举前都重新核对 deadline；
+provider 即使已经观察到 cancellation 后仍尝试产出晚到 chunk 或正常 completion，也不能覆盖或
+重复该 typed timeout 终态。子类不得通过覆写 handler 自建无 deadline 的 streaming 分支；
+classifier 的普通 provider failure JSON fallback 只作为主链上的非超时展示策略。
+
+`HouseholdEntity` 的 sensor、camera、chat 与 heartbeat reasoning handler 同样在 actor turn 内运行，
+因此复用同一个 `RoleChatExecutionOptions` Host cap，而不维护第二份 timeout 配置。reasoning stream
+必须携带该 token，并在每个 chunk 处理前和枚举正常结束后再次检查。deadline 到期提交 typed
+`ReasoningCompletedEvent`，其中 `outcome = FAILED`、`failure_code = LLM_TIMEOUT`，并将同一终态
+写入 actor-owned `HouseholdEntityState.last_reasoning_terminal`；失败不推进成功 reasoning debounce，
+所以释放后的下一条 inbox 消息可以正常执行。
+
+`WorkflowRoleGAgent` 的 workflow intent 与 approval continuation 使用独立的流消费循环，但仍遵循
+同一 fencing 契约：每个 chunk 在写入内容、发布进度或收集 tool receipt 前先检查 host token，
+异步枚举正常结束后再次检查，防止忽略 cancellation 的 provider 以晚到 chunk 或无 chunk 的正常
+结束伪造成功终态。所有用户可见 text/reasoning/media/tool progress 均提交为统一的
+`RoleChatSessionProgressedEvent`，由 workflow Projection Pipeline 映射为 run-event；禁止恢复
+workflow 专用 transient chunk 协议。completion 中的 typed terminal tail 只补齐 usage、fallback text、
+text end 与 authorization，role terminal/replay 不得冒充 workflow 根 actor 的 run terminal。每个 role
+session 的首个 progress 必须且只能是 `text_started`；approval continuation 与 recovery 重入也必须通过
+同一个幂等 start gate，禁止在新 message id 上直接发送 text delta，或因 recovery 重复发送 start。
+
+审批通过后的 tool resume 是新的 actor turn，必须创建新的 Host-owned deadline；其 token 连续覆盖
+caller token refresh、request tool catalog materialization 和 approved tool execution，禁止使用
+`CancellationToken.None` 或沿用已结束 LLM turn 的 token。任一阶段超时后 actor 清理 pending
+approval，不发送 chat continuation，并提交失败的 `RoleChatSessionCompletedEvent`，其中
+`failure_code = APPROVAL_TOOL_TIMEOUT`；workflow completion 同步携带
+`approval_tool_timeout` reason code。该终态只表示已批准工具的恢复执行超时，不冒充原 LLM turn 的
+`LLM_TIMEOUT`。每个外部 await 返回后以及发送 continuation 前都必须再次检查 token；adapter 即使吞掉
+cancellation 后晚返回成功或晚抛其他异常，也仍归入 `APPROVAL_TOOL_TIMEOUT`，不得退化为普通失败或
+继续执行。
+
+审批结果成功时，actor 使用原 `operation_id` 和 `ActorRecovery` attempt 执行工具，将真实 result
+首次写入稳定 vault reference，再原子提交 `CONTINUATION_PREPARED + ClearPendingApprovalEvent`。
+审批等待阶段不得把 approval-required receipt 当作 terminal completion 写入同一个 result reference。
+提交后只发送 typed `RoleChatRecoveryContinuationRequested` self-message；self-message 丢失时由 activation
+按 checkpoint generation 重发。恢复 LLM 输入保持原 user message，并追加 assistant tool-call 与 tool
+result typed transcript，不把不可信 tool output 拼接成 system/recovery prompt。
+
+Host deadline 不在 provider stream 正常结束时提前失效。stream 后的 catalog、progress 与 terminal
+commit admission 仍携带同一个 turn token；每个外部 await 返回后、以及发起下一次 success commit 前都必须
+复检。`IEventStore.AppendAsync` 的 cancellation authority 只覆盖 admission：它抛出的
+`OperationCanceledException` 必须保证该 batch 零提交，event-sourcing runtime 才能安全丢弃未提交 pending
+events；adapter 一旦进入不可取消的原子 commit，或已经取得 commit result，就必须停止观察 deadline 并返回
+权威 `EventStoreCommitResult`。因此 Lua/File 原子提交期间即使 deadline 到达，已提交 success 仍是唯一终态，
+不得再追加或发布 timeout/failure；state apply、committed publication/checkpoint 与 terminal presentation 从该
+commit result 继续，并由 runtime committed-publication recovery 处理投影失败。只有在 commit admission 被取消且
+零提交时，handler 才提交 typed timeout。approval resume 的 `ClearPendingApprovalEvent` 不是 success terminal：
+它提交返回后、self continuation 发送前后仍执行 fencing；即使 clear 已成功但返回晚于 deadline，仍提交一次
+`APPROVAL_TOOL_TIMEOUT`，且不得重复 clear 或发送 continuation。
+
+Provider adapter 仍独立负责 connect timeout、stream idle timeout 和 cancellation 传递；
+普通 `HttpClient.Timeout` 不充当 streaming 总时长上限。完全忽略
+`CancellationToken` 的第三方 provider 不符合 provider contract，Host deadline 不对这类
+adapter 承诺强制中断。
 
 ## 3. 组件与分层
 
@@ -340,6 +411,16 @@ NyxIdChat 的用户可见 live path 不直接投影上述 transient publications
 
 `RoleChatSessionCompletedEvent` 仍是 terminal/final authority，并在同一个 committed fact 内嵌尚未 live 投递的 final text、usage、text end、authorization 与唯一 terminal typed tail。normal projector 只展开该 tail，不读取 completion snapshot 合成全文，因此 completed authority 与 terminal presentation 不会被逐事件发布失败拆开，也不会重复已流式投递的内容。显式 replay 才能把 committed completion snapshot 按 tool、reasoning、media、text、usage、terminal 的展示顺序完整展开。不同输入复用同一 turn id 时，新 producer 提交带独立 command attempt id 的 rejection，不推进已完成 session 的 progress sequence；projection 在滚动升级期间仍兼容旧 `RoleChatSessionConflictEvent` TypeUrl。provider-native tool、text-parsed tool 与 initial skill recovery 都使用同一个 start-before-execution/result lifecycle；`use_skill` 在 start snapshot 时从结构化参数解析实际 skill identity。
 
+`RoleGAgent` 在 session start 时提交 generation 1 的 `MODEL_READY` checkpoint。每轮 tool batch 必须先把 frozen intent 提交为 `TOOL_BATCH_PREPARED`，其中包含 stable `operation_id`、typed recovery context、replay policy、arguments digest 与 actor/session/operation-bound vault reference；intent commit 成功前不得调用外部 terminal。每个 completion 同样以 digest + vault reference 写入 checkpoint，多工具 batch 在全部 operation 都有 completion 前保持 `TOOL_BATCH_PREPARED`。result reference 内保存 protobuf typed result proof，并以 deterministic reference 实施 first-result authority：result 已写 vault 但 checkpoint append 失败时，caller redelivery 与 activation recovery 都必须在任何外呼前采用原 payload/reference，不得用第二次响应覆盖，也不得创建 alias。checkpoint generation 每次单调递增，producer 在持久化前校验合法 stage transition，consumer 再以 expected generation fence 陈旧 self-message。
+
+Actor activation 对 durable session 先检查 checkpoint：合法的 `MODEL_READY`、`TOOL_BATCH_PREPARED` 或 `CONTINUATION_PREPARED` 通过 typed `RoleChatRecoveryContinuationRequested(session_id, expected_checkpoint_generation, operation_id)` 进入下一次 actor turn；`WAITING_APPROVAL` 仅在 matching pending approval 仍由 actor 持有时继续等待并重新发布审批。恢复读取已提交 completion，不重复外部调用；未完成 operation 先探测 deterministic result，再只按 `READ_ONLY_RETRYABLE`、`IDEMPOTENT_RETRYABLE` 或 `RECONCILABLE` 契约推进，并保留原 operation/admission identity。`NON_REPLAYABLE` 的未完成 intent，以及过期、损坏或永久不可解析的 arguments/result recovery material，均提交 `OUTCOME_UNCERTAIN + SESSION_OUTCOME_UNCERTAIN`，不得反复 fault 或重放；vault 基础设施抛出的未分类瞬时异常才保留 actor redelivery。runtime credential 不进入 checkpoint；NyxID 与 Workflow 边界从 typed durable caller credential reference 重新解析，并校验 purpose、owner、version、fingerprint 与 expiry。
+
+外部 terminal 返回后的 result store/checkpoint append 失败必须以 typed post-external failure 穿过 Chat 主链，禁止被 generic LLM catch 转成 `FAILED` 或清除 checkpoint；瞬时失败保持 session incomplete 并发布 recovery continuation，永久材料失败提交 `OUTCOME_UNCERTAIN`。checkpoint 的 recovery context 持久 credential kind 与各秘密槽位的 required flag，不持久 token：`SOURCE_READABLE_USER_BEARER` 的主 bearer 恢复到 `NyxIdAccessToken`；`PROXY_DELEGATION` 若还要求独立 source-readable supplemental bearer，则必须有独立 sealed reference，否则 fail closed 为 `SESSION_OUTCOME_UNCERTAIN`，禁止拿 delegation token 冒充 supplemental credential。
+
+没有合法 recovery checkpoint 的旧 started-only session 仍通过 typed `RoleChatIncompleteSessionFinalizationRequested(session_id, expected_last_progress_sequence)` self-message进入下一次 actor turn并与权威 state 对账：started-only 提交 `FAILED + SESSION_ORPHANED`，已有 committed progress 提交 `OUTCOME_UNCERTAIN + SESSION_OUTCOME_UNCERTAIN`。所有分支都复用唯一的 `RoleChatSessionCompletedEvent + terminal_progress + completion notification` 主链。completion notification 的 activation recovery 按 session 隔离失败，单个 outbox 故障不得阻断其余 pending delivery 或 incomplete-session sweep。
+
+重复、陈旧 signal 幂等忽略，等待 typed tool approval continuation 的 session 不参与该 sweep。session retention 只在新 session admission 时回收已终态、completion notification 已完成且 transcript history 不处于 `Prepared` 的记录；terminal/progress/delivery reducer 不得隐式 trim。容量已满且没有安全可回收记录时，actor 提交 typed `CAPACITY_EXHAUSTED` rejection，且不得启动 LLM/tool。`OUTCOME_UNCERTAIN` 不是失败别名：它只允许由同一 authoritative session 的明确 `COMPLETED` 或 `FAILED` fact 对账；后两者是吸收态。合法对账复用 session identity，重置 completion outbox，并用包含 typed outcome 的 deduplication operation id 重新投递一次。
+
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
@@ -358,6 +439,19 @@ flowchart LR
 3. `src/Aevatar.AI.Core/RoleGAgent.cs:114`
 4. `src/workflow/Aevatar.Workflow.Core/Modules/ToolCallModule.cs:53`
 5. `src/Aevatar.AI.Abstractions/ai_messages.proto:34`
+
+### 8.1.1 Mutating receipt grounding and terminal delivery
+
+LLM 文本不是外部写操作结果的事实源。只有同一 turn 内 `Status=Success`、`Effect=Mutating`，并且 `call_id`、tool、side effect 与 typed subject 都和具体动作匹配的 `AgentToolReceipt`，才允许支撑面向用户的写成功声明。probe、workflow run、read 或无关动作的成功回执不能证明目标动作成功。`Effect` 必须由 executor 根据本次调用的 `GetCallSafety(argumentsJson)` 与 `SideEffectKind` 确定为 `ReadOnly` 或 `Mutating`；`Unspecified` 只用于兼容，不能作为 mutation success evidence。
+
+每次生成请求都必须携带“成功回执只证明匹配动作”的 request-local grounding constraint；本 turn 尚无 successful mutating receipt 时，再附加 no-success 约束。constraint 负责约束 zero-receipt 或 unrelated-success 场景的模型措辞，最终投递仍必须确定性执行 receipt authority。对同一非空 `call_id + tool`，最后一条 receipt 是 terminal authority；空 `call_id` 的 receipts 保持彼此独立，不得互相覆盖。provider 未返回 call id 时，runtime 生成的匿名 ID 必须包含 request/round identity。完成对账后，mutating receipt 的 terminal delivery 规则如下：
+
+| Reconciled status | Final delivery behavior |
+|---|---|
+| `Success` | 仅在 tool、side effect 与 typed subject 同样匹配时，允许支撑对应动作的成功声明。 |
+| `Error` / `ApprovalRequired` / `Denied` / `AuthorizationRequired` / `Unspecified` | 用 deterministic receipt text 替换模型成功叙述，并同时写入 streaming snapshot、reply、outbound intent 与本 turn assistant history；必须保持用户可见。`ApprovalRequired` 的确定性文案保留 approval request evidence。 |
+
+Assistant tool-call history 中与 blocking receipt 匹配的 narrative 必须清空，同时保留 tool call/result pairing，避免下一 turn 重放虚假成功。Read-only failure 可以追加为用户可见诊断，但不替换一个其他方面有效的回答；追加后的实际可见文本也必须同步进 retained history。`use_skill` 省略 `mount_workflows` 时只是 read-only 的 skill/instruction load，该成功回执不能证明 workflow mount；`mount_workflows=true` 是单独的 mutating operation，只有其 matching successful mutating receipt 才能证明挂载完成。
 
 ### 8.2 WorkflowRunEvent（输出统一事件）
 

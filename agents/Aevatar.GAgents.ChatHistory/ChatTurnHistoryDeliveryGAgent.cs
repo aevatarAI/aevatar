@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -6,6 +7,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Workflow.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.ChatHistory;
 
@@ -18,15 +20,18 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
     private const string ConversationAppendPublisherId = "chat-history-turn-delivery";
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _dispatchPort;
+    private readonly ILogger<ChatTurnHistoryDeliveryGAgent> _logger;
     private readonly TimeProvider _timeProvider;
 
     public ChatTurnHistoryDeliveryGAgent(
         IActorRuntime actorRuntime,
         IActorDispatchPort dispatchPort,
+        ILogger<ChatTurnHistoryDeliveryGAgent> logger,
         TimeProvider? timeProvider = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -38,6 +43,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             .On<ChatTurnHistoryDeliveryReservedEvent>(ApplyReserved)
             .On<ChatTurnHistoryDeliveryBoundEvent>(ApplyBound)
             .On<ChatTurnHistoryDeliveryTerminalFrameObserved>(ApplyTerminalFrameObserved)
+            .On<ChatTurnHistoryDeliveryTerminalReconciledEvent>(ApplyTerminalReconciled)
             .On<ChatTurnHistoryDeliveryAppendDispatchedEvent>(ApplyAppendDispatched)
             .On<ChatTurnHistoryDeliveryAppendResultRecordedEvent>(ApplyAppendResultRecorded)
             .On<ChatTurnHistoryDeliveryAbandonedEvent>(ApplyAbandoned)
@@ -119,6 +125,16 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
     {
         ArgumentNullException.ThrowIfNull(notification);
         var publisherActorId = ActiveInboundEnvelope?.Route?.PublisherActorId?.Trim() ?? string.Empty;
+        _logger.LogWarning(
+            "Chat turn history delivery workflow terminal notification received: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} sourceActorId={SourceActorId} publisherActorId={PublisherActorId} sourceCommandId={SourceCommandId} status={TerminalStatus} currentStatus={CurrentStatus} terminalStatus={CurrentTerminalStatus}",
+            Id,
+            notification.DeliveryId,
+            notification.WorkflowActorId,
+            publisherActorId,
+            notification.WorkflowCommandId,
+            notification.Status,
+            State.Status,
+            State.TerminalStatus);
         if (!IsValidNotificationEnvelope(notification, publisherActorId) ||
             !IsCurrentSource(notification.DeliveryId, notification.WorkflowActorId, notification.WorkflowCommandId))
         {
@@ -165,24 +181,54 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         };
         if (State.TerminalStatus != ChatTurnTerminalStatus.Unspecified)
         {
-            if (!HasSameTerminalFrame(State, terminal))
+            if (HasSameTerminalFrame(State, terminal))
+            {
+                if (State.Status is ChatTurnHistoryDeliveryStatus.Reserved or ChatTurnHistoryDeliveryStatus.Bound)
+                    await DispatchPendingTerminalAppendAsync(CancellationToken.None).ConfigureAwait(false);
+                return;
+            }
+
+            if (State.Status != ChatTurnHistoryDeliveryStatus.AppendCommitted ||
+                !CanReconcileTerminal(State.TerminalStatus, terminal.Status))
                 throw new InvalidOperationException("Chat history delivery terminal conflicts with the committed terminal.");
 
-            if (State.Status is ChatTurnHistoryDeliveryStatus.Reserved or ChatTurnHistoryDeliveryStatus.Bound)
-                await DispatchPendingTerminalAppendAsync(CancellationToken.None).ConfigureAwait(false);
+            await PersistDomainEventAsync(new ChatTurnHistoryDeliveryTerminalReconciledEvent
+            {
+                DeliveryId = terminal.DeliveryId,
+                SourceActorId = terminal.SourceActorId,
+                SourceCommandId = terminal.SourceCommandId,
+                PreviousStatus = State.TerminalStatus,
+                Status = terminal.Status,
+                Text = terminal.Text,
+                ErrorCode = terminal.ErrorCode,
+                ObservedAtUnixMs = terminal.ObservedAtUnixMs,
+            });
+            await DispatchPendingTerminalAppendAsync(CancellationToken.None).ConfigureAwait(false);
             return;
         }
 
         if (State.Status is not (ChatTurnHistoryDeliveryStatus.Reserved or ChatTurnHistoryDeliveryStatus.Bound))
             return;
 
+        var terminalFramePersistStarted = Stopwatch.GetTimestamp();
         await PersistDomainEventAsync(terminal);
+        _logger.LogWarning(
+            "Chat turn history delivery terminal frame persisted: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} sourceActorId={SourceActorId} sourceCommandId={SourceCommandId} status={TerminalStatus} currentStatus={CurrentStatus} elapsedMs={ElapsedMs}",
+            Id,
+            State.DeliveryId,
+            State.SourceActorId,
+            State.SourceCommandId,
+            State.TerminalStatus,
+            State.Status,
+            Stopwatch.GetElapsedTime(terminalFramePersistStarted).TotalMilliseconds);
         await DispatchPendingTerminalAppendAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
     private async Task DispatchPendingTerminalAppendAsync(CancellationToken ct)
     {
-        if (State.Status is not (ChatTurnHistoryDeliveryStatus.Reserved or ChatTurnHistoryDeliveryStatus.Bound) ||
+        if (State.Status is not (ChatTurnHistoryDeliveryStatus.Reserved or
+                                ChatTurnHistoryDeliveryStatus.Bound or
+                                ChatTurnHistoryDeliveryStatus.TerminalReconciliationPrepared) ||
             State.TerminalStatus == ChatTurnTerminalStatus.Unspecified)
         {
             return;
@@ -190,7 +236,28 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
 
         var appendCommand = BuildAppendCommandFromState();
         var conversationActorId = ChatHistoryActorIds.Conversation(State.ScopeId, State.ConversationId);
-        if (!await _actorRuntime.ExistsAsync(conversationActorId).ConfigureAwait(false))
+        var appendAttempt = Math.Max(1, State.AppendAttempt + 1);
+        _logger.LogWarning(
+            "Chat turn history delivery append dispatch starting: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} conversationActorId={ConversationActorId} sourceActorId={SourceActorId} sourceCommandId={SourceCommandId} appendAttempt={AppendAttempt} currentStatus={CurrentStatus} terminalStatus={TerminalStatus}",
+            Id,
+            State.DeliveryId,
+            conversationActorId,
+            State.SourceActorId,
+            State.SourceCommandId,
+            appendAttempt,
+            State.Status,
+            State.TerminalStatus);
+        var existsStarted = Stopwatch.GetTimestamp();
+        var conversationExists = await _actorRuntime.ExistsAsync(conversationActorId).ConfigureAwait(false);
+        _logger.LogWarning(
+            "Chat turn history delivery conversation exists check completed: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} conversationActorId={ConversationActorId} sourceCommandId={SourceCommandId} exists={Exists} elapsedMs={ElapsedMs}",
+            Id,
+            State.DeliveryId,
+            conversationActorId,
+            State.SourceCommandId,
+            conversationExists,
+            Stopwatch.GetElapsedTime(existsStarted).TotalMilliseconds);
+        if (!conversationExists)
         {
             if (!State.CreateConversationIfMissing)
             {
@@ -204,8 +271,16 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
                 return;
             }
 
+            var createStarted = Stopwatch.GetTimestamp();
             await _actorRuntime.CreateAsync<ChatConversationGAgent>(conversationActorId, ct)
                 .ConfigureAwait(false);
+            _logger.LogWarning(
+                "Chat turn history delivery conversation create completed: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} conversationActorId={ConversationActorId} sourceCommandId={SourceCommandId} elapsedMs={ElapsedMs}",
+                Id,
+                State.DeliveryId,
+                conversationActorId,
+                State.SourceCommandId,
+                Stopwatch.GetElapsedTime(createStarted).TotalMilliseconds);
         }
 
         var envelope = new EventEnvelope
@@ -221,10 +296,23 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
                     : State.SourceCorrelationId,
             },
         };
-        envelope.EnsureRuntime().EnsureDeduplication().OperationId = $"chat-history-append:{State.DeliveryId}";
+        envelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId =
+            $"chat-history-append:{State.DeliveryId}:{appendAttempt}";
 
+        var dispatchStarted = Stopwatch.GetTimestamp();
         var admission = await _dispatchPort.DispatchAsync(conversationActorId, envelope, ct)
             .ConfigureAwait(false);
+        _logger.LogWarning(
+            "Chat turn history delivery append dispatch completed: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} conversationActorId={ConversationActorId} sourceCommandId={SourceCommandId} appendAttempt={AppendAttempt} accepted={Accepted} commandId={CommandId} correlationId={CorrelationId} elapsedMs={ElapsedMs}",
+            Id,
+            State.DeliveryId,
+            conversationActorId,
+            State.SourceCommandId,
+            appendAttempt,
+            admission.Accepted,
+            admission.CommandId,
+            admission.CorrelationId,
+            Stopwatch.GetElapsedTime(dispatchStarted).TotalMilliseconds);
         if (!admission.Accepted)
         {
             await PersistFailureAsync(
@@ -237,18 +325,34 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             return;
         }
 
+        _logger.LogWarning(
+            "Chat turn history delivery append dispatched event persisting: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} conversationActorId={ConversationActorId} sourceCommandId={SourceCommandId} appendAttempt={AppendAttempt}",
+            Id,
+            State.DeliveryId,
+            conversationActorId,
+            State.SourceCommandId,
+            appendAttempt);
+        var appendDispatchedPersistStarted = Stopwatch.GetTimestamp();
         await PersistDomainEventAsync(new ChatTurnHistoryDeliveryAppendDispatchedEvent
         {
             DeliveryId = State.DeliveryId,
             SourceActorId = State.SourceActorId,
             SourceCommandId = State.SourceCommandId,
-            AppendAttempt = Math.Max(1, State.AppendAttempt + 1),
+            AppendAttempt = appendAttempt,
             TerminalStatus = State.TerminalStatus,
             TerminalText = State.TerminalText,
             TerminalErrorCode = State.TerminalErrorCode,
             TerminalObservedAtUnixMs = State.TerminalObservedAtUnixMs,
             DispatchedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         });
+        _logger.LogWarning(
+            "Chat turn history delivery append dispatched event persisted: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} sourceCommandId={SourceCommandId} appendAttempt={AppendAttempt} currentStatus={CurrentStatus} elapsedMs={ElapsedMs}",
+            Id,
+            State.DeliveryId,
+            State.SourceCommandId,
+            appendAttempt,
+            State.Status,
+            Stopwatch.GetElapsedTime(appendDispatchedPersistStarted).TotalMilliseconds);
     }
 
     [EventHandler]
@@ -276,7 +380,8 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
 
     private AppendChatTurnCommand BuildAppendCommandFromState()
     {
-        var sanitizedError = State.TerminalStatus == ChatTurnTerminalStatus.Failed
+        var sanitizedError = State.TerminalStatus is
+            ChatTurnTerminalStatus.Failed or ChatTurnTerminalStatus.OutcomeUncertain
             ? SanitizeError(State.TerminalText, State.TerminalErrorCode)
             : State.TerminalStatus == ChatTurnTerminalStatus.Stopped
                 ? SanitizeError(string.Empty, State.TerminalErrorCode)
@@ -291,7 +396,10 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             {
                 TurnId = State.TurnId,
                 UserText = State.UserText,
-                AssistantText = State.TerminalStatus is ChatTurnTerminalStatus.Completed or ChatTurnTerminalStatus.Blocked
+                AssistantText = State.TerminalStatus is
+                    ChatTurnTerminalStatus.Completed or
+                    ChatTurnTerminalStatus.Blocked or
+                    ChatTurnTerminalStatus.OutcomeUncertain
                     ? State.TerminalText?.Trim() ?? string.Empty
                     : string.Empty,
                 TerminalStatus = State.TerminalStatus,
@@ -429,6 +537,12 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         string.Equals(state.TerminalErrorCode, terminal.ErrorCode, StringComparison.Ordinal) &&
         state.TerminalObservedAtUnixMs == terminal.ObservedAtUnixMs;
 
+    private static bool CanReconcileTerminal(
+        ChatTurnTerminalStatus current,
+        ChatTurnTerminalStatus candidate) =>
+        current == ChatTurnTerminalStatus.OutcomeUncertain &&
+        candidate is ChatTurnTerminalStatus.Completed or ChatTurnTerminalStatus.Failed;
+
     private static bool HasSameReservation(
         ChatTurnHistoryDeliveryState state,
         ChatTurnHistoryDeliveryReserveRequested command) =>
@@ -513,6 +627,27 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         ChatTurnHistoryDeliveryTerminalFrameObserved evt)
     {
         var next = current.Clone();
+        next.TerminalStatus = evt.Status;
+        next.TerminalText = evt.Text;
+        next.TerminalErrorCode = evt.ErrorCode;
+        next.TerminalObservedAtUnixMs = evt.ObservedAtUnixMs;
+        next.ErrorCode = string.Empty;
+        next.ErrorSummary = string.Empty;
+        return next;
+    }
+
+    private static ChatTurnHistoryDeliveryState ApplyTerminalReconciled(
+        ChatTurnHistoryDeliveryState current,
+        ChatTurnHistoryDeliveryTerminalReconciledEvent evt)
+    {
+        if (current.TerminalStatus != evt.PreviousStatus ||
+            !CanReconcileTerminal(current.TerminalStatus, evt.Status))
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.Status = ChatTurnHistoryDeliveryStatus.TerminalReconciliationPrepared;
         next.TerminalStatus = evt.Status;
         next.TerminalText = evt.Text;
         next.TerminalErrorCode = evt.ErrorCode;

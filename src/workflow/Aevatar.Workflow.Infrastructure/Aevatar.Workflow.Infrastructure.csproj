@@ -34,7 +34,7 @@
     <PackageReference Include="UglyToad.PdfPig" />
   </ItemGroup>
   <ItemGroup>
-    <EmbeddedResource Include="CapabilityApi\workflow-observatory.html" />
+    <EmbeddedResource Include="CapabilityApi\admin-workflow-observatory.html" />
     <EmbeddedResource Include="CapabilityApi\workflow-studio.html" />
   </ItemGroup>
 </Project>

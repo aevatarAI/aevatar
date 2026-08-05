@@ -7,7 +7,7 @@
 <style>
   /* =========================================================================
      Aevatar Console · /workflow/skills 「Skills 调用入口」
-     与 /workflow/observatory 同源：同一套 design tokens、深色为主 + 完整浅色、
+     与 /admin#/observatory 同源：同一套 design tokens、深色为主 + 完整浅色、
      响应式、键盘可达、zh-CN。单文件自包含，零外部依赖。
      JS 仅为结构性占位（渲染函数 + 各态骨架）；真实 OIDC PKCE 鉴权与 fetch 由接线方注入。
      ========================================================================= */
@@ -332,7 +332,7 @@
      scheduleAction(id,act)  POST /api/schedules/{id}:enable|:disable|:run-now / DELETE
    渲染函数与契约解耦：render*(data) 形状即「给我数据我能渲染」。鉴权/网络/错误透传由接线方注入。
    =========================================================================== */
-const OBS = "/workflow/observatory";
+const OBS = "/admin#/observatory";
 let ACCOUNT = null;
 function nowMs(){ return Date.now(); }
 
@@ -348,6 +348,36 @@ function randomString(n){ const a=new Uint8Array(n); crypto.getRandomValues(a); 
 function getToken(){ const r=localStorage.getItem(TOKEN_KEY); if(!r)return null; try{return JSON.parse(r);}catch(e){return null;} }
 function setToken(t){ localStorage.setItem(TOKEN_KEY,JSON.stringify(t)); }
 function clearToken(){ localStorage.removeItem(TOKEN_KEY); }
+function isEmbeddedInAdmin(){ try{return window.parent&&window.parent!==window&&window.frameElement&&window.frameElement.getAttribute("data-console-frame")==="1";}catch(e){return false;} }
+function replacementToken(rejectedAccessToken){ const current=getToken(); return current&&current.access_token&&current.access_token!==rejectedAccessToken?current:null; }
+async function requestAdminShellTokenRefresh(rejectedAccessToken){
+  const existing=replacementToken(rejectedAccessToken); if(existing)return existing;
+  if(!isEmbeddedInAdmin())return null;
+  const requestId="auth-"+Date.now().toString(36)+"-"+randomString(10);
+  return await new Promise(resolve=>{
+    let timer=null,settled=false;
+    function finish(){ if(settled)return; settled=true; window.removeEventListener("message",onMessage); if(timer!==null)clearTimeout(timer); resolve(replacementToken(rejectedAccessToken)); }
+    function onMessage(ev){ const msg=ev.data||{}; if(ev.origin===location.origin&&ev.source===window.parent&&msg.source==="aevatar-backend-console-suite"&&msg.type==="auth-refresh-result"&&msg.requestId===requestId)finish(); }
+    window.addEventListener("message",onMessage); timer=setTimeout(finish,10000);
+    window.parent.postMessage({source:"aevatar-backend-console-suite",type:"auth-refresh-request",requestId,rejectedAccessToken},location.origin);
+  });
+}
+function signOutSilent(rejectedAccessToken){
+  const current=getToken(); if(rejectedAccessToken&&current&&current.access_token!==rejectedAccessToken)return false;
+  if(isEmbeddedInAdmin()){ window.parent.postMessage({source:"aevatar-backend-console-suite",type:"auth-required",reason:"登录已过期，请重新使用 NyxID 登录。",rejectedAccessToken:rejectedAccessToken||""},location.origin); return true; }
+  clearToken(); state.authed=false; state.listState="signedout";
+  render();
+  return true;
+}
+async function fetchWithConsoleAuth(path,opt){
+  let token=getToken(); if(!token||!token.access_token)throw apiError(401,"not-authenticated");
+  opt=opt||{};
+  function request(activeToken){ const headers=Object.assign({},opt.headers||{},{Authorization:"Bearer "+activeToken.access_token}); return fetch(path,Object.assign({},opt,{headers})); }
+  let res=await request(token); if(res.status!==401)return res;
+  let replacement=replacementToken(token.access_token); if(!replacement)replacement=await requestAdminShellTokenRefresh(token.access_token);
+  if(replacement&&replacement.access_token!==token.access_token){ token=replacement; res=await request(token); if(res.status!==401)return res; }
+  signOutSilent(token.access_token); throw apiError(401,"未登录或登录已过期");
+}
 async function beginLogin(){
   const v=randomString(64), st=randomString(32), ch=await sha256(v);
   sessionStorage.setItem(PKCE_KEY,JSON.stringify({verifier:v,state:st,returnTo:location.pathname}));
@@ -378,10 +408,7 @@ function mergeAccount(info){ const next=toAccount(info); if(!next)return; ACCOUN
 function accountScope(){ return (ACCOUNT&&ACCOUNT.scope)?String(ACCOUNT.scope).trim():""; }
 function apiError(status,message,body){ const e=new Error(message); e.status=status; e.body=body; return e; }
 async function api(path,opt){
-  const t=getToken(); if(!t)throw apiError(401,"not-authenticated");
-  const headers=Object.assign({Authorization:"Bearer "+t.access_token},(opt&&opt.headers)||{});
-  const res=await fetch(path,Object.assign({},opt||{},{headers}));
-  if(res.status===401){ clearToken(); state.authed=false; state.listState="signedout"; render(); throw apiError(401,"未登录或登录已过期"); }
+  const res=await fetchWithConsoleAuth(path,opt);
   const txt=await res.text(); let body=null; try{ body=txt?JSON.parse(txt):null; }catch(_){ body=txt; }
   if(!res.ok) throw apiError(res.status,(body&&(body.message||body.error||body.code))||("HTTP "+res.status),body);
   return body;
@@ -494,7 +521,7 @@ function applyTheme(){ const t=localStorage.getItem("skills-theme"); if(t)docume
    topbar
    =========================================================================== */
 const SUITE_NAV=[
-  {k:"observatory",href:"/workflow/observatory",label:"观测台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'},
+  {k:"observatory",href:"/admin#/observatory",label:"观测台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'},
   {k:"skills",href:"/workflow/skills",label:"Skills",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 13h7l-1 9 9-11h-7l1-9Z"/></svg>'},
   {k:"studio",href:"/workflow/studio",label:"Studio",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>'},
   {k:"schedules",href:"/schedules",label:"定时任务",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>'},

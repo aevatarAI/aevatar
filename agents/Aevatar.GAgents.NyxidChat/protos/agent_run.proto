@@ -192,6 +192,16 @@ message AgentRunToolCall {
   string arguments_json = 3;
 }
 
+message AgentRunPendingToolAuthorization {
+  AgentRunToolCall call = 1;
+  bool has_requires_approval = 2;
+  bool requires_approval = 3;
+  bool is_read_only = 4;
+  bool is_destructive = 5;
+  string side_effect_kind = 6;
+  string tool_definition_fingerprint = 7;
+}
+
 message AgentRunChatMessage {
   string role = 1;
   string content = 2;
@@ -230,6 +240,8 @@ message AgentRunReplyStepState {
   // tool-stripping / server-default-routing semantics of final_no_tools_step: the recovery retry
   // keeps tools + the user's routing + channel-context and only trims history to the recent floor.
   bool empty_reply_retry = 25;
+  repeated AgentRunPendingToolAuthorization pending_tool_authorizations = 26;
+  bool pending_tool_authorization_consumed = 27;
 }
 
 // Typed LLM IO facts returned by the executor. The run actor reconciles these
@@ -246,6 +258,7 @@ message AgentRunLlmStepResult {
   string finish_reason = 6;
   aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 7;
   bool has_streamed_text_content = 8;
+  repeated AgentRunPendingToolAuthorization pending_tool_authorizations = 10;
 }
 
 // Typed tool IO facts returned after the run actor has reconciled and persisted
@@ -468,6 +481,9 @@ enum ChannelWorkflowDraftRunStatus {
   CHANNEL_WORKFLOW_DRAFT_RUN_STATUS_STARTED = 1;
   CHANNEL_WORKFLOW_DRAFT_RUN_STATUS_REPLY_HANDED_OFF = 2;
   CHANNEL_WORKFLOW_DRAFT_RUN_STATUS_FAILED = 3;
+  // An immutable terminal reply has been committed, but actor-inbox admission
+  // and the corresponding final state event have not both completed yet.
+  CHANNEL_WORKFLOW_DRAFT_RUN_STATUS_TERMINAL_PRODUCED = 4;
 }
 
 message ChannelWorkflowDraftRunGAgentState {
@@ -480,6 +496,10 @@ message ChannelWorkflowDraftRunGAgentState {
   string error_code = 7;
   string error_summary = 8;
   string accumulated_text = 9;
+  aevatar.gagents.channel.runtime.NeedsWorkflowDraftRunEvent recovery_request = 10;
+  int64 recovery_deadline_unix_ms = 11;
+  aevatar.gagents.channel.runtime.LlmReplyReadyEvent produced_terminal_reply = 12;
+  string terminal_operation_id = 13;
 }
 
 message ChannelWorkflowDraftRunStartRequested {
@@ -492,6 +512,35 @@ message ChannelWorkflowDraftRunStartedEvent {
   string correlation_id = 2;
   string target_actor_id = 3;
   int64 started_at_unix_ms = 4;
+  aevatar.gagents.channel.runtime.NeedsWorkflowDraftRunEvent recovery_request = 5;
+  int64 recovery_deadline_unix_ms = 6;
+}
+
+// Durable self-timeout payload. The actor rehydrates the recovery request from
+// committed state so callback storage never contains runtime credentials.
+message ChannelWorkflowDraftRunRecoveryTimeoutElapsed {
+  string run_id = 1;
+  string correlation_id = 2;
+  int64 recovery_deadline_unix_ms = 3;
+}
+
+// Durable outbox fact. This is committed before actor-inbox admission is
+// attempted, so activation and retries only replay this immutable payload.
+message ChannelWorkflowDraftRunTerminalProducedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  aevatar.gagents.channel.runtime.LlmReplyReadyEvent terminal_reply = 4;
+  string operation_id = 5;
+  int64 produced_at_unix_ms = 6;
+}
+
+// Signal-only durable callback. The terminal payload is rehydrated from actor
+// state so callback storage contains no reply body or credential material.
+message ChannelWorkflowDraftRunTerminalHandoffRetryElapsed {
+  string run_id = 1;
+  string correlation_id = 2;
+  string operation_id = 3;
 }
 
 message ChannelWorkflowDraftRunFrame {

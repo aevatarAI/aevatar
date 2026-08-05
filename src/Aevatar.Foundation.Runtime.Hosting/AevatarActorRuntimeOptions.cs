@@ -1,3 +1,6 @@
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+
 namespace Aevatar.Foundation.Runtime.Hosting;
 
 public sealed class AevatarActorRuntimeOptions
@@ -39,13 +42,22 @@ public sealed class AevatarActorRuntimeOptions
 
     public int OrleansQueueCount { get; set; } = 8;
 
-    public int OrleansQueueCacheSize { get; set; } = 4096;
+    public int OrleansQueueCacheSize { get; set; } = AevatarOrleansRuntimeOptions.DefaultQueueCacheSize;
 
     public string KafkaBootstrapServers { get; set; } = "localhost:9092";
 
     public string KafkaTopicName { get; set; } = "aevatar-foundation-agent-events";
 
     public string KafkaConsumerGroup { get; set; } = "aevatar-foundation-kafka-streaming";
+
+    public int KafkaReceiverBufferCapacity { get; set; } =
+        KafkaProviderTransportOptions.DefaultReceiverBufferCapacity;
+
+    public int KafkaReceiverBufferHighWatermark { get; set; } =
+        KafkaProviderTransportOptions.DefaultReceiverBufferHighWatermark;
+
+    public int KafkaReceiverBufferLowWatermark { get; set; } =
+        KafkaProviderTransportOptions.DefaultReceiverBufferLowWatermark;
 
     public bool EventSourcingEnableSnapshots { get; set; } = true;
 

@@ -66,20 +66,22 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             ExpectedStateVersion = version,
             Kind = NyxIdChatRecoveryKind.InterruptedOperationReconciliation,
         };
-        var envelope = new EventEnvelope
-        {
-            Id = $"{State.AdmittedOperation.OperationId}:turn-recovery:{version}",
-            Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-            Payload = Any.Pack(signal),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication(
-                Id,
-                TopologyAudience.Self),
-            Propagation = new EnvelopePropagation
+        await PublishAsync(
+            signal,
+            TopologyAudience.Self,
+            ct,
+            new EventEnvelopePublishOptions
             {
-                CorrelationId = State.AdmittedOperation.OperationId,
-            },
-        };
-        await _actorDispatchPort.DispatchAsync(Id, envelope, ct);
+                Propagation = new EventEnvelopePropagationOverrides
+                {
+                    CorrelationId = State.AdmittedOperation.OperationId,
+                },
+                Delivery = new EventEnvelopeDeliveryOptions
+                {
+                    OperationId =
+                        $"{State.AdmittedOperation.OperationId}:turn-recovery:{version}",
+                },
+            });
     }
 
     [EventHandler]
@@ -95,7 +97,8 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         {
             Key = command.Key.Clone(),
             OperationKind = kind,
-            MayChangeExternalState = command.Tool?.MayChangeExternalState == true,
+            MayChangeExternalState = command.Tool?.MayChangeExternalState == true ||
+                                     command.ToolApprovalContinuation?.MayChangeExternalState == true,
             AdmittedAt = admittedAt,
         }, CancellationToken.None);
 
@@ -123,7 +126,8 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
                 {
                     FailureCode = ExecutionFailedCode,
                     SafeMessage = ExecutionFailedMessage,
-                    ExternalEffect = command.Tool?.MayChangeExternalState == true
+                    ExternalEffect = command.Tool?.MayChangeExternalState == true ||
+                                     command.ToolApprovalContinuation?.MayChangeExternalState == true
                         ? NyxIdChatEffectEvidence.MayHaveChanged
                         : NyxIdChatEffectEvidence.NotApplied,
                 },
@@ -287,7 +291,8 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             {
                 FailureCode = ResultKeyMismatchCode,
                 SafeMessage = ResultKeyMismatchMessage,
-                ExternalEffect = command.Tool?.MayChangeExternalState == true
+                ExternalEffect = command.Tool?.MayChangeExternalState == true ||
+                                 command.ToolApprovalContinuation?.MayChangeExternalState == true
                     ? NyxIdChatEffectEvidence.MayHaveChanged
                     : NyxIdChatEffectEvidence.NotApplied,
             },
@@ -421,7 +426,10 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         command.InputCase switch
         {
             NyxIdChatOperationDispatchCommand.InputOneofCase.Llm => NyxIdChatStepKind.Llm,
+            NyxIdChatOperationDispatchCommand.InputOneofCase.InputContinuation => NyxIdChatStepKind.Llm,
             NyxIdChatOperationDispatchCommand.InputOneofCase.Tool => NyxIdChatStepKind.Tool,
+            NyxIdChatOperationDispatchCommand.InputOneofCase.ToolApprovalContinuation =>
+                NyxIdChatStepKind.Tool,
             NyxIdChatOperationDispatchCommand.InputOneofCase.ActionPostcondition =>
                 NyxIdChatStepKind.Postcondition,
             _ => NyxIdChatStepKind.Unspecified,

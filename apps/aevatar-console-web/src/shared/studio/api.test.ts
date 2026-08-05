@@ -170,17 +170,21 @@ describe('studioApi host-session requests', () => {
       ok: true,
       status: 200,
       json: async () => ({
-        savedRoute: '/api/v1/proxy/s/openai',
+        savedSelection: {
+          routeKind: 'nyx_id_user_service',
+          routeValue: '/api/v1/proxy/s/chrono-llm-public',
+          nyxIdUserServiceId: 'us-alpha',
+          serviceSlugSnapshot: 'chrono-llm-public',
+          modelSelection: {
+            kind: 'explicit_model',
+            modelId: 'gpt-5.5',
+          },
+        },
         savedRouteLabel: 'OpenAI beta',
-        savedRouteKind: 'nyx_id_user_service',
-        savedUserServiceId: 'us-beta',
-        savedServiceSlug: 'openai',
-        effectiveRoute: '/api/v1/proxy/s/openai',
-        effectiveRouteLabel: 'OpenAI beta',
-        routeFallbackActive: false,
-        fallbackReason: null,
+        selectionStatus: 'needs_repair',
+        catalogDiagnostic: 'route_not_ready',
+        remediation: 'choose_replacement',
         catalogStatus: 'ready',
-        defaultModel: 'gpt-5.4-mini',
         capabilities: {
           canEditRoute: true,
           canEditModel: true,
@@ -197,7 +201,12 @@ describe('studioApi host-session requests', () => {
             ready: true,
             userServiceId: null,
             serviceSlug: null,
-            defaultModel: null,
+            modelCatalog: {
+              certainty: 'not_verifiable',
+              modelIds: [],
+              defaultModelId: null,
+              diagnostic: 'not_published',
+            },
             description: null,
           },
           {
@@ -209,19 +218,12 @@ describe('studioApi host-session requests', () => {
             ready: true,
             userServiceId: 'us-alpha',
             serviceSlug: 'openai',
-            defaultModel: 'gpt-5.4-mini',
-            description: null,
-          },
-          {
-            routeValue: '/api/v1/proxy/s/openai',
-            label: 'OpenAI beta',
-            source: 'user_service',
-            status: 'ready',
-            allowed: true,
-            ready: true,
-            userServiceId: 'us-beta',
-            serviceSlug: 'openai',
-            defaultModel: 'gpt-5.4',
+            modelCatalog: {
+              certainty: 'enumerated',
+              modelIds: ['gpt-5.5'],
+              defaultModelId: 'gpt-5.5',
+              diagnostic: 'unspecified',
+            },
             description: null,
           },
         ],
@@ -237,88 +239,37 @@ describe('studioApi host-session requests', () => {
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
-    await expect(studioApi.getUserLlmSettings()).resolves.toEqual({
-      savedRoute: '/api/v1/proxy/s/openai',
-      savedRouteLabel: 'OpenAI beta',
-      savedRouteKind: 'nyx_id_user_service',
-      savedUserServiceId: 'us-beta',
-      savedServiceSlug: 'openai',
-      effectiveRoute: '/api/v1/proxy/s/openai',
-      effectiveRouteLabel: 'OpenAI beta',
-      routeFallbackActive: false,
-      fallbackReason: null,
-      catalogStatus: 'ready',
-      defaultModel: 'gpt-5.4-mini',
-      capabilities: {
-        canEditRoute: true,
-        canEditModel: true,
-        canSave: true,
-        canRetryCatalog: false,
+    const settings = await studioApi.getUserLlmSettings();
+    expect(settings).toMatchObject({
+      savedSelection: {
+        routeKind: 'nyx_id_user_service',
+        routeValue: '/api/v1/proxy/s/chrono-llm-public',
+        nyxIdUserServiceId: 'us-alpha',
+        modelSelection: { kind: 'explicit_model', modelId: 'gpt-5.5' },
       },
-      routeOptions: [
-        {
-          routeValue: '/api/v1/llm/gateway/v1',
-          label: 'Company LLM Gateway',
-          source: 'gateway_provider',
-          status: 'ready',
-          allowed: true,
-          ready: true,
-          userServiceId: null,
-          serviceSlug: null,
-          defaultModel: null,
-          description: null,
-        },
-        {
-          routeValue: '/api/v1/proxy/s/openai',
-          label: 'OpenAI',
-          source: 'user_service',
-          status: 'ready',
-          allowed: true,
-          ready: true,
-          userServiceId: 'us-alpha',
-          serviceSlug: 'openai',
-          defaultModel: 'gpt-5.4-mini',
-          description: null,
-        },
-        {
-          routeValue: '/api/v1/proxy/s/openai',
-          label: 'OpenAI beta',
-          source: 'user_service',
-          status: 'ready',
-          allowed: true,
-          ready: true,
-          userServiceId: 'us-beta',
-          serviceSlug: 'openai',
-          defaultModel: 'gpt-5.4',
-          description: null,
-        },
-      ],
-      modelGroupsByRoute: [
-        {
-          routeValue: '',
-          groupId: 'openai',
-          label: 'OpenAI',
-          models: ['gpt-5.4-mini'],
-        },
-      ],
-      setupHint: undefined,
+      selectionStatus: 'needs_repair',
+      remediation: 'choose_replacement',
     });
+    expect(settings).not.toHaveProperty('effectiveRoute');
+    expect(settings).not.toHaveProperty('routeFallbackActive');
   });
 
-  it('maps an unknown saved LLM selection kind to the fail-closed variant', async () => {
+  it('rejects an unknown LLM selection enum at the adapter boundary', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
       json: async () => ({
-        savedRoute: '/api/v1/proxy/s/openai',
+        savedSelection: {
+          routeKind: 'future_selection_kind',
+          routeValue: '/api/v1/proxy/s/openai',
+          nyxIdUserServiceId: 'us-alpha',
+          serviceSlugSnapshot: 'openai',
+          modelSelection: { kind: 'provider_default', modelId: null },
+        },
         savedRouteLabel: 'OpenAI alpha',
-        savedRouteKind: 'future_selection_kind',
-        savedUserServiceId: 'us-alpha',
-        savedServiceSlug: 'openai',
-        effectiveRoute: '/api/v1/llm/gateway/v1',
-        effectiveRouteLabel: 'Gateway',
-        routeFallbackActive: true,
-        fallbackReason: 'saved_route_unavailable',
+        selectionStatus: 'needs_repair',
+        catalogDiagnostic: 'route_not_ready',
+        remediation: 'choose_replacement',
         routeOptions: [],
         modelGroupsByRoute: [],
         catalogStatus: 'ready',
@@ -328,19 +279,46 @@ describe('studioApi host-session requests', () => {
           canSave: true,
           canRetryCatalog: false,
         },
-        defaultModel: '',
         setupHint: null,
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
-    await expect(studioApi.getUserLlmSettings()).resolves.toMatchObject({
-      savedRouteKind: 'unknown',
-      savedUserServiceId: 'us-alpha',
-    });
+    await expect(studioApi.getUserLlmSettings()).rejects.toThrow(
+      'StudioUserLlmSettings.savedSelection.routeKind is not supported.',
+    );
   });
 
-  it('saves an exact inventory-backed LLM service selection', async () => {
+  it.each([
+    [
+      'reset',
+      { action: 'reset' } as const,
+    ],
+    [
+      'Gateway',
+      {
+        action: 'select_gateway',
+        gateway: { model: { kind: 'provider_default' } },
+      } as const,
+    ],
+    [
+      'user service',
+      {
+        action: 'select_user_service',
+        userService: {
+          userServiceId: 'us-beta',
+          model: { kind: 'explicit_model', modelId: 'gpt-5.4-mini' },
+        },
+      } as const,
+    ],
+    [
+      'preset',
+      {
+        action: 'activate_preset',
+        preset: { presetId: 'work-fast' },
+      } as const,
+    ],
+  ])('sends the typed %s LLM intent unchanged', async (_label, intent) => {
     persistAuthSession({
       tokens: {
         accessToken: 'access-token',
@@ -355,7 +333,7 @@ describe('studioApi host-session requests', () => {
       status: 202,
       json: async () => ({
         accepted: true,
-        commandId: 'cmd-1',
+        commandId: 'cmd-typed',
         ackStage: 'accepted_for_dispatch',
         actorId: 'user-1',
         correlationId: 'corr-1',
@@ -364,60 +342,13 @@ describe('studioApi host-session requests', () => {
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
-    await studioApi.saveUserLlmSettings({
-      userServiceId: ' us-beta ',
-      model: ' gpt-5.4-mini ',
-    });
+    await studioApi.saveUserLlmSettings(intent);
 
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/user-config/llm',
       expect.objectContaining({
         method: 'PUT',
-        body: JSON.stringify({
-          userServiceId: 'us-beta',
-          model: 'gpt-5.4-mini',
-        }),
-      }),
-    );
-  });
-
-  it('saves the Gateway route without a user service identity', async () => {
-    persistAuthSession({
-      tokens: {
-        accessToken: 'access-token',
-        tokenType: 'Bearer',
-        expiresIn: 3600,
-        expiresAt: Date.now() + 3_600_000,
-      },
-      user: { sub: 'user-1' },
-    });
-    const fetchMock = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 202,
-      json: async () => ({
-        accepted: true,
-        commandId: 'cmd-2',
-        ackStage: 'accepted_for_dispatch',
-        actorId: 'user-1',
-        correlationId: 'corr-2',
-        ackedAtUtc: '2026-07-23T08:01:00Z',
-      }),
-    } as Response);
-    global.fetch = fetchMock as typeof global.fetch;
-
-    await studioApi.saveUserLlmSettings({
-      routeValue: ' /api/v1/llm/gateway/v1 ',
-      model: null,
-    });
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/user-config/llm',
-      expect.objectContaining({
-        method: 'PUT',
-        body: JSON.stringify({
-          routeValue: '/api/v1/llm/gateway/v1',
-          model: '',
-        }),
+        body: JSON.stringify(intent),
       }),
     );
   });

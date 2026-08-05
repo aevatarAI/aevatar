@@ -6,7 +6,6 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Foundation.Runtime.Deduplication;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Application.Runtime;
@@ -107,16 +106,9 @@ public sealed class ScriptBehaviorCompletionNotificationTests
             TimeSpan.FromSeconds(2));
 
         var operationIds = scheduler.TimeoutRequests
-            .Select(static request => request.TriggerEnvelope.Runtime!.Deduplication!.OperationId)
+            .Select(static request => request.TriggerEnvelope.Runtime!.DeliveryIdentity!.OperationId)
             .ToArray();
         operationIds.Should().OnlyHaveUniqueItems();
-        var deduplicator = new MemoryCacheDeduplicator();
-        foreach (var retryEnvelope in scheduler.TimeoutRequests.Select(static request => request.TriggerEnvelope))
-        {
-            RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, retryEnvelope, out var dedupKey)
-                .Should().BeTrue();
-            (await deduplicator.TryRecordAsync(dedupKey)).Should().BeTrue();
-        }
 
         var handler = typeof(ScriptBehaviorGAgent).GetMethod(
             nameof(ScriptBehaviorGAgent.HandleRunOutcomeRetryFiredAsync));
@@ -558,16 +550,11 @@ public sealed class ScriptBehaviorCompletionNotificationTests
         var retry = recovery.Event.Should()
             .BeOfType<ScriptRunOutcomeNotificationRetryFiredEvent>().Subject;
         retry.Attempt.Should().Be(1);
-        recovery.Options!.Delivery!.DeduplicationOperationId.Should()
+        recovery.Options!.Delivery!.OperationId.Should()
             .Be("script-run-terminal-retry:run-1:delivery-1:1");
 
         scheduler.ScheduleException = null;
         var recoveryEnvelope = BuildSelfEnvelope(actor.Id, retry, recovery.Options);
-        var deduplicator = new MemoryCacheDeduplicator();
-        RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, recoveryEnvelope, out var recoveryDedupKey)
-            .Should().BeTrue();
-        (await deduplicator.TryRecordAsync(recoveryDedupKey)).Should().BeTrue();
-        (await deduplicator.TryRecordAsync(recoveryDedupKey)).Should().BeFalse();
         publisher.SendException = null;
         await actor.HandleEventAsync(recoveryEnvelope);
         await actor.HandleEventAsync(recoveryEnvelope);
@@ -823,9 +810,9 @@ public sealed class ScriptBehaviorCompletionNotificationTests
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(actorId, TopologyAudience.Self),
             Runtime = new EnvelopeRuntime
             {
-                Deduplication = new DeliveryDeduplication
+                DeliveryIdentity = new DeliveryIdentity
                 {
-                    OperationId = options.Delivery!.DeduplicationOperationId,
+                    OperationId = options.Delivery!.OperationId,
                 },
             },
         };

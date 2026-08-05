@@ -1,11 +1,81 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Google.Protobuf;
 
 namespace Aevatar.AI.ToolProviders.Binding.Tools;
+
+public abstract class ExternalWorkflowCapabilityReadOnlyTool : IAgentTool
+{
+    public abstract string Name { get; }
+
+    public abstract string Description { get; }
+
+    public abstract string ParametersSchema { get; }
+
+    public bool IsReadOnly => true;
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson)
+    {
+        if (string.IsNullOrWhiteSpace(resultJson))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return null;
+
+            if (root.TryGetProperty("error", out var error) &&
+                error.ValueKind == JsonValueKind.String)
+            {
+                return new AgentToolReceipt
+                {
+                    CallId = callId ?? string.Empty,
+                    ToolName = ResolveToolName(toolName),
+                    Status = AgentToolReceiptStatus.Error,
+                    ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+                    ErrorCode = "external_workflow_capability_query_failed",
+                    ErrorMessage = "External workflow capability query failed.",
+                    ResultJson = resultJson,
+                };
+            }
+
+            if (!IsVerifiedResult(root))
+                return null;
+
+            return new AgentToolReceipt
+            {
+                CallId = callId ?? string.Empty,
+                ToolName = ResolveToolName(toolName),
+                Status = AgentToolReceiptStatus.Success,
+                ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+                ResultJson = resultJson,
+            };
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    public abstract Task<string> ExecuteAsync(
+        string argumentsJson,
+        CancellationToken ct = default);
+
+    protected abstract bool IsVerifiedResult(JsonElement result);
+
+    private string ResolveToolName(string? toolName) =>
+        string.IsNullOrWhiteSpace(toolName) ? Name : toolName;
+}
 
 internal static class ExternalWorkflowCapabilityToolSupport
 {
@@ -76,12 +146,11 @@ internal static class ExternalWorkflowCapabilityToolSupport
             return false;
         }
 
+        var credentials = AgentToolRequestContext.Current?.Credentials;
         access = new ExternalWorkflowCapabilityAccessContext(
             scopeId,
             callerId,
-            ResolveCallerCredential(
-                AgentToolRequestContext.NyxIdCredentialKind,
-                AgentToolRequestContext.NyxIdAccessToken),
+            ResolveCallerCredential(credentials),
             AgentToolRequestContext.NyxIdOrgToken);
         error = null;
         return true;
@@ -156,11 +225,20 @@ internal static class ExternalWorkflowCapabilityToolSupport
     };
 
     private static NyxIdCallerCredentialSelection? ResolveCallerCredential(
-        AgentToolNyxIdCredentialKind kind,
-        string? bearerToken) =>
-        string.IsNullOrWhiteSpace(bearerToken)
+        AgentToolCredentials? credentials)
+    {
+        var sourceReadableBearerToken =
+            AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(credentials);
+        if (sourceReadableBearerToken is not null)
+        {
+            return NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                sourceReadableBearerToken);
+        }
+
+        var bearerToken = credentials?.NyxIdAccessToken;
+        return string.IsNullOrWhiteSpace(bearerToken)
             ? null
-            : kind switch
+            : credentials!.NyxIdCredentialKind switch
             {
                 AgentToolNyxIdCredentialKind.SourceReadableUserBearer =>
                     NyxIdCallerCredentialSelection.SourceReadableUserBearer(bearerToken),
@@ -168,4 +246,5 @@ internal static class ExternalWorkflowCapabilityToolSupport
                     NyxIdCallerCredentialSelection.ProxyDelegation(bearerToken),
                 _ => null,
             };
+    }
 }

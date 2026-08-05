@@ -4,11 +4,9 @@ jest.mock("@/shared/auth/fetch", () => ({
 
 import { authFetch } from "@/shared/auth/fetch";
 import {
-  ChatHistoryApiError,
   ChatHistoryContractError,
   chatHistoryApi,
   decodeChatConversationDetail,
-  decodeChatCreateRecovery,
   decodeChatHistoryIndex,
 } from "./chatHistoryApi";
 
@@ -26,56 +24,22 @@ describe("chatHistoryApi", () => {
     jest.clearAllMocks();
   });
 
-  it("loads and decodes the authenticated conversation index", async () => {
-    (authFetch as jest.Mock).mockResolvedValue(
-      jsonResponse({
-        conversations: [
-          {
-            createdAt: "2026-07-17T02:30:00+00:00",
-            id: "conversation-a",
-            llmModel: null,
-            llmRoute: "/api/v1/proxy/s/openai",
-            messageCount: 2,
-            title: "Create support workflow",
-            updatedAt: "2026-07-17T02:35:00+00:00",
-          },
-        ],
-      })
-    );
-
-    await expect(
-      chatHistoryApi.listConversationMetas(" scope/a ")
-    ).resolves.toEqual([
-      {
-        createdAt: "2026-07-17T02:30:00+00:00",
-        id: "conversation-a",
-        llmModel: null,
-        llmRoute: "/api/v1/proxy/s/openai",
-        messageCount: 2,
-        title: "Create support workflow",
-        updatedAt: "2026-07-17T02:35:00+00:00",
-      },
-    ]);
-    expect(authFetch).toHaveBeenCalledWith(
-      "/api/scopes/scope%2Fa/chat-history",
-      {
-        headers: { Accept: "application/json" },
-        method: "GET",
-      }
-    );
-  });
-
-  it("follows opaque index cursors and combines every page", async () => {
+  it("loads every canonical conversation page with opaque cursors", async () => {
     (authFetch as jest.Mock)
       .mockResolvedValueOnce(
         jsonResponse({
           conversations: [
             {
-              createdAt: "2026-07-17T02:30:00+00:00",
+              activeStepSummary: "Connect GitHub",
+              attentionKind: "action",
+              attentionSince: "2026-08-04T02:35:00+00:00",
+              createdAt: "2026-08-04T02:30:00+00:00",
               id: "conversation-new",
               messageCount: 2,
+              stateVersion: 7,
+              taskStatus: "blocked",
               title: "New conversation",
-              updatedAt: "2026-07-17T02:35:00+00:00",
+              updatedAt: "2026-08-04T02:35:00+00:00",
             },
           ],
           nextCursor: "opaque+/cursor==",
@@ -85,11 +49,11 @@ describe("chatHistoryApi", () => {
         jsonResponse({
           conversations: [
             {
-              createdAt: "2026-07-16T02:30:00+00:00",
+              createdAt: "2026-08-03T02:30:00+00:00",
               id: "conversation-old",
               messageCount: 4,
               title: "Old conversation",
-              updatedAt: "2026-07-16T02:35:00+00:00",
+              updatedAt: "2026-08-03T02:35:00+00:00",
             },
           ],
           nextCursor: null,
@@ -98,16 +62,19 @@ describe("chatHistoryApi", () => {
 
     const controller = new AbortController();
     await expect(
-      chatHistoryApi.listConversationMetas("scope-a", controller.signal)
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "conversation-new" }),
-        expect.objectContaining({ id: "conversation-old" }),
-      ])
-    );
+      chatHistoryApi.listConversationMetas(controller.signal)
+    ).resolves.toEqual([
+      expect.objectContaining({
+        attentionKind: "action",
+        id: "conversation-new",
+        stateVersion: 7,
+        taskStatus: "blocked",
+      }),
+      expect.objectContaining({ id: "conversation-old" }),
+    ]);
     expect(authFetch).toHaveBeenNthCalledWith(
       1,
-      "/api/scopes/scope-a/chat-history",
+      "/api/chat/conversations",
       {
         headers: { Accept: "application/json" },
         method: "GET",
@@ -116,7 +83,7 @@ describe("chatHistoryApi", () => {
     );
     expect(authFetch).toHaveBeenNthCalledWith(
       2,
-      "/api/scopes/scope-a/chat-history?cursor=opaque%2B%2Fcursor%3D%3D",
+      "/api/chat/conversations?cursor=opaque%2B%2Fcursor%3D%3D",
       {
         headers: { Accept: "application/json" },
         method: "GET",
@@ -125,44 +92,77 @@ describe("chatHistoryApi", () => {
     );
   });
 
-  it("loads and validates create recovery identity", async () => {
-    (authFetch as jest.Mock).mockResolvedValue(
-      jsonResponse({
-        conversationId: "conversation-a",
-        stateVersion: 3,
-        status: "append_committed",
-        turnId: "turn-a",
-      })
-    );
+  it("loads the canonical transcript and conditional current state", async () => {
+    const transcript = {
+      messages: [],
+      projectionStatus: "current",
+      stateVersion: 7,
+    };
+    const state = {
+      snapshot: {
+        actorId: "conversation/a",
+        progressSequence: 8,
+        scopeId: "scope-a",
+        stateVersion: 8,
+      },
+      stateVersion: 8,
+      status: "current",
+      turnId: "turn/a",
+    };
+    (authFetch as jest.Mock)
+      .mockResolvedValueOnce(jsonResponse(transcript))
+      .mockResolvedValueOnce(jsonResponse(state));
+    const controller = new AbortController();
 
     await expect(
-      chatHistoryApi.recoverCreate("scope/a", "create/key")
-    ).resolves.toEqual({
-      conversationId: "conversation-a",
-      stateVersion: 3,
-      status: "append_committed",
-      turnId: "turn-a",
-    });
-    expect(authFetch).toHaveBeenCalledWith(
-      "/api/scopes/scope%2Fa/chat-history/create-recovery/create%2Fkey",
+      chatHistoryApi.loadConversation(" conversation/a ", controller.signal)
+    ).resolves.toEqual(transcript);
+    await expect(
+      chatHistoryApi.loadConversationState(
+        " conversation/a ",
+        { afterStateVersion: 7, turnId: " turn/a " },
+        controller.signal
+      )
+    ).resolves.toEqual(state);
+
+    expect(authFetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/chat/conversations/conversation%2Fa",
       {
         headers: { Accept: "application/json" },
         method: "GET",
+        signal: controller.signal,
       }
     );
-    expect(() =>
-      decodeChatCreateRecovery({
-        conversationId: "conversation-a",
-        stateVersion: -1,
-        status: "reserved",
-        turnId: "turn-a",
-      })
-    ).toThrow(ChatHistoryContractError);
+    expect(authFetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/chat/conversations/conversation%2Fa/state?afterStateVersion=7&turnId=turn%2Fa",
+      {
+        headers: { Accept: "application/json" },
+        method: "GET",
+        signal: controller.signal,
+      }
+    );
   });
 
-  it("preserves documented message fields and unknown role or status strings", async () => {
-    (authFetch as jest.Mock).mockResolvedValue(
-      jsonResponse({
+  it("preserves the typed not_found state carried by HTTP 404", async () => {
+    const payload = { status: "not_found" };
+    (authFetch as jest.Mock).mockResolvedValue({
+      json: jest.fn().mockResolvedValue(payload),
+      ok: false,
+      status: 404,
+      statusText: "Not Found",
+      text: jest.fn().mockResolvedValue(JSON.stringify(payload)),
+    } as unknown as Response);
+
+    await expect(
+      chatHistoryApi.loadConversationState("conversation-alpha")
+    ).resolves.toEqual({ status: "not_found" });
+  });
+
+  it("preserves documented transcript fields and extensible role strings", () => {
+    expect(
+      decodeChatConversationDetail({
         messages: [
           {
             authorId: null,
@@ -177,18 +177,10 @@ describe("chatHistoryApi", () => {
             turnId: "turn-a",
           },
         ],
+        projectionStatus: "current",
         stateVersion: 7,
       })
-    );
-
-    const controller = new AbortController();
-    await expect(
-      chatHistoryApi.loadConversation(
-        "scope/a",
-        "conversation/a",
-        controller.signal
-      )
-    ).resolves.toEqual({
+    ).toEqual({
       messages: [
         {
           authorId: null,
@@ -203,25 +195,23 @@ describe("chatHistoryApi", () => {
           turnId: "turn-a",
         },
       ],
+      projectionStatus: "current",
       stateVersion: 7,
     });
-    expect(authFetch).toHaveBeenCalledWith(
-      "/api/scopes/scope%2Fa/chat-history/conversations/conversation%2Fa",
-      {
-        headers: { Accept: "application/json" },
-        method: "GET",
-        signal: controller.signal,
-      }
-    );
   });
 
-  it("accepts empty index and detail responses", () => {
-    expect(decodeChatHistoryIndex({ conversations: [] })).toEqual({
-      conversations: [],
-    });
+  it("preserves pending status for an acknowledged conversation without a projected turn", () => {
     expect(
-      decodeChatConversationDetail({ messages: [], stateVersion: 0 })
-    ).toEqual({ messages: [], stateVersion: 0 });
+      decodeChatConversationDetail({
+        messages: [],
+        projectionStatus: "pending",
+        stateVersion: 0,
+      })
+    ).toEqual({
+      messages: [],
+      projectionStatus: "pending",
+      stateVersion: 0,
+    });
   });
 
   it("rejects malformed successful response bodies explicitly", () => {
@@ -232,44 +222,38 @@ describe("chatHistoryApi", () => {
       ChatHistoryContractError
     );
     expect(() =>
-      decodeChatConversationDetail({ messages: [], stateVersion: -1 })
+      decodeChatConversationDetail({
+        messages: [],
+        projectionStatus: "current",
+        stateVersion: -1,
+      })
     ).toThrow(expect.objectContaining({ path: "$conversation.stateVersion" }));
     expect(() =>
       decodeChatConversationDetail({
-        messages: [
-          {
-            content: "hello",
-            id: "message-a",
-            role: "user",
-            status: "complete",
-            timestamp: "not-a-number",
-          },
-        ],
-        stateVersion: 7,
+        messages: [],
+        projectionStatus: "stale",
+        stateVersion: 0,
       })
     ).toThrow(
-      expect.objectContaining({
-        code: "INVALID_CHAT_HISTORY_RESPONSE",
-        path: "$conversation.messages[0].timestamp",
-      })
+      expect.objectContaining({ path: "$conversation.projectionStatus" })
     );
   });
 
-  it("deletes remotely without parsing the empty success body", async () => {
-    const json = jest.fn().mockRejectedValue(new Error("body is empty"));
+  it("submits canonical deletion without parsing the accepted body", async () => {
+    const json = jest.fn().mockRejectedValue(new Error("body is not needed"));
     (authFetch as jest.Mock).mockResolvedValue({
       json,
       ok: true,
-      status: 200,
-      statusText: "OK",
+      status: 202,
+      statusText: "Accepted",
     } as unknown as Response);
 
     await expect(
-      chatHistoryApi.deleteConversation("scope/a", "conversation/a")
+      chatHistoryApi.deleteConversation(" conversation/a ")
     ).resolves.toBeUndefined();
     expect(json).not.toHaveBeenCalled();
     expect(authFetch).toHaveBeenCalledWith(
-      "/api/scopes/scope%2Fa/chat-history/conversations/conversation%2Fa",
+      "/api/chat/conversations/conversation%2Fa",
       {
         headers: { Accept: "application/json" },
         method: "DELETE",
@@ -284,25 +268,16 @@ describe("chatHistoryApi", () => {
       statusText: "Forbidden",
       text: jest.fn().mockResolvedValue(
         JSON.stringify({
-          code: "SCOPE_ACCESS_DENIED",
-          message: "Authenticated scope does not match requested scope.",
+          code: "CONVERSATION_ACCESS_DENIED",
+          message: "Conversation access denied.",
         })
       ),
     } as unknown as Response);
 
-    let error: unknown;
-    try {
-      await chatHistoryApi.listConversationMetas("scope-a");
-    } catch (caught) {
-      error = caught;
-    }
-
-    expect(error).toBeInstanceOf(ChatHistoryApiError);
-    expect(error).toMatchObject({
-      code: "SCOPE_ACCESS_DENIED",
-      message: "Authenticated scope does not match requested scope.",
+    await expect(chatHistoryApi.listConversationMetas()).rejects.toMatchObject({
+      code: "CONVERSATION_ACCESS_DENIED",
+      message: "Conversation access denied.",
       status: 403,
     });
   });
-
 });

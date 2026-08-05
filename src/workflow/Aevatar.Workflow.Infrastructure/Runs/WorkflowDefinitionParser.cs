@@ -77,6 +77,12 @@ internal sealed class WorkflowDefinitionParser : IWorkflowDefinitionParser
                 workflowName,
                 WorkflowAuthorizationDependencyEvaluator.Evaluate(workflow)));
         }
+        catch (WorkflowYamlResourceLimitException ex)
+        {
+            return Task.FromResult(WorkflowYamlParseResult.Invalid(
+                ex.Message,
+                errorCode: WorkflowYamlParseErrorCode.ResourceLimit));
+        }
         catch (WorkflowExternalCapabilityValidationException ex)
         {
             return Task.FromResult(WorkflowYamlParseResult.Invalid(ex.Message, ex.Readiness));
@@ -107,7 +113,10 @@ internal sealed class WorkflowDefinitionParser : IWorkflowDefinitionParser
 
             var parseResult = await ParseWorkflowYamlAsync(yaml, ct).ConfigureAwait(false);
             if (!parseResult.Succeeded)
-                return WorkflowInlineYamlBundleParseResult.Invalid(parseResult.Error, parseResult.ExternalCapabilityReadiness);
+                return WorkflowInlineYamlBundleParseResult.Invalid(
+                    parseResult.Error,
+                    parseResult.ExternalCapabilityReadiness,
+                    parseResult.ErrorCode);
 
             var workflowName = NormalizeWorkflowName(parseResult.WorkflowName);
             if (string.IsNullOrWhiteSpace(workflowName))

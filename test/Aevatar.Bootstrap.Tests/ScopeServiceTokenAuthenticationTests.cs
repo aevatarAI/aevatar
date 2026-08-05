@@ -28,6 +28,7 @@ public sealed class ScopeServiceTokenAuthenticationTests
 
         builder.Configuration["Aevatar:Authentication:Enabled"] = "true";
         builder.Configuration["Aevatar:Authentication:Authority"] = "https://nyxid.example.com/";
+        builder.Configuration["Aevatar:Authentication:Audience"] = "aevatar-api";
         builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:Enabled"] = "true";
         builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:Issuer"] = "https://aevatar.example.com";
         builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:Audience"] = "aevatar-scope-services";
@@ -50,7 +51,52 @@ public sealed class ScopeServiceTokenAuthenticationTests
             .Which.KeyId.Should().Be("scope-kid-1");
         jwtOptions.TokenValidationParameters.IssuerSigningKeyResolver.Should().BeNull();
         jwtOptions.TokenValidationParameters.IssuerSigningKeyResolverUsingConfiguration.Should().NotBeNull();
-        jwtOptions.TokenValidationParameters.ValidAudiences.Should().Contain("aevatar-scope-services");
+        jwtOptions.TokenValidationParameters.ValidAudience.Should().BeNull();
+        jwtOptions.TokenValidationParameters.ValidAudiences.Should().BeNull();
+        jwtOptions.TokenValidationParameters.AudienceValidator.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AddAevatarAuthentication_WhenOnlyScopeAudienceIsConfiguredOutsideDevelopment_ShouldFailClosed()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Production,
+        });
+
+        builder.Configuration["Aevatar:Authentication:Enabled"] = "true";
+        builder.Configuration["Aevatar:Authentication:Authority"] = "https://nyxid.example.com/";
+        builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:Enabled"] = "true";
+        builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:Issuer"] =
+            "https://aevatar.example.com";
+        builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:Audience"] =
+            "aevatar-scope-services";
+
+        var act = () => builder.AddAevatarAuthentication();
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage(
+                "Aevatar:Authentication:Audience is required when authentication is enabled outside Development.");
+    }
+
+    [Fact]
+    public void AddAevatarAuthentication_WhenScopeAudienceIsMissing_ShouldFailClosed()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Production,
+        });
+
+        builder.Configuration["Aevatar:Authentication:Enabled"] = "true";
+        builder.Configuration["Aevatar:Authentication:Authority"] = "https://nyxid.example.com/";
+        builder.Configuration["Aevatar:Authentication:Audience"] = "aevatar-api";
+        builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:Enabled"] = "true";
+
+        var act = () => builder.AddAevatarAuthentication();
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage(
+                "Aevatar:Authentication:ScopeServiceTokens:Audience is required when scope service tokens are enabled.");
     }
 
     [Fact]

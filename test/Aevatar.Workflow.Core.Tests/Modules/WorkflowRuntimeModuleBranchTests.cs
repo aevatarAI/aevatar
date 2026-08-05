@@ -8,6 +8,7 @@ using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Tests.Primitives;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -406,6 +407,45 @@ public sealed class WorkflowRuntimeModuleBranchTests
                     ParentStepId = "reply",
                     InvocationId = "run-llm-handoff:workflow_tool:reply:call-1",
                     ChildRunId = "run-llm-handoff:workflow_tool:reply:call-1",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Canceled.Should().ContainSingle(x => x.CallbackId == watchdog.CallbackId);
+        ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task LlmCallModule_WhenCompletionRequiresAuthorization_ShouldLeaveParentStepPending()
+    {
+        var module = new LLMCallModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "reply",
+                StepType = "llm_call",
+                RunId = "run-llm-authorization",
+                Input = "connect github",
+            }),
+            ctx,
+            CancellationToken.None);
+        var intent = DispatchedLlmIntent(ctx);
+        var watchdog = ctx.Scheduled.Single();
+
+        await module.HandleAsync(
+            Wrap(new WorkflowLlmInvocationCompletedEvent
+            {
+                RunId = "run-llm-authorization",
+                StepId = "reply",
+                SessionId = intent.SessionId,
+                Success = false,
+                AuthorizationRequirement = new WorkflowInteractiveAuthorizationRequirement
+                {
+                    ServiceSlug = "api-github",
+                    RequestedScopes = { "repo" },
                 },
             }),
             ctx,
@@ -1225,6 +1265,37 @@ public sealed class WorkflowRuntimeModuleBranchTests
             ctx);
 
         errors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void DynamicWorkflowModule_ValidateWorkflowYaml_ShouldRejectExcessiveNesting()
+    {
+        var ctx = new RecordingWorkflowContext();
+        var yaml = WorkflowYamlResourceGuardTests.BuildNestedWorkflow(childLinks: 31);
+
+        var errors = DynamicWorkflowModule.ValidateWorkflowYaml(yaml, ctx);
+
+        errors.Should().ContainSingle()
+            .Which.Should().ContainAll("YAML parse failed", "nesting depth");
+    }
+
+    [Fact]
+    public void DynamicWorkflowModule_ValidateWorkflowYaml_ShouldRejectCollectionAliasCycle()
+    {
+        var ctx = new RecordingWorkflowContext();
+        const string yaml = """
+                            name: cyclic
+                            roles: []
+                            steps: &steps
+                              - id: loop
+                                type: assign
+                                children: *steps
+                            """;
+
+        var errors = DynamicWorkflowModule.ValidateWorkflowYaml(yaml, ctx);
+
+        errors.Should().ContainSingle()
+            .Which.Should().ContainAll("YAML parse failed", "nesting depth");
     }
 
     private static EventEnvelope Wrap(IMessage evt, EnvelopeCallbackContext? callback = null)

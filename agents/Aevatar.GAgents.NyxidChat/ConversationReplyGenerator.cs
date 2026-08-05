@@ -74,15 +74,14 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private readonly ILLMProviderFactory _llmProviderFactory;
     private readonly IReadOnlyList<IAgentToolSource> _toolSources;
     private readonly IReadOnlyList<IAgentRunMiddleware> _agentMiddlewares;
-    private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
-    private readonly IToolApprovalHandler? _approvalHandler;
+    private readonly IAgentToolExecutionPort? _toolExecutionPort;
     private readonly LocalSkillCatalog? _localSkillCatalog;
     private readonly IRemoteSkillFetcher? _remoteSkillFetcher;
     private readonly IRemoteSkillAccessTokenResolver? _remoteSkillAccessTokenResolver;
     private readonly global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
     private readonly INyxIdUserLlmPreferencesStore? _preferencesStore;
-    private readonly IUserMemoryStore? _userMemoryStore;
+    private readonly IUserMemoryPromptContextProvider? _userMemoryPromptContextProvider;
     private readonly ILarkNyxClient? _larkClient;
     private readonly IFileArtifactIngressPort? _fileIngressPort;
     private readonly IFileArtifactReadPort? _fileArtifactReadPort;
@@ -119,34 +118,32 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IBuiltInPromptFloorProvider builtInPromptFloorProvider,
         IEnumerable<IAgentToolSource>? toolSources = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
-        IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         LocalSkillCatalog? localSkillCatalog = null,
         IRemoteSkillFetcher? remoteSkillFetcher = null,
         global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions = null,
         INyxIdUserLlmPreferencesStore? preferencesStore = null,
-        IUserMemoryStore? userMemoryStore = null,
+        IUserMemoryPromptContextProvider? userMemoryPromptContextProvider = null,
         ILarkNyxClient? larkClient = null,
         IFileArtifactIngressPort? fileIngressPort = null,
         IFileArtifactReadPort? fileArtifactReadPort = null,
-        IToolApprovalHandler? approvalHandler = null,
         ILogger<NyxIdConversationReplyGenerator>? logger = null,
         ISystemSkillOverlayProvider? overlayProvider = null,
         ILarkOutboundClientFactory? larkOutboundClientFactory = null,
+        IAgentToolExecutionPort? toolExecutionPort = null,
         IRemoteSkillAccessTokenResolver? remoteSkillAccessTokenResolver = null)
     {
         _llmProviderFactory = llmProviderFactory ?? throw new ArgumentNullException(nameof(llmProviderFactory));
         _toolSources = (toolSources ?? []).ToArray();
         _agentMiddlewares = (agentMiddlewares ?? []).ToArray();
-        _toolMiddlewares = (toolMiddlewares ?? []).ToArray();
         _llmMiddlewares = (llmMiddlewares ?? []).ToArray();
-        _approvalHandler = approvalHandler;
+        _toolExecutionPort = toolExecutionPort;
         _localSkillCatalog = localSkillCatalog;
         _remoteSkillFetcher = remoteSkillFetcher;
         _remoteSkillAccessTokenResolver = remoteSkillAccessTokenResolver;
         _relayOptions = relayOptions;
         _preferencesStore = preferencesStore;
-        _userMemoryStore = userMemoryStore;
+        _userMemoryPromptContextProvider = userMemoryPromptContextProvider;
         _larkClient = larkClient;
         _fileIngressPort = fileIngressPort;
         _fileArtifactReadPort = fileArtifactReadPort;
@@ -340,10 +337,11 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             replyPlan.Primary,
             replyPlan.PrimaryControl,
             replyPlan.PrimaryToolContext);
+        var isChannelRelayTurn = IsChannelRelayTurn(toolContext);
         var tools = turnCatalog is null
             ? await BuildTurnToolsAsync(
                 disableTools,
-                IsChannelRelayTurn(toolContext),
+                isChannelRelayTurn,
                 effectiveToolContext,
                 ct)
             : BuildProfileTools(disableTools, turnCatalog);
@@ -356,6 +354,16 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         var inputFileRefs = CollectInputFileRefs(input.Parts);
         effectiveToolContext = WithInputFileRefs(effectiveToolContext, inputFileRefs);
         var ownerFallbackToolContext = WithInputFileRefs(replyPlan.OwnerFallbackToolContext, inputFileRefs);
+        LogChannelLlmToolPlan(
+            "actor-step",
+            isChannelRelayTurn,
+            forceDisableTools,
+            replyPlan.DisableTools,
+            disableTools,
+            turnCatalog,
+            effectiveToolContext,
+            inputFileRefs,
+            tools);
 
         var runtime = BuildRuntime(
             activity,
@@ -402,6 +410,41 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         if (!disableTools)
             tools.Register(turnCatalog.RouteOwnedTools.Values);
         return tools;
+    }
+
+    private void LogChannelLlmToolPlan(
+        string surface,
+        bool isChannelRelayTurn,
+        bool forceDisableTools,
+        bool replyPlanDisableTools,
+        bool disableTools,
+        AgentProfileTurnCatalog? turnCatalog,
+        AgentToolExecutionContext toolContext,
+        IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef> inputFileRefs,
+        ToolManager tools)
+    {
+        var isNyxIdChatTurn = IsNyxIdChatTurn(toolContext);
+        if (!isChannelRelayTurn && !isNyxIdChatTurn)
+            return;
+
+        var validTools = FilterValidTools(tools) ?? [];
+        _logger.LogWarning(
+            "Channel LLM tool plan prepared. surface={Surface} isChannelRelayTurn={IsChannelRelayTurn} isNyxIdChatTurn={IsNyxIdChatTurn} forceDisableTools={ForceDisableTools} replyPlanDisableTools={ReplyPlanDisableTools} disableTools={DisableTools} turnCatalogPresent={TurnCatalogPresent} profileAllowedToolCount={ProfileAllowedToolCount} profileAllowedTools={ProfileAllowedTools} routeOwnedToolCount={RouteOwnedToolCount} routeOwnedTools={RouteOwnedTools} finalToolCount={FinalToolCount} finalTools={FinalTools} inputPartFileRefCount={InputPartFileRefCount} toolContextInputFileRefCount={ToolContextInputFileRefCount}",
+            surface,
+            isChannelRelayTurn,
+            isNyxIdChatTurn,
+            forceDisableTools,
+            replyPlanDisableTools,
+            disableTools,
+            turnCatalog is not null,
+            turnCatalog?.FinalAllowedToolNames.Count ?? 0,
+            FormatToolNames(turnCatalog?.FinalAllowedToolNames ?? Enumerable.Empty<string>()),
+            turnCatalog?.RouteOwnedTools.Count ?? 0,
+            FormatToolNames(turnCatalog?.RouteOwnedTools.Values.Select(static tool => tool.Name) ?? Enumerable.Empty<string>()),
+            validTools.Count,
+            FormatToolNames(validTools.Select(static tool => tool.Name)),
+            inputFileRefs.Count,
+            toolContext.InputFileRefs.Count);
     }
 
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
@@ -477,7 +520,18 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 ct)
             .ConfigureAwait(false);
         input = await MaterializeUserInputPartsAsync(input, ct).ConfigureAwait(false);
-        toolContext = WithInputFileRefs(toolContext, CollectInputFileRefs(input.Parts));
+        var inputFileRefs = CollectInputFileRefs(input.Parts);
+        toolContext = WithInputFileRefs(toolContext, inputFileRefs);
+        LogChannelLlmToolPlan(
+            "direct-reply",
+            IsChannelRelayTurn(toolContext),
+            forceDisableTools: false,
+            replyPlanDisableTools: false,
+            disableTools: false,
+            turnCatalog: null,
+            toolContext,
+            inputFileRefs,
+            tools);
 
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
         //   Old pattern: NyxID reply construction passed stream_buffer_capacity into ChatRuntime after the stream loop moved to Task.Run + Channel.
@@ -494,8 +548,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             toolLoop: new ToolCallLoop(
                 tools,
                 hooks: null,
-                toolMiddlewares: BuildToolMiddlewaresForTurn(),
-                llmMiddlewares: _llmMiddlewares),
+                llmMiddlewares: _llmMiddlewares,
+                toolExecutionPort: _toolExecutionPort),
             hooks: null,
             requestBuilder: _ => new LLMRequest
             {
@@ -689,7 +743,24 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     {
         var text = activity.Content?.Text ?? string.Empty;
         var parts = new List<ContentPart> { ContentPart.TextPart(text) };
+        var currentAttachmentCount = activity.Content?.Attachments?.Count ?? 0;
+        var recentAttachmentCount = CountAttachments(attachmentContext?.RecentAttachmentActivities
+            .Where(static entry => entry.Activity?.Content?.Attachments is { Count: > 0 })
+            .Select(static entry => new AttachmentActivity(
+                entry.Activity!,
+                entry.Activity!.Content!.Attachments.Select(static attachment => attachment.Clone()).ToArray())) ?? []);
         var attachments = SelectAttachmentActivities(activity, attachmentContext).ToArray();
+        if (IsLarkActivity(activity) || attachments.Any(static attachment => IsLarkActivity(attachment.Activity)))
+        {
+            _logger.LogWarning(
+                "Channel attachment input selection prepared. activityId={ActivityId} currentAttachmentCount={CurrentAttachmentCount} recentAttachmentCount={RecentAttachmentCount} selectedAttachmentActivityCount={SelectedAttachmentActivityCount} selectedAttachmentCount={SelectedAttachmentCount}",
+                activity.Id,
+                currentAttachmentCount,
+                recentAttachmentCount,
+                attachments.Length,
+                CountAttachments(attachments));
+        }
+
         if (attachments.Length == 0)
             return new UserInputParts(text, parts);
 
@@ -963,6 +1034,17 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         var instruction = unseenCount > 0
             ? BuildAttachmentVisibilityInstruction(unseenCount, unseenReason)
             : null;
+        if (IsLarkActivity(activity) || attachments.Any(static attachment => IsLarkActivity(attachment.Activity)))
+        {
+            _logger.LogWarning(
+                "Channel attachment input processing completed. activityId={ActivityId} selectedAttachmentCount={SelectedAttachmentCount} outputPartCount={OutputPartCount} outputFileRefPartCount={OutputFileRefPartCount} unseenAttachmentCount={UnseenAttachmentCount} imageInputUnsupportedCount={ImageInputUnsupportedCount}",
+                activity.Id,
+                CountAttachments(attachments),
+                parts.Count,
+                parts.Count(static part => part.FileRef is not null),
+                unseenCount,
+                imageInputUnsupportedCount);
+        }
 
         return new UserInputParts(text, parts, instruction);
     }
@@ -1798,7 +1880,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    // Reasoning content is per-turn working memory, never conversation input: replaying a
+    // Reasoning content is ephemeral provider output, never conversation input: replaying a
     // prior turn's reasoning_content to the provider violates the reasoning-model contract
     // (DeepSeek documents it as a request error; through the NyxID proxy it instead silently
     // derails generation — the 2026-06-12 prod incident where every turn in a
@@ -1916,18 +1998,6 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private static ReplyTokenUsage MapUsage(TokenUsage usage) =>
         new(usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens);
 
-    private IReadOnlyList<IToolCallMiddleware> BuildToolMiddlewaresForTurn()
-    {
-        var effective = new List<IToolCallMiddleware>(_toolMiddlewares.Count + 2)
-        {
-            new ToolCallCredentialPolicyMiddleware(),
-            new ToolApprovalMiddleware(_approvalHandler ?? MissingApprovalHandler.Instance),
-        };
-        effective.AddRange(_toolMiddlewares.Where(static middleware =>
-            middleware is not ToolApprovalMiddleware and not ToolCallCredentialPolicyMiddleware));
-        return effective;
-    }
-
     private ChatRuntime BuildRuntime(
         ChatActivity activity,
         LLMControlContext llmControl,
@@ -1946,8 +2016,9 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             toolLoop: new ToolCallLoop(
                 tools,
                 hooks: null,
-                toolMiddlewares: BuildToolMiddlewaresForTurn(),
-                llmMiddlewares: _llmMiddlewares),
+                llmMiddlewares: _llmMiddlewares,
+                toolExecutionPort: _toolExecutionPort,
+                approvalContinuationMode: AgentToolApprovalContinuationMode.ActorOwned),
             hooks: null,
             requestBuilder: _ => new LLMRequest
             {
@@ -2023,10 +2094,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     effectiveControl.MaxToolRoundsOverride);
                 if (applied.RouteApplied && string.IsNullOrWhiteSpace(senderToken))
                 {
-                    effectiveControl = effectiveControl with
-                    {
-                        NyxIdRoutePreference = ownerFallbackControl?.NyxIdRoutePreference,
-                    };
+                    effectiveControl = ownerFallbackControl ?? LLMControlContext.Empty;
                 }
             }
             else
@@ -2047,28 +2115,17 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             }
         }
 
-        if (_userMemoryStore is not null)
+        if (_userMemoryPromptContextProvider is not null)
         {
-            try
+            var promptSection = await _userMemoryPromptContextProvider.BuildAsync(2000, ct);
+            if (!string.IsNullOrWhiteSpace(promptSection))
             {
-                var promptSection = await _userMemoryStore.BuildPromptSectionAsync(2000, ct);
-                if (!string.IsNullOrWhiteSpace(promptSection))
-                {
-                    effectiveControl = effectiveControl with { UserMemoryPrompt = promptSection };
-                    if (ownerFallback is not null)
-                        ownerFallbackControl = (ownerFallbackControl ?? effectiveControl) with
-                        {
-                            UserMemoryPrompt = promptSection,
-                        };
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "User memory prompt context is unavailable; continuing reply generation without user memory.");
+                effectiveControl = effectiveControl with { UserMemoryPrompt = promptSection };
+                if (ownerFallback is not null)
+                    ownerFallbackControl = (ownerFallbackControl ?? effectiveControl) with
+                    {
+                        UserMemoryPrompt = promptSection,
+                    };
             }
         }
 
@@ -2114,18 +2171,11 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             return new SenderPreferenceResult(effectiveControl, new SenderPreferenceApplication(false, false, false));
         }
 
-        var modelApplied = !string.IsNullOrWhiteSpace(preferences.DefaultModel);
-        var routeApplied = !string.IsNullOrWhiteSpace(preferences.PreferredRoute);
+        var modelApplied = preferences.Status == LLMSelectionPersistenceStatus.Ready &&
+                           preferences.Selection.ModelSelection?.Kind == LLMModelSelectionKind.ExplicitModel;
+        var routeApplied = preferences.Status == LLMSelectionPersistenceStatus.Ready;
         var roundsApplied = preferences.MaxToolRounds > 0;
-        if (modelApplied || routeApplied || roundsApplied)
-        {
-            effectiveControl = effectiveControl with
-            {
-                ModelOverride = modelApplied ? preferences.DefaultModel!.Trim() : effectiveControl.ModelOverride,
-                NyxIdRoutePreference = routeApplied ? preferences.PreferredRoute!.Trim() : effectiveControl.NyxIdRoutePreference,
-                MaxToolRoundsOverride = roundsApplied ? preferences.MaxToolRounds : effectiveControl.MaxToolRoundsOverride,
-            };
-        }
+        effectiveControl = preferences.ApplyTo(effectiveControl);
         return new SenderPreferenceResult(
             effectiveControl,
             new SenderPreferenceApplication(modelApplied, routeApplied, roundsApplied));
@@ -2181,7 +2231,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             {
                 // Channel-side exclusion by GENERIC capability, not by tool name: a tool that
                 // declares AgentToolCapabilities.ExcludeFromDirectChannelChat completes its work
-                // off-chat (e.g. delivered to /workflow/observatory), so surfacing it on this
+                // off-chat (e.g. delivered to /admin#/observatory), so surfacing it on this
                 // direct-channel/Lark agent would let the model silently route a chat user's
                 // request away from their chat. Such tools stay in the global catalog for the
                 // workflow allowlist path; the exclusion is channel-side only. No channel agent

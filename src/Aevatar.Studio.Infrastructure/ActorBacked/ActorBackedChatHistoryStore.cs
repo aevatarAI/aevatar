@@ -97,20 +97,30 @@ internal sealed class ActorBackedChatHistoryStore :
     public async Task<ChatHistoryConversationMessagesResult> GetMessagesAsync(
         string scopeId, string conversationId, CancellationToken ct = default)
     {
-        var resolved = await ResolveConversationDocumentAsync(scopeId, conversationId, ct);
-        if (resolved is null)
-            return ChatHistoryConversationMessagesResult.NotFound();
+        var lookup = await LookupConversationDocumentAsync(scopeId, conversationId, ct);
+        if (lookup.Resolved is null)
+        {
+            if (lookup.Deleted)
+                return ChatHistoryConversationMessagesResult.NotFound();
 
-        if (resolved.Value.Document.Turns.Count == 0)
-            return ChatHistoryConversationMessagesResult.Found([], resolved.Value.Document.StateVersion);
+            return await HasPendingCreateReservationAsync(scopeId, conversationId, ct)
+                .ConfigureAwait(false)
+                ? ChatHistoryConversationMessagesResult.Pending()
+                : ChatHistoryConversationMessagesResult.NotFound();
+        }
+
+        var resolved = lookup.Resolved.Value;
+
+        if (resolved.Document.Turns.Count == 0)
+            return ChatHistoryConversationMessagesResult.Found([], resolved.Document.StateVersion);
 
         return ChatHistoryConversationMessagesResult.Found(
-            resolved.Value.Document.Turns
+            resolved.Document.Turns
                 .OrderBy(static turn => turn.Sequence)
                 .SelectMany(ToStoredChatMessages)
                 .ToList()
                 .AsReadOnly(),
-            resolved.Value.Document.StateVersion);
+            resolved.Document.StateVersion);
     }
 
     public async Task SaveMessagesAsync(
@@ -200,17 +210,18 @@ internal sealed class ActorBackedChatHistoryStore :
     public async Task<ChatHistoryDeleteResult> DeleteConversationAsync(
         string scopeId, string conversationId, CancellationToken ct = default)
     {
-        var resolved = await ResolveConversationDocumentAsync(scopeId, conversationId, ct);
-        if (resolved is null)
+        var lookup = await LookupConversationDocumentAsync(scopeId, conversationId, ct);
+        if (lookup.Resolved is null)
             return ChatHistoryDeleteResult.NotFound();
 
-        var conversationActor = await EnsureConversationActorAsync(resolved.Value.ActorId, ct);
-        var deleteEvt = new ConversationDeletedEvent
+        var resolved = lookup.Resolved.Value;
+        var conversationActor = await EnsureConversationActorAsync(resolved.ActorId, ct);
+        var command = new DeleteConversationCommand
         {
-            ConversationId = resolved.Value.Document.ConversationId,
-            ScopeId = resolved.Value.Document.ScopeId,
+            ConversationId = resolved.Document.ConversationId,
+            ScopeId = resolved.Document.ScopeId,
         };
-        await _commandDispatch.DispatchAsync(conversationActor, deleteEvt, PublisherId, ct);
+        await _commandDispatch.DispatchAsync(conversationActor, command, PublisherId, ct);
         return ChatHistoryDeleteResult.Accepted();
     }
 
@@ -270,6 +281,30 @@ internal sealed class ActorBackedChatHistoryStore :
             result.UpdatedAt);
     }
 
+    public async Task<WorkflowChatHistoryCreateRecovery?> GetByConversationAsync(
+        string scopeId,
+        string conversationId,
+        CancellationToken ct = default)
+    {
+        var document = await FindAcknowledgedCreateReservationAsync(scopeId, conversationId, ct)
+            .ConfigureAwait(false);
+        if (document is null)
+            return null;
+
+        return new WorkflowChatHistoryCreateRecovery(
+            ToWorkflowCreateRecoveryStatus(ToCreateRecoveryStatus(document.Status)),
+            document.ScopeId,
+            document.WorkflowCommandId,
+            EmptyToNull(document.ConversationId),
+            EmptyToNull(document.TurnId),
+            EmptyToNull(document.WorkflowActorId),
+            EmptyToNull(document.WorkflowCommandId),
+            EmptyToNull(document.WorkflowCorrelationId),
+            EmptyToNull(document.RequestFingerprint),
+            document.StateVersion,
+            document.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.UnixEpoch);
+    }
+
     // ── Actor resolution ───────────────────────────────────────
 
     private async Task<IActor> EnsureConversationActorAsync(
@@ -292,7 +327,7 @@ internal sealed class ActorBackedChatHistoryStore :
         return await _bootstrap.EnsureAsync<ChatConversationGAgent>(actorId, ct);
     }
 
-    private async Task<ResolvedConversationDocument?> ResolveConversationDocumentAsync(
+    private async Task<ConversationDocumentLookup> LookupConversationDocumentAsync(
         string scopeId,
         string conversationId,
         CancellationToken ct)
@@ -300,7 +335,7 @@ internal sealed class ActorBackedChatHistoryStore :
         var normalizedScopeId = NormalizeOptional(scopeId);
         var normalizedConversationId = NormalizeOptional(conversationId);
         if (normalizedScopeId == null || normalizedConversationId == null)
-            return null;
+            return ConversationDocumentLookup.Missing;
 
         var actorIds = new[]
         {
@@ -312,20 +347,69 @@ internal sealed class ActorBackedChatHistoryStore :
         {
             var document = await _conversationDocumentReader.GetAsync(actorId, ct).ConfigureAwait(false);
             if (document is null ||
-                document.Deleted ||
                 !string.Equals(document.ScopeId, normalizedScopeId, StringComparison.Ordinal) ||
                 !string.Equals(document.ConversationId, normalizedConversationId, StringComparison.Ordinal))
             {
                 continue;
             }
 
+            if (document.Deleted)
+                return ConversationDocumentLookup.DeletedConversation;
+
             var dispatchActorId = string.IsNullOrWhiteSpace(document.ActorId)
                 ? actorId
                 : document.ActorId.Trim();
-            return new ResolvedConversationDocument(dispatchActorId, document);
+            return ConversationDocumentLookup.Found(
+                new ResolvedConversationDocument(dispatchActorId, document));
         }
 
-        return null;
+        return ConversationDocumentLookup.Missing;
+    }
+
+    private async Task<bool> HasPendingCreateReservationAsync(
+        string scopeId,
+        string conversationId,
+        CancellationToken ct) =>
+        await FindAcknowledgedCreateReservationAsync(scopeId, conversationId, ct)
+            .ConfigureAwait(false) is not null;
+
+    private async Task<ChatHistoryCreateRecoveryCurrentStateDocument?> FindAcknowledgedCreateReservationAsync(
+        string scopeId,
+        string conversationId,
+        CancellationToken ct)
+    {
+        var normalizedScopeId = NormalizeOptional(scopeId);
+        var normalizedConversationId = NormalizeOptional(conversationId);
+        if (normalizedScopeId == null || normalizedConversationId == null)
+            return null;
+
+        var reservations = await _createRecoveryDocumentReader.QueryAsync(new ProjectionDocumentQuery
+        {
+            Filters =
+            [
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(ChatHistoryCreateRecoveryCurrentStateDocument.ScopeId),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString(normalizedScopeId),
+                },
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(ChatHistoryCreateRecoveryCurrentStateDocument.ConversationId),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString(normalizedConversationId),
+                },
+            ],
+            Take = 1,
+        }, ct).ConfigureAwait(false);
+
+        return reservations.Items.FirstOrDefault(reservation =>
+            reservation.StateVersion > 0 &&
+            string.Equals(reservation.ScopeId, normalizedScopeId, StringComparison.Ordinal) &&
+            string.Equals(reservation.ConversationId, normalizedConversationId, StringComparison.Ordinal) &&
+            ToCreateRecoveryStatus(reservation.Status) is not (
+                ChatHistoryCreateRecoveryStatus.NotFound or
+                ChatHistoryCreateRecoveryStatus.Abandoned));
     }
 
     // ── Mapping helpers ────────────────────────────────────────
@@ -361,6 +445,7 @@ internal sealed class ActorBackedChatHistoryStore :
             {
                 "error" => "error",
                 "blocked" => "blocked",
+                "outcome_uncertain" => "outcome_uncertain",
                 _ => "complete",
             },
             Error: string.IsNullOrEmpty(turn.SanitizedError) ? null : turn.SanitizedError,
@@ -398,6 +483,7 @@ internal sealed class ActorBackedChatHistoryStore :
                 {
                     "error" => ChatTurnTerminalStatus.Failed,
                     "blocked" => ChatTurnTerminalStatus.Blocked,
+                    "outcome_uncertain" => ChatTurnTerminalStatus.OutcomeUncertain,
                     _ => ChatTurnTerminalStatus.Completed,
                 },
                 SanitizedError = assistant.Error ?? string.Empty,
@@ -433,6 +519,7 @@ internal sealed class ActorBackedChatHistoryStore :
             ChatHistoryTurnTerminalStatus.Failed => ChatTurnTerminalStatus.Failed,
             ChatHistoryTurnTerminalStatus.Stopped => ChatTurnTerminalStatus.Stopped,
             ChatHistoryTurnTerminalStatus.Blocked => ChatTurnTerminalStatus.Blocked,
+            ChatHistoryTurnTerminalStatus.OutcomeUncertain => ChatTurnTerminalStatus.OutcomeUncertain,
             _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Terminal status must be closed."),
         };
 
@@ -449,6 +536,7 @@ internal sealed class ActorBackedChatHistoryStore :
             "failed" => ChatHistoryCreateRecoveryStatus.Failed,
             "append_committed" => ChatHistoryCreateRecoveryStatus.AppendCommitted,
             "append_rejected" => ChatHistoryCreateRecoveryStatus.AppendRejected,
+            "terminal_reconciliation_prepared" => ChatHistoryCreateRecoveryStatus.TerminalReconciliationPrepared,
             _ => ChatHistoryCreateRecoveryStatus.NotFound,
         };
 
@@ -463,10 +551,24 @@ internal sealed class ActorBackedChatHistoryStore :
             ChatHistoryCreateRecoveryStatus.Failed => WorkflowChatHistoryCreateRecoveryStatus.Failed,
             ChatHistoryCreateRecoveryStatus.AppendCommitted => WorkflowChatHistoryCreateRecoveryStatus.AppendCommitted,
             ChatHistoryCreateRecoveryStatus.AppendRejected => WorkflowChatHistoryCreateRecoveryStatus.AppendRejected,
+            ChatHistoryCreateRecoveryStatus.TerminalReconciliationPrepared =>
+                WorkflowChatHistoryCreateRecoveryStatus.TerminalReconciliationPrepared,
             _ => WorkflowChatHistoryCreateRecoveryStatus.NotFound,
         };
 
     private readonly record struct ResolvedConversationDocument(
         string ActorId,
         ChatConversationCurrentStateDocument Document);
+
+    private readonly record struct ConversationDocumentLookup(
+        ResolvedConversationDocument? Resolved,
+        bool Deleted)
+    {
+        public static ConversationDocumentLookup Missing { get; } = new(null, false);
+
+        public static ConversationDocumentLookup DeletedConversation { get; } = new(null, true);
+
+        public static ConversationDocumentLookup Found(ResolvedConversationDocument resolved) =>
+            new(resolved, false);
+    }
 }

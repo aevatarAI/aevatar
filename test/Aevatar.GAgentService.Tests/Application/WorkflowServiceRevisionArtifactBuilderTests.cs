@@ -18,6 +18,9 @@ public sealed class WorkflowServiceRevisionArtifactBuilderTests
             .Be(AuthorizationGrantRequirement.Required);
         artifact.DeploymentPlan.WorkflowPlan.WorkflowId.Should().Be("wf-artifact-alpha");
         artifact.DeploymentPlan.WorkflowPlan.RevisionId.Should().Be("rev-artifact-alpha");
+        artifact.DeploymentPlan.WorkflowPlan.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
+        artifact.DeploymentPlan.WorkflowPlan.CapabilityAdmissionPlan.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Durable);
     }
 
     [Fact]
@@ -36,7 +39,7 @@ public sealed class WorkflowServiceRevisionArtifactBuilderTests
         artifact.DeploymentPlan.WorkflowPlan.WorkflowId.Should().BeEmpty();
         artifact.DeploymentPlan.WorkflowPlan.RevisionId.Should().BeEmpty();
         new PreparedServiceRevisionArtifactAssembler().Assemble(artifact).ArtifactHash.Should()
-            .Be("06F4C6FCF0F518A9F6EC52C8AD8692ED3E8D78DB9CB96E0F9800DEEEB90B960A");
+            .Be("0041D703A9CBF0ADA4713D890A0E619340C4EEE1425961E98B89A8B6D066F18C");
     }
 
     [Fact]
@@ -93,6 +96,67 @@ public sealed class WorkflowServiceRevisionArtifactBuilderTests
             .WithMessage("*capability*");
     }
 
+    [Fact]
+    public void Build_WithUnspecifiedExecutionMode_ShouldFailClosed()
+    {
+        var plan = new WorkflowCapabilityAdmissionPlan();
+
+        var action = () => BuildArtifactWithIdentity(
+            "wf-artifact-alpha",
+            "rev-artifact-alpha",
+            plan,
+            ExternalCapabilityExecutionMode.Durable);
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*execution mode*");
+    }
+
+    [Fact]
+    public void Build_WhenExpectedModeDiffersFromAdmissionPlan_ShouldFailClosed()
+    {
+        var plan = new WorkflowCapabilityAdmissionPlan
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+        };
+
+        var action = () => BuildArtifactWithIdentity(
+            "wf-artifact-alpha",
+            "rev-artifact-alpha",
+            plan,
+            ExternalCapabilityExecutionMode.Interactive);
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*execution mode*match*");
+    }
+
+    [Fact]
+    public void ResolveBindingIdentity_WhenDeploymentModeDiffersFromAdmissionPlan_ShouldFailClosed()
+    {
+        var artifact = BuildArtifact();
+        artifact.DeploymentPlan.WorkflowPlan.ExecutionMode = ExternalCapabilityExecutionMode.Interactive;
+
+        var action = () => WorkflowServiceDeploymentPlanIntegrity.ResolveBindingIdentity(
+            artifact,
+            "rev-artifact-alpha");
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*execution mode*match*");
+    }
+
+    [Fact]
+    public void ResolveBindingIdentity_WithUnspecifiedDeploymentMode_ShouldFailClosed()
+    {
+        var artifact = BuildArtifact();
+        artifact.DeploymentPlan.WorkflowPlan.ExecutionMode = ExternalCapabilityExecutionMode.Unspecified;
+
+        var action = () => WorkflowServiceDeploymentPlanIntegrity.ResolveBindingIdentity(
+            artifact,
+            "rev-artifact-alpha");
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*execution mode*match*");
+    }
+
     private static PreparedServiceRevisionArtifact BuildArtifact(
         params ExternalWorkflowCapabilityRef[] capabilities) =>
         BuildArtifactWithIdentity("wf-artifact-alpha", "rev-artifact-alpha", capabilities);
@@ -102,7 +166,10 @@ public sealed class WorkflowServiceRevisionArtifactBuilderTests
         string revisionId,
         params ExternalWorkflowCapabilityRef[] capabilities)
     {
-        var plan = new WorkflowCapabilityAdmissionPlan();
+        var plan = new WorkflowCapabilityAdmissionPlan
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+        };
         for (var index = 0; index < capabilities.Length; index++)
         {
             var capability = capabilities[index];
@@ -132,6 +199,7 @@ public sealed class WorkflowServiceRevisionArtifactBuilderTests
                     WorkflowName = "artifact-workflow",
                     WorkflowYaml = "name: artifact-workflow",
                     WorkflowId = workflowId,
+                    ExpectedExecutionMode = ExternalCapabilityExecutionMode.Durable,
                 },
             },
             "artifact-workflow",
@@ -141,6 +209,37 @@ public sealed class WorkflowServiceRevisionArtifactBuilderTests
             },
             plan);
     }
+
+    private static PreparedServiceRevisionArtifact BuildArtifactWithIdentity(
+        string workflowId,
+        string revisionId,
+        WorkflowCapabilityAdmissionPlan plan,
+        ExternalCapabilityExecutionMode expectedExecutionMode) =>
+        WorkflowServiceRevisionArtifactBuilder.Build(
+            new ServiceRevisionSpec
+            {
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "scope-artifact-alpha",
+                    AppId = "app-artifact-alpha",
+                    Namespace = "namespace-artifact-alpha",
+                    ServiceId = "svc-published-runtime-alpha",
+                },
+                RevisionId = revisionId,
+                WorkflowSpec = new WorkflowServiceRevisionSpec
+                {
+                    WorkflowName = "artifact-workflow",
+                    WorkflowYaml = "name: artifact-workflow",
+                    WorkflowId = workflowId,
+                    ExpectedExecutionMode = expectedExecutionMode,
+                },
+            },
+            "artifact-workflow",
+            new WorkflowAuthorizationDependencies
+            {
+                ServiceGrantPolicy = WorkflowServiceGrantPolicy.Required,
+            },
+            plan);
 
     private static ExternalWorkflowCapabilityRef ExplicitRequestCapability(string userServiceId) =>
         new()

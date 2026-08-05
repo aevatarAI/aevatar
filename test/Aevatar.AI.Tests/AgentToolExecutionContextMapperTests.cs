@@ -208,6 +208,27 @@ public sealed class AgentToolExecutionContextMapperTests
     }
 
     [Fact]
+    public void ToPayloadAndFromPayload_ShouldPreserveRequestIssuedTime()
+    {
+        const long issuedAtUnixMs = 1_785_484_800_000;
+        var context = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(
+                "request-1",
+                "call-1",
+                "idempotency-1",
+                issuedAtUnixMs),
+        };
+
+        var payload = context.ToPayload();
+        var restored = AgentToolExecutionContextMapper.FromPayload(
+            AgentToolExecutionContextPayload.Parser.ParseFrom(payload.ToByteArray()));
+
+        payload.Request.IssuedAtUnixMs.Should().Be(issuedAtUnixMs);
+        restored.Request.IssuedAtUnixMs.Should().Be(issuedAtUnixMs);
+    }
+
+    [Fact]
     public void ToPayload_WhenToolVisibilityUnrestricted_ShouldOmitVisibilityPayload()
     {
         var payload = AgentToolExecutionContextMapper.ToPayload(AgentToolExecutionContext.Empty);
@@ -349,7 +370,10 @@ public sealed class AgentToolExecutionContextMapperTests
                 ["external-trace"] = "trace-1",
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = "legacy-token",
                 ["telegram.chat_id"] = "10001",
-            });
+            }) with
+        {
+            ExecutionOwner = AgentToolExecutionOwners.HostService("svc-context-roundtrip"),
+        };
 
         var payload = context.ToPayload();
         var copy = AgentToolExecutionContextMapper.FromPayload(
@@ -403,6 +427,8 @@ public sealed class AgentToolExecutionContextMapperTests
         copy.SkillRecovery.MaxOrnnSearchAttempts.Should().Be(2);
         copy.SkillRecovery.CommandArguments.Should().Be("ship");
         copy.SkillRecovery.DiscoveryRequested.Should().BeTrue();
+        copy.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.HostService);
+        copy.ExecutionOwner.OwnerId.Should().Be("svc-context-roundtrip");
         copy.ExternalMetadata.Should().ContainSingle().Which.Should().Be(new KeyValuePair<string, string>("external-trace", "trace-1"));
     }
 

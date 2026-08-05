@@ -34,7 +34,7 @@ public static class CqrsObservatoryApiEndpoints
 
         data.MapGet("/scopes", ListScopes)
             .WithName("ListCqrsProjectionScopes")
-            .WithSummary("List projection-scope statuses (version lag, active, failures). Aevatar admin only.")
+            .WithSummary("List projection-scope processing and unresolved-failure statuses. Aevatar admin only.")
             .WithEndpointAudit(
                 "cqrs.observatory.list-scopes",
                 AuditSensitivityLevel.Confidential,
@@ -108,9 +108,17 @@ public static class CqrsObservatoryApiEndpoints
             {
                 id = snapshot.ScopeActorId,
                 active = snapshot.Active,
-                observed = snapshot.LastObservedVersion,
-                successful = snapshot.LastSuccessfulVersion,
-                failures = snapshot.FailureCount,
+                receivedEnvelopeTotal = snapshot.ReceivedEnvelopeTotal,
+                attemptedEnvelopeTotal = snapshot.AttemptedEnvelopeTotal,
+                successfulMaterializationTotal = snapshot.SuccessfulMaterializationTotal,
+                failedAttemptTotal = snapshot.FailedAttemptTotal,
+                retryExhaustedTotal = snapshot.RetryExhaustedTotal,
+                retryExhaustedFailureCount = snapshot.RetryExhaustedFailureCount,
+                unresolvedFailureCount = snapshot.UnresolvedFailureCount,
+                oldestUnresolvedFailureAt = snapshot.OldestUnresolvedFailureAt,
+                failureDiagnosticDroppedTotal = snapshot.FailureDiagnosticDroppedTotal,
+                sourceActorCount = snapshot.SourceActorCount,
+                singleSourceVersionGap = snapshot.SingleSourceVersionGap,
             }),
         });
     }
@@ -140,9 +148,16 @@ public static class CqrsObservatoryApiEndpoints
                 snapshot.ObservationAttached,
                 snapshot.Released,
                 snapshot.StateVersion,
-                snapshot.LastObservedVersion,
-                snapshot.LastSuccessfulVersion,
-                snapshot.FailureCount,
+                snapshot.ReceivedEnvelopeTotal,
+                snapshot.AttemptedEnvelopeTotal,
+                snapshot.SuccessfulMaterializationTotal,
+                snapshot.FailedAttemptTotal,
+                snapshot.RetryExhaustedTotal,
+                snapshot.RetryExhaustedFailureCount,
+                snapshot.UnresolvedFailureCount,
+                snapshot.OldestUnresolvedFailureAt,
+                snapshot.FailureDiagnosticDroppedTotal,
+                snapshot.SourceVersions,
                 snapshot.UpdatedAt,
             });
     }

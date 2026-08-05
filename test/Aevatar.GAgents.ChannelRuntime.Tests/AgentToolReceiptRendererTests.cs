@@ -145,9 +145,45 @@ public sealed class AgentToolReceiptRendererTests
         rendered.Should().Contain("local_request=approval-1");
     }
 
+    [Fact]
+    public void Render_WhenCallIdIsSharedByDifferentTools_ShouldUseMatchingToolArguments()
+    {
+        var renderer = new AgentToolReceiptRenderer();
+
+        var rendered = renderer.Render(
+            [
+                new AgentToolReceipt
+                {
+                    CallId = "call-shared",
+                    ToolName = "submit_invoice",
+                    Status = AgentToolReceiptStatus.Error,
+                    ErrorMessage = "Submission failed.",
+                },
+            ],
+            [
+                new AgentRunToolCall
+                {
+                    Id = "call-shared",
+                    Name = "submit_invoice",
+                    ArgumentsJson = """{"name":"invoice-42"}""",
+                },
+                new AgentRunToolCall
+                {
+                    Id = "call-shared",
+                    Name = "probe_workflow",
+                    ArgumentsJson = """{"name":"unrelated-probe"}""",
+                },
+            ]);
+
+        rendered.Should().Contain("[tool receipt] Failed: invoice-42");
+        rendered.Should().NotContain("unrelated-probe");
+    }
+
     [Theory]
     [InlineData(AgentToolReceiptStatus.Denied, "Denied")]
     [InlineData(AgentToolReceiptStatus.Error, "Failed")]
+    [InlineData(AgentToolReceiptStatus.AuthorizationRequired, "Authorization required")]
+    [InlineData(AgentToolReceiptStatus.Unspecified, "Outcome unverified")]
     public void Render_ShouldRenderTypedNegativeStatuses(AgentToolReceiptStatus status, string expectedLabel)
     {
         var renderer = new AgentToolReceiptRenderer();
