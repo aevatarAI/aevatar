@@ -207,7 +207,27 @@ public sealed class WorkOrderGAgentTests
         agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.Ready);
         agent.State.LifecycleVersion.Should().Be(2);
         agent.State.TimeoutAtUtc.Should().BeNull();
+        agent.State.AvailableActions.Should().BeEquivalentTo(new WorkOrderAvailableActions
+        {
+            CanReassign = true,
+            CanDispatch = true,
+            CanCancel = true,
+        });
         (await eventStore.GetEventsAsync(ActorId, ct: CancellationToken.None)).Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task Dispatch_ShouldCloseAllPreRunManagementActions()
+    {
+        var agent = await CreateDispatchPendingAgentAsync(new RecordingExecutionScheduler());
+
+        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
+        agent.State.AvailableActions.Should().BeEquivalentTo(new WorkOrderAvailableActions
+        {
+            CanReassign = false,
+            CanDispatch = false,
+            CanCancel = false,
+        });
     }
 
     [Fact]
@@ -1122,6 +1142,12 @@ public sealed class WorkOrderGAgentTests
                 CorrelationId = "correlation-1",
                 Outcome = WorkOrderTerminalOutcome.Succeeded,
             },
+            AvailableActions = new WorkOrderAvailableActions
+            {
+                CanReassign = true,
+                CanDispatch = true,
+                CanCancel = true,
+            },
         };
 
         var restored = WorkOrderState.Parser.ParseFrom(state.ToByteArray());
@@ -1135,6 +1161,9 @@ public sealed class WorkOrderGAgentTests
         restored.ExecutionRetryCallbackId.Should().Be("retry-3");
         restored.RunOutcome.DeliveryId.Should().Be("delivery-1");
         restored.RunOutcome.CorrelationId.Should().Be("correlation-1");
+        restored.AvailableActions.CanReassign.Should().BeTrue();
+        restored.AvailableActions.CanDispatch.Should().BeTrue();
+        restored.AvailableActions.CanCancel.Should().BeTrue();
     }
 
     private static async Task<WorkOrderGAgent> CreateDispatchPendingAgentAsync(

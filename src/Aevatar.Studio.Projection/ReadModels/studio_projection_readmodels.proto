@@ -103,6 +103,12 @@ message WorkOrderRunOutcomeReferenceDocument {
   int64 terminal_at_unix_ms = 7;
 }
 
+message WorkOrderAvailableActionsDocument {
+  bool can_reassign = 1;
+  bool can_dispatch = 2;
+  bool can_cancel = 3;
+}
+
 // Actor-scoped current-state replica for WorkOrderGAgent. Business lifecycle
 // decisions are copied from the authoritative actor state; projection does
 // not reconstruct or advance the WorkOrder state machine.
@@ -131,6 +137,7 @@ message WorkOrderCurrentStateDocument {
   int64 created_at_unix_ms = 35;
   int64 timeout_at_unix_ms = 36;
   google.protobuf.Timestamp work_order_updated_at_utc = 37;
+  WorkOrderAvailableActionsDocument available_actions = 38;
 
   string input_prompt = 40;
   repeated WorkOrderArtifactReferenceDocument input_artifacts = 41;
