@@ -266,15 +266,28 @@ public sealed class WorkflowExternalCapabilityAdmissionException : InvalidOperat
     {
         Readiness = readiness?.Clone() ?? throw new ArgumentNullException(nameof(readiness));
         var blocker = Readiness.Blockers.FirstOrDefault(static item => !string.IsNullOrWhiteSpace(item.Code));
-        StableCode = NormalizeStableCode(blocker?.Code);
+        SafeBlockerCode = NormalizeSafeBlockerCode(blocker?.Code);
+        StableCode = NormalizeStableCode(SafeBlockerCode);
         SafeMessage = string.IsNullOrWhiteSpace(blocker?.SafeMessage)
             ? AdmissionRejectedMessage
             : blocker.SafeMessage.Trim();
     }
 
     public ExternalCapabilityReadiness Readiness { get; }
+    public string SafeBlockerCode { get; }
     public string StableCode { get; }
     public string SafeMessage { get; }
+
+    private static string NormalizeSafeBlockerCode(string? code)
+    {
+        var normalized = code?.Trim();
+        return !string.IsNullOrWhiteSpace(normalized) &&
+               normalized.Length <= 128 &&
+               normalized.All(static character =>
+                   char.IsAsciiLetterOrDigit(character) || character == '_')
+            ? normalized
+            : AdmissionRejectedCode;
+    }
 
     private static string NormalizeStableCode(string? code) =>
         code?.Trim() switch

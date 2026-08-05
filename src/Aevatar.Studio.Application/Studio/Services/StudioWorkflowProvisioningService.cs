@@ -7,8 +7,8 @@ using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
-using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
 
@@ -74,7 +74,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     private readonly IStudioMemberService _memberService;
     private readonly IStudioMemberWorkflowBindingPort _bindingPort;
     private readonly IStudioMemberWorkflowSchedulePort _schedulePort;
-    private readonly IWorkflowExternalCapabilityAdmissionService _capabilityAdmissionService;
+    private readonly StudioWorkflowProvisioningAdmissionService _provisioningAdmissionService;
     private readonly TimeProvider _timeProvider;
 
     public StudioWorkflowProvisioningService(
@@ -82,13 +82,17 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         IStudioMemberWorkflowBindingPort bindingPort,
         IStudioMemberWorkflowSchedulePort schedulePort,
         IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        INyxIdAuthorizationCatalogRefreshPort? catalogRefreshPort = null,
+        INyxIdAuthorizationCatalogVisibilityPort? catalogVisibilityPort = null)
     {
         _memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
         _bindingPort = bindingPort ?? throw new ArgumentNullException(nameof(bindingPort));
         _schedulePort = schedulePort ?? throw new ArgumentNullException(nameof(schedulePort));
-        _capabilityAdmissionService = capabilityAdmissionService
-            ?? throw new ArgumentNullException(nameof(capabilityAdmissionService));
+        _provisioningAdmissionService = new StudioWorkflowProvisioningAdmissionService(
+            capabilityAdmissionService,
+            catalogRefreshPort,
+            catalogVisibilityPort);
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -113,36 +117,31 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         var nyxIdCallerCredentialSelection = suppliedAdmission?.NyxIdCallerCredential;
         var organizationBearerToken = suppliedAdmission?.NyxIdOrganizationBearerToken;
         var existingPlan = suppliedAdmission?.ExistingPlan?.Clone();
-        var explicitRequestConfirmations = suppliedAdmission?.ExplicitRequestConfirmations ?? [];
+        var explicitRequestConfirmations = BindProvisionedExplicitRequestConfirmations(
+            suppliedAdmission?.ExplicitRequestConfirmations,
+            workflowId,
+            revisionId);
         var executionMode = ShouldSchedule(request)
             ? ExternalCapabilityExecutionMode.Durable
             : ExternalCapabilityExecutionMode.Interactive;
-        var capabilityAdmissionPlan = existingPlan is not null
-            ? await _capabilityAdmissionService.RevalidatePersistedAsync(
-                new PersistedWorkflowCapabilityAdmissionRequest(
-                    existingPlan,
-                    workflowYaml,
-                    new Dictionary<string, string>(),
-                    "studio_workflow_provisioning",
-                    executionMode,
-                    workflowId,
-                    revisionId),
-                ct)
-            : await _capabilityAdmissionService.AdmitAsync(
-                new WorkflowExternalCapabilityAdmissionRequest(
-                new ExternalWorkflowCapabilityAccessContext(
-                    normalizedScopeId,
-                    callerId,
-                    nyxIdCallerCredentialSelection,
-                    organizationBearerToken),
-                workflowYaml,
-                new Dictionary<string, string>(),
-                "studio_workflow_provisioning",
-                executionMode,
-                explicitRequestConfirmations,
-                workflowId,
-                revisionId),
-                ct);
+        var liveAdmissionRequest = new WorkflowExternalCapabilityAdmissionRequest(
+            new ExternalWorkflowCapabilityAccessContext(
+                normalizedScopeId,
+                callerId,
+                nyxIdCallerCredentialSelection,
+                organizationBearerToken),
+            workflowYaml,
+            new Dictionary<string, string>(),
+            "studio_workflow_provisioning",
+            executionMode,
+            explicitRequestConfirmations,
+            workflowId,
+            revisionId);
+        var capabilityAdmissionPlan = await _provisioningAdmissionService.ResolveAsync(
+            liveAdmissionRequest,
+            existingPlan,
+            request,
+            ct);
         var trustedAdmission = new WorkflowCapabilityAdmissionContext(
             callerId,
             executionMode: executionMode,
@@ -224,6 +223,22 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             StudioUrl = BuildStudioUrl(normalizedScopeId, teamId, memberId),
         };
     }
+
+    private static IReadOnlyList<NyxIdExplicitRequestConfirmation> BindProvisionedExplicitRequestConfirmations(
+        IReadOnlyList<NyxIdExplicitRequestConfirmation>? confirmations,
+        string workflowId,
+        string revisionId) =>
+        (confirmations ?? []).Select(confirmation =>
+        {
+            var bound = confirmation.Clone();
+            if (bound.WorkflowId.Length == 0 && bound.RevisionId.Length == 0)
+            {
+                bound.WorkflowId = workflowId;
+                bound.RevisionId = revisionId;
+            }
+
+            return bound;
+        }).ToArray();
 
     /// <summary>
     /// Resolves the provisioned member for one (scope, display name) pair:

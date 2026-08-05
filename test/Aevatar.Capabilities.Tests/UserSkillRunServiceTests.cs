@@ -3,9 +3,13 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Mainnet.Host.Api.Skills;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
+using ExternalCapabilityBlocker = Aevatar.Workflow.Abstractions.ExternalCapabilityBlocker;
 using ExternalCapabilityExecutionMode = Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode;
+using ExternalCapabilityReadiness = Aevatar.Workflow.Abstractions.ExternalCapabilityReadiness;
+using ExternalCapabilityReadinessStatus = Aevatar.Workflow.Abstractions.ExternalCapabilityReadinessStatus;
 using NyxIdCallerCredentialKind = Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind;
 using NyxIdOperationRisk = Aevatar.Workflow.Abstractions.NyxIdOperationRisk;
 
@@ -102,7 +106,10 @@ public sealed class UserSkillRunServiceTests
         schedule.Request.CapabilityAdmission.CallerId.Should().Be("nyx-user-alpha");
         schedule.Request.CapabilityAdmission.NyxIdCallerCredential!.Kind
             .Should().Be(NyxIdCallerCredentialKind.SourceReadableUserBearer);
-        schedule.Request.CapabilityAdmission.ExplicitRequestConfirmations.Should().ContainSingle();
+        var explicitConfirmation = schedule.Request.CapabilityAdmission.ExplicitRequestConfirmations
+            .Should().ContainSingle().Which;
+        explicitConfirmation.WorkflowId.Should().BeEmpty();
+        explicitConfirmation.RevisionId.Should().BeEmpty();
     }
 
     [Fact]
@@ -285,6 +292,49 @@ public sealed class UserSkillRunServiceTests
         outcome.Succeeded.Should().BeFalse();
         outcome.ErrorCode.Should().Be("schedule_authorization_projection_pending");
         outcome.ErrorMessage.Should().Contain("Required state version: 23");
+    }
+
+    [Fact]
+    public async Task ScheduleAsync_ShouldReturnSafeAdmissionBlockerCode()
+    {
+        var blockerCode = "NYXID_EXPLICIT_REQUEST_CONFIRMATION_BINDING_MISMATCH";
+        var schedule = new RecordingScheduleProvisioningPort
+        {
+            Exception = new WorkflowExternalCapabilityAdmissionException(new ExternalCapabilityReadiness
+            {
+                Status = ExternalCapabilityReadinessStatus.ContractDrift,
+                Blockers =
+                {
+                    new ExternalCapabilityBlocker
+                    {
+                        Status = ExternalCapabilityReadinessStatus.ContractDrift,
+                        Code = blockerCode,
+                        SafeMessage = "The confirmation is bound to another workflow identity.",
+                    },
+                },
+            }),
+        };
+        var service = new UserSkillRunService(
+            new RecordingRemoteSkillFetcher(WorkflowSkill()),
+            new RecordingWorkflowChatDispatch(),
+            schedule,
+            new RecordingWorkflowConfirmationPort(ConfirmedWorkflow()));
+
+        var outcome = await service.ScheduleAsync(
+            "skill-alpha",
+            SourceReadableCallerCredential(),
+            "scope-alpha",
+            "run the check",
+            "*/15 * * * *",
+            "UTC",
+            "Codex Check",
+            "team-alpha",
+            "sha256:reviewed",
+            CancellationToken.None);
+
+        outcome.Succeeded.Should().BeFalse();
+        outcome.ErrorCode.Should().Be(blockerCode);
+        outcome.ErrorMessage.Should().Be("The confirmation is bound to another workflow identity.");
     }
 
     [Theory]

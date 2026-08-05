@@ -3,12 +3,13 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using WorkflowCallerCredentialTokens = Aevatar.Workflow.Abstractions.WorkflowCallerCredentialTokens;
 using ExternalCapabilityExecutionMode = Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode;
 using NyxIdCallerCredentialKind = Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind;
 using NyxIdCallerCredentialSelection = Aevatar.Workflow.Abstractions.NyxIdCallerCredentialSelection;
 using NyxIdExplicitRequestConfirmation = Aevatar.Workflow.Abstractions.NyxIdExplicitRequestConfirmation;
+using WorkflowCallerCredentialTokens = Aevatar.Workflow.Abstractions.WorkflowCallerCredentialTokens;
 
 namespace Aevatar.Mainnet.Host.Api.Skills;
 
@@ -184,6 +185,10 @@ internal sealed class UserSkillRunService : IUserSkillRunService
                 ObservatoryUrl: result.ObservatoryUrl,
                 StudioUrl: result.StudioUrl));
         }
+        catch (WorkflowExternalCapabilityAdmissionException ex)
+        {
+            return SkillScheduleOutcome.Failed(ex.SafeBlockerCode, ex.SafeMessage);
+        }
         catch (StudioMemberAutomationProjectionPendingException ex)
         {
             return SkillScheduleOutcome.Failed(
@@ -306,8 +311,6 @@ internal sealed class UserSkillRunService : IUserSkillRunService
         previews.SelectMany(static preview => preview.Confirmation.ExplicitRequests.Select(request =>
             new NyxIdExplicitRequestConfirmation
             {
-                WorkflowId = preview.WorkflowId,
-                RevisionId = preview.RevisionId,
                 CallSiteId = request.CallSiteId,
                 RequestContractDigest = request.RequestContractDigest,
                 AttestedRisk = request.AttestedRisk,

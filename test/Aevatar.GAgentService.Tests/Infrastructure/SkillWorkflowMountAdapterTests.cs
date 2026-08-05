@@ -157,6 +157,53 @@ public sealed class SkillWorkflowMountAdapterTests
     }
 
     [Fact]
+    public async Task ConfirmAsync_WhenAdmissionBlocks_ShouldReturnSafeBlockerCode()
+    {
+        const string yaml = "name: durable_workflow\nsteps: []";
+        var commandPort = new RecordingScopeWorkflowCommandPort();
+        var readiness = new ExternalCapabilityReadiness
+        {
+            Status = ExternalCapabilityReadinessStatus.ContractDrift,
+            Blockers =
+            {
+                new ExternalCapabilityBlocker
+                {
+                    Status = ExternalCapabilityReadinessStatus.ContractDrift,
+                    Code = "NYXID_EXPLICIT_REQUEST_CONFIRMATION_BINDING_MISMATCH",
+                    SafeMessage = "The confirmation is bound to another workflow identity.",
+                },
+            },
+        };
+        var adapter = new SkillWorkflowMountAdapter(
+            commandPort,
+            new StubWorkflowDefinitionParser(new Dictionary<string, string>
+            {
+                [yaml] = "durable_workflow",
+            }),
+            new RecordingWorkflowExplicitRequestPreviewService
+            {
+                Exception = new WorkflowExternalCapabilityAdmissionException(readiness),
+            });
+
+        var result = await adapter.ConfirmAsync(new SkillWorkflowConfirmationRequest(
+            "scope-alpha",
+            "caller-alpha",
+            "source-readable-token",
+            [new SkillWorkflowDescriptor
+            {
+                WorkflowId = "durable_workflow",
+                WorkflowYamls = [yaml],
+            }],
+            ExternalCapabilityExecutionMode.Durable));
+
+        result.Status.Should().Be("capability_admission_blocked");
+        result.Confirmed.Should().BeFalse();
+        result.FailureCode.Should().Be("NYXID_EXPLICIT_REQUEST_CONFIRMATION_BINDING_MISMATCH");
+        result.Message.Should().Be("The confirmation is bound to another workflow identity.");
+        commandPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ConfirmAsync_WhenTokenWasIssuedForInteractiveMode_ShouldRejectDurableUse()
     {
         const string yaml = "name: mode_bound_workflow\nsteps: []";
@@ -632,12 +679,15 @@ public sealed class SkillWorkflowMountAdapterTests
         IWorkflowExplicitRequestPreviewService
     {
         public List<WorkflowExplicitRequestPreviewRequest> Requests { get; } = [];
+        public Exception? Exception { get; init; }
 
         public Task<WorkflowExplicitRequestPreviewResult> PreviewAsync(
             WorkflowExplicitRequestPreviewRequest request,
             CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
+            if (Exception != null)
+                throw Exception;
             return Task.FromResult(new WorkflowExplicitRequestPreviewResult(
                 request.WorkflowId ?? string.Empty,
                 request.RevisionId ?? string.Empty,

@@ -59,14 +59,15 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort, ISkillW
         catch (WorkflowExternalCapabilityAdmissionException exception)
         {
             _logger.LogWarning(
-                "Skill workflow mount admission blocked with code {FailureCode}",
+                "Skill workflow mount admission blocked with code {FailureCode} and schedule-safe code {StableCode}",
+                exception.SafeBlockerCode,
                 exception.StableCode);
             return new SkillWorkflowMountResult(
                 Status: "capability_admission_blocked",
                 Mounted: false,
                 Workflows: [],
                 Message: exception.SafeMessage,
-                FailureCode: exception.StableCode);
+                FailureCode: exception.SafeBlockerCode);
         }
     }
 
@@ -96,14 +97,15 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort, ISkillW
         catch (WorkflowExternalCapabilityAdmissionException exception)
         {
             _logger.LogWarning(
-                "Skill workflow confirmation admission blocked with code {FailureCode}",
+                "Skill workflow confirmation admission blocked with code {FailureCode} and schedule-safe code {StableCode}",
+                exception.SafeBlockerCode,
                 exception.StableCode);
             return new SkillWorkflowConfirmationResult(
                 Status: "capability_admission_blocked",
                 Confirmed: false,
                 ConfirmationRequests: [],
                 Message: exception.SafeMessage,
-                FailureCode: exception.StableCode);
+                FailureCode: exception.SafeBlockerCode);
         }
     }
 
