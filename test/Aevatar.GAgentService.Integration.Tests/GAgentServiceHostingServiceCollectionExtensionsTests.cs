@@ -69,6 +69,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x => x.ServiceType == typeof(IScopeBindingReadinessQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceInvocationPort));
         services.Should().Contain(x => x.ServiceType == typeof(ISkillWorkflowMountPort));
+        services.Should().Contain(x => x.ServiceType == typeof(ISkillWorkflowConfirmationPort));
         services.Should().Contain(x => x.ServiceType == typeof(IStaticGAgentStreamInvocationPort<AGUIEvent>));
         services.Should().NotContain(x => x.ServiceType == typeof(ITeamEntryMemberResolver));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceGovernanceCommandPort));
@@ -128,19 +129,27 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>())
             .Build();
+        services.AddAevatarRuntime();
+        services.AddWorkflowProjectionReadModelProviders(configuration);
         services.AddSkills(_ => { });
 
         services.AddGAgentServiceCapability(configuration);
 
         services.Where(descriptor => descriptor.ServiceType == typeof(ISkillWorkflowMountPort))
             .Should().ContainSingle()
-            .Which.Should().Match<ServiceDescriptor>(descriptor =>
-                descriptor.ImplementationType == typeof(SkillWorkflowMountAdapter) &&
-                descriptor.Lifetime == ServiceLifetime.Singleton);
+            .Which.Lifetime.Should().Be(ServiceLifetime.Singleton);
+        services.Where(descriptor => descriptor.ServiceType == typeof(ISkillWorkflowConfirmationPort))
+            .Should().ContainSingle()
+            .Which.Lifetime.Should().Be(ServiceLifetime.Singleton);
         services.Where(descriptor =>
                 descriptor.ServiceType == typeof(IWorkflowExplicitRequestPreviewService))
             .Should().ContainSingle()
             .Which.Lifetime.Should().Be(ServiceLifetime.Singleton);
+
+        using var provider = services.BuildServiceProvider();
+        var adapter = provider.GetRequiredService<SkillWorkflowMountAdapter>();
+        provider.GetRequiredService<ISkillWorkflowMountPort>().Should().BeSameAs(adapter);
+        provider.GetRequiredService<ISkillWorkflowConfirmationPort>().Should().BeSameAs(adapter);
     }
 
     [Fact]

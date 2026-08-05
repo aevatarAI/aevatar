@@ -12,7 +12,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgentService.Infrastructure.Adapters;
 
-public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort
+public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort, ISkillWorkflowConfirmationPort
 {
     private const string ConfirmationMismatchCode = "USE_SKILL_MOUNT_CONFIRMATION_MISMATCH";
 
@@ -70,31 +70,138 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort
         }
     }
 
+    public async Task<SkillWorkflowConfirmationResult> ConfirmAsync(
+        SkillWorkflowConfirmationRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (request.Workflows.Count == 0)
+        {
+            return new SkillWorkflowConfirmationResult(
+                Status: "no_workflows",
+                Confirmed: false,
+                ConfirmationRequests: [],
+                Message: "The skill does not expose workflow YAML bundles.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.CallerId))
+            throw new InvalidOperationException("Skill workflow confirmation requires an authenticated caller identity.");
+
+        try
+        {
+            var preparation = await PrepareCoreAsync(request, [], ct);
+            return preparation.Result;
+        }
+        catch (WorkflowExternalCapabilityAdmissionException exception)
+        {
+            _logger.LogWarning(
+                "Skill workflow confirmation admission blocked with code {FailureCode}",
+                exception.StableCode);
+            return new SkillWorkflowConfirmationResult(
+                Status: "capability_admission_blocked",
+                Confirmed: false,
+                ConfirmationRequests: [],
+                Message: exception.SafeMessage,
+                FailureCode: exception.StableCode);
+        }
+    }
+
     private async Task<SkillWorkflowMountResult> MountCoreAsync(
         SkillWorkflowMountRequest request,
         CancellationToken ct)
     {
-        var confirmations = request.Confirmations ?? [];
-        var suppliedToken = request.ConfirmationToken?.Trim() ?? string.Empty;
-        var tokenStage = !string.IsNullOrWhiteSpace(suppliedToken);
-        var legacyConfirmationStage = confirmations.Count > 0;
-        var confirmationStage = tokenStage || legacyConfirmationStage;
-        if (tokenStage && legacyConfirmationStage)
-            return ConfirmationMismatch("Use one workflow confirmation contract, not both.");
-        if (legacyConfirmationStage && confirmations.Count != request.Workflows.Count)
-            return ConfirmationMismatch("Workflow confirmation count does not match the skill workflow count.");
-        if (confirmations.Any(static confirmation => confirmation is null))
-            return ConfirmationMismatch("Workflow confirmations cannot contain null values.");
-
-        var confirmationByWorkflowId = new Dictionary<string, SkillWorkflowMountConfirmation>(StringComparer.Ordinal);
-        foreach (var confirmation in confirmations)
-        {
-            if (string.IsNullOrWhiteSpace(confirmation.WorkflowId) ||
-                !confirmationByWorkflowId.TryAdd(confirmation.WorkflowId, confirmation))
+        var preparation = await PrepareCoreAsync(
+            new SkillWorkflowConfirmationRequest(
+                request.ScopeId,
+                request.CallerId,
+                request.SourceReadableNyxIdAccessToken,
+                request.Workflows,
+                ExternalCapabilityExecutionMode.Interactive)
             {
-                return ConfirmationMismatch("Workflow confirmations must contain distinct workflow identities.");
-            }
+                ConfirmationToken = request.ConfirmationToken,
+            },
+            request.Confirmations ?? [],
+            ct);
+        if (!preparation.Result.Confirmed)
+        {
+            return new SkillWorkflowMountResult(
+                preparation.Result.Status,
+                Mounted: false,
+                Workflows: [],
+                preparation.Result.Message,
+                preparation.Result.ConfirmationRequests,
+                preparation.Result.FailureCode,
+                preparation.Result.ConfirmationToken);
         }
+
+        var mounted = new List<MountedSkillWorkflow>(preparation.Prepared.Count);
+        foreach (var item in preparation.Prepared)
+        {
+            var explicitRequestConfirmations = item.Confirmation.ExplicitRequests
+                .Select(confirmation => new NyxIdExplicitRequestConfirmation
+                {
+                    WorkflowId = item.Confirmation.WorkflowId,
+                    RevisionId = item.Confirmation.RevisionId,
+                    CallSiteId = confirmation.CallSiteId,
+                    RequestContractDigest = confirmation.RequestContractDigest,
+                    AttestedRisk = confirmation.AttestedRisk,
+                })
+                .ToArray();
+            var upsert = await _scopeWorkflowCommandPort.UpsertAsync(
+                new ScopeWorkflowUpsertRequest(
+                    request.ScopeId,
+                    item.WorkflowId,
+                    item.Bundle.EntryWorkflowYaml,
+                    WorkflowName: item.Bundle.EntryWorkflowName,
+                    DisplayName: item.WorkflowId,
+                    InlineWorkflowYamls: item.Bundle.SubWorkflowYamls,
+                    RevisionId: item.Confirmation.RevisionId)
+                {
+                    CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
+                        request.CallerId.Trim(),
+                        NyxIdCallerCredentialSelection.SourceReadableUserBearerOrNull(
+                            request.SourceReadableNyxIdAccessToken),
+                        executionMode: ExternalCapabilityExecutionMode.Interactive,
+                        explicitRequestConfirmations: explicitRequestConfirmations),
+                },
+                ct);
+
+            mounted.Add(new MountedSkillWorkflow(
+                WorkflowId: item.WorkflowId,
+                ServiceId: upsert.WorkflowId,
+                EndpointId: "chat",
+                RevisionId: upsert.RevisionId));
+        }
+
+        return new SkillWorkflowMountResult(
+            Status: "mounted",
+            Mounted: mounted.Count > 0,
+            Workflows: mounted,
+            Message: mounted.Count > 0
+                ? "Mounted reviewed skill workflows into the current scope."
+                : "No skill workflows were mounted.",
+            ConfirmationRequests: preparation.Result.ConfirmationRequests,
+            ConfirmationToken: preparation.Result.ConfirmationToken);
+    }
+
+    private async Task<SkillWorkflowPreparation> PrepareCoreAsync(
+        SkillWorkflowConfirmationRequest request,
+        IReadOnlyList<SkillWorkflowMountConfirmation> confirmations,
+        CancellationToken ct)
+    {
+        var suppliedToken = request.ConfirmationToken?.Trim() ?? string.Empty;
+        var confirmationInput = ValidateConfirmationInput(
+            suppliedToken,
+            confirmations,
+            request.Workflows.Count);
+        if (confirmationInput.Error is not null)
+            return ConfirmationMismatch(confirmationInput.Error);
+
+        var tokenStage = confirmationInput.TokenStage;
+        var legacyConfirmationStage = confirmationInput.LegacyConfirmationStage;
+        var confirmationStage = tokenStage || legacyConfirmationStage;
+        var confirmationByWorkflowId = confirmationInput.ConfirmationsByWorkflowId;
 
         var access = new ExternalWorkflowCapabilityAccessContext(
             request.ScopeId,
@@ -130,7 +237,7 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort
                     access,
                     bundle.EntryWorkflowYaml,
                     bundle.SubWorkflowYamls,
-                    ExternalCapabilityExecutionMode.Interactive,
+                    request.ExecutionMode,
                     workflowId,
                     revisionId,
                     workflow.WorkflowYamls),
@@ -146,66 +253,54 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort
                 BuildPreview(preview, bundleDigest, expectedConfirmation)));
         }
 
-        var expectedToken = ComputeConfirmationToken(prepared.Select(static item => item.Confirmation));
+        var expectedToken = ComputeConfirmationToken(
+            request.ExecutionMode,
+            prepared.Select(static item => item.Confirmation));
         if (tokenStage && !FixedTimeEquals(suppliedToken, expectedToken))
             return ConfirmationMismatch("Workflow content or external request confirmation changed after review.");
 
-        if (!confirmationStage)
+        var previews = prepared.Select(static item => item.Preview).ToArray();
+        return new SkillWorkflowPreparation(
+            new SkillWorkflowConfirmationResult(
+                Status: confirmationStage ? "confirmed" : "confirmation_required",
+                Confirmed: confirmationStage,
+                ConfirmationRequests: previews,
+                Message: confirmationStage
+                    ? "The reviewed skill workflow confirmation is valid."
+                    : "Review every explicit request and submit the exact confirmation token before creating workflow state.",
+                ConfirmationToken: expectedToken),
+            prepared);
+    }
+
+    private static ConfirmationInputValidation ValidateConfirmationInput(
+        string suppliedToken,
+        IReadOnlyList<SkillWorkflowMountConfirmation> confirmations,
+        int workflowCount)
+    {
+        var tokenStage = !string.IsNullOrWhiteSpace(suppliedToken);
+        var legacyConfirmationStage = confirmations.Count > 0;
+        if (tokenStage && legacyConfirmationStage)
+            return ConfirmationInputValidation.Failed("Use one workflow confirmation contract, not both.");
+        if (legacyConfirmationStage && confirmations.Count != workflowCount)
         {
-            return new SkillWorkflowMountResult(
-                Status: "confirmation_required",
-                Mounted: false,
-                Workflows: [],
-                Message: "Review every confirmation request, then call use_skill again with the same skill, mount_workflows=true, and workflow_mount_confirmation_token set to the exact confirmation_token. The second call requires durable approval before any workflow is changed.",
-                ConfirmationRequests: prepared.Select(static item => item.Preview).ToArray(),
-                ConfirmationToken: expectedToken);
+            return ConfirmationInputValidation.Failed(
+                "Workflow confirmation count does not match the skill workflow count.");
         }
 
-        var mounted = new List<MountedSkillWorkflow>(prepared.Count);
-        foreach (var item in prepared)
+        var byWorkflowId = new Dictionary<string, SkillWorkflowMountConfirmation>(StringComparer.Ordinal);
+        foreach (var confirmation in confirmations)
         {
-            var explicitRequestConfirmations = item.Confirmation.ExplicitRequests
-                .Select(confirmation => new NyxIdExplicitRequestConfirmation
-                {
-                    WorkflowId = item.Confirmation.WorkflowId,
-                    RevisionId = item.Confirmation.RevisionId,
-                    CallSiteId = confirmation.CallSiteId,
-                    RequestContractDigest = confirmation.RequestContractDigest,
-                    AttestedRisk = confirmation.AttestedRisk,
-                })
-                .ToArray();
-            var upsert = await _scopeWorkflowCommandPort.UpsertAsync(
-                new ScopeWorkflowUpsertRequest(
-                    request.ScopeId,
-                    item.WorkflowId,
-                    item.Bundle.EntryWorkflowYaml,
-                    WorkflowName: item.Bundle.EntryWorkflowName,
-                    DisplayName: item.WorkflowId,
-                    InlineWorkflowYamls: item.Bundle.SubWorkflowYamls,
-                    RevisionId: item.Confirmation.RevisionId)
-                {
-                    CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
-                        request.CallerId.Trim(),
-                        NyxIdCallerCredentialSelection.SourceReadableUserBearerOrNull(
-                            request.SourceReadableNyxIdAccessToken),
-                        explicitRequestConfirmations: explicitRequestConfirmations),
-                },
-                ct);
-
-            mounted.Add(new MountedSkillWorkflow(
-                WorkflowId: item.WorkflowId,
-                ServiceId: upsert.WorkflowId,
-                EndpointId: "chat",
-                RevisionId: upsert.RevisionId));
+            if (confirmation is null)
+                return ConfirmationInputValidation.Failed("Workflow confirmations cannot contain null values.");
+            if (string.IsNullOrWhiteSpace(confirmation.WorkflowId) ||
+                !byWorkflowId.TryAdd(confirmation.WorkflowId, confirmation))
+            {
+                return ConfirmationInputValidation.Failed(
+                    "Workflow confirmations must contain distinct workflow identities.");
+            }
         }
 
-        return new SkillWorkflowMountResult(
-            Status: "mounted",
-            Mounted: mounted.Count > 0,
-            Workflows: mounted,
-            Message: mounted.Count > 0
-                ? "Mounted reviewed skill workflows into the current scope."
-                : "No skill workflows were mounted.");
+        return ConfirmationInputValidation.Valid(tokenStage, legacyConfirmationStage, byWorkflowId);
     }
 
     private async Task<WorkflowYamlBundle> ParseBundleAsync(
@@ -256,15 +351,17 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort
             subWorkflowYamls);
     }
 
-    private SkillWorkflowMountResult ConfirmationMismatch(string message)
+    private SkillWorkflowPreparation ConfirmationMismatch(string message)
     {
         _logger.LogWarning("Skill workflow mount confirmation rejected with code {FailureCode}", ConfirmationMismatchCode);
-        return new SkillWorkflowMountResult(
-            Status: "confirmation_mismatch",
-            Mounted: false,
-            Workflows: [],
-            Message: message,
-            FailureCode: ConfirmationMismatchCode);
+        return new SkillWorkflowPreparation(
+            new SkillWorkflowConfirmationResult(
+                Status: "confirmation_mismatch",
+                Confirmed: false,
+                ConfirmationRequests: [],
+                Message: message,
+                FailureCode: ConfirmationMismatchCode),
+            []);
     }
 
     private static SkillWorkflowMountConfirmation BuildConfirmation(
@@ -338,26 +435,32 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort
         return $"sha256:{Convert.ToHexString(SHA256.HashData(canonicalBytes)).ToLowerInvariant()}";
     }
 
-    private static string ComputeConfirmationToken(IEnumerable<SkillWorkflowMountConfirmation> confirmations)
+    private static string ComputeConfirmationToken(
+        ExternalCapabilityExecutionMode executionMode,
+        IEnumerable<SkillWorkflowMountConfirmation> confirmations)
     {
-        var canonical = confirmations
-            .OrderBy(static confirmation => confirmation.WorkflowId, StringComparer.Ordinal)
-            .Select(static confirmation => new
-            {
-                confirmation.WorkflowId,
-                confirmation.RevisionId,
-                confirmation.WorkflowBundleDigest,
-                ExplicitRequests = confirmation.ExplicitRequests
-                    .OrderBy(static item => item.CallSiteId, StringComparer.Ordinal)
-                    .Select(static item => new
-                    {
-                        item.CallSiteId,
-                        item.RequestContractDigest,
-                        AttestedRisk = item.AttestedRisk.ToString(),
-                    })
-                    .ToArray(),
-            })
-            .ToArray();
+        var canonical = new
+        {
+            ExecutionMode = executionMode.ToString(),
+            Workflows = confirmations
+                .OrderBy(static confirmation => confirmation.WorkflowId, StringComparer.Ordinal)
+                .Select(static confirmation => new
+                {
+                    confirmation.WorkflowId,
+                    confirmation.RevisionId,
+                    confirmation.WorkflowBundleDigest,
+                    ExplicitRequests = confirmation.ExplicitRequests
+                        .OrderBy(static item => item.CallSiteId, StringComparer.Ordinal)
+                        .Select(static item => new
+                        {
+                            item.CallSiteId,
+                            item.RequestContractDigest,
+                            AttestedRisk = item.AttestedRisk.ToString(),
+                        })
+                        .ToArray(),
+                })
+                .ToArray(),
+        };
         var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(canonical));
         return $"sha256:{Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant()}";
     }
@@ -378,6 +481,26 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort
         WorkflowYamlBundle Bundle,
         SkillWorkflowMountConfirmation Confirmation,
         SkillWorkflowMountPreview Preview);
+
+    private sealed record SkillWorkflowPreparation(
+        SkillWorkflowConfirmationResult Result,
+        IReadOnlyList<PreparedWorkflowMount> Prepared);
+
+    private sealed record ConfirmationInputValidation(
+        bool TokenStage,
+        bool LegacyConfirmationStage,
+        IReadOnlyDictionary<string, SkillWorkflowMountConfirmation> ConfirmationsByWorkflowId,
+        string? Error)
+    {
+        public static ConfirmationInputValidation Valid(
+            bool tokenStage,
+            bool legacyConfirmationStage,
+            IReadOnlyDictionary<string, SkillWorkflowMountConfirmation> confirmationsByWorkflowId) =>
+            new(tokenStage, legacyConfirmationStage, confirmationsByWorkflowId, null);
+
+        public static ConfirmationInputValidation Failed(string error) =>
+            new(false, false, new Dictionary<string, SkillWorkflowMountConfirmation>(), error);
+    }
 
     private sealed record WorkflowYamlBundle(
         string EntryWorkflowName,

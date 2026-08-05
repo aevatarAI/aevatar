@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Text;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Mainnet.Host.Api.Skills;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
@@ -82,9 +83,52 @@ public sealed class WorkflowSkillsEndpointsTests
         runService.InvocationCount.Should().Be(0);
     }
 
+    [Fact]
+    public async Task ScheduleSkill_WhenConfirmationIsRequired_ShouldReturnTypedPreviewWithHttp200()
+    {
+        var preview = new SkillWorkflowMountPreview(
+            "workflow-alpha",
+            "revision-alpha",
+            "sha256:bundle",
+            [],
+            new SkillWorkflowMountConfirmation(
+                "workflow-alpha",
+                "revision-alpha",
+                "sha256:bundle",
+                []));
+        var runService = new RecordingUserSkillRunService
+        {
+            ScheduleOutcome = SkillScheduleOutcome.ConfirmationRequired(
+                new SkillScheduleConfirmationReceipt(
+                    "confirmation_required",
+                    "sha256:reviewed",
+                    [preview])),
+        };
+        var bindingQuery = Substitute.For<IExternalIdentityBindingQueryPort>();
+        bindingQuery.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<BindingId?>(new BindingId { Value = "binding-alpha" }));
+        using var services = CreateRequestServices(bindingQuery);
+        var http = CreateHttpContext(
+            services,
+            "Bearer caller-token",
+            "{\"prompt\":\"run\",\"cronExpression\":\"0 9 * * *\",\"timezone\":\"UTC\",\"displayName\":\"Daily Check\",\"teamId\":\"team-alpha\",\"workflowConfirmationToken\":\"sha256:supplied\"}");
+
+        var result = await WorkflowSkillsEndpoints.ScheduleSkill(
+            http,
+            "skill-alpha",
+            runService,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status200OK);
+        ((IValueHttpResult)result).Value.Should().BeSameAs(runService.ScheduleOutcome.Confirmation);
+        runService.ScheduleInvocationCount.Should().Be(1);
+        runService.WorkflowConfirmationToken.Should().Be("sha256:supplied");
+    }
+
     private static DefaultHttpContext CreateHttpContext(
         IServiceProvider services,
-        string? authorization)
+        string? authorization,
+        string bodyJson = "{\"prompt\":\"run the check\"}")
     {
         var http = new DefaultHttpContext
         {
@@ -98,7 +142,7 @@ public sealed class WorkflowSkillsEndpointsTests
         if (authorization != null)
             http.Request.Headers.Authorization = authorization;
 
-        var body = Encoding.UTF8.GetBytes("{\"prompt\":\"run the check\"}");
+        var body = Encoding.UTF8.GetBytes(bodyJson);
         http.Request.Body = new MemoryStream(body);
         http.Request.ContentLength = body.Length;
         http.Request.ContentType = "application/json";
@@ -133,9 +177,16 @@ public sealed class WorkflowSkillsEndpointsTests
 
         public int InvocationCount { get; private set; }
 
+        public int ScheduleInvocationCount { get; private set; }
+
         public WorkflowCallerCredential? CallerCredential { get; private set; }
 
         public string? ScopeId { get; private set; }
+
+        public SkillScheduleOutcome ScheduleOutcome { get; init; } =
+            SkillScheduleOutcome.Failed("unexpected", "not invoked");
+
+        public string? WorkflowConfirmationToken { get; private set; }
 
         public Task<SkillRunOutcome> InvokeOnceAsync(
             string skillGuid,
@@ -159,7 +210,12 @@ public sealed class WorkflowSkillsEndpointsTests
             string timezone,
             string displayName,
             string teamId,
-            CancellationToken ct = default) =>
-            throw new NotSupportedException("This test exercises one-shot skill invocation only.");
+            string workflowConfirmationToken,
+            CancellationToken ct = default)
+        {
+            ScheduleInvocationCount++;
+            WorkflowConfirmationToken = workflowConfirmationToken;
+            return Task.FromResult(ScheduleOutcome);
+        }
     }
 }

@@ -273,9 +273,12 @@ internal static class WorkflowSkillsEndpoints
             body.Timezone ?? string.Empty,
             body.DisplayName ?? string.Empty,
             body.TeamId!,
+            body.WorkflowConfirmationToken ?? string.Empty,
             ct);
         if (outcome.Succeeded)
             return Results.Json(outcome.Receipt);
+        if (outcome.Confirmation is not null)
+            return Results.Json(outcome.Confirmation);
 
         var scheduleStatus = string.Equals(outcome.ErrorCode, "skill_not_found", StringComparison.Ordinal)
             ? StatusCodes.Status404NotFound

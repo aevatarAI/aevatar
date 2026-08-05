@@ -2305,6 +2305,8 @@ public sealed class ScheduledDispatchGAgentTests
         record.Error.Should().Be(safeMessage);
         record.ErrorCode.Should().Be(code);
         record.TargetActorId.Should().BeEmpty();
+        agent.State.Deleted.Should().BeFalse();
+        agent.State.Target.ServiceInvocation.Identity.ServiceId.Should().Be("svc-alpha");
         agent.State.ToString().Should().NotContain("workflow yaml");
         agent.State.ToString().Should().NotContain(nameof(ScheduledWorkflowAdmissionException));
     }

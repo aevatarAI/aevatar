@@ -12,6 +12,38 @@ public interface ISkillWorkflowMountPort
         CancellationToken ct = default);
 }
 
+/// <summary>
+/// Prepares and verifies the explicit-request confirmation for a skill workflow bundle
+/// without mounting or otherwise mutating workflow state.
+/// </summary>
+public interface ISkillWorkflowConfirmationPort
+{
+    Task<SkillWorkflowConfirmationResult> ConfirmAsync(
+        SkillWorkflowConfirmationRequest request,
+        CancellationToken ct = default);
+}
+
+public sealed record SkillWorkflowConfirmationRequest(
+    string ScopeId,
+    string CallerId,
+    string SourceReadableNyxIdAccessToken,
+    IReadOnlyList<SkillWorkflowDescriptor> Workflows,
+    ExternalCapabilityExecutionMode ExecutionMode)
+{
+    public string ConfirmationToken { get; init; } = string.Empty;
+
+    public override string ToString() =>
+        $"{nameof(SkillWorkflowConfirmationRequest)} {{ ScopeId = {ScopeId}, CallerId = {CallerId}, ExecutionMode = {ExecutionMode}, Credentials = [REDACTED], WorkflowCount = {Workflows.Count} }}";
+}
+
+public sealed record SkillWorkflowConfirmationResult(
+    string Status,
+    bool Confirmed,
+    IReadOnlyList<SkillWorkflowMountPreview> ConfirmationRequests,
+    string? Message = null,
+    string? FailureCode = null,
+    string? ConfirmationToken = null);
+
 public sealed record SkillWorkflowMountRequest(
     string ScopeId,
     string SourceReadableNyxIdAccessToken,
@@ -85,5 +117,21 @@ public sealed class NoOpSkillWorkflowMountPort : ISkillWorkflowMountPort
             Mounted: false,
             Workflows: [],
             Message: "Workflow mounting is not available in this host."));
+    }
+}
+
+public sealed class NoOpSkillWorkflowConfirmationPort : ISkillWorkflowConfirmationPort
+{
+    public Task<SkillWorkflowConfirmationResult> ConfirmAsync(
+        SkillWorkflowConfirmationRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return Task.FromResult(new SkillWorkflowConfirmationResult(
+            Status: "not_available",
+            Confirmed: false,
+            ConfirmationRequests: [],
+            Message: "Workflow confirmation is not available in this host."));
     }
 }

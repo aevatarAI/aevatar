@@ -80,6 +80,118 @@ public sealed class SkillWorkflowMountAdapterTests
     }
 
     [Fact]
+    public async Task ConfirmAsync_DurablePreviewAndExactToken_ShouldNeverMutateWorkflowState()
+    {
+        const string yaml = "name: durable_workflow\nsteps: []";
+        var commandPort = new RecordingScopeWorkflowCommandPort();
+        var previewService = new RecordingWorkflowExplicitRequestPreviewService(
+        [
+            ExplicitRequestPreview(),
+        ]);
+        var adapter = new SkillWorkflowMountAdapter(
+            commandPort,
+            new StubWorkflowDefinitionParser(new Dictionary<string, string>
+            {
+                [yaml] = "durable_workflow",
+            }),
+            previewService);
+        var request = new SkillWorkflowConfirmationRequest(
+            "scope-alpha",
+            "caller-alpha",
+            "source-readable-token",
+            [new SkillWorkflowDescriptor
+            {
+                WorkflowId = "durable_workflow",
+                WorkflowYamls = [yaml],
+            }],
+            ExternalCapabilityExecutionMode.Durable);
+
+        var preview = await adapter.ConfirmAsync(request);
+        var confirmed = await adapter.ConfirmAsync(request with
+        {
+            ConfirmationToken = preview.ConfirmationToken!,
+        });
+
+        preview.Status.Should().Be("confirmation_required");
+        preview.Confirmed.Should().BeFalse();
+        preview.ConfirmationToken.Should().StartWith("sha256:");
+        confirmed.Status.Should().Be("confirmed");
+        confirmed.Confirmed.Should().BeTrue();
+        previewService.Requests.Should().HaveCount(2);
+        previewService.Requests.Should().OnlyContain(request =>
+            request.ExecutionMode == ExternalCapabilityExecutionMode.Durable);
+        commandPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ConfirmAsync_WhenTokenDoesNotMatch_ShouldRejectWithoutMutation()
+    {
+        const string yaml = "name: durable_workflow\nsteps: []";
+        var commandPort = new RecordingScopeWorkflowCommandPort();
+        var adapter = new SkillWorkflowMountAdapter(
+            commandPort,
+            new StubWorkflowDefinitionParser(new Dictionary<string, string>
+            {
+                [yaml] = "durable_workflow",
+            }),
+            new RecordingWorkflowExplicitRequestPreviewService());
+
+        var result = await adapter.ConfirmAsync(new SkillWorkflowConfirmationRequest(
+            "scope-alpha",
+            "caller-alpha",
+            "source-readable-token",
+            [new SkillWorkflowDescriptor
+            {
+                WorkflowId = "durable_workflow",
+                WorkflowYamls = [yaml],
+            }],
+            ExternalCapabilityExecutionMode.Durable)
+        {
+            ConfirmationToken = "sha256:forged",
+        });
+
+        result.Status.Should().Be("confirmation_mismatch");
+        result.Confirmed.Should().BeFalse();
+        result.FailureCode.Should().Be("USE_SKILL_MOUNT_CONFIRMATION_MISMATCH");
+        commandPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ConfirmAsync_WhenTokenWasIssuedForInteractiveMode_ShouldRejectDurableUse()
+    {
+        const string yaml = "name: mode_bound_workflow\nsteps: []";
+        var commandPort = new RecordingScopeWorkflowCommandPort();
+        var adapter = new SkillWorkflowMountAdapter(
+            commandPort,
+            new StubWorkflowDefinitionParser(new Dictionary<string, string>
+            {
+                [yaml] = "mode_bound_workflow",
+            }),
+            new RecordingWorkflowExplicitRequestPreviewService());
+        var interactiveRequest = new SkillWorkflowConfirmationRequest(
+            "scope-alpha",
+            "caller-alpha",
+            "source-readable-token",
+            [new SkillWorkflowDescriptor
+            {
+                WorkflowId = "mode_bound_workflow",
+                WorkflowYamls = [yaml],
+            }],
+            ExternalCapabilityExecutionMode.Interactive);
+
+        var interactive = await adapter.ConfirmAsync(interactiveRequest);
+        var durable = await adapter.ConfirmAsync(interactiveRequest with
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            ConfirmationToken = interactive.ConfirmationToken!,
+        });
+
+        durable.Status.Should().Be("confirmation_mismatch");
+        durable.Confirmed.Should().BeFalse();
+        commandPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task MountAsync_PreviewsBeforeUpsert_ThenMountsTheExactReviewedBundle()
     {
         var commandPort = new RecordingScopeWorkflowCommandPort();

@@ -1,4 +1,5 @@
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.AI.ToolProviders.Skills;
 
 namespace Aevatar.Mainnet.Host.Api.Skills;
 
@@ -29,7 +30,8 @@ internal sealed record SkillScheduleHttpRequest(
     string? CronExpression = null,
     string? Timezone = null,
     string? DisplayName = null,
-    string? TeamId = null);
+    string? TeamId = null,
+    string? WorkflowConfirmationToken = null);
 
 // Returned after a schedule is provisioned; ObservatoryUrl shows the schedule's recurring runs.
 public sealed record SkillScheduleReceipt(
@@ -40,15 +42,27 @@ public sealed record SkillScheduleReceipt(
     string ObservatoryUrl,
     string StudioUrl);
 
+public sealed record SkillScheduleConfirmationReceipt(
+    string Status,
+    string? ConfirmationToken,
+    IReadOnlyList<SkillWorkflowMountPreview> Workflows,
+    string? FailureCode = null,
+    string? Message = null);
+
 internal sealed record SkillScheduleOutcome(
     bool Succeeded,
     SkillScheduleReceipt? Receipt = null,
+    SkillScheduleConfirmationReceipt? Confirmation = null,
     string? ErrorCode = null,
     string? ErrorMessage = null)
 {
     public static SkillScheduleOutcome Ok(SkillScheduleReceipt receipt) => new(true, receipt);
 
-    public static SkillScheduleOutcome Failed(string code, string message) => new(false, null, code, message);
+    public static SkillScheduleOutcome ConfirmationRequired(SkillScheduleConfirmationReceipt confirmation) =>
+        new(false, Confirmation: confirmation);
+
+    public static SkillScheduleOutcome Failed(string code, string message) =>
+        new(false, ErrorCode: code, ErrorMessage: message);
 }
 
 // Invokes a visible ornn skill once as an observable workflow run, or provisions a recurring schedule for it.
@@ -71,5 +85,6 @@ internal interface IUserSkillRunService
         string timezone,
         string displayName,
         string teamId,
+        string workflowConfirmationToken,
         CancellationToken ct = default);
 }

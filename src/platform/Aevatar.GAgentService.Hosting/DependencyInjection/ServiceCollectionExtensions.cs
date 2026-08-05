@@ -192,7 +192,13 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScopeWorkflowQueryPort>(sp => sp.GetRequiredService<ScopeWorkflowQueryApplicationService>());
         services.TryAddSingleton<IScopeWorkflowCommandPort, ScopeWorkflowCommandApplicationService>();
         services.TryAddSingleton<IScopeWorkflowSaveAndBindPort, ScopeWorkflowSaveAndBindApplicationService>();
-        services.Replace(ServiceDescriptor.Singleton<ISkillWorkflowMountPort, SkillWorkflowMountAdapter>());
+        services.Replace(ServiceDescriptor.Singleton(
+            typeof(SkillWorkflowMountAdapter),
+            typeof(SkillWorkflowMountAdapter)));
+        services.Replace(ServiceDescriptor.Singleton<ISkillWorkflowMountPort>(sp =>
+            sp.GetRequiredService<SkillWorkflowMountAdapter>()));
+        services.Replace(ServiceDescriptor.Singleton<ISkillWorkflowConfirmationPort>(sp =>
+            sp.GetRequiredService<SkillWorkflowMountAdapter>()));
         services.TryAddSingleton<IScopeBindingCommandPort>(sp => new ScopeBindingCommandApplicationService(
             sp.GetRequiredService<IServiceCommandPort>(),
             sp.GetRequiredService<IServiceLifecycleQueryPort>(),

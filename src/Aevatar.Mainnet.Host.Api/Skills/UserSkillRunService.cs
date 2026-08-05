@@ -1,10 +1,14 @@
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using WorkflowCallerCredentialTokens = Aevatar.Workflow.Abstractions.WorkflowCallerCredentialTokens;
 using ExternalCapabilityExecutionMode = Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode;
+using NyxIdCallerCredentialKind = Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind;
+using NyxIdCallerCredentialSelection = Aevatar.Workflow.Abstractions.NyxIdCallerCredentialSelection;
+using NyxIdExplicitRequestConfirmation = Aevatar.Workflow.Abstractions.NyxIdExplicitRequestConfirmation;
 
 namespace Aevatar.Mainnet.Host.Api.Skills;
 
@@ -19,15 +23,18 @@ internal sealed class UserSkillRunService : IUserSkillRunService
     private readonly IRemoteSkillFetcher _remoteSkillFetcher;
     private readonly ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> _chatRunDispatch;
     private readonly IWorkflowScheduleProvisioningPort _scheduleProvisioningPort;
+    private readonly ISkillWorkflowConfirmationPort _workflowConfirmationPort;
 
     public UserSkillRunService(
         IRemoteSkillFetcher remoteSkillFetcher,
         ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> chatRunDispatch,
-        IWorkflowScheduleProvisioningPort scheduleProvisioningPort)
+        IWorkflowScheduleProvisioningPort scheduleProvisioningPort,
+        ISkillWorkflowConfirmationPort workflowConfirmationPort)
     {
         _remoteSkillFetcher = remoteSkillFetcher ?? throw new ArgumentNullException(nameof(remoteSkillFetcher));
         _chatRunDispatch = chatRunDispatch ?? throw new ArgumentNullException(nameof(chatRunDispatch));
         _scheduleProvisioningPort = scheduleProvisioningPort ?? throw new ArgumentNullException(nameof(scheduleProvisioningPort));
+        _workflowConfirmationPort = workflowConfirmationPort ?? throw new ArgumentNullException(nameof(workflowConfirmationPort));
     }
 
     public async Task<SkillRunOutcome> InvokeOnceAsync(
@@ -77,6 +84,7 @@ internal sealed class UserSkillRunService : IUserSkillRunService
         string timezone,
         string displayName,
         string teamId,
+        string workflowConfirmationToken,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(callerCredential);
@@ -91,21 +99,69 @@ internal sealed class UserSkillRunService : IUserSkillRunService
                 "Caller NyxID authority with verified binding is required to schedule the skill workflow.");
 
         var accessToken = parsedToken.NormalizedBearerToken!;
+        var sourceReadableBearerToken = ResolveSourceReadableBearerToken(callerCredential, accessToken);
+        if (sourceReadableBearerToken is null)
+        {
+            return SkillScheduleOutcome.Failed(
+                "source_readable_caller_credential_required",
+                "A source-readable NyxID user bearer is required to review and schedule this skill workflow.");
+        }
+
         var skill = await _remoteSkillFetcher.FetchSkillAsync(accessToken, skillGuid, ct);
         if (skill == null)
             return SkillScheduleOutcome.Failed("skill_not_found", $"Skill '{skillGuid}' was not found or is not accessible.");
 
+        var scheduleWorkflow = ResolveScheduleWorkflow(skill);
+        if (scheduleWorkflow.ErrorCode is not null)
+            return SkillScheduleOutcome.Failed(scheduleWorkflow.ErrorCode, scheduleWorkflow.ErrorMessage!);
+
+        var workflow = scheduleWorkflow.Workflow!;
+        var confirmation = await _workflowConfirmationPort.ConfirmAsync(
+            new SkillWorkflowConfirmationRequest(
+                scopeId,
+                authenticatedOwner.SubjectExternalUserId,
+                sourceReadableBearerToken,
+                [workflow],
+                ExternalCapabilityExecutionMode.Durable)
+            {
+                ConfirmationToken = workflowConfirmationToken ?? string.Empty,
+            },
+            ct);
+        if (!confirmation.Confirmed)
+        {
+            if (string.Equals(confirmation.Status, "confirmation_required", StringComparison.Ordinal) ||
+                string.Equals(confirmation.Status, "confirmation_mismatch", StringComparison.Ordinal))
+            {
+                return SkillScheduleOutcome.ConfirmationRequired(new SkillScheduleConfirmationReceipt(
+                    confirmation.Status,
+                    confirmation.ConfirmationToken,
+                    confirmation.ConfirmationRequests,
+                    confirmation.FailureCode,
+                    confirmation.Message));
+            }
+
+            return SkillScheduleOutcome.Failed(
+                confirmation.FailureCode ?? "skill_schedule_confirmation_failed",
+                confirmation.Message ?? "The skill workflow could not be reviewed for durable scheduling.");
+        }
+
+        var explicitRequestConfirmations = ToExplicitRequestConfirmations(confirmation.ConfirmationRequests);
+
         // The provisioning port persists a member + inline-bound workflow YAML + a Workflow-kind scheduled
-        // dispatch, so recurring runs land in the observatory (the same path the LLM provisioning tool uses).
-        // It takes a single entry YAML: a direct skill's synthesized workflow is one document; a carried skill
-        // uses its entry workflow. Cron is Cronos CronFormat.Standard (5-field, no seconds).
-        var (_, yamls) = ResolveWorkflowYamls(skill);
+        // dispatch, so recurring runs land in the observatory. Cron is Cronos CronFormat.Standard
+        // (5-field, no seconds). Capability admission is explicitly Durable and carries the exact reviewed
+        // request contracts; provisioning may mutate only after that confirmation succeeds.
         var request = new WorkflowScheduleProvisioningRequest(
             ScopeId: scopeId,
             TeamId: teamId,
             DisplayName: string.IsNullOrWhiteSpace(displayName) ? skill.Name : displayName,
-            WorkflowYaml: yamls[0])
+            WorkflowYaml: workflow.WorkflowYamls[0])
         {
+            CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
+                authenticatedOwner.SubjectExternalUserId,
+                NyxIdCallerCredentialSelection.SourceReadableUserBearer(sourceReadableBearerToken),
+                executionMode: ExternalCapabilityExecutionMode.Durable,
+                explicitRequestConfirmations: explicitRequestConfirmations),
             Prompt = string.IsNullOrWhiteSpace(prompt) ? null : prompt,
             ScheduleCron = cronExpression,
             ScheduleTimezone = string.IsNullOrWhiteSpace(timezone) ? null : timezone,
@@ -198,6 +254,65 @@ internal sealed class UserSkillRunService : IUserSkillRunService
             authority.BindingId.Trim());
     }
 
+    private static string? ResolveSourceReadableBearerToken(
+        WorkflowCallerCredential callerCredential,
+        string executionBearerToken)
+    {
+        var supplemental = WorkflowCallerCredentialTokens.ParseOptional(
+            callerCredential.SourceReadableUserBearerToken);
+        if (supplemental.IsInvalid)
+            return null;
+        if (supplemental.IsValid)
+            return supplemental.NormalizedBearerToken;
+
+        return callerCredential.Kind == NyxIdCallerCredentialKind.SourceReadableUserBearer
+            ? executionBearerToken
+            : null;
+    }
+
+    private static ScheduleWorkflowResolution ResolveScheduleWorkflow(SkillDefinition skill)
+    {
+        var carriedWorkflows = skill.Workflows
+            .Where(static workflow => workflow.WorkflowYamls.Count > 0)
+            .ToArray();
+        if (carriedWorkflows.Length > 1)
+        {
+            return ScheduleWorkflowResolution.Failed(
+                "skill_schedule_workflow_ambiguous",
+                "The skill exposes multiple root workflows. Select a single workflow before scheduling it.");
+        }
+
+        if (carriedWorkflows.Length == 1)
+        {
+            if (carriedWorkflows[0].WorkflowYamls.Count > 1)
+            {
+                return ScheduleWorkflowResolution.Failed(
+                    "skill_schedule_workflow_bundle_unsupported",
+                    "Scheduling a skill workflow bundle with sub-workflows is not supported by this provisioning contract.");
+            }
+
+            return ScheduleWorkflowResolution.Ok(carriedWorkflows[0]);
+        }
+
+        return ScheduleWorkflowResolution.Ok(new SkillWorkflowDescriptor
+        {
+            WorkflowId = skill.Name,
+            WorkflowYamls = [SkillDirectWorkflowYamlSynthesizer.Synthesize(skill)],
+        });
+    }
+
+    private static IReadOnlyList<NyxIdExplicitRequestConfirmation> ToExplicitRequestConfirmations(
+        IReadOnlyList<SkillWorkflowMountPreview> previews) =>
+        previews.SelectMany(static preview => preview.Confirmation.ExplicitRequests.Select(request =>
+            new NyxIdExplicitRequestConfirmation
+            {
+                WorkflowId = preview.WorkflowId,
+                RevisionId = preview.RevisionId,
+                CallSiteId = request.CallSiteId,
+                RequestContractDigest = request.RequestContractDigest,
+                AttestedRisk = request.AttestedRisk,
+            })).ToArray();
+
     // Skills carrying workflow YAML run as-is; skills without one run a synthesized single llm_call workflow
     // that injects the skill's full instructions. Either way the result is one observable workflow run.
     private static (string RunKind, IReadOnlyList<string> Yamls) ResolveWorkflowYamls(SkillDefinition skill)
@@ -210,5 +325,17 @@ internal sealed class UserSkillRunService : IUserSkillRunService
         }
 
         return ("direct", [SkillDirectWorkflowYamlSynthesizer.Synthesize(skill)]);
+    }
+
+    private sealed record ScheduleWorkflowResolution(
+        SkillWorkflowDescriptor? Workflow,
+        string? ErrorCode,
+        string? ErrorMessage)
+    {
+        public static ScheduleWorkflowResolution Ok(SkillWorkflowDescriptor workflow) =>
+            new(workflow, null, null);
+
+        public static ScheduleWorkflowResolution Failed(string code, string message) =>
+            new(null, code, message);
     }
 }

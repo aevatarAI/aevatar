@@ -414,6 +414,13 @@ async function api(path,opt){
   return body;
 }
 function apiSend(path,method,payload){ return api(path,{method,headers:payload!=null?{"Content-Type":"application/json"}:{},body:payload!=null?JSON.stringify(payload):undefined}); }
+function scheduleConfirmationText(receipt){
+  const rows=[];
+  (receipt.workflows||[]).forEach(w=>(w.explicitRequests||[]).forEach(r=>{
+    rows.push(`${r.method||"REQUEST"} ${r.pathTemplate||""} · ${r.effectiveRisk||"unknown"}`);
+  }));
+  return ["确认创建定时任务？",...rows].join("\n");
+}
 
 /* cache populated by async loaders; render*() read it synchronously */
 const cache = { skills:null, detail:{}, schedules:null, run:null, preview:null, teams:null };
@@ -802,7 +809,15 @@ function renderScheduleDrawer(skill){
     const { prompt }=collectInputs();
     create.disabled=true; state.schedAuthErr=false;
     try{
-      const receipt=await apiSend("/api/workflow/skills/"+encodeURIComponent(guid)+"/schedule","POST",{ prompt, cronExpression:state.cron, timezone:state.tz, displayName:dn, teamId:teamId });
+      const request={ prompt, cronExpression:state.cron, timezone:state.tz, displayName:dn, teamId:teamId };
+      let receipt=await apiSend("/api/workflow/skills/"+encodeURIComponent(guid)+"/schedule","POST",request);
+      if(receipt&&receipt.status==="confirmation_required"){
+        if(!receipt.confirmationToken||!confirm(scheduleConfirmationText(receipt))){
+          create.disabled=false; render(); return;
+        }
+        receipt=await apiSend("/api/workflow/skills/"+encodeURIComponent(guid)+"/schedule","POST",{...request,workflowConfirmationToken:receipt.confirmationToken});
+      }
+      if(receipt&&receipt.status==="confirmation_mismatch") throw apiError(409,receipt.message||"Workflow confirmation changed. Review and retry.",receipt);
       state.schedCreated=receipt||true; await loadSchedules();
     }catch(e){ if(e.status===401||e.status===403){ state.schedAuthErr=true; } else { state.schedCreated=false; alert("创建定时失败："+(e.message||e.status)); } }
     create.disabled=false; render();
