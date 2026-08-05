@@ -7,7 +7,9 @@ import {
 } from '../../../tests/reactQueryTestUtils';
 import WorkflowActivityVNextPage from './index';
 
-let mockPathname = '/scopes/scope-alpha/workflow-activity-vnext/workflows';
+let mockLocation = '/scopes/scope-alpha/workflow-activity-vnext/workflows';
+
+const readMockUrl = () => new URL(mockLocation, 'http://console.local');
 
 jest.mock('@umijs/max', () => ({
   getIntl: () => ({
@@ -32,7 +34,11 @@ jest.mock('@umijs/max', () => ({
       id: string;
     }) => defaultMessage ?? id,
   }),
-  useLocation: () => ({ hash: '', pathname: mockPathname, search: '' }),
+  useLocation: () => ({
+    hash: '',
+    pathname: readMockUrl().pathname,
+    search: readMockUrl().search,
+  }),
   useModel: () => ({ initialState: { auth: { authenticated: true } } }),
   useParams: () => ({ scopeId: 'scope-alpha' }),
 }));
@@ -70,7 +76,7 @@ jest.mock('@/shared/api/scopesApi', () => ({
 }));
 
 jest.mock('@/shared/navigation/history', () => ({
-  getLocationSnapshot: () => mockPathname,
+  getLocationSnapshot: () => `${readMockUrl().pathname}${readMockUrl().search}`,
   history: { push: jest.fn(), replace: jest.fn() },
   subscribeToLocationChanges: () => () => undefined,
 }));
@@ -155,7 +161,7 @@ const mockScopesApi = jest.requireMock('@/shared/api/scopesApi').scopesApi as {
 
 describe('Workflow Activity vNext catalogue', () => {
   beforeEach(() => {
-    mockPathname = '/scopes/scope-alpha/workflow-activity-vnext/workflows';
+    mockLocation = '/scopes/scope-alpha/workflow-activity-vnext/workflows';
     jest.clearAllMocks();
   });
 
@@ -304,6 +310,152 @@ describe('Workflow Activity vNext catalogue', () => {
     expect(await screen.findByText('No workflows yet')).toBeInTheDocument();
   });
 
+  it('restores URL search and filters Drafts by exact draft API membership', async () => {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows?q=support&view=drafts';
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([
+      {
+        workflowId: 'wf-draft-alpha',
+        name: 'Support triage',
+        description: 'Route support requests',
+        fileName: 'support.yaml',
+        filePath: '/support.yaml',
+        directoryId: 'directory-alpha',
+        directoryLabel: 'Workflows',
+        stepCount: 3,
+        hasLayout: true,
+        updatedAtUtc: '2026-08-04T10:00:00Z',
+      },
+    ]);
+    mockScopesApi.listWorkflows.mockResolvedValue([
+      {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-draft-alpha',
+        displayName: 'Committed support source',
+        serviceKey: '',
+        workflowName: 'committed_support_source',
+        actorId: 'summary-actor-alpha',
+        activeRevisionId: 'revision-alpha',
+        deploymentId: 'deployment-alpha',
+        deploymentStatus: 'active',
+        updatedAt: '2026-08-03T10:00:00Z',
+      },
+      {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-committed-beta',
+        displayName: 'Invoice review',
+        serviceKey: '',
+        workflowName: 'invoice_review',
+        actorId: 'summary-actor-beta',
+        activeRevisionId: 'revision-beta',
+        deploymentId: 'deployment-beta',
+        deploymentStatus: 'active',
+        updatedAt: '2026-08-03T10:00:00Z',
+      },
+    ]);
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(await screen.findByText('Support triage')).toBeInTheDocument();
+    expect(screen.queryByText('Invoice review')).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('searchbox', { name: 'Search workflows' }),
+    ).toHaveValue('support');
+    expect(screen.getByText('Drafts')).toBeInTheDocument();
+
+    fireEvent.mouseDown(
+      screen.getByRole('combobox', { name: 'Workflow view' }),
+    );
+    expect(
+      await screen.findByRole('option', { name: 'All workflows' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Drafts' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('option', { name: 'Committed' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('option', { name: 'Published' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('option', { name: 'Failing' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('writes Workflow filters to the URL and clears a filtered empty result', async () => {
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
+    mockScopesApi.listWorkflows.mockResolvedValue([
+      {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-committed-beta',
+        displayName: 'Invoice review',
+        serviceKey: '',
+        workflowName: 'invoice_review',
+        actorId: 'summary-actor-beta',
+        activeRevisionId: 'revision-beta',
+        deploymentId: 'deployment-beta',
+        deploymentStatus: 'active',
+        updatedAt: '2026-08-03T10:00:00Z',
+      },
+    ]);
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    expect(await screen.findByText('Invoice review')).toBeInTheDocument();
+
+    fireEvent.change(
+      screen.getByRole('searchbox', { name: 'Search workflows' }),
+      { target: { value: 'missing' } },
+    );
+
+    expect(
+      await screen.findByText('No matching workflows'),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(history.replace).toHaveBeenLastCalledWith(
+        '/scopes/scope-alpha/workflow-activity-vnext/workflows?q=missing',
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    expect(await screen.findByText('Invoice review')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(history.replace).toHaveBeenLastCalledWith(
+        '/scopes/scope-alpha/workflow-activity-vnext/workflows',
+      ),
+    );
+  });
+
+  it('shows Drafts as unavailable instead of empty when the draft API fails', async () => {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows?view=drafts';
+    mockStudioApi.listWorkflowDrafts.mockRejectedValue(
+      new Error('draft source down'),
+    );
+    mockScopesApi.listWorkflows.mockResolvedValue([
+      {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-committed-beta',
+        displayName: 'Invoice review',
+        serviceKey: '',
+        workflowName: 'invoice_review',
+        actorId: 'summary-actor-beta',
+        activeRevisionId: 'revision-beta',
+        deploymentId: 'deployment-beta',
+        deploymentStatus: 'active',
+        updatedAt: '2026-08-03T10:00:00Z',
+      },
+    ]);
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(
+      await screen.findByText('Draft workflows unavailable'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Retry workflows' }),
+    ).toBeEnabled();
+    expect(screen.queryByText('No workflows yet')).not.toBeInTheDocument();
+  });
+
   it('renders total source failure and supports retry', async () => {
     mockStudioApi.listWorkflowDrafts.mockRejectedValue(new Error('offline'));
     mockScopesApi.listWorkflows.mockRejectedValue(new Error('offline'));
@@ -320,7 +472,7 @@ describe('Workflow Activity vNext catalogue', () => {
 
 describe('Workflow Activity vNext settings', () => {
   beforeEach(() => {
-    mockPathname = '/scopes/scope-alpha/workflow-activity-vnext/settings';
+    mockLocation = '/scopes/scope-alpha/workflow-activity-vnext/settings';
     jest.clearAllMocks();
     mockStudioApi.getUserLlmSettings.mockResolvedValue({
       savedSelection: null,
@@ -510,7 +662,7 @@ describe('Workflow Activity vNext settings', () => {
 
 describe('Workflow Activity vNext editor', () => {
   beforeEach(() => {
-    mockPathname =
+    mockLocation =
       '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-committed-source';
     jest.clearAllMocks();
     mockStudioApi.getWorkspaceSettings.mockResolvedValue({
@@ -702,7 +854,7 @@ describe('Workflow Activity vNext editor', () => {
 
 describe('Workflow Activity vNext creation', () => {
   beforeEach(() => {
-    mockPathname = '/scopes/scope-alpha/workflow-activity-vnext/workflows/new';
+    mockLocation = '/scopes/scope-alpha/workflow-activity-vnext/workflows/new';
     jest.clearAllMocks();
     mockStudioApi.getWorkspaceSettings.mockResolvedValue({
       runtimeBaseUrl: '',

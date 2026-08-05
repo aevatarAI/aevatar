@@ -61,7 +61,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const [workflowFilter, setWorkflowFilter] = React.useState(
     initialParams.get('workflowFilter') ?? '',
   );
-  const [search, setSearch] = React.useState('');
+  const [search, setSearch] = React.useState(initialParams.get('q') ?? '');
   const runs = useQuery({
     queryKey: [
       'workflow-activity-vnext',
@@ -83,6 +83,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
 
   React.useEffect(() => {
     const params = new URLSearchParams(location.search);
+    setSearch(params.get('q') ?? '');
     setStatus(params.get('status') ?? '');
     setOrigin(params.get('origin') ?? '');
     setDefinition(params.get('definition') ?? '');
@@ -91,13 +92,14 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
 
   React.useEffect(() => {
     const params = new URLSearchParams();
+    if (search.trim()) params.set('q', search.trim());
     if (status) params.set('status', status);
     if (origin) params.set('origin', origin);
     if (definition) params.set('definition', definition);
     if (workflowFilter) params.set('workflowFilter', workflowFilter);
     const suffix = params.toString();
     history.replace(`${location.pathname}${suffix ? `?${suffix}` : ''}`);
-  }, [definition, location.pathname, origin, status, workflowFilter]);
+  }, [definition, location.pathname, origin, search, status, workflowFilter]);
 
   const filtered = (runs.data ?? []).filter((run) => {
     const normalized = search.trim().toLowerCase();
@@ -143,6 +145,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             'workflowActivityVNext.activity.searchAria',
             'Search runs',
           )}
+          className="wa-vnext__toolbar-search"
           onChange={(event) => setSearch(event.target.value)}
           placeholder={t(
             'workflowActivityVNext.activity.search',
@@ -150,10 +153,9 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           )}
           prefix={<SearchOutlined />}
           role="searchbox"
-          style={{ width: 320 }}
           value={search}
         />
-        <Space wrap>
+        <Space className="wa-vnext__toolbar-filters" wrap>
           <Select
             aria-label={t(
               'workflowActivityVNext.activity.statusFilter',
@@ -194,7 +196,6 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                 value: 'waiting',
               },
             ]}
-            style={{ width: 150 }}
             value={status}
           />
           <Select
@@ -244,7 +245,6 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                 value: 'schedule',
               },
             ]}
-            style={{ width: 160 }}
             value={origin}
           />
           {definition ? (

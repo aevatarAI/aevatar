@@ -54,7 +54,10 @@ export const workflowActivityVNextCss = `
 .wa-vnext__header p { color: var(--wa-muted); font-size: 13px; margin: 5px 0 0; }
 .wa-vnext__header-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .wa-vnext__content { min-width: 0; padding: 24px 30px 56px; }
-.wa-vnext__toolbar { align-items: end; display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; margin-bottom: 18px; }
+.wa-vnext__toolbar { align-items: center; display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; margin-bottom: 18px; }
+.wa-vnext__toolbar-search { flex: 0 1 360px; max-width: 100%; width: 360px; }
+.wa-vnext__toolbar-filters { justify-content: flex-end; }
+.wa-vnext__toolbar-filters .ant-select { min-width: 160px; }
 .wa-vnext__table-wrap {
   border: 1px solid var(--wa-line);
   max-height: min(640px, calc(100dvh - 240px));
@@ -133,7 +136,11 @@ export const workflowActivityVNextCss = `
   .wa-vnext__header-actions { justify-content: flex-start; width: 100%; }
   .wa-vnext__content { padding: 18px 16px 44px; }
   .wa-vnext__toolbar { align-items: stretch; flex-direction: column; }
-  .wa-vnext__toolbar .ant-input-affix-wrapper { width: 100% !important; }
+  .wa-vnext__toolbar-search { flex-basis: auto; width: 100%; }
+  .wa-vnext__toolbar-filters { display: grid; grid-template-columns: 1fr; width: 100%; }
+  .wa-vnext__toolbar-filters .ant-space-item,
+  .wa-vnext__toolbar-filters .ant-select,
+  .wa-vnext__toolbar-filters .ant-btn { width: 100%; }
   .wa-vnext__settings-layout { gap: 20px; }
   .wa-vnext__settings-nav { gap: 4px; }
   .wa-vnext__settings-nav-link { font-size: 12px; padding-inline: 6px; }

@@ -1,5 +1,6 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import * as React from 'react';
+import { history } from '@/shared/navigation/history';
 import {
   cleanupTestQueryClients,
   renderWithQueryClient,
@@ -115,6 +116,41 @@ describe('Workflow Activity vNext Activity ledger', () => {
     expect(
       screen.getByRole('button', { name: 'Show all workflows' }),
     ).toBeEnabled();
+  });
+
+  it('restores search from the URL without sending it to the runs API', async () => {
+    mockSearch =
+      '?q=customer&status=failed&origin=draft&definition=definition-alpha&workflowFilter=unavailable';
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    expect(screen.getByRole('searchbox', { name: 'Search runs' })).toHaveValue(
+      'customer',
+    );
+    await waitFor(() =>
+      expect(mockListRuns).toHaveBeenLastCalledWith('scope-alpha', {
+        status: 'failed',
+        origins: ['draft'],
+        definitionActorIds: ['definition-alpha'],
+        take: 100,
+      }),
+    );
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search runs' }), {
+      target: { value: 'invoice' },
+    });
+
+    await waitFor(() =>
+      expect(history.replace).toHaveBeenLastCalledWith(
+        '/scopes/scope-alpha/workflow-activity-vnext/activity?q=invoice&status=failed&origin=draft&definition=definition-alpha&workflowFilter=unavailable',
+      ),
+    );
+    expect(mockListRuns).toHaveBeenLastCalledWith('scope-alpha', {
+      status: 'failed',
+      origins: ['draft'],
+      definitionActorIds: ['definition-alpha'],
+      take: 100,
+    });
   });
 
   it('shows product run information without exposing internal observation fields', async () => {

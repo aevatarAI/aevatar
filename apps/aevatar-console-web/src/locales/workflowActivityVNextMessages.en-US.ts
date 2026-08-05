@@ -267,11 +267,18 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.unavailable.description':
     "The page you requested isn't available.",
   'workflowActivityVNext.unavailable.title': 'Unavailable',
+  'workflowActivityVNext.workflows.allView': 'All workflows',
+  'workflowActivityVNext.workflows.clearFilters': 'Clear filters',
   'workflowActivityVNext.workflows.columnActions': 'Actions',
   'workflowActivityVNext.workflows.columnUpdated': 'Updated',
   'workflowActivityVNext.workflows.columnWorkflow': 'Workflow',
   'workflowActivityVNext.workflows.description':
     'Create, edit, and run your workflows.',
+  'workflowActivityVNext.workflows.draftsUnavailable':
+    'Draft workflows unavailable',
+  'workflowActivityVNext.workflows.draftsUnavailableDescription':
+    'Try again to load draft workflows.',
+  'workflowActivityVNext.workflows.draftsView': 'Drafts',
   'workflowActivityVNext.workflows.empty': 'No workflows yet',
   'workflowActivityVNext.workflows.emptyDescription':
     'Create a workflow to get started.',
@@ -279,7 +286,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.workflows.new': 'New workflow',
   'workflowActivityVNext.workflows.noMatch': 'No matching workflows',
   'workflowActivityVNext.workflows.noMatchDescription':
-    'Try a different search.',
+    'Try a different search or filter.',
   'workflowActivityVNext.workflows.openAria': 'Open {name}',
   'workflowActivityVNext.workflows.refreshAria': 'Refresh workflows',
   'workflowActivityVNext.workflows.retryAria': 'Retry workflows',
@@ -291,6 +298,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.workflows.unavailable': 'Workflows unavailable',
   'workflowActivityVNext.workflows.unavailableDescription':
     'Try again to load your workflows.',
+  'workflowActivityVNext.workflows.viewFilter': 'Workflow view',
   'workflowActivityVNext.workflows.activityFilterUnavailable':
     "Activity filtering isn't available for this workflow yet.",
   'workflowActivityVNext.workflows.activityResolutionFailed':

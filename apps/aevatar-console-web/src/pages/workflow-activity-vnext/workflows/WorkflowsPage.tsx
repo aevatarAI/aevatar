@@ -4,7 +4,7 @@ import {
   SearchOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Button, Input, Space } from 'antd';
+import { Alert, Button, Input, Select, Space } from 'antd';
 import React from 'react';
 import { scopesApi } from '@/shared/api/scopesApi';
 import { t } from '@/shared/i18n/messages';
@@ -12,6 +12,7 @@ import type { ScopeWorkflowSummary } from '@/shared/models/scopes';
 import { history } from '@/shared/navigation/history';
 import { studioApi } from '@/shared/studio/api';
 import type { StudioWorkflowDraftSummary } from '@/shared/studio/models';
+import { useConsoleLocation } from '../hooks/useConsoleLocation';
 import {
   buildWorkflowActivityEditorHref,
   buildWorkflowActivityNewHref,
@@ -25,7 +26,6 @@ type WorkflowRow = {
   readonly description: string;
   readonly hasCommittedSource: boolean;
   readonly name: string;
-  readonly source: 'draft' | 'committed';
   readonly stepCount?: number;
   readonly updatedAtUtc: string | null;
   readonly workflowId: string;
@@ -39,7 +39,6 @@ function toDraftRow(
     description: item.description,
     hasCommittedSource: Boolean(committed),
     name: item.name,
-    source: 'draft',
     stepCount: item.stepCount,
     updatedAtUtc: item.updatedAtUtc,
     workflowId: item.workflowId,
@@ -51,10 +50,15 @@ function toCommittedRow(item: ScopeWorkflowSummary): WorkflowRow {
     description: '',
     hasCommittedSource: true,
     name: item.displayName || item.workflowName,
-    source: 'committed',
     updatedAtUtc: item.updatedAt,
     workflowId: item.workflowId,
   };
+}
+
+type WorkflowView = 'all' | 'drafts';
+
+function readWorkflowView(params: URLSearchParams): WorkflowView {
+  return params.get('view') === 'drafts' ? 'drafts' : 'all';
 }
 
 function formatDate(value: string | null): string {
@@ -70,7 +74,15 @@ function formatDate(value: string | null): string {
 }
 
 const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
-  const [query, setQuery] = React.useState('');
+  const location = useConsoleLocation();
+  const initialParams = React.useMemo(
+    () => new URLSearchParams(location.search),
+    [location.search],
+  );
+  const [query, setQuery] = React.useState(initialParams.get('q') ?? '');
+  const [view, setView] = React.useState<WorkflowView>(
+    readWorkflowView(initialParams),
+  );
   const [activityWorkflowId, setActivityWorkflowId] = React.useState('');
   const [activityError, setActivityError] = React.useState('');
   const drafts = useQuery({
@@ -84,7 +96,25 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     retry: false,
   });
 
+  React.useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    setQuery(params.get('q') ?? '');
+    setView(readWorkflowView(params));
+  }, [location.search]);
+
+  React.useEffect(() => {
+    const params = new URLSearchParams();
+    if (query.trim()) params.set('q', query.trim());
+    if (view === 'drafts') params.set('view', 'drafts');
+    const suffix = params.toString();
+    history.replace(`${location.pathname}${suffix ? `?${suffix}` : ''}`);
+  }, [location.pathname, query, view]);
+
   const loading = drafts.isPending || committed.isPending;
+  const draftWorkflowIds = React.useMemo(
+    () => new Set((drafts.data ?? []).map((item) => item.workflowId)),
+    [drafts.data],
+  );
   const rows = React.useMemo(() => {
     const merged = new Map<string, WorkflowRow>();
     for (const item of committed.data ?? [])
@@ -97,6 +127,9 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     const normalized = query.trim().toLowerCase();
     return [...merged.values()]
       .filter(
+        (item) => view !== 'drafts' || draftWorkflowIds.has(item.workflowId),
+      )
+      .filter(
         (item) =>
           !normalized ||
           [item.name, item.description, item.workflowId].some((value) =>
@@ -108,8 +141,9 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           Date.parse(right.updatedAtUtc ?? '') -
           Date.parse(left.updatedAtUtc ?? ''),
       );
-  }, [committed.data, drafts.data, query]);
+  }, [committed.data, draftWorkflowIds, drafts.data, query, view]);
   const totalFailure = drafts.isError && committed.isError;
+  const filtersActive = Boolean(query.trim()) || view === 'drafts';
 
   const retry = () => {
     void drafts.refetch();
@@ -148,13 +182,25 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         'Create, edit, and run your workflows.',
       )}
       headerActions={
-        <Button
-          icon={<PlusOutlined />}
-          onClick={() => history.push(buildWorkflowActivityNewHref(scopeId))}
-          type="primary"
-        >
-          {t('workflowActivityVNext.workflows.new', 'New workflow')}
-        </Button>
+        <Space wrap>
+          <Button
+            aria-label={t(
+              'workflowActivityVNext.workflows.refreshAria',
+              'Refresh workflows',
+            )}
+            icon={<ReloadOutlined />}
+            onClick={retry}
+          >
+            {t('workflowActivityVNext.common.refresh', 'Refresh')}
+          </Button>
+          <Button
+            icon={<PlusOutlined />}
+            onClick={() => history.push(buildWorkflowActivityNewHref(scopeId))}
+            type="primary"
+          >
+            {t('workflowActivityVNext.workflows.new', 'New workflow')}
+          </Button>
+        </Space>
       }
       scopeId={scopeId}
       title={t('workflowActivityVNext.workflows.title', 'Workflows')}
@@ -166,6 +212,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             'workflowActivityVNext.workflows.searchAria',
             'Search workflows',
           )}
+          className="wa-vnext__toolbar-search"
           onChange={(event) => setQuery(event.target.value)}
           placeholder={t(
             'workflowActivityVNext.workflows.search',
@@ -173,22 +220,38 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           )}
           prefix={<SearchOutlined />}
           role="searchbox"
-          style={{ width: 360 }}
           value={query}
         />
-        <Button
-          aria-label={t(
-            'workflowActivityVNext.workflows.refreshAria',
-            'Refresh workflows',
-          )}
-          icon={<ReloadOutlined />}
-          onClick={retry}
-        >
-          {t('workflowActivityVNext.common.refresh', 'Refresh')}
-        </Button>
+        <Space className="wa-vnext__toolbar-filters" wrap>
+          <Select
+            aria-label={t(
+              'workflowActivityVNext.workflows.viewFilter',
+              'Workflow view',
+            )}
+            onChange={setView}
+            options={[
+              {
+                label: t(
+                  'workflowActivityVNext.workflows.allView',
+                  'All workflows',
+                ),
+                value: 'all',
+              },
+              {
+                disabled: drafts.isError,
+                label: t(
+                  'workflowActivityVNext.workflows.draftsView',
+                  'Drafts',
+                ),
+                value: 'drafts',
+              },
+            ]}
+            value={view}
+          />
+        </Space>
       </div>
 
-      {drafts.isError && !committed.isError ? (
+      {drafts.isError && !committed.isError && view !== 'drafts' ? (
         <Alert
           message={t(
             'workflowActivityVNext.workflows.partialUnavailable',
@@ -226,6 +289,33 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             {t('workflowActivityVNext.workflows.loading', 'Loading workflows')}
           </p>
         </div>
+      ) : view === 'drafts' && drafts.isError ? (
+        <div className="wa-vnext__state" role="alert">
+          <div>
+            <h2>
+              {t(
+                'workflowActivityVNext.workflows.draftsUnavailable',
+                'Draft workflows unavailable',
+              )}
+            </h2>
+            <p>
+              {t(
+                'workflowActivityVNext.workflows.draftsUnavailableDescription',
+                'Try again to load draft workflows.',
+              )}
+            </p>
+            <Button
+              aria-label={t(
+                'workflowActivityVNext.workflows.retryAria',
+                'Retry workflows',
+              )}
+              icon={<ReloadOutlined />}
+              onClick={() => void drafts.refetch()}
+            >
+              {t('workflowActivityVNext.common.retry', 'Retry')}
+            </Button>
+          </div>
+        </div>
       ) : totalFailure ? (
         <div className="wa-vnext__state" role="alert">
           <div>
@@ -257,7 +347,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         <div className="wa-vnext__state">
           <div>
             <h2>
-              {query
+              {filtersActive
                 ? t(
                     'workflowActivityVNext.workflows.noMatch',
                     'No matching workflows',
@@ -268,17 +358,29 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                   )}
             </h2>
             <p>
-              {query
+              {filtersActive
                 ? t(
                     'workflowActivityVNext.workflows.noMatchDescription',
-                    'Try a different search.',
+                    'Try a different search or filter.',
                   )
                 : t(
                     'workflowActivityVNext.workflows.emptyDescription',
                     'Create a workflow to get started.',
                   )}
             </p>
-            {!query ? (
+            {filtersActive ? (
+              <Button
+                onClick={() => {
+                  setQuery('');
+                  setView('all');
+                }}
+              >
+                {t(
+                  'workflowActivityVNext.workflows.clearFilters',
+                  'Clear filters',
+                )}
+              </Button>
+            ) : (
               <Button
                 icon={<PlusOutlined />}
                 onClick={() =>
@@ -288,7 +390,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
               >
                 {t('workflowActivityVNext.workflows.new', 'New workflow')}
               </Button>
-            ) : null}
+            )}
           </div>
         </div>
       ) : (

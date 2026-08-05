@@ -250,11 +250,17 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.unavailable.body': '请检查地址或返回其他页面。',
     'workflowActivityVNext.unavailable.description': '你请求的页面不可用。',
     'workflowActivityVNext.unavailable.title': '不可用',
+    'workflowActivityVNext.workflows.allView': '全部工作流',
+    'workflowActivityVNext.workflows.clearFilters': '清除筛选',
     'workflowActivityVNext.workflows.columnActions': '操作',
     'workflowActivityVNext.workflows.columnUpdated': '更新时间',
     'workflowActivityVNext.workflows.columnWorkflow': '工作流',
     'workflowActivityVNext.workflows.description':
       '创建、编辑并运行你的工作流。',
+    'workflowActivityVNext.workflows.draftsUnavailable': '草稿工作流不可用',
+    'workflowActivityVNext.workflows.draftsUnavailableDescription':
+      '请重试加载草稿工作流。',
+    'workflowActivityVNext.workflows.draftsView': '草稿',
     'workflowActivityVNext.workflows.empty': '暂无工作流',
     'workflowActivityVNext.workflows.emptyDescription':
       '创建一个工作流即可开始。',
@@ -262,7 +268,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.workflows.new': '新建工作流',
     'workflowActivityVNext.workflows.noMatch': '没有匹配的工作流',
     'workflowActivityVNext.workflows.noMatchDescription':
-      '请尝试其他搜索条件。',
+      '请尝试其他搜索或筛选条件。',
     'workflowActivityVNext.workflows.openAria': '打开 {name}',
     'workflowActivityVNext.workflows.refreshAria': '刷新工作流',
     'workflowActivityVNext.workflows.retryAria': '重试加载工作流',
@@ -274,6 +280,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.workflows.unavailable': '工作流不可用',
     'workflowActivityVNext.workflows.unavailableDescription':
       '请重试加载工作流。',
+    'workflowActivityVNext.workflows.viewFilter': '工作流视图',
     'workflowActivityVNext.workflows.activityFilterUnavailable':
       '暂时无法筛选此工作流的活动记录。',
     'workflowActivityVNext.workflows.activityResolutionFailed':
