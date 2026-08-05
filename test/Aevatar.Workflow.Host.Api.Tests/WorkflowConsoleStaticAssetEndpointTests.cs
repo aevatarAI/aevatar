@@ -63,6 +63,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             html.Should().Contain("globalThis.__AEVATAR_ASSISTANT_CONFIG__");
             html.Should().Contain("Aevatar Studio");
             html.Should().Contain("<span>工作台</span>");
+            html.Should().Contain("<div class=\"group-label\">工作台</div>");
             html.Should().Contain("name=\"color-scheme\" content=\"only light\"");
             html.Should().NotContain("themeButton");
             html.Should().NotContain("workflow: \"studio\"");
@@ -199,11 +200,14 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         styles.Should().Contain(".actor-task.collapsed");
         styles.Should().Contain(".cc-progress");
         styles.Should().Contain(".activity-card.collapsed");
+        styles.Should().Contain("--assistant-card-max-width: 560px");
+        styles.Should().Contain("--assistant-card-inline-gutter: 24px");
+        styles.Should().Contain("width: min(448px, calc(100% - 48px))");
         app.Should().Contain("展开计划详情");
         app.Should().Contain("cc-progress-step");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("v=20260805-nyxid-compact");
+        html.Should().Contain("v=20260805-card-gutters");
         styles.Should().Contain("color-scheme: only light");
         styles.Should().NotContain("color-scheme: dark");
         styles.Should().NotContain("prefers-color-scheme");

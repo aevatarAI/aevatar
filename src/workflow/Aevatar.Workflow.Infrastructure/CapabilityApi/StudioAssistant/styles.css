@@ -22,6 +22,8 @@
   --info: #3b82f6;
   --info-soft: #eff6ff;
   --shadow: 0 16px 42px rgba(24, 24, 27, 0.14);
+  --assistant-card-max-width: 560px;
+  --assistant-card-inline-gutter: 24px;
   --sans: "Mona Sans", "Alibaba PuHuiTi 2.0", "Alibaba PuHuiTi", "PingFang SC",
     -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, monospace;
@@ -2537,6 +2539,16 @@ summary:focus-visible {
   color: var(--tertiary);
 }
 
+.connect-card,
+.authorization-callout,
+.activity-card,
+.approval-card,
+.actor-task {
+  width: min(var(--assistant-card-max-width), calc(100% - var(--assistant-card-inline-gutter)));
+  margin-right: auto;
+  margin-left: auto;
+}
+
 .inspector {
   display: flex;
   width: 300px;
@@ -2944,8 +2956,8 @@ summary:focus-visible {
 }
 
 .settings-dialog {
-  width: min(520px, calc(100% - 28px));
-  max-height: min(680px, calc(100dvh - 28px));
+  width: min(448px, calc(100% - 48px));
+  max-height: min(680px, calc(100dvh - 48px));
   overflow: hidden;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
@@ -3629,7 +3641,8 @@ summary:focus-visible {
   }
 
   .settings-dialog {
-    max-height: calc(100dvh - 18px);
+    width: calc(100% - 32px);
+    max-height: calc(100dvh - 32px);
   }
 
   .service-access-row {
