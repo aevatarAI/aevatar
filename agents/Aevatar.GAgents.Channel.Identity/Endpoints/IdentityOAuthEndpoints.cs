@@ -551,7 +551,7 @@ public static class IdentityOAuthEndpoints
     }
 
     private static string BindingDigest(string bindingId) =>
-        NyxIdRemoteCapabilityBroker.HashBindingId(bindingId)[..12];
+        NyxIdRemoteCapabilityBroker.BindingDigest(bindingId);
 
     private static IResult BuildIssuedBindingProbeError(IssuedBindingProbeResult probeResult) =>
         probeResult switch
@@ -1225,8 +1225,8 @@ public static class IdentityOAuthEndpoints
         {
             await brokerCallback.RevokeBindingByIdAsync(bindingId, ct).ConfigureAwait(false);
             logger.LogInformation(
-                "Revoked orphan binding_id={BindingId} after concurrent /init",
-                bindingId);
+                "Revoked unadopted NyxID binding after OAuth callback rejection. binding_digest={BindingDigest}",
+                BindingDigest(bindingId));
         }
         catch (Exception ex)
         {
@@ -1234,8 +1234,8 @@ public static class IdentityOAuthEndpoints
             // to failing the user's already-bound response. NyxID's CAE
             // sweeper eventually reclaims unused bindings.
             logger.LogWarning(ex,
-                "Failed to revoke orphan binding_id={BindingId}; NyxID will eventually reap it",
-                bindingId);
+                "Failed to revoke unadopted NyxID binding; NyxID will eventually reap it. binding_digest={BindingDigest}",
+                BindingDigest(bindingId));
         }
     }
 

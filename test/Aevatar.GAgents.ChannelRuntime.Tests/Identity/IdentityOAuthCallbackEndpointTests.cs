@@ -9,6 +9,7 @@ using Aevatar.GAgents.Channel.Identity.Endpoints;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
@@ -440,6 +441,7 @@ public sealed class IdentityOAuthCallbackEndpointTests
         var bindingDispatch = new RecordingCommandDispatch<CommitBindingCommand>();
         var bindingReplaceDispatch = new RecordingCommandDispatch<ReplaceBindingCommand>();
         var capabilityDispatch = new RecordingCommandDispatch<ObserveBrokerCapabilityCommand>();
+        var loggerFactory = new RecordingLoggerFactory();
 
         var result = await InvokeCallbackAsync(
             broker,
@@ -448,7 +450,8 @@ public sealed class IdentityOAuthCallbackEndpointTests
             capabilityDispatch,
             bindingReplaceDispatch,
             NewOwnerScopeResolver("owner-user-1"),
-            format: "json");
+            format: "json",
+            loggerFactory: loggerFactory);
 
         await capabilityBroker.Received(1).IssueShortLivedByBindingIdAsync(
             subject,
@@ -470,6 +473,9 @@ public sealed class IdentityOAuthCallbackEndpointTests
             "auth-code",
             "pkce-verifier",
             "short-lived-capability");
+        var logs = string.Join('\n', loggerFactory.Messages);
+        logs.Should().Contain(NyxIdRemoteCapabilityBroker.BindingDigest(incoming));
+        logs.Should().NotContain(incoming);
     }
 
     [Fact]
@@ -734,7 +740,8 @@ public sealed class IdentityOAuthCallbackEndpointTests
         ICommandDispatchService<ObserveBrokerCapabilityCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> capabilityDispatch,
         ICommandDispatchService<ReplaceBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>? bindingReplaceDispatch = null,
         IOwnerScopeResolver? ownerScopeResolver = null,
-        string? format = null)
+        string? format = null,
+        ILoggerFactory? loggerFactory = null)
     {
         bindingReplaceDispatch ??= new RecordingCommandDispatch<ReplaceBindingCommand>();
         ownerScopeResolver ??= NewOwnerScopeResolver(null);
@@ -750,7 +757,7 @@ public sealed class IdentityOAuthCallbackEndpointTests
             bindingReplaceDispatch: bindingReplaceDispatch,
             ownerScopeResolver: ownerScopeResolver,
             brokerCapabilityDispatch: capabilityDispatch,
-            loggerFactory: NullLoggerFactory.Instance,
+            loggerFactory: loggerFactory ?? NullLoggerFactory.Instance,
             ct: CancellationToken.None);
     }
 
@@ -849,6 +856,36 @@ public sealed class IdentityOAuthCallbackEndpointTests
                 Body = new MemoryStream(),
             },
         };
+    }
+
+    private sealed class RecordingLoggerFactory : ILoggerFactory
+    {
+        public List<string> Messages { get; } = [];
+
+        public ILogger CreateLogger(string categoryName) => new RecordingLogger(Messages);
+
+        public void AddProvider(ILoggerProvider provider)
+        {
+        }
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class RecordingLogger(List<string> messages) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter) =>
+                messages.Add(formatter(state, exception));
+        }
     }
 
 }

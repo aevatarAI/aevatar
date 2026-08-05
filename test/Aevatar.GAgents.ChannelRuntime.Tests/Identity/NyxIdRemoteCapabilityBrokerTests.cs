@@ -1,12 +1,14 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using FluentAssertions;
 using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
@@ -556,11 +558,33 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         exception.Which.RequiredResources.Should().Equal(RequiredResources);
     }
 
+    [Fact]
+    public async Task RevokeBindingByIdAsync_LogsOnlyBindingDigest_WhenNyxIdRejectsRevocation()
+    {
+        const string bindingId = "bnd-raw-secret";
+        var logger = new RecordingLogger<NyxIdRemoteCapabilityBroker>();
+        var broker = NewBroker(
+            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
+            httpHandler: StubHandler.Text(
+                HttpStatusCode.BadRequest,
+                $$"""{"error":"revoke_failed","binding_id":"{{bindingId}}"}"""),
+            logger: logger);
+
+        var act = () => broker.RevokeBindingByIdAsync(bindingId);
+
+        await act.Should().ThrowAsync<HttpRequestException>();
+        var logs = string.Join('\n', logger.Messages);
+        logs.Should().Contain(NyxIdRemoteCapabilityBroker.BindingDigest(bindingId));
+        logs.Should().Contain(SecretScrubber.Marker);
+        logs.Should().NotContain(bindingId);
+    }
+
     private static NyxIdRemoteCapabilityBroker NewBroker(
         AevatarOAuthClientSnapshot snapshot,
         NyxIdBrokerOptions? options = null,
         HttpMessageHandler? httpHandler = null,
-        IExternalIdentityBindingQueryPort? queryPort = null)
+        IExternalIdentityBindingQueryPort? queryPort = null,
+        ILogger<NyxIdRemoteCapabilityBroker>? logger = null)
     {
         var provider = new FakeOAuthClientProvider(snapshot);
         options ??= new NyxIdBrokerOptions
@@ -578,7 +602,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
             new StateTokenCodec(provider),
             queryPort ?? new EmptyBindingQueryPort(),
             new FakeTimeProvider(DateTimeOffset.Parse("2026-04-30T10:00:00Z")),
-            NullLogger<NyxIdRemoteCapabilityBroker>.Instance);
+            logger ?? NullLogger<NyxIdRemoteCapabilityBroker>.Instance);
     }
 
     private static AevatarOAuthClientSnapshot NewSnapshot(string? redirectUri) => new(
@@ -722,5 +746,22 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
                 Content = new StringContent(_responseBodies.Dequeue()),
             };
         }
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Messages.Add(formatter(state, exception));
     }
 }

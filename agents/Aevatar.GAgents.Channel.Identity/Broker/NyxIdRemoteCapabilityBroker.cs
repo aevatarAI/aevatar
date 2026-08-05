@@ -177,10 +177,10 @@ public sealed class NyxIdRemoteCapabilityBroker :
 
         var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         _logger.LogError(
-            "NyxID revoke binding failed: status={StatusCode}, binding_id={BindingId}, body={Body}",
+            "NyxID revoke binding failed: status={StatusCode}, binding_digest={BindingDigest}, body={Body}",
             (int)response.StatusCode,
-            bindingId,
-            Truncate(SecretScrubber.Scrub(body), 256));
+            BindingDigest(bindingId),
+            Truncate(ScrubBindingId(body, bindingId), 256));
         response.EnsureSuccessStatusCode();
     }
 
@@ -702,8 +702,14 @@ public sealed class NyxIdRemoteCapabilityBroker :
     private static string Truncate(string value, int max) =>
         string.IsNullOrEmpty(value) ? string.Empty : value.Length <= max ? value : value[..max];
 
+    private static string ScrubBindingId(string value, string bindingId) =>
+        SecretScrubber.Scrub(value)
+            .Replace(bindingId, SecretScrubber.Marker, StringComparison.Ordinal);
+
     internal static string HashBindingId(string bindingId) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(bindingId))).ToLowerInvariant();
+
+    internal static string BindingDigest(string bindingId) => HashBindingId(bindingId)[..12];
 
     private sealed record TokenResponse
     {
