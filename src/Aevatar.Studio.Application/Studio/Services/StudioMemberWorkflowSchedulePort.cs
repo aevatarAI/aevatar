@@ -1052,23 +1052,18 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             throw new StudioMemberAutomationNotFoundException();
         }
 
-        try
+        if (request.AcceptedBinding is not null)
         {
-            EnsureWorkflowBindingCanBeScheduled(member, memberId, publishedServiceId);
-        }
-        catch (InvalidOperationException) when (request.AcceptedBinding is not null)
-        {
-            return BuildResolvedAuthorizationRequest(
+            return ResolveAcceptedBindingAuthorizationRequest(
                 request,
                 scopeId,
-                teamId,
                 memberId,
-                publishedServiceId,
-                NormalizeRequired(request.AcceptedBinding.WorkflowId, nameof(request.AcceptedBinding.WorkflowId)),
-                NormalizeOptional(request.AcceptedBinding.WorkflowRevisionId) ?? string.Empty,
-                credentialExpiresAtUtc);
+                credentialExpiresAtUtc,
+                teamId,
+                publishedServiceId)!;
         }
 
+        EnsureWorkflowBindingCanBeScheduled(member, memberId, publishedServiceId);
         var workflowRevision = member.LastBinding?.RevisionId ?? member.Summary.LastBoundRevisionId ?? string.Empty;
         var workflowId = NormalizeRequired(member.ImplementationRef?.WorkflowId, "workflowId");
         return BuildResolvedAuthorizationRequest(
@@ -1086,7 +1081,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         StudioMemberWorkflowScheduleRequest request,
         string scopeId,
         string memberId,
-        DateTimeOffset? credentialExpiresAtUtc)
+        DateTimeOffset? credentialExpiresAtUtc,
+        string? knownTeamId = null,
+        string? knownPublishedServiceId = null)
     {
         if (request.AcceptedBinding is not { } acceptedBinding)
             return null;
@@ -1097,13 +1094,27 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         {
             throw new StudioMemberAutomationNotFoundException();
         }
+        if (knownTeamId is not null &&
+            !string.Equals(acceptedTeamId, knownTeamId, StringComparison.Ordinal))
+        {
+            throw new StudioMemberAutomationNotFoundException();
+        }
+
+        var acceptedPublishedServiceId = NormalizeRequired(
+            acceptedBinding.PublishedServiceId,
+            nameof(acceptedBinding.PublishedServiceId));
+        if (knownPublishedServiceId is not null &&
+            !string.Equals(acceptedPublishedServiceId, knownPublishedServiceId, StringComparison.Ordinal))
+        {
+            throw new StudioMemberAutomationNotFoundException();
+        }
 
         return BuildResolvedAuthorizationRequest(
             request,
             scopeId,
             acceptedTeamId,
             memberId,
-            NormalizeRequired(acceptedBinding.PublishedServiceId, nameof(acceptedBinding.PublishedServiceId)),
+            acceptedPublishedServiceId,
             NormalizeRequired(acceptedBinding.WorkflowId, nameof(acceptedBinding.WorkflowId)),
             NormalizeOptional(acceptedBinding.WorkflowRevisionId) ?? string.Empty,
             credentialExpiresAtUtc);

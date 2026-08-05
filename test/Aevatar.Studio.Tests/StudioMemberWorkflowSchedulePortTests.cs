@@ -1006,6 +1006,71 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
+    public async Task PreflightForWriteAsync_WhenMemberReadModelHasOlderBinding_ShouldUseAcceptedBindingContext()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        var port = NewPort(new RecordingScheduleService(), planner: planner);
+        var workflowEvidence = new ScheduledInvocationWorkflowEvidence(
+            StateVersion: 0,
+            ExternalCapabilities: [],
+            OwnerLLMRouteRequired: false,
+            ServiceGrantRequirement: AuthorizationGrantRequirement.NotRequired);
+        var request = Request("scope-1", "member-1") with
+        {
+            AcceptedBinding = new StudioMemberWorkflowAcceptedBindingContext(
+                "team-1",
+                "published-member-1",
+                "workflow-accepted",
+                "rev-accepted")
+            {
+                WorkflowEvidence = workflowEvidence,
+            },
+        };
+
+        var result = await port.PreflightForWriteAsync(request);
+
+        result.Success.Should().BeTrue();
+        planner.Requests.Should().ContainSingle();
+        var authorizationRequest = planner.Requests[0];
+        authorizationRequest.InvocationTarget.StudioMember.Should().BeEquivalentTo(
+            new StudioMemberInvocationTarget
+            {
+                ScopeId = "scope-1",
+                TeamId = "team-1",
+                MemberId = "member-1",
+                PublishedServiceId = "published-member-1",
+                DraftWorkflowId = "workflow-accepted",
+                WorkflowRevisionId = "rev-accepted",
+            });
+        authorizationRequest.TrustedMemberEvidence.Should().BeEquivalentTo(
+            new ScheduledInvocationMemberEvidence(
+                StateVersion: 0,
+                DraftWorkflowId: "workflow-accepted",
+                WorkflowRevisionId: "rev-accepted",
+                PublishedServiceId: "published-member-1"));
+        authorizationRequest.TrustedWorkflowEvidence.Should().BeSameAs(workflowEvidence);
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenAcceptedBindingPublishedServiceDiffersFromMember_ShouldReturnGenericNotFound()
+    {
+        var port = NewPort(new RecordingScheduleService());
+        var request = Request("scope-1", "member-1") with
+        {
+            AcceptedBinding = new StudioMemberWorkflowAcceptedBindingContext(
+                "team-1",
+                "published-member-other",
+                "workflow-accepted",
+                "rev-accepted"),
+        };
+
+        var action = () => port.PreflightForWriteAsync(request);
+
+        await action.Should().ThrowAsync<StudioMemberAutomationNotFoundException>()
+            .WithMessage("The requested Team automation was not found.");
+    }
+
+    [Fact]
     public void ToScheduleAuthorizationFact_ShouldMapMixedDirectAndNodeBackedServicesPerService()
     {
         var plan = new RecordingAuthorizationPlanner().Result.Plan!.Clone();
