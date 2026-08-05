@@ -140,9 +140,17 @@ internal sealed class InvokeMemberTool : IAevatarInvocationTool
     public string Name => "aevatar_invoke_member";
 
     public string Description =>
-        "Invoke a Studio member by member_id with a typed chat payload. endpoint_id is optional and defaults to chat, which is the standard Studio workflow member endpoint; pass endpoint_id only when a different published endpoint is explicitly known.";
+        "Dispatch one Studio member run by member_id with a typed chat payload. " +
+        "The result confirms dispatch acceptance only; it does not contain the member run's terminal result. " +
+        "After an accepted or streaming result, do not call this tool again in the same turn. " +
+        "Use aevatar_observe_run with service_run.service_id and service_run.run_id from the receipt to read progress or completion. " +
+        "wait supports ack or stream, not complete. endpoint_id is optional and defaults to chat; pass it only when a different published endpoint is explicitly known.";
 
     public string ParametersSchema => AevatarInvocationToolSchemas.InvokeMember;
+
+    public string SideEffectKind => "studio.member.run-dispatch";
+
+    public AgentToolTurnReusePolicy TurnReusePolicy => AgentToolTurnReusePolicy.RetireAfterSuccess;
 
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.InvokeMemberAsync(argumentsJson, ct);

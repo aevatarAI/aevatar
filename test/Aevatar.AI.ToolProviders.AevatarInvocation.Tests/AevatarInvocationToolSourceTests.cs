@@ -131,7 +131,37 @@ public sealed class AevatarInvocationToolSourceTests
 
         required.Should().BeEquivalentTo("member_id", "payload");
         doc.RootElement.GetProperty("properties").TryGetProperty("endpoint_id", out _).Should().BeTrue();
+        doc.RootElement.GetProperty("properties").GetProperty("wait").GetProperty("enum")
+            .EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should().BeEquivalentTo("ack", "stream");
         tool.Description.Should().Contain("defaults to chat");
+        tool.Description.Should().Contain("acceptance only");
+        tool.Description.Should().Contain("aevatar_observe_run");
+        tool.Description.Should().Contain("not complete");
+        tool.SideEffectKind.Should().Be("studio.member.run-dispatch");
+        tool.TurnReusePolicy.Should().Be(AgentToolTurnReusePolicy.RetireAfterSuccess);
+    }
+
+    [Fact]
+    public async Task InvokeMember_WaitComplete_ShouldRejectBeforeDispatch()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_member");
+
+        using var _ = PushContext(callId: "call-member-complete");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "m-alpha",
+              "payload": { "prompt": "run once" },
+              "wait": "complete"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().Be("unsupported_wait_mode");
+        output.Should().Contain("aevatar_observe_run");
+        harness.MemberResolver.LastMemberId.Should().BeNull();
+        harness.ServiceInvocationDispatcher.Calls.Should().BeEmpty();
     }
 
     [Fact]

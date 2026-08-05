@@ -1186,6 +1186,63 @@ public sealed class ChatRuntimeStreamingBufferTests
             message.Content.Contains("match that exact action", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task ChatStreamAsync_WhenSingleUseToolSucceeds_ShouldRetireItBeforeTheNextRound()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "invoke-1",
+                    Name = "aevatar_invoke_member",
+                    ArgumentsJson = "{\"member_id\":\"m-alpha\"}",
+                },
+            }],
+            [new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "invoke-2",
+                    Name = "aevatar_invoke_member",
+                    ArgumentsJson = "{\"member_id\":\"m-alpha\"}",
+                },
+            }],
+            [new LLMStreamChunk { DeltaContent = "dispatch accepted" }],
+        ]);
+        var invocationCount = 0;
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool(
+            "aevatar_invoke_member",
+            _ =>
+            {
+                invocationCount++;
+                return "{\"run_id\":\"run-alpha\",\"status\":\"streaming\"}";
+            },
+            turnReusePolicy: AgentToolTurnReusePolicy.RetireAfterSuccess));
+        tools.Register(new DelegateTool(
+            "aevatar_observe_run",
+            _ => "{\"run_id\":\"run-alpha\",\"status\":\"running\"}",
+            isReadOnly: true));
+        var runtime = CreateRuntime(provider, tools: tools);
+
+        await foreach (var _ in runtime.ChatStreamAsync("run member", maxToolRounds: 3, turnCatalog: null))
+        {
+        }
+
+        invocationCount.Should().Be(1);
+        provider.StreamRequests.Should().HaveCount(3);
+        provider.StreamRequests[1].Tools.Should().NotContain(tool =>
+            tool.Name == "aevatar_invoke_member");
+        provider.StreamRequests[1].Tools.Should().Contain(tool =>
+            tool.Name == "aevatar_observe_run");
+        provider.StreamRequests[1].Messages.Should().Contain(message =>
+            message.Role == "system" &&
+            message.Content != null &&
+            message.Content.Contains("Do not call them again", StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData(false, true, true)]
     [InlineData(true, false, false)]
@@ -1953,7 +2010,8 @@ public sealed class ChatRuntimeStreamingBufferTests
         Func<string, string> execute,
         bool isReadOnly = false,
         bool isDestructive = false,
-        string sideEffectKind = "") : IAgentTool
+        string sideEffectKind = "",
+        AgentToolTurnReusePolicy turnReusePolicy = AgentToolTurnReusePolicy.Reusable) : IAgentTool
     {
         public string Name => name;
         public string Description => "delegate";
@@ -1961,6 +2019,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         public bool IsReadOnly => isReadOnly;
         public bool IsDestructive => isDestructive;
         public string SideEffectKind => sideEffectKind;
+        public AgentToolTurnReusePolicy TurnReusePolicy => turnReusePolicy;
         public AgentToolReceipt? CreateSuccessReceipt(
             string callId,
             string toolName,

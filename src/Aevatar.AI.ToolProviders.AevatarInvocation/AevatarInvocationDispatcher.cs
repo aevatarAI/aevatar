@@ -218,7 +218,8 @@ public sealed class AevatarInvocationDispatcher
         var payload = request.Payload;
         var endpointId = ResolveMemberEndpointId(request.EndpointId);
         var error = ProtoToolArguments.Require(request.MemberId, "member_id", "member_id is required.") ??
-                    ProtoToolArguments.RequirePayload(payload, "payload");
+                    ProtoToolArguments.RequirePayload(payload, "payload") ??
+                    RejectMemberCompleteWait(request.Wait);
         if (error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(error), error);
 
@@ -2327,6 +2328,14 @@ public sealed class AevatarInvocationDispatcher
         wait == InvocationWaitMode.Unspecified
             ? InvocationWaitMode.Stream
             : wait;
+
+    private static InvocationToolError? RejectMemberCompleteWait(InvocationWaitMode wait) =>
+        wait == InvocationWaitMode.Complete
+            ? Error(
+                "unsupported_wait_mode",
+                "aevatar_invoke_member cannot wait for terminal completion. Use wait=ack or wait=stream once, then call aevatar_observe_run with the returned service_id and run_id.",
+                "wait")
+            : null;
 
     private static string ResolveMemberEndpointId(string endpointId) =>
         Normalize(endpointId) ?? DefaultMemberEndpointId;

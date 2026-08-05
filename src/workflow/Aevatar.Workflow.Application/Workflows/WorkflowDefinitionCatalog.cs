@@ -317,7 +317,11 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                  to watch demo/scheduled runs, and tell the user to open /admin#/observatory to see runs. Report
                  honestly: state that the workflow was accepted/bound or provisioned, then report any observed run
                  status — never optimistically assume success.
-              9. Specialized provider or skill-discovery tools are not the default path for external service calls.
+              9. `aevatar_invoke_member` dispatches exactly one member run and returns an Accepted/streaming receipt,
+                 not the member's terminal result. Never pass `wait: "complete"`. After acceptance, do NOT invoke the
+                 member again in the same turn; use `aevatar_observe_run` with the exact returned `service_id` and
+                 `run_id`. A pending observation is not permission to dispatch another member run.
+              10. Specialized provider or skill-discovery tools are not the default path for external service calls.
                  For workflow runtime integrations, author the typed NyxID selector and internal proof-bound
                  `tool_call` adapter when a matching service and operation contract exist. Do not create a provider-specific prompt rule or runtime-tool mapping for one named service; service-specific behavior must come from discovered connected-service/catalog/host connector/runtime tool schemas.
                  Use specialized provider or skill-discovery tools only for current-turn discovery or authoring

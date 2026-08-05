@@ -265,6 +265,9 @@ public class WorkflowDefinitionCatalogTests
         role.SystemPrompt.Should().Contain("Do NOT");
         // Honesty: the receipt is Accepted (async), not a success claim.
         role.SystemPrompt.Should().Contain("Accepted");
+        role.SystemPrompt.Should().Contain("`aevatar_invoke_member` dispatches exactly one member run");
+        role.SystemPrompt.Should().Contain("Never pass `wait: \"complete\"`");
+        role.SystemPrompt.Should().Contain("A pending observation is not permission to dispatch another member run");
         // Schema teaching: without it the model falls back to foreign workflow
         // dialects (GitHub-Actions-style version:/inputs:) that the strict parser
         // rejects. Pin the load-bearing pieces: the closed top-level key list,

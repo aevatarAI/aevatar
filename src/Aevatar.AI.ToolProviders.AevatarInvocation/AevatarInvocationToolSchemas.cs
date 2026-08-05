@@ -9,6 +9,13 @@ internal static class AevatarInvocationToolSchemas
             ["kind"] = ["text", "image", "audio", "video", "file"],
         };
 
+    private static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> AcceptedOnlyWaitValues =
+        new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+        {
+            ["wait"] = ["ack", "stream"],
+            ["kind"] = ["text", "image", "audio", "video", "file"],
+        };
+
     public static readonly string InvokeGAgent = ProtoToolSchema.Build(
         InvokeGAgentToolRequest.Descriptor,
         requiredFields: new HashSet<string>(StringComparer.Ordinal) { "payload" },
@@ -37,7 +44,7 @@ internal static class AevatarInvocationToolSchemas
             "member_id",
             "payload",
         },
-        stringEnums: WaitValues);
+        stringEnums: AcceptedOnlyWaitValues);
 
     public static readonly string StartWorkflow = ProtoToolSchema.Build(
         StartWorkflowToolRequest.Descriptor,
