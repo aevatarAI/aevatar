@@ -62,7 +62,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             html.Should().Contain("/workflow/studio/assets/app.js");
             html.Should().Contain("globalThis.__AEVATAR_ASSISTANT_CONFIG__");
             html.Should().Contain("Aevatar Studio");
-            html.Should().Contain("name=\"color-scheme\" content=\"light\"");
+            html.Should().Contain("name=\"color-scheme\" content=\"only light\"");
             html.Should().NotContain("themeButton");
             html.Should().NotContain("workflow: \"studio\"");
         }
@@ -193,7 +193,11 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         styles.Should().Contain(".needs-you-panel");
         styles.Should().Contain(".history-filter");
         styles.Should().Contain("@media (max-width:");
-        styles.Should().Contain("color-scheme: light");
+        html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
+        html.Should().Contain("v=20260805-light-only");
+        styles.Should().Contain("color-scheme: only light");
+        styles.Should().NotContain("color-scheme: dark");
+        styles.Should().NotContain("prefers-color-scheme");
         styles.Should().Contain("--bg: #f4f5f7");
         styles.Should().Contain("--accent: #2563eb");
         styles.Should().NotContain("data-theme");
