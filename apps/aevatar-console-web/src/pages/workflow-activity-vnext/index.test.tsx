@@ -1136,6 +1136,31 @@ describe('Workflow Activity vNext editor', () => {
     expect(screen.getByRole('button', { name: 'Run' })).toBeEnabled();
   });
 
+  it('renders loaded nodes inside the sized Workflow Studio canvas region', async () => {
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const canvasRegion = await screen.findByRole('region', {
+      name: 'Workflow canvas',
+    });
+
+    expect(canvasRegion).toHaveStyle({
+      display: 'flex',
+      minHeight: '440px',
+    });
+    const canvas = within(canvasRegion).getByTestId('workflow-studio-canvas');
+    expect(canvas.parentElement).toHaveStyle({
+      display: 'flex',
+      height: '100%',
+      minHeight: '0',
+      width: '100%',
+    });
+    expect(
+      within(canvas).getByRole('button', {
+        name: 'Select step:step-root',
+      }),
+    ).toBeInTheDocument();
+  });
+
   it('opens the existing test run panel after a valid requested draft loads', async () => {
     mockLocation =
       '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha?run=1';

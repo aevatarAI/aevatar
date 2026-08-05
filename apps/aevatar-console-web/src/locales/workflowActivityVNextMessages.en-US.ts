@@ -52,6 +52,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.addNode': 'Add node',
   'workflowActivityVNext.editor.backAria': 'Back to workflows',
   'workflowActivityVNext.editor.canvas': 'Canvas',
+  'workflowActivityVNext.editor.canvasAria': 'Workflow canvas',
   'workflowActivityVNext.editor.description':
     'Build, test, and refine this workflow.',
   'workflowActivityVNext.editor.discardLeave': 'Discard and leave',

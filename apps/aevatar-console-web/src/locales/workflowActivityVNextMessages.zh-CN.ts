@@ -56,6 +56,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.editor.addNode': '添加节点',
     'workflowActivityVNext.editor.backAria': '返回工作流列表',
     'workflowActivityVNext.editor.canvas': '画布',
+    'workflowActivityVNext.editor.canvasAria': '工作流画布',
     'workflowActivityVNext.editor.description': '构建、测试并完善这个工作流。',
     'workflowActivityVNext.editor.discardLeave': '放弃并离开',
     'workflowActivityVNext.editor.emptyCanvas':

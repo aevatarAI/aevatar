@@ -9,7 +9,7 @@ import {
 } from '@ant-design/icons';
 import { Alert, Button, Input, Modal, Segmented, Space } from 'antd';
 import React from 'react';
-import WorkflowStudioCanvas from '@/pages/team-member-workflow-studio/components/WorkflowStudioCanvas';
+import WorkflowStudioCanvasRegion from '@/pages/team-member-workflow-studio/components/WorkflowStudioCanvasRegion';
 import WorkflowStudioNodeDetailPanel from '@/pages/team-member-workflow-studio/components/WorkflowStudioNodeDetailPanel';
 import WorkflowStudioNodeLibrary from '@/pages/team-member-workflow-studio/components/WorkflowStudioNodeLibrary';
 import { t } from '@/shared/i18n/messages';
@@ -299,72 +299,71 @@ const WorkflowEditorPage: React.FC<{
           ))}
         </div>
       ) : null}
-      <div
-        style={{
-          border: '1px solid var(--wa-line)',
-          height: 'min(620px, calc(100vh - 260px))',
-          minHeight: 440,
-          position: 'relative',
-        }}
-      >
-        {mode === 'canvas' ? (
-          <>
-            <div style={{ height: '100%' }}>
-              <WorkflowStudioCanvas
-                edges={editor.graph.edges}
-                emptyDescription={t(
-                  'workflowActivityVNext.editor.emptyCanvas',
-                  'Add the first executable node to make this workflow runnable.',
-                )}
-                nodes={editor.graph.nodes}
-                onAddFirstStep={() => setNodeLibraryOpen(true)}
-                onCanvasSelect={editor.selectCanvas}
-                onNodeSelect={editor.selectNode}
-                selectedNodeId={editor.selectedNodeId}
-              />
-            </div>
-            <Button
-              icon={<PlusOutlined />}
-              onClick={() => setNodeLibraryOpen(true)}
-              style={{ left: 16, position: 'absolute', top: 16, zIndex: 5 }}
-            >
-              {t('workflowActivityVNext.editor.addNode', 'Add node')}
-            </Button>
-            <WorkflowStudioNodeLibrary
-              onClose={() => setNodeLibraryOpen(false)}
-              onInsertNode={(stepType) => {
-                void editor.addNode(stepType);
-                setNodeLibraryOpen(false);
-              }}
-              open={nodeLibraryOpen}
-            />
-            <WorkflowStudioNodeDetailPanel
-              error={editor.selectedStepConfigurationError}
-              onClose={editor.selectCanvas}
-              onConfigurationChange={(parametersText) =>
-                void editor.updateSelectedStepConfiguration(parametersText)
-              }
-              onConfigurationErrorChange={
-                editor.setSelectedStepConfigurationError
-              }
-              stepDraft={editor.selectedStepDraft}
-            />
-          </>
-        ) : (
-          <Input.TextArea
-            aria-label={t('workflowActivityVNext.new.yaml', 'Workflow YAML')}
-            onChange={(event) => editor.updateYaml(event.target.value)}
-            style={{
-              border: 0,
-              borderRadius: 0,
-              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-              height: '100%',
-              resize: 'none',
+      {mode === 'canvas' ? (
+        <WorkflowStudioCanvasRegion
+          ariaLabel={t(
+            'workflowActivityVNext.editor.canvasAria',
+            'Workflow canvas',
+          )}
+          edges={editor.graph.edges}
+          emptyDescription={t(
+            'workflowActivityVNext.editor.emptyCanvas',
+            'Add the first executable node to make this workflow runnable.',
+          )}
+          nodes={editor.graph.nodes}
+          onAddFirstStep={() => setNodeLibraryOpen(true)}
+          onCanvasSelect={editor.selectCanvas}
+          onNodeSelect={editor.selectNode}
+          selectedNodeId={editor.selectedNodeId}
+          style={{
+            border: '1px solid var(--wa-line)',
+            flex: 'none',
+            height: 'min(620px, calc(100vh - 260px))',
+            minHeight: 440,
+          }}
+        >
+          <Button
+            icon={<PlusOutlined />}
+            onClick={() => setNodeLibraryOpen(true)}
+            style={{ left: 16, position: 'absolute', top: 16, zIndex: 5 }}
+          >
+            {t('workflowActivityVNext.editor.addNode', 'Add node')}
+          </Button>
+          <WorkflowStudioNodeLibrary
+            onClose={() => setNodeLibraryOpen(false)}
+            onInsertNode={(stepType) => {
+              void editor.addNode(stepType);
+              setNodeLibraryOpen(false);
             }}
-            value={editor.yaml}
+            open={nodeLibraryOpen}
           />
-        )}
-      </div>
+          <WorkflowStudioNodeDetailPanel
+            error={editor.selectedStepConfigurationError}
+            onClose={editor.selectCanvas}
+            onConfigurationChange={(parametersText) =>
+              void editor.updateSelectedStepConfiguration(parametersText)
+            }
+            onConfigurationErrorChange={
+              editor.setSelectedStepConfigurationError
+            }
+            stepDraft={editor.selectedStepDraft}
+          />
+        </WorkflowStudioCanvasRegion>
+      ) : (
+        <Input.TextArea
+          aria-label={t('workflowActivityVNext.new.yaml', 'Workflow YAML')}
+          onChange={(event) => editor.updateYaml(event.target.value)}
+          style={{
+            border: '1px solid var(--wa-line)',
+            borderRadius: 0,
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+            height: 'min(620px, calc(100vh - 260px))',
+            minHeight: 440,
+            resize: 'none',
+          }}
+          value={editor.yaml}
+        />
+      )}
       {runPanelOpen ? (
         <section
           aria-label={t('workflowActivityVNext.editor.runPanel', 'Test run')}
