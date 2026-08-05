@@ -1,56 +1,31 @@
 :root {
-  color-scheme: dark;
-  --bg: #0d0d0e;
-  --panel: #141416;
-  --panel-raised: #19191c;
-  --surface: #202024;
-  --surface-hover: #28282d;
-  --text: #f4f4f5;
-  --text-soft: #d4d4d8;
-  --muted: #a1a1aa;
-  --tertiary: #71717a;
-  --border: #29292e;
-  --border-strong: #3a3a41;
-  --accent: #8b5cf6;
-  --accent-soft: rgba(139, 92, 246, 0.14);
-  --success: #34d399;
-  --success-soft: rgba(52, 211, 153, 0.12);
-  --warning: #fbbf24;
-  --warning-soft: rgba(251, 191, 36, 0.11);
-  --error: #f87171;
-  --error-soft: rgba(248, 113, 113, 0.1);
-  --info: #60a5fa;
-  --info-soft: rgba(96, 165, 250, 0.11);
-  --shadow: 0 18px 48px rgba(0, 0, 0, 0.38);
-  --sans: "Mona Sans", "Avenir Next", sans-serif;
-  --mono: "JetBrains Mono", ui-monospace, monospace;
-  --radius: 8px;
-}
-
-html[data-theme="light"] {
   color-scheme: light;
-  --bg: #fafafa;
+  --bg: #f4f5f7;
   --panel: #ffffff;
   --panel-raised: #ffffff;
-  --surface: #f4f4f5;
-  --surface-hover: #e9e9ed;
-  --text: #18181b;
-  --text-soft: #3f3f46;
-  --muted: #52525b;
-  --tertiary: #71717a;
-  --border: #e4e4e7;
-  --border-strong: #d4d4d8;
-  --accent: #6d3de7;
-  --accent-soft: rgba(109, 61, 231, 0.1);
-  --success: #047857;
-  --success-soft: rgba(4, 120, 87, 0.09);
-  --warning: #b45309;
-  --warning-soft: rgba(180, 83, 9, 0.08);
+  --surface: #f6f7f9;
+  --surface-hover: #eef0f3;
+  --text: #1f2937;
+  --text-soft: #374151;
+  --muted: #4b5563;
+  --tertiary: #9ca3af;
+  --border: #e5e7eb;
+  --border-strong: #d8dce2;
+  --accent: #2563eb;
+  --accent-soft: #eef3ff;
+  --success: #15a34a;
+  --success-soft: #eafaf0;
+  --warning: #d97706;
+  --warning-soft: #fdf3e3;
   --error: #dc2626;
-  --error-soft: rgba(220, 38, 38, 0.07);
+  --error-soft: #fdeeee;
   --info: #2563eb;
-  --info-soft: rgba(37, 99, 235, 0.08);
-  --shadow: 0 18px 48px rgba(24, 24, 27, 0.12);
+  --info-soft: #eef3ff;
+  --shadow: 0 12px 36px rgba(17, 24, 39, 0.14);
+  --sans: "Alibaba PuHuiTi 2.0", "Alibaba PuHuiTi", "AlibabaSans", "PingFang SC",
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+  --radius: 6px;
 }
 
 * {
@@ -150,10 +125,10 @@ summary:focus-visible {
   width: 27px;
   height: 27px;
   place-items: center;
-  border: 1px solid rgba(139, 92, 246, 0.45);
-  border-radius: 7px;
-  background: var(--accent-soft);
-  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
   font-size: 13px;
   font-weight: 700;
 }
@@ -649,7 +624,7 @@ summary:focus-visible {
   width: 42px;
   height: 42px;
   place-items: center;
-  border: 1px solid rgba(139, 92, 246, 0.35);
+  border: 1px solid #c4d6ff;
   border-radius: var(--radius);
   background: var(--accent-soft);
   color: var(--accent);
@@ -748,7 +723,7 @@ summary:focus-visible {
 }
 
 .message.assistant .message-avatar {
-  border-color: rgba(139, 92, 246, 0.3);
+  border-color: #c4d6ff;
   background: var(--accent-soft);
   color: var(--accent);
 }
@@ -933,7 +908,7 @@ summary:focus-visible {
   justify-content: center;
   overflow: hidden;
   border-radius: 8px;
-  background: linear-gradient(145deg, #a672fb, #5a2af1);
+  background: linear-gradient(145deg, #2563eb, #1d4ed8);
   color: #fff;
   font-size: 13px;
   font-weight: 700;
@@ -1028,7 +1003,7 @@ summary:focus-visible {
 
 .cc-step.active .cc-num {
   border-color: transparent;
-  background: linear-gradient(90deg, #a672fb, #5e00f5);
+  background: var(--accent);
   color: #fff;
 }
 
@@ -1101,7 +1076,7 @@ summary:focus-visible {
 }
 
 .cc-btn.primary {
-  background: linear-gradient(90deg, #a672fb 0%, #5e00f5 100%);
+  background: var(--accent);
   color: #fff;
 }
 
@@ -1759,7 +1734,7 @@ summary:focus-visible {
 .actor-effect.may-have-changed,
 .actor-control-error {
   border-color: color-mix(in srgb, #ef4444 58%, var(--border));
-  color: #fca5a5;
+  color: var(--error);
 }
 
 .actor-task-header,
@@ -2043,7 +2018,7 @@ summary:focus-visible {
 }
 
 .route-node-icon.aevatar {
-  border-color: rgba(139, 92, 246, 0.35);
+  border-color: #c4d6ff;
   background: var(--accent-soft);
   color: var(--accent);
 }

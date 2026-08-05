@@ -25,7 +25,6 @@ import {
 } from "./actor-state.js";
 
 const PREFERENCES_KEY = "aevatar-studio:assistant-preferences:v4";
-const THEME_KEY = "aevatar-studio:assistant-theme";
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 
 const surfaceLabels = {
@@ -129,7 +128,6 @@ const dom = {
   steerButton: $("#steerButton"),
   stopButton: $("#stopButton"),
   testConnectionButton: $("#testConnectionButton"),
-  themeButton: $("#themeButton"),
   thread: $("#thread"),
   toast: $("#toast"),
   toastText: $("#toastText"),
@@ -385,7 +383,6 @@ function el(tag, className, text) {
 }
 
 async function init() {
-  applyTheme(readStorage(THEME_KEY) || "dark");
   configureMarkdown();
   bindEvents();
   refreshIcons();
@@ -457,7 +454,6 @@ function bindEvents() {
   dom.loginButton.addEventListener("click", beginLogin);
   dom.emptyLoginButton.addEventListener("click", beginLogin);
   dom.logoutButton.addEventListener("click", () => void logout());
-  dom.themeButton.addEventListener("click", toggleTheme);
   dom.attachButton.addEventListener("click", () => dom.fileInput.click());
   dom.fileInput.addEventListener("change", () => void selectAttachment());
   dom.removeAttachmentButton.addEventListener("click", clearAttachment);
@@ -3651,16 +3647,6 @@ function closeMobilePanels() {
   dom.sidebar.classList.remove("open");
   dom.inspector.classList.remove("open");
   dom.mobileBackdrop.classList.add("hidden");
-}
-
-function toggleTheme() {
-  const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
-  applyTheme(next);
-  writeStorage(THEME_KEY, next);
-}
-
-function applyTheme(theme) {
-  document.documentElement.dataset.theme = theme === "light" ? "light" : "dark";
 }
 
 function iconNode(name) {

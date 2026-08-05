@@ -62,6 +62,8 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             html.Should().Contain("/workflow/studio/assets/app.js");
             html.Should().Contain("globalThis.__AEVATAR_ASSISTANT_CONFIG__");
             html.Should().Contain("Aevatar Studio");
+            html.Should().Contain("name=\"color-scheme\" content=\"light\"");
+            html.Should().NotContain("themeButton");
             html.Should().NotContain("workflow: \"studio\"");
         }
     }
@@ -171,6 +173,10 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         blocks.Should().Contain("export function buildConnectCardBlock(");
         styles.Should().Contain(".connect-card");
         styles.Should().Contain("@media (max-width:");
+        styles.Should().Contain("color-scheme: light");
+        styles.Should().Contain("--bg: #f4f5f7");
+        styles.Should().Contain("--accent: #2563eb");
+        styles.Should().NotContain("data-theme");
     }
 
     [Fact]
