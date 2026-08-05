@@ -231,6 +231,19 @@ public static class WorkflowCapabilityEndpoints
             var trustedScopeId = Aevatar.Capabilities.AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var callerScopeId)
                 ? callerScopeId
                 : null;
+            var firstInputFileRef = FirstInputFileRef(input.InputParts);
+            logger?.LogWarning(
+                "Workflow chat input file refs received. path={Path} sourceKind={SourceKind} sessionId={SessionId} scopeId={ScopeId} trustedScopeId={TrustedScopeId} requestInputPartCount={RequestInputPartCount} inputFileRefCount={InputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+                http.Request.Path.Value ?? string.Empty,
+                input.Source?.Kind ?? string.Empty,
+                input.SessionId ?? string.Empty,
+                input.ScopeId ?? string.Empty,
+                trustedScopeId ?? string.Empty,
+                input.InputParts?.Count ?? 0,
+                CountInputFileRefs(input.InputParts),
+                firstInputFileRef?.FileId ?? string.Empty,
+                firstInputFileRef?.ArtifactId ?? firstInputFileRef?.Uri ?? string.Empty,
+                firstInputFileRef?.MediaType ?? string.Empty);
             var normalizedRequest = await ChatRunRequestNormalizer.NormalizeAsync(
                 input,
                 fileIngressPort,
@@ -247,6 +260,19 @@ public static class WorkflowCapabilityEndpoints
                 await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
                 return;
             }
+
+            var normalizedInputParts = normalizedRequest.Request!.InputParts;
+            var firstNormalizedFileRef = FirstInputFileRef(normalizedInputParts);
+            logger?.LogWarning(
+                "Workflow chat input file refs normalized. path={Path} sessionId={SessionId} scopeId={ScopeId} normalizedInputPartCount={NormalizedInputPartCount} normalizedInputFileRefCount={NormalizedInputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+                http.Request.Path.Value ?? string.Empty,
+                normalizedRequest.Request.SessionId ?? string.Empty,
+                normalizedRequest.Request.ScopeId ?? string.Empty,
+                normalizedInputParts?.Count ?? 0,
+                CountInputFileRefs(normalizedInputParts),
+                firstNormalizedFileRef?.FileId ?? string.Empty,
+                firstNormalizedFileRef?.ArtifactId ?? string.Empty,
+                firstNormalizedFileRef?.MediaType ?? string.Empty);
 
             var result = await chatRunService.ExecuteAsync(
                 normalizedRequest.Request!,
@@ -847,6 +873,27 @@ public static class WorkflowCapabilityEndpoints
                 }),
             },
         };
+
+    private static int CountInputFileRefs(IReadOnlyList<ChatInputContentPart>? inputParts) =>
+        inputParts?.Count(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef)) ?? 0;
+
+    private static ChatInputFileRef? FirstInputFileRef(IReadOnlyList<ChatInputContentPart>? inputParts) =>
+        inputParts?.FirstOrDefault(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef))?.FileRef;
+
+    private static bool HasFileRefIdentity(ChatInputFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId) ||
+        !string.IsNullOrWhiteSpace(fileRef.Uri);
+
+    private static int CountInputFileRefs(IReadOnlyList<WorkflowChatInputPart>? inputParts) =>
+        inputParts?.Count(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef)) ?? 0;
+
+    private static FileArtifactRef? FirstInputFileRef(IReadOnlyList<WorkflowChatInputPart>? inputParts) =>
+        inputParts?.FirstOrDefault(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef))?.FileRef;
+
+    private static bool HasFileRefIdentity(FileArtifactRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
 
     private static WorkflowToolApprovalResumeCommand? ToToolApprovalResumeCommand(
         WorkflowToolApprovalResumeInput? input)
