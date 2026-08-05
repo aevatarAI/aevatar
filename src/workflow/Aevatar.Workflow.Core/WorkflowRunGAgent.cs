@@ -573,7 +573,7 @@ public sealed partial class WorkflowRunGAgent
             firstInputFileRef?.FileId ?? string.Empty,
             firstInputFileRef?.ArtifactId ?? string.Empty,
             firstInputFileRef?.MediaType ?? string.Empty);
-        if (!await BindInputFileArtifactsAsync(inputFileRefs, runId, scopeId ?? string.Empty))
+        if (!await BindInputFileArtifactsAsync(inputFileRefs, runId))
         {
             await HandleWorkflowCompleted(new WorkflowCompletedEvent
             {
@@ -1106,7 +1106,7 @@ public sealed partial class WorkflowRunGAgent
                 if (string.IsNullOrWhiteSpace(clone.OwnerRunId))
                 {
                     clone.OwnerRunId = runId;
-                    clone.OwnerScopeId = scopeId ?? string.Empty;
+                    clone.OwnerScopeId = scopeId;
                 }
 
                 return clone;
@@ -1115,8 +1115,7 @@ public sealed partial class WorkflowRunGAgent
 
     private async Task<bool> BindInputFileArtifactsAsync(
         IReadOnlyList<WorkflowFileRef> fileRefs,
-        string runId,
-        string scopeId)
+        string runId)
     {
         if (fileRefs.Count == 0 || _fileArtifactOwnership == null)
             return true;
@@ -1127,8 +1126,8 @@ public sealed partial class WorkflowRunGAgent
             {
                 await _fileArtifactOwnership.BindOwnerAsync(
                     ToApplicationFileArtifactRef(fileRef),
-                    ResolveInputFileArtifactOwnerRunId(fileRef, runId),
-                    ResolveInputFileArtifactOwnerScopeId(fileRef, scopeId),
+                    fileRef.OwnerRunId!,
+                    fileRef.OwnerScopeId,
                     CancellationToken.None);
             }
             catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FileNotFoundException or IOException or UnauthorizedAccessException)
@@ -1140,12 +1139,6 @@ public sealed partial class WorkflowRunGAgent
 
         return true;
     }
-
-    private static string ResolveInputFileArtifactOwnerRunId(WorkflowFileRef fileRef, string runId) =>
-        string.IsNullOrWhiteSpace(fileRef.OwnerRunId) ? runId : fileRef.OwnerRunId.Trim();
-
-    private static string ResolveInputFileArtifactOwnerScopeId(WorkflowFileRef fileRef, string scopeId) =>
-        string.IsNullOrWhiteSpace(fileRef.OwnerScopeId) ? scopeId : fileRef.OwnerScopeId.Trim();
 
     private static ApplicationFileArtifactRef ToApplicationFileArtifactRef(WorkflowFileRef source) =>
         new()
