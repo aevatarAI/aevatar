@@ -123,7 +123,12 @@ public sealed class StudioScheduledCredentialMaterializer : IStudioScheduledCred
                     issued.AuthorizationPlanMismatchReason);
             }
 
-            throw new InvalidOperationException(issued.Error ?? "scheduled_credential_materialization_failed");
+            var failureCode = issued.Error ?? "scheduled_credential_materialization_failed";
+            throw new StudioScheduledCredentialMaterializationException(
+                failureCode,
+                effectsCleaned: true,
+                new InvalidOperationException(failureCode),
+                failureCode: failureCode);
         }
 
         var expiresAt = DateTimeOffset.FromUnixTimeMilliseconds(issued.KeyExpiresAtUnixMs);

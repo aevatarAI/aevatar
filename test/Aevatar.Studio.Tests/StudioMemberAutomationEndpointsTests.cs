@@ -361,6 +361,47 @@ public sealed class StudioMemberAutomationEndpointsTests
     }
 
     [Fact]
+    public async Task Create_WhenScopePlanIsDenied_ShouldReturnTypedForbidden()
+    {
+        var schedules = new StubSchedules
+        {
+            Exception = new StudioScheduledCredentialMaterializationException(
+                "api_key_scope_plan_denied",
+                effectsCleaned: true,
+                new InvalidOperationException("api_key_scope_plan_denied"),
+                failureCode: "api_key_scope_plan_denied"),
+        };
+
+        var result = await StudioMemberAutomationEndpoints.HandleCreateAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            new StudioMemberAutomationMutationRequest(
+                "0 9 * * *",
+                "UTC",
+                "run daily digest",
+                "Daily digest",
+                true,
+                "permission-digest-alpha",
+                "scheduled-invocation-auth/v1",
+                "dedicated_scheduled_invocation_agent_key",
+                "op-create",
+                "idem-create"),
+            schedules,
+            new StubBindingQuery(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status403Forbidden);
+        var response = Value(result);
+        StringProperty(response, "code").Should().Be("api_key_scope_plan_denied");
+        StringProperty(response, "message").Should()
+            .Be("NyxID denied the requested Agent Key scope for this caller.");
+        AssertNoCredentialMaterial(response);
+    }
+
+    [Fact]
     public async Task ReadResponses_ShouldExposeCanonicalIdentityWithoutCredentialMaterial()
     {
         var view = new StudioMemberAutomationView(

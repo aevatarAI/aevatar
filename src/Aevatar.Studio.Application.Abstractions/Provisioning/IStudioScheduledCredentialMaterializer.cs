@@ -48,14 +48,20 @@ public sealed class StudioScheduledCredentialMaterializationException : InvalidO
         string message,
         bool effectsCleaned,
         Exception innerException,
-        bool recoveryBlocked = false)
+        bool recoveryBlocked = false,
+        string? failureCode = null)
         : base(message, innerException)
     {
         EffectsCleaned = effectsCleaned;
         RecoveryBlocked = recoveryBlocked;
+        FailureCode = string.IsNullOrWhiteSpace(failureCode)
+            ? string.Empty
+            : failureCode.Trim();
     }
 
     public bool EffectsCleaned { get; }
 
     public bool RecoveryBlocked { get; }
+
+    public string FailureCode { get; }
 }

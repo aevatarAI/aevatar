@@ -80,7 +80,11 @@ public sealed class StudioScheduledCredentialMaterializerTests
             1,
             OwnerScope.ForNyxIdNative("owner-alpha"));
 
-        await action.Should().ThrowAsync<InvalidOperationException>().WithMessage("issuer-rejected");
+        var failure = await action.Should()
+            .ThrowAsync<StudioScheduledCredentialMaterializationException>()
+            .WithMessage("issuer-rejected");
+        failure.Which.EffectsCleaned.Should().BeTrue();
+        failure.Which.FailureCode.Should().Be("issuer-rejected");
         vault.Stores.Should().BeEmpty();
         issuer.Revocations.Should().BeEmpty();
     }

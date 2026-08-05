@@ -97,7 +97,7 @@ public sealed class UserSkillRunServiceTests
         schedule.Request.ScheduleCron.Should().Be("*/15 * * * *");
         schedule.Request.ScheduleTimezone.Should().Be("Asia/Shanghai");
         schedule.Request.RunImmediately.Should().BeFalse();
-        schedule.Request.ProvisioningBearerToken.Should().Be("delegation-token");
+        schedule.Request.ProvisioningBearerToken.Should().Be("caller-token");
         schedule.Request.AuthenticatedOwner.Should().NotBeNull();
         schedule.Request.AuthenticatedOwner!.SubjectExternalUserId.Should().Be("nyx-user-alpha");
         schedule.Request.AuthenticatedOwner.VerifiedBindingId.Should().Be("binding-alpha");
@@ -335,6 +335,40 @@ public sealed class UserSkillRunServiceTests
         outcome.Succeeded.Should().BeFalse();
         outcome.ErrorCode.Should().Be(blockerCode);
         outcome.ErrorMessage.Should().Be("The confirmation is bound to another workflow identity.");
+    }
+
+    [Fact]
+    public async Task ScheduleAsync_WhenScopePlanIsDenied_ShouldPreserveTypedProviderFailure()
+    {
+        var schedule = new RecordingScheduleProvisioningPort
+        {
+            Exception = new StudioScheduledCredentialMaterializationException(
+                "api_key_scope_plan_denied",
+                effectsCleaned: true,
+                new InvalidOperationException("api_key_scope_plan_denied"),
+                failureCode: "api_key_scope_plan_denied"),
+        };
+        var service = new UserSkillRunService(
+            new RecordingRemoteSkillFetcher(WorkflowSkill()),
+            new RecordingWorkflowChatDispatch(),
+            schedule,
+            new RecordingWorkflowConfirmationPort(ConfirmedWorkflow()));
+
+        var outcome = await service.ScheduleAsync(
+            "skill-alpha",
+            SourceReadableCallerCredential(),
+            "scope-alpha",
+            "run the check",
+            "*/15 * * * *",
+            "UTC",
+            "Codex Check",
+            "team-alpha",
+            "sha256:reviewed",
+            CancellationToken.None);
+
+        outcome.Succeeded.Should().BeFalse();
+        outcome.ErrorCode.Should().Be("api_key_scope_plan_denied");
+        outcome.ErrorMessage.Should().Be("NyxID denied the requested Agent Key scope for this caller.");
     }
 
     [Theory]

@@ -295,11 +295,23 @@ internal static class WorkflowSkillsEndpoints
             ResolveScheduleFailureStage(outcome.ErrorCode),
             outcome.ErrorCode ?? "skill_schedule_unknown_failure");
 
-        var scheduleStatus = string.Equals(outcome.ErrorCode, "skill_not_found", StringComparison.Ordinal)
-            ? StatusCodes.Status404NotFound
-            : StatusCodes.Status502BadGateway;
+        var scheduleStatus = ResolveScheduleFailureStatus(outcome.ErrorCode);
         return Results.Json(new { code = outcome.ErrorCode, message = outcome.ErrorMessage }, statusCode: scheduleStatus);
     }
+
+    private static int ResolveScheduleFailureStatus(string? errorCode) => errorCode switch
+    {
+        "skill_not_found" or "api_key_scope_plan_not_found" => StatusCodes.Status404NotFound,
+        "authentication_failed" or "unauthorized" or "token_expired" => StatusCodes.Status401Unauthorized,
+        "forbidden" or "api_key_scope_plan_denied" => StatusCodes.Status403Forbidden,
+        "bad_request" or "validation_error" or "api_key_scope_plan_owner_unsupported" =>
+            StatusCodes.Status400BadRequest,
+        "conflict" or "api_key_scope_plan_route_unresolved" or "api_key_scope_plan_stale" =>
+            StatusCodes.Status409Conflict,
+        "rate_limited" => StatusCodes.Status429TooManyRequests,
+        "nyxid_scope_plan_provider_timed_out" => StatusCodes.Status504GatewayTimeout,
+        _ => StatusCodes.Status502BadGateway,
+    };
 
     private static string ResolveScheduleFailureStage(string? errorCode)
     {
@@ -320,7 +332,9 @@ internal static class WorkflowSkillsEndpoints
         if (errorCode.Contains("confirmation", StringComparison.OrdinalIgnoreCase))
             return "confirmation";
         if (errorCode.StartsWith("schedule_authorization_", StringComparison.Ordinal) ||
-            string.Equals(errorCode, "schedule_reauthorization_required", StringComparison.Ordinal))
+            string.Equals(errorCode, "schedule_reauthorization_required", StringComparison.Ordinal) ||
+            errorCode.StartsWith("api_key_scope_plan_", StringComparison.Ordinal) ||
+            errorCode.StartsWith("nyxid_scope_plan_", StringComparison.Ordinal))
         {
             return "authorization_catalog";
         }

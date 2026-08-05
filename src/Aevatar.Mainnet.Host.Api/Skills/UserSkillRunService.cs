@@ -171,7 +171,7 @@ internal sealed class UserSkillRunService : IUserSkillRunService
             CallerSubjectTenant = authenticatedOwner.SubjectTenant,
             CallerSubjectExternalUserId = authenticatedOwner.SubjectExternalUserId,
             AuthenticatedOwner = authenticatedOwner,
-            ProvisioningBearerToken = accessToken,
+            ProvisioningBearerToken = sourceReadableBearerToken,
         };
 
         try
@@ -213,6 +213,13 @@ internal sealed class UserSkillRunService : IUserSkillRunService
                 ToPlanConflictCode(ex.Code),
                 ToPlanConflictMessage(ex.Code));
         }
+        catch (StudioScheduledCredentialMaterializationException ex)
+            when (!string.IsNullOrWhiteSpace(ex.FailureCode))
+        {
+            return SkillScheduleOutcome.Failed(
+                ex.FailureCode,
+                ToCredentialProvisioningFailureMessage(ex.FailureCode));
+        }
         catch (InvalidOperationException ex)
         {
             return SkillScheduleOutcome.Failed("schedule_failed", ex.Message);
@@ -231,6 +238,23 @@ internal sealed class UserSkillRunService : IUserSkillRunService
         "authorization_plan_changed" => "The authorization plan changed before the schedule write. Retry this request.",
         "reauthorization_required" => "Reconnect NyxID to authorize this workflow schedule.",
         _ => "The workflow schedule authorization plan conflicted with the current state.",
+    };
+
+    private static string ToCredentialProvisioningFailureMessage(string code) => code switch
+    {
+        "api_key_scope_plan_denied" =>
+            "NyxID denied the requested Agent Key scope for this caller.",
+        "api_key_scope_plan_not_found" =>
+            "A required NyxID service in the Agent Key scope was not found.",
+        "api_key_scope_plan_owner_unsupported" =>
+            "NyxID does not support the requested Agent Key owner.",
+        "api_key_scope_plan_route_unresolved" =>
+            "NyxID could not resolve a configured route required by the Agent Key scope.",
+        "api_key_scope_plan_stale" =>
+            "The NyxID Agent Key scope plan changed before the credential was created.",
+        "nyxid_scope_plan_provider_timed_out" =>
+            "NyxID timed out while planning the Agent Key scope.",
+        _ => "The scheduled Agent Key could not be issued.",
     };
 
     private static AuthenticatedAuthorizationOwnerContext? BuildAuthenticatedOwner(
