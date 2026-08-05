@@ -48,6 +48,8 @@ import { AevatarPageLoading } from "@/shared/ui/AevatarLoading";
 const PUBLIC_ROUTES = new Set(["/login", "/auth/callback"]);
 const DEFAULT_PROTECTED_ROUTE = CONSOLE_HOME_ROUTE;
 const FULLSCREEN_DISPLAY_ROUTES = new Set(["/runtime/mission-wall"]);
+const WORKFLOW_ACTIVITY_VNEXT_ROUTE =
+  /^\/scopes\/[^/]+\/workflow-activity-vnext(?:\/|$)/;
 const STUDIO_HOST_ROUTES = new Set([
   "/studio",
   "/scopes/:scopeId/teams/:teamId/members/new/workflow",
@@ -55,7 +57,14 @@ const STUDIO_HOST_ROUTES = new Set([
 ]);
 
 function isFullscreenDisplayRoute(pathname: string): boolean {
-  return FULLSCREEN_DISPLAY_ROUTES.has(pathname);
+  return (
+    FULLSCREEN_DISPLAY_ROUTES.has(pathname) ||
+    WORKFLOW_ACTIVITY_VNEXT_ROUTE.test(pathname)
+  );
+}
+
+function isWorkflowActivityVNextRoute(pathname: string): boolean {
+  return WORKFLOW_ACTIVITY_VNEXT_ROUTE.test(pathname);
 }
 
 function isStudioHostRoute(pathname: string): boolean {
@@ -703,6 +712,7 @@ export const layout = ({
   const search = window.location.search;
   const collapseForRoute = shouldCollapseLayout(pathname, search);
   const fullscreenDisplayRoute = isFullscreenDisplayRoute(pathname);
+  const workflowActivityVNextRoute = isWorkflowActivityVNextRoute(pathname);
 
   return {
     onPageChange: () => {
@@ -792,7 +802,16 @@ export const layout = ({
       collapsedShowTitle: false,
       type: "group",
     },
-    contentStyle: fullscreenDisplayRoute
+    contentStyle: workflowActivityVNextRoute
+      ? {
+          background: "#ffffff",
+          display: "block",
+          height: "100vh",
+          minHeight: 0,
+          overflow: "hidden",
+          padding: 0,
+        }
+      : fullscreenDisplayRoute
       ? {
           background: "#09110f",
           display: "block",

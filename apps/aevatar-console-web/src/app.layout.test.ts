@@ -85,6 +85,37 @@ describe("layout menu collapse behavior", () => {
     });
   });
 
+  it("renders Workflow Activity vNext without the global console chrome", () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-a/workflow-activity-vnext/workflows/wf-a",
+    );
+
+    const runtimeLayout = layout({
+      initialState: {
+        auth: {} as never,
+        settings: defaultSettings,
+      },
+    });
+    const menuRender = runtimeLayout.menuRender as
+      | ((props: unknown, defaultDom: unknown) => React.ReactNode)
+      | undefined;
+    const actionsRender = runtimeLayout.actionsRender as
+      | ((props: unknown, dom: unknown) => React.ReactNode[])
+      | undefined;
+
+    expect(runtimeLayout.headerRender).toBe(false);
+    expect(menuRender?.({}, React.createElement("nav"))).toBe(false);
+    expect(actionsRender?.({}, {})).toEqual([]);
+    expect(runtimeLayout.contentStyle).toMatchObject({
+      background: "#ffffff",
+      height: "100vh",
+      overflow: "hidden",
+      padding: 0,
+    });
+  });
+
   it("updates the controlled global menu collapse state after SPA route changes", () => {
     window.history.replaceState({}, "", "/scopes/scope-a/teams");
     const teamsLayout = layout({
