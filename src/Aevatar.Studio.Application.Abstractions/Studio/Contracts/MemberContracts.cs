@@ -134,7 +134,21 @@ public sealed record StudioMemberDetailResponse(
     StudioMemberBindingContractResponse? LastBinding)
 {
     public StudioMemberBindingRunStatusResponse? CurrentBindingRun { get; init; }
+
+    public StudioMemberWorkflowScheduleProvisioningStatusResponse? ScheduleProvisioning { get; init; }
 }
+
+public sealed record StudioMemberWorkflowScheduleProvisioningStatusResponse(
+    string ProvisioningId,
+    string Status,
+    string RevisionId,
+    string? ScheduleId,
+    string? OperationId,
+    int AttemptCount,
+    long StateVersion,
+    string? FailureCode,
+    string? FailureMessage,
+    DateTimeOffset? UpdatedAt);
 
 public sealed record StudioMemberBindingContractResponse(
     string PublishedServiceId,

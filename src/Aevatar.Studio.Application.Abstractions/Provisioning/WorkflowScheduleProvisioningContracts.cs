@@ -80,8 +80,8 @@ public sealed record WorkflowScheduleProvisioningRequest(
 
 /// <summary>
 /// Result of provisioning a workflow schedule. The bind and the run are both
-/// asynchronous, so no run id is returned; the runs appear in the Observatory
-/// (<see cref="ObservatoryUrl"/>) as the <see cref="ScheduleId"/> fires.
+/// asynchronous, so no run id is returned. Schedule provisioning is also
+/// actor-owned and may still be pending when this result is returned.
 /// Contains NO channel / Lark / bot fields.
 /// </summary>
 public sealed record WorkflowScheduleProvisioningResult(
@@ -95,4 +95,8 @@ public sealed record WorkflowScheduleProvisioningResult(
     public string? ScheduleId { get; init; }
 
     public string? BindingRunId { get; init; }
+
+    public string? ScheduleProvisioningId { get; init; }
+
+    public string? ScheduleProvisioningStatus { get; init; }
 }

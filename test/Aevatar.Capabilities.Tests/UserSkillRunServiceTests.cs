@@ -86,6 +86,13 @@ public sealed class UserSkillRunServiceTests
             CancellationToken.None);
 
         outcome.Succeeded.Should().BeTrue();
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.ScheduleId.Should().Be("schedule-alpha");
+        outcome.Receipt.ScopeId.Should().Be("scope-alpha");
+        outcome.Receipt.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Accepted);
+        outcome.Receipt.BindingRunId.Should().Be("bind-alpha");
+        outcome.Receipt.ScheduleProvisioningId.Should().Be("provision-alpha");
+        outcome.Receipt.ScheduleProvisioningStatus.Should().Be("succeeded");
         fetcher.AccessToken.Should().Be("delegation-token");
         confirmation.Request.Should().NotBeNull();
         confirmation.Request!.SourceReadableNyxIdAccessToken.Should().Be("caller-token");
@@ -111,6 +118,55 @@ public sealed class UserSkillRunServiceTests
             .Should().ContainSingle().Which;
         explicitConfirmation.WorkflowId.Should().BeEmpty();
         explicitConfirmation.RevisionId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ScheduleAsync_WhenProvisioningIsPending_ShouldReturnTypedReceiptWithoutScheduleId()
+    {
+        var schedule = new RecordingScheduleProvisioningPort
+        {
+            Result = new WorkflowScheduleProvisioningResult(
+                "m-alpha",
+                "scope-alpha",
+                "team-alpha",
+                ProvisionWorkflowBindingStatusNames.Accepted,
+                "/admin#/observatory",
+                "/studio/member")
+            {
+                ScheduleId = null,
+                BindingRunId = "bind-alpha",
+                ScheduleProvisioningId = "provision-alpha",
+                ScheduleProvisioningStatus = "pending_binding",
+            },
+        };
+        var service = new UserSkillRunService(
+            new RecordingRemoteSkillFetcher(WorkflowSkill()),
+            new RecordingWorkflowChatDispatch(),
+            schedule,
+            new RecordingWorkflowConfirmationPort(ConfirmedWorkflow()));
+
+        var outcome = await service.ScheduleAsync(
+            "skill-alpha",
+            SourceReadableCallerCredential(),
+            "scope-alpha",
+            "run the check",
+            "*/15 * * * *",
+            "UTC",
+            "Codex Check",
+            "team-alpha",
+            "sha256:reviewed",
+            CancellationToken.None);
+
+        outcome.Succeeded.Should().BeTrue();
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.ScheduleId.Should().BeNull();
+        outcome.Receipt.MemberId.Should().Be("m-alpha");
+        outcome.Receipt.ScopeId.Should().Be("scope-alpha");
+        outcome.Receipt.TeamId.Should().Be("team-alpha");
+        outcome.Receipt.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Accepted);
+        outcome.Receipt.BindingRunId.Should().Be("bind-alpha");
+        outcome.Receipt.ScheduleProvisioningId.Should().Be("provision-alpha");
+        outcome.Receipt.ScheduleProvisioningStatus.Should().Be("pending_binding");
     }
 
     [Fact]
@@ -566,6 +622,7 @@ public sealed class UserSkillRunServiceTests
     {
         public WorkflowScheduleProvisioningRequest? Request { get; private set; }
         public Exception? Exception { get; init; }
+        public WorkflowScheduleProvisioningResult? Result { get; init; }
 
         public Task<WorkflowScheduleProvisioningResult> ProvisionAsync(
             WorkflowScheduleProvisioningRequest request,
@@ -573,7 +630,7 @@ public sealed class UserSkillRunServiceTests
         {
             Request = request;
             if (Exception != null) throw Exception;
-            return Task.FromResult(new WorkflowScheduleProvisioningResult(
+            return Task.FromResult(Result ?? new WorkflowScheduleProvisioningResult(
                 "member-alpha",
                 request.ScopeId,
                 request.TeamId,
@@ -582,6 +639,9 @@ public sealed class UserSkillRunServiceTests
                 "/studio/member")
             {
                 ScheduleId = "schedule-alpha",
+                BindingRunId = "bind-alpha",
+                ScheduleProvisioningId = "provision-alpha",
+                ScheduleProvisioningStatus = "succeeded",
             });
         }
     }

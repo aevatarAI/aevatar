@@ -41,6 +41,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStudioMemberInvocationReadinessQueryPort,
             StudioMemberInvocationReadinessQueryPort>();
         services.TryAddSingleton<IStudioWorkflowProvisioningService, StudioWorkflowProvisioningService>();
+        services.TryAddSingleton<
+            IStudioWorkflowScheduleProvisioningExecutor,
+            StudioWorkflowScheduleProvisioningExecutor>();
         // Narrow, tool-facing port (Abstractions) adapting IStudioWorkflowProvisioningService so the
         // aevatar_provision_workflow_schedule agent tool can depend only on Aevatar.Studio.Application.Abstractions.
         services.TryAddSingleton<IWorkflowScheduleProvisioningPort, WorkflowScheduleProvisioningPort>();

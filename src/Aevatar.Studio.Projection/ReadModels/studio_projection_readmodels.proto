@@ -679,6 +679,17 @@ message StudioMemberCurrentStateDocument {
   string binding_failure_message = 64;
   google.protobuf.Timestamp binding_failure_at = 65;
   google.protobuf.Timestamp binding_updated_at = 66;
+
+  // ── Actor-owned provision schedule continuation ──
+  string schedule_provisioning_id = 70;
+  string schedule_provisioning_status = 71;
+  string schedule_provisioning_revision_id = 72;
+  string schedule_provisioning_schedule_id = 73;
+  string schedule_provisioning_operation_id = 74;
+  int32 schedule_provisioning_attempt_count = 75;
+  string schedule_provisioning_failure_code = 76;
+  string schedule_provisioning_failure_message = 77;
+  google.protobuf.Timestamp schedule_provisioning_updated_at = 78;
 }
 
 // ─── StudioMemberBindingRun Current State ReadModel ───

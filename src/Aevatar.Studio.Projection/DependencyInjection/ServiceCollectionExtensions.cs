@@ -8,6 +8,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.CQRS.Core.DependencyInjection;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Projection.CommandServices;
 using Aevatar.Studio.Projection.Audit;
@@ -272,6 +273,12 @@ public static class ServiceCollectionExtensions
         // Command services (write side)
         services.TryAddSingleton<IUserConfigCommandService, ActorDispatchUserConfigCommandService>();
         services.TryAddSingleton<IStudioMemberCommandPort, ActorDispatchStudioMemberCommandService>();
+        services.TryAddSingleton<
+            IStudioWorkflowScheduleProvisioningCommandPort,
+            ActorDispatchStudioWorkflowScheduleProvisioningCommandService>();
+        services.TryAddSingleton<
+            IStudioMemberWorkflowScheduleProvisioningPort,
+            StudioMemberWorkflowScheduleProvisioningExecutionPort>();
         services.TryAddSingleton<IContentArtifactCommandPort, ActorDispatchContentArtifactCommandService>();
         services.TryAddSingleton<IWorkOrderCommandPort, ActorDispatchWorkOrderCommandService>();
         services.TryAddSingleton<IStudioMemberPlatformBindingCommandPort, ScopeBindingStudioMemberPlatformBindingCommandService>();

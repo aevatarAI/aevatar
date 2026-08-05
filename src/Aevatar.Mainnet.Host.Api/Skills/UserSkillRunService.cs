@@ -179,12 +179,18 @@ internal sealed class UserSkillRunService : IUserSkillRunService
         {
             var result = await _scheduleProvisioningPort.ProvisionAsync(request, ct);
             return SkillScheduleOutcome.Ok(new SkillScheduleReceipt(
-                ScheduleId: result.ScheduleId ?? string.Empty,
                 MemberId: result.MemberId,
+                ScopeId: result.ScopeId,
                 TeamId: result.TeamId,
-                Status: result.BindingStatus,
+                BindingStatus: result.BindingStatus,
                 ObservatoryUrl: result.ObservatoryUrl,
-                StudioUrl: result.StudioUrl));
+                StudioUrl: result.StudioUrl)
+            {
+                ScheduleId = result.ScheduleId,
+                BindingRunId = result.BindingRunId,
+                ScheduleProvisioningId = result.ScheduleProvisioningId,
+                ScheduleProvisioningStatus = result.ScheduleProvisioningStatus,
+            });
         }
         catch (WorkflowExternalCapabilityAdmissionException ex)
         {

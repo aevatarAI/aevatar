@@ -87,6 +87,23 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void AddStudioApplication_ShouldRegisterActorOwnedWorkflowScheduleProvisioningServices()
+    {
+        var services = new ServiceCollection();
+
+        services.AddStudioApplication();
+
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(IStudioWorkflowScheduleProvisioningExecutor) &&
+            x.ImplementationType == typeof(StudioWorkflowScheduleProvisioningExecutor) &&
+            x.Lifetime == ServiceLifetime.Singleton);
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(IWorkflowScheduleProvisioningPort) &&
+            x.ImplementationType == typeof(WorkflowScheduleProvisioningPort) &&
+            x.Lifetime == ServiceLifetime.Singleton);
+    }
+
+    [Fact]
     public void AddStudioApplication_ShouldAliasWorkOrderSchedulerAndRegisterQueueSingleton()
     {
         var services = new ServiceCollection();

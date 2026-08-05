@@ -7,6 +7,7 @@ using Aevatar.Mainnet.Host.Api.Skills;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -124,6 +125,90 @@ public sealed class WorkflowSkillsEndpointsTests
         ((IValueHttpResult)result).Value.Should().BeSameAs(runService.ScheduleOutcome.Confirmation);
         runService.ScheduleInvocationCount.Should().Be(1);
         runService.WorkflowConfirmationToken.Should().Be("sha256:supplied");
+    }
+
+    [Fact]
+    public async Task ScheduleSkill_WhenProvisioningIsPending_ShouldReturnAcceptedMemberLocation()
+    {
+        var receipt = new SkillScheduleReceipt(
+            "m-alpha",
+            "scope-alpha",
+            "team-alpha",
+            "accepted",
+            "/admin#/observatory",
+            "/studio/member")
+        {
+            ScheduleId = null,
+            BindingRunId = "bind-alpha",
+            ScheduleProvisioningId = "provision-alpha",
+            ScheduleProvisioningStatus = "pending_binding",
+        };
+        var runService = new RecordingUserSkillRunService
+        {
+            ScheduleOutcome = SkillScheduleOutcome.Ok(receipt),
+        };
+        var bindingQuery = Substitute.For<IExternalIdentityBindingQueryPort>();
+        bindingQuery.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<BindingId?>(new BindingId { Value = "binding-alpha" }));
+        using var services = CreateRequestServices(bindingQuery);
+        var http = CreateHttpContext(
+            services,
+            "Bearer caller-token",
+            "{\"cronExpression\":\"0 9 * * *\",\"teamId\":\"team-alpha\",\"workflowConfirmationToken\":\"sha256:supplied\"}");
+
+        var result = await WorkflowSkillsEndpoints.ScheduleSkill(
+            http,
+            "skill-alpha",
+            runService,
+            CancellationToken.None);
+
+        var accepted = result.Should().BeOfType<Accepted<SkillScheduleReceipt>>().Subject;
+        accepted.Location.Should().Be("/api/scopes/scope-alpha/members/m-alpha");
+        accepted.Value.Should().BeSameAs(receipt);
+        accepted.Value!.ScheduleId.Should().BeNull();
+        accepted.Value.ScheduleProvisioningId.Should().Be("provision-alpha");
+        accepted.Value.ScheduleProvisioningStatus.Should().Be("pending_binding");
+        accepted.Value.BindingRunId.Should().Be("bind-alpha");
+    }
+
+    [Fact]
+    public async Task ScheduleSkill_WhenScheduleIsVisible_ShouldReturnAcceptedScheduleLocation()
+    {
+        var receipt = new SkillScheduleReceipt(
+            "m-alpha",
+            "scope-alpha",
+            "team-alpha",
+            "succeeded",
+            "/admin#/observatory",
+            "/studio/member")
+        {
+            ScheduleId = "schedule/alpha",
+            BindingRunId = "bind-alpha",
+            ScheduleProvisioningId = "provision-alpha",
+            ScheduleProvisioningStatus = "succeeded",
+        };
+        var runService = new RecordingUserSkillRunService
+        {
+            ScheduleOutcome = SkillScheduleOutcome.Ok(receipt),
+        };
+        var bindingQuery = Substitute.For<IExternalIdentityBindingQueryPort>();
+        bindingQuery.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<BindingId?>(new BindingId { Value = "binding-alpha" }));
+        using var services = CreateRequestServices(bindingQuery);
+        var http = CreateHttpContext(
+            services,
+            "Bearer caller-token",
+            "{\"cronExpression\":\"0 9 * * *\",\"teamId\":\"team-alpha\",\"workflowConfirmationToken\":\"sha256:supplied\"}");
+
+        var result = await WorkflowSkillsEndpoints.ScheduleSkill(
+            http,
+            "skill-alpha",
+            runService,
+            CancellationToken.None);
+
+        var accepted = result.Should().BeOfType<Accepted<SkillScheduleReceipt>>().Subject;
+        accepted.Location.Should().Be("/api/schedules/schedule%2Falpha");
+        accepted.Value.Should().BeSameAs(receipt);
     }
 
     [Fact]

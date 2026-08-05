@@ -33,14 +33,24 @@ internal sealed record SkillScheduleHttpRequest(
     string? TeamId = null,
     string? WorkflowConfirmationToken = null);
 
-// Returned after a schedule is provisioned; ObservatoryUrl shows the schedule's recurring runs.
+// Returned after actor-owned schedule provisioning is accepted. ScheduleId remains null until
+// the schedule becomes visible; clients poll the member read model through the response Location.
 public sealed record SkillScheduleReceipt(
-    string ScheduleId,
     string MemberId,
+    string ScopeId,
     string TeamId,
-    string Status,
+    string BindingStatus,
     string ObservatoryUrl,
-    string StudioUrl);
+    string StudioUrl)
+{
+    public string? ScheduleId { get; init; }
+
+    public string? BindingRunId { get; init; }
+
+    public string? ScheduleProvisioningId { get; init; }
+
+    public string? ScheduleProvisioningStatus { get; init; }
+}
 
 public sealed record SkillScheduleConfirmationReceipt(
     string Status,

@@ -21,7 +21,26 @@ namespace Aevatar.GAgents.StudioMember;
 [GAgent("studio.member")]
 public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProjectedActor
 {
+    private static readonly TimeSpan ScheduleProvisioningInitialDelay = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan ScheduleProvisioningRetryDelay = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan ScheduleProvisioningAttemptWatchdogDelay = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ScheduleProvisioningBudget = TimeSpan.FromMinutes(10);
+    private readonly IStudioMemberWorkflowScheduleProvisioningPort? _scheduleProvisioningPort;
+
     public static string ProjectionKind => "studio-member";
+
+    public StudioMemberGAgent(
+        IStudioMemberWorkflowScheduleProvisioningPort? scheduleProvisioningPort = null)
+    {
+        _scheduleProvisioningPort = scheduleProvisioningPort;
+    }
+
+    protected override async Task OnActivateAsync(CancellationToken ct)
+    {
+        await base.OnActivateAsync(ct);
+        if (CanRecoverScheduleProvisioning())
+            await ScheduleWorkflowScheduleProvisioningAttemptAsync(ScheduleProvisioningInitialDelay, ct);
+    }
 
     // Refactor (iter1345/cluster-519-draft-member-authority):
     //   Old pattern: workflow draft saves could leave member authority creation
@@ -161,24 +180,36 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
 
         if (string.IsNullOrEmpty(State.MemberId))
         {
-            await SendToAsync(runActorId, BuildRejected(evt, "STUDIO_MEMBER_NOT_FOUND", "member not yet created.", failedAt));
+            await SendBindingRejectionAsync(
+                runActorId,
+                BuildRejected(evt, "STUDIO_MEMBER_NOT_FOUND", "member not yet created.", failedAt));
             return;
         }
         if (State.Deleted)
         {
-            await SendToAsync(runActorId, BuildRejected(evt, "STUDIO_MEMBER_NOT_FOUND", "member has been deleted.", failedAt));
+            await SendBindingRejectionAsync(
+                runActorId,
+                BuildRejected(evt, "STUDIO_MEMBER_NOT_FOUND", "member has been deleted.", failedAt));
             return;
         }
 
         if (!string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal)
             || !string.Equals(State.MemberId, evt.MemberId, StringComparison.Ordinal))
         {
-            await SendToAsync(runActorId, BuildRejected(evt, "STUDIO_MEMBER_TARGET_MISMATCH", "binding admission target does not match member authority state.", failedAt));
+            await SendBindingRejectionAsync(
+                runActorId,
+                BuildRejected(
+                    evt,
+                    "STUDIO_MEMBER_TARGET_MISMATCH",
+                    "binding admission target does not match member authority state.",
+                    failedAt));
             return;
         }
 
         if (TryBuildTerminalBindingRunReplayResponse(State, evt, failedAt, out var terminalReplayResponse))
         {
+            if (terminalReplayResponse is StudioMemberBindingRejectedEvent terminalRejection)
+                await FailWorkflowScheduleProvisioningForBindingRejectionAsync(terminalRejection);
             await SendToAsync(runActorId, terminalReplayResponse);
             return;
         }
@@ -190,17 +221,25 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
 
         if (HasActiveBindingRun(State, evt.BindingRunId))
         {
-            await SendToAsync(runActorId, BuildRejected(
-                evt,
-                "STUDIO_MEMBER_BINDING_RUN_ALREADY_ACTIVE",
-                "member already has an active binding run.",
-                failedAt));
+            await SendBindingRejectionAsync(
+                runActorId,
+                BuildRejected(
+                    evt,
+                    "STUDIO_MEMBER_BINDING_RUN_ALREADY_ACTIVE",
+                    "member already has an active binding run.",
+                    failedAt));
             return;
         }
 
         if (IsSupersededBindingRun(State, evt.BindingRunId, evt.RequestedAtUtc))
         {
-            await SendToAsync(runActorId, BuildRejected(evt, "STUDIO_MEMBER_BINDING_RUN_SUPERSEDED", "binding run was superseded by a newer member binding run.", failedAt));
+            await SendBindingRejectionAsync(
+                runActorId,
+                BuildRejected(
+                    evt,
+                    "STUDIO_MEMBER_BINDING_RUN_SUPERSEDED",
+                    "binding run was superseded by a newer member binding run.",
+                    failedAt));
             return;
         }
 
@@ -213,7 +252,7 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
                 $"binding request kind '{requestedKind}' does not match member kind '{State.ImplementationKind}'.",
                 failedAt);
             await PersistDomainEventsAsync([evt, rejected]);
-            await SendToAsync(runActorId, rejected);
+            await SendBindingRejectionAsync(runActorId, rejected);
             return;
         }
 
@@ -285,6 +324,7 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         completed.MemberId = State.MemberId;
         completed.ScopeId = State.ScopeId;
         await PersistDomainEventAsync(completed);
+        await ScheduleWorkflowScheduleProvisioningIfReadyAsync();
         await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Succeeded);
     }
 
@@ -315,6 +355,12 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         failed.MemberId = State.MemberId;
         failed.ScopeId = State.ScopeId;
         await PersistDomainEventAsync(failed);
+        if (ShouldFailScheduleProvisioningForBindingRun(evt.BindingRunId))
+        {
+            await FailWorkflowScheduleProvisioningAsync(
+                evt.Failure?.Code ?? "workflow_binding_failed",
+                evt.Failure?.Message ?? "Workflow binding failed before schedule provisioning.");
+        }
         await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Failed);
     }
 
@@ -344,6 +390,191 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         }
 
         await PersistDomainEventAsync(evt);
+        await ScheduleWorkflowScheduleProvisioningIfReadyAsync();
+    }
+
+    [EventHandler(EndpointName = "requestWorkflowScheduleProvisioning")]
+    public async Task HandleWorkflowScheduleProvisioningRequested(
+        StudioMemberWorkflowScheduleProvisioningRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var intent = command.Intent ?? throw new InvalidOperationException("schedule provisioning intent is required.");
+        ValidateScheduleProvisioningIntent(intent);
+
+        var current = State.WorkflowScheduleProvisioning;
+        if (current?.Intent != null &&
+            string.Equals(current.Intent.ProvisioningId, intent.ProvisioningId, StringComparison.Ordinal))
+        {
+            if (!current.Intent.Equals(intent))
+                throw new InvalidOperationException("schedule provisioning intent payload conflict.");
+
+            if (CanRecoverScheduleProvisioning())
+                await ScheduleWorkflowScheduleProvisioningIfReadyAsync();
+            return;
+        }
+
+        var requested = command.Clone();
+        requested.RequestedAtUtc ??= Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        await PersistDomainEventAsync(requested);
+
+        if (HasConflictingActiveBindingRun(intent.BindingRunId))
+        {
+            await FailWorkflowScheduleProvisioningAsync(
+                "STUDIO_MEMBER_BINDING_RUN_ALREADY_ACTIVE",
+                "member already has an active binding run.");
+            return;
+        }
+
+        if (ShouldFailScheduleProvisioningForBindingRun(intent.BindingRunId))
+        {
+            await FailWorkflowScheduleProvisioningAsync(
+                State.Binding?.LastFailure?.Code ?? "workflow_binding_failed",
+                State.Binding?.LastFailure?.Message ?? "Workflow binding failed before schedule provisioning.");
+            return;
+        }
+
+        await ScheduleWorkflowScheduleProvisioningIfReadyAsync();
+    }
+
+    [EventHandler(EndpointName = "attemptWorkflowScheduleProvisioning", AllowSelfHandling = true)]
+    public async Task HandleWorkflowScheduleProvisioningAttemptRequested(
+        StudioMemberWorkflowScheduleProvisioningAttemptRequested command)
+    {
+        if (!CanAcceptScheduleProvisioningContinuation(command.ProvisioningId) ||
+            command.ObservedAttempt != State.WorkflowScheduleProvisioning!.AttemptCount ||
+            !IsTargetScheduleBindingObserved())
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (IsScheduleProvisioningDeadlineReached(now))
+        {
+            await FailWorkflowScheduleProvisioningAsync(
+                "workflow_schedule_provisioning_timeout",
+                "Workflow schedule provisioning did not complete before its deadline.");
+            return;
+        }
+
+        var provisioning = State.WorkflowScheduleProvisioning!;
+        if (provisioning.Intent.ScheduleMode == StudioMemberWorkflowScheduleMode.OneShotAtUtc &&
+            provisioning.ResolvedOneShotFireAtUtc == null)
+        {
+            var delaySeconds = provisioning.Intent.OneShotDelaySeconds > 0
+                ? provisioning.Intent.OneShotDelaySeconds
+                : 30;
+            await PersistDomainEventAsync(new StudioMemberWorkflowScheduleProvisioningTimingResolved
+            {
+                ProvisioningId = command.ProvisioningId,
+                OneShotFireAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(delaySeconds)),
+                ResolvedAtUtc = Timestamp.FromDateTimeOffset(now),
+            });
+            provisioning = State.WorkflowScheduleProvisioning!;
+        }
+
+        if (_scheduleProvisioningPort == null)
+        {
+            await FailWorkflowScheduleProvisioningAsync(
+                "workflow_schedule_provisioning_port_unavailable",
+                "Workflow schedule provisioning port is not registered.");
+            return;
+        }
+
+        var attempt = provisioning.AttemptCount + 1;
+        await PersistDomainEventAsync(new StudioMemberWorkflowScheduleProvisioningAttemptStarted
+        {
+            ProvisioningId = command.ProvisioningId,
+            Attempt = attempt,
+            StartedAtUtc = Timestamp.FromDateTimeOffset(now),
+        });
+
+        StudioMemberWorkflowScheduleProvisioningExecutionAccepted accepted;
+        try
+        {
+            accepted = await _scheduleProvisioningPort.ExecuteAsync(
+                Id,
+                State.WorkflowScheduleProvisioning!.Intent.Clone(),
+                State.WorkflowScheduleProvisioning.ResolvedOneShotFireAtUtc?.ToDateTimeOffset(),
+                attempt,
+                CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await PersistDomainEventAsync(new StudioMemberWorkflowScheduleProvisioningRetryDeferred
+            {
+                ProvisioningId = command.ProvisioningId,
+                Attempt = attempt,
+                FailureCode = "workflow_schedule_provisioning_dispatch_failed",
+                Detail = ex.GetType().Name,
+                DeferredAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            });
+            await ScheduleWorkflowScheduleProvisioningAttemptAsync(
+                ScheduleProvisioningRetryDelay,
+                CancellationToken.None);
+            return;
+        }
+
+        if (!string.Equals(accepted.ProvisioningId, command.ProvisioningId, StringComparison.Ordinal) ||
+            accepted.Attempt != attempt)
+        {
+            await FailWorkflowScheduleProvisioningAsync(
+                "workflow_schedule_provisioning_receipt_invalid",
+                "Workflow schedule provisioning execution receipt did not match the active attempt.");
+            return;
+        }
+        await ScheduleWorkflowScheduleProvisioningAttemptAsync(
+            ScheduleProvisioningAttemptWatchdogDelay,
+            CancellationToken.None);
+    }
+
+    [EventHandler(EndpointName = "deferWorkflowScheduleProvisioning", AllowSelfHandling = true)]
+    public async Task HandleWorkflowScheduleProvisioningRetryDeferred(
+        StudioMemberWorkflowScheduleProvisioningRetryDeferred continuation)
+    {
+        if (!CanAcceptScheduleProvisioningExecutionContinuation(
+                continuation.ProvisioningId,
+                continuation.Attempt))
+            return;
+
+        var deferred = continuation.Clone();
+        deferred.DeferredAtUtc ??= Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        await PersistDomainEventAsync(deferred);
+        if (IsScheduleProvisioningDeadlineReached(DateTimeOffset.UtcNow))
+        {
+            await FailWorkflowScheduleProvisioningAsync(
+                "workflow_schedule_provisioning_timeout",
+                continuation.Detail);
+            return;
+        }
+
+        await ScheduleWorkflowScheduleProvisioningAttemptAsync(ScheduleProvisioningRetryDelay);
+    }
+
+    [EventHandler(EndpointName = "completeWorkflowScheduleProvisioning", AllowSelfHandling = true)]
+    public async Task HandleWorkflowScheduleProvisioningSucceeded(
+        StudioMemberWorkflowScheduleProvisioningSucceeded continuation)
+    {
+        if (!CanAcceptScheduleProvisioningExecutionContinuation(
+                continuation.ProvisioningId,
+                continuation.Attempt))
+            return;
+        if (string.IsNullOrWhiteSpace(continuation.ScheduleId))
+            throw new InvalidOperationException("schedule_id is required for provisioning success.");
+
+        var completed = continuation.Clone();
+        completed.CompletedAtUtc ??= Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        await PersistDomainEventAsync(completed);
+    }
+
+    [EventHandler(EndpointName = "failWorkflowScheduleProvisioning", AllowSelfHandling = true)]
+    public async Task HandleWorkflowScheduleProvisioningFailed(
+        StudioMemberWorkflowScheduleProvisioningFailed continuation)
+    {
+        if (!CanAcceptScheduleProvisioningExecutionContinuation(
+                continuation.ProvisioningId,
+                continuation.Attempt))
+            return;
+        await PersistDomainEventAsync(continuation);
     }
 
     /// <summary>
@@ -544,6 +775,12 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             .On<StudioMemberBindingCompletedEvent>(ApplyBindingCompleted)
             .On<StudioMemberBindingFailedEvent>(ApplyBindingFailed)
             .On<StudioMemberPublishedBindingRecordedEvent>(ApplyPublishedBindingRecorded)
+            .On<StudioMemberWorkflowScheduleProvisioningRequested>(ApplyWorkflowScheduleProvisioningRequested)
+            .On<StudioMemberWorkflowScheduleProvisioningTimingResolved>(ApplyWorkflowScheduleProvisioningTimingResolved)
+            .On<StudioMemberWorkflowScheduleProvisioningAttemptStarted>(ApplyWorkflowScheduleProvisioningAttemptStarted)
+            .On<StudioMemberWorkflowScheduleProvisioningRetryDeferred>(ApplyWorkflowScheduleProvisioningRetryDeferred)
+            .On<StudioMemberWorkflowScheduleProvisioningSucceeded>(ApplyWorkflowScheduleProvisioningSucceeded)
+            .On<StudioMemberWorkflowScheduleProvisioningFailed>(ApplyWorkflowScheduleProvisioningFailed)
             .On<StudioMemberReassignedEvent>(ApplyReassigned)
             .On<StudioMemberDeletedEvent>(ApplyDeleted)
             .OrCurrent();
@@ -791,6 +1028,114 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         return next;
     }
 
+    private static StudioMemberState ApplyWorkflowScheduleProvisioningRequested(
+        StudioMemberState state,
+        StudioMemberWorkflowScheduleProvisioningRequested evt)
+    {
+        var requestedAt = evt.RequestedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        var next = state.Clone();
+        next.WorkflowScheduleProvisioning = new StudioMemberWorkflowScheduleProvisioningState
+        {
+            Intent = evt.Intent?.Clone(),
+            Status = StudioMemberWorkflowScheduleProvisioningStatus.PendingBinding,
+            RequestedAtUtc = requestedAt,
+            UpdatedAtUtc = requestedAt,
+            DeadlineAtUtc = Timestamp.FromDateTimeOffset(
+                requestedAt.ToDateTimeOffset().Add(ScheduleProvisioningBudget)),
+        };
+        next.UpdatedAtUtc = requestedAt;
+        return next;
+    }
+
+    private static StudioMemberState ApplyWorkflowScheduleProvisioningTimingResolved(
+        StudioMemberState state,
+        StudioMemberWorkflowScheduleProvisioningTimingResolved evt)
+    {
+        if (!IsCurrentScheduleProvisioning(state, evt.ProvisioningId))
+            return state;
+
+        var next = state.Clone();
+        next.WorkflowScheduleProvisioning.ResolvedOneShotFireAtUtc = evt.OneShotFireAtUtc;
+        next.WorkflowScheduleProvisioning.UpdatedAtUtc = evt.ResolvedAtUtc;
+        next.UpdatedAtUtc = evt.ResolvedAtUtc;
+        return next;
+    }
+
+    private static StudioMemberState ApplyWorkflowScheduleProvisioningAttemptStarted(
+        StudioMemberState state,
+        StudioMemberWorkflowScheduleProvisioningAttemptStarted evt)
+    {
+        if (!IsCurrentScheduleProvisioning(state, evt.ProvisioningId))
+            return state;
+
+        var next = state.Clone();
+        next.WorkflowScheduleProvisioning.Status = StudioMemberWorkflowScheduleProvisioningStatus.Provisioning;
+        next.WorkflowScheduleProvisioning.AttemptCount = evt.Attempt;
+        next.WorkflowScheduleProvisioning.AttemptInFlight = true;
+        next.WorkflowScheduleProvisioning.Failure = null;
+        next.WorkflowScheduleProvisioning.UpdatedAtUtc = evt.StartedAtUtc;
+        next.UpdatedAtUtc = evt.StartedAtUtc;
+        return next;
+    }
+
+    private static StudioMemberState ApplyWorkflowScheduleProvisioningRetryDeferred(
+        StudioMemberState state,
+        StudioMemberWorkflowScheduleProvisioningRetryDeferred evt)
+    {
+        if (!IsCurrentScheduleProvisioning(state, evt.ProvisioningId))
+            return state;
+
+        var deferredAt = evt.DeferredAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        var next = state.Clone();
+        next.WorkflowScheduleProvisioning.Status = StudioMemberWorkflowScheduleProvisioningStatus.RetryPending;
+        next.WorkflowScheduleProvisioning.AttemptInFlight = false;
+        next.WorkflowScheduleProvisioning.Failure = new StudioMemberWorkflowScheduleProvisioningFailure
+        {
+            Code = evt.FailureCode,
+            Message = evt.Detail,
+            FailedAtUtc = deferredAt,
+        };
+        next.WorkflowScheduleProvisioning.UpdatedAtUtc = deferredAt;
+        next.UpdatedAtUtc = deferredAt;
+        return next;
+    }
+
+    private static StudioMemberState ApplyWorkflowScheduleProvisioningSucceeded(
+        StudioMemberState state,
+        StudioMemberWorkflowScheduleProvisioningSucceeded evt)
+    {
+        if (!IsCurrentScheduleProvisioning(state, evt.ProvisioningId))
+            return state;
+
+        var completedAt = evt.CompletedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        var next = state.Clone();
+        next.WorkflowScheduleProvisioning.Status = StudioMemberWorkflowScheduleProvisioningStatus.Succeeded;
+        next.WorkflowScheduleProvisioning.AttemptInFlight = false;
+        next.WorkflowScheduleProvisioning.ScheduleId = evt.ScheduleId;
+        next.WorkflowScheduleProvisioning.OperationId = evt.OperationId;
+        next.WorkflowScheduleProvisioning.Failure = null;
+        next.WorkflowScheduleProvisioning.UpdatedAtUtc = completedAt;
+        next.UpdatedAtUtc = completedAt;
+        return next;
+    }
+
+    private static StudioMemberState ApplyWorkflowScheduleProvisioningFailed(
+        StudioMemberState state,
+        StudioMemberWorkflowScheduleProvisioningFailed evt)
+    {
+        if (!IsCurrentScheduleProvisioning(state, evt.ProvisioningId))
+            return state;
+
+        var failedAt = evt.Failure?.FailedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        var next = state.Clone();
+        next.WorkflowScheduleProvisioning.Status = StudioMemberWorkflowScheduleProvisioningStatus.Failed;
+        next.WorkflowScheduleProvisioning.AttemptInFlight = false;
+        next.WorkflowScheduleProvisioning.Failure = evt.Failure?.Clone();
+        next.WorkflowScheduleProvisioning.UpdatedAtUtc = failedAt;
+        next.UpdatedAtUtc = failedAt;
+        return next;
+    }
+
     private static bool TryBuildDeleteBindingFailure(
         StudioMemberState state,
         Timestamp deletedAt,
@@ -944,6 +1289,191 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
                 Status = status,
                 AcknowledgedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             });
+
+    private async Task SendBindingRejectionAsync(
+        string runActorId,
+        StudioMemberBindingRejectedEvent rejection)
+    {
+        await FailWorkflowScheduleProvisioningForBindingRejectionAsync(rejection);
+        await SendToAsync(runActorId, rejection);
+    }
+
+    private Task FailWorkflowScheduleProvisioningForBindingRejectionAsync(
+        StudioMemberBindingRejectedEvent rejection)
+    {
+        var intent = State.WorkflowScheduleProvisioning?.Intent;
+        if (!CanRecoverScheduleProvisioning() ||
+            !string.Equals(intent?.BindingRunId, rejection.BindingRunId, StringComparison.Ordinal))
+        {
+            return Task.CompletedTask;
+        }
+
+        return FailWorkflowScheduleProvisioningAsync(
+            rejection.Failure?.Code ?? "workflow_binding_rejected",
+            rejection.Failure?.Message ?? "Workflow binding was rejected before schedule provisioning.");
+    }
+
+    private void ValidateScheduleProvisioningIntent(
+        StudioMemberWorkflowScheduleProvisioningIntent intent)
+    {
+        if (State.Deleted)
+            throw new InvalidOperationException("member has been deleted.");
+        if (State.ImplementationKind != StudioMemberImplementationKind.Workflow)
+            throw new InvalidOperationException("schedule provisioning requires a workflow member.");
+        if (string.IsNullOrWhiteSpace(intent.ProvisioningId) ||
+            !string.Equals(intent.ScopeId, State.ScopeId, StringComparison.Ordinal) ||
+            !string.Equals(intent.MemberId, State.MemberId, StringComparison.Ordinal) ||
+            !string.Equals(intent.PublishedServiceId, State.PublishedServiceId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("schedule provisioning target does not match member authority state.");
+        }
+        if (!State.HasTeamId || !string.Equals(intent.TeamId, State.TeamId, StringComparison.Ordinal))
+            throw new InvalidOperationException("schedule provisioning team does not match member authority state.");
+        if (string.IsNullOrWhiteSpace(intent.WorkflowId) ||
+            string.IsNullOrWhiteSpace(intent.RevisionId) ||
+            intent.Owner == null ||
+            string.IsNullOrWhiteSpace(intent.Owner.Authority) ||
+            string.IsNullOrWhiteSpace(intent.Owner.OwnerSubject) ||
+            string.IsNullOrWhiteSpace(intent.SubjectPlatform) ||
+            string.IsNullOrWhiteSpace(intent.SubjectExternalUserId) ||
+            string.IsNullOrWhiteSpace(intent.VerifiedBindingId))
+        {
+            throw new InvalidOperationException("schedule provisioning intent is incomplete.");
+        }
+        if (intent.ScheduleMode == StudioMemberWorkflowScheduleMode.RecurringCron &&
+            string.IsNullOrWhiteSpace(intent.CronExpression))
+        {
+            throw new InvalidOperationException("recurring schedule provisioning requires cron_expression.");
+        }
+        if (intent.ScheduleMode == StudioMemberWorkflowScheduleMode.OneShotAtUtc &&
+            intent.OneShotDelaySeconds <= 0)
+        {
+            throw new InvalidOperationException("one-shot schedule provisioning requires a positive delay.");
+        }
+        if (intent.ScheduleMode == StudioMemberWorkflowScheduleMode.Unspecified)
+            throw new InvalidOperationException("schedule provisioning mode is required.");
+    }
+
+    private bool CanRecoverScheduleProvisioning()
+    {
+        var provisioning = State.WorkflowScheduleProvisioning;
+        return !State.Deleted &&
+               provisioning?.Intent != null &&
+               provisioning.Status is
+                   StudioMemberWorkflowScheduleProvisioningStatus.PendingBinding or
+                   StudioMemberWorkflowScheduleProvisioningStatus.Provisioning or
+                   StudioMemberWorkflowScheduleProvisioningStatus.RetryPending;
+    }
+
+    private bool CanAcceptScheduleProvisioningContinuation(string provisioningId) =>
+        CanRecoverScheduleProvisioning() &&
+        string.Equals(
+            State.WorkflowScheduleProvisioning!.Intent.ProvisioningId,
+            provisioningId,
+            StringComparison.Ordinal);
+
+    private bool CanAcceptScheduleProvisioningExecutionContinuation(
+        string provisioningId,
+        int attempt) =>
+        CanAcceptScheduleProvisioningContinuation(provisioningId) &&
+        State.WorkflowScheduleProvisioning!.AttemptInFlight &&
+        State.WorkflowScheduleProvisioning.AttemptCount == attempt;
+
+    private static bool IsCurrentScheduleProvisioning(
+        StudioMemberState state,
+        string provisioningId) =>
+        state.WorkflowScheduleProvisioning?.Intent != null &&
+        string.Equals(
+            state.WorkflowScheduleProvisioning.Intent.ProvisioningId,
+            provisioningId,
+            StringComparison.Ordinal);
+
+    private bool IsTargetScheduleBindingObserved()
+    {
+        var intent = State.WorkflowScheduleProvisioning?.Intent;
+        var binding = State.LastBinding;
+        return intent != null &&
+               binding != null &&
+               string.Equals(binding.PublishedServiceId, intent.PublishedServiceId, StringComparison.Ordinal) &&
+               string.Equals(binding.RevisionId, intent.RevisionId, StringComparison.Ordinal);
+    }
+
+    private bool ShouldFailScheduleProvisioningForBindingRun(string? bindingRunId)
+    {
+        var intent = State.WorkflowScheduleProvisioning?.Intent;
+        var binding = State.Binding;
+        return intent != null &&
+               !string.IsNullOrWhiteSpace(intent.BindingRunId) &&
+               string.Equals(intent.BindingRunId, bindingRunId, StringComparison.Ordinal) &&
+               binding != null &&
+               string.Equals(binding.CurrentBindingRunId, bindingRunId, StringComparison.Ordinal) &&
+               binding.CurrentStatus is StudioMemberBindingRunStatus.Failed or StudioMemberBindingRunStatus.Rejected;
+    }
+
+    private bool HasConflictingActiveBindingRun(string? bindingRunId)
+    {
+        var binding = State.Binding;
+        return binding != null &&
+               !string.IsNullOrWhiteSpace(binding.CurrentBindingRunId) &&
+               !string.Equals(binding.CurrentBindingRunId, bindingRunId, StringComparison.Ordinal) &&
+               !IsTerminalBindingStatus(binding.CurrentStatus);
+    }
+
+    private async Task ScheduleWorkflowScheduleProvisioningIfReadyAsync(
+        CancellationToken ct = default)
+    {
+        if (!CanRecoverScheduleProvisioning())
+            return;
+        if (!IsTargetScheduleBindingObserved())
+            return;
+
+        await ScheduleWorkflowScheduleProvisioningAttemptAsync(
+            ScheduleProvisioningInitialDelay,
+            ct);
+    }
+
+    private Task ScheduleWorkflowScheduleProvisioningAttemptAsync(
+        TimeSpan dueTime,
+        CancellationToken ct = default)
+    {
+        var provisioningId = State.WorkflowScheduleProvisioning?.Intent?.ProvisioningId;
+        if (string.IsNullOrWhiteSpace(provisioningId))
+            return Task.CompletedTask;
+
+        return ScheduleSelfDurableTimeoutAsync(
+            $"studio-member-workflow-schedule-provisioning:{provisioningId}",
+            dueTime,
+            new StudioMemberWorkflowScheduleProvisioningAttemptRequested
+            {
+                ProvisioningId = provisioningId,
+                ObservedAttempt = State.WorkflowScheduleProvisioning!.AttemptCount,
+            },
+            ct: ct);
+    }
+
+    private bool IsScheduleProvisioningDeadlineReached(DateTimeOffset now)
+    {
+        var deadline = State.WorkflowScheduleProvisioning?.DeadlineAtUtc;
+        return deadline != null && now >= deadline.ToDateTimeOffset();
+    }
+
+    private Task FailWorkflowScheduleProvisioningAsync(string code, string message)
+    {
+        var provisioningId = State.WorkflowScheduleProvisioning?.Intent?.ProvisioningId;
+        if (string.IsNullOrWhiteSpace(provisioningId))
+            return Task.CompletedTask;
+
+        return PersistDomainEventAsync(new StudioMemberWorkflowScheduleProvisioningFailed
+        {
+            ProvisioningId = provisioningId,
+            Failure = new StudioMemberWorkflowScheduleProvisioningFailure
+            {
+                Code = string.IsNullOrWhiteSpace(code) ? "workflow_schedule_provisioning_failed" : code,
+                Message = message ?? string.Empty,
+                FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        });
+    }
 
     private static int CompareTimestamp(Timestamp? left, Timestamp? right)
     {

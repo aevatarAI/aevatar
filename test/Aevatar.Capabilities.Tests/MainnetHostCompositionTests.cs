@@ -60,11 +60,13 @@ using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.Mainnet.Host.Api.AgentProfiles;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.Mainnet.Host.Api.Responses;
+using Aevatar.Mainnet.Host.Api.Skills;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Scripting.Projection.ReadModels;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Hosting;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -137,6 +139,35 @@ public sealed class MainnetHostCompositionTests
         builder.Services.Should().ContainSingle(descriptor =>
             descriptor.ServiceType == typeof(IAgentToolSource) &&
             descriptor.ImplementationType == typeof(BindingAgentToolSource));
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldResolveWorkflowScheduleProvisioningComposition()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        using var runtimeProvider = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__Provider", "InMemory");
+        using var secretStoreBackend = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__SecretStoreBackend", "InMemory");
+        var builder = CreateBuilder();
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+
+        app.Services.GetRequiredService<IStudioWorkflowScheduleProvisioningCommandPort>()
+            .Should().NotBeNull();
+        app.Services.GetRequiredService<IStudioWorkflowScheduleProvisioningExecutor>()
+            .Should().BeOfType<StudioWorkflowScheduleProvisioningExecutor>();
+        app.Services.GetRequiredService<IWorkflowScheduleProvisioningPort>()
+            .Should().BeOfType<WorkflowScheduleProvisioningPort>();
+        app.Services.GetRequiredService<IUserSkillRunService>()
+            .Should().BeOfType<UserSkillRunService>();
+        app.Services.GetRequiredService<ISkillWorkflowConfirmationPort>()
+            .Should().NotBeOfType<NoOpSkillWorkflowConfirmationPort>();
     }
 
     [Fact]
