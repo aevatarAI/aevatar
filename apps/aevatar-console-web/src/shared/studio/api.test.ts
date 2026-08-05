@@ -254,6 +254,55 @@ describe('studioApi host-session requests', () => {
     expect(settings).not.toHaveProperty('routeFallbackActive');
   });
 
+  it('decodes an omitted model selection for the system default route', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        savedSelection: {
+          routeKind: 'unspecified',
+          routeValue: '',
+          nyxIdUserServiceId: '',
+          serviceSlugSnapshot: '',
+        },
+        savedRouteLabel: 'System default',
+        selectionStatus: 'system_default',
+        catalogDiagnostic: 'unspecified',
+        remediation: 'none',
+        catalogStatus: 'ready',
+        capabilities: {
+          canEditRoute: true,
+          canEditModel: true,
+          canSave: true,
+          canRetryCatalog: false,
+        },
+        routeOptions: [],
+        modelGroupsByRoute: [],
+        setupHint: null,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(studioApi.getUserLlmSettings()).resolves.toMatchObject({
+      savedSelection: {
+        routeKind: 'unspecified',
+        modelSelection: { kind: 'unspecified' },
+      },
+      selectionStatus: 'system_default',
+    });
+  });
+
   it('rejects an unknown LLM selection enum at the adapter boundary', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,

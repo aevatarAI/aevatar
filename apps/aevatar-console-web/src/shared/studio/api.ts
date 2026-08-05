@@ -586,10 +586,13 @@ function decodeStudioLlmSelection(
 ): StudioLlmSelection {
   const record = expectRecord(value, label);
   const routeKind = readString(record, "routeKind", `${label}.routeKind`);
-  const modelSelection = decodeStudioLlmModelSelection(
-    record.modelSelection,
-    `${label}.modelSelection`,
-  );
+  const modelSelection: StudioLlmModelSelection =
+    routeKind === "unspecified" && record.modelSelection == null
+      ? { kind: "unspecified" }
+      : decodeStudioLlmModelSelection(
+          record.modelSelection,
+          `${label}.modelSelection`,
+        );
   switch (routeKind) {
     case "unspecified":
       if (modelSelection.kind !== "unspecified") {
