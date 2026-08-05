@@ -81,14 +81,13 @@ internal sealed class NyxIdManagedCodexChronoTransport(
             _timeProvider);
         using var requestDeadline =
             CancellationTokenSource.CreateLinkedTokenSource(ct, lifecycleTimeout.Token);
-        var response = await secret.UseAsync(rawKey => _clientFactory.CreateClient().ProxyRequestBoundedAsync(
+        var response = await secret.UseAsync(rawKey => _clientFactory.CreateClient().ProxyRequestBoundedWithApiKeyAsync(
                 rawKey,
                 ManagedCodexOptions.ChronoSandboxServiceSlug,
                 credential.ChronoSandboxUserServiceId,
                 ManagedCodexOptions.ChronoExecutionPath,
                 HttpMethod.Post.Method,
                 body,
-                extraHeaders: null,
                 _options.MaxResponseBytes,
                 requestDeadline.Token))
             .ConfigureAwait(false);

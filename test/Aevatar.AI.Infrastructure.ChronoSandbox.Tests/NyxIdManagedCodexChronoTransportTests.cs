@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.CodexExecution;
@@ -46,8 +45,8 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         result.DiagnosticId.Should().Be("chrono-1");
         handler.PathAndQuery.Should().Be(
             "/api/v1/proxy/s/chrono-sandbox/codex/execute?_nyxid_via=us-sandbox");
-        handler.Authorization.Should().Be(new AuthenticationHeaderValue("Bearer", RawKey).ToString());
-        handler.Authorization.Should().NotContain(InteractiveBearer);
+        handler.Authorization.Should().BeNull();
+        handler.ApiKeys.Should().Equal(RawKey);
         using var body = JsonDocument.Parse(handler.Body!);
         body.RootElement.EnumerateObject().Select(static property => property.Name)
             .Should().Equal("prompt", "timeout_secs", "workspace");
@@ -378,6 +377,7 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         public string? Path { get; private set; }
         public string? PathAndQuery { get; private set; }
         public string? Authorization { get; private set; }
+        public IReadOnlyList<string> ApiKeys { get; private set; } = [];
         public string? Body { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(
@@ -388,6 +388,9 @@ public sealed class NyxIdManagedCodexChronoTransportTests
             Path = request.RequestUri?.AbsolutePath;
             PathAndQuery = request.RequestUri?.PathAndQuery;
             Authorization = request.Headers.Authorization?.ToString();
+            ApiKeys = request.Headers.TryGetValues("X-API-Key", out var apiKeys)
+                ? apiKeys.ToArray()
+                : [];
             Body = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
