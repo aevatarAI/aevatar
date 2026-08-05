@@ -35,10 +35,11 @@ internal static class StudioExplicitRequestAdmissionTestKit
         """;
 
     public static StudioWorkflowCapabilityAdmissionTestService CreateAdmissionService(
-        NyxIdOperationRisk currentRisk = NyxIdOperationRisk.ReadOnly)
+        NyxIdOperationRisk currentRisk = NyxIdOperationRisk.ReadOnly,
+        Func<bool>? durableCatalogReady = null)
     {
         var readiness = new ExternalWorkflowCapabilityReadinessService(
-            [new ExplicitRequestSource(currentRisk)]);
+            [new ExplicitRequestSource(currentRisk, durableCatalogReady)]);
         var inner = new WorkflowExternalCapabilityAdmissionService(
             new RealWorkflowDefinitionParser(),
             readiness,
@@ -143,7 +144,9 @@ internal static class StudioExplicitRequestAdmissionTestKit
             throw new NotSupportedException();
     }
 
-    private sealed class ExplicitRequestSource(NyxIdOperationRisk currentRisk) :
+    private sealed class ExplicitRequestSource(
+        NyxIdOperationRisk currentRisk,
+        Func<bool>? durableCatalogReady) :
         IExternalWorkflowCapabilitySource
     {
         public ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind =>
@@ -202,6 +205,21 @@ internal static class StudioExplicitRequestAdmissionTestKit
                 FreshUntil = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now.AddMinutes(5)),
                 ContentDigest = "keys-digest-alpha",
             });
+            if (executionMode != ExternalCapabilityExecutionMode.Durable)
+                return Task.FromResult(result);
+
+            if (durableCatalogReady?.Invoke() == false)
+            {
+                result.Status = ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable;
+                result.Blockers.Add(new ExternalCapabilityBlocker
+                {
+                    Status = ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
+                    Code = "DURABLE_AUTHORIZATION_UNAVAILABLE",
+                    SafeMessage = "The current authorization catalog does not prove this durable grant.",
+                });
+                return Task.FromResult(result);
+            }
+
             result.Sources.Add(new ExternalCapabilitySourceStamp
             {
                 SourceKind = ExternalCapabilitySourceKind.DurableAuthorizationCatalog,

@@ -76,7 +76,8 @@ internal sealed class StudioWorkflowProvisioningAdmissionService
                     ExternalCapabilityExecutionMode.Interactive,
                     admissionRequest.ExplicitRequestConfirmations,
                     admissionRequest.WorkflowId,
-                    admissionRequest.RevisionId),
+                    admissionRequest.RevisionId,
+                    explicitRequestGrantMode: ExternalCapabilityExecutionMode.Durable),
                 ct);
             if (!TryResolveDurableRequiredServices(interactivePlan, out var requiredServices))
                 throw;

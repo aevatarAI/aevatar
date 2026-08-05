@@ -58,13 +58,15 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
         ExternalCapabilityExecutionMode executionMode,
         IEnumerable<NyxIdExplicitRequestConfirmation>? explicitRequestConfirmations = null,
         string? workflowId = null,
-        string? revisionId = null)
+        string? revisionId = null,
+        ExternalCapabilityExecutionMode? explicitRequestGrantMode = null)
     {
         Access = access ?? throw new ArgumentNullException(nameof(access));
         WorkflowYaml = workflowYaml ?? string.Empty;
         InlineWorkflowYamls = inlineWorkflowYamls ?? new Dictionary<string, string>();
         SourceKind = sourceKind?.Trim() ?? string.Empty;
         ExecutionMode = executionMode;
+        ExplicitRequestGrantMode = explicitRequestGrantMode ?? executionMode;
         ExplicitRequestConfirmations = CloneConfirmations(explicitRequestConfirmations);
         WorkflowId = NormalizeOptional(workflowId);
         RevisionId = NormalizeOptional(revisionId);
@@ -79,6 +81,8 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
     public string SourceKind { get; }
 
     public ExternalCapabilityExecutionMode ExecutionMode { get; }
+
+    public ExternalCapabilityExecutionMode ExplicitRequestGrantMode { get; }
 
     public IReadOnlyList<NyxIdExplicitRequestConfirmation> ExplicitRequestConfirmations { get; }
 
@@ -95,7 +99,8 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
         ExternalCapabilityExecutionMode executionMode,
         IEnumerable<NyxIdExplicitRequestConfirmation>? explicitRequestConfirmations = null,
         string? workflowId = null,
-        string? revisionId = null)
+        string? revisionId = null,
+        ExternalCapabilityExecutionMode? explicitRequestGrantMode = null)
     {
         ArgumentNullException.ThrowIfNull(workflowYamls);
         if (workflowYamls.Count == 0)
@@ -109,14 +114,15 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
             executionMode,
             explicitRequestConfirmations,
             workflowId,
-            revisionId)
+            revisionId,
+            explicitRequestGrantMode)
         {
             WorkflowYamls = workflowYamls.ToArray(),
         };
     }
 
     public override string ToString() =>
-        $"{nameof(WorkflowExternalCapabilityAdmissionRequest)} {{ Access = {Access}, SourceKind = {SourceKind}, ExecutionMode = {ExecutionMode}, Definition = [REDACTED] }}";
+        $"{nameof(WorkflowExternalCapabilityAdmissionRequest)} {{ Access = {Access}, SourceKind = {SourceKind}, ExecutionMode = {ExecutionMode}, ExplicitRequestGrantMode = {ExplicitRequestGrantMode}, Definition = [REDACTED] }}";
 
     private static IReadOnlyList<NyxIdExplicitRequestConfirmation> CloneConfirmations(
         IEnumerable<NyxIdExplicitRequestConfirmation>? confirmations) =>

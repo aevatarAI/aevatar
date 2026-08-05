@@ -30,6 +30,14 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
         ArgumentNullException.ThrowIfNull(request);
         if (request.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified)
             throw new InvalidOperationException("External capability execution mode is required.");
+        if (request.ExplicitRequestGrantMode == ExternalCapabilityExecutionMode.Unspecified)
+            throw new InvalidOperationException("Explicit request grant mode is required.");
+        if (request.ExecutionMode == ExternalCapabilityExecutionMode.Durable &&
+            request.ExplicitRequestGrantMode != ExternalCapabilityExecutionMode.Durable)
+        {
+            throw new InvalidOperationException(
+                "Durable execution requires a durable explicit request grant mode.");
+        }
 
         var definition = await ParseDefinitionAsync(
             request.WorkflowYaml,
@@ -173,7 +181,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
                 "NYXID_EXPLICIT_REQUEST_CONFIRMATION_RISK_MISMATCH",
                 "The explicit request risk confirmation does not satisfy the request method policy.");
         }
-        if (request.ExecutionMode == ExternalCapabilityExecutionMode.Durable &&
+        if (request.ExplicitRequestGrantMode == ExternalCapabilityExecutionMode.Durable &&
             capability.NyxIdUserRequest.ExecutionPolicy?.Risk is
                 NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive)
         {
@@ -183,6 +191,16 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
                 request.ExecutionMode,
                 "NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED",
                 "This explicit request can only be admitted for interactive execution.");
+        }
+        if (capability.NyxIdUserRequest.ExecutionPolicy?.AllowedExecutionModes.Contains(
+                request.ExplicitRequestGrantMode) != true)
+        {
+            throw ExplicitRequestConfirmationFailure(
+                invocation,
+                capability,
+                request.ExecutionMode,
+                "NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED",
+                "The current explicit request capability does not allow the requested grant mode.");
         }
         if (string.IsNullOrWhiteSpace(request.Access.CallerId))
         {
@@ -206,7 +224,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             RevisionId = request.RevisionId!,
         };
         grant.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
-        if (request.ExecutionMode == ExternalCapabilityExecutionMode.Durable)
+        if (request.ExplicitRequestGrantMode == ExternalCapabilityExecutionMode.Durable)
             grant.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Durable);
 
         var admittedCapability = capability.Clone();

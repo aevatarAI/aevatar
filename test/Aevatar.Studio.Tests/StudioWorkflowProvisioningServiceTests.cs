@@ -237,6 +237,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
             ExternalCapabilityExecutionMode.Durable,
             ExternalCapabilityExecutionMode.Interactive,
             ExternalCapabilityExecutionMode.Durable);
+        admission.Requests.Select(static request => request.ExplicitRequestGrantMode).Should().Equal(
+            ExternalCapabilityExecutionMode.Durable,
+            ExternalCapabilityExecutionMode.Durable,
+            ExternalCapabilityExecutionMode.Durable);
         refresh.Owner.Should().BeEquivalentTo(owner.Owner);
         refresh.BearerToken.Should().Be("runtime-caller-credential");
         refresh.Request!.RequiredServices.Should().ContainSingle()
@@ -244,6 +248,72 @@ public sealed class StudioWorkflowProvisioningServiceTests
         visibility.Owner.Should().BeEquivalentTo(owner.Owner);
         visibility.RequiredStateVersion.Should().Be(31);
         member.CreateInvoked.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenRealAdmissionNeedsCatalogPreparation_ShouldRefreshAndReadmitDurable()
+    {
+        var catalogReady = false;
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService(
+            durableCatalogReady: () => catalogReady);
+        var refresh = new RecordingCatalogRefreshPort(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(31))
+        {
+            OnRefresh = () => catalogReady = true,
+        };
+        var visibility = new RecordingCatalogVisibilityPort(new NyxIdAuthorizationCatalogVisibilityResult(
+            NyxIdAuthorizationCatalogVisibilityStatus.Ready,
+            31,
+            31,
+            string.Empty));
+        var owner = new AuthenticatedAuthorizationOwnerContext(
+            new AuthorizationOwnerIdentity
+            {
+                Authority = NyxIdAuthorizationAuthorities.NyxId,
+                OwnerKind = AuthorizationOwnerKind.Personal,
+                OwnerSubject = StudioExplicitRequestAdmissionTestKit.CallerId,
+            },
+            "nyxid",
+            string.Empty,
+            StudioExplicitRequestAdmissionTestKit.CallerId,
+            "binding-alpha");
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            new RecordingBindingPort(member, WorkflowId, RevisionId),
+            new RecordingWorkflowSchedulePort(schedule),
+            admission,
+            new FakeTimeProvider(),
+            refresh,
+            visibility);
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+            {
+                TeamId = TeamId,
+                AuthenticatedOwner = owner,
+                ProvisioningBearerToken = "runtime-caller-credential",
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(string.Empty, string.Empty)],
+                    ExternalCapabilityExecutionMode.Durable),
+            });
+
+        admission.Requests.Select(static request => request.ExecutionMode).Should().Equal(
+            ExternalCapabilityExecutionMode.Durable,
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable);
+        admission.Requests.Select(static request => request.ExplicitRequestGrantMode).Should().Equal(
+            ExternalCapabilityExecutionMode.Durable,
+            ExternalCapabilityExecutionMode.Durable,
+            ExternalCapabilityExecutionMode.Durable);
+        refresh.Request!.RequiredServices.Should().ContainSingle()
+            .Which.UserServiceId.Should().Be("usvc-alpha");
+        member.BindRequest!.Workflow!.CapabilityAdmissionPlan!.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Durable);
+        schedule.Ensured.Should().BeTrue();
     }
 
     [Fact]
@@ -1534,6 +1604,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
     private sealed class RecordingCatalogRefreshPort(NyxIdAuthorizationCatalogRefreshResult result) :
         INyxIdAuthorizationCatalogRefreshPort
     {
+        public Action? OnRefresh { get; init; }
         public AuthorizationOwnerIdentity? Owner { get; private set; }
         public string? BearerToken { get; private set; }
         public NyxIdAuthorizationCatalogRefreshRequest? Request { get; private set; }
@@ -1553,6 +1624,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             Owner = owner.Clone();
             BearerToken = bearerToken;
             Request = request;
+            OnRefresh?.Invoke();
             return Task.FromResult(result);
         }
 
