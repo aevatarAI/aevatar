@@ -140,12 +140,13 @@ public sealed class HealthProbeStartupServiceTests
     }
 
     [Fact]
-    public void Source_ShouldNotOwnProjectionActivationOrSleepRetry()
+    public void Source_ShouldNotOwnProjectionLifecycleOrSleepRetry()
     {
         var source = StripLineComments(File.ReadAllText(GetProductionSourcePath()));
 
         source.Should().NotContain("EnsureProjectionForActorAsync");
         source.Should().NotContain("HealthProbeProjectionPort");
+        source.Should().NotContain("ProjectionScope");
         source.Should().NotContain(string.Concat("Task", ".Delay"));
     }
 
