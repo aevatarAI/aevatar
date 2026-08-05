@@ -1,29 +1,40 @@
-import { screen, waitFor } from "@testing-library/react";
-import * as React from "react";
+import { screen, waitFor } from '@testing-library/react';
+import * as React from 'react';
 import {
   cleanupTestQueryClients,
   renderWithQueryClient,
-} from "../../../../tests/reactQueryTestUtils";
-import ActivityPage from "./ActivityPage";
+} from '../../../../tests/reactQueryTestUtils';
+import ActivityPage from './ActivityPage';
 
-let mockSearch = "";
+let mockSearch = '';
 
-jest.mock("@umijs/max", () => ({
+jest.mock('@umijs/max', () => ({
   getIntl: () => ({
-    formatMessage: ({ defaultMessage, id }: { defaultMessage?: string; id: string }) =>
-      defaultMessage ?? id,
+    formatMessage: (
+      { defaultMessage, id }: { defaultMessage?: string; id: string },
+      values?: Record<string, unknown>,
+    ) =>
+      (defaultMessage ?? id).replace(
+        /\{(\w+)\}/g,
+        (_match: string, key: string) => String(values?.[key] ?? ''),
+      ),
   }),
-  getLocale: () => "en-US",
+  getLocale: () => 'en-US',
   history: {},
   setLocale: jest.fn(),
   useIntl: () => ({
-    formatMessage: ({ defaultMessage, id }: { defaultMessage?: string; id: string }) =>
-      defaultMessage ?? id,
+    formatMessage: ({
+      defaultMessage,
+      id,
+    }: {
+      defaultMessage?: string;
+      id: string;
+    }) => defaultMessage ?? id,
   }),
   useModel: () => ({ initialState: { auth: { authenticated: true } } }),
 }));
 
-jest.mock("@/shared/api/workflowActivityApi", () => {
+jest.mock('@/shared/api/workflowActivityApi', () => {
   class WorkflowActivityApiError extends Error {
     status: number;
 
@@ -39,45 +50,47 @@ jest.mock("@/shared/api/workflowActivityApi", () => {
   };
 });
 
-jest.mock("@/shared/navigation/history", () => ({
+jest.mock('@/shared/navigation/history', () => ({
   history: { push: jest.fn(), replace: jest.fn() },
 }));
 
-jest.mock("@/shared/ui/ConsoleHeaderActions", () => ({
+jest.mock('@/shared/ui/ConsoleHeaderActions', () => ({
   ConsoleAuthActions: () => <button type="button">Account</button>,
   ConsoleLanguageSwitch: () => <button type="button">Language</button>,
 }));
 
-jest.mock("../hooks/useConsoleLocation", () => ({
+jest.mock('../hooks/useConsoleLocation', () => ({
   useConsoleLocation: () => ({
-    hash: "",
-    pathname: "/scopes/scope-alpha/workflow-activity-vnext/activity",
+    hash: '',
+    pathname: '/scopes/scope-alpha/workflow-activity-vnext/activity',
     search: mockSearch,
   }),
 }));
 
-const mockListRuns = jest.requireMock("@/shared/api/workflowActivityApi")
+const mockListRuns = jest.requireMock('@/shared/api/workflowActivityApi')
   .workflowActivityApi.listRuns as jest.Mock;
 
-describe("Workflow Activity vNext Activity ledger", () => {
+describe('Workflow Activity vNext Activity ledger', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockSearch = "";
+    mockSearch = '';
     mockListRuns.mockResolvedValue([]);
   });
 
   afterEach(() => cleanupTestQueryClients());
 
-  it("preserves the honest unavailable notice for a workflow without definition identity", async () => {
-    mockSearch = "?workflowFilter=unavailable";
+  it('preserves the honest unavailable notice for a workflow without definition identity', async () => {
+    mockSearch = '?workflowFilter=unavailable';
 
     renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
 
     expect(
-      await screen.findByText("Workflow filter unavailable; showing unfiltered Activity"),
+      await screen.findByText(
+        "This workflow can't be filtered yet. Showing all activity.",
+      ),
     ).toBeInTheDocument();
     await waitFor(() =>
-      expect(mockListRuns).toHaveBeenCalledWith("scope-alpha", {
+      expect(mockListRuns).toHaveBeenCalledWith('scope-alpha', {
         status: undefined,
         origins: undefined,
         definitionActorIds: undefined,
@@ -86,19 +99,51 @@ describe("Workflow Activity vNext Activity ledger", () => {
     );
   });
 
-  it("sends only URL-backed supported filters to the observatory API", async () => {
-    mockSearch = "?status=failed&origin=draft&definition=definition-alpha";
+  it('sends only URL-backed supported filters to the observatory API', async () => {
+    mockSearch = '?status=failed&origin=draft&definition=definition-alpha';
 
     renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
 
     await waitFor(() =>
-      expect(mockListRuns).toHaveBeenCalledWith("scope-alpha", {
-        status: "failed",
-        origins: ["draft"],
-        definitionActorIds: ["definition-alpha"],
+      expect(mockListRuns).toHaveBeenCalledWith('scope-alpha', {
+        status: 'failed',
+        origins: ['draft'],
+        definitionActorIds: ['definition-alpha'],
         take: 100,
       }),
     );
-    expect(screen.getByRole("button", { name: "Clear workflow filter" })).toBeEnabled();
+    expect(
+      screen.getByRole('button', { name: 'Show all workflows' }),
+    ).toBeEnabled();
+  });
+
+  it('shows product run information without exposing internal observation fields', async () => {
+    mockListRuns.mockResolvedValue([
+      {
+        runId: 'workflow-definition:studio:run:internal-alpha',
+        workflowName: 'Customer follow-up',
+        status: 'completed',
+        success: true,
+        startedAtUtc: '2026-08-04T10:00:00Z',
+        updatedAtUtc: '2026-08-04T10:01:00Z',
+        stateVersion: 21,
+        scopeId: 'scope-alpha',
+        runOrigin: 'ad-hoc-chat',
+      },
+    ]);
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    expect(
+      await screen.findByRole('button', { name: 'Open Customer follow-up' }),
+    ).toBeEnabled();
+    expect(screen.getByText('Completed')).toBeInTheDocument();
+    expect(screen.getByText('Chat')).toBeInTheDocument();
+    expect(
+      screen.queryByText('workflow-definition:studio:run:internal-alpha'),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('State version')).not.toBeInTheDocument();
+    expect(screen.queryByText(/read model/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/recently observed/i)).not.toBeInTheDocument();
   });
 });

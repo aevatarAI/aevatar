@@ -200,6 +200,17 @@ pnpm --dir apps/aevatar-console-web build
   magic values.
 - Treat the console as an operational tool: prioritize scannability, clear
   hierarchy, predictable navigation, and efficient repeated actions.
+- Default user-facing surfaces must show only information needed to understand
+  the current task, result, or next action. Do not expose backend architecture,
+  transport, storage, or consistency terminology such as `read model`,
+  `projection`, `materialization`, `receipt`, raw actor/command/correlation
+  identifiers, state versions/watermarks, DTO or endpoint names, or query
+  sampling limits in page titles, descriptions, helper copy, primary tables,
+  empty states, or primary error messages. Preserve truthful loading, accepted,
+  delayed, and failed semantics in plain product language. When raw values are
+  genuinely useful for support or debugging, place them behind an explicit,
+  user-opened technical-details disclosure instead of making them the default
+  interface.
 - Preserve responsive behavior, keyboard access, focus visibility, semantic
   controls, and readable contrast. Verify dense real content and narrow mobile
   widths without overlap, clipping, or inaccessible actions.

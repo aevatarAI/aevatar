@@ -47,9 +47,6 @@ export const workflowActivityVNextCss = `
 }
 .wa-vnext__nav-button:hover { background: #1d2939; color: #fff; }
 .wa-vnext__nav-button[aria-current="page"] { background: #344054; border-color: #475467; color: #fff; }
-.wa-vnext__rail-foot { border-top: 1px solid #344054; margin-top: auto; min-width: 0; padding: 14px 12px 0; }
-.wa-vnext__rail-foot span { color: #98a2b3; font-size: 12px; }
-.wa-vnext__rail-foot strong { display: block; font: 12px ui-monospace, monospace; margin-top: 5px; overflow-wrap: anywhere; }
 .wa-vnext__main { background: var(--wa-surface); min-height: 0; min-width: 0; overflow: auto; }
 .wa-vnext__mobile-nav { display: none; }
 .wa-vnext__header { align-items: center; border-bottom: 1px solid var(--wa-line); display: flex; gap: 18px; justify-content: space-between; min-height: 84px; padding: 18px 30px; }
@@ -110,7 +107,7 @@ export const workflowActivityVNextCss = `
 .wa-vnext__settings-facts .ant-descriptions-item-content { color: var(--wa-ink); min-width: 0; overflow-wrap: anywhere; }
 .wa-vnext__technical-details { color: var(--wa-muted); font-size: 12px; margin-top: 18px; max-width: 100%; }
 .wa-vnext__technical-details summary { cursor: pointer; font-weight: 650; }
-.wa-vnext__technical-details code { background: #fff; border: 1px solid var(--wa-line); display: block; margin-top: 8px; max-width: 100%; padding: 10px; }
+.wa-vnext__technical-details-body { background: #fff; border: 1px solid var(--wa-line); display: block; margin-top: 8px; max-width: 100%; overflow-wrap: anywhere; padding: 10px; }
 .wa-vnext button:focus-visible, .wa-vnext a:focus-visible, .wa-vnext input:focus-visible, .wa-vnext textarea:focus-visible, .wa-vnext select:focus-visible { outline: 3px solid rgba(23, 92, 211, .25); outline-offset: 2px; }
 @media (max-width: 900px) {
   .wa-vnext { grid-template-columns: 1fr; }

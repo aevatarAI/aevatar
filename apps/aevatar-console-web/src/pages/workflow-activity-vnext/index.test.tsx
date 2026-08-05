@@ -1,35 +1,50 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
-import * as React from "react";
-import { history } from "@/shared/navigation/history";
+import { fireEvent, screen, waitFor } from '@testing-library/react';
+import * as React from 'react';
+import { history } from '@/shared/navigation/history';
 import {
   cleanupTestQueryClients,
   renderWithQueryClient,
-} from "../../../tests/reactQueryTestUtils";
-import WorkflowActivityVNextPage from "./index";
+} from '../../../tests/reactQueryTestUtils';
+import WorkflowActivityVNextPage from './index';
 
-let mockPathname =
-  "/scopes/scope-alpha/workflow-activity-vnext/workflows";
+let mockPathname = '/scopes/scope-alpha/workflow-activity-vnext/workflows';
 
-jest.mock("@umijs/max", () => ({
+jest.mock('@umijs/max', () => ({
   getIntl: () => ({
-    formatMessage: ({ defaultMessage, id }: { defaultMessage?: string; id: string }, values?: Record<string, unknown>) =>
-      (defaultMessage ?? id).replace(/\{(\w+)\}/g, (_match: string, key: string) => String(values?.[key] ?? "")),
+    formatMessage: (
+      { defaultMessage, id }: { defaultMessage?: string; id: string },
+      values?: Record<string, unknown>,
+    ) =>
+      (defaultMessage ?? id).replace(
+        /\{(\w+)\}/g,
+        (_match: string, key: string) => String(values?.[key] ?? ''),
+      ),
   }),
-  getLocale: () => "en-US",
+  getLocale: () => 'en-US',
   history: {},
   setLocale: jest.fn(),
   useIntl: () => ({
-    formatMessage: ({ defaultMessage, id }: { defaultMessage?: string; id: string }) =>
-      defaultMessage ?? id,
+    formatMessage: ({
+      defaultMessage,
+      id,
+    }: {
+      defaultMessage?: string;
+      id: string;
+    }) => defaultMessage ?? id,
   }),
-  useLocation: () => ({ hash: "", pathname: mockPathname, search: "" }),
+  useLocation: () => ({ hash: '', pathname: mockPathname, search: '' }),
   useModel: () => ({ initialState: { auth: { authenticated: true } } }),
-  useParams: () => ({ scopeId: "scope-alpha" }),
+  useParams: () => ({ scopeId: 'scope-alpha' }),
 }));
 
-jest.mock("@/shared/studio/api", () => ({
+jest.mock('@/shared/studio/api', () => ({
   isStudioApiStatus: (error: unknown, status: number) =>
-    Boolean(error && typeof error === "object" && "status" in error && error.status === status),
+    Boolean(
+      error &&
+        typeof error === 'object' &&
+        'status' in error &&
+        error.status === status,
+    ),
   studioApi: {
     authorWorkflow: jest.fn(),
     createWorkflowDraft: jest.fn(),
@@ -47,65 +62,78 @@ jest.mock("@/shared/studio/api", () => ({
   },
 }));
 
-jest.mock("@/shared/api/scopesApi", () => ({
+jest.mock('@/shared/api/scopesApi', () => ({
   scopesApi: {
     getWorkflowDetail: jest.fn(),
     listWorkflows: jest.fn(),
   },
 }));
 
-jest.mock("@/shared/navigation/history", () => ({
+jest.mock('@/shared/navigation/history', () => ({
   getLocationSnapshot: () => mockPathname,
   history: { push: jest.fn(), replace: jest.fn() },
   subscribeToLocationChanges: () => () => undefined,
 }));
 
-jest.mock("@/shared/ui/ConsoleHeaderActions", () => ({
+jest.mock('@/shared/ui/ConsoleHeaderActions', () => ({
   ConsoleAuthActions: () => <button type="button">Account</button>,
   ConsoleLanguageSwitch: () => <button type="button">Language</button>,
 }));
 
-jest.mock("@/pages/team-member-workflow-studio/components/WorkflowStudioCanvas", () => ({
-  __esModule: true,
-  default: ({
-    nodes,
-    onNodeSelect,
-  }: {
-    nodes: readonly { readonly id: string }[];
-    onNodeSelect?: (nodeId: string) => void;
-  }) => (
-    <div data-testid="workflow-studio-canvas">
-      {nodes.map((node) => (
-        <button key={node.id} onClick={() => onNodeSelect?.(node.id)} type="button">
-          Select {node.id}
-        </button>
-      ))}
-    </div>
-  ),
-}));
+jest.mock(
+  '@/pages/team-member-workflow-studio/components/WorkflowStudioCanvas',
+  () => ({
+    __esModule: true,
+    default: ({
+      nodes,
+      onNodeSelect,
+    }: {
+      nodes: readonly { readonly id: string }[];
+      onNodeSelect?: (nodeId: string) => void;
+    }) => (
+      <div data-testid="workflow-studio-canvas">
+        {nodes.map((node) => (
+          <button
+            key={node.id}
+            onClick={() => onNodeSelect?.(node.id)}
+            type="button"
+          >
+            Select {node.id}
+          </button>
+        ))}
+      </div>
+    ),
+  }),
+);
 
-jest.mock("@/pages/team-member-workflow-studio/components/WorkflowStudioNodeDetailPanel", () => ({
-  __esModule: true,
-  default: ({
-    onConfigurationChange,
-    stepDraft,
-  }: {
-    onConfigurationChange: (parametersText: string) => void;
-    stepDraft: { readonly id: string } | null;
-  }) => stepDraft ? (
-    <section aria-label="Node configuration">
-      <span>Configuring {stepDraft.id}</span>
-      <button
-        onClick={() => onConfigurationChange('{"prompt_prefix":"Updated prompt"}')}
-        type="button"
-      >
-        Apply node configuration
-      </button>
-    </section>
-  ) : null,
-}));
+jest.mock(
+  '@/pages/team-member-workflow-studio/components/WorkflowStudioNodeDetailPanel',
+  () => ({
+    __esModule: true,
+    default: ({
+      onConfigurationChange,
+      stepDraft,
+    }: {
+      onConfigurationChange: (parametersText: string) => void;
+      stepDraft: { readonly id: string } | null;
+    }) =>
+      stepDraft ? (
+        <section aria-label="Node configuration">
+          <span>Configuring {stepDraft.id}</span>
+          <button
+            onClick={() =>
+              onConfigurationChange('{"prompt_prefix":"Updated prompt"}')
+            }
+            type="button"
+          >
+            Apply node configuration
+          </button>
+        </section>
+      ) : null,
+  }),
+);
 
-const mockStudioApi = jest.requireMock("@/shared/studio/api").studioApi as {
+const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
   authorWorkflow: jest.Mock;
   createWorkflowDraft: jest.Mock;
   getWorkspaceSettings: jest.Mock;
@@ -120,169 +148,183 @@ const mockStudioApi = jest.requireMock("@/shared/studio/api").studioApi as {
   saveUserLlmSettings: jest.Mock;
   serializeYaml: jest.Mock;
 };
-const mockScopesApi = jest.requireMock("@/shared/api/scopesApi").scopesApi as {
+const mockScopesApi = jest.requireMock('@/shared/api/scopesApi').scopesApi as {
   getWorkflowDetail: jest.Mock;
   listWorkflows: jest.Mock;
 };
 
-describe("Workflow Activity vNext catalogue", () => {
+describe('Workflow Activity vNext catalogue', () => {
   beforeEach(() => {
-    mockPathname = "/scopes/scope-alpha/workflow-activity-vnext/workflows";
+    mockPathname = '/scopes/scope-alpha/workflow-activity-vnext/workflows';
     jest.clearAllMocks();
   });
 
   afterEach(() => cleanupTestQueryClients());
 
-  it("renders authoritative draft and committed rows, searches, and navigates by the real workflow id", async () => {
+  it('renders authoritative draft and committed rows, searches, and navigates by the real workflow id', async () => {
     mockStudioApi.listWorkflowDrafts.mockResolvedValue([
       {
-        workflowId: "wf-draft-alpha",
-        name: "Support triage",
-        description: "Route support requests",
-        fileName: "support.yaml",
-        filePath: "/support.yaml",
-        directoryId: "directory-alpha",
-        directoryLabel: "Workflows",
+        workflowId: 'wf-draft-alpha',
+        name: 'Support triage',
+        description: 'Route support requests',
+        fileName: 'support.yaml',
+        filePath: '/support.yaml',
+        directoryId: 'directory-alpha',
+        directoryLabel: 'Workflows',
         stepCount: 3,
         hasLayout: true,
-        updatedAtUtc: "2026-08-04T10:00:00Z",
+        updatedAtUtc: '2026-08-04T10:00:00Z',
       },
     ]);
     mockScopesApi.listWorkflows.mockResolvedValue([
       {
-        scopeId: "scope-alpha",
-        workflowId: "wf-committed-beta",
-        displayName: "Invoice review",
-        serviceKey: "",
-        workflowName: "invoice_review",
-        actorId: "summary-actor-beta",
-        activeRevisionId: "revision-beta",
-        deploymentId: "deployment-beta",
-        deploymentStatus: "active",
-        updatedAt: "2026-08-03T10:00:00Z",
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-committed-beta',
+        displayName: 'Invoice review',
+        serviceKey: '',
+        workflowName: 'invoice_review',
+        actorId: 'summary-actor-beta',
+        activeRevisionId: 'revision-beta',
+        deploymentId: 'deployment-beta',
+        deploymentStatus: 'active',
+        updatedAt: '2026-08-03T10:00:00Z',
       },
     ]);
     mockScopesApi.getWorkflowDetail.mockResolvedValue({
       available: true,
-      scopeId: "scope-alpha",
+      scopeId: 'scope-alpha',
       workflow: null,
       source: {
-        workflowYaml: "",
-        definitionActorId: "definition-beta",
+        workflowYaml: '',
+        definitionActorId: 'definition-beta',
         inlineWorkflowYamls: null,
       },
     });
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
-    expect(screen.getByText("Loading workflows")).toBeInTheDocument();
-    expect(await screen.findByText("Support triage")).toBeInTheDocument();
-    expect(screen.getByText("Invoice review")).toBeInTheDocument();
+    expect(screen.getByText('Loading workflows')).toBeInTheDocument();
+    expect(await screen.findByText('Support triage')).toBeInTheDocument();
+    expect(screen.getByText('Invoice review')).toBeInTheDocument();
 
-    fireEvent.change(screen.getByRole("searchbox", { name: "Search workflows" }), {
-      target: { value: "invoice" },
-    });
-    expect(screen.queryByText("Support triage")).not.toBeInTheDocument();
+    fireEvent.change(
+      screen.getByRole('searchbox', { name: 'Search workflows' }),
+      {
+        target: { value: 'invoice' },
+      },
+    );
+    expect(screen.queryByText('Support triage')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Activity" }));
+    fireEvent.click(screen.getByRole('button', { name: 'Activity' }));
     await waitFor(() => {
       expect(mockScopesApi.getWorkflowDetail).toHaveBeenCalledWith(
-        "scope-alpha",
-        "wf-committed-beta",
+        'scope-alpha',
+        'wf-committed-beta',
       );
       expect(history.push).toHaveBeenCalledWith(
-        "/scopes/scope-alpha/workflow-activity-vnext/activity?definition=definition-beta",
+        '/scopes/scope-alpha/workflow-activity-vnext/activity?definition=definition-beta',
       );
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Open Invoice review" }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open Invoice review' }),
+    );
     expect(history.push).toHaveBeenCalledWith(
-      "/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-committed-beta",
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-committed-beta',
     );
   });
 
-  it("opens unfiltered Activity with an unavailable notice for a draft-only row", async () => {
+  it('opens unfiltered Activity with an unavailable notice for a draft-only row', async () => {
     mockStudioApi.listWorkflowDrafts.mockResolvedValue([
       {
-        workflowId: "wf-draft-alpha",
-        name: "Support triage",
-        description: "Route support requests",
-        fileName: "support.yaml",
-        filePath: "/support.yaml",
-        directoryId: "directory-alpha",
-        directoryLabel: "Workflows",
+        workflowId: 'wf-draft-alpha',
+        name: 'Support triage',
+        description: 'Route support requests',
+        fileName: 'support.yaml',
+        filePath: '/support.yaml',
+        directoryId: 'directory-alpha',
+        directoryLabel: 'Workflows',
         stepCount: 3,
         hasLayout: true,
-        updatedAtUtc: "2026-08-04T10:00:00Z",
+        updatedAtUtc: '2026-08-04T10:00:00Z',
       },
     ]);
     mockScopesApi.listWorkflows.mockResolvedValue([]);
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
-    expect(await screen.findByText("Support triage")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Activity" }));
+    expect(await screen.findByText('Support triage')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Activity' }));
     expect(mockScopesApi.getWorkflowDetail).not.toHaveBeenCalled();
     expect(history.push).toHaveBeenCalledWith(
-      "/scopes/scope-alpha/workflow-activity-vnext/activity?workflowFilter=unavailable",
+      '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowFilter=unavailable',
     );
   });
 
-  it("keeps successful rows and names the failed source", async () => {
-    mockStudioApi.listWorkflowDrafts.mockRejectedValue(new Error("draft source down"));
+  it('keeps successful rows and names the failed source', async () => {
+    mockStudioApi.listWorkflowDrafts.mockRejectedValue(
+      new Error('draft source down'),
+    );
     mockScopesApi.listWorkflows.mockResolvedValue([
       {
-        scopeId: "scope-alpha",
-        workflowId: "wf-committed-beta",
-        displayName: "Invoice review",
-        serviceKey: "",
-        workflowName: "invoice_review",
-        actorId: "definition-beta",
-        activeRevisionId: "revision-beta",
-        deploymentId: "deployment-beta",
-        deploymentStatus: "active",
-        updatedAt: "2026-08-03T10:00:00Z",
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-committed-beta',
+        displayName: 'Invoice review',
+        serviceKey: '',
+        workflowName: 'invoice_review',
+        actorId: 'definition-beta',
+        activeRevisionId: 'revision-beta',
+        deploymentId: 'deployment-beta',
+        deploymentStatus: 'active',
+        updatedAt: '2026-08-03T10:00:00Z',
       },
     ]);
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
-    expect(await screen.findByText("Invoice review")).toBeInTheDocument();
-    expect(screen.getByText("Draft catalogue unavailable")).toBeInTheDocument();
-    expect(screen.queryByText("No workflows yet")).not.toBeInTheDocument();
+    expect(await screen.findByText('Invoice review')).toBeInTheDocument();
+    expect(
+      screen.getByText("Some workflows couldn't be loaded"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/catalogue/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('No workflows yet')).not.toBeInTheDocument();
   });
 
-  it("renders a successful empty result", async () => {
+  it('renders a successful empty result', async () => {
     mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
     mockScopesApi.listWorkflows.mockResolvedValue([]);
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
-    expect(await screen.findByText("No workflows yet")).toBeInTheDocument();
+    expect(await screen.findByText('No workflows yet')).toBeInTheDocument();
   });
 
-  it("renders total source failure and supports retry", async () => {
-    mockStudioApi.listWorkflowDrafts.mockRejectedValue(new Error("offline"));
-    mockScopesApi.listWorkflows.mockRejectedValue(new Error("offline"));
+  it('renders total source failure and supports retry', async () => {
+    mockStudioApi.listWorkflowDrafts.mockRejectedValue(new Error('offline'));
+    mockScopesApi.listWorkflows.mockRejectedValue(new Error('offline'));
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
-    expect(await screen.findByText("Workflows unavailable")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Retry workflows" })).toBeEnabled();
+    expect(
+      await screen.findByText('Workflows unavailable'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Retry workflows' }),
+    ).toBeEnabled();
   });
 });
 
-describe("Workflow Activity vNext settings", () => {
+describe('Workflow Activity vNext settings', () => {
   beforeEach(() => {
-    mockPathname = "/scopes/scope-alpha/workflow-activity-vnext/settings";
+    mockPathname = '/scopes/scope-alpha/workflow-activity-vnext/settings';
     jest.clearAllMocks();
     mockStudioApi.getUserLlmSettings.mockResolvedValue({
       savedSelection: null,
-      savedRouteLabel: "System default",
-      selectionStatus: "system_default",
-      catalogDiagnostic: "unspecified",
-      remediation: "none",
+      savedRouteLabel: 'System default',
+      selectionStatus: 'system_default',
+      catalogDiagnostic: 'unspecified',
+      remediation: 'none',
       routeOptions: [],
       modelGroupsByRoute: [],
-      catalogStatus: "empty",
+      catalogStatus: 'empty',
       capabilities: {
         canEditRoute: true,
         canEditModel: true,
@@ -293,101 +335,112 @@ describe("Workflow Activity vNext settings", () => {
     mockStudioApi.getAuthSession.mockResolvedValue({
       enabled: true,
       authenticated: true,
-      providerDisplayName: "NyxID",
+      providerDisplayName: 'NyxID',
       profile: {
-        subject: "user-subject-alpha",
-        name: "Ada Operator",
-        email: "ada@example.test",
+        subject: 'user-subject-alpha',
+        name: 'Ada Operator',
+        email: 'ada@example.test',
         emailVerified: true,
         picture: null,
-        roles: ["operator"],
-        groups: ["platform"],
+        roles: ['operator'],
+        groups: ['platform'],
       },
       session: {
         authenticated: true,
-        scopeId: "scope-alpha",
-        scopeSource: "nyxid-session",
-        expiresAtUtc: "2026-08-05T10:00:00Z",
+        scopeId: 'scope-alpha',
+        scopeSource: 'nyxid-session',
+        expiresAtUtc: '2026-08-05T10:00:00Z',
       },
     });
     mockStudioApi.getUserConfigRuntime.mockResolvedValue({
-      runtimeMode: "remote",
-      activeRuntimeBaseUrl: "https://runtime.example.test",
-      localRuntimeBaseUrl: "http://localhost:5100",
-      remoteRuntimeBaseUrl: "https://runtime.example.test",
+      runtimeMode: 'remote',
+      activeRuntimeBaseUrl: 'https://runtime.example.test',
+      localRuntimeBaseUrl: 'http://localhost:5100',
+      remoteRuntimeBaseUrl: 'https://runtime.example.test',
       runtimeDefaults: {
-        localRuntimeBaseUrl: "http://localhost:5100",
-        remoteRuntimeBaseUrl: "https://runtime.example.test",
-        localMode: "local",
-        remoteMode: "remote",
+        localRuntimeBaseUrl: 'http://localhost:5100',
+        remoteRuntimeBaseUrl: 'https://runtime.example.test',
+        localMode: 'local',
+        remoteMode: 'remote',
       },
     });
   });
 
   afterEach(() => cleanupTestQueryClients());
 
-  it("renders real AI, account, and runtime facts in one scoped settings surface", async () => {
+  it('renders account facts while keeping runtime connection values behind technical details', async () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
-    expect((await screen.findAllByText("System default")).length).toBeGreaterThan(0);
-    const accountLink = screen.getByRole("link", { name: "Account" });
+    expect(
+      (await screen.findAllByText('System default')).length,
+    ).toBeGreaterThan(0);
+    const accountLink = screen.getByRole('link', { name: 'Account' });
     expect(accountLink).toHaveAttribute(
-      "href",
-      "/scopes/scope-alpha/workflow-activity-vnext/settings?section=account",
+      'href',
+      '/scopes/scope-alpha/workflow-activity-vnext/settings?section=account',
     );
     fireEvent.click(accountLink);
-    expect(accountLink).toHaveAttribute("aria-current", "page");
-    expect(await screen.findByText("Ada Operator")).toBeInTheDocument();
-    expect(screen.getByText("user-subject-alpha")).toBeInTheDocument();
-    expect(screen.getByText("NyxID")).toBeInTheDocument();
-    expect(screen.getByText("operator")).toBeInTheDocument();
-    expect(screen.getByText("platform")).toBeInTheDocument();
-    expect(screen.getByText("nyxid-session")).toBeInTheDocument();
+    expect(accountLink).toHaveAttribute('aria-current', 'page');
+    expect(await screen.findByText('Ada Operator')).toBeInTheDocument();
+    expect(screen.getByText('NyxID')).toBeInTheDocument();
+    expect(screen.getByText('operator')).toBeInTheDocument();
+    expect(screen.queryByText('user-subject-alpha')).not.toBeInTheDocument();
+    expect(screen.queryByText('platform')).not.toBeInTheDocument();
+    expect(screen.queryByText('nyxid-session')).not.toBeInTheDocument();
+    expect(screen.queryByText('scope-alpha')).not.toBeInTheDocument();
     expect(
       screen.getByText(
-        new Intl.DateTimeFormat("en-US", {
-          dateStyle: "medium",
-          timeStyle: "short",
-        }).format(new Date("2026-08-05T10:00:00Z")),
+        new Intl.DateTimeFormat('en-US', {
+          dateStyle: 'medium',
+          timeStyle: 'short',
+        }).format(new Date('2026-08-05T10:00:00Z')),
       ),
     ).toBeInTheDocument();
 
-    const advancedLink = screen.getByRole("link", { name: "Advanced" });
+    const advancedLink = screen.getByRole('link', { name: 'Advanced' });
     fireEvent.click(advancedLink);
-    expect(advancedLink).toHaveAttribute("aria-current", "page");
-    expect(await screen.findAllByText("https://runtime.example.test")).toHaveLength(2);
-    expect(screen.getByText("remote")).toBeInTheDocument();
+    expect(advancedLink).toHaveAttribute('aria-current', 'page');
+    expect(
+      screen.getAllByText('https://runtime.example.test')[0],
+    ).not.toBeVisible();
+    fireEvent.click(screen.getByText('Technical details'));
+    expect(
+      await screen.findAllByText('https://runtime.example.test'),
+    ).toHaveLength(2);
+    expect(screen.getByText('remote')).toBeInTheDocument();
   });
 
-  it("keeps an AI defaults decoding failure compact and actionable", async () => {
+  it('keeps an AI defaults decoding failure compact and actionable', async () => {
     mockStudioApi.getUserLlmSettings.mockRejectedValue(
       new Error(
-        "StudioUserLlmSettings.savedSelection.modelSelection must be an object.",
+        'StudioUserLlmSettings.savedSelection.modelSelection must be an object.',
       ),
     );
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
-    expect(await screen.findByText("AI defaults unavailable")).toBeInTheDocument();
     expect(
-      screen.getByText("Refresh this section to try loading the authoritative settings again."),
+      await screen.findByText('AI defaults unavailable'),
     ).toBeInTheDocument();
-    expect(screen.getByText("Technical details")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+    expect(
+      screen.getByText('Try loading this section again.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Technical details')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
   });
 
-  it("discards dirty AI defaults back to the last authoritative selection", async () => {
+  it('discards dirty AI defaults back to the last authoritative selection', async () => {
     mockStudioApi.getUserLlmSettings.mockResolvedValue({
       savedSelection: {
-        routeKind: "gateway",
-        routeValue: "/api/v1/llm/gateway/v1",
-        modelSelection: { kind: "provider_default" },
+        routeKind: 'gateway',
+        routeValue: '/api/v1/llm/gateway/v1',
+        modelSelection: { kind: 'provider_default' },
       },
-      savedRouteLabel: "Gateway",
-      selectionStatus: "ready",
-      catalogDiagnostic: "unspecified",
-      remediation: "none",
-      catalogStatus: "ready",
+      savedRouteLabel: 'Gateway',
+      selectionStatus: 'ready',
+      catalogDiagnostic: 'unspecified',
+      remediation: 'none',
+      catalogStatus: 'ready',
       capabilities: {
         canEditRoute: true,
         canEditModel: true,
@@ -396,36 +449,36 @@ describe("Workflow Activity vNext settings", () => {
       },
       routeOptions: [
         {
-          routeValue: "/api/v1/llm/gateway/v1",
-          label: "Gateway",
-          source: "gateway_provider",
-          status: "ready",
+          routeValue: '/api/v1/llm/gateway/v1',
+          label: 'Gateway',
+          source: 'gateway_provider',
+          status: 'ready',
           allowed: true,
           ready: true,
           userServiceId: null,
           serviceSlug: null,
           modelCatalog: {
-            certainty: "not_verifiable",
+            certainty: 'not_verifiable',
             modelIds: [],
             defaultModelId: null,
-            diagnostic: "not_published",
+            diagnostic: 'not_published',
           },
           description: null,
         },
         {
-          routeValue: "/api/v1/proxy/s/service-alpha",
-          label: "Service alpha",
-          source: "user_service",
-          status: "ready",
+          routeValue: '/api/v1/proxy/s/service-alpha',
+          label: 'Service alpha',
+          source: 'user_service',
+          status: 'ready',
           allowed: true,
           ready: true,
-          userServiceId: "us-alpha",
-          serviceSlug: "service-alpha",
+          userServiceId: 'us-alpha',
+          serviceSlug: 'service-alpha',
           modelCatalog: {
-            certainty: "enumerated",
-            modelIds: ["model-alpha"],
-            defaultModelId: "model-alpha",
-            diagnostic: "unspecified",
+            certainty: 'enumerated',
+            modelIds: ['model-alpha'],
+            defaultModelId: 'model-alpha',
+            diagnostic: 'unspecified',
           },
           description: null,
         },
@@ -435,46 +488,53 @@ describe("Workflow Activity vNext settings", () => {
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
-    const routeSelect = await screen.findByRole("combobox", {
-      name: "Preferred service",
+    const routeSelect = await screen.findByRole('combobox', {
+      name: 'Preferred service',
     });
     fireEvent.mouseDown(routeSelect);
-    fireEvent.click(await screen.findByText("Service alpha"));
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
-    expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByText('Service alpha'));
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+    expect(
+      screen.queryByRole('button', { name: 'Save changes' }),
+    ).not.toBeInTheDocument();
     expect(mockStudioApi.saveUserLlmSettings).not.toHaveBeenCalled();
   });
 });
 
-describe("Workflow Activity vNext editor", () => {
+describe('Workflow Activity vNext editor', () => {
   beforeEach(() => {
     mockPathname =
-      "/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-committed-source";
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-committed-source';
     jest.clearAllMocks();
     mockStudioApi.getWorkspaceSettings.mockResolvedValue({
-      runtimeBaseUrl: "",
+      runtimeBaseUrl: '',
       directories: [
-        { directoryId: "directory-alpha", label: "Workflows", path: "/workflows", isBuiltIn: true },
+        {
+          directoryId: 'directory-alpha',
+          label: 'Workflows',
+          path: '/workflows',
+          isBuiltIn: true,
+        },
       ],
     });
     mockStudioApi.getWorkflow.mockResolvedValue({
-      workflowId: "wf-committed-source",
-      name: "Committed source",
-      fileName: "committed-source.yaml",
-      filePath: "",
-      directoryId: "",
-      directoryLabel: "",
-      yaml: "name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n    parameters:\n      prompt_prefix: Original prompt\n",
-      updatedAtUtc: "2026-08-04T10:00:00Z",
+      workflowId: 'wf-committed-source',
+      name: 'Committed source',
+      fileName: 'committed-source.yaml',
+      filePath: '',
+      directoryId: '',
+      directoryLabel: '',
+      yaml: 'name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n    parameters:\n      prompt_prefix: Original prompt\n',
+      updatedAtUtc: '2026-08-04T10:00:00Z',
       document: {
-        name: "committed_source",
+        name: 'committed_source',
         roles: [],
         steps: [
           {
-            id: "step-root",
-            type: "llm_call",
-            parameters: { prompt_prefix: "Original prompt" },
+            id: 'step-root',
+            type: 'llm_call',
+            parameters: { prompt_prefix: 'Original prompt' },
           },
         ],
       },
@@ -482,26 +542,26 @@ describe("Workflow Activity vNext editor", () => {
       findings: [],
     });
     mockStudioApi.parseYaml.mockResolvedValue({
-      document: { name: "committed_source", roles: [], steps: [] },
+      document: { name: 'committed_source', roles: [], steps: [] },
       findings: [],
     });
     mockStudioApi.serializeYaml.mockResolvedValue({
-      yaml: "name: committed_source\nroles: []\nsteps: []\n",
-      document: { name: "committed_source", roles: [], steps: [] },
+      yaml: 'name: committed_source\nroles: []\nsteps: []\n',
+      document: { name: 'committed_source', roles: [], steps: [] },
       findings: [],
     });
     mockStudioApi.saveWorkflow.mockResolvedValue({
-      kind: "materialized",
+      kind: 'materialized',
       workflow: {
-        workflowId: "wf-draft-new",
-        name: "Committed source",
-        fileName: "committed-source.yaml",
-        filePath: "/workflows/committed-source.yaml",
-        directoryId: "directory-alpha",
-        directoryLabel: "Workflows",
-        yaml: "name: committed_source\nroles: []\nsteps: []\n",
-        updatedAtUtc: "2026-08-04T10:01:00Z",
-        document: { name: "committed_source", roles: [], steps: [] },
+        workflowId: 'wf-draft-new',
+        name: 'Committed source',
+        fileName: 'committed-source.yaml',
+        filePath: '/workflows/committed-source.yaml',
+        directoryId: 'directory-alpha',
+        directoryLabel: 'Workflows',
+        yaml: 'name: committed_source\nroles: []\nsteps: []\n',
+        updatedAtUtc: '2026-08-04T10:01:00Z',
+        document: { name: 'committed_source', roles: [], steps: [] },
         draftExists: true,
         findings: [],
       },
@@ -510,49 +570,87 @@ describe("Workflow Activity vNext editor", () => {
 
   afterEach(() => cleanupTestQueryClients());
 
-  it("creates on first save for committed-only source and adopts the API-returned draft id", async () => {
+  it('creates on first save for committed-only source and adopts the API-returned draft id', async () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
-    expect(await screen.findByDisplayValue("Committed source")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("YAML"));
-    fireEvent.change(screen.getByLabelText("Workflow YAML"), {
-      target: { value: "name: committed_source\nroles: []\nsteps: []\n\n" },
+    expect(
+      await screen.findByDisplayValue('Committed source'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        'Committed source · first Save creates a scoped draft',
+      ),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('YAML'));
+    fireEvent.change(screen.getByLabelText('Workflow YAML'), {
+      target: { value: 'name: committed_source\nroles: []\nsteps: []\n\n' },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save workflow" }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
 
-    await waitFor(() => expect(mockStudioApi.saveWorkflow).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(mockStudioApi.saveWorkflow).toHaveBeenCalledTimes(1),
+    );
     expect(mockStudioApi.saveWorkflow).toHaveBeenCalledWith(
       expect.objectContaining({
         draftExists: false,
-        workflowId: "wf-committed-source",
-        directoryId: "directory-alpha",
+        workflowId: 'wf-committed-source',
+        directoryId: 'directory-alpha',
       }),
     );
     expect(history.replace).toHaveBeenCalledWith(
-      "/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-new",
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-new',
     );
   });
 
-  it("edits a selected canvas node through the shared document state", async () => {
+  it("keeps a save failure's server detail out of the primary editor message", async () => {
+    mockStudioApi.saveWorkflow.mockRejectedValue(
+      new Error('PUT /api/studio/workflows/wf-committed-source returned 500'),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(
+      await screen.findByDisplayValue('Committed source'),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Updated source' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
+
+    expect(
+      await screen.findByText("Workflow couldn't be saved"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        'PUT /api/studio/workflows/wf-committed-source returned 500',
+      ),
+    ).not.toBeVisible();
+  });
+
+  it('edits a selected canvas node through the shared document state', async () => {
     mockStudioApi.serializeYaml.mockImplementation(async ({ document }) => ({
-      yaml: "name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n    parameters:\n      prompt_prefix: Updated prompt\n",
+      yaml: 'name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n    parameters:\n      prompt_prefix: Updated prompt\n',
       document,
       findings: [],
     }));
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Select step:step-root" }));
-    expect(screen.getByText("Configuring step-root")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Apply node configuration" }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Select step:step-root' }),
+    );
+    expect(screen.getByText('Configuring step-root')).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Apply node configuration' }),
+    );
 
     await waitFor(() =>
       expect(mockStudioApi.serializeYaml).toHaveBeenCalledWith({
         document: expect.objectContaining({
           steps: [
             expect.objectContaining({
-              id: "step-root",
-              parameters: { prompt_prefix: "Updated prompt" },
+              id: 'step-root',
+              parameters: { prompt_prefix: 'Updated prompt' },
             }),
           ],
         }),
@@ -560,99 +658,144 @@ describe("Workflow Activity vNext editor", () => {
     );
   });
 
-  it("offers Save, Discard, and Stay before vNext navigation with unsaved changes", async () => {
+  it('offers Save, Discard, and Stay before vNext navigation with unsaved changes', async () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
-    expect(await screen.findByDisplayValue("Committed source")).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Workflow name"), {
-      target: { value: "Unsaved title" },
+    expect(
+      await screen.findByDisplayValue('Committed source'),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Unsaved title' },
     });
-    fireEvent.click(screen.getAllByRole("link", { name: "Activity" })[0]);
+    fireEvent.click(screen.getAllByRole('link', { name: 'Activity' })[0]);
 
     expect(history.push).not.toHaveBeenCalledWith(
-      "/scopes/scope-alpha/workflow-activity-vnext/activity",
+      '/scopes/scope-alpha/workflow-activity-vnext/activity',
     );
-    expect(screen.getByRole("dialog", { name: "Unsaved workflow changes" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save and leave" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Discard and leave" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Stay" }));
-    expect(screen.queryByRole("dialog", { name: "Unsaved workflow changes" })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('dialog', { name: 'Unsaved workflow changes' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Save and leave' }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole('button', { name: 'Discard and leave' }),
+    ).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
+    expect(
+      screen.queryByRole('dialog', { name: 'Unsaved workflow changes' }),
+    ).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getAllByRole("link", { name: "Activity" })[0]);
-    fireEvent.click(screen.getByRole("button", { name: "Discard and leave" }));
+    fireEvent.click(screen.getAllByRole('link', { name: 'Activity' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Discard and leave' }));
     expect(history.push).toHaveBeenCalledWith(
-      "/scopes/scope-alpha/workflow-activity-vnext/activity",
+      '/scopes/scope-alpha/workflow-activity-vnext/activity',
     );
   });
 });
 
-describe("Workflow Activity vNext creation", () => {
+describe('Workflow Activity vNext creation', () => {
   beforeEach(() => {
-    mockPathname = "/scopes/scope-alpha/workflow-activity-vnext/workflows/new";
+    mockPathname = '/scopes/scope-alpha/workflow-activity-vnext/workflows/new';
     jest.clearAllMocks();
     mockStudioApi.getWorkspaceSettings.mockResolvedValue({
-      runtimeBaseUrl: "",
+      runtimeBaseUrl: '',
       directories: [
-        { directoryId: "directory-alpha", label: "Workflows", path: "/workflows", isBuiltIn: true },
+        {
+          directoryId: 'directory-alpha',
+          label: 'Workflows',
+          path: '/workflows',
+          isBuiltIn: true,
+        },
       ],
     });
   });
 
   afterEach(() => cleanupTestQueryClients());
 
-  it("creates a blank draft with a server directory and navigates only after materialization", async () => {
+  it('creates a blank draft with a server directory and navigates only after materialization', async () => {
     mockStudioApi.createWorkflowDraft.mockResolvedValue({
-      kind: "materialized",
+      kind: 'materialized',
       workflow: {
-        workflowId: "wf-created-alpha",
-        name: "Incident review",
-        fileName: "incident-review.yaml",
-        filePath: "/workflows/incident-review.yaml",
-        directoryId: "directory-alpha",
-        directoryLabel: "Workflows",
-        yaml: "name: incident_review\nroles: []\nsteps: []\n",
-        updatedAtUtc: "2026-08-04T10:00:00Z",
-        document: { name: "incident_review", roles: [], steps: [] },
+        workflowId: 'wf-created-alpha',
+        name: 'Incident review',
+        fileName: 'incident-review.yaml',
+        filePath: '/workflows/incident-review.yaml',
+        directoryId: 'directory-alpha',
+        directoryLabel: 'Workflows',
+        yaml: 'name: incident_review\nroles: []\nsteps: []\n',
+        updatedAtUtc: '2026-08-04T10:00:00Z',
+        document: { name: 'incident_review', roles: [], steps: [] },
         draftExists: true,
         findings: [],
       },
     });
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
-    const blankButton = await screen.findByRole("button", { name: "Start blank" });
+    expect(
+      screen.getByText('Choose how you want to start.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/persisted workflow draft/i),
+    ).not.toBeInTheDocument();
+    const blankButton = await screen.findByRole('button', {
+      name: 'Start blank',
+    });
     await waitFor(() => expect(blankButton).toBeEnabled());
     fireEvent.click(blankButton);
-    fireEvent.change(screen.getByLabelText("Workflow name"), {
-      target: { value: "Incident review" },
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Incident review' },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create blank draft" }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create workflow' }));
 
-    await waitFor(() => expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledTimes(1),
+    );
     expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledWith(
-      expect.objectContaining({ directoryId: "directory-alpha", scopeId: "scope-alpha" }),
+      expect.objectContaining({
+        directoryId: 'directory-alpha',
+        scopeId: 'scope-alpha',
+      }),
     );
     expect(history.push).toHaveBeenCalledWith(
-      "/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha",
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha',
     );
   });
 
-  it("validates imported YAML before creating and preserves invalid input", async () => {
+  it('keeps bundled template version metadata out of the primary interface', async () => {
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    const templateButton = await screen.findByRole('button', {
+      name: 'Use template',
+    });
+    await waitFor(() => expect(templateButton).toBeEnabled());
+    fireEvent.click(templateButton);
+
+    expect(screen.queryByText(/2026\.08\.1/)).not.toBeInTheDocument();
+  });
+
+  it('validates imported YAML before creating and preserves invalid input', async () => {
     mockStudioApi.parseYaml.mockResolvedValue({
       document: null,
-      findings: [{ level: "error", code: "YAML_INVALID", message: "Invalid YAML" }],
+      findings: [
+        { level: 'error', code: 'YAML_INVALID', message: 'Invalid YAML' },
+      ],
     });
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
-    const importButton = await screen.findByRole("button", { name: "Import YAML" });
+    const importButton = await screen.findByRole('button', {
+      name: 'Import YAML',
+    });
     await waitFor(() => expect(importButton).toBeEnabled());
     fireEvent.click(importButton);
-    fireEvent.change(screen.getByLabelText("Workflow YAML"), {
-      target: { value: "name: [broken" },
+    fireEvent.change(screen.getByLabelText('Workflow YAML'), {
+      target: { value: 'name: [broken' },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Validate and create" }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Validate and create' }),
+    );
 
-    expect(await screen.findByText("Invalid YAML")).toBeInTheDocument();
+    expect(await screen.findByText('Invalid YAML')).toBeInTheDocument();
     expect(mockStudioApi.createWorkflowDraft).not.toHaveBeenCalled();
-    expect(screen.getByLabelText("Workflow YAML")).toHaveValue("name: [broken");
+    expect(screen.getByLabelText('Workflow YAML')).toHaveValue('name: [broken');
   });
 });
