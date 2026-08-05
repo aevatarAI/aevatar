@@ -1,5 +1,6 @@
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.Mainnet.Host.Api.Skills;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Contracts;
@@ -110,6 +111,39 @@ public sealed class UserSkillRunServiceTests
             .Should().ContainSingle().Which;
         explicitConfirmation.WorkflowId.Should().BeEmpty();
         explicitConfirmation.RevisionId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ScheduleAsync_WhenCredentialOperationIsInProgress_ShouldReturnTypedConflict()
+    {
+        var schedule = new RecordingScheduleProvisioningPort
+        {
+            Exception = new ScheduledDispatchConflictException(
+                "schedule-sensitive",
+                "team_automation_operation_in_progress"),
+        };
+        var service = new UserSkillRunService(
+            new RecordingRemoteSkillFetcher(WorkflowSkill()),
+            new RecordingWorkflowChatDispatch(),
+            schedule,
+            new RecordingWorkflowConfirmationPort(ConfirmedWorkflow()));
+
+        var outcome = await service.ScheduleAsync(
+            "skill-alpha",
+            SourceReadableCallerCredential(),
+            "scope-alpha",
+            "run the check",
+            "*/15 * * * *",
+            "UTC",
+            "Codex Check",
+            "team-alpha",
+            "sha256:reviewed",
+            CancellationToken.None);
+
+        outcome.Succeeded.Should().BeFalse();
+        outcome.ErrorCode.Should().Be("conflict");
+        outcome.ErrorMessage.Should().Contain("still in progress");
+        outcome.ErrorMessage.Should().NotContain("schedule-sensitive");
     }
 
     [Fact]

@@ -485,6 +485,7 @@ public sealed class StudioMemberWorkflowBindingPortTests
         saveAndBindPort.LastRequest.ExposureDesired.Should().BeTrue();
         saveAndBindPort.LastRequest.DisplayName.Should().Be("Member One");
         saveAndBindPort.LastRequest.WorkflowId.Should().Be("workflow-explicit");
+        saveAndBindPort.LastRequest.WorkflowName.Should().BeNull();
         saveAndBindPort.LastRequest.CapabilityAdmission.Should().NotBeNull();
         saveAndBindPort.LastRequest.CapabilityAdmission!.ExistingPlan.Should().NotBeNull();
         memberCommandPort.LastRecordPublishedBinding.Should().NotBeNull();

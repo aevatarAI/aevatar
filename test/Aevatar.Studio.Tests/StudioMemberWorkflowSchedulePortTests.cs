@@ -114,6 +114,118 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
+    public async Task EnsureAsync_WhenDifferentPendingOperationLeaseExpired_ShouldSupersedeBeforeCreate()
+    {
+        var calls = new List<string>();
+        var current = CreateTeamAutomationDetail(
+            RecordingAuthorizationPlanner.Digest,
+            RecordingAuthorizationPlanner.PolicyVersion);
+        var scheduleService = new RecordingScheduleService
+        {
+            Calls = calls,
+            TeamAutomationDetail = current with
+            {
+                Schedule = current.Schedule with
+                {
+                    ScheduleId = "provision-published-member-1",
+                    TargetKind = ScheduledDispatchTargetKind.Envelope,
+                    TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatus.ProvisioningPending,
+                    TeamAutomationOperationId = "operation-stale",
+                    TeamAutomationIdempotencyKey = "idempotency-stale",
+                },
+            },
+        };
+        var sut = NewPort(scheduleService);
+
+        var result = await ScheduleAsync(sut, Request("scope-1", "member-1"));
+
+        result.Success.Should().BeTrue();
+        scheduleService.RetryCredentialOperationCallCount.Should().Be(1);
+        scheduleService.FailCallCount.Should().Be(1);
+        scheduleService.BeginCallCount.Should().Be(1);
+        scheduleService.EnsureCallCount.Should().Be(1);
+        calls.Should().Equal("retry_credential", "fail", "begin", "complete");
+    }
+
+    [Fact]
+    public async Task EnsureAsync_WhenDifferentPendingOperationLeaseActive_ShouldReturnConflictWithoutSuperseding()
+    {
+        var calls = new List<string>();
+        var current = CreateTeamAutomationDetail(
+            RecordingAuthorizationPlanner.Digest,
+            RecordingAuthorizationPlanner.PolicyVersion);
+        var scheduleService = new RecordingScheduleService
+        {
+            Calls = calls,
+            RetryOwnsEffectAttempt = false,
+            TeamAutomationDetail = current with
+            {
+                Schedule = current.Schedule with
+                {
+                    ScheduleId = "provision-published-member-1",
+                    TargetKind = ScheduledDispatchTargetKind.Envelope,
+                    TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatus.ProvisioningPending,
+                    TeamAutomationOperationId = "operation-active",
+                    TeamAutomationIdempotencyKey = "idempotency-active",
+                },
+            },
+        };
+        var sut = NewPort(scheduleService);
+
+        var act = () => ScheduleAsync(sut, Request("scope-1", "member-1"));
+
+        await act.Should().ThrowAsync<ScheduledDispatchConflictException>()
+            .WithMessage("team_automation_operation_in_progress");
+        scheduleService.RetryCredentialOperationCallCount.Should().Be(1);
+        scheduleService.FailCallCount.Should().Be(0);
+        scheduleService.BeginCallCount.Should().Be(0);
+        calls.Should().Equal("retry_credential");
+    }
+
+    [Fact]
+    public async Task EnsureAsync_WhenSupersededOperationHasCandidate_ShouldRevokeBeforeCreate()
+    {
+        var calls = new List<string>();
+        var current = CreateTeamAutomationDetail(
+            RecordingAuthorizationPlanner.Digest,
+            RecordingAuthorizationPlanner.PolicyVersion);
+        var scheduleService = new RecordingScheduleService
+        {
+            Calls = calls,
+            FailureReturnsPendingRevocation = true,
+            TeamAutomationDetail = current with
+            {
+                Schedule = current.Schedule with
+                {
+                    ScheduleId = "provision-published-member-1",
+                    TargetKind = ScheduledDispatchTargetKind.Envelope,
+                    TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatus.ProvisioningPending,
+                    TeamAutomationOperationId = "operation-stale",
+                    TeamAutomationIdempotencyKey = "idempotency-stale",
+                },
+            },
+        };
+        var materializer = new RecordingCredentialMaterializer();
+        var sut = NewPort(scheduleService, materializer: materializer);
+
+        var result = await ScheduleAsync(sut, Request("scope-1", "member-1"));
+
+        result.Success.Should().BeTrue();
+        materializer.RevokeCallCount.Should().Be(1);
+        materializer.RevocationCalls.Should().ContainSingle()
+            .Which.Should().Match<(string BearerToken, bool RevokeNyxId, bool RevokeVault)>(
+                call => call.RevokeNyxId && call.RevokeVault);
+        scheduleService.CompleteRevocationCallCount.Should().Be(1);
+        scheduleService.BeginCallCount.Should().Be(1);
+        calls.Should().Equal(
+            "retry_credential",
+            "fail",
+            "complete_revocation",
+            "begin",
+            "complete");
+    }
+
+    [Fact]
     public async Task EnsureAsync_UsesMaterializedScheduledCredentialAndStableMemberOwner()
     {
         var scheduleService = new RecordingScheduleService();
@@ -2607,6 +2719,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     {
         public int EnsureCallCount { get; private set; }
         public int BeginCallCount { get; private set; }
+        public int RetryCredentialOperationCallCount { get; private set; }
         public int CandidateCallCount { get; private set; }
         public int FailCallCount { get; private set; }
         public int TombstonedAttempts { get; init; }
@@ -2616,6 +2729,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public Exception? CandidateException { get; init; }
         public bool CommitCandidateBeforeException { get; init; }
         public bool ReturnPendingRevocationOnRetry { get; init; }
+        public bool FailureReturnsPendingRevocation { get; init; }
         public bool RetryOwnsEffectAttempt { get; init; } = true;
         public bool RejectMutationDigestDrift { get; init; }
         public ScheduledDispatchConfiguration? Configuration { get; private set; }
@@ -2668,6 +2782,25 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 candidateOwner: _candidateOwner,
                 credentialEffectLocator: operation.CredentialEffectLocator,
                 newOperationCommitted: BeginNewOperationCommitted));
+        }
+
+        public Task<TeamAutomationCommittedMutationReceipt> RetryTeamAutomationCredentialOperationAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            string operationId,
+            string idempotencyKey,
+            CancellationToken ct = default)
+        {
+            RetryCredentialOperationCallCount++;
+            Calls?.Add("retry_credential");
+            return Task.FromResult(Committed(
+                scheduleId,
+                operationId,
+                idempotencyKey,
+                TeamAutomationOperationObservationStages.Begin,
+                ownsEffectAttempt: RetryOwnsEffectAttempt,
+                "cmd-retry-credential",
+                effectAttemptId: RetryOwnsEffectAttempt ? "attempt-retry-credential" : string.Empty));
         }
 
         public Task<TeamAutomationCommittedMutationReceipt> RecordTeamAutomationCredentialCandidateAsync(
@@ -2742,14 +2875,28 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             CancellationToken ct = default)
         {
             FailCallCount++;
+            Calls?.Add("fail");
+            var credential = CreateCredential(
+                TestNow.AddHours(20),
+                CredentialSecretPurposes.ScheduledInvocationAgentKey);
             return Task.FromResult(Committed(
                 scheduleId,
                 operationId,
                 idempotencyKey,
                 TeamAutomationOperationObservationStages.Fail,
-                ownsEffectAttempt: false,
+                ownsEffectAttempt: FailureReturnsPendingRevocation,
                 "cmd-fail",
-                errorCode));
+                errorCode,
+                effectAttemptId: FailureReturnsPendingRevocation ? "attempt-fail-revocation" : string.Empty,
+                pendingRevocationCredential: FailureReturnsPendingRevocation
+                    ? new ScheduledInvocationAgentKeyCredentialReference(
+                        credential.SecretReference,
+                        credential.ApiKeyId,
+                        credential.ExpiresAtUtc.ToUnixTimeMilliseconds())
+                    : null,
+                pendingRevocationOwner: FailureReturnsPendingRevocation ? credential.Owner : null,
+                nyxIdRevocationPending: FailureReturnsPendingRevocation,
+                vaultRevocationPending: FailureReturnsPendingRevocation));
         }
 
         public Task<TeamAutomationCommittedMutationReceipt> DeleteTeamAutomationAsync(
@@ -2835,6 +2982,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             CancellationToken ct = default)
         {
             CompleteRevocationCallCount++;
+            Calls?.Add("complete_revocation");
             return Task.FromResult(Committed(
                 scheduleId,
                 operationId,

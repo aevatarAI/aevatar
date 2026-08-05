@@ -473,6 +473,41 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             () => HandleBeginTeamAutomationCredentialOperationCoreAsync(command));
     }
 
+    [EventHandler]
+    public Task HandleRetryTeamAutomationCredentialOperationAsync(
+        RetryTeamAutomationCredentialOperationCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        return ExecuteObservedTeamAutomationCommandAsync(
+            ResolveScheduleId(),
+            command.OperationId,
+            command.IdempotencyKey,
+            TeamAutomationOperationObservationStages.Begin,
+            command.ObservationRequestId,
+            () => HandleRetryTeamAutomationCredentialOperationCoreAsync(command));
+    }
+
+    private async Task HandleRetryTeamAutomationCredentialOperationCoreAsync(
+        RetryTeamAutomationCredentialOperationCommand command)
+    {
+        var owner = NormalizeTeamAutomationOwner(command.Owner);
+        EnsureObservedTeamAutomationOwnerAccess(owner);
+        EnsureCurrentTeamAutomationOperation(command.OperationId, command.IdempotencyKey);
+        if (State.TeamAutomationLifecycleStatus is not (
+                TeamAutomationLifecycleStatusState.ProvisioningPending or
+                TeamAutomationLifecycleStatusState.ReplacementPending))
+        {
+            throw TeamAutomationCommandRejectedException.Conflict(
+                "team_automation_operation_not_pending");
+        }
+
+        await PersistTeamAutomationObservationAsync(
+            TeamAutomationOperationObservationStages.Begin,
+            CanClaimTeamAutomationEffectAttempt(_timeProvider.GetUtcNow()),
+            CancellationToken.None,
+            observationRequestId: command.ObservationRequestId);
+    }
+
     private async Task HandleBeginTeamAutomationCredentialOperationCoreAsync(
         BeginTeamAutomationCredentialOperationCommand command)
     {

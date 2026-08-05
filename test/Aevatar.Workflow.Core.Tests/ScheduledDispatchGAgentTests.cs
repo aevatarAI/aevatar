@@ -3041,6 +3041,46 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task TeamAutomationCredentialOperation_RetryPendingIdentity_ShouldClaimOnlyAfterLeaseExpires()
+    {
+        var eventStore = new TestEventStore();
+        var timeProvider = new FakeTimeProvider(
+            new DateTimeOffset(2026, 7, 16, 8, 0, 0, TimeSpan.Zero));
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort(), timeProvider: timeProvider);
+        await agent.ActivateAsync();
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(CreateTeamBeginCommand());
+        var firstEffectAttemptId = agent.State.TeamAutomationEffectAttemptId;
+        var retry = new RetryTeamAutomationCredentialOperationCommand
+        {
+            Owner = CreateTeamOwner(),
+            OperationId = "operation-alpha",
+            IdempotencyKey = "idempotency-alpha",
+            ObservationRequestId = "retry-before-expiry",
+        };
+
+        await agent.HandleRetryTeamAutomationCredentialOperationAsync(retry);
+        agent.State.TeamAutomationEffectAttemptId.Should().Be(firstEffectAttemptId);
+
+        timeProvider.Advance(TimeSpan.FromMinutes(5));
+        retry.ObservationRequestId = "retry-after-expiry";
+        await agent.HandleRetryTeamAutomationCredentialOperationAsync(retry);
+
+        agent.State.TeamAutomationEffectAttemptId.Should().NotBe(firstEffectAttemptId);
+        agent.State.TeamAutomationEffectAttemptGeneration.Should().Be(2);
+        agent.State.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusState.ProvisioningPending);
+        var observations = eventStore.GetEvents(ScheduleActorId)
+            .Where(x => x.EventType == TeamAutomationOperationObservedEvent.Descriptor.FullName)
+            .Select(x => x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Where(x => x.ObservationRequestId.StartsWith("retry-", StringComparison.Ordinal))
+            .ToArray();
+        observations.Select(x => x.OwnsEffectAttempt).Should().Equal(false, true);
+        observations.Should().OnlyContain(x =>
+            x.Stage == TeamAutomationOperationObservationStages.Begin &&
+            !x.NewOperationCommitted);
+    }
+
+    [Fact]
     public async Task TeamAutomationCredentialOperation_ShouldRejectStaleEffectAttempt()
     {
         var eventStore = new TestEventStore();

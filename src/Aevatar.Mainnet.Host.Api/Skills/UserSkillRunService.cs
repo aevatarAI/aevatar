@@ -1,6 +1,7 @@
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
@@ -220,11 +221,26 @@ internal sealed class UserSkillRunService : IUserSkillRunService
                 ex.FailureCode,
                 ToCredentialProvisioningFailureMessage(ex.FailureCode));
         }
+        catch (ScheduledDispatchConflictException ex)
+        {
+            return SkillScheduleOutcome.Failed(
+                "conflict",
+                ToScheduleConflictMessage(ex.Message));
+        }
         catch (InvalidOperationException ex)
         {
             return SkillScheduleOutcome.Failed("schedule_failed", ex.Message);
         }
     }
+
+    private static string ToScheduleConflictMessage(string message) => message switch
+    {
+        "team_automation_operation_in_progress" =>
+            "A credential operation for this workflow schedule is still in progress. Retry after it finishes.",
+        "team_automation_revocation_in_progress" =>
+            "Credential cleanup for this workflow schedule is still in progress. Retry after it finishes.",
+        _ => "The workflow schedule conflicts with an existing operation.",
+    };
 
     private static string ToPlanConflictCode(string code) => code switch
     {

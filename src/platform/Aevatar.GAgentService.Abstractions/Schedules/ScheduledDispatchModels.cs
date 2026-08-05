@@ -552,6 +552,15 @@ public interface IScheduledDispatchActorPort
         CancellationToken ct = default) =>
         throw new NotSupportedException();
 
+    Task<DispatchAdmission> DispatchRetryTeamAutomationCredentialOperationAsync(
+        string actorId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
+        string observationRequestId,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
     Task<DispatchAdmission> DispatchRecordTeamAutomationCredentialCandidateAsync(
         string actorId,
         TeamMemberAutomationOwner owner,
@@ -794,6 +803,14 @@ public interface IScheduledDispatchApplicationService
 
     Task<TeamAutomationCommittedMutationReceipt> BeginTeamAutomationCredentialOperationAsync(
         TeamAutomationCredentialOperation operation,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    Task<TeamAutomationCommittedMutationReceipt> RetryTeamAutomationCredentialOperationAsync(
+        string scheduleId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
         CancellationToken ct = default) =>
         throw new NotSupportedException();
 
