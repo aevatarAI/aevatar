@@ -573,7 +573,7 @@ public sealed partial class WorkflowRunGAgent
             firstInputFileRef?.FileId ?? string.Empty,
             firstInputFileRef?.ArtifactId ?? string.Empty,
             firstInputFileRef?.MediaType ?? string.Empty);
-        if (!await BindInputFileArtifactsAsync(inputFileRefs, runId, scopeId ?? string.Empty))
+        if (!await BindInputFileArtifactsAsync(inputFileRefs, runId))
         {
             await HandleWorkflowCompleted(new WorkflowCompletedEvent
             {
@@ -1103,16 +1103,19 @@ public sealed partial class WorkflowRunGAgent
             .Select(fileRef =>
             {
                 var clone = fileRef.Clone();
-                clone.OwnerRunId = runId;
-                clone.OwnerScopeId = scopeId ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(clone.OwnerRunId))
+                {
+                    clone.OwnerRunId = runId;
+                    clone.OwnerScopeId = scopeId;
+                }
+
                 return clone;
             })
             .ToArray();
 
     private async Task<bool> BindInputFileArtifactsAsync(
         IReadOnlyList<WorkflowFileRef> fileRefs,
-        string runId,
-        string scopeId)
+        string runId)
     {
         if (fileRefs.Count == 0 || _fileArtifactOwnership == null)
             return true;
@@ -1123,8 +1126,8 @@ public sealed partial class WorkflowRunGAgent
             {
                 await _fileArtifactOwnership.BindOwnerAsync(
                     ToApplicationFileArtifactRef(fileRef),
-                    runId,
-                    scopeId,
+                    fileRef.OwnerRunId!,
+                    fileRef.OwnerScopeId,
                     CancellationToken.None);
             }
             catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FileNotFoundException or IOException or UnauthorizedAccessException)

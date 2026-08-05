@@ -3068,7 +3068,7 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task StartWorkflow_WhenManagedRuntimeExists_ShouldNotPopulateInputFileRefsFromAmbientRefs()
+    public async Task StartWorkflow_WhenManagedRuntimeExists_ShouldPopulateInputFileRefsFromAmbientRefs()
     {
         var harness = new Harness();
         var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
@@ -3107,7 +3107,15 @@ public sealed class AevatarInvocationToolSourceTests
         receipt!.ManagedWorkflowHandoff.Should().NotBeNull();
         var requested = harness.ActorDispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload
             .Unpack<SubWorkflowInvokeRequestedEvent>();
-        requested.InputFileRefs.Should().BeEmpty();
+        var fileRef = requested.InputFileRefs.Should().ContainSingle().Subject;
+        fileRef.FileId.Should().Be("file-ambient-child-1");
+        fileRef.ArtifactId.Should().Be("workflow-file://file-ambient-child-1");
+        fileRef.SourceKind.Should().Be(Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ConnectedServiceResource);
+        fileRef.SourceMessageId.Should().Be("om_ambient_child_1");
+        fileRef.SourceResourceKey.Should().Be("file_key_ambient_child_1");
+        fileRef.FileName.Should().Be("ambient-child.pdf");
+        fileRef.MediaType.Should().Be("application/pdf");
+        fileRef.SizeBytes.Should().Be(654);
     }
 
     [Fact]
