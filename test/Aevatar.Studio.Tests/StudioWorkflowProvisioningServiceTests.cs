@@ -62,10 +62,19 @@ public sealed class StudioWorkflowProvisioningServiceTests
     private static (string WorkflowId, string RevisionId) ProvisionIdentity(
         string scopeId,
         string teamId,
-        string displayName)
+        string displayName,
+        string workflowYaml = StudioExplicitRequestAdmissionTestKit.WorkflowYaml,
+        ExternalCapabilityExecutionMode executionMode = ExternalCapabilityExecutionMode.Durable)
     {
         var key = StudioWorkflowProvisioningService.BuildProvisionKey(scopeId, teamId, displayName);
-        return ($"workflow-{key}", $"revision-{key}");
+        var workflowId = $"workflow-{key}";
+        return (
+            workflowId,
+            StudioWorkflowProvisioningService.BuildProvisionRevisionId(
+                key,
+                workflowId,
+                workflowYaml,
+                executionMode));
     }
 
     [Fact]
@@ -1318,8 +1327,63 @@ public sealed class StudioWorkflowProvisioningServiceTests
             StudioMemberInputLimits.MemberIdPattern.ToString());
         firstMember.BindRequest!.Workflow!.WorkflowId.Should().Be(
             secondMember.BindRequest!.Workflow!.WorkflowId);
+        firstMember.BindRequest.RevisionId.Should().Be(secondMember.BindRequest!.RevisionId);
         firstSchedule.Configuration!.ScheduleId.Should().Be($"provision-{PublishedServiceId}");
         firstSchedule.Configuration.ScheduleId.Should().Be(secondSchedule.Configuration!.ScheduleId);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_ChangedWorkflowSpec_KeepsWorkflowIdentityAndAdvancesRevision()
+    {
+        var originalMember = NewMemberService();
+        var changedMember = NewMemberService();
+
+        await NewService(originalMember, new RecordingScheduleService()).ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor\nsteps: []")
+            {
+                TeamId = TeamId,
+            });
+        await NewService(changedMember, new RecordingScheduleService()).ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor\nsteps:\n  - id: changed")
+            {
+                TeamId = TeamId,
+            });
+
+        originalMember.CreateRequest!.MemberId.Should().Be(changedMember.CreateRequest!.MemberId);
+        originalMember.BindRequest!.Workflow!.WorkflowId.Should().Be(
+            changedMember.BindRequest!.Workflow!.WorkflowId);
+        originalMember.BindRequest.RevisionId.Should().NotBe(changedMember.BindRequest.RevisionId);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_ChangedExecutionMode_AdvancesRevision()
+    {
+        var scheduledMember = NewMemberService();
+        var bindOnlyMember = NewMemberService();
+        const string yaml = "name: monitor\nsteps: []";
+
+        await NewService(scheduledMember, new RecordingScheduleService()).ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", yaml)
+            {
+                TeamId = TeamId,
+            });
+        await NewService(bindOnlyMember, new RecordingScheduleService()).ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", yaml, RunImmediately: false)
+            {
+                TeamId = TeamId,
+            });
+
+        scheduledMember.BindRequest!.Workflow!.WorkflowId.Should().Be(
+            bindOnlyMember.BindRequest!.Workflow!.WorkflowId);
+        scheduledMember.BindRequest.RevisionId.Should().NotBe(bindOnlyMember.BindRequest.RevisionId);
     }
 
     [Fact]

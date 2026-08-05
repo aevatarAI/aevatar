@@ -113,7 +113,14 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         var workflowYaml = NormalizeRequired(request.WorkflowYaml, nameof(request.WorkflowYaml));
         var provisionKey = BuildProvisionKey(normalizedScopeId, teamId, displayName);
         var workflowId = $"workflow-{provisionKey}";
-        var revisionId = $"revision-{provisionKey}";
+        var executionMode = ShouldSchedule(request)
+            ? ExternalCapabilityExecutionMode.Durable
+            : ExternalCapabilityExecutionMode.Interactive;
+        var revisionId = BuildProvisionRevisionId(
+            provisionKey,
+            workflowId,
+            workflowYaml,
+            executionMode);
 
         var suppliedAdmission = request.CapabilityAdmission;
         var callerId = suppliedAdmission?.CallerId ?? string.Empty;
@@ -124,9 +131,6 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             suppliedAdmission?.ExplicitRequestConfirmations,
             workflowId,
             revisionId);
-        var executionMode = ShouldSchedule(request)
-            ? ExternalCapabilityExecutionMode.Durable
-            : ExternalCapabilityExecutionMode.Interactive;
         var liveAdmissionRequest = new WorkflowExternalCapabilityAdmissionRequest(
             new ExternalWorkflowCapabilityAccessContext(
                 normalizedScopeId,
@@ -500,6 +504,30 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         var identity = Encoding.UTF8.GetBytes($"{scopeId}\n{teamId}\n{displayName}");
         var hash = SHA256.HashData(identity);
         return Convert.ToHexString(hash.AsSpan(0, 16)).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// A provisioned workflow keeps one stable draft identity while each distinct
+    /// executable spec receives its own immutable service revision. The versioned
+    /// contract marker also prevents a retry from colliding with revisions created
+    /// before the published-member binding began resolving the workflow name from
+    /// YAML instead of writing the workflow id into that semantic field.
+    /// </summary>
+    internal static string BuildProvisionRevisionId(
+        string provisionKey,
+        string workflowId,
+        string workflowYaml,
+        ExternalCapabilityExecutionMode executionMode)
+    {
+        var canonicalSpec = Encoding.UTF8.GetBytes(string.Join('\n',
+            "studio-workflow-provision-revision/v2",
+            provisionKey,
+            workflowId,
+            "workflow-name=yaml",
+            ((int)executionMode).ToString(),
+            workflowYaml));
+        var hash = SHA256.HashData(canonicalSpec);
+        return $"revision-{Convert.ToHexString(hash.AsSpan(0, 16)).ToLowerInvariant()}";
     }
 
     private static string NormalizeRequired(string? value, string fieldName)
