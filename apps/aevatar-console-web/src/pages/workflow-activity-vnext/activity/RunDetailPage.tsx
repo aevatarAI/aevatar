@@ -38,6 +38,31 @@ function failureTitle(error: unknown): string {
   return t('workflowActivityVNext.run.unavailable', 'Run unavailable');
 }
 
+function RunFailureSummary({
+  detail,
+  kind,
+}: {
+  readonly detail: string;
+  readonly kind: 'run' | 'step';
+}) {
+  return (
+    <>
+      <span>
+        {kind === 'run'
+          ? t(
+              'workflowActivityVNext.run.failedSummary',
+              'The run did not complete.',
+            )
+          : t(
+              'workflowActivityVNext.run.stepFailedSummary',
+              'This step did not complete.',
+            )}
+      </span>
+      <TechnicalDetails>{detail}</TechnicalDetails>
+    </>
+  );
+}
+
 const RunDetailPage: React.FC<{
   readonly runId: string;
   readonly scopeId: string;
@@ -353,9 +378,11 @@ const RunDetailPage: React.FC<{
           {
             key: 'error',
             label: t('workflowActivityVNext.run.error', 'Final error'),
-            children:
-              run.finalError ||
-              t('workflowActivityVNext.common.unavailable', 'Unavailable'),
+            children: run.finalError ? (
+              <RunFailureSummary detail={run.finalError} kind="run" />
+            ) : (
+              t('workflowActivityVNext.common.unavailable', 'Unavailable')
+            ),
           },
         ]}
       />
@@ -435,12 +462,18 @@ const RunDetailPage: React.FC<{
                             'Output',
                           )}
                         >
-                          {step.error ||
+                          {step.error ? (
+                            <RunFailureSummary
+                              detail={step.error}
+                              kind="step"
+                            />
+                          ) : (
                             step.outputPreview ||
                             t(
                               'workflowActivityVNext.common.unavailable',
                               'Unavailable',
-                            )}
+                            )
+                          )}
                         </td>
                         <td
                           data-label={t(
@@ -759,6 +792,18 @@ const RunDetailPage: React.FC<{
         <Descriptions
           column={1}
           items={[
+            {
+              key: 'step',
+              label: t(
+                'workflowActivityVNext.run.startingStep',
+                'Starting step',
+              ),
+              children: pendingRecovery?.stepId ? (
+                <span className="wa-vnext__mono">{pendingRecovery.stepId}</span>
+              ) : (
+                t('workflowActivityVNext.common.unavailable', 'Unavailable')
+              ),
+            },
             {
               key: 'input',
               label: t('workflowActivityVNext.run.input', 'Input'),

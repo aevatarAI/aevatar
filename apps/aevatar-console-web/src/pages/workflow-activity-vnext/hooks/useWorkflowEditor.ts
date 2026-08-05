@@ -1,25 +1,33 @@
-import { useQuery } from "@tanstack/react-query";
-import React from "react";
-import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
-import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
-import { history } from "@/shared/navigation/history";
+import { useQuery } from '@tanstack/react-query';
+import React from 'react';
+import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
+import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
+import { history } from '@/shared/navigation/history';
+import { studioApi } from '@/shared/studio/api';
 import {
   applyStepInspectorDraft,
   createStepInspectorDraft,
   insertStepByType,
-} from "@/shared/studio/document";
-import { buildStudioGraphElements, buildStudioWorkflowLayout } from "@/shared/studio/graph";
-import { studioApi } from "@/shared/studio/api";
+} from '@/shared/studio/document';
+import {
+  buildStudioGraphElements,
+  buildStudioWorkflowLayout,
+} from '@/shared/studio/graph';
 import type {
   StudioValidationFinding,
   StudioWorkflowDocument,
   StudioWorkflowFile,
-} from "@/shared/studio/models";
-import { buildWorkflowActivityEditorHref } from "../navigation";
-import { hasBlockingFindings } from "../workflows/workflowCreation";
-import { useDraftMaterialization } from "./useDraftMaterialization";
+} from '@/shared/studio/models';
+import { buildWorkflowActivityEditorHref } from '../navigation';
+import { hasBlockingFindings } from '../workflows/workflowCreation';
+import { useDraftMaterialization } from './useDraftMaterialization';
 
-export type DraftRunPhase = "idle" | "submitting" | "accepted" | "stream_ended" | "failed";
+export type DraftRunPhase =
+  | 'idle'
+  | 'submitting'
+  | 'accepted'
+  | 'stream_ended'
+  | 'failed';
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -27,34 +35,41 @@ function toErrorMessage(error: unknown): string {
 
 export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
   const source = useQuery({
-    queryKey: ["workflow-activity-vnext", "workflow", scopeId, routeWorkflowId],
+    queryKey: ['workflow-activity-vnext', 'workflow', scopeId, routeWorkflowId],
     queryFn: () => studioApi.getWorkflow(routeWorkflowId, scopeId),
     retry: false,
   });
   const workspace = useQuery({
-    queryKey: ["workflow-activity-vnext", "workspace", scopeId],
+    queryKey: ['workflow-activity-vnext', 'workspace', scopeId],
     queryFn: () => studioApi.getWorkspaceSettings(scopeId),
     retry: false,
   });
   const materialization = useDraftMaterialization(scopeId);
-  const [workflow, setWorkflow] = React.useState<StudioWorkflowFile | null>(null);
-  const [workflowTitle, setWorkflowTitle] = React.useState("");
-  const [yaml, setYaml] = React.useState("");
-  const [document, setDocument] = React.useState<StudioWorkflowDocument | null>(null);
+  const [workflow, setWorkflow] = React.useState<StudioWorkflowFile | null>(
+    null,
+  );
+  const [workflowTitle, setWorkflowTitle] = React.useState('');
+  const [yaml, setYaml] = React.useState('');
+  const [document, setDocument] = React.useState<StudioWorkflowDocument | null>(
+    null,
+  );
   const [layout, setLayout] = React.useState<unknown>(null);
-  const [findings, setFindings] = React.useState<readonly StudioValidationFinding[]>([]);
+  const [findings, setFindings] = React.useState<
+    readonly StudioValidationFinding[]
+  >([]);
   const [dirty, setDirty] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
-  const [saveError, setSaveError] = React.useState("");
-  const [runInput, setRunInput] = React.useState("");
-  const [runPhase, setRunPhase] = React.useState<DraftRunPhase>("idle");
-  const [runError, setRunError] = React.useState("");
+  const [saveError, setSaveError] = React.useState('');
+  const [runInput, setRunInput] = React.useState('');
+  const [runPhase, setRunPhase] = React.useState<DraftRunPhase>('idle');
+  const [runError, setRunError] = React.useState('');
   const [runEventCount, setRunEventCount] = React.useState(0);
-  const [selectedNodeId, setSelectedNodeId] = React.useState("");
-  const [selectedStepConfigurationError, setSelectedStepConfigurationError] = React.useState("");
+  const [selectedNodeId, setSelectedNodeId] = React.useState('');
+  const [selectedStepConfigurationError, setSelectedStepConfigurationError] =
+    React.useState('');
   const runControllerRef = React.useRef<AbortController | null>(null);
   const configurationGenerationRef = React.useRef(0);
-  const loadedSignatureRef = React.useRef("");
+  const loadedSignatureRef = React.useRef('');
 
   React.useEffect(() => {
     if (!source.data) return;
@@ -68,19 +83,43 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     setLayout(source.data.layout ?? null);
     setFindings(source.data.findings);
     setDirty(false);
-    setSaveError("");
-    setSelectedNodeId("");
-    setSelectedStepConfigurationError("");
+    setSaveError('');
+    setSelectedNodeId('');
+    setSelectedStepConfigurationError('');
+    if (source.data.document) return;
+
+    let cancelled = false;
+    void studioApi
+      .parseYaml({ yaml: source.data.yaml })
+      .then((parsed) => {
+        if (cancelled || loadedSignatureRef.current !== signature) return;
+        setDocument(parsed.document ?? null);
+        setFindings(parsed.findings);
+      })
+      .catch((error) => {
+        if (cancelled || loadedSignatureRef.current !== signature) return;
+        setFindings([
+          {
+            code: 'WORKFLOW_YAML_PARSE_FAILED',
+            level: 'error',
+            message: toErrorMessage(error),
+          },
+        ]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [source.data]);
 
   React.useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
       if (!dirty) return;
       event.preventDefault();
-      event.returnValue = "";
+      event.returnValue = '';
     };
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
 
   React.useEffect(() => () => runControllerRef.current?.abort(), []);
@@ -106,15 +145,24 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
   const save = React.useCallback(async () => {
     if (!workflow || saving || !workflowTitle.trim()) return false;
     setSaving(true);
-    setSaveError("");
+    setSaveError('');
     try {
       const parsedDocument = await parseCurrentYaml();
       if (!parsedDocument) return false;
-      const serialized = await studioApi.serializeYaml({ document: parsedDocument });
+      const serialized = await studioApi.serializeYaml({
+        document: parsedDocument,
+      });
       setFindings(serialized.findings);
-      if (hasBlockingFindings(serialized.document, serialized.findings)) return false;
-      const directoryId = workflow.directoryId || workspace.data?.directories[0]?.directoryId || "";
-      if (!directoryId) throw new Error("No server workflow directory is available for saving this draft.");
+      if (hasBlockingFindings(serialized.document, serialized.findings))
+        return false;
+      const directoryId =
+        workflow.directoryId ||
+        workspace.data?.directories[0]?.directoryId ||
+        '';
+      if (!directoryId)
+        throw new Error(
+          'No server workflow directory is available for saving this draft.',
+        );
       const graph = buildStudioGraphElements(serialized.document, layout);
       const result = await studioApi.saveWorkflow({
         directoryId,
@@ -127,7 +175,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         yaml: serialized.yaml,
       });
       let saved: StudioWorkflowFile | null = null;
-      if (result.kind === "materialized") saved = result.workflow;
+      if (result.kind === 'materialized') saved = result.workflow;
       else saved = await materialization.observe(result.receipt);
       if (!saved) return false;
       setWorkflow(saved);
@@ -137,7 +185,9 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       setFindings(saved.findings);
       setDirty(false);
       if (saved.workflowId !== routeWorkflowId) {
-        history.replace(buildWorkflowActivityEditorHref(scopeId, saved.workflowId));
+        history.replace(
+          buildWorkflowActivityEditorHref(scopeId, saved.workflowId),
+        );
       }
       return true;
     } catch (error) {
@@ -146,27 +196,42 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     } finally {
       setSaving(false);
     }
-  }, [layout, materialization.observe, parseCurrentYaml, routeWorkflowId, saving, scopeId, workflow, workflowTitle, workspace.data]);
+  }, [
+    layout,
+    materialization.observe,
+    parseCurrentYaml,
+    routeWorkflowId,
+    saving,
+    scopeId,
+    workflow,
+    workflowTitle,
+    workspace.data,
+  ]);
 
-  const addNode = React.useCallback(async (stepType: string) => {
-    const current = document ?? (await parseCurrentYaml());
-    if (!current) return;
-    const inserted = insertStepByType(current, stepType);
-    const serialized = await studioApi.serializeYaml({ document: inserted.document });
-    setDocument(serialized.document);
-    setYaml(serialized.yaml);
-    setFindings(serialized.findings);
-    setSelectedNodeId(inserted.nodeId);
-    setDirty(true);
-  }, [document, parseCurrentYaml]);
+  const addNode = React.useCallback(
+    async (stepType: string) => {
+      const current = document ?? (await parseCurrentYaml());
+      if (!current) return;
+      const inserted = insertStepByType(current, stepType);
+      const serialized = await studioApi.serializeYaml({
+        document: inserted.document,
+      });
+      setDocument(serialized.document);
+      setYaml(serialized.yaml);
+      setFindings(serialized.findings);
+      setSelectedNodeId(inserted.nodeId);
+      setDirty(true);
+    },
+    [document, parseCurrentYaml],
+  );
 
   const graph = React.useMemo(
     () => buildStudioGraphElements(document, layout),
     [document, layout],
   );
   const selectedStepDraft = React.useMemo(() => {
-    const selectedStepId = selectedNodeId.startsWith("step:")
-      ? selectedNodeId.slice("step:".length).trim()
+    const selectedStepId = selectedNodeId.startsWith('step:')
+      ? selectedNodeId.slice('step:'.length).trim()
       : selectedNodeId.trim();
     const selectedStep = graph.steps.find((step) => step.id === selectedStepId);
     return selectedStep ? createStepInspectorDraft(selectedStep) : null;
@@ -184,9 +249,11 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         );
         setDocument(updated.document);
         setSelectedNodeId(updated.nodeId);
-        setSelectedStepConfigurationError("");
+        setSelectedStepConfigurationError('');
         setDirty(true);
-        const serialized = await studioApi.serializeYaml({ document: updated.document });
+        const serialized = await studioApi.serializeYaml({
+          document: updated.document,
+        });
         if (generation !== configurationGenerationRef.current) return;
         setDocument(serialized.document);
         setYaml(serialized.yaml);
@@ -202,14 +269,14 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
 
   const canRun = Boolean(
     document?.steps?.length &&
-    !hasBlockingFindings(document, findings) &&
-    !selectedStepConfigurationError,
+      !hasBlockingFindings(document, findings) &&
+      !selectedStepConfigurationError,
   );
 
   const run = React.useCallback(async () => {
-    if (runPhase === "submitting" || runPhase === "accepted") return;
-    setRunPhase("submitting");
-    setRunError("");
+    if (runPhase === 'submitting' || runPhase === 'accepted') return;
+    setRunPhase('submitting');
+    setRunError('');
     setRunEventCount(0);
     const controller = new AbortController();
     runControllerRef.current?.abort();
@@ -217,13 +284,13 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     try {
       const current = await parseCurrentYaml();
       if (!current) {
-        setRunPhase("failed");
+        setRunPhase('failed');
         return;
       }
       const serialized = await studioApi.serializeYaml({ document: current });
       setFindings(serialized.findings);
       if (hasBlockingFindings(serialized.document, serialized.findings)) {
-        setRunPhase("failed");
+        setRunPhase('failed');
         return;
       }
       const response = await runtimeRunsApi.streamDraftRun(
@@ -231,18 +298,21 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         { prompt: runInput, workflowYamls: [serialized.yaml] },
         controller.signal,
       );
-      setRunPhase("accepted");
-      for await (const _event of parseBackendSSEStream(response, { signal: controller.signal })) {
+      setRunPhase('accepted');
+      for await (const _event of parseBackendSSEStream(response, {
+        signal: controller.signal,
+      })) {
         setRunEventCount((count) => count + 1);
       }
-      if (!controller.signal.aborted) setRunPhase("stream_ended");
+      if (!controller.signal.aborted) setRunPhase('stream_ended');
     } catch (error) {
       if (!controller.signal.aborted) {
         setRunError(toErrorMessage(error));
-        setRunPhase("failed");
+        setRunPhase('failed');
       }
     } finally {
-      if (runControllerRef.current === controller) runControllerRef.current = null;
+      if (runControllerRef.current === controller)
+        runControllerRef.current = null;
     }
   }, [parseCurrentYaml, runInput, runPhase, scopeId]);
 
@@ -268,12 +338,12 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     selectedStepConfigurationError,
     selectedStepDraft,
     selectCanvas: () => {
-      setSelectedNodeId("");
-      setSelectedStepConfigurationError("");
+      setSelectedNodeId('');
+      setSelectedStepConfigurationError('');
     },
     selectNode: (nodeId: string) => {
       setSelectedNodeId(nodeId);
-      setSelectedStepConfigurationError("");
+      setSelectedStepConfigurationError('');
     },
     setRunInput,
     setSelectedStepConfigurationError,

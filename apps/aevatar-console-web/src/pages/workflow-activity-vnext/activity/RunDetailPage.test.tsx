@@ -204,10 +204,13 @@ describe('Workflow Activity vNext run detail recovery', () => {
     expect(
       screen.getByRole('dialog', { name: 'Confirm new run' }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText('step-failed').length).toBeGreaterThan(0);
+    const confirmation = screen.getByRole('dialog', {
+      name: 'Confirm new run',
+    });
+    expect(within(confirmation).getByText('step-failed')).toBeInTheDocument();
     expect(
-      screen.getAllByText('Investigate checkout latency').length,
-    ).toBeGreaterThan(0);
+      within(confirmation).getByText('Investigate checkout latency'),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Confirm retry' }));
 
@@ -267,6 +270,18 @@ describe('Workflow Activity vNext run detail recovery', () => {
       await screen.findByText('Run graph unavailable'),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Run again' })).toBeDisabled();
+  });
+
+  it('keeps raw run and step errors behind technical details', async () => {
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    expect(await screen.findByText('The run did not complete.')).toBeVisible();
+    expect(screen.getByText('This step did not complete.')).toBeVisible();
+    for (const rawError of screen.getAllByText('Approval timed out')) {
+      expect(rawError).not.toBeVisible();
+    }
   });
 
   it('uses a product title instead of a raw run ID when the workflow name is missing', async () => {

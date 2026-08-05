@@ -109,6 +109,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.new.creatingDescription':
     'This usually takes only a moment.',
   'workflowActivityVNext.new.description': 'Choose how you want to start.',
+  'workflowActivityVNext.new.defaultWorkspace': 'Default workspace',
   'workflowActivityVNext.new.directory': 'Save location',
   'workflowActivityVNext.new.generate': 'Generate workflow',
   'workflowActivityVNext.new.generatedYaml': 'Generated YAML',
@@ -157,6 +158,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.run.cost': 'Cost',
   'workflowActivityVNext.run.diagnostics': 'Diagnostics',
   'workflowActivityVNext.run.error': 'Final error',
+  'workflowActivityVNext.run.failedSummary': 'The run did not complete.',
   'workflowActivityVNext.run.description':
     'Review the result, steps, and history for this run.',
   'workflowActivityVNext.run.title': 'Run details',
@@ -190,9 +192,11 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.run.sourceImmutable':
     "This starts a new run. The original run won't change.",
   'workflowActivityVNext.run.startFailed': "The new run couldn't be started",
+  'workflowActivityVNext.run.startingStep': 'Starting step',
   'workflowActivityVNext.run.statusUrl': 'Status URL',
   'workflowActivityVNext.run.statisticsUsage': 'Statistics and usage',
   'workflowActivityVNext.run.step': 'Step',
+  'workflowActivityVNext.run.stepFailedSummary': 'This step did not complete.',
   'workflowActivityVNext.run.steps': 'Steps',
   'workflowActivityVNext.run.timeline': 'Timeline',
   'workflowActivityVNext.run.totalSteps': 'Total steps',

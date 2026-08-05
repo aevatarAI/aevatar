@@ -212,6 +212,11 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
     workspace.isPending ||
     workspace.isError ||
     workspace.data?.directories.length === 0;
+  const selectMode = (nextMode: WorkflowCreationMode) => {
+    setFailure('');
+    setFindings([]);
+    setMode(nextMode);
+  };
 
   return (
     <WorkflowActivityVNextShell
@@ -290,7 +295,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
               aria-label={item.label}
               disabled={disabledByWorkspace}
               key={item.key}
-              onClick={() => setMode(item.key)}
+              onClick={() => selectMode(item.key)}
               style={{
                 background: '#fff',
                 border: '1px solid var(--wa-line)',
@@ -345,7 +350,13 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                 )}
                 onChange={setDirectoryId}
                 options={(workspace.data?.directories ?? []).map((item) => ({
-                  label: item.label,
+                  label:
+                    item.isBuiltIn && item.label.trim() === scopeId
+                      ? t(
+                          'workflowActivityVNext.new.defaultWorkspace',
+                          'Default workspace',
+                        )
+                      : item.label,
                   value: item.directoryId,
                 }))}
                 style={{ display: 'block', marginTop: 6, width: '100%' }}

@@ -760,6 +760,40 @@ describe('Workflow Activity vNext editor', () => {
     );
   });
 
+  it('parses authoritative YAML when the workflow response omits its document', async () => {
+    mockStudioApi.getWorkflow.mockResolvedValue({
+      workflowId: 'wf-imported',
+      name: 'Imported workflow',
+      fileName: 'imported.yaml',
+      filePath: '/workflows/imported.yaml',
+      directoryId: 'directory-alpha',
+      directoryLabel: 'Workflows',
+      yaml: 'name: imported\nsteps:\n  - id: step-root\n    type: llm_call\n',
+      updatedAtUtc: '2026-08-04T10:00:00Z',
+      document: null,
+      draftExists: true,
+      findings: [],
+    });
+    mockStudioApi.parseYaml.mockResolvedValue({
+      document: {
+        name: 'imported',
+        roles: [],
+        steps: [{ id: 'step-root', type: 'llm_call' }],
+      },
+      findings: [],
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(
+      await screen.findByRole('button', { name: 'Select step:step-root' }),
+    ).toBeInTheDocument();
+    expect(mockStudioApi.parseYaml).toHaveBeenCalledWith({
+      yaml: 'name: imported\nsteps:\n  - id: step-root\n    type: llm_call\n',
+    });
+    expect(screen.getByRole('button', { name: 'Run' })).toBeEnabled();
+  });
+
   it("keeps a save failure's server detail out of the primary editor message", async () => {
     mockStudioApi.saveWorkflow.mockRejectedValue(
       new Error('PUT /api/studio/workflows/wf-committed-source returned 500'),
@@ -920,6 +954,61 @@ describe('Workflow Activity vNext creation', () => {
     );
   });
 
+  it('does not expose the scope id as the built-in save location label', async () => {
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue({
+      runtimeBaseUrl: '',
+      directories: [
+        {
+          directoryId: 'directory-alpha',
+          label: 'scope-alpha',
+          path: '/workflows',
+          isBuiltIn: true,
+        },
+      ],
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    const blankButton = await screen.findByRole('button', {
+      name: 'Start blank',
+    });
+    await waitFor(() => expect(blankButton).toBeEnabled());
+    fireEvent.click(blankButton);
+
+    expect(screen.getByText('Default workspace')).toBeInTheDocument();
+    expect(screen.queryByText('scope-alpha')).not.toBeInTheDocument();
+  });
+
+  it('clears a submission failure when changing creation methods', async () => {
+    mockStudioApi.authorWorkflow.mockRejectedValue(
+      new Error('LLM service rejected the request'),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    const describeButton = await screen.findByRole('button', {
+      name: 'Describe',
+    });
+    await waitFor(() => expect(describeButton).toBeEnabled());
+    fireEvent.click(describeButton);
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Weekly review' },
+    });
+    fireEvent.change(screen.getByLabelText('Automation goal'), {
+      target: { value: 'Summarize this week' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Generate workflow' }));
+
+    expect(
+      await screen.findByText("Workflow couldn't be created"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Change method' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start blank' }));
+
+    expect(
+      screen.queryByText("Workflow couldn't be created"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Workflow name')).toHaveValue('Weekly review');
+  });
+
   it('keeps bundled template version metadata out of the primary interface', async () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
     const templateButton = await screen.findByRole('button', {
@@ -929,6 +1018,37 @@ describe('Workflow Activity vNext creation', () => {
     fireEvent.click(templateButton);
 
     expect(screen.queryByText(/2026\.08\.1/)).not.toBeInTheDocument();
+  });
+
+  it('submits bundled template YAML with the backend parser field names', async () => {
+    mockStudioApi.parseYaml.mockResolvedValue({
+      document: {
+        name: 'incident_triage',
+        roles: [],
+        steps: [{ id: 'classify', type: 'llm_call' }],
+      },
+      findings: [],
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    const templateButton = await screen.findByRole('button', {
+      name: 'Use template',
+    });
+    await waitFor(() => expect(templateButton).toBeEnabled());
+    fireEvent.click(templateButton);
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Incident triage QA' },
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Create from template' }),
+    );
+
+    await waitFor(() => expect(mockStudioApi.parseYaml).toHaveBeenCalled());
+    const submittedYaml = mockStudioApi.parseYaml.mock.calls[0][0].yaml;
+    expect(submittedYaml).toContain('system_prompt:');
+    expect(submittedYaml).toContain('target_role:');
+    expect(submittedYaml).not.toContain('systemPrompt:');
+    expect(submittedYaml).not.toContain('targetRole:');
   });
 
   it('validates imported YAML before creating and preserves invalid input', async () => {
