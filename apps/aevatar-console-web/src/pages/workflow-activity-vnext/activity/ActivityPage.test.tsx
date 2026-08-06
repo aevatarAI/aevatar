@@ -51,6 +51,10 @@ jest.mock('@/shared/api/workflowActivityApi', () => {
   };
 });
 
+jest.mock('@/shared/api/scopesApi', () => ({
+  scopesApi: { getWorkflowDetail: jest.fn() },
+}));
+
 jest.mock('@/shared/navigation/history', () => ({
   history: { push: jest.fn(), replace: jest.fn() },
 }));
@@ -70,6 +74,8 @@ jest.mock('../hooks/useConsoleLocation', () => ({
 
 const mockListRuns = jest.requireMock('@/shared/api/workflowActivityApi')
   .workflowActivityApi.listRuns as jest.Mock;
+const mockGetWorkflowDetail = jest.requireMock('@/shared/api/scopesApi')
+  .scopesApi.getWorkflowDetail as jest.Mock;
 
 describe('Workflow Activity vNext Activity ledger', () => {
   beforeEach(() => {
@@ -80,24 +86,89 @@ describe('Workflow Activity vNext Activity ledger', () => {
 
   afterEach(() => cleanupTestQueryClients());
 
-  it('preserves the honest unavailable notice for a workflow without definition identity', async () => {
-    mockSearch = '?workflowFilter=unavailable';
+  it('restores a visible workflow filter from the URL and removes it back to global Activity', async () => {
+    mockSearch = '?workflowId=wf-alpha';
+    mockGetWorkflowDetail.mockResolvedValue({
+      available: true,
+      scopeId: 'scope-alpha',
+      workflow: null,
+      source: {
+        definitionActorId: 'definition-alpha',
+        inlineWorkflowYamls: null,
+        workflowYaml: '',
+      },
+    });
 
     renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
 
-    expect(
-      await screen.findByText(
-        "This workflow can't be filtered yet. Showing all activity.",
-      ),
-    ).toBeInTheDocument();
     await waitFor(() =>
       expect(mockListRuns).toHaveBeenCalledWith('scope-alpha', {
         status: undefined,
         origins: undefined,
-        definitionActorIds: undefined,
+        definitionActorIds: ['definition-alpha'],
         take: 100,
       }),
     );
+    expect(mockGetWorkflowDetail).toHaveBeenCalledWith(
+      'scope-alpha',
+      'wf-alpha',
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Remove workflow filter wf-alpha',
+      }),
+    );
+
+    expect(history.replace).toHaveBeenLastCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/activity',
+    );
+  });
+
+  it('does not query global runs when the workflow filter is empty', async () => {
+    mockSearch = '?workflowId=';
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    expect(
+      await screen.findByText('Choose a workflow to filter Activity'),
+    ).toBeInTheDocument();
+    expect(mockGetWorkflowDetail).not.toHaveBeenCalled();
+    expect(mockListRuns).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unresolved workflow filter visible without showing global runs', async () => {
+    mockSearch = '?workflowId=wf-missing';
+    mockGetWorkflowDetail.mockRejectedValue(new Error('GET returned 404'));
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    expect(
+      await screen.findByText('Workflow activity unavailable'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', {
+        name: 'Remove workflow filter wf-missing',
+      }),
+    ).toBeEnabled();
+    expect(mockListRuns).not.toHaveBeenCalled();
+  });
+
+  it('keeps a workflow without a definition in an honest unavailable state', async () => {
+    mockSearch = '?workflowId=wf-draft-only';
+    mockGetWorkflowDetail.mockResolvedValue({
+      available: false,
+      scopeId: 'scope-alpha',
+      workflow: null,
+      source: null,
+    });
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    expect(
+      await screen.findByText('Activity filtering is unavailable'),
+    ).toBeInTheDocument();
+    expect(mockListRuns).not.toHaveBeenCalled();
   });
 
   it('sends only URL-backed supported filters to the observatory API', async () => {
@@ -146,7 +217,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
 
   it('restores search from the URL without sending it to the runs API', async () => {
     mockSearch =
-      '?q=customer&status=failed&origin=draft&definition=definition-alpha&workflowFilter=unavailable';
+      '?q=customer&status=failed&origin=draft&definition=definition-alpha';
 
     renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
 
@@ -168,7 +239,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
 
     await waitFor(() =>
       expect(history.replace).toHaveBeenLastCalledWith(
-        '/scopes/scope-alpha/workflow-activity-vnext/activity?q=invoice&status=failed&origin=draft&definition=definition-alpha&workflowFilter=unavailable',
+        '/scopes/scope-alpha/workflow-activity-vnext/activity?q=invoice&status=failed&origin=draft&definition=definition-alpha',
       ),
     );
     expect(mockListRuns).toHaveBeenLastCalledWith('scope-alpha', {

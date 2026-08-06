@@ -34,8 +34,24 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.activity.unnamed': 'Unnamed workflow',
   'workflowActivityVNext.activity.unavailableDescription':
     'Try again to load recent workflow runs.',
-  'workflowActivityVNext.activity.workflowFilterUnavailable':
-    "This workflow can't be filtered yet. Showing all activity.",
+  'workflowActivityVNext.activity.removeWorkflowFilterAria':
+    'Remove workflow filter {workflowId}',
+  'workflowActivityVNext.activity.workflowFilterInvalidDescription':
+    'This Activity link does not contain a workflow identity.',
+  'workflowActivityVNext.activity.workflowFilterInvalidTitle':
+    'Choose a workflow to filter Activity',
+  'workflowActivityVNext.activity.workflowFilterLabel':
+    'Workflow: {workflowId}',
+  'workflowActivityVNext.activity.workflowFilterLoading':
+    'Loading workflow activity…',
+  'workflowActivityVNext.activity.workflowFilterResolutionFailed':
+    'Workflow activity unavailable',
+  'workflowActivityVNext.activity.workflowFilterResolutionFailedDescription':
+    'Try again or remove the workflow filter.',
+  'workflowActivityVNext.activity.workflowFilterUnavailableDescription':
+    'No runs are shown because this workflow does not expose an Activity filter.',
+  'workflowActivityVNext.activity.workflowFilterUnavailableTitle':
+    'Activity filtering is unavailable',
   'workflowActivityVNext.brand.subtitle': 'AUTOMATION LEDGER',
   'workflowActivityVNext.common.cancel': 'Cancel',
   'workflowActivityVNext.common.close': 'Close',
@@ -571,10 +587,6 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.workflows.unavailableDescription':
     'Try again to load your workflows.',
   'workflowActivityVNext.workflows.viewFilter': 'Workflow view',
-  'workflowActivityVNext.workflows.activityFilterUnavailable':
-    "Activity filtering isn't available for this workflow yet.",
-  'workflowActivityVNext.workflows.activityResolutionFailed':
-    "Activity couldn't be opened for this workflow",
   'workflowActivityVNext.workflows.partialUnavailable':
     "Some workflows couldn't be loaded",
   'workflowActivityVNext.workflows.publishedRevision': 'Published {revision}',

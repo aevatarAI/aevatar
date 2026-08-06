@@ -38,8 +38,24 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.activity.unnamed': '未命名工作流',
     'workflowActivityVNext.activity.unavailableDescription':
       '请重试加载最近的工作流运行记录。',
-    'workflowActivityVNext.activity.workflowFilterUnavailable':
-      '暂时无法按此工作流筛选，当前显示全部活动记录。',
+    'workflowActivityVNext.activity.removeWorkflowFilterAria':
+      '移除工作流筛选条件 {workflowId}',
+    'workflowActivityVNext.activity.workflowFilterInvalidDescription':
+      '此活动链接不包含工作流身份。',
+    'workflowActivityVNext.activity.workflowFilterInvalidTitle':
+      '请选择要筛选活动的工作流',
+    'workflowActivityVNext.activity.workflowFilterLabel':
+      '工作流：{workflowId}',
+    'workflowActivityVNext.activity.workflowFilterLoading':
+      '正在加载工作流活动…',
+    'workflowActivityVNext.activity.workflowFilterResolutionFailed':
+      '工作流活动不可用',
+    'workflowActivityVNext.activity.workflowFilterResolutionFailedDescription':
+      '请重试或移除工作流筛选条件。',
+    'workflowActivityVNext.activity.workflowFilterUnavailableDescription':
+      '此工作流未提供活动筛选条件，因此不显示任何运行记录。',
+    'workflowActivityVNext.activity.workflowFilterUnavailableTitle':
+      '活动筛选不可用',
     'workflowActivityVNext.brand.subtitle': '自动化账本',
     'workflowActivityVNext.common.cancel': '取消',
     'workflowActivityVNext.common.close': '关闭',
@@ -532,10 +548,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.workflows.unavailableDescription':
       '请重试加载工作流。',
     'workflowActivityVNext.workflows.viewFilter': '工作流视图',
-    'workflowActivityVNext.workflows.activityFilterUnavailable':
-      '暂时无法筛选此工作流的活动记录。',
-    'workflowActivityVNext.workflows.activityResolutionFailed':
-      '无法打开此工作流的活动记录',
     'workflowActivityVNext.workflows.partialUnavailable': '部分工作流无法加载',
     'workflowActivityVNext.workflows.publishedRevision': '已发布 {revision}',
     'workflowActivityVNext.workflows.referenceCopied': '已复制工作流引用',
