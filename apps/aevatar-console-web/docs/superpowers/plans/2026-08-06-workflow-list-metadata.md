@@ -98,7 +98,7 @@ const workflowName = <span className="wa-vnext__title">{row.name}</span>;
         {row.description}
       </p>
     }
-    placement="rightTop"
+    placement="bottomLeft"
     trigger={['hover', 'focus']}
   >
     <button
