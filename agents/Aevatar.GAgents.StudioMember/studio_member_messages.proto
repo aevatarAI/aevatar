@@ -40,6 +40,18 @@ enum StudioMemberBindingRunStatus {
   STUDIO_MEMBER_BINDING_RUN_STATUS_MEMBER_NOTIFICATION_PENDING = 8;
 }
 
+enum StudioMemberPlatformBindingReadinessStatus {
+  STUDIO_MEMBER_PLATFORM_BINDING_READINESS_STATUS_UNSPECIFIED = 0;
+  STUDIO_MEMBER_PLATFORM_BINDING_READINESS_STATUS_SERVICE_CATALOG_MISSING = 1;
+  STUDIO_MEMBER_PLATFORM_BINDING_READINESS_STATUS_SERVING_SET_MISSING = 2;
+  STUDIO_MEMBER_PLATFORM_BINDING_READINESS_STATUS_ELIGIBLE_SERVING_TARGET_MISSING = 3;
+  STUDIO_MEMBER_PLATFORM_BINDING_READINESS_STATUS_SERVICE_CATALOG_TARGET_MISSING = 4;
+  STUDIO_MEMBER_PLATFORM_BINDING_READINESS_STATUS_READY = 5;
+  STUDIO_MEMBER_PLATFORM_BINDING_READINESS_STATUS_TRAFFIC_VIEW_TARGET_MISSING = 6;
+  STUDIO_MEMBER_PLATFORM_BINDING_READINESS_STATUS_PREPARED_ARTIFACT_MISSING = 7;
+  STUDIO_MEMBER_PLATFORM_BINDING_READINESS_STATUS_INVOCATION_CATALOG_NOT_READY = 8;
+}
+
 enum StudioMemberGAgentEndpointKind {
   STUDIO_MEMBER_GAGENT_ENDPOINT_KIND_UNSPECIFIED = 0;
   STUDIO_MEMBER_GAGENT_ENDPOINT_KIND_COMMAND = 1;
@@ -344,6 +356,13 @@ message StudioMemberPlatformBindingExecutionStarted {
   string binding_run_id = 1;
   string platform_binding_command_id = 2;
   google.protobuf.Timestamp started_at_utc = 3;
+}
+
+message StudioMemberPlatformBindingReadinessTimedOut {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+  StudioMemberPlatformBindingReadinessStatus readiness_status = 3;
+  google.protobuf.Timestamp timed_out_at_utc = 4;
 }
 
 message StudioMemberPlatformBindingSucceeded {

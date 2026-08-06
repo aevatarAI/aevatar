@@ -17,7 +17,6 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
     private const string BindingRunDirectRoute = "aevatar.studio.projection.studio-member-binding-run";
     private const string PlatformBindingFailedFailureCode = "STUDIO_MEMBER_PLATFORM_BINDING_FAILED";
     private const string ReadinessFailedFailureCode = "STUDIO_MEMBER_PLATFORM_BINDING_READINESS_FAILED";
-    private const string ReadinessTimeoutFailureCode = "STUDIO_MEMBER_PLATFORM_BINDING_READINESS_TIMEOUT";
 
     private readonly IScopeBindingCommandPort _scopeBindingCommandPort;
     private readonly IScopeBindingReadinessQueryPort _readinessQueryPort;
@@ -184,16 +183,15 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         if (!readiness.InvokeReady)
         {
             _logger.LogWarning(
-                "StudioMember platform binding commands completed, but readiness was not observed before timeout. bindingRunId={BindingRunId} platformBindingCommandId={CommandId} readinessStatus={ReadinessStatus}",
+                "StudioMember platform binding commands completed, but readiness was not observed before timeout. Leaving binding run pending for watchdog recovery. bindingRunId={BindingRunId} platformBindingCommandId={CommandId} readinessStatus={ReadinessStatus}",
                 request.BindingRunId,
                 commandId,
                 readiness.Status);
 
-            return BuildFailedContinuation(
+            return BuildReadinessTimedOutContinuation(
                 request.BindingRunId,
                 commandId,
-                ReadinessTimeoutFailureCode,
-                $"scope binding readiness timed out with status '{readiness.Status}'.");
+                readiness.Status);
         }
 
         StudioMemberImplementationRef implementationRef;
@@ -316,6 +314,18 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         };
         return _dispatchPort.DispatchAsync(replyActorId, envelope, ct);
     }
+
+    private static StudioMemberPlatformBindingReadinessTimedOut BuildReadinessTimedOutContinuation(
+        string bindingRunId,
+        string commandId,
+        ScopeBindingReadinessStatus readinessStatus) =>
+        new()
+        {
+            BindingRunId = bindingRunId,
+            PlatformBindingCommandId = commandId,
+            ReadinessStatus = ToStudioReadinessStatus(readinessStatus),
+            TimedOutAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
 
     private static StudioMemberPlatformBindingFailed BuildFailedContinuation(
         string bindingRunId,
@@ -473,6 +483,28 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             ScopeBindingImplementationKind.Scripting => StudioMemberImplementationKind.Script,
             ScopeBindingImplementationKind.GAgent => StudioMemberImplementationKind.Gagent,
             _ => StudioMemberImplementationKind.Unspecified,
+        };
+
+    private static StudioMemberPlatformBindingReadinessStatus ToStudioReadinessStatus(
+        ScopeBindingReadinessStatus status) =>
+        status switch
+        {
+            ScopeBindingReadinessStatus.ServiceCatalogMissing =>
+                StudioMemberPlatformBindingReadinessStatus.ServiceCatalogMissing,
+            ScopeBindingReadinessStatus.ServingSetMissing =>
+                StudioMemberPlatformBindingReadinessStatus.ServingSetMissing,
+            ScopeBindingReadinessStatus.EligibleServingTargetMissing =>
+                StudioMemberPlatformBindingReadinessStatus.EligibleServingTargetMissing,
+            ScopeBindingReadinessStatus.ServiceCatalogTargetMissing =>
+                StudioMemberPlatformBindingReadinessStatus.ServiceCatalogTargetMissing,
+            ScopeBindingReadinessStatus.Ready => StudioMemberPlatformBindingReadinessStatus.Ready,
+            ScopeBindingReadinessStatus.TrafficViewTargetMissing =>
+                StudioMemberPlatformBindingReadinessStatus.TrafficViewTargetMissing,
+            ScopeBindingReadinessStatus.PreparedArtifactMissing =>
+                StudioMemberPlatformBindingReadinessStatus.PreparedArtifactMissing,
+            ScopeBindingReadinessStatus.InvocationCatalogNotReady =>
+                StudioMemberPlatformBindingReadinessStatus.InvocationCatalogNotReady,
+            _ => StudioMemberPlatformBindingReadinessStatus.Unspecified,
         };
 
     private static StudioMemberImplementationRef BuildImplementationRef(ScopeBindingUpsertResult result) =>

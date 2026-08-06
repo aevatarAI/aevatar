@@ -406,7 +406,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenReadinessTimesOut_ShouldDispatchReadinessTimeoutContinuation()
+    public async Task ExecuteAsync_WhenReadinessTimesOut_ShouldDispatchRecoverableReadinessTimeoutContinuation()
     {
         var readinessPort = new RecordingReadinessQueryPort([NotReadySnapshot()]);
         var scopeBindingPort = new RecordingScopeBindingCommandPort();
@@ -428,12 +428,11 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             "platform-bind-1",
             NewScriptStartRequest());
 
-        var failed = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingFailed>();
+        var timedOut = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingReadinessTimedOut>();
         readinessPort.Requests.Should().HaveCount(2);
-        failed.BindingRunId.Should().Be("bind-1");
-        failed.PlatformBindingCommandId.Should().Be("platform-bind-1");
-        failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_READINESS_TIMEOUT");
-        failed.Failure.Message.Should().Contain("ServingSetMissing");
+        timedOut.BindingRunId.Should().Be("bind-1");
+        timedOut.PlatformBindingCommandId.Should().Be("platform-bind-1");
+        timedOut.ReadinessStatus.Should().Be(StudioMemberPlatformBindingReadinessStatus.ServingSetMissing);
     }
 
     [Fact]
