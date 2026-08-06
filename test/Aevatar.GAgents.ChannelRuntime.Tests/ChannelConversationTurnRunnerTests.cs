@@ -2414,6 +2414,7 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Should().NotBeNull();
         result.LlmReplyRequest!.Activity.Content.Text.Should().Contain("Ornn skill-backed command");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("use_skill");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("omit `mount_workflows`");
         var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext).SkillRecovery;
         recovery.RequireInitialOrnnSearch.Should().BeTrue();
         recovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
@@ -2422,6 +2423,41 @@ public sealed class ChannelConversationTurnRunnerTests
         recovery.CommandArguments.Should().Be(message);
         recovery.OriginalCommand.Should().Be(message);
         recovery.IsolatePriorConversationHistory.Should().BeTrue();
+        recovery.MountWorkflowsRequested.Should().BeFalse();
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_WhenNamedSkillMountIsExplicit_ShouldPreviewAndPreserveMountIntent()
+    {
+        const string message =
+            "请挂载 lark-contact-batch-resolution skill，解析 1 个合成联系人标识，并只返回脱敏结果。";
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                message,
+                "msg-skill-mount-natural-language-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Activity.Content.Text.Should().Contain("`mount_workflows=true`");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("`workflow_mount_confirmation_token`");
+        result.LlmReplyRequest.Activity.Content.Text.Should().NotContain("omit `mount_workflows`");
+        var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext).SkillRecovery;
+        recovery.CommandName.Should().Be("lark-contact-batch-resolution");
+        recovery.PrimarySkillName.Should().Be("lark-contact-batch-resolution");
+        recovery.CommandArguments.Should().Be(message);
+        recovery.MountWorkflowsRequested.Should().BeTrue();
         adapter.Replies.Should().BeEmpty();
     }
 

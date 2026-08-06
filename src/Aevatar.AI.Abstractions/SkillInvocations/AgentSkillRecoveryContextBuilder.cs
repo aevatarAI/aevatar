@@ -20,7 +20,8 @@ public static class AgentSkillRecoveryContextBuilder
                 MaxOrnnSearchAttempts: 1,
                 CommandArguments: null,
                 DiscoveryRequested: true,
-                IsolatePriorConversationHistory: false);
+                IsolatePriorConversationHistory: false,
+                MountWorkflowsRequested: false);
         }
 
         return new AgentSkillRecoveryContext(
@@ -32,6 +33,7 @@ public static class AgentSkillRecoveryContextBuilder
             MaxOrnnSearchAttempts: 2,
             CommandArguments: trigger.Arguments,
             DiscoveryRequested: false,
-            IsolatePriorConversationHistory: true);
+            IsolatePriorConversationHistory: true,
+            MountWorkflowsRequested: trigger.MountWorkflowsRequested);
     }
 }

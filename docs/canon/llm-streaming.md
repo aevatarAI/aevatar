@@ -451,7 +451,7 @@ LLM 文本不是外部写操作结果的事实源。只有同一 turn 内 `Statu
 | `Success` | 仅在 tool、side effect 与 typed subject 同样匹配时，允许支撑对应动作的成功声明。 |
 | `Error` / `ApprovalRequired` / `Denied` / `AuthorizationRequired` / `Unspecified` | 用 deterministic receipt text 替换模型成功叙述，并同时写入 streaming snapshot、reply、outbound intent 与本 turn assistant history；必须保持用户可见。`ApprovalRequired` 的确定性文案保留 approval request evidence。 |
 
-Assistant tool-call history 中与 blocking receipt 匹配的 narrative 必须清空，同时保留 tool call/result pairing，避免下一 turn 重放虚假成功。Read-only failure 可以追加为用户可见诊断，但不替换一个其他方面有效的回答；追加后的实际可见文本也必须同步进 retained history。`use_skill` 省略 `mount_workflows` 时只是 read-only 的 skill/instruction load，该成功回执不能证明 workflow mount；首次 `mount_workflows=true` 仍是 read-only preview，返回服务端可重算的 `workflow_mount_confirmation_token`。携带该 token 的二次调用才是 approval-gated mutating operation，批准后必须重算全部 workflow/capability confirmation 并校验 token；只有其 matching successful mutating receipt 才能证明挂载完成。
+Assistant tool-call history 中与 blocking receipt 匹配的 narrative 必须清空，同时保留 tool call/result pairing，避免下一 turn 重放虚假成功。Read-only failure 可以追加为用户可见诊断，但不替换一个其他方面有效的回答；追加后的实际可见文本也必须同步进 retained history。`use_skill` 省略 `mount_workflows` 时只是 read-only 的 skill/instruction load，该成功回执不能证明 workflow mount；首次 `mount_workflows=true` 仍是 read-only preview，返回服务端可重算的 `workflow_mount_confirmation_token`。携带该 token 的二次调用才是 approval-gated mutating operation，批准后必须重算全部 workflow/capability confirmation 并校验 token；只有其 matching successful mutating receipt 才能证明挂载完成。自然语言 skill trigger 必须把显式 `mount/挂载` 意图建模为 typed recovery state 并跨 checkpoint 保留；普通 `use/使用/load/加载` 不得隐式升级为 workflow mount。Preview 到 confirmation 的推进由 typed recovery planner 读取结构化 `skill_load.workflow_mount` 后确定性完成，不能把 opaque token 的提取和审批推进委托给模型文本推理。
 
 ### 8.2 WorkflowRunEvent（输出统一事件）
 

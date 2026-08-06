@@ -809,7 +809,8 @@ public sealed class RoleGAgentRecoveryCheckpointTests
                 2,
                 "arguments-with-secret",
                 true,
-                IsolatePriorConversationHistory: true),
+                IsolatePriorConversationHistory: true,
+                MountWorkflowsRequested: true),
         };
 
         var recoveryPayload = context.ToRecoveryPayload();
@@ -820,6 +821,12 @@ public sealed class RoleGAgentRecoveryCheckpointTests
             .FromRecoveryPayload(recoveryPayload)
             .SkillRecovery
             .IsolatePriorConversationHistory
+            .Should()
+            .BeTrue();
+        AgentToolExecutionContextMapper
+            .FromRecoveryPayload(recoveryPayload)
+            .SkillRecovery
+            .MountWorkflowsRequested
             .Should()
             .BeTrue();
 

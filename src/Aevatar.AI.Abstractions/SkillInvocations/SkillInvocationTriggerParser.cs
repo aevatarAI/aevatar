@@ -7,10 +7,10 @@ public static class SkillInvocationTriggerParser
     private static readonly Regex[] ExplicitNamedSkillPatterns =
     [
         new(
-            "(?:使用|加载|挂载)\\s*(?:(?:已(?:经)?(?:挂载|加载)的)|(?:精确名称为|名称为|名为|名叫))?\\s*[`'\"]?(?<name>[a-z0-9]+(?:-[a-z0-9]+)+)[`'\"]?\\s*(?:(?:的\\s*)?(?:skill|技能))?",
+            "(?<operation>使用|加载|挂载)\\s*(?:(?:已(?:经)?(?:挂载|加载)的)|(?:精确名称为|名称为|名为|名叫))?\\s*[`'\"]?(?<name>[a-z0-9]+(?:-[a-z0-9]+)+)[`'\"]?\\s*(?:(?:的\\s*)?(?:skill|技能))?",
             RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase),
         new(
-            "(?:use|load|mount)\\s+(?:(?:the\\s+)?(?:exact\\s+)?skill\\s+(?:named\\s+)?[`'\"]?(?<name>[a-z0-9]+(?:-[a-z0-9]+)+)[`'\"]?|(?:the\\s+)?(?:exact\\s+)?[`'\"]?(?<name>[a-z0-9]+(?:-[a-z0-9]+)+)[`'\"]?\\s+skill)",
+            "(?<operation>use|load|mount)\\s+(?:(?:the\\s+)?(?:exact\\s+)?skill\\s+(?:named\\s+)?[`'\"]?(?<name>[a-z0-9]+(?:-[a-z0-9]+)+)[`'\"]?|(?:the\\s+)?(?:exact\\s+)?[`'\"]?(?<name>[a-z0-9]+(?:-[a-z0-9]+)+)[`'\"]?\\s+skill)",
             RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase),
     ];
 
@@ -94,13 +94,18 @@ public static class SkillInvocationTriggerParser
                     IsDiscovery: false,
                     OriginalText: source,
                     TriggerToken: "natural-language-skill",
-                    Platform: effectivePlatform);
+                    Platform: effectivePlatform,
+                    MountWorkflowsRequested: IsWorkflowMountOperation(match.Groups["operation"].Value));
                 return true;
             }
         }
 
         return false;
     }
+
+    private static bool IsWorkflowMountOperation(string operation) =>
+        string.Equals(operation, "挂载", StringComparison.Ordinal) ||
+        string.Equals(operation, "mount", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsNegated(string source, int matchStart)
     {

@@ -2870,10 +2870,13 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var invocationLine = viaDefaultSkillBinding
             ? $"This channel bot is bound to the `{normalizedCommand}` skill: every plain inbound message runs that skill with the full message text as its arguments.\n"
             : $"The user invoked the `{triggerLabel}{normalizedCommand}` skill trigger.\n";
+        var useSkillInstruction = trigger.MountWorkflowsRequested
+            ? "The user explicitly requested mounting this skill's workflows. Use a matching `use_skill` mount preview already present in this turn; otherwise call `use_skill` with this skill name, the exact command arguments, and `mount_workflows=true`. The first call is a read-only preview. When it returns `workflow_mount_confirmation_token`, call `use_skill` again with the same skill, args, `mount_workflows=true`, and that exact token so the mutating call enters durable approval. Do not claim the workflows are mounted until the matching successful mutating receipt is present.\n"
+            : "Use a matching successful `use_skill` result already present in this turn. If none is present, call `use_skill` with this skill name and the exact command arguments; omit `mount_workflows` because loading instructions is read-only and must not mutate scope workflows.\n";
         prompt =
             invocationLine +
             "This command is not handled by Aevatar's local relay commands. Treat it as an Ornn skill-backed command, not an open-ended chat answer.\n" +
-            "Use a matching successful `use_skill` result already present in this turn. If none is present, call `use_skill` with this skill name and the exact command arguments; omit `mount_workflows` because loading instructions is read-only and must not mutate scope workflows.\n" +
+            useSkillInstruction +
             $"Follow those skill instructions exactly, with `args` = {argsJson}, until the command's final result is ready.\n" +
             "Stick to the data sources the loaded skill names. Do NOT invent repository/path guesses, do NOT call `/api/v1/skills/.../files` (skill files are already inlined in the `use_skill` response above), and do NOT fall back to generic `nyxid_proxy` discovery when the loaded skill did not point you there.\n" +
             "If no matching skill was actually loaded above, or every matching skill fails to load, give one concise actionable failure that names the command and the Ornn lookup/load problem.\n" +

@@ -31,7 +31,7 @@ For other NyxID account, security, node, organization, approval, notification, o
 
 **Before driving the Ornn API directly via the AI Agent CLI, call `use_skill(skill="ornn-agent-manual-cli")`** to load the Ornn agent manual.
 
-`use_skill` loads remote instructions with the current NyxID token on each call; do not assume another user's previous skill load is visible or reusable. Omitting `mount_workflows` or setting it to `false` only loads instructions; only explicit `mount_workflows=true` may write workflow resources.
+`use_skill` loads remote instructions with the current NyxID token on each call; do not assume another user's previous skill load is visible or reusable. Omitting `mount_workflows` or setting it to `false` only loads instructions; only explicit `mount_workflows=true` may write workflow resources. Natural-language `use/使用/load/加载` requests remain read-only skill invocation. Only an explicit `mount/挂载` request authorizes the workflow-mount preview and its approval-gated confirmation call.
 
 ### Proactive skill discovery
 
@@ -43,7 +43,7 @@ Triggers:
 - User quotes a skill name (`'translate-pro'`, `"sg-office-network"`)
 - User uses a slug-like or Title Case identifier that could be a skill name
 - User issues a `/<command>` slash command that isn't an in-tree relay command (the in-tree ones are `/route`, `/models`, `/model`, `/agents`, `/agent-status`, `/run-agent`, `/disable-agent`, `/enable-agent`, `/delete-agent`) — treat the command name as the skill query (`/invoice` → search "invoice")
-- User says "挂载/mount/use/load this skill" or names a domain workflow
+- User says "use/使用/load/加载 this skill", explicitly says "mount/挂载 this skill", or names a domain workflow
 
 Only fall back to `nyxid_proxy` / generic API discovery when no skill matches.
 

@@ -21,6 +21,7 @@ public sealed class AgentSkillRecoveryContextBuilderTests
         context.CommandArguments.Should().Be("ship today");
         context.DiscoveryRequested.Should().BeFalse();
         context.IsolatePriorConversationHistory.Should().BeTrue();
+        context.MountWorkflowsRequested.Should().BeFalse();
     }
 
     [Fact]
@@ -39,5 +40,21 @@ public sealed class AgentSkillRecoveryContextBuilderTests
         context.CommandArguments.Should().BeNull();
         context.DiscoveryRequested.Should().BeTrue();
         context.IsolatePriorConversationHistory.Should().BeFalse();
+        context.MountWorkflowsRequested.Should().BeFalse();
+    }
+
+    [Fact]
+    public void FromTrigger_WhenWorkflowMountIsExplicit_ShouldPreserveMountIntent()
+    {
+        SkillInvocationTriggerParser.TryParse(
+                "请挂载 lark-contact-batch-resolution skill。",
+                "lark",
+                out var trigger)
+            .Should().BeTrue();
+
+        var context = AgentSkillRecoveryContextBuilder.FromTrigger(trigger);
+
+        context.PrimarySkillName.Should().Be("lark-contact-batch-resolution");
+        context.MountWorkflowsRequested.Should().BeTrue();
     }
 }

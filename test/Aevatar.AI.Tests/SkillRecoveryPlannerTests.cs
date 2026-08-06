@@ -363,6 +363,179 @@ public sealed class SkillRecoveryPlannerTests
     }
 
     [Fact]
+    public void TryPlanNextDirective_WhenWorkflowMountIsExplicit_ShouldBuildMountPreviewCall()
+    {
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.User("请挂载 project-summary skill。"),
+            AssistantToolCall("search-1", "ornn_search_skills", """{"query":"project-summary"}"""),
+            ToolResult("search-1", "ornn_search_skills", SearchResult(
+                status: "success",
+                text: "typed catalog match",
+                matches:
+                [
+                    new { skill_name = "project-summary", description = "summary planning", is_private = false, category = "ops", tags = Array.Empty<string>() },
+                ])),
+        };
+
+        var forced = SkillRecoveryPlanner.TryPlanNextDirective(
+            Recovery(
+                originalCommand: "请挂载 project-summary skill。",
+                primarySkillName: "project-summary",
+                commandArguments: "synthetic args",
+                mountWorkflowsRequested: true),
+            messages,
+            finalContent: null,
+            recoveryAttempts: 1,
+            callIdPrefix: "req-mount",
+            out var directive);
+
+        forced.Should().BeTrue();
+        directive.ToolCall.Should().NotBeNull();
+        using var document = JsonDocument.Parse(directive.ToolCall!.ArgumentsJson);
+        document.RootElement.GetProperty("skill").GetString().Should().Be("project-summary");
+        document.RootElement.GetProperty("args").GetString().Should().Be("synthetic args");
+        document.RootElement.GetProperty("mount_workflows").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void TryPlanNextDirective_WhenMountPreviewRequiresConfirmation_ShouldBuildApprovalGatedCall()
+    {
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.User("请挂载 project-summary skill。"),
+            AssistantToolCall("search-1", "ornn_search_skills", """{"query":"project-summary"}"""),
+            ToolResult("search-1", "ornn_search_skills", SearchResult(
+                status: "success",
+                text: "typed catalog match",
+                matches:
+                [
+                    new { skill_name = "project-summary", description = "summary planning", is_private = false, category = "ops", tags = Array.Empty<string>() },
+                ])),
+            AssistantToolCall(
+                "use-preview",
+                "use_skill",
+                """{"skill":"project-summary","args":"synthetic args","mount_workflows":true}"""),
+            ToolResult(
+                "use-preview",
+                "use_skill",
+                MountLoadResult(
+                    skillName: "project-summary",
+                    mountStatus: "confirmation_required",
+                    mounted: false,
+                    confirmationToken: "sha256:preview-alpha")),
+        };
+
+        var forced = SkillRecoveryPlanner.TryPlanNextDirective(
+            Recovery(
+                originalCommand: "请挂载 project-summary skill。",
+                primarySkillName: "project-summary",
+                commandArguments: "synthetic args",
+                mountWorkflowsRequested: true),
+            messages,
+            finalContent: null,
+            recoveryAttempts: 0,
+            callIdPrefix: "req-confirm",
+            out var directive);
+
+        forced.Should().BeTrue();
+        using var document = JsonDocument.Parse(directive.ToolCall!.ArgumentsJson);
+        document.RootElement.GetProperty("skill").GetString().Should().Be("project-summary");
+        document.RootElement.GetProperty("args").GetString().Should().Be("synthetic args");
+        document.RootElement.GetProperty("mount_workflows").GetBoolean().Should().BeTrue();
+        document.RootElement.GetProperty("workflow_mount_confirmation_token").GetString()
+            .Should().Be("sha256:preview-alpha");
+    }
+
+    [Fact]
+    public void TryPlanNextDirective_WhenMountConfirmationCallAlreadyExists_ShouldNotRepeatIt()
+    {
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.User("请挂载 project-summary skill。"),
+            AssistantToolCall("search-1", "ornn_search_skills", """{"query":"project-summary"}"""),
+            ToolResult("search-1", "ornn_search_skills", SearchResult(
+                status: "success",
+                text: "typed catalog match",
+                matches:
+                [
+                    new { skill_name = "project-summary", description = "summary planning", is_private = false, category = "ops", tags = Array.Empty<string>() },
+                ])),
+            AssistantToolCall(
+                "use-preview",
+                "use_skill",
+                """{"skill":"project-summary","mount_workflows":true}"""),
+            ToolResult(
+                "use-preview",
+                "use_skill",
+                MountLoadResult(
+                    skillName: "project-summary",
+                    mountStatus: "confirmation_required",
+                    mounted: false,
+                    confirmationToken: "sha256:preview-alpha")),
+            AssistantToolCall(
+                "use-confirm",
+                "use_skill",
+                """{"skill":"project-summary","mount_workflows":true,"workflow_mount_confirmation_token":"sha256:preview-alpha"}"""),
+        };
+
+        var forced = SkillRecoveryPlanner.TryPlanNextDirective(
+            Recovery(
+                primarySkillName: "project-summary",
+                mountWorkflowsRequested: true),
+            messages,
+            finalContent: null,
+            recoveryAttempts: 0,
+            callIdPrefix: "req-confirm",
+            primarySkillAttempted: true,
+            out var directive);
+
+        forced.Should().BeFalse();
+        directive.ToolCall.Should().BeNull();
+    }
+
+    [Fact]
+    public void TryPlanNextDirective_WhenMountIntentIsAbsent_ShouldNotConfirmUnexpectedPreview()
+    {
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.User("请使用 project-summary skill。"),
+            AssistantToolCall("search-1", "ornn_search_skills", """{"query":"project-summary"}"""),
+            ToolResult("search-1", "ornn_search_skills", SearchResult(
+                status: "success",
+                text: "typed catalog match",
+                matches:
+                [
+                    new { skill_name = "project-summary", description = "summary planning", is_private = false, category = "ops", tags = Array.Empty<string>() },
+                ])),
+            AssistantToolCall(
+                "use-preview",
+                "use_skill",
+                """{"skill":"project-summary","mount_workflows":true}"""),
+            ToolResult(
+                "use-preview",
+                "use_skill",
+                MountLoadResult(
+                    skillName: "project-summary",
+                    mountStatus: "confirmation_required",
+                    mounted: false,
+                    confirmationToken: "sha256:preview-alpha")),
+        };
+
+        var forced = SkillRecoveryPlanner.TryPlanNextDirective(
+            Recovery(primarySkillName: "project-summary", mountWorkflowsRequested: false),
+            messages,
+            finalContent: null,
+            recoveryAttempts: 0,
+            callIdPrefix: "req-read-only",
+            primarySkillAttempted: true,
+            out var directive);
+
+        forced.Should().BeFalse();
+        directive.ToolCall.Should().BeNull();
+    }
+
+    [Fact]
     public void TryPlanNextDirective_WhenInitialSearchFindsDifferentSkill_ShouldLoadTypedMatchInsteadOfPrimaryGuess()
     {
         var messages = new List<ChatMessage>
@@ -720,7 +893,8 @@ public sealed class SkillRecoveryPlannerTests
         string originalCommand = "/goal ship",
         string? primarySkillName = "project-summary",
         int maxAttempts = 2,
-        string? commandArguments = null) =>
+        string? commandArguments = null,
+        bool mountWorkflowsRequested = false) =>
         new(
             RequireInitialOrnnSearch: requireInitialSearch,
             RequireOrnnSearchOnBlocker: true,
@@ -729,7 +903,8 @@ public sealed class SkillRecoveryPlannerTests
             PrimarySkillName: primarySkillName,
             MaxOrnnSearchAttempts: maxAttempts,
             CommandArguments: commandArguments,
-            DiscoveryRequested: false);
+            DiscoveryRequested: false,
+            MountWorkflowsRequested: mountWorkflowsRequested);
 
     private static StreamingToolExecutor NewStreamingToolExecutor(
         ToolManager tools,
@@ -831,6 +1006,28 @@ public sealed class SkillRecoveryPlannerTests
             error,
             http_status = (int?)null,
             text,
+        });
+
+    private static string MountLoadResult(
+        string skillName,
+        string mountStatus,
+        bool mounted,
+        string confirmationToken) =>
+        JsonSerializer.Serialize(new
+        {
+            result_type = "skill_load",
+            status = "success",
+            skill_name = skillName,
+            loaded = true,
+            error = (string?)null,
+            http_status = (int?)null,
+            text = "loaded workflow skill",
+            workflow_mount = new
+            {
+                status = mountStatus,
+                mounted,
+                confirmation_token = confirmationToken,
+            },
         });
 
     private sealed class DelegateTool(string name, Func<string, string> execute) : IAgentTool

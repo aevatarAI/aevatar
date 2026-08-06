@@ -894,7 +894,7 @@ Executor 必须根据具体调用的 `GetCallSafety(argumentsJson)` 与 `SideEff
 - read-only failure 可以附加到回复中，但不得替换一个本来有效的答案。
 - `ApprovalRequired` 仍表示等待审批，不能证明成功；deterministic pending 文案必须保留 approval request evidence，不能与模型成功措辞并列。
 
-`use_skill` 必须保持两种操作语义分离：省略 `mount_workflows` 时仅加载 skill/instructions，是 read-only，加载成功不能证明 workflow 已挂载；首次 `mount_workflows=true` 也只做外部请求 preview，并返回覆盖 workflow revision、bundle 与全部 explicit request contract 的 `workflow_mount_confirmation_token`。后续调用必须原样携带该 token，进入 durable approval 后由服务端重新解析 workflow、重算 confirmation 并校验 token，不能信任模型复制的 capability 字段。只有 matching successful mutating receipt 才能证明挂载成功；完整 `workflow_mount_confirmations` 对象仅作为旧会话兼容契约。
+`use_skill` 必须保持两种操作语义分离：省略 `mount_workflows` 时仅加载 skill/instructions，是 read-only，加载成功不能证明 workflow 已挂载；首次 `mount_workflows=true` 也只做外部请求 preview，并返回覆盖 workflow revision、bundle 与全部 explicit request contract 的 `workflow_mount_confirmation_token`。后续调用必须原样携带该 token，进入 durable approval 后由服务端重新解析 workflow、重算 confirmation 并校验 token，不能信任模型复制的 capability 字段。只有 matching successful mutating receipt 才能证明挂载成功；完整 `workflow_mount_confirmations` 对象仅作为旧会话兼容契约。Channel 自然语言入口只把显式 `mount/挂载` 解析为 typed workflow-mount intent，并跨 tool context/checkpoint 保留；`use/使用/load/加载` 仍只允许 read-only skill load，禁止由模型自行扩大为写操作。Typed recovery planner 必须从结构化 `skill_load.workflow_mount` 读取 `confirmation_required` 与 opaque token，并确定性地产生一次 confirmation call；不得依赖模型从展示文本复制 token 或决定是否进入审批。
 
 ### 5.7 Middleware Pipeline（窄范围）
 

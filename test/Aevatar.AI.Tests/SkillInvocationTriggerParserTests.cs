@@ -153,6 +153,7 @@ public sealed class SkillInvocationTriggerParserTests
         trigger.Arguments.Should().Be(text);
         trigger.OriginalText.Should().Be(text);
         trigger.TriggerToken.Should().Be("natural-language-skill");
+        trigger.MountWorkflowsRequested.Should().BeFalse();
     }
 
     [Theory]
@@ -166,6 +167,7 @@ public sealed class SkillInvocationTriggerParserTests
         trigger.Arguments.Should().Be(text);
         trigger.OriginalText.Should().Be(text);
         trigger.TriggerToken.Should().Be("natural-language-skill");
+        trigger.MountWorkflowsRequested.Should().BeFalse();
     }
 
     [Theory]
@@ -178,6 +180,19 @@ public sealed class SkillInvocationTriggerParserTests
         trigger.Name.Should().Be("invoice-ocr-policy-review");
         trigger.Arguments.Should().Be(text);
         trigger.TriggerToken.Should().Be("natural-language-skill");
+        trigger.MountWorkflowsRequested.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("请挂载 lark-contact-batch-resolution skill，并只返回脱敏结果。", "lark")]
+    [InlineData("Please mount the exact lark-contact-batch-resolution skill.", "web")]
+    public void TryParse_WhenNamedSkillMountIsExplicit_ShouldPreserveMountIntent(string text, string platform)
+    {
+        SkillInvocationTriggerParser.TryParse(text, platform, out var trigger).Should().BeTrue();
+
+        trigger.Name.Should().Be("lark-contact-batch-resolution");
+        trigger.Arguments.Should().Be(text);
+        trigger.MountWorkflowsRequested.Should().BeTrue();
     }
 
     [Theory]
@@ -186,6 +201,7 @@ public sealed class SkillInvocationTriggerParserTests
     [InlineData("不要使用精确名称为 invoice-ocr-policy-review 的 skill。")]
     [InlineData("不要使用 lark-contact-batch-resolution。")]
     [InlineData("不要使用已挂载的 lark-contact-batch-resolution。")]
+    [InlineData("不要挂载 lark-contact-batch-resolution skill。")]
     public void TryParse_WhenSkillIsOnlyMentionedOrNegated_ShouldIgnoreIt(string text)
     {
         SkillInvocationTriggerParser.TryParse(text, "cli", out _).Should().BeFalse();

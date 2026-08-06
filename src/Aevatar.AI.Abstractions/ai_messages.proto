@@ -211,6 +211,8 @@ message AgentSkillRecoveryContextPayload {
   // Explicit named-skill invocations must not inherit prior assistant/tool output
   // that could satisfy a new invocation without creating a new workflow run.
   bool isolate_prior_conversation_history = 9;
+  // True only when the caller explicitly requested mounting the skill's workflows.
+  bool mount_workflows_requested = 10;
 }
 
 message AgentToolVisibilityScopePayload {
@@ -259,6 +261,7 @@ message AgentSkillRecoveryCheckpointPayload {
   int32 max_ornn_search_attempts = 5;
   bool discovery_requested = 6;
   bool isolate_prior_conversation_history = 7;
+  bool mount_workflows_requested = 8;
 }
 
 enum AgentToolNyxIdCredentialKindPayload {
