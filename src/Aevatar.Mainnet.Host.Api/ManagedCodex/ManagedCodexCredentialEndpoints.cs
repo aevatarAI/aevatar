@@ -3,6 +3,7 @@ using Aevatar.AI.Application.CodexExecution;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.Mainnet.Host.Api.ManagedCodex;
@@ -79,26 +80,27 @@ internal static class ManagedCodexCredentialEndpoints
         HttpContext http,
         IManagedCodexCredentialLifecycle lifecycle,
         CancellationToken ct) =>
-        MutateAsync(http, lifecycle, static (service, bearer, userId, token) =>
+        MutateAsync(http, lifecycle, "provision", static (service, bearer, userId, token) =>
             service.ProvisionAsync(bearer, userId, token), ct);
 
     internal static Task<IResult> RotateAsync(
         HttpContext http,
         IManagedCodexCredentialLifecycle lifecycle,
         CancellationToken ct) =>
-        MutateAsync(http, lifecycle, static (service, bearer, userId, token) =>
+        MutateAsync(http, lifecycle, "rotate", static (service, bearer, userId, token) =>
             service.RotateAsync(bearer, userId, token), ct);
 
     internal static Task<IResult> RevokeAsync(
         HttpContext http,
         IManagedCodexCredentialLifecycle lifecycle,
         CancellationToken ct) =>
-        MutateAsync(http, lifecycle, static (service, bearer, userId, token) =>
+        MutateAsync(http, lifecycle, "revoke", static (service, bearer, userId, token) =>
             service.RevokeAsync(bearer, userId, token), ct);
 
     private static async Task<IResult> MutateAsync(
         HttpContext http,
         IManagedCodexCredentialLifecycle lifecycle,
+        string operation,
         Func<IManagedCodexCredentialLifecycle, string, string, CancellationToken,
             Task<ManagedCodexCredentialMutationResult>> mutate,
         CancellationToken ct)
@@ -125,9 +127,17 @@ internal static class ManagedCodexCredentialEndpoints
         }
         catch (ManagedCodexCredentialLifecycleException exception)
         {
+            var statusCode = StatusFor(exception.Code);
+            var loggerFactory = http.RequestServices?.GetService(typeof(ILoggerFactory)) as ILoggerFactory;
+            loggerFactory?.CreateLogger(typeof(ManagedCodexCredentialEndpoints).FullName!)
+                .LogWarning(
+                    "Managed Codex credential {Operation} failed with lifecycle code {Code} and HTTP status {StatusCode}.",
+                    operation,
+                    exception.Code,
+                    statusCode);
             return Results.Json(
                 new { code = exception.Code, message = exception.Message },
-                statusCode: StatusFor(exception.Code));
+                statusCode: statusCode);
         }
     }
 

@@ -1206,8 +1206,9 @@ public sealed class ManagedCodexCredentialLifecycleTests
         int status,
         string expectedCode)
     {
-        var handler = new RoutingHandler(
-            $$"""{"error":true,"status":{{status}},"body":"denied {{RawKey}}"}""");
+        var handler = new StatusRoutingHandler(
+            (HttpStatusCode)status,
+            $$"""{"error":"denied","message":"denied {{RawKey}}"}""");
         var client = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
@@ -3519,5 +3520,18 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 Content = new StringContent(route(request), Encoding.UTF8, "application/json"),
             });
         }
+    }
+
+    private sealed class StatusRoutingHandler(
+        HttpStatusCode status,
+        string response) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(status)
+            {
+                Content = new StringContent(response, Encoding.UTF8, "application/json"),
+            });
     }
 }

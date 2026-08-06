@@ -154,6 +154,13 @@ curl -i -X DELETE \
   https://<aevatar-host>/api/managed-codex/credential
 ```
 
+When a credential mutation returns a typed lifecycle failure, the Host writes
+one bounded warning containing only the fixed operation (`provision`, `rotate`,
+or `revoke`), the stable lifecycle code, and its mapped HTTP status. Use those
+fields to correlate a failed request. The warning must not include the exception
+message, bearer, NyxID subject, API-key ID, actor ID, command ID, or Vault
+reference.
+
 ## Workflow canaries
 
 Invoke the public Ornn skill `aevatar-codex-exec-workflow-sample` and its

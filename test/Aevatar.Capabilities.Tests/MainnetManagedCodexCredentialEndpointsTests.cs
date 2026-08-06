@@ -9,6 +9,8 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Mainnet.Host.Api.ManagedCodex;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
@@ -389,6 +391,39 @@ public sealed class MainnetManagedCodexCredentialEndpointsTests
     }
 
     [Fact]
+    public async Task RotateAsync_WhenLifecycleFails_LogsOnlyBoundedStableDiagnostics()
+    {
+        var lifecycle = Substitute.For<IManagedCodexCredentialLifecycle>();
+        lifecycle.RotateAsync("user-bearer", "user-a", Arg.Any<CancellationToken>())
+            .Returns<Task<ManagedCodexCredentialMutationResult>>(_ =>
+                throw new ManagedCodexCredentialLifecycleException(
+                    "managed_api_key_issue_invalid",
+                    "Sensitive upstream detail must not be logged."));
+        using var loggerProvider = new RecordingLoggerProvider();
+        using var loggerFactory = LoggerFactory.Create(builder => builder.AddProvider(loggerProvider));
+        using var services = new ServiceCollection()
+            .AddSingleton<ILoggerFactory>(loggerFactory)
+            .BuildServiceProvider();
+        var http = Context(subject: "user-a", bearer: "user-bearer");
+        http.RequestServices = services;
+
+        var result = await ManagedCodexCredentialEndpoints.RotateAsync(
+            http,
+            lifecycle,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status502BadGateway);
+        loggerProvider.Messages.Should().ContainSingle(message =>
+            message.Contains("rotate", StringComparison.Ordinal) &&
+            message.Contains("managed_api_key_issue_invalid", StringComparison.Ordinal) &&
+            message.Contains("502", StringComparison.Ordinal));
+        loggerProvider.Messages.Should().OnlyContain(message =>
+            !message.Contains("user-bearer", StringComparison.Ordinal) &&
+            !message.Contains("user-a", StringComparison.Ordinal) &&
+            !message.Contains("Sensitive upstream detail", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task RevokeAsync_DoesNotDependOnTheKillSwitch()
     {
         var lifecycle = Substitute.For<IManagedCodexCredentialLifecycle>();
@@ -468,4 +503,28 @@ public sealed class MainnetManagedCodexCredentialEndpointsTests
 
     private static int StatusCode(IResult result) =>
         ((IStatusCodeHttpResult)result).StatusCode ?? StatusCodes.Status200OK;
+
+    private sealed class RecordingLoggerProvider : ILoggerProvider, ILogger
+    {
+        public List<string> Messages { get; } = [];
+
+        public ILogger CreateLogger(string categoryName) => this;
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Messages.Add(formatter(state, exception));
+
+        public void Dispose()
+        {
+        }
+    }
 }
