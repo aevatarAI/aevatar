@@ -848,11 +848,23 @@ public sealed class UserConfigControllerSettingsTests
 
     private static string PersonalUserServicesJson(string id, string slug, string label, string? defaultModel = null)
     {
-        var defaultModelJson = string.IsNullOrWhiteSpace(defaultModel)
-            ? string.Empty
-            : $$""",
-              "default_model": "{{defaultModel}}"
-        """;
+        if (string.IsNullOrWhiteSpace(defaultModel))
+        {
+            return $$"""
+                {
+                  "services": [
+                    {
+                      "id": "{{id}}",
+                      "slug": "{{slug}}",
+                      "label": "{{label}}",
+                      "catalog_service_name": "{{label}}",
+                      "is_active": true,
+                      "credential_source": { "type": "personal" }
+                    }
+                  ]
+                }
+                """;
+        }
 
         return $$"""
             {
@@ -863,7 +875,8 @@ public sealed class UserConfigControllerSettingsTests
                   "label": "{{label}}",
                   "catalog_service_name": "{{label}}",
                   "is_active": true,
-                  "credential_source": { "type": "personal" }{{defaultModelJson}}
+                  "credential_source": { "type": "personal" },
+                  "default_model": "{{defaultModel}}"
                 }
               ]
             }
