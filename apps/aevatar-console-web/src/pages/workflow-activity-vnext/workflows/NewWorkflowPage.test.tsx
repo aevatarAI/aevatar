@@ -45,8 +45,13 @@ jest.mock('@/shared/studio/api', () => ({
     authorWorkflow: jest.fn(),
     createWorkflowDraft: jest.fn(),
     getWorkspaceSettings: jest.fn(),
+    listWorkflowDrafts: jest.fn(),
     parseYaml: jest.fn(),
   },
+}));
+
+jest.mock('@/shared/api/scopesApi', () => ({
+  scopesApi: { listWorkflows: jest.fn() },
 }));
 
 jest.mock('@/shared/navigation/history', () => ({
@@ -71,7 +76,12 @@ const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
   authorWorkflow: jest.Mock;
   createWorkflowDraft: jest.Mock;
   getWorkspaceSettings: jest.Mock;
+  listWorkflowDrafts: jest.Mock;
   parseYaml: jest.Mock;
+};
+
+const mockScopesApi = jest.requireMock('@/shared/api/scopesApi').scopesApi as {
+  listWorkflows: jest.Mock;
 };
 
 const readyWorkspace = {
@@ -86,9 +96,28 @@ const readyWorkspace = {
   ],
 };
 
+const materializedWorkflow = {
+  kind: 'materialized',
+  workflow: {
+    directoryId: 'directory-alpha',
+    directoryLabel: 'Workflows',
+    document: { name: 'incident_review', roles: [], steps: [] },
+    draftExists: true,
+    fileName: 'incident-review.yaml',
+    filePath: '/workflows/incident-review.yaml',
+    findings: [],
+    name: 'Incident review',
+    updatedAtUtc: '2026-08-06T10:00:00Z',
+    workflowId: 'wf-created-alpha',
+    yaml: 'name: incident_review\nroles: []\nsteps: []\n',
+  },
+} as const;
+
 describe('New workflow save-target recovery', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
+    mockScopesApi.listWorkflows.mockResolvedValue([]);
   });
 
   afterEach(() => cleanupTestQueryClients());
@@ -107,6 +136,238 @@ describe('New workflow save-target recovery', () => {
     });
     expect(screen.getByLabelText('Workflow YAML')).toHaveValue(
       'name: prepared_workflow',
+    );
+  });
+
+  it('hides the only save target while still using its directory id', async () => {
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+    mockStudioApi.createWorkflowDraft.mockResolvedValue(materializedWorkflow);
+
+    renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start blank' }));
+    expect(screen.queryByLabelText('Save to')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Save location')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Incident review' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create and open' }));
+
+    await waitFor(() =>
+      expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledWith(
+        expect.objectContaining({ directoryId: 'directory-alpha' }),
+      ),
+    );
+  });
+
+  it('shows Save to only when the workspace has multiple directories', async () => {
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue({
+      runtimeBaseUrl: '',
+      directories: [
+        readyWorkspace.directories[0],
+        {
+          directoryId: 'directory-beta',
+          isBuiltIn: false,
+          label: 'Operations',
+          path: '/operations',
+        },
+      ],
+    });
+    mockStudioApi.createWorkflowDraft.mockResolvedValue(materializedWorkflow);
+
+    renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start blank' }));
+    const directorySelect = screen.getByLabelText('Save to');
+    fireEvent.mouseDown(directorySelect);
+    fireEvent.click(await screen.findByText('Operations'));
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Incident review' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create and open' }));
+
+    await waitFor(() =>
+      expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledWith(
+        expect.objectContaining({ directoryId: 'directory-beta' }),
+      ),
+    );
+  });
+
+  it('uses the first available YAML filename without changing the display name', async () => {
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([
+      {
+        directoryId: 'directory-alpha',
+        fileName: 'incident-review.yaml',
+        name: 'Other workflow',
+      },
+      {
+        directoryId: 'directory-alpha',
+        fileName: 'incident-review-2.yaml',
+        name: 'Another workflow',
+      },
+      {
+        directoryId: 'directory-beta',
+        fileName: 'incident-review-3.yaml',
+        name: 'Different directory workflow',
+      },
+    ]);
+    mockStudioApi.createWorkflowDraft.mockResolvedValue(materializedWorkflow);
+
+    renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start blank' }));
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Incident review' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create and open' }));
+
+    await waitFor(() =>
+      expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fileName: 'incident-review-3.yaml',
+          workflowName: 'Incident review',
+        }),
+      ),
+    );
+  });
+
+  it('generates, saves, and opens a described workflow with one action', async () => {
+    const generatedYaml =
+      'name: weekly_review\ndescription: Summarize the week.\nroles: []\nsteps: []\n';
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+    mockStudioApi.authorWorkflow.mockResolvedValue(generatedYaml);
+    mockStudioApi.parseYaml.mockResolvedValue({
+      document: { name: 'weekly_review', roles: [], steps: [] },
+      findings: [],
+    });
+    mockStudioApi.createWorkflowDraft.mockResolvedValue(materializedWorkflow);
+
+    renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Describe' }));
+    expect(screen.queryByLabelText('Workflow name')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Generated YAML')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('What should this workflow do?'), {
+      target: { value: 'Summarize this week' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Generate and open' }));
+
+    await waitFor(() =>
+      expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledWith({
+        directoryId: 'directory-alpha',
+        fileName: 'weekly-review.yaml',
+        scopeId: 'scope-alpha',
+        workflowName: 'weekly_review',
+        yaml: generatedYaml,
+      }),
+    );
+    expect(mockStudioApi.authorWorkflow).toHaveBeenCalledWith(
+      { prompt: 'Summarize this week' },
+      expect.any(Object),
+    );
+    expect(mockStudioApi.parseYaml).toHaveBeenCalledWith({
+      yaml: generatedYaml,
+    });
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha',
+    );
+  });
+
+  it('preserves the description and retries generation without an earlier save', async () => {
+    const generatedYaml = 'name: weekly_review\nroles: []\nsteps: []\n';
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+    mockStudioApi.authorWorkflow
+      .mockRejectedValueOnce(new Error('Generation unavailable'))
+      .mockResolvedValueOnce(generatedYaml);
+    mockStudioApi.parseYaml.mockResolvedValue({
+      document: { name: 'weekly_review', roles: [], steps: [] },
+      findings: [],
+    });
+    mockStudioApi.createWorkflowDraft.mockResolvedValue(materializedWorkflow);
+
+    renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Describe' }));
+    const description = screen.getByLabelText('What should this workflow do?');
+    fireEvent.change(description, {
+      target: { value: 'Summarize this week' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Generate and open' }));
+
+    expect(
+      await screen.findByText("Workflow couldn't be created"),
+    ).toBeVisible();
+    expect(screen.getByText('Generation unavailable')).toBeInTheDocument();
+    expect(description).toHaveValue('Summarize this week');
+    expect(mockStudioApi.createWorkflowDraft).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate and open' }));
+    await waitFor(() =>
+      expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledTimes(1),
+    );
+  });
+
+  it('imports and opens YAML using the parsed document name', async () => {
+    const importedYaml = 'name: imported_review\nroles: []\nsteps: []\n';
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+    mockStudioApi.parseYaml.mockResolvedValue({
+      document: { name: 'imported_review', roles: [], steps: [] },
+      findings: [],
+    });
+    mockStudioApi.createWorkflowDraft.mockResolvedValue(materializedWorkflow);
+
+    renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Import YAML' }));
+    expect(screen.queryByLabelText('Workflow name')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Workflow YAML'), {
+      target: { value: importedYaml },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Import and open' }));
+
+    await waitFor(() =>
+      expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fileName: 'imported-review.yaml',
+          workflowName: 'imported_review',
+          yaml: importedYaml,
+        }),
+      ),
+    );
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha',
+    );
+  });
+
+  it('creates and opens an independently named template copy', async () => {
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+    mockStudioApi.parseYaml.mockResolvedValue({
+      document: { name: 'incident_triage', roles: [], steps: [] },
+      findings: [],
+    });
+    mockStudioApi.createWorkflowDraft.mockResolvedValue(materializedWorkflow);
+
+    renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Use template' }),
+    );
+    expect(screen.queryByLabelText('Workflow name')).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Use template and open' }),
+    );
+
+    await waitFor(() =>
+      expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fileName: 'incident-triage-copy.yaml',
+          workflowName: 'Incident triage copy',
+        }),
+      ),
+    );
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha',
     );
   });
 
@@ -171,7 +432,7 @@ describe('New workflow save-target recovery', () => {
       target: { value: 'Prepared workflow' },
     });
     expect(
-      screen.getByRole('button', { name: 'Create workflow' }),
+      screen.getByRole('button', { name: 'Create and open' }),
     ).toBeDisabled();
     expect(mockStudioApi.createWorkflowDraft).not.toHaveBeenCalled();
   });
