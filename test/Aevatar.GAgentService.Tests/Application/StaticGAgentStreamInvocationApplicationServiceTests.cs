@@ -27,7 +27,7 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         var registration = new RecordingServiceRunRegistrationPort();
         var service = await CreateServiceAsync(
             identity,
-            CreateArtifact(identity, ServiceImplementationKind.Workflow),
+            CreateArtifact(identity, ServiceImplementationKind.Scripting),
             interaction,
             registration);
 
