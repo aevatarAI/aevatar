@@ -248,6 +248,12 @@ public class CiTestAuthorityContractTests
         Assert.Contains("Audit__ActorIdentityHasher__Keys__0__KeyId=distributed-smoke-key", script, StringComparison.Ordinal);
         Assert.Contains("Audit__ActorIdentityHasher__Keys__0__Key=", script, StringComparison.Ordinal);
         Assert.Contains("ChannelIdentity__OAuthClient__Bootstrap__Enabled=false", script, StringComparison.Ordinal);
+        Assert.Contains(
+            "dotnet build test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains("--no-build", script, StringComparison.Ordinal);
+        Assert.Contains("--no-restore", script, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -413,6 +413,15 @@ dll_spec="$(resolve_app_dlls)"
 old_app_dll="${dll_spec%%|*}"
 new_app_dll="${dll_spec##*|}"
 
+echo "Building distributed integration tests before starting the cluster..."
+dotnet build test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj \
+  -c Release \
+  --nologo \
+  --tl:off \
+  -m:1 \
+  -p:UseSharedCompilation=false \
+  -p:NuGetAudit=false
+
 echo "Old app dll: ${old_app_dll}"
 echo "New app dll: ${new_app_dll}"
 echo "Starting mixed cluster: old=${OLD_NODE_COUNT}, new=${NEW_NODE_COUNT}"
@@ -520,7 +529,10 @@ if [[ "${MIXED_EVENT_PROBE_ENABLED}" == "true" ]]; then
 fi
 
 dotnet test test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj \
+  -c Release \
   --nologo \
+  --no-build \
+  --no-restore \
   --filter "${test_filter}"
 
 echo "Distributed mixed-version smoke test passed."

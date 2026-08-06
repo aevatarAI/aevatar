@@ -189,6 +189,15 @@ if [[ ! -f "${APP_DLL}" ]]; then
   exit 1
 fi
 
+echo "Building distributed integration tests before starting the cluster..."
+dotnet build test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj \
+  -c Release \
+  --nologo \
+  --tl:off \
+  -m:1 \
+  -p:UseSharedCompilation=false \
+  -p:NuGetAudit=false
+
 echo "Starting 3-node cluster..."
 start_node 1 "${HTTP_PORTS[0]}" "${SILO_PORTS[0]}" "${GATEWAY_PORTS[0]}" "127.0.0.1:${SILO_PORTS[0]}"
 sleep 3
@@ -254,7 +263,10 @@ AEVATAR_TEST_CLUSTER_NODE2_BASE_URL="http://127.0.0.1:${HTTP_PORTS[1]}" \
 AEVATAR_TEST_CLUSTER_NODE3_BASE_URL="http://127.0.0.1:${HTTP_PORTS[2]}" \
 AEVATAR_TEST_CLUSTER_BEARER_TOKEN="${DISTRIBUTED_SMOKE_BEARER_TOKEN}" \
 dotnet test test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj \
+  -c Release \
   --nologo \
+  --no-build \
+  --no-restore \
   --filter "FullyQualifiedName~DistributedClusterConsistencyIntegrationTests"
 
 echo "Distributed 3-node smoke test passed."
