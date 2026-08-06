@@ -693,7 +693,11 @@ describe('Workflow Activity vNext catalogue', () => {
   });
 
   it('renames a duplicate workflow without changing its definition identity', async () => {
-    let drafts = [
+    const originalYaml = 'name: support_triage\nroles: []\nsteps: []\n';
+    const renamedYaml = 'name: APAC support triage\nroles: []\nsteps: []\n';
+    let authoritativeName = 'Support triage';
+    let authoritativeYaml = originalYaml;
+    const drafts = [
       {
         workflowId: 'wf-support-emea',
         name: 'Support triage',
@@ -719,33 +723,46 @@ describe('Workflow Activity vNext catalogue', () => {
         updatedAtUtc: '2026-08-05T11:30:00Z',
       },
     ];
-    mockStudioApi.listWorkflowDrafts.mockImplementation(async () => drafts);
+    mockStudioApi.listWorkflowDrafts.mockImplementation(async () =>
+      drafts.map((draft) =>
+        draft.workflowId === 'wf-support-apac'
+          ? { ...draft, name: authoritativeName }
+          : draft,
+      ),
+    );
     mockScopesApi.listWorkflows.mockResolvedValue([]);
-    mockStudioApi.getWorkflowDraft.mockResolvedValue({
+    mockStudioApi.getWorkflowDraft.mockImplementation(async () => ({
       workflowId: 'wf-support-apac',
-      name: 'Support triage',
+      name: authoritativeName,
       fileName: 'support-apac.yaml',
       filePath: '/apac/support-apac.yaml',
       directoryId: 'directory-apac',
       directoryLabel: 'APAC operations',
-      yaml: 'name: support_triage\nroles: []\nsteps: []\n',
+      yaml: authoritativeYaml,
       layout: { nodes: [] },
       updatedAtUtc: '2026-08-05T11:30:00Z',
+    }));
+    mockStudioApi.parseYaml.mockResolvedValue({
+      document: { name: 'support_triage', roles: [], steps: [] },
+      findings: [],
     });
-    mockStudioApi.updateWorkflowDraft.mockImplementation(async () => {
-      drafts = drafts.map((draft) =>
-        draft.workflowId === 'wf-support-apac'
-          ? { ...draft, name: 'APAC support triage' }
-          : draft,
-      );
+    mockStudioApi.serializeYaml.mockResolvedValue({
+      document: { name: 'APAC support triage', roles: [], steps: [] },
+      findings: [],
+      yaml: renamedYaml,
+    });
+    mockStudioApi.updateWorkflowDraft.mockImplementation(async (input) => {
+      authoritativeYaml = input.yaml;
+      authoritativeName =
+        input.yaml === renamedYaml ? 'APAC support triage' : 'Support triage';
       return {
         workflowId: 'wf-support-apac',
-        name: 'APAC support triage',
+        name: authoritativeName,
         fileName: 'support-apac.yaml',
         filePath: '/apac/support-apac.yaml',
         directoryId: 'directory-apac',
         directoryLabel: 'APAC operations',
-        yaml: 'name: support_triage\nroles: []\nsteps: []\n',
+        yaml: authoritativeYaml,
         layout: { nodes: [] },
         updatedAtUtc: '2026-08-05T11:31:00Z',
       };
@@ -774,6 +791,18 @@ describe('Workflow Activity vNext catalogue', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
 
     await waitFor(() =>
+      expect(mockStudioApi.parseYaml).toHaveBeenCalledWith({
+        yaml: originalYaml,
+      }),
+    );
+    expect(mockStudioApi.serializeYaml).toHaveBeenCalledWith({
+      document: {
+        name: 'APAC support triage',
+        roles: [],
+        steps: [],
+      },
+    });
+    await waitFor(() =>
       expect(mockStudioApi.updateWorkflowDraft).toHaveBeenCalledWith({
         directoryId: 'directory-apac',
         fileName: 'support-apac.yaml',
@@ -781,9 +810,10 @@ describe('Workflow Activity vNext catalogue', () => {
         scopeId: 'scope-alpha',
         workflowId: 'wf-support-apac',
         workflowName: 'APAC support triage',
-        yaml: 'name: support_triage\nroles: []\nsteps: []\n',
+        yaml: renamedYaml,
       }),
     );
+    expect(mockStudioApi.getWorkflowDraft).toHaveBeenCalledTimes(2);
     expect(await screen.findByText('APAC support triage')).toBeVisible();
     expect(mockConsoleToast.success).toHaveBeenCalledWith('Workflow renamed');
   });
