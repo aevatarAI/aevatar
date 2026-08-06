@@ -122,7 +122,7 @@ export const workflowActivityVNextCss = `
   overflow: auto;
   scrollbar-gutter: stable;
 }
-.wa-vnext__table { border-collapse: separate; border-spacing: 0; font-size: 12px; line-height: 17px; min-width: 720px; table-layout: fixed; width: 100%; }
+.wa-vnext__table { border-collapse: separate; border-spacing: 0; font-size: 12px; line-height: 17px; min-width: 900px; table-layout: fixed; width: 100%; }
 .wa-vnext__table th {
   background: var(--wa-subtle);
   border-bottom: 1px solid var(--wa-line);
@@ -141,6 +141,9 @@ export const workflowActivityVNextCss = `
 }
 .wa-vnext__table th:first-child { border-top-left-radius: 7px; }
 .wa-vnext__table th:last-child { border-top-right-radius: 7px; }
+.wa-vnext__table-column--status { width: 120px; }
+.wa-vnext__table-column--updated { width: 190px; }
+.wa-vnext__table-column--actions { width: 270px; }
 .wa-vnext__table td { border-bottom: 1px solid var(--wa-line); height: 76px; overflow-wrap: anywhere; padding: 10px 12px; vertical-align: middle; }
 .wa-vnext__table tr:last-child td { border-bottom: 0; }
 .wa-vnext__table tbody tr:hover { background: #f9fafb; }
@@ -151,8 +154,9 @@ export const workflowActivityVNextCss = `
 .wa-vnext__run-link { max-width: 100%; min-width: 0; overflow: hidden; }
 .wa-vnext__title { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wa-vnext__sub { color: var(--wa-muted); display: block; font-size: 12px; line-height: 17px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wa-vnext__workflow-context { align-items: center; color: var(--wa-muted); display: flex; flex-wrap: wrap; font-size: 11px; gap: 4px 7px; line-height: 16px; margin-top: 7px; }
-.wa-vnext__workflow-context .wa-vnext__status { min-height: 20px; }
+.wa-vnext__workflow-name-trigger { background: transparent; border: 0; color: inherit; cursor: help; display: block; font: inherit; margin: 0; max-width: 100%; padding: 0; text-align: left; }
+.wa-vnext__workflow-description-popover { max-width: calc(100vw - 48px); width: 320px; }
+.wa-vnext__workflow-description { margin: 0; max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
 .wa-vnext__status { align-items: center; border: 1px solid currentColor; border-radius: 5px; display: inline-flex; font-size: 11px; font-weight: 600; gap: 6px; min-height: 24px; padding: 0 8px; white-space: nowrap; }
 .wa-vnext__status::before { background: currentColor; border-radius: 50%; content: ""; height: 6px; width: 6px; }
 .wa-vnext__status--draft { background: #f4f3ff; color: #6941c6; }

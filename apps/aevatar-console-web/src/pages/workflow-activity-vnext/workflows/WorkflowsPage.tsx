@@ -9,7 +9,7 @@ import {
   SearchOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Dropdown, Input, Modal, Select, Space } from 'antd';
+import { Button, Dropdown, Input, Modal, Popover, Select, Space } from 'antd';
 import React from 'react';
 import { scopesApi } from '@/shared/api/scopesApi';
 import { t } from '@/shared/i18n/messages';
@@ -567,7 +567,16 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                     'Workflow',
                   )}
                 </th>
-                <th className="wa-vnext__workflow-actions-cell">
+                <th className="wa-vnext__table-column--status">
+                  {t('workflowActivityVNext.workflows.columnStatus', 'Status')}
+                </th>
+                <th className="wa-vnext__table-column--updated">
+                  {t(
+                    'workflowActivityVNext.workflows.columnUpdated',
+                    'Last updated',
+                  )}
+                </th>
+                <th className="wa-vnext__table-column--actions wa-vnext__workflow-actions-cell">
                   {t(
                     'workflowActivityVNext.workflows.columnActions',
                     'Actions',
@@ -585,6 +594,11 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                   scopeId,
                   'activity',
                 )}?workflowId=${encodeURIComponent(row.workflowId)}`;
+                const description = row.description.trim();
+                const isPublished = Boolean(row.activeRevisionId);
+                const workflowName = (
+                  <span className="wa-vnext__title">{row.name}</span>
+                );
 
                 return (
                   <tr key={row.workflowId}>
@@ -594,40 +608,67 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                         'Workflow',
                       )}
                     >
-                      <span className="wa-vnext__title">{row.name}</span>
-                      {row.description ? (
-                        <span className="wa-vnext__sub">{row.description}</span>
-                      ) : null}
-                      <span className="wa-vnext__workflow-context">
-                        <span
-                          className={`wa-vnext__status ${
-                            row.activeRevisionId
-                              ? 'wa-vnext__status--committed'
-                              : 'wa-vnext__status--draft'
-                          }`}
+                      {description ? (
+                        <Popover
+                          classNames={{
+                            container: 'wa-vnext__workflow-description-popover',
+                          }}
+                          content={
+                            <p className="wa-vnext__workflow-description">
+                              {description}
+                            </p>
+                          }
+                          destroyOnHidden
+                          placement="bottomLeft"
+                          trigger={['hover', 'focus']}
                         >
-                          {row.activeRevisionId
-                            ? t(
-                                'workflowActivityVNext.workflows.publishedRevision',
-                                'Published {revision}',
-                                { revision: row.activeRevisionId },
-                              )
-                            : t(
-                                'workflowActivityVNext.workflows.draftStatus',
-                                'Draft',
-                              )}
-                        </span>
-                        <span aria-hidden="true">·</span>
-                        <span>{row.ownershipLabel}</span>
-                        <span aria-hidden="true">·</span>
-                        <span>
-                          {t(
-                            'workflowActivityVNext.workflows.updatedContext',
-                            'Updated {updatedAt}',
-                            { updatedAt: formatDate(row.updatedAtUtc) },
-                          )}
-                        </span>
+                          <button
+                            aria-label={t(
+                              'workflowActivityVNext.workflows.descriptionAria',
+                              'Description for {name}',
+                              { name: row.name },
+                            )}
+                            className="wa-vnext__workflow-name-trigger"
+                            type="button"
+                          >
+                            {workflowName}
+                          </button>
+                        </Popover>
+                      ) : (
+                        workflowName
+                      )}
+                    </td>
+                    <td
+                      data-label={t(
+                        'workflowActivityVNext.workflows.columnStatus',
+                        'Status',
+                      )}
+                    >
+                      <span
+                        className={`wa-vnext__status ${
+                          isPublished
+                            ? 'wa-vnext__status--committed'
+                            : 'wa-vnext__status--draft'
+                        }`}
+                      >
+                        {isPublished
+                          ? t(
+                              'workflowActivityVNext.workflows.publishedStatus',
+                              'Published',
+                            )
+                          : t(
+                              'workflowActivityVNext.workflows.draftStatus',
+                              'Draft',
+                            )}
                       </span>
+                    </td>
+                    <td
+                      data-label={t(
+                        'workflowActivityVNext.workflows.columnUpdated',
+                        'Last updated',
+                      )}
+                    >
+                      {formatDate(row.updatedAtUtc)}
                     </td>
                     <td
                       className="wa-vnext__workflow-actions-cell"
