@@ -8,7 +8,16 @@ import {
   SearchOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Dropdown, Input, Modal, Select, Space, Tooltip } from 'antd';
+import {
+  Button,
+  Dropdown,
+  Input,
+  Modal,
+  Popover,
+  Select,
+  Space,
+  Tooltip,
+} from 'antd';
 import React from 'react';
 import { scopesApi } from '@/shared/api/scopesApi';
 import { t } from '@/shared/i18n/messages';
@@ -32,7 +41,6 @@ type WorkflowRow = {
   readonly hasCommittedSource: boolean;
   readonly hasDraftSource: boolean;
   readonly name: string;
-  readonly ownershipLabel: string;
   readonly stepCount?: number;
   readonly updatedAtUtc: string | null;
   readonly workflowId: string;
@@ -49,9 +57,6 @@ function toDraftRow(
     hasCommittedSource: Boolean(committed),
     hasDraftSource: true,
     name: item.name,
-    ownershipLabel:
-      item.directoryLabel.trim() ||
-      t('workflowActivityVNext.workflows.workspaceOwner', 'Workspace'),
     stepCount: item.stepCount,
     updatedAtUtc: item.updatedAtUtc,
     workflowId: item.workflowId,
@@ -65,10 +70,6 @@ function toCommittedRow(item: ScopeWorkflowSummary): WorkflowRow {
     hasCommittedSource: true,
     hasDraftSource: false,
     name: item.displayName || item.workflowName,
-    ownershipLabel: t(
-      'workflowActivityVNext.workflows.workspaceOwner',
-      'Workspace',
-    ),
     updatedAtUtc: item.updatedAt,
     workflowId: item.workflowId,
   };
@@ -555,7 +556,16 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                     'Workflow',
                   )}
                 </th>
-                <th>
+                <th className="wa-vnext__table-column--status">
+                  {t('workflowActivityVNext.workflows.columnStatus', 'Status')}
+                </th>
+                <th className="wa-vnext__table-column--updated">
+                  {t(
+                    'workflowActivityVNext.workflows.columnUpdated',
+                    'Last updated',
+                  )}
+                </th>
+                <th className="wa-vnext__table-column--actions">
                   {t(
                     'workflowActivityVNext.workflows.columnActions',
                     'Actions',
@@ -564,150 +574,185 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
-                <tr key={row.workflowId}>
-                  <td
-                    data-label={t(
-                      'workflowActivityVNext.workflows.columnWorkflow',
-                      'Workflow',
-                    )}
-                  >
-                    <span className="wa-vnext__title">{row.name}</span>
-                    {row.description ? (
-                      <span className="wa-vnext__sub">{row.description}</span>
-                    ) : null}
-                    <span className="wa-vnext__workflow-context">
+              {rows.map((row) => {
+                const description = row.description.trim();
+                const isPublished = Boolean(row.activeRevisionId);
+                const workflowName = (
+                  <span className="wa-vnext__title">{row.name}</span>
+                );
+
+                return (
+                  <tr key={row.workflowId}>
+                    <td
+                      data-label={t(
+                        'workflowActivityVNext.workflows.columnWorkflow',
+                        'Workflow',
+                      )}
+                    >
+                      {description ? (
+                        <Popover
+                          classNames={{
+                            container: 'wa-vnext__workflow-description-popover',
+                          }}
+                          content={
+                            <p className="wa-vnext__workflow-description">
+                              {description}
+                            </p>
+                          }
+                          destroyOnHidden
+                          placement="bottomLeft"
+                          trigger={['hover', 'focus']}
+                        >
+                          <button
+                            aria-label={t(
+                              'workflowActivityVNext.workflows.descriptionAria',
+                              'Description for {name}',
+                              { name: row.name },
+                            )}
+                            className="wa-vnext__workflow-name-trigger"
+                            type="button"
+                          >
+                            {workflowName}
+                          </button>
+                        </Popover>
+                      ) : (
+                        workflowName
+                      )}
+                    </td>
+                    <td
+                      data-label={t(
+                        'workflowActivityVNext.workflows.columnStatus',
+                        'Status',
+                      )}
+                    >
                       <span
                         className={`wa-vnext__status ${
-                          row.activeRevisionId
+                          isPublished
                             ? 'wa-vnext__status--committed'
                             : 'wa-vnext__status--draft'
                         }`}
                       >
-                        {row.activeRevisionId
+                        {isPublished
                           ? t(
-                              'workflowActivityVNext.workflows.publishedRevision',
-                              'Published {revision}',
-                              { revision: row.activeRevisionId },
+                              'workflowActivityVNext.workflows.publishedStatus',
+                              'Published',
                             )
                           : t(
                               'workflowActivityVNext.workflows.draftStatus',
                               'Draft',
                             )}
                       </span>
-                      <span aria-hidden="true">·</span>
-                      <span>{row.ownershipLabel}</span>
-                      <span aria-hidden="true">·</span>
-                      <span>
-                        {t(
-                          'workflowActivityVNext.workflows.updatedContext',
-                          'Updated {updatedAt}',
-                          { updatedAt: formatDate(row.updatedAtUtc) },
-                        )}
-                      </span>
-                    </span>
-                  </td>
-                  <td
-                    data-label={t(
-                      'workflowActivityVNext.workflows.columnActions',
-                      'Actions',
-                    )}
-                  >
-                    <Space>
-                      <Button
-                        aria-label={t(
-                          'workflowActivityVNext.workflows.openAria',
-                          'Open {name}',
-                          { name: row.name },
-                        )}
-                        onClick={() =>
-                          history.push(
-                            buildWorkflowActivityEditorHref(
-                              scopeId,
-                              row.workflowId,
-                            ),
-                          )
-                        }
-                      >
-                        {t('workflowActivityVNext.common.open', 'Open')}
-                      </Button>
-                      <Button onClick={() => openActivity(row)}>
-                        {t(
-                          'workflowActivityVNext.workflows.viewActivity',
-                          'Activity',
-                        )}
-                      </Button>
-                      {row.hasDraftSource ? (
-                        <Tooltip
-                          title={t(
-                            'workflowActivityVNext.workflows.deleteDraft',
-                            'Delete draft',
+                    </td>
+                    <td
+                      data-label={t(
+                        'workflowActivityVNext.workflows.columnUpdated',
+                        'Last updated',
+                      )}
+                    >
+                      {formatDate(row.updatedAtUtc)}
+                    </td>
+                    <td
+                      data-label={t(
+                        'workflowActivityVNext.workflows.columnActions',
+                        'Actions',
+                      )}
+                    >
+                      <Space>
+                        <Button
+                          aria-label={t(
+                            'workflowActivityVNext.workflows.openAria',
+                            'Open {name}',
+                            { name: row.name },
                           )}
+                          onClick={() =>
+                            history.push(
+                              buildWorkflowActivityEditorHref(
+                                scopeId,
+                                row.workflowId,
+                              ),
+                            )
+                          }
+                        >
+                          {t('workflowActivityVNext.common.open', 'Open')}
+                        </Button>
+                        <Button onClick={() => openActivity(row)}>
+                          {t(
+                            'workflowActivityVNext.workflows.viewActivity',
+                            'Activity',
+                          )}
+                        </Button>
+                        {row.hasDraftSource ? (
+                          <Tooltip
+                            title={t(
+                              'workflowActivityVNext.workflows.deleteDraft',
+                              'Delete draft',
+                            )}
+                          >
+                            <Button
+                              aria-label={t(
+                                'workflowActivityVNext.workflows.deleteAria',
+                                'Delete {name}',
+                                { name: row.name },
+                              )}
+                              danger
+                              icon={<DeleteOutlined />}
+                              onClick={() => {
+                                setDeleteTarget(row);
+                                setDeleteFailed(false);
+                                setDeleteSucceeded(false);
+                              }}
+                              type="text"
+                            />
+                          </Tooltip>
+                        ) : null}
+                        <Dropdown
+                          menu={{
+                            items: [
+                              ...(row.hasDraftSource
+                                ? [
+                                    {
+                                      icon: <EditOutlined />,
+                                      key: 'rename',
+                                      label: t(
+                                        'workflowActivityVNext.workflows.rename',
+                                        'Rename',
+                                      ),
+                                    },
+                                  ]
+                                : []),
+                              {
+                                icon: <CopyOutlined />,
+                                key: 'copy-reference',
+                                label: t(
+                                  'workflowActivityVNext.workflows.copyReference',
+                                  'Copy workflow reference',
+                                ),
+                              },
+                            ],
+                            onClick: ({ key }) => {
+                              if (key === 'rename') openRename(row);
+                              if (key === 'copy-reference')
+                                void copyWorkflowReference(row);
+                            },
+                          }}
+                          placement="bottomRight"
+                          trigger={['click']}
                         >
                           <Button
                             aria-label={t(
-                              'workflowActivityVNext.workflows.deleteAria',
-                              'Delete {name}',
+                              'workflowActivityVNext.workflows.moreActionsAria',
+                              'More actions for {name}',
                               { name: row.name },
                             )}
-                            danger
-                            icon={<DeleteOutlined />}
-                            onClick={() => {
-                              setDeleteTarget(row);
-                              setDeleteFailed(false);
-                              setDeleteSucceeded(false);
-                            }}
+                            icon={<MoreOutlined />}
                             type="text"
                           />
-                        </Tooltip>
-                      ) : null}
-                      <Dropdown
-                        menu={{
-                          items: [
-                            ...(row.hasDraftSource
-                              ? [
-                                  {
-                                    icon: <EditOutlined />,
-                                    key: 'rename',
-                                    label: t(
-                                      'workflowActivityVNext.workflows.rename',
-                                      'Rename',
-                                    ),
-                                  },
-                                ]
-                              : []),
-                            {
-                              icon: <CopyOutlined />,
-                              key: 'copy-reference',
-                              label: t(
-                                'workflowActivityVNext.workflows.copyReference',
-                                'Copy workflow reference',
-                              ),
-                            },
-                          ],
-                          onClick: ({ key }) => {
-                            if (key === 'rename') openRename(row);
-                            if (key === 'copy-reference')
-                              void copyWorkflowReference(row);
-                          },
-                        }}
-                        placement="bottomRight"
-                        trigger={['click']}
-                      >
-                        <Button
-                          aria-label={t(
-                            'workflowActivityVNext.workflows.moreActionsAria',
-                            'More actions for {name}',
-                            { name: row.name },
-                          )}
-                          icon={<MoreOutlined />}
-                          type="text"
-                        />
-                      </Dropdown>
-                    </Space>
-                  </td>
-                </tr>
-              ))}
+                        </Dropdown>
+                      </Space>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </TableScrollRegion>
