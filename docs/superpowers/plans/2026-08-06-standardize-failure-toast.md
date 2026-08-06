@@ -236,6 +236,7 @@ git commit -m "Standardize console toast notifications"
 **Files:**
 - Modify: `apps/aevatar-console-web/src/pages/workflow-activity-vnext/activity/runFailurePresentation.test.tsx`
 - Modify: `apps/aevatar-console-web/src/pages/workflow-activity-vnext/activity/runFailurePresentation.tsx`
+- Modify: `apps/aevatar-console-web/src/pages/workflow-activity-vnext/activity/RunDetailPage.test.tsx`
 
 - [x] **Step 1: Write the failing duration and hierarchy expectations**
 
@@ -337,7 +338,7 @@ pnpm exec jest src/pages/workflow-activity-vnext/activity/runFailurePresentation
 
 Expected: PASS with 13 tests and 0 failures.
 
-- [ ] **Step 5: Commit the failure policy**
+- [x] **Step 5: Commit the failure policy**
 
 ```bash
 git add \
@@ -351,7 +352,7 @@ git commit -m "Refine workflow failure toast presentation"
 **Files:**
 - Verify all files changed on the branch.
 
-- [ ] **Step 1: Analyze the affected frontend scope**
+- [x] **Step 1: Analyze the affected frontend scope**
 
 From the repository root:
 
@@ -361,9 +362,9 @@ python3 ~/.codex/skills/frontend-incremental-pr/scripts/frontend_change_scope.py
   --base origin/feat/2026-08-04_workflow-activity-vnext
 ```
 
-Expected: Jest is the affected runner; the two changed production files and two changed test files are listed as frontend scope.
+Expected: Jest is the affected runner; the two changed production files and three changed test files are listed as frontend scope.
 
-- [ ] **Step 2: Run dependency-related tests for changed production files**
+- [x] **Step 2: Run dependency-related tests for changed production files**
 
 From `apps/aevatar-console-web`, using the analyzer's changed source list:
 
@@ -376,18 +377,19 @@ pnpm exec jest --findRelatedTests \
 
 Expected: all dependency-related tests selected by Jest pass. Do not replace this command with the full frontend suite.
 
-- [ ] **Step 3: Run the changed test files explicitly**
+- [x] **Step 3: Run the changed test files explicitly**
 
 ```bash
 pnpm exec jest \
   src/shared/ui/ConsoleToast.test.tsx \
   src/pages/workflow-activity-vnext/activity/runFailurePresentation.test.tsx \
+  src/pages/workflow-activity-vnext/activity/RunDetailPage.test.tsx \
   --runInBand
 ```
 
 Expected: both changed test suites pass.
 
-- [ ] **Step 4: Run required test and changed-file static guards**
+- [x] **Step 4: Run required test and changed-file static guards**
 
 From the repository root:
 
@@ -397,7 +399,8 @@ pnpm --dir apps/aevatar-console-web exec biome check \
   src/shared/ui/ConsoleToast.tsx \
   src/shared/ui/ConsoleToast.test.tsx \
   src/pages/workflow-activity-vnext/activity/runFailurePresentation.tsx \
-  src/pages/workflow-activity-vnext/activity/runFailurePresentation.test.tsx
+  src/pages/workflow-activity-vnext/activity/runFailurePresentation.test.tsx \
+  src/pages/workflow-activity-vnext/activity/RunDetailPage.test.tsx
 ```
 
 Expected: the stability guard and Biome checks pass. Skip local full typecheck and build; GitHub CI owns them.
@@ -414,7 +417,8 @@ git diff origin/feat/2026-08-04_workflow-activity-vnext...HEAD -- \
   apps/aevatar-console-web/src/shared/ui/ConsoleToast.tsx \
   apps/aevatar-console-web/src/shared/ui/ConsoleToast.test.tsx \
   apps/aevatar-console-web/src/pages/workflow-activity-vnext/activity/runFailurePresentation.tsx \
-  apps/aevatar-console-web/src/pages/workflow-activity-vnext/activity/runFailurePresentation.test.tsx
+  apps/aevatar-console-web/src/pages/workflow-activity-vnext/activity/runFailurePresentation.test.tsx \
+  apps/aevatar-console-web/src/pages/workflow-activity-vnext/activity/RunDetailPage.test.tsx
 ```
 
 Expected: only the toast design, plan, shared adapter, failure presentation, and their tests are present.
@@ -430,7 +434,7 @@ gh pr create \
   --body-file /tmp/standardize-failure-toast-pr.md
 ```
 
-The pull request body must contain the problem and selected solution, the six changed paths, the exact focused verification commands and results, and this statement:
+The pull request body must contain the problem and selected solution, the seven changed paths, the exact focused verification commands and results, and this statement:
 
 ```markdown
 - Full frontend suite/build: deferred to GitHub CI by personal local workflow policy

@@ -344,7 +344,7 @@ describe('Workflow Activity vNext run detail recovery', () => {
     );
     const [content, options] = mockConsoleToast.error.mock.calls[0];
     expect(options).toEqual({
-      duration: 0,
+      duration: 8,
       key: 'run-failure:run-source-alpha:access_denied',
     });
     const toastContent = render(content).container;
