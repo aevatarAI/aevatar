@@ -11,7 +11,7 @@ import React from 'react';
 import { scopesApi } from '@/shared/api/scopesApi';
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
-import { studioApi } from '@/shared/studio/api';
+import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
 import type {
   StudioValidationFinding,
   StudioWorkflowSaveResult,
@@ -114,9 +114,16 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
   });
 
   React.useEffect(() => {
-    if (!directoryId && workspace.data?.directories[0]?.directoryId) {
-      setDirectoryId(workspace.data.directories[0].directoryId);
+    if (!workspace.data) return;
+    if (
+      directoryId &&
+      workspace.data.directories.some(
+        (item) => item.directoryId === directoryId,
+      )
+    ) {
+      return;
     }
+    setDirectoryId(workspace.data.directories[0]?.directoryId ?? '');
   }, [directoryId, workspace.data]);
 
   const navigateToWorkflow = React.useCallback(
@@ -139,7 +146,16 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
 
   const persist = async (nextYaml: string, suggestedName?: string) => {
     const workflowName = (name || suggestedName || '').trim();
-    if (!workflowName || !directoryId || submitting) return;
+    if (!workflowName || submitting) return;
+    if (!directoryId) {
+      setFailure(
+        t(
+          'workflowActivityVNext.new.saveTargetRequired',
+          'Choose an available save location before creating the workflow.',
+        ),
+      );
+      return;
+    }
     setSubmitting(true);
     setFailure('');
     try {
@@ -233,10 +249,12 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
     'workflowActivityVNext.new.templateDescription.incidentTriage',
     'Classify an incident, prepare a response, and request human approval.',
   );
-  const disabledByWorkspace =
-    workspace.isPending ||
-    workspace.isError ||
-    workspace.data?.directories.length === 0;
+  const saveTargetUnavailable = !directoryId;
+  const workspaceAccessDenied =
+    isStudioApiStatus(workspace.error, 401) ||
+    isStudioApiStatus(workspace.error, 403);
+  const reviewAccess = () =>
+    history.push(buildWorkflowActivitySectionHref(scopeId, 'settings'));
   const selectMode = (nextMode: WorkflowCreationMode) => {
     setFailure('');
     setFindings([]);
@@ -265,6 +283,10 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
     >
       {workspace.isPending ? (
         <Alert
+          description={t(
+            'workflowActivityVNext.new.workspaceLoadingDescription',
+            'Choose a creation method now. Your input stays on this page while the current workspace save location loads.',
+          )}
           message={t(
             'workflowActivityVNext.new.workspaceLoading',
             'Loading save locations…',
@@ -276,13 +298,26 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
       {workspace.isError ? (
         <Alert
           action={
-            <Button onClick={() => void workspace.refetch()}>
-              {t('workflowActivityVNext.common.retry', 'Retry')}
-            </Button>
+            <Space wrap>
+              <Button onClick={() => void workspace.refetch()}>
+                {t('workflowActivityVNext.common.retry', 'Retry')}
+              </Button>
+              <Button onClick={reviewAccess}>
+                {t('workflowActivityVNext.new.reviewAccess', 'Review access')}
+              </Button>
+            </Space>
           }
+          description={t(
+            'workflowActivityVNext.new.workspaceUnavailableDescription',
+            'Choose a creation method now. Your input stays on this page while you restore access.',
+          )}
           message={t(
-            'workflowActivityVNext.new.workspaceUnavailable',
-            'Save locations unavailable',
+            workspaceAccessDenied
+              ? 'workflowActivityVNext.new.workspaceUnauthorized'
+              : 'workflowActivityVNext.new.workspaceUnavailable',
+            workspaceAccessDenied
+              ? "You don't have access to a save location in the current workspace."
+              : "The current workspace's save location couldn't be loaded.",
           )}
           showIcon
           type="error"
@@ -290,9 +325,23 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
       ) : null}
       {workspace.data?.directories.length === 0 ? (
         <Alert
+          action={
+            <Space wrap>
+              <Button onClick={() => void workspace.refetch()}>
+                {t('workflowActivityVNext.common.retry', 'Retry')}
+              </Button>
+              <Button onClick={reviewAccess}>
+                {t('workflowActivityVNext.new.reviewAccess', 'Review access')}
+              </Button>
+            </Space>
+          }
+          description={t(
+            'workflowActivityVNext.new.noDirectoriesDescription',
+            'A save location is required to own the workflow. You can prepare your input here while access is restored.',
+          )}
           message={t(
             'workflowActivityVNext.new.noDirectories',
-            'No save location is available. Try again later or contact your administrator.',
+            'No save location is available in the current workspace.',
           )}
           showIcon
           type="warning"
@@ -310,7 +359,6 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
           {modeItems.map((item) => (
             <button
               aria-label={item.label}
-              disabled={disabledByWorkspace}
               className="wa-vnext__creation-option"
               key={item.key}
               onClick={() => selectMode(item.key)}
@@ -364,6 +412,8 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                   value: item.directoryId,
                 }))}
                 className="wa-vnext__field-control"
+                disabled={saveTargetUnavailable}
+                loading={workspace.isPending}
                 value={directoryId || undefined}
               />
             </div>
@@ -443,7 +493,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                   </Button>
                   {generatedYaml && generatedReady ? (
                     <Button
-                      disabled={!name.trim()}
+                      disabled={!name.trim() || saveTargetUnavailable}
                       loading={submitting}
                       onClick={() => void persist(generatedYaml)}
                       type="primary"
@@ -460,7 +510,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
 
             {mode === 'blank' ? (
               <Button
-                disabled={!name.trim()}
+                disabled={!name.trim() || saveTargetUnavailable}
                 loading={submitting}
                 onClick={() => void persist(createBlankWorkflowYaml(name))}
                 type="primary"
@@ -487,7 +537,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                   />
                 </div>
                 <Button
-                  disabled={!yaml.trim()}
+                  disabled={!yaml.trim() || saveTargetUnavailable}
                   loading={submitting}
                   onClick={() => void validateAndPersist(yaml)}
                   type="primary"
@@ -529,7 +579,9 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                   </div>
                 ) : null}
                 <Button
-                  disabled={!selectedTemplate || !name.trim()}
+                  disabled={
+                    !selectedTemplate || !name.trim() || saveTargetUnavailable
+                  }
                   loading={submitting}
                   onClick={() =>
                     selectedTemplate &&
