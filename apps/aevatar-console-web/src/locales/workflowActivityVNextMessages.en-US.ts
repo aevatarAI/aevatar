@@ -96,8 +96,19 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.loadingDescription': 'Preparing the editor…',
   'workflowActivityVNext.editor.openActivity': 'Open Activity',
   'workflowActivityVNext.editor.publish': 'Publish',
+  'workflowActivityVNext.editor.publishBeforeRun':
+    'Publish this workflow before running it.',
+  'workflowActivityVNext.editor.publishLatestBeforeRun':
+    'Save and publish the latest changes before running.',
   'workflowActivityVNext.editor.publishUnavailable':
     "Publishing isn't available for this workflow yet.",
+  'workflowActivityVNext.editor.publishedRunDrawer': 'Run published workflow',
+  'workflowActivityVNext.editor.publishedTargetUnavailable':
+    'Publish this workflow before running it.',
+  'workflowActivityVNext.editor.waitForEditorBeforeRun':
+    'Wait for the workflow update to finish.',
+  'workflowActivityVNext.editor.waitForPublishedRun':
+    'Wait for the published revision to become available.',
   'workflowActivityVNext.publish.accepted': 'Publication accepted',
   'workflowActivityVNext.publish.approvalNotRequired':
     'No additional approval is required.',
@@ -136,6 +147,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.publish.publishedServiceId': 'Published service ID',
   'workflowActivityVNext.publish.publishing': 'Publishing',
   'workflowActivityVNext.publish.publishingTo': 'Publishing to {service}',
+  'workflowActivityVNext.publish.revisionId': 'Revision ID',
   'workflowActivityVNext.publish.reviewAgain': 'Review again',
   'workflowActivityVNext.publish.reviewAndPublish': 'Review and publish',
   'workflowActivityVNext.publish.reviewDescription':
