@@ -453,6 +453,51 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     }
 
     [Fact]
+    public async Task HandlePlatformBindingExecuteRequested_WhenRecoveryTimesOut_ShouldReachTerminalNotificationPending()
+    {
+        var state = NewInFlightState(DateTimeOffset.UtcNow.AddMinutes(-3));
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var agent = NewHandlerAgent(state, publisher, scheduler, platformPort);
+
+        await agent.HandlePlatformBindingExecuteRequested(new StudioMemberPlatformBindingExecuteRequested
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            RecoveryExecution = true,
+        });
+
+        platformPort.ExecuteRequests.Should().ContainSingle();
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-watchdog:bind-1:platform-1");
+
+        var restarted = _agent.Apply(state, new StudioMemberPlatformBindingExecutionStarted
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            StartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var failedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1));
+        var failed = _agent.Apply(restarted, new StudioMemberPlatformBindingFailed
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = "STUDIO_MEMBER_PLATFORM_BINDING_READINESS_TIMEOUT",
+                Message = "scope binding readiness timed out with status 'ServingSetMissing'.",
+                FailedAtUtc = failedAt,
+            },
+        });
+
+        failed.Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
+        failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_READINESS_TIMEOUT");
+        failed.PlatformExecutionInFlight.Should().BeFalse();
+        failed.UpdatedAtUtc.Should().Be(failedAt);
+    }
+
+    [Fact]
     public async Task ActivateAsync_WhenInFlightIsFresh_ShouldOnlyRestoreWatchdog()
     {
         var state = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
