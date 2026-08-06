@@ -50,6 +50,7 @@ public sealed partial class WorkflowRunGAgent
     private const string StoppedStatus = "stopped";
     private static readonly TimeSpan ScheduledCallerCredentialCleanupTimeout = TimeSpan.FromSeconds(5);
     private const string StartedNotificationDispatchOperationPrefix = "workflow-started-notification";
+    private const string ToolApprovalNotificationDispatchOperationPrefix = "workflow-tool-approval-notification";
     private const string TerminalNotificationDispatchOperationPrefix = "workflow-terminal-notification";
     private const string TerminalNotificationRetryCallbackPrefix = "workflow-terminal-notification-retry";
     private const int TerminalNotificationInitialRetryDelayMs = 250;
@@ -1296,6 +1297,48 @@ public sealed partial class WorkflowRunGAgent
         }
 
         await AttemptPendingTerminalNotificationAsync(CancellationToken.None);
+    }
+
+    [AllEventHandler(Priority = 50, AllowSelfHandling = true)]
+    public async Task HandleWorkflowToolApprovalSuspendedEnvelope(EventEnvelope envelope)
+    {
+        if (envelope.Payload?.Is(WorkflowSuspendedEvent.Descriptor) != true)
+            return;
+
+        var suspended = envelope.Payload.Unpack<WorkflowSuspendedEvent>();
+        var publisherActorId = envelope.Route?.PublisherActorId ?? string.Empty;
+        var target = State.CompletionNotificationTarget;
+        if (!string.Equals(publisherActorId, Id, StringComparison.Ordinal) ||
+            !string.Equals(suspended.RunId, RunId, StringComparison.Ordinal) ||
+            !string.Equals(suspended.SuspensionType, "tool_approval", StringComparison.Ordinal) ||
+            !HasCompletionNotificationTarget(target) ||
+            target!.ExpiresAtUnixMs <= _timeProvider.GetUtcNow().ToUnixTimeMilliseconds() ||
+            string.IsNullOrWhiteSpace(State.LastCommandId) ||
+            !HasToolApprovalIdentity(suspended))
+        {
+            return;
+        }
+
+        var notification = new WorkflowRunToolApprovalNotification
+        {
+            DeliveryId = target.DeliveryId.Trim(),
+            WorkflowActorId = Id,
+            WorkflowRunId = RunId,
+            WorkflowCommandId = State.LastCommandId.Trim(),
+            WorkflowCorrelationId = State.WorkflowCorrelationId?.Trim() ?? string.Empty,
+            StepId = suspended.StepId.Trim(),
+            ExecutionId = suspended.ToolApproval.ExecutionId.Trim(),
+            ToolName = suspended.ToolApproval.ToolName.Trim(),
+            ToolCallId = suspended.ToolApproval.ToolCallId.Trim(),
+            ApprovalRequestId = suspended.ToolApproval.ApprovalRequestId.Trim(),
+            Prompt = suspended.Prompt?.Trim() ?? string.Empty,
+            RequestedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+        };
+        await SendToAsync(
+            target.ActorId.Trim(),
+            notification,
+            CancellationToken.None,
+            BuildToolApprovalNotificationDispatchOptions(notification));
     }
 
     [AllEventHandler(Priority = 50, AllowSelfHandling = true)]
@@ -2902,6 +2945,14 @@ public sealed partial class WorkflowRunGAgent
         !string.IsNullOrWhiteSpace(target.ActorId) &&
         !string.IsNullOrWhiteSpace(target.DeliveryId);
 
+    private static bool HasToolApprovalIdentity(WorkflowSuspendedEvent suspended) =>
+        !string.IsNullOrWhiteSpace(suspended.StepId) &&
+        suspended.ToolApproval != null &&
+        !string.IsNullOrWhiteSpace(suspended.ToolApproval.ExecutionId) &&
+        !string.IsNullOrWhiteSpace(suspended.ToolApproval.ToolName) &&
+        !string.IsNullOrWhiteSpace(suspended.ToolApproval.ToolCallId) &&
+        !string.IsNullOrWhiteSpace(suspended.ToolApproval.ApprovalRequestId);
+
     private async Task SendWorkflowRunStartedNotificationAsync(CancellationToken ct)
     {
         var target = State.CompletionNotificationTarget;
@@ -2962,6 +3013,20 @@ public sealed partial class WorkflowRunGAgent
                     StartedNotificationDispatchOperationPrefix,
                     notification.DeliveryId,
                     notification.WorkflowCommandId),
+            },
+        };
+
+    private static EventEnvelopePublishOptions BuildToolApprovalNotificationDispatchOptions(
+        WorkflowRunToolApprovalNotification notification) =>
+        new()
+        {
+            Delivery = new EventEnvelopeDeliveryOptions
+            {
+                OperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
+                    ToolApprovalNotificationDispatchOperationPrefix,
+                    notification.DeliveryId,
+                    notification.WorkflowCommandId,
+                    notification.ApprovalRequestId),
             },
         };
 

@@ -889,6 +889,7 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
 
             var agent = new WorkflowRunDeliveryGAgent(
                 _outboundPort,
+                Substitute.For<IInteractiveReplyDispatcher>(),
                 _credentialResolver,
                 _callbackScheduler,
                 NullLogger<WorkflowRunDeliveryGAgent>.Instance)

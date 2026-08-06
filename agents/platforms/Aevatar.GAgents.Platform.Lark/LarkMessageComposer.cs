@@ -420,6 +420,14 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
     }
 
     private static bool IsReservedTypedApprovalArgument(ActionElement action, string key) =>
+        (action.WorkflowResume is not null &&
+         (string.Equals(key, "actor_id", StringComparison.Ordinal) ||
+          string.Equals(key, "run_id", StringComparison.Ordinal) ||
+          string.Equals(key, "step_id", StringComparison.Ordinal) ||
+          string.Equals(key, "approved", StringComparison.Ordinal) ||
+          string.Equals(key, "execution_id", StringComparison.Ordinal) ||
+          string.Equals(key, "tool_call_id", StringComparison.Ordinal) ||
+          string.Equals(key, "approval_request_id", StringComparison.Ordinal))) ||
         (action.NyxIdApproval is not null &&
          (string.Equals(key, "nyxid_approval_request_id", StringComparison.Ordinal) ||
           string.Equals(key, "nyxid_approval_approved", StringComparison.Ordinal))) ||
@@ -467,6 +475,15 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             map["edited_content"] = payload.EditedContent;
         if (!string.IsNullOrWhiteSpace(payload.Feedback))
             map["feedback"] = payload.Feedback;
+        if (payload.ToolApproval is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(payload.ToolApproval.ExecutionId))
+                map["execution_id"] = payload.ToolApproval.ExecutionId;
+            if (!string.IsNullOrWhiteSpace(payload.ToolApproval.ToolCallId))
+                map["tool_call_id"] = payload.ToolApproval.ToolCallId;
+            if (!string.IsNullOrWhiteSpace(payload.ToolApproval.ApprovalRequestId))
+                map["approval_request_id"] = payload.ToolApproval.ApprovalRequestId;
+        }
     }
 
     private static void CopyLlmSelectionPayload(

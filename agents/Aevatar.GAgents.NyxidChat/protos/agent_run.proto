@@ -776,6 +776,13 @@ message WorkflowRunDeliveryGAgentState {
   string pending_terminal_publisher_actor_id = 31;
   int64 pending_terminal_buffered_at_unix_ms = 32;
   aevatar.workflow.WorkflowRunTerminalStatus terminal_outcome = 33;
+  aevatar.workflow.WorkflowRunToolApprovalNotification pending_tool_approval_notification = 34;
+  repeated string delivered_tool_approval_request_ids = 35;
+  int32 tool_approval_delivery_attempt = 36;
+  string tool_approval_retry_callback_id = 37;
+  int64 tool_approval_retry_at_unix_ms = 38;
+  string pending_tool_approval_publisher_actor_id = 39;
+  int64 pending_tool_approval_buffered_at_unix_ms = 40;
 }
 
 message WorkflowRunDeliveryReserveRequested {
@@ -843,6 +850,49 @@ message WorkflowRunDeliveryTerminalNotificationDiscardedEvent {
   string workflow_command_id = 2;
   string reason = 3;
   int64 discarded_at_unix_ms = 4;
+}
+
+message WorkflowRunDeliveryToolApprovalNotificationBufferedEvent {
+  string delivery_id = 1;
+  string workflow_command_id = 2;
+  string publisher_actor_id = 3;
+  aevatar.workflow.WorkflowRunToolApprovalNotification notification = 4;
+  int64 buffered_at_unix_ms = 5;
+}
+
+message WorkflowRunDeliveryToolApprovalNotificationDeliveredEvent {
+  string delivery_id = 1;
+  string workflow_command_id = 2;
+  string approval_request_id = 3;
+  int32 attempt = 4;
+  string sent_activity_id = 5;
+  string platform_message_id = 6;
+  int64 delivered_at_unix_ms = 7;
+}
+
+message WorkflowRunDeliveryToolApprovalNotificationRetryScheduledEvent {
+  string delivery_id = 1;
+  string workflow_command_id = 2;
+  string approval_request_id = 3;
+  int32 attempt = 4;
+  string callback_id = 5;
+  int64 retry_at_unix_ms = 6;
+}
+
+message WorkflowRunDeliveryToolApprovalNotificationRetryReached {
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_command_id = 3;
+  string approval_request_id = 4;
+  int32 attempt = 5;
+}
+
+message WorkflowRunDeliveryToolApprovalNotificationDiscardedEvent {
+  string delivery_id = 1;
+  string workflow_command_id = 2;
+  string approval_request_id = 3;
+  string reason = 4;
+  int64 discarded_at_unix_ms = 5;
 }
 
 message WorkflowRunDeliveryAbandonRequested {

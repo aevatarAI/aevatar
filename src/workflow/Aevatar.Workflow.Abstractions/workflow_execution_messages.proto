@@ -82,6 +82,21 @@ message WorkflowRunStartedNotification {
   google.protobuf.Timestamp started_at = 6;
 }
 
+message WorkflowRunToolApprovalNotification {
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_run_id = 3;
+  string workflow_command_id = 4;
+  string workflow_correlation_id = 5;
+  string step_id = 6;
+  string execution_id = 7;
+  string tool_name = 8;
+  string tool_call_id = 9;
+  string approval_request_id = 10;
+  string prompt = 11;
+  google.protobuf.Timestamp requested_at = 12;
+}
+
 message WorkflowRunCompletionNotificationTargetAdoptedEvent {
   WorkflowCompletionNotificationTarget completion_notification_target = 1;
   string workflow_run_id = 2;
