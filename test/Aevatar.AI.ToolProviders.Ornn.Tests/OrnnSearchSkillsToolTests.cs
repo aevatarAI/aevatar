@@ -1,5 +1,7 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.Skills;
 using FluentAssertions;
 using System.Text.Json;
 
@@ -24,6 +26,71 @@ public sealed class OrnnSearchSkillsToolTests
         // The model-facing `scope` knob is intentionally gone: a discovery-for-use tool must never
         // let the model narrow visibility and hide skills it can actually use. Always searches mixed.
         schema.RootElement.GetProperty("properties").TryGetProperty("scope", out _).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(
+        """
+        {
+          "result_type": "skill_search",
+          "status": "success",
+          "matches": [{ "skill_name": "invoice-approval" }],
+          "text": "Found 1 skill"
+        }
+        """)]
+    [InlineData(
+        """{"result_type":"skill_search","status":"no_match","matches":[],"text":"No skills found"}""")]
+    public void CreateResultReceipt_WithCompletedSearchOutcome_ReturnsVerifiedSuccess(string resultJson)
+    {
+        var tool = CreateTool(OrnnTestHttpMessageHandler.ReturningJson("""{ "data": { "items": [] } }"""));
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt("call-search", tool.Name, "{}", resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.ResultJson.Should().Be(resultJson);
+    }
+
+    [Fact]
+    public void CreateResultReceipt_WithSearchError_ReturnsTypedFailure()
+    {
+        var tool = CreateTool(OrnnTestHttpMessageHandler.ReturningJson("""{ "data": { "items": [] } }"""));
+        const string resultJson =
+            """
+            {
+              "result_type": "skill_search",
+              "status": "error",
+              "error": "upstream unavailable",
+              "matches": [],
+              "text": "Search failed"
+            }
+            """;
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt("call-search", tool.Name, "{}", resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("ORNN_SKILL_SEARCH_FAILED");
+        receipt.ResultJson.Should().Be(resultJson);
+    }
+
+    [Theory]
+    [InlineData("not-json")]
+    [InlineData("""{"result_type":"skill_search","status":"success","matches":[]}""")]
+    [InlineData(
+        """
+        {"result_type":"skill_search","status":"success","error":"failed","matches":[{"skill_name":"invoice-approval"}]}
+        """)]
+    [InlineData("""{"result_type":1,"status":"success","matches":[{"skill_name":"invoice-approval"}]}""")]
+    [InlineData("""{"result_type":"skill_search","status":"unknown","matches":[]}""")]
+    [InlineData("""{"result_type":"other","status":"success","matches":[]}""")]
+    public void CreateResultReceipt_WithUnverifiedPayload_ReturnsNull(string resultJson)
+    {
+        var tool = CreateTool(OrnnTestHttpMessageHandler.ReturningJson("""{ "data": { "items": [] } }"""));
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt("call-search", tool.Name, "{}", resultJson);
+
+        receipt.Should().BeNull();
     }
 
     [Fact]
@@ -142,6 +209,58 @@ public sealed class OrnnSearchSkillsToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WithRemoteAccessResolver_UsesResolvedCallerAuthority()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""{ "data": { "items": [] } }""");
+        var resolver = new RecordingRemoteSkillAccessTokenResolver("bound-skill-token");
+        var previous = AgentToolRequestContext.Current;
+        try
+        {
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+            {
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "generic-delegation-token",
+            });
+            var tool = CreateTool(handler, resolver);
+
+            await tool.ExecuteAsync("""{ "query": "invoice-approval" }""");
+
+            resolver.SkillNames.Should().Equal("invoice-approval");
+            handler.Requests.Should().ContainSingle()
+                .Which.Authorization!.Parameter.Should().Be("bound-skill-token");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenRemoteAccessResolverRejectsAuthority_DoesNotUseGenericToken()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""{ "data": { "items": [] } }""");
+        var resolver = new RecordingRemoteSkillAccessTokenResolver(null);
+        var previous = AgentToolRequestContext.Current;
+        try
+        {
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+            {
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "generic-delegation-token",
+            });
+            var tool = CreateTool(handler, resolver);
+
+            var result = await tool.ExecuteAsync("""{ "query": "invoice-approval" }""");
+
+            ExtractStatus(result).Should().Be("error");
+            resolver.SkillNames.Should().Equal("invoice-approval");
+            handler.Requests.Should().BeEmpty();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_IgnoresModelScopePublic_StillSearchesMixed()
     {
         // Regression guard for the original bug: the model picked scope=public for "org-shared
@@ -218,7 +337,9 @@ public sealed class OrnnSearchSkillsToolTests
         }
     }
 
-    private static OrnnSearchSkillsTool CreateTool(OrnnTestHttpMessageHandler handler)
+    private static OrnnSearchSkillsTool CreateTool(
+        OrnnTestHttpMessageHandler handler,
+        IRemoteSkillAccessTokenResolver? remoteAccessTokenResolver = null)
     {
         var nyxClient = new Aevatar.AI.ToolProviders.NyxId.NyxIdApiClient(
             new Aevatar.AI.ToolProviders.NyxId.NyxIdToolOptions { BaseUrl = "https://nyx.example" },
@@ -227,7 +348,20 @@ public sealed class OrnnSearchSkillsToolTests
             new OrnnOptions { NyxIdSlug = "ornn" },
             nyxClient);
 
-        return new OrnnSearchSkillsTool(client);
+        return new OrnnSearchSkillsTool(client, remoteAccessTokenResolver);
+    }
+
+    private sealed class RecordingRemoteSkillAccessTokenResolver(string? token) :
+        IRemoteSkillAccessTokenResolver
+    {
+        public List<string> SkillNames { get; } = [];
+
+        public Task<string?> ResolveAsync(string skillName, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            SkillNames.Add(skillName);
+            return Task.FromResult(token);
+        }
     }
 
     private static string ExtractText(string json)

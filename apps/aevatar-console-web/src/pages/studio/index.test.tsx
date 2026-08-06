@@ -394,7 +394,6 @@ let mockConnectorCatalog: any;
 let mockConnectorDraftResponse: any;
 let mockRoleCatalog: any;
 let mockRoleDraftResponse: any;
-let mockSettings: any;
 let mockLastWorkflowBuildPanelProps: any;
 const defaultStudioAppContext = {
   mode: "proxy",
@@ -495,6 +494,18 @@ async function mockAuthorWorkflowSuccess(
   return "name: ai-generated\nsteps: []\n";
 }
 
+function createStudioApiStatusError(
+  message: string,
+  status: number,
+  code: string,
+): Error & { code: string; status: number } {
+  const error = new Error(message) as Error & { code: string; status: number };
+  error.name = "StudioApiError";
+  error.code = code;
+  error.status = status;
+  return error;
+}
+
 function resetMockState(): void {
   mockParsedDocument = mockCloneValue(mockWorkflowDocument);
   mockWorkflowSummaries = mockCreateDefaultWorkflowSummaries();
@@ -578,34 +589,6 @@ function resetMockState(): void {
     fileExists: false,
     updatedAtUtc: null,
     draft: null,
-  };
-  mockSettings = {
-    runtimeBaseUrl: "https://aevatar-console-backend-api.aevatar.ai",
-    defaultProviderName: "tornado",
-    providerTypes: [
-      {
-        id: "openai",
-        displayName: "OpenAI",
-        category: "llm",
-        description: "OpenAI compatible provider",
-        recommended: true,
-        defaultEndpoint: "https://api.openai.test",
-        defaultModel: "gpt-4.1-mini",
-      },
-    ],
-    providers: [
-      {
-        providerName: "tornado",
-        providerType: "openai",
-        displayName: "Tornado",
-        category: "llm",
-        description: "Local provider",
-        model: "gpt-test",
-        endpoint: "https://aevatar-console-backend-api.aevatar.ai",
-        apiKey: "",
-        apiKeyConfigured: true,
-      },
-    ],
   };
 }
 
@@ -748,6 +731,13 @@ const mockRuntimeRunsApi = runtimeRunsApi as unknown as {
 };
 
 jest.mock("@/shared/studio/api", () => ({
+  isStudioApiErrorCode: (error: unknown, status: number, code: string) =>
+    error instanceof Error &&
+    error.name === "StudioApiError" &&
+    "status" in error &&
+    error.status === status &&
+    "code" in error &&
+    error.code === code,
   isStudioApiStatus: (error: unknown, status: number) =>
     error instanceof Error &&
     error.name === "StudioApiError" &&
@@ -768,14 +758,19 @@ jest.mock("@/shared/studio/api", () => ({
       ],
     })),
     getUserLlmSettings: jest.fn(async () => ({
-      savedRoute: "",
+      savedSelection: {
+        routeKind: "gateway",
+        routeValue: "/api/v1/llm/gateway/v1",
+        modelSelection: {
+          kind: "explicit_model",
+          modelId: "gpt-4.1-mini",
+        },
+      },
       savedRouteLabel: "Company LLM Gateway",
-      effectiveRoute: "",
-      effectiveRouteLabel: "Company LLM Gateway",
-      routeFallbackActive: false,
-      fallbackReason: null,
+      selectionStatus: "ready",
+      catalogDiagnostic: "unspecified",
+      remediation: "none",
       catalogStatus: "ready",
-      defaultModel: "gpt-4.1-mini",
       capabilities: {
         canEditRoute: true,
         canEditModel: true,
@@ -1103,9 +1098,6 @@ jest.mock("@/shared/studio/api", () => ({
       return undefined;
     }),
     deleteMember: jest.fn(async (input: { scopeId: string; memberId: string }) => {
-      mockStudioMembers = mockStudioMembers.filter(
-        (member) => member.memberId !== input.memberId,
-      );
       return {
         status: "delete_accepted",
         scopeId: input.scopeId,
@@ -1161,6 +1153,7 @@ jest.mock("@/shared/studio/api", () => ({
         };
       }
     ),
+    previewExplicitRequests: jest.fn(),
     listExecutions: jest.fn(async () => [
       {
         executionId: "execution-1",
@@ -1638,36 +1631,6 @@ jest.mock("@/shared/studio/api", () => ({
         importedCount: mockRoleCatalog.roles.length,
       };
     }),
-    getSettings: jest.fn(async () => ({
-      ...mockSettings,
-    })),
-    saveSettings: jest.fn(
-      async (input: {
-        runtimeBaseUrl?: string;
-        defaultProviderName?: string;
-        providers?: typeof mockSettings.providers;
-      }) => {
-        mockSettings = {
-          ...mockSettings,
-          runtimeBaseUrl: input.runtimeBaseUrl || mockSettings.runtimeBaseUrl,
-          defaultProviderName:
-            input.defaultProviderName || mockSettings.defaultProviderName,
-          providers: input.providers || mockSettings.providers,
-        };
-        return mockSettings;
-      }
-    ),
-    testRuntimeConnection: jest.fn(
-      async (input: { runtimeBaseUrl?: string }) => ({
-        runtimeBaseUrl: input.runtimeBaseUrl || mockSettings.runtimeBaseUrl,
-        reachable: true,
-        checkedUrl: `${
-          input.runtimeBaseUrl || mockSettings.runtimeBaseUrl
-        }/health`,
-        statusCode: 200,
-        message: "Runtime responded with 200 OK.",
-      })
-    ),
     addWorkflowDirectory: jest.fn(async () => ({
       runtimeBaseUrl: "https://aevatar-console-backend-api.aevatar.ai",
       directories: [
@@ -1970,6 +1933,13 @@ jest.mock("./components/StudioBuildPanels", () => {
         { key: "dry-run-route", "data-testid": "workflow-dry-run-route" },
         props.dryRunRouteLabel || ""
       ),
+      props.dryRunBlockedReason
+        ? mockReact.createElement(
+            "div",
+            { key: "dry-run-blocked", role: "alert" },
+            props.dryRunBlockedReason,
+          )
+        : null,
       mockReact.createElement("textarea", {
         key: "run-input",
         "aria-label": "Workflow dry run input",
@@ -3419,6 +3389,14 @@ describe("StudioPage", () => {
         updatedAt: "2026-04-27T08:15:01Z",
       })
     );
+    (studioApi.previewExplicitRequests as jest.Mock).mockReset();
+    (studioApi.previewExplicitRequests as jest.Mock).mockImplementation(
+      (input: { workflowId: string; revisionId: string }) => ({
+        workflowId: input.workflowId,
+        revisionId: input.revisionId,
+        items: [],
+      }),
+    );
     (scriptsApi.listScripts as jest.Mock).mockReset();
     (scriptsApi.listScripts as jest.Mock).mockResolvedValue([]);
     (scriptsApi.observeSaveScript as jest.Mock).mockReset();
@@ -3484,16 +3462,23 @@ describe("StudioPage", () => {
     expect(await screen.findByText("Workflow description")).toBeTruthy();
   });
 
-  it("uses the backend effective route when the saved workflow dry-run route is stale", async () => {
+  it("blocks a repair-required saved route without substituting Gateway", async () => {
     (studioApi.getUserLlmSettings as jest.Mock).mockResolvedValueOnce({
-      savedRoute: "/api/v1/proxy/s/stale-openai",
+      savedSelection: {
+        routeKind: "nyx_id_user_service",
+        routeValue: "/api/v1/proxy/s/stale-openai",
+        nyxIdUserServiceId: "us-stale-openai",
+        serviceSlugSnapshot: "stale-openai",
+        modelSelection: {
+          kind: "explicit_model",
+          modelId: "gpt-5.4-mini",
+        },
+      },
       savedRouteLabel: "/api/v1/proxy/s/stale-openai",
-      effectiveRoute: "",
-      effectiveRouteLabel: "Company LLM Gateway",
-      routeFallbackActive: true,
-      fallbackReason: "saved_route_unavailable",
+      selectionStatus: "needs_repair",
+      catalogDiagnostic: "route_not_ready",
+      remediation: "choose_replacement",
       catalogStatus: "ready",
-      defaultModel: "gpt-5.4-mini",
       capabilities: {
         canEditRoute: true,
         canEditModel: true,
@@ -3508,8 +3493,14 @@ describe("StudioPage", () => {
           status: "ready",
           allowed: true,
           ready: true,
-          serviceId: null,
+          userServiceId: null,
           serviceSlug: null,
+          modelCatalog: {
+            certainty: "enumerated",
+            modelIds: ["gpt-4.1-mini", "gpt-5.4-mini"],
+            defaultModelId: "gpt-4.1-mini",
+            diagnostic: "unspecified",
+          },
           description: null,
         },
         {
@@ -3519,8 +3510,14 @@ describe("StudioPage", () => {
           status: "ready",
           allowed: true,
           ready: true,
-          serviceId: "svc-openai",
+          userServiceId: "us-openai",
           serviceSlug: "openai",
+          modelCatalog: {
+            certainty: "enumerated",
+            modelIds: ["gpt-4.1-mini", "gpt-5.4-mini"],
+            defaultModelId: "gpt-4.1-mini",
+            diagnostic: "unspecified",
+          },
           description: null,
         },
       ],
@@ -3538,8 +3535,14 @@ describe("StudioPage", () => {
 
     const routeLabel = await screen.findByTestId("workflow-dry-run-route");
     await waitFor(() => {
-      expect(routeLabel).toHaveTextContent("Company LLM Gateway");
+      expect(routeLabel).toHaveTextContent("/api/v1/proxy/s/stale-openai");
     });
+    expect(routeLabel).not.toHaveTextContent("Company LLM Gateway");
+    expect(
+      screen.getByText(
+        "The saved LLM selection needs attention in Settings before this workflow can run.",
+      ),
+    ).toBeTruthy();
   });
 
   it("canonicalizes legacy service member params to real member ids", async () => {
@@ -5163,11 +5166,37 @@ describe("StudioPage", () => {
   });
 
   it("deletes a synced Studio member from the inventory rail", async () => {
+    (studioApi.deleteMember as jest.Mock).mockResolvedValue({
+      status: "delete_accepted",
+      scopeId: "scope-1",
+      memberId: "workspace-demo",
+      ackedAt: "2026-07-09T08:12:00Z",
+    });
     renderStudioPage(
       "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio"
     );
 
-    fireEvent.click(await screen.findByLabelText("Delete workspace-demo"));
+    const deleteButton = await screen.findByLabelText("Delete workspace-demo");
+    const memberReadsBeforeDelete = (studioApi.getMember as jest.Mock).mock.calls.length;
+    let confirmRemoval: (() => void) | undefined;
+    const removalObserved = new Promise<void>((resolve) => {
+      confirmRemoval = resolve;
+    });
+    (studioApi.getMember as jest.Mock)
+      .mockResolvedValueOnce({
+        summary: mockStudioMembers[0],
+        implementationRef: null,
+        lastBinding: null,
+      })
+      .mockImplementationOnce(async () => {
+        await removalObserved;
+        throw createStudioApiStatusError(
+          "Member not found",
+          404,
+          "STUDIO_MEMBER_NOT_FOUND",
+        );
+      });
+    fireEvent.click(deleteButton);
 
     await waitFor(() => {
       expect(Modal.confirm).toHaveBeenCalledWith(
@@ -5182,8 +5211,9 @@ describe("StudioPage", () => {
 
     const confirmConfig = (Modal.confirm as jest.Mock).mock.calls[0]?.[0];
     expect(confirmConfig.icon).toBeTruthy();
-    await act(async () => {
-      await confirmConfig.onOk();
+    let deletePromise: Promise<void> | undefined;
+    act(() => {
+      deletePromise = confirmConfig.onOk();
     });
 
     await waitFor(() => {
@@ -5193,6 +5223,19 @@ describe("StudioPage", () => {
       });
     });
     expect(studioApi.deleteWorkflow).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(studioApi.getMember).toHaveBeenCalledTimes(
+        memberReadsBeforeDelete + 2,
+      );
+    });
+    expect(screen.getByLabelText("Delete workspace-demo")).toBeTruthy();
+    expect(message.info).toHaveBeenCalled();
+    expect(message.success).not.toHaveBeenCalled();
+
+    await act(async () => {
+      confirmRemoval?.();
+      await deletePromise;
+    });
 
     await waitFor(() => {
       expect(message.success).toHaveBeenCalledWith(
@@ -5271,6 +5314,14 @@ describe("StudioPage", () => {
       "Other team member",
     );
 
+    (studioApi.getMember as jest.Mock).mockRejectedValueOnce(
+      createStudioApiStatusError(
+        "Member not found",
+        404,
+        "STUDIO_MEMBER_NOT_FOUND",
+      ),
+    );
+
     await act(async () => {
       await otherConfirmConfig.onOk();
     });
@@ -5287,6 +5338,33 @@ describe("StudioPage", () => {
         "Deleted member Other team member.",
       );
     });
+  });
+
+  it("surfaces an unrelated Studio member delete 404", async () => {
+    (studioApi.deleteMember as jest.Mock).mockRejectedValueOnce(
+      createStudioApiStatusError("Delete route not found", 404, "ROUTE_NOT_FOUND"),
+    );
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio"
+    );
+
+    fireEvent.click(await screen.findByLabelText("Delete workspace-demo"));
+    await waitFor(() => {
+      expect(Modal.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Delete Studio member",
+        })
+      );
+    });
+
+    const confirmConfig = (Modal.confirm as jest.Mock).mock.calls[0]?.[0];
+    await act(async () => {
+      await confirmConfig.onOk();
+    });
+
+    expect(message.error).toHaveBeenCalledWith("Delete route not found");
+    expect(message.success).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Delete workspace-demo")).toBeTruthy();
   });
 
   it("treats a missing workflow draft as already deleted from the inventory rail", async () => {
@@ -5658,25 +5736,33 @@ describe("StudioPage", () => {
     });
   });
 
-  it("surfaces the current workflow as a bind candidate before any published service exists", async () => {
-    mockParsedDocument = {
-      ...mockParsedDocument,
-      steps: mockParsedDocument.steps.map((step) =>
-        step.type === "llm_call"
-          ? {
-              ...step,
-              parameters: {
-                prompt: "把用户输入的内容转成日语",
-              },
-            }
-          : step
-      ),
-    } as any;
-    mockWorkflowFile = {
-      ...mockWorkflowFile,
-      document: mockParsedDocument,
-      yaml: mockBuildWorkflowYaml(mockParsedDocument),
-    };
+  it("requires a fresh explicit-request confirmation before binding a workflow member", async () => {
+    mockStudioMembers = mockStudioMembers.map((member) =>
+      member.memberId === "workspace-demo"
+        ? { ...member, lastBoundRevisionId: "rev-2" }
+        : member,
+    );
+    (studioApi.previewExplicitRequests as jest.Mock).mockImplementation(
+      (input: { workflowId: string; revisionId: string }) => ({
+        workflowId: input.workflowId,
+        revisionId: input.revisionId,
+        items: [
+          {
+            callSiteId: "wf-alpha/request-alpha",
+            requestContractDigest: "digest-alpha",
+            userServiceId: "usvc-alpha",
+            method: "post",
+            pathTemplate: "/records/{id}",
+            bodyMode: "json",
+            bodyRequired: true,
+            responseMode: "text",
+            effectiveRisk: "write",
+            approvalRequired: true,
+            allowedExecutionModes: ["interactive"],
+          },
+        ],
+      }),
+    );
     mockScopeRuntimeApi.listServices.mockReset();
     mockScopeRuntimeApi.listServices
       .mockResolvedValueOnce([])
@@ -5717,39 +5803,55 @@ describe("StudioPage", () => {
     });
 
     await waitFor(() => {
-      expect(studioApi.bindMemberWorkflow).toHaveBeenCalledWith(
-        expect.objectContaining({
-          scopeId: "scope-1",
-          memberId: "workspace-demo",
-          displayName: "workspace-demo",
-          workflowId: "workflow-1",
-          workflowYamls: expect.arrayContaining([expect.stringContaining("name: workspace-demo")]),
-        }),
-      );
+      expect(studioApi.previewExplicitRequests).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        workflowId: "workflow-1",
+        workflowYaml: expect.stringContaining("name: workspace-demo"),
+        inlineWorkflowYamls: {},
+        executionMode: "interactive",
+        revisionId: expect.stringMatching(/^rev-/),
+      });
+      expect(Modal.confirm).toHaveBeenCalledTimes(1);
     });
-    const workflowYamls =
-      (studioApi.bindMemberWorkflow as jest.Mock).mock.calls.at(-1)?.[0]
-        ?.workflowYamls ?? [];
-    expect(workflowYamls.join("\n")).toContain(
-      "prompt_prefix: 把用户输入的内容转成日语"
-    );
-    expect(workflowYamls.join("\n")).not.toContain(
-      "prompt: 把用户输入的内容转成日语"
-    );
-    await waitFor(() => {
-      expect(screen.getByText("service:default")).toBeTruthy();
-      expect(screen.getByText("services:default")).toBeTruthy();
-      expect(screen.getByText("candidate:none")).toBeTruthy();
-    });
-    expect(screen.queryByText("service:no-service")).toBeNull();
-    expect(screen.queryByText("services:none")).toBeNull();
+    expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
 
-    const rail = await screen.findByLabelText("Team members");
-    await waitFor(() => {
-      expect(
-        within(rail).getAllByRole("button", { name: "workspace-demo" })
-      ).toHaveLength(1);
+    const cancelledConfirmation = (Modal.confirm as jest.Mock).mock.calls[0]?.[0];
+    await act(async () => {
+      cancelledConfirmation.onCancel();
     });
+    expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Bind current member" }));
+    await waitFor(() => {
+      expect(studioApi.previewExplicitRequests).toHaveBeenCalledTimes(2);
+      expect(Modal.confirm).toHaveBeenCalledTimes(2);
+    });
+    const previewInput = (studioApi.previewExplicitRequests as jest.Mock).mock.calls[1]?.[0];
+    const confirmedDialog = (Modal.confirm as jest.Mock).mock.calls[1]?.[0];
+    await act(async () => {
+      await confirmedDialog.onOk();
+    });
+
+    await waitFor(() => {
+      expect(studioApi.bindMemberWorkflow).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        memberId: "workspace-demo",
+        displayName: "workspace-demo",
+        workflowId: "workflow-1",
+        revisionId: previewInput.revisionId,
+        workflowYamls: [previewInput.workflowYaml],
+        explicitRequestConfirmations: [
+          {
+            workflowId: "workflow-1",
+            revisionId: previewInput.revisionId,
+            callSiteId: "wf-alpha/request-alpha",
+            requestContractDigest: "digest-alpha",
+            attestedRisk: "write",
+          },
+        ],
+      });
+    });
+    expect(previewInput.revisionId).not.toBe("rev-2");
   });
 
   it("does not expose post-bind Team entry or Team test actions from Studio bind", async () => {

@@ -57,8 +57,17 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         if (!revisionCatalog.TryGetPreparedArtifact(command.RevisionId, out var artifact))
         {
             if (revisionCatalog.IsRevisionPreparationFailed(command.RevisionId))
-                throw new InvalidOperationException(
+            {
+                await FailActivationAsync(
+                    command.Identity,
+                    command.RevisionId,
+                    ServiceDeploymentActivationFailureCode.RevisionPreparationFailed,
                     $"Prepared artifact for '{ServiceKeys.Build(command.Identity)}' revision '{command.RevisionId}' failed preparation.");
+                return;
+            }
+
+            if (State.ActivationFailures.ContainsKey(command.RevisionId))
+                return;
 
             await ReArmActivationForProjectionLagAsync(command);
             return;
@@ -124,14 +133,41 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
 
     private async Task ReArmActivationForProjectionLagAsync(ActivateServiceRevisionCommand command)
     {
+        if (State.Deployments.Values.Any(x =>
+                string.Equals(x.RevisionId, command.RevisionId, StringComparison.Ordinal) &&
+                x.Status == ServiceDeploymentStatus.Active))
+        {
+            return;
+        }
+
         var nowUtc = DateTime.UtcNow;
-        var deadlineUtc = command.ActivationDeadlineAt?.ToDateTime() ?? nowUtc + ActivationProjectionRetryBudget;
+        DateTime deadlineUtc;
+        if (State.PendingActivations.TryGetValue(command.RevisionId, out var pendingActivation))
+        {
+            deadlineUtc = pendingActivation.DeadlineAt.ToDateTime();
+        }
+        else
+        {
+            var maximumDeadlineUtc = nowUtc + ActivationProjectionRetryBudget;
+            var requestedDeadlineUtc = command.ActivationDeadlineAt?.ToDateTime() ?? maximumDeadlineUtc;
+            deadlineUtc = requestedDeadlineUtc < maximumDeadlineUtc ? requestedDeadlineUtc : maximumDeadlineUtc;
+            await PersistDomainEventAsync(new ServiceDeploymentActivationDeferredEvent
+            {
+                Identity = command.Identity.Clone(),
+                RevisionId = command.RevisionId,
+                DeadlineAt = Timestamp.FromDateTime(deadlineUtc),
+                DeferredAt = Timestamp.FromDateTime(nowUtc),
+            });
+        }
+
         if (nowUtc >= deadlineUtc)
         {
-            // Projection never caught up within the bounded budget: surface the honest terminal failure
-            // so the runtime/operator can observe it (matches the pre-fix behaviour, just deferred).
-            throw new InvalidOperationException(
+            await FailActivationAsync(
+                command.Identity,
+                command.RevisionId,
+                ServiceDeploymentActivationFailureCode.PreparedArtifactMissing,
                 $"Prepared artifact for '{ServiceKeys.Build(command.Identity)}' revision '{command.RevisionId}' was not found before the activation deadline.");
+            return;
         }
 
         var remaining = deadlineUtc - nowUtc;
@@ -153,6 +189,42 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             $"{ActivationProjectionRetryCallbackPrefix}:{command.RevisionId}",
             dueTime,
             retryCommand);
+    }
+
+    private async Task FailActivationAsync(
+        ServiceIdentity identity,
+        string revisionId,
+        ServiceDeploymentActivationFailureCode failureCode,
+        string failureReason)
+    {
+        if (State.Deployments.Values.Any(x =>
+                string.Equals(x.RevisionId, revisionId, StringComparison.Ordinal) &&
+                x.Status == ServiceDeploymentStatus.Active))
+        {
+            return;
+        }
+
+        if (State.ActivationFailures.TryGetValue(revisionId, out var existing) &&
+            existing.FailureCode == failureCode &&
+            string.Equals(existing.FailureReason, failureReason, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        Logger.LogError(
+            "Service activation failed terminally. serviceKey={ServiceKey} revisionId={RevisionId} failureCode={FailureCode} failureReason={FailureReason}",
+            ServiceKeys.Build(identity),
+            revisionId,
+            failureCode,
+            failureReason);
+        await PersistDomainEventAsync(new ServiceDeploymentActivationFailedEvent
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+            FailureCode = failureCode,
+            FailureReason = failureReason,
+            OccurredAt = Timestamp.FromDateTime(DateTime.UtcNow),
+        });
     }
 
     [EventHandler]
@@ -193,6 +265,8 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             .On<ServiceDeploymentActivatedEvent>(ApplyActivated)
             .On<ServiceDeploymentDeactivatedEvent>(ApplyDeactivated)
             .On<ServiceDeploymentHealthChangedEvent>(ApplyHealthChanged)
+            .On<ServiceDeploymentActivationFailedEvent>(ApplyActivationFailed)
+            .On<ServiceDeploymentActivationDeferredEvent>(ApplyActivationDeferred)
             .OrCurrent();
 
     private static ServiceDeploymentState ApplyActivated(ServiceDeploymentState state, ServiceDeploymentActivatedEvent evt)
@@ -208,8 +282,46 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             ActivatedAt = evt.ActivatedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
             UpdatedAt = evt.ActivatedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
         };
+        next.PendingActivations.Remove(evt.RevisionId);
+        next.ActivationFailures.Remove(evt.RevisionId);
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = BuildEventId(evt.Identity, evt.DeploymentId, "activated");
+        return next;
+    }
+
+    private static ServiceDeploymentState ApplyActivationFailed(
+        ServiceDeploymentState state,
+        ServiceDeploymentActivationFailedEvent evt)
+    {
+        var next = state.Clone();
+        next.Identity = evt.Identity?.Clone() ?? state.Identity?.Clone() ?? new ServiceIdentity();
+        next.ActivationFailures[evt.RevisionId] = new ServiceDeploymentActivationFailureRecord
+        {
+            RevisionId = evt.RevisionId ?? string.Empty,
+            FailureCode = evt.FailureCode,
+            FailureReason = evt.FailureReason ?? string.Empty,
+            OccurredAt = evt.OccurredAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
+        };
+        next.PendingActivations.Remove(evt.RevisionId);
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
+        next.LastEventId = BuildEventId(evt.Identity, evt.RevisionId, "activation-failed");
+        return next;
+    }
+
+    private static ServiceDeploymentState ApplyActivationDeferred(
+        ServiceDeploymentState state,
+        ServiceDeploymentActivationDeferredEvent evt)
+    {
+        var next = state.Clone();
+        next.Identity = evt.Identity?.Clone() ?? state.Identity?.Clone() ?? new ServiceIdentity();
+        next.PendingActivations[evt.RevisionId] = new ServiceDeploymentPendingActivationRecord
+        {
+            RevisionId = evt.RevisionId ?? string.Empty,
+            DeadlineAt = evt.DeadlineAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
+            DeferredAt = evt.DeferredAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
+        };
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
+        next.LastEventId = BuildEventId(evt.Identity, evt.RevisionId, "activation-deferred");
         return next;
     }
 

@@ -2,11 +2,13 @@ using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
+using ExternalCapabilityExecutionMode = Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode;
 
 namespace Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
 
@@ -71,7 +73,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
             },
             Runtime = new EnvelopeRuntime
             {
-                Deduplication = new DeliveryDeduplication
+                DeliveryIdentity = new DeliveryIdentity
                 {
                     OperationId = commandId,
                 },
@@ -110,6 +112,8 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
                 ct);
         }
 
+        // This observer is transient by design. It only publishes typed frames/completion
+        // back to the run actor; the actor-owned durable deadline guarantees termination.
         _ = Task.Run(
             () => ExecuteWorkflowInteractionAsync(runActorId, request.Clone(), CancellationToken.None),
             CancellationToken.None);
@@ -232,6 +236,19 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         CancellationToken ct)
     {
         var inputParts = await BuildAttachmentInputPartsAsync(request, ct).ConfigureAwait(false);
+        var firstFileRef = FirstInputFileRef(inputParts);
+        _logger.LogWarning(
+            "Workflow draft-run command input file refs resolved. runId={RunId} correlation={CorrelationId} workflowName={WorkflowName} scopeId={ScopeId} activityAttachmentCount={ActivityAttachmentCount} commandInputPartCount={CommandInputPartCount} commandInputFileRefCount={CommandInputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+            request.RunId,
+            request.CorrelationId,
+            request.WorkflowSource?.WorkflowName ?? string.Empty,
+            request.WorkflowSource?.ScopeId ?? string.Empty,
+            request.Activity?.Content?.Attachments.Count ?? 0,
+            inputParts?.Count ?? 0,
+            CountInputFileRefs(inputParts),
+            firstFileRef?.FileId ?? string.Empty,
+            firstFileRef?.ArtifactId ?? string.Empty,
+            firstFileRef?.MediaType ?? string.Empty);
         return BuildCommand(request, inputParts);
     }
 
@@ -261,7 +278,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         var inputParts = new List<WorkflowChatInputPart>(attachments.Length);
         foreach (var attachment in attachments)
         {
-            var resourceKey = NormalizeOptional(attachment.AttachmentId);
+            var resourceKey = LarkAttachmentResourceKeys.Normalize(attachment.AttachmentId);
             if (resourceKey is null)
                 throw new WorkflowAttachmentIngressException("resource_key_missing");
 
@@ -298,7 +315,6 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
                             SourceResourceKey: resourceKey,
                             FileName: NormalizeOptional(download.FileName) ?? NormalizeOptional(attachment.Name),
                             MediaType: NormalizeOptional(download.ContentType) ?? NormalizeOptional(attachment.ContentType),
-                            OwnerRunId: NormalizeOptional(request.RunId),
                             OwnerScopeId: NormalizeOptional(request.WorkflowSource?.ScopeId)),
                         ct)
                     .ConfigureAwait(false);
@@ -308,20 +324,38 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
                 throw new WorkflowAttachmentIngressException("ingress_failed", ex);
             }
 
-            inputParts.Add(new WorkflowChatInputPart
-            {
-                Kind = attachment.Kind == AttachmentKind.Image
+            _logger.LogWarning(
+                "Workflow draft-run attachment ingested. runId={RunId} correlation={CorrelationId} workflowName={WorkflowName} scopeId={ScopeId} attachmentKind={AttachmentKind} resourceKey={ResourceKey} fileId={FileId} artifactId={ArtifactId} mediaType={MediaType} sizeBytes={SizeBytes}",
+                request.RunId,
+                request.CorrelationId,
+                request.WorkflowSource?.WorkflowName ?? string.Empty,
+                request.WorkflowSource?.ScopeId ?? string.Empty,
+                attachment.Kind,
+                resourceKey,
+                ingress.FileRef.FileId ?? string.Empty,
+                ingress.FileRef.ArtifactId ?? string.Empty,
+                ingress.FileRef.MediaType ?? string.Empty,
+                ingress.FileRef.SizeBytes);
+
+            inputParts.Add(WorkflowChatInputParts.FromFileRef(
+                ingress.FileRef,
+                attachment.Kind == AttachmentKind.Image
                     ? WorkflowChatInputPartKind.Image
-                    : WorkflowChatInputPartKind.Text,
-                MediaType = ingress.FileRef.MediaType,
-                Uri = ingress.FileRef.ArtifactId,
-                Name = ingress.FileRef.FileName,
-                FileRef = ingress.FileRef,
-            });
+                    : WorkflowChatInputPartKind.File));
         }
 
         return inputParts;
     }
+
+    private static int CountInputFileRefs(IReadOnlyList<WorkflowChatInputPart>? inputParts) =>
+        inputParts?.Count(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef)) ?? 0;
+
+    private static FileArtifactRef? FirstInputFileRef(IReadOnlyList<WorkflowChatInputPart>? inputParts) =>
+        inputParts?.FirstOrDefault(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef))?.FileRef;
+
+    private static bool HasFileRefIdentity(FileArtifactRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
 
     private ILarkNyxClient ResolveLarkResourceDownloadClient(NeedsWorkflowDraftRunEvent request)
     {
@@ -341,6 +375,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         return new WorkflowChatRunRequest(
             Prompt: request.Prompt ?? string.Empty,
             Source: WorkflowChatSource.DefinitionActor(source.DefinitionActorId, source.WorkflowName),
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             SessionId: request.RunId,
             InputParts: inputParts,
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
@@ -368,10 +403,8 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         {
             if (attachment.Kind is not (AttachmentKind.Image or AttachmentKind.File))
                 continue;
-            var resourceKey = NormalizeOptional(attachment.AttachmentId);
-            if (resourceKey is null || IsHttpUrl(resourceKey))
-                continue;
-            if (!string.IsNullOrWhiteSpace(attachment.ExternalUrl))
+            var resourceKey = LarkAttachmentResourceKeys.Normalize(attachment.AttachmentId);
+            if (resourceKey is null)
                 continue;
 
             yield return attachment;
@@ -385,10 +418,6 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         return string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase);
     }
-
-    private static bool IsHttpUrl(string value) =>
-        Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
-        (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

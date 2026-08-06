@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Claims;
 using System.Text.Json;
+using Aevatar.AGUI.Contracts;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -10,23 +11,22 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
-using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.ScopeScripts;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.Workflows;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Scripting.Abstractions.Queries;
-using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -35,10 +35,10 @@ using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -168,7 +168,7 @@ public sealed class ScopeServiceInvocationEndpointTests : ScopeServiceEndpointTe
                 payloadBase64 = "",
             },
             "scope-a");
-        request.Headers.Add("X-Test-Member-Id", "member-b");
+        request.Headers.Add("X-Test-Member-Id", "member-a");
 
         var response = await host.Client.SendAsync(request);
 
@@ -187,6 +187,50 @@ public sealed class ScopeServiceInvocationEndpointTests : ScopeServiceEndpointTe
             ServiceId = "member-a",
         });
         host.InvocationPort.LastRequest.EndpointId.Should().Be("chat");
+    }
+
+    [Fact]
+    public async Task MemberInvokeEndpoint_ShouldProjectHttpCallerCredentialIntoTypedChatPayload()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.MemberPublishedServiceResolver.Result = new MemberPublishedServiceResolution(
+            "scope-alpha",
+            "m-alpha",
+            "svc-alpha",
+            IsMemberAuthorityBacked: true);
+        var clientPayload = new ChatRequestEvent
+        {
+            Prompt = "run workflow",
+            ScopeId = "scope-alpha",
+            ConnectorHttpAuthorization = "Bearer untrusted-payload-token",
+            CallerNyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+            CallerSourceReadableNyxIdBearerToken = "untrusted-source-token",
+        };
+
+        using var request = CreateAuthenticatedJsonRequest(
+            HttpMethod.Post,
+            "/api/scopes/scope-alpha/members/m-alpha/invoke/chat",
+            new
+            {
+                payloadTypeUrl = Any.Pack(clientPayload).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(clientPayload.ToByteArray()),
+            },
+            "scope-alpha");
+        request.Headers.Add("X-Test-Member-Id", "m-alpha");
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Bearer",
+            "fixture-caller-token");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        host.InvocationPort.LastRequest.Should().NotBeNull();
+        host.InvocationPort.LastRequest!.Identity.ServiceId.Should().Be("svc-alpha");
+        var payload = host.InvocationPort.LastRequest.Payload.Unpack<ChatRequestEvent>();
+        payload.ConnectorHttpAuthorization.Should().Be("Bearer fixture-caller-token");
+        payload.CallerNyxIdCredentialKind.Should().Be(
+            AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer);
+        payload.CallerSourceReadableNyxIdBearerToken.Should().BeEmpty();
     }
 
     [Fact]

@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.GAgents.ChatHistory;
+using Aevatar.GAgents.ContentArtifacts;
 using Aevatar.GAgents.ConnectorCatalog;
 using Aevatar.GAgents.Registry;
 using Aevatar.GAgents.RoleCatalog;
@@ -9,6 +10,7 @@ using Aevatar.GAgents.StudioTeam;
 using Aevatar.GAgents.WorkOrder;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.GAgents.UserMemory;
+using Aevatar.GAgents.NyxidChat;
 using Aevatar.Studio.Workspace;
 
 namespace Aevatar.Studio.Projection.Orchestration;
@@ -28,9 +30,11 @@ public sealed class StudioCommittedStateProjectionActivationPlanProvider : IProj
             [typeof(UserMemoryGAgent)] = UserMemoryGAgent.ProjectionKind,
             [typeof(ChatConversationGAgent)] = ChatConversationGAgent.ProjectionKind,
             [typeof(ChatTurnHistoryDeliveryGAgent)] = ChatTurnHistoryDeliveryGAgent.ProjectionKind,
+            [typeof(NyxIdChatConversationGAgent)] = NyxIdChatConversationGAgent.ProjectionKind,
             [typeof(StudioMemberGAgent)] = StudioMemberGAgent.ProjectionKind,
             [typeof(StudioMemberBindingRunGAgent)] = StudioMemberBindingRunGAgent.ProjectionKind,
             [typeof(StudioTeamGAgent)] = StudioTeamGAgent.ProjectionKind,
+            [typeof(ContentArtifactGAgent)] = ContentArtifactGAgent.ProjectionKind,
             [typeof(WorkOrderGAgent)] = WorkOrderGAgent.ProjectionKind,
             [typeof(StudioWorkspaceGAgent)] = StudioWorkspaceGAgent.ProjectionKind,
         };

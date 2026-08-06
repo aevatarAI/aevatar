@@ -69,9 +69,7 @@ internal sealed class WorkflowDefinitionParser : IWorkflowDefinitionParser
                 }
             }
 
-            var workflowName = string.IsNullOrWhiteSpace(workflow.Name)
-                ? string.Empty
-                : workflow.Name.Trim();
+            var workflowName = NormalizeWorkflowName(workflow.Name);
             if (string.IsNullOrWhiteSpace(workflowName))
                 return Task.FromResult(WorkflowYamlParseResult.Invalid("Workflow name is required."));
 
@@ -79,9 +77,79 @@ internal sealed class WorkflowDefinitionParser : IWorkflowDefinitionParser
                 workflowName,
                 WorkflowAuthorizationDependencyEvaluator.Evaluate(workflow)));
         }
+        catch (WorkflowYamlResourceLimitException ex)
+        {
+            return Task.FromResult(WorkflowYamlParseResult.Invalid(
+                ex.Message,
+                errorCode: WorkflowYamlParseErrorCode.ResourceLimit));
+        }
+        catch (WorkflowExternalCapabilityValidationException ex)
+        {
+            return Task.FromResult(WorkflowYamlParseResult.Invalid(ex.Message, ex.Readiness));
+        }
         catch (Exception ex)
         {
             return Task.FromResult(WorkflowYamlParseResult.Invalid(ex.Message));
         }
     }
+
+    public async Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+        IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+        CancellationToken ct = default)
+    {
+        if (inlineWorkflowDocuments.Count == 0)
+            return WorkflowInlineYamlBundleParseResult.Invalid("workflowYamls is required.");
+
+        var workflowByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        string entryWorkflowName = string.Empty;
+        string entryWorkflowYaml = string.Empty;
+
+        for (var i = 0; i < inlineWorkflowDocuments.Count; i++)
+        {
+            var document = inlineWorkflowDocuments[i];
+            var yaml = document.Yaml;
+            if (string.IsNullOrWhiteSpace(yaml))
+                return WorkflowInlineYamlBundleParseResult.Invalid($"workflowYamls[{i}] is required.");
+
+            var parseResult = await ParseWorkflowYamlAsync(yaml, ct).ConfigureAwait(false);
+            if (!parseResult.Succeeded)
+                return WorkflowInlineYamlBundleParseResult.Invalid(
+                    parseResult.Error,
+                    parseResult.ExternalCapabilityReadiness,
+                    parseResult.ErrorCode);
+
+            var workflowName = NormalizeWorkflowName(parseResult.WorkflowName);
+            if (string.IsNullOrWhiteSpace(workflowName))
+                return WorkflowInlineYamlBundleParseResult.Invalid($"workflowYamls[{i}] workflow name is required.");
+
+            var documentName = NormalizeWorkflowName(document.Name);
+            if (!string.IsNullOrWhiteSpace(documentName) &&
+                !string.Equals(documentName, workflowName, StringComparison.OrdinalIgnoreCase))
+            {
+                return WorkflowInlineYamlBundleParseResult.Invalid(
+                    $"workflowYamls[{i}] document name '{documentName}' does not match workflow name '{workflowName}'.");
+            }
+
+            if (!workflowByName.TryAdd(workflowName, yaml))
+                return WorkflowInlineYamlBundleParseResult.Invalid(
+                    $"Duplicate workflow name '{workflowName}' in workflowYamls.");
+
+            if (i == 0)
+            {
+                entryWorkflowName = workflowName;
+                entryWorkflowYaml = yaml;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(entryWorkflowName) || string.IsNullOrWhiteSpace(entryWorkflowYaml))
+            return WorkflowInlineYamlBundleParseResult.Invalid("Workflow YAML is invalid.");
+
+        return WorkflowInlineYamlBundleParseResult.Success(
+            entryWorkflowName,
+            entryWorkflowYaml,
+            workflowByName);
+    }
+
+    private static string NormalizeWorkflowName(string? workflowName) =>
+        string.IsNullOrWhiteSpace(workflowName) ? string.Empty : workflowName.Trim();
 }

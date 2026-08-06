@@ -4,6 +4,9 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Security;
+using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Application.Abstractions.Security;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Projectors;
@@ -756,6 +759,128 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
+    public void ApplyObservedPayloadToReport_ShouldPreserveSanitizedApprovalContent_AndHideSecureContent()
+    {
+        const string secret = "suspension-secret";
+        var document = new WorkflowRunInsightReportDocument();
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            document,
+            PackStateEvent(
+                new WorkflowSuspendedEvent
+                {
+                    StepId = "review",
+                    SuspensionType = "human_approval",
+                    Prompt = "Review the draft",
+                    Content = $$"""{"draft":"ready","access_token":"{{secret}}"}""",
+                    TimeoutSeconds = 3600,
+                },
+                1,
+                "evt-review"),
+            DateTimeOffset.UnixEpoch);
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            document,
+            PackStateEvent(
+                new WorkflowSuspendedEvent
+                {
+                    StepId = "secret",
+                    SuspensionType = "secure_input",
+                    Content = "must-not-materialize",
+                    Secure = true,
+                },
+                2,
+                "evt-secret"),
+            DateTimeOffset.UnixEpoch.AddSeconds(1));
+
+        var report = new WorkflowExecutionReadModelMapper().ToRunReport(document);
+        var sanitized = WorkflowAuditReportSanitizer.Sanitize(report);
+
+        var review = sanitized.Steps.Single(step => step.StepId == "review");
+        review.SuspensionContent.Should().Contain("\"draft\":\"ready\"");
+        review.SuspensionContent.Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+        review.SuspensionContent.Should().NotContain(secret);
+        review.SuspensionTimeoutSeconds.Should().Be(3600);
+        sanitized.Steps.Single(step => step.StepId == "secret")
+            .SuspensionContent.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ApplyObservedPayloadToReport_ShouldPreserveTypedToolApprovalIdentity()
+    {
+        var document = new WorkflowRunInsightReportDocument();
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            document,
+            PackStateEvent(
+                new WorkflowSuspendedEvent
+                {
+                    RunId = "run-tool",
+                    StepId = "create_approval",
+                    SuspensionType = "tool_approval",
+                    Prompt = "Approve tool execution?",
+                    ToolApproval = new WorkflowToolApprovalSuspension
+                    {
+                        ExecutionId = "exec-alpha",
+                        ToolName = "nyxid_proxy",
+                        ToolCallId = "call-alpha",
+                        ApprovalRequestId = "approval-alpha",
+                    },
+                },
+                1,
+                "evt-tool-approval"),
+            DateTimeOffset.UnixEpoch);
+
+        var approval = new WorkflowExecutionReadModelMapper()
+            .ToRunReport(document)
+            .Steps.Should().ContainSingle().Subject;
+        approval.SuspensionType.Should().Be("tool_approval");
+        approval.ToolApproval.Should().NotBeNull();
+        approval.ToolApproval!.ExecutionId.Should().Be("exec-alpha");
+        approval.ToolApproval.ToolName.Should().Be("nyxid_proxy");
+        approval.ToolApproval.ToolCallId.Should().Be("call-alpha");
+        approval.ToolApproval.ApprovalRequestId.Should().Be("approval-alpha");
+    }
+
+    [Fact]
+    public void ApplyObservedPayloadToReport_ShouldMaterializeToolApprovalResumeRejection()
+    {
+        var document = new WorkflowRunInsightReportDocument
+        {
+            RootActorId = "run-tool",
+        };
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            document,
+            PackStateEvent(
+                new WorkflowToolApprovalResumeRejectedEvent
+                {
+                    RunId = "run-tool",
+                    StepId = "create_approval",
+                    SubmittedApproval = new WorkflowToolApprovalResume
+                    {
+                        ExecutionId = "exec-alpha",
+                        ToolCallId = "call-alpha",
+                        ApprovalRequestId = "approval-stale",
+                    },
+                    Reason = WorkflowToolApprovalResumeRejectionReason.IdentityMismatch,
+                },
+                2,
+                "evt-tool-approval-resume-rejected"),
+            DateTimeOffset.UnixEpoch.AddSeconds(1));
+
+        var timeline = new WorkflowExecutionReadModelMapper()
+            .ToRunReport(document)
+            .Timeline.Should().ContainSingle().Subject;
+        timeline.Stage.Should().Be("tool_approval.resume_rejected");
+        timeline.StepId.Should().Be("create_approval");
+        timeline.StepType.Should().Be("tool_call");
+        timeline.Data.Should().ContainKey("reason").WhoseValue.Should().Be("IdentityMismatch");
+        timeline.Data.Should().ContainKey("execution_id").WhoseValue.Should().Be("exec-alpha");
+        timeline.Data.Should().ContainKey("tool_call_id").WhoseValue.Should().Be("call-alpha");
+        timeline.Data.Should().ContainKey("approval_request_id").WhoseValue.Should().Be("approval-stale");
+    }
+
+    [Fact]
     public void ReportArtifact_ShouldOwnTimelineAndGraphMaterializationInputs()
     {
         var report = new WorkflowRunInsightReportDocument
@@ -905,6 +1030,11 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                     DeadLetterFailedCompensationStepId = "refund_payment",
                     DeadLetterRemainingUncompensated = 2,
                     DeadLetterError = "refund failed",
+                    CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+                    {
+                        SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+                        AdmissionDigest = "admission-v3",
+                    },
                     ExecutionStates =
                     {
                         ["workflow_execution_kernel"] = Any.Pack(new WorkflowExecutionKernelState
@@ -929,6 +1059,9 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         document.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
         document.DeadLetterRemainingUncompensated.Should().Be(2);
         document.DeadLetterError.Should().Be("refund failed");
+        document.CapabilityAdmissionPlan.Should().NotBeNull();
+        document.CapabilityAdmissionPlan.SchemaVersion.Should().Be(WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion);
+        document.CapabilityAdmissionPlan.AdmissionDigest.Should().Be("admission-v3");
         document.StateVersion.Should().Be(1);
         document.Compiled.Should().BeTrue();
         document.ExecutionStateCount.Should().Be(1);
@@ -948,6 +1081,52 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         fileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
         fileRef.OwnerRunId.Should().Be("run-owner");
         fileRef.OwnerScopeId.Should().Be("scope-owner");
+    }
+
+    [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldExposePendingToolApprovalStatus()
+    {
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-04T09:00:00+00:00")));
+        var state = new WorkflowRunState
+        {
+            RunId = "run-approval",
+            Status = "running",
+        };
+        state.ExecutionStates["tool_call"] = Any.Pack(new ToolCallModuleState
+        {
+            PendingApprovals =
+            {
+                ["approval-key"] = new PendingToolCallApprovalState
+                {
+                    RunId = "run-approval",
+                    StepId = "write_record",
+                    ExecutionId = "exec-alpha",
+                    ToolName = "nyxid_proxy",
+                    ToolCallId = "call-alpha",
+                    ApprovalRequestId = "approval-alpha",
+                },
+            },
+        });
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowSuspendedEvent
+                {
+                    RunId = "run-approval",
+                    StepId = "write_record",
+                    SuspensionType = "tool_approval",
+                },
+                state));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.Status.Should().Be("awaiting_tool_approval");
+        new WorkflowExecutionReadModelMapper()
+            .ToActorSnapshot(document)
+            .CompletionStatus.Should().Be(WorkflowRunCompletionStatus.AwaitingToolApproval);
     }
 
     [Fact]

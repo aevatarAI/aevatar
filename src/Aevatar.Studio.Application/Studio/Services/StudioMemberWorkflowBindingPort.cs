@@ -5,8 +5,8 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
-using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
@@ -36,36 +36,46 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        var workflowId = ResolveWorkflowId(request);
+        var revisionId = NormalizeOptional(request.RevisionId);
         var suppliedAdmission = request.CapabilityAdmission;
+        var callerId = suppliedAdmission?.CallerId ?? string.Empty;
+        var callerCredential = suppliedAdmission?.NyxIdCallerCredential;
+        var organizationBearerToken = suppliedAdmission?.NyxIdOrganizationBearerToken;
+        var existingPlan = suppliedAdmission?.ExistingPlan?.Clone();
+        var explicitRequestConfirmations = suppliedAdmission?.ExplicitRequestConfirmations ?? [];
         var executionMode = suppliedAdmission?.ExecutionMode
             ?? ExternalCapabilityExecutionMode.Interactive;
-        var capabilityAdmissionPlan = suppliedAdmission?.ExistingPlan is { } existingPlan
+        var capabilityAdmissionPlan = existingPlan is not null
             ? await _capabilityAdmissionService.RevalidatePersistedAsync(
                 new PersistedWorkflowCapabilityAdmissionRequest(
                     existingPlan,
                     request.WorkflowYaml,
                     new Dictionary<string, string>(),
                     "studio_member_workflow_binding",
-                    executionMode),
+                    executionMode,
+                    workflowId,
+                    revisionId),
                 ct)
             : await _capabilityAdmissionService.AdmitAsync(
                 new WorkflowExternalCapabilityAdmissionRequest(
                 new ExternalWorkflowCapabilityAccessContext(
                     request.ScopeId,
-                    suppliedAdmission?.CallerId ?? string.Empty,
-                    suppliedAdmission?.NyxIdCallerBearerToken,
-                    suppliedAdmission?.NyxIdOrganizationBearerToken),
+                    callerId,
+                    callerCredential,
+                    organizationBearerToken),
                 request.WorkflowYaml,
                 new Dictionary<string, string>(),
                 "studio_member_workflow_binding",
-                executionMode),
+                executionMode,
+                explicitRequestConfirmations,
+                workflowId,
+                revisionId),
                 ct);
         var trustedAdmission = new WorkflowCapabilityAdmissionContext(
-            suppliedAdmission?.CallerId ?? string.Empty,
-            suppliedAdmission?.NyxIdCallerBearerToken,
-            suppliedAdmission?.NyxIdOrganizationBearerToken,
-            executionMode,
-            capabilityAdmissionPlan);
+            callerId,
+            executionMode: executionMode,
+            existingPlan: capabilityAdmissionPlan);
 
         try
         {
@@ -91,6 +101,7 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
             request.ScopeId,
             request.MemberId,
             new UpdateStudioMemberBindingRequest(
+                RevisionId: NormalizeOptional(request.RevisionId),
                 Workflow: new StudioMemberWorkflowBindingSpec(
                     workflowId,
                     [request.WorkflowYaml])
@@ -139,12 +150,13 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
                 request.ScopeId,
                 workflowId,
                 request.WorkflowYaml,
-                WorkflowName: workflowId,
+                WorkflowName: null,
                 DisplayName: member.Summary.DisplayName,
                 InlineWorkflowYamls: null,
-                AppId: "studio",
+                AppId: StudioMemberPublishedServiceIdentity.AppId,
                 ServiceId: publishedServiceId,
-                ExposureDesired: true)
+                ExposureDesired: true,
+                RevisionId: NormalizeOptional(request.RevisionId))
             {
                 CapabilityAdmission = trustedAdmission,
             },
@@ -181,6 +193,12 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
         string.IsNullOrWhiteSpace(request.WorkflowId)
             ? $"workflow-{BuildWorkflowKey(request.ScopeId, request.MemberId)}"
             : request.WorkflowId.Trim();
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim() ?? string.Empty;
+        return normalized.Length == 0 ? null : normalized;
+    }
 
     private static string BuildWorkflowKey(string scopeId, string memberId)
     {

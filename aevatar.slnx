@@ -23,6 +23,7 @@
     <Project Path="agents/Aevatar.GAgents.StudioMember/Aevatar.GAgents.StudioMember.csproj" />
     <Project Path="agents/Aevatar.GAgents.StudioTeam/Aevatar.GAgents.StudioTeam.csproj" />
     <Project Path="agents/Aevatar.GAgents.WorkOrder/Aevatar.GAgents.WorkOrder.csproj" />
+    <Project Path="agents/Aevatar.GAgents.ContentArtifacts/Aevatar.GAgents.ContentArtifacts.csproj" />
     <Project Path="agents/Aevatar.GAgents.ChatRouting/Aevatar.GAgents.ChatRouting.csproj" />
   </Folder>
   <Folder Name="/docs/">
@@ -40,10 +41,10 @@
     <File Path="Directory.Build.props" />
   </Folder>
   <Folder Name="/tools/">
-    <Project Path="tools/Aevatar.Tools.AgentProfileRollout/Aevatar.Tools.AgentProfileRollout.csproj" />
     <Project Path="tools/secret-store/Aevatar.SecretStore.Tools.csproj" />
   </Folder>
   <Folder Name="/src/">
+    <Project Path="src/Aevatar.ContentArtifacts.Abstractions/Aevatar.ContentArtifacts.Abstractions.csproj" />
     <Project Path="src/Aevatar.Audit.Abstractions/Aevatar.Audit.Abstractions.csproj" />
     <Project Path="src/Aevatar.Audit.Core/Aevatar.Audit.Core.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.Binding/Aevatar.AI.ToolProviders.Binding.csproj" />
@@ -77,6 +78,7 @@
     <Project Path="src\Aevatar.AI.ToolProviders.Scripting\Aevatar.AI.ToolProviders.Scripting.csproj" />
     <Project Path="src\Aevatar.AI.Infrastructure.Local\Aevatar.AI.Infrastructure.Local.csproj" />
     <Project Path="src\Aevatar.AI.Infrastructure.ChronoSandbox\Aevatar.AI.Infrastructure.ChronoSandbox.csproj" />
+    <Project Path="src\Aevatar.AI.Infrastructure.ToolExecution\Aevatar.AI.Infrastructure.ToolExecution.csproj" />
     <Project Path="src\Aevatar.AI.ToolProviders.Workflow\Aevatar.AI.ToolProviders.Workflow.csproj" />
     <Project Path="src\Aevatar.Audit.Hosting\Aevatar.Audit.Hosting.csproj" />
     <Project Path="src\Aevatar.Bootstrap.Extensions.AI\Aevatar.Bootstrap.Extensions.AI.csproj" />

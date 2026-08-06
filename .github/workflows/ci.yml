@@ -240,7 +240,11 @@ jobs:
     if: needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.console_web == 'true'
     needs: changes
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The serial suite grew into this budget: recent runs took 19m02s, 19m35s,
+    # 19m57s, then 20m10s and 20m17s, the last two cancelled mid-test at the
+    # 20m cap. The ~18m of test work is real, so give it headroom rather than
+    # letting every run decide the build on runner jitter.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
@@ -382,7 +386,22 @@ jobs:
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
       needs.changes.outputs.docs_only == 'false'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # Full coverage recently passed at 34-35 minutes, then timed out during the
+    # 121 MB artifact upload. Keep the fail-fast guard while allowing cleanup.
+    timeout-minutes: 45
+    services:
+      agent-tool-admission-redis:
+        image: redis:7.2.3
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      AGENT_TOOL_ADMISSION_REDIS_CONNECTION_STRING: >-
+        127.0.0.1:6379,abortConnect=true,allowAdmin=true,connectTimeout=5000,syncTimeout=5000
     steps:
       - uses: actions/checkout@v4
 

@@ -21,6 +21,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             Prompt = command.Prompt,
             SessionId = sessionId,
             ScopeId = command.ScopeId ?? string.Empty,
+            CurrentTurnId = command.CurrentTurnId ?? string.Empty,
         };
         if (command.InputParts is { Count: > 0 })
             chatRequest.InputParts.Add(command.InputParts.Select(ToProto));
@@ -134,7 +135,12 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         Application.Abstractions.Runs.WorkflowCallerCredential? source)
     {
         var parsed = WorkflowCallerCredentialTokens.ParseOptional(source?.BearerToken);
-        if (parsed.IsInvalid)
+        var sourceReadable = WorkflowCallerCredentialTokens.ParseOptional(
+            source?.SourceReadableUserBearerToken);
+        if (WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
+                source?.BearerToken,
+                source?.Kind ?? NyxIdCallerCredentialKind.Unspecified,
+                source?.SourceReadableUserBearerToken))
             throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(source));
 
         var authority = source?.NyxIdAuthority;
@@ -148,6 +154,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         var credential = new Aevatar.Workflow.Abstractions.WorkflowCallerCredential
         {
             BearerToken = parsed.NormalizedBearerToken ?? string.Empty,
+            Kind = source?.Kind ?? NyxIdCallerCredentialKind.Unspecified,
+            SourceReadableUserBearerToken = sourceReadable.NormalizedBearerToken ?? string.Empty,
         };
         if (authority != null)
         {
@@ -239,6 +247,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             StateVersion = Math.Max(0, source.StateVersion),
             Truncated = source.Truncated,
             MaxMessageCount = Math.Max(0, source.MaxMessageCount),
+            CurrentTurnId = Normalize(source.CurrentTurnId),
         };
         payload.Messages.Add(source.Messages
             .Where(static message => !string.IsNullOrWhiteSpace(message.Content))

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Microsoft.Extensions.Logging;
@@ -43,6 +44,106 @@ public sealed class NyxIdCodeExecuteTool : INyxIdBuiltInTool
     // boundary, so a host-side approval gate adds nothing here. Contrast
     // NyxIdSshExecTool, which targets a real host and so keeps ApprovalMode.Auto.
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+
+    // Workflow authoring restricts this tool to deterministic sandbox computation without
+    // external service calls. The isolated execution has no durable external effect to replay.
+    public bool IsReadOnly => true;
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson)
+    {
+        var proxyReceipt = NyxIdProxyReceiptFactory.TryCreate(
+            callId,
+            toolName,
+            _sandboxServiceSlug ?? NyxIdToolOptions.DefaultSandboxServiceSlug,
+            userServiceId: null,
+            serviceLabel: null,
+            resourceUri: "/execute",
+            resultJson);
+        if (proxyReceipt != null)
+            return proxyReceipt;
+
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return null;
+
+            if (root.TryGetProperty("success", out var success))
+                return CreateChronoSandboxReceipt(callId, toolName, root, success);
+
+            var hasError = root.TryGetProperty("error", out _);
+            var exitCodeValue = 0;
+            var hasExitCode = root.TryGetProperty("exit_code", out var exitCode) &&
+                              exitCode.TryGetInt32(out exitCodeValue);
+            var nonZeroExit = hasExitCode && exitCodeValue != 0;
+            if (hasError || nonZeroExit)
+                return CreateFailureReceipt(callId, toolName);
+
+            if (!hasExitCode)
+                return null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        return CreateSuccessReceipt(callId, toolName);
+    }
+
+    private AgentToolReceipt? CreateChronoSandboxReceipt(
+        string callId,
+        string toolName,
+        JsonElement root,
+        JsonElement success)
+    {
+        if (success.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
+            !root.TryGetProperty("output", out var output) ||
+            output.ValueKind != JsonValueKind.Object ||
+            !output.TryGetProperty("exit_code", out var exitCode) ||
+            !exitCode.TryGetInt32(out var exitCodeValue))
+        {
+            return null;
+        }
+
+        if (success.GetBoolean())
+        {
+            return exitCodeValue == 0 && !root.TryGetProperty("error", out _)
+                ? CreateSuccessReceipt(callId, toolName)
+                : null;
+        }
+
+        return exitCodeValue != 0 &&
+               root.TryGetProperty("error", out var error) &&
+               error.ValueKind == JsonValueKind.Object
+            ? CreateFailureReceipt(callId, toolName)
+            : null;
+    }
+
+    private AgentToolReceipt CreateSuccessReceipt(string callId, string toolName) =>
+        new()
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+            Status = AgentToolReceiptStatus.Success,
+            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+        };
+
+    private AgentToolReceipt CreateFailureReceipt(string callId, string toolName) =>
+        new()
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+            Status = AgentToolReceiptStatus.Error,
+            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            ErrorCode = "CODE_EXECUTE_FAILED",
+            ErrorMessage = "Code execution failed.",
+            ResultJson = "{\"error\":\"CODE_EXECUTE_FAILED\",\"message\":\"Code execution failed.\"}",
+        };
 
     public string ParametersSchema => """
         {

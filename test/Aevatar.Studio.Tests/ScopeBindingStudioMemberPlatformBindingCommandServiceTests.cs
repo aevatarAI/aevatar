@@ -144,7 +144,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         upsert.CapabilityAdmission.Should().NotBeNull();
         var admission = upsert.CapabilityAdmission!;
         admission.CallerId.Should().BeEmpty();
-        admission.NyxIdCallerBearerToken.Should().BeNull();
+        admission.NyxIdCallerCredential.Should().BeNull();
         admission.NyxIdOrganizationBearerToken.Should().BeNull();
         admission.ExistingPlan.Should().NotBeNull();
         admission.ExistingPlan.Should().NotBeSameAs(submittedPlan);
@@ -406,7 +406,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenReadinessTimesOut_ShouldLeaveBindingRunPendingForWatchdogRecovery()
+    public async Task ExecuteAsync_WhenReadinessTimesOut_ShouldDispatchRecoverableReadinessTimeoutContinuation()
     {
         var readinessPort = new RecordingReadinessQueryPort([NotReadySnapshot()]);
         var scopeBindingPort = new RecordingScopeBindingCommandPort();
@@ -428,9 +428,11 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             "platform-bind-1",
             NewScriptStartRequest());
 
-        await readinessPort.Observed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var timedOut = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingReadinessTimedOut>();
         readinessPort.Requests.Should().HaveCount(2);
-        dispatchPort.Dispatches.Should().BeEmpty();
+        timedOut.BindingRunId.Should().Be("bind-1");
+        timedOut.PlatformBindingCommandId.Should().Be("platform-bind-1");
+        timedOut.ReadinessStatus.Should().Be(StudioMemberPlatformBindingReadinessStatus.ServingSetMissing);
     }
 
     [Fact]
@@ -655,10 +657,21 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             {
                 UserServiceId = "us-gamma",
                 ServiceSlugSnapshot = "service-gamma",
-                OperationId = "invoke-gamma",
-                HttpMethod = "POST",
+                EndpointId = "invoke-gamma",
+                HttpMethod = "GET",
                 PathTemplate = "/invoke",
                 ContractDigest = "operation-gamma-digest",
+                ExecutionPolicy = new NyxIdOperationExecutionPolicy
+                {
+                    Risk = NyxIdOperationRisk.ReadOnly,
+                    Approval = NyxIdOperationApproval.None,
+                    EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+                    AllowedExecutionModes =
+                    {
+                        ExternalCapabilityExecutionMode.Interactive,
+                        ExternalCapabilityExecutionMode.Durable,
+                    },
+                },
             },
         };
         var owner = new ExternalCapabilityAuthorizationOwner
@@ -673,18 +686,17 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
                 workflowYaml,
                 new Dictionary<string, string>(),
                 ExternalCapabilityExecutionMode.Durable,
-                [capability],
+                [new WorkflowCapabilityInvocationAdmission
+                {
+                    CallSiteId = "workflow-main/invoke-gamma",
+                    Capability = capability,
+                }],
                 [
                     Source(
-                        ExternalCapabilitySourceKind.NyxIdUserServices,
-                        "nyxid-user-services:caller-alpha",
+                        ExternalCapabilitySourceKind.NyxIdMcpConfig,
+                        "nyxid-mcp-config:caller:nyx-user-gamma",
                         observedAt,
-                        "user-services-gamma-digest"),
-                    Source(
-                        ExternalCapabilitySourceKind.NyxIdOpenApi,
-                        "us-gamma",
-                        observedAt,
-                        "openapi-gamma-digest"),
+                        "mcp-config-gamma-digest"),
                     Source(
                         ExternalCapabilitySourceKind.DurableAuthorizationCatalog,
                         NyxIdAuthorizationCatalogActorIds.Build(new AuthorizationOwnerIdentity

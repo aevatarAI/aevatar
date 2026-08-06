@@ -89,7 +89,7 @@ internal sealed class StudioTeamRosterFanoutMaterializer
             payload,
             PublisherId,
             commandId: BuildFanoutCommandId(actorId, payload),
-            deduplicationOperationId: BuildFanoutDeduplicationId(actorId, payload),
+            deliveryOperationId: BuildFanoutDeliveryOperationId(actorId, payload),
             ct: ct).ConfigureAwait(false);
     }
 
@@ -101,6 +101,6 @@ internal sealed class StudioTeamRosterFanoutMaterializer
         return $"{PublisherId}:{actorId}:{eventHash}";
     }
 
-    private static string BuildFanoutDeduplicationId(string actorId, IMessage payload) =>
+    private static string BuildFanoutDeliveryOperationId(string actorId, IMessage payload) =>
         BuildFanoutCommandId(actorId, payload);
 }

@@ -6,6 +6,7 @@ using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
 using FluentAssertions;
@@ -34,7 +35,7 @@ public sealed class WorkflowApplicationLayerTests
             new FakeDurableCompletionResolver());
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
@@ -78,7 +79,7 @@ public sealed class WorkflowApplicationLayerTests
         var acceptedReceipts = new ConcurrentQueue<WorkflowChatRunAcceptedReceipt>();
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             (frame, _) =>
             {
                 emittedFrames.Enqueue(frame);
@@ -133,7 +134,7 @@ public sealed class WorkflowApplicationLayerTests
             new FakeDurableCompletionResolver());
 
         var executeTask = service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             (frame, _) =>
             {
                 emitted.Enqueue(frame);
@@ -194,7 +195,7 @@ public sealed class WorkflowApplicationLayerTests
             new FakeDurableCompletionResolver());
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
@@ -230,7 +231,7 @@ public sealed class WorkflowApplicationLayerTests
                     WorkflowProjectionCompletionStatus.Completed)));
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
@@ -262,7 +263,7 @@ public sealed class WorkflowApplicationLayerTests
             new FakeDurableCompletionResolver());
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
@@ -285,7 +286,7 @@ public sealed class WorkflowApplicationLayerTests
         var service = CreateAcceptedOnlyDispatchService(
             pipeline);
 
-        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("missing")));
+        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("missing"), ExternalCapabilityExecutionMode.Interactive));
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.WorkflowNotFound);
@@ -303,7 +304,7 @@ public sealed class WorkflowApplicationLayerTests
         var service = CreateAcceptedOnlyDispatchService(
             new FakeAcceptedDispatchPipeline { Result = AcceptedSuccess(target, receipt) });
 
-        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")));
+        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive));
 
         result.Succeeded.Should().BeTrue();
         result.Receipt.Should().Be(receipt);
@@ -719,6 +720,11 @@ public sealed class WorkflowApplicationLayerTests
             Task.CompletedTask;
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default) =>
             throw new NotSupportedException();
     }
 

@@ -35,6 +35,7 @@ public sealed class WorkflowForkRunCommandDispatchTests
         result.Succeeded.Should().BeFalse();
         result.Error.Code.Should().Be(expectedCode);
         seedPort.RequestedRunIds.Should().Equal("source-run");
+        seedPort.RequestedScopeIds.Should().Equal(string.Empty);
         runPort.CreateRunBindings.Should().BeEmpty();
     }
 
@@ -174,7 +175,8 @@ public sealed class WorkflowForkRunCommandDispatchTests
                     ["input"] = "seed-input",
                     ["topic"] = "seed-topic",
                     ["step-a"] = "alpha",
-                }),
+                },
+                scopeId: "scope-1"),
         };
         var runPort = new RecordingRunProvisioningPort();
         var dispatchPort = new RecordingActorDispatchPort();
@@ -190,9 +192,11 @@ public sealed class WorkflowForkRunCommandDispatchTests
             },
             Input: "command-input",
             CommandId: "cmd-fork",
-            CorrelationId: "corr-fork"));
+            CorrelationId: "corr-fork",
+            ScopeId: "scope-1"));
 
         result.Succeeded.Should().BeTrue();
+        seedPort.RequestedScopeIds.Should().Equal("scope-1");
         var request = dispatchPort.DispatchedRequest();
         request.ForkSeed.Variables["topic"].Should().Be("override-topic");
         request.ForkSeed.Variables["extra"].Should().Be("override-extra");
@@ -223,7 +227,8 @@ public sealed class WorkflowForkRunCommandDispatchTests
                 idempotencyByStepId: new Dictionary<string, WorkflowStepIdempotencyView>(StringComparer.Ordinal)
                 {
                     ["step-b"] = new("source-run", "step-b", 2, "source-run:step-b:2"),
-                }),
+                },
+                scopeId: "scope-1"),
         };
         var runPort = new RecordingRunProvisioningPort();
         var dispatchPort = new RecordingActorDispatchPort();
@@ -248,6 +253,7 @@ public sealed class WorkflowForkRunCommandDispatchTests
             CallerCredential: new WorkflowApplicationCallerCredential("typed-token")));
 
         result.Succeeded.Should().BeTrue();
+        seedPort.RequestedScopeIds.Should().Equal("scope-1");
         result.Receipt.Should().BeEquivalentTo(new
         {
             SourceRunId = "source-run",
@@ -289,7 +295,7 @@ public sealed class WorkflowForkRunCommandDispatchTests
     }
 
     [Fact]
-    public async Task DispatchAsync_WhenCommandScopeMissing_ShouldInheritSourceScopeFromSeedReadModel()
+    public async Task DispatchAsync_WhenSeedScopeDiffersFromTrustedCommandScope_ShouldFailClosed()
     {
         var seedPort = new RecordingSeedQueryPort
         {
@@ -301,11 +307,14 @@ public sealed class WorkflowForkRunCommandDispatchTests
 
         var result = await service.DispatchAsync(new WorkflowForkRunCommand(
             SourceRunId: "source-run",
-            StartAtStepId: "step-b"));
+            StartAtStepId: "step-b",
+            ScopeId: "attacker-scope"));
 
-        result.Succeeded.Should().BeTrue();
-        runPort.CreateRunBindings.Should().ContainSingle().Which.ScopeId.Should().Be("source-scope-1");
-        dispatchPort.DispatchedRequest().ScopeId.Should().Be("source-scope-1");
+        result.Succeeded.Should().BeFalse();
+        result.Error.Code.Should().Be(WorkflowForkRunStartErrorCode.SourceRunNotFound);
+        seedPort.RequestedScopeIds.Should().Equal("attacker-scope");
+        runPort.CreateRunBindings.Should().BeEmpty();
+        dispatchPort.Dispatches.Should().BeEmpty();
     }
 
     [Fact]
@@ -391,6 +400,7 @@ public sealed class WorkflowForkRunCommandDispatchTests
             Status: status,
             WorkflowYaml: workflowYaml ?? WorkflowYaml("source"),
             InlineWorkflowYamls: inlineWorkflowYamls ?? new Dictionary<string, string>(StringComparer.Ordinal),
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             Variables: variables ?? new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["input"] = "seed-input",
@@ -416,13 +426,16 @@ public sealed class WorkflowForkRunCommandDispatchTests
     private sealed class RecordingSeedQueryPort : IWorkflowRunForkSeedQueryPort
     {
         public WorkflowRunForkSeedView? View { get; set; }
+        public List<string> RequestedScopeIds { get; } = [];
         public List<string> RequestedRunIds { get; } = [];
 
         public Task<WorkflowRunForkSeedView?> GetForkSeedAsync(
+            string scopeId,
             string runId,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            RequestedScopeIds.Add(scopeId);
             RequestedRunIds.Add(runId);
             return Task.FromResult(View);
         }
@@ -474,6 +487,36 @@ public sealed class WorkflowForkRunCommandDispatchTests
                 ? string.Empty
                 : nameLine["name:".Length..].Trim();
             return Task.FromResult(WorkflowYamlParseResult.Success(workflowName));
+        }
+
+        public async Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default)
+        {
+            if (inlineWorkflowDocuments.Count == 0)
+                return WorkflowInlineYamlBundleParseResult.Invalid("workflowYamls is required.");
+
+            var workflowYamlsByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            string entryWorkflowName = string.Empty;
+            string entryWorkflowYaml = string.Empty;
+            for (var i = 0; i < inlineWorkflowDocuments.Count; i++)
+            {
+                var document = inlineWorkflowDocuments[i];
+                var parseResult = await ParseWorkflowYamlAsync(document.Yaml, ct);
+                if (!parseResult.Succeeded)
+                    return WorkflowInlineYamlBundleParseResult.Invalid(parseResult.Error, parseResult.ExternalCapabilityReadiness);
+
+                if (!workflowYamlsByName.TryAdd(parseResult.WorkflowName, document.Yaml))
+                    return WorkflowInlineYamlBundleParseResult.Invalid($"Duplicate workflow name '{parseResult.WorkflowName}' in workflowYamls.");
+
+                if (i == 0)
+                {
+                    entryWorkflowName = parseResult.WorkflowName;
+                    entryWorkflowYaml = document.Yaml;
+                }
+            }
+
+            return WorkflowInlineYamlBundleParseResult.Success(entryWorkflowName, entryWorkflowYaml, workflowYamlsByName);
         }
     }
 

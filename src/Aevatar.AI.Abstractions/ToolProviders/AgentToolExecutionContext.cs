@@ -77,6 +77,21 @@ public sealed record AgentToolExecutionContext(
     public AgentToolNyxIdAuthorityContext NyxIdAuthority { get; init; } =
         AgentToolNyxIdAuthorityContext.Empty;
 
+    /// <summary>
+    /// Committed proof for the exact operation this call site was admitted to invoke. Null for
+    /// call sites that are not under external-capability admission (ordinary human sessions).
+    /// </summary>
+    public AgentToolOperationAdmission? OperationAdmission { get; init; }
+
+    public AgentToolInvocationSurface InvocationSurface { get; init; } =
+        AgentToolInvocationSurface.Unspecified;
+
+    public AgentChatInvocationContext Chat { get; init; } = AgentChatInvocationContext.Empty;
+
+    public IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef> InputFileRefs { get; init; } = [];
+
+    public AgentToolExecutionOwner ExecutionOwner { get; init; } = new();
+
     public static AgentToolExecutionContext Empty { get; } = new(
         AgentToolRequestIdentity.Empty,
         AgentToolCredentials.Empty,
@@ -96,6 +111,33 @@ public sealed record AgentToolExecutionContext(
 
     internal static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+}
+
+public enum AgentToolInvocationSurface
+{
+    Unspecified = 0,
+    HumanSession = 1,
+    WorkflowToolCall = 2,
+    WorkflowLlmToolLoop = 3,
+}
+
+public enum AgentChatInvocationSurface
+{
+    Unspecified = 0,
+    NyxIdAssistant = 1,
+    WorkflowChat = 2,
+}
+
+public sealed record AgentChatInvocationContext(
+    AgentChatInvocationSurface Surface,
+    string? ConversationId,
+    string? TurnId,
+    string? TaskId,
+    string? StepId,
+    string? ActionRequestId)
+{
+    public static AgentChatInvocationContext Empty { get; } =
+        new(AgentChatInvocationSurface.Unspecified, null, null, null, null, null);
 }
 
 public sealed record AgentToolVisibilityScope(IReadOnlySet<string>? AllowedToolNames)
@@ -134,15 +176,41 @@ public sealed record AgentToolVisibilityScope(IReadOnlySet<string>? AllowedToolN
     }
 }
 
-public sealed record AgentToolRequestIdentity(string? RequestId, string? CallId, string? IdempotencyKey = null)
+public sealed record AgentToolRequestIdentity(
+    string? RequestId,
+    string? CallId,
+    string? IdempotencyKey,
+    long IssuedAtUnixMs,
+    string? OperationId = null)
 {
-    public static AgentToolRequestIdentity Empty { get; } = new(null, null, null);
+    public AgentToolRequestIdentity(
+        string? requestId,
+        string? callId,
+        string? idempotencyKey = null)
+        : this(
+            requestId,
+            callId,
+            idempotencyKey,
+            TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds())
+    {
+    }
+
+    public static AgentToolRequestIdentity Empty { get; } = new(null, null, null, 0);
+}
+
+public enum AgentToolNyxIdCredentialKind
+{
+    Unspecified = 0,
+    SourceReadableUserBearer = 1,
+    ProxyDelegation = 2,
 }
 
 public sealed record AgentToolCredentials(
     string? NyxIdAccessToken,
     string? NyxIdOrgToken,
-    string? SenderNyxIdAccessToken)
+    string? SenderNyxIdAccessToken,
+    AgentToolNyxIdCredentialKind NyxIdCredentialKind = AgentToolNyxIdCredentialKind.Unspecified,
+    string? SourceReadableNyxIdAccessToken = null)
 {
     public static AgentToolCredentials Empty { get; } = new(null, null, null);
 }
@@ -166,7 +234,8 @@ public sealed record AgentToolCallerContext(string? ScopeId, string? OwnerSubjec
 public sealed record AgentToolNyxIdAuthorityContext(
     string? Platform,
     string? Tenant,
-    string? ExternalUserId)
+    string? ExternalUserId,
+    string? Scope = null)
 {
     public static AgentToolNyxIdAuthorityContext Empty { get; } = new(null, null, null);
 
@@ -183,10 +252,13 @@ public sealed record AgentToolChannelContext(
     string? PlatformMessageId,
     string? DeliveryTargetId = null,
     ChannelWorkflowResultDeliveryCredential? WorkflowResultDeliveryCredential = null,
-    string? BotRegistrationId = null)
+    string? BotRegistrationId = null,
+    IReadOnlyList<AgentToolChannelIdentityHint>? IdentityHints = null)
 {
-    public static AgentToolChannelContext Empty { get; } = new(null, null, null, null, null, null, null, null);
+    public static AgentToolChannelContext Empty { get; } = new(null, null, null, null, null, null, null, null, []);
 }
+
+public sealed record AgentToolChannelIdentityHint(string Subject, string Kind, string Value);
 
 public sealed record AgentToolSenderBindingContext(string? BindingId, string? NyxUserId = null, string? SenderTenant = null)
 {

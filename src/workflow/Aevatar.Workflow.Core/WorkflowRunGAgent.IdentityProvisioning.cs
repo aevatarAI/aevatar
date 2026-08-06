@@ -25,7 +25,9 @@ public sealed partial class WorkflowRunGAgent
                 binding.RunId,
                 binding.ScopeId,
                 binding.RunOrigin,
-                binding.ScheduleId);
+                binding.ScheduleId,
+                binding.CapabilityAdmissionPlan,
+                binding.ExpectedExecutionMode);
         }
         else
         {
@@ -56,6 +58,11 @@ public sealed partial class WorkflowRunGAgent
             string.Equals(State.ScopeId, binding.ScopeId?.Trim(), StringComparison.Ordinal) &&
             string.Equals(State.RunOrigin, binding.RunOrigin?.Trim(), StringComparison.Ordinal) &&
             string.Equals(State.ScheduleId, binding.ScheduleId?.Trim(), StringComparison.Ordinal) &&
+            State.ExpectedExecutionMode == binding.ExpectedExecutionMode &&
+            string.Equals(
+                State.CapabilityAdmissionPlan?.AdmissionDigest ?? string.Empty,
+                binding.CapabilityAdmissionPlan?.AdmissionDigest ?? string.Empty,
+                StringComparison.Ordinal) &&
             InlineWorkflowYamlsEqual(State.InlineWorkflowYamls, binding.InlineWorkflowYamls);
         if (!same)
         {

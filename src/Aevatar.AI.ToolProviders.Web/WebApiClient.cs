@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -8,6 +9,8 @@ namespace Aevatar.AI.ToolProviders.Web;
 /// <summary>HTTP client for web search and fetch operations.</summary>
 public sealed class WebApiClient : IWebApiClient, IDisposable
 {
+    private const string FirecrawlNyxIdSearchSlug = "api-firecrawl";
+
     private readonly HttpClient _http;
     private readonly WebToolOptions _options;
     private readonly ILogger _logger;
@@ -34,9 +37,17 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
         if (!string.IsNullOrWhiteSpace(_options.NyxIdSearchSlug) &&
             !string.IsNullOrWhiteSpace(_options.NyxIdBaseUrl))
         {
+            var slug = _options.NyxIdSearchSlug.Trim();
+            var proxyBaseUrl = $"{_options.NyxIdBaseUrl.TrimEnd('/')}/api/v1/proxy/s/{Uri.EscapeDataString(slug)}";
+            if (string.Equals(slug, FirecrawlNyxIdSearchSlug, StringComparison.OrdinalIgnoreCase))
+            {
+                var url = $"{proxyBaseUrl}/v2/search";
+                return WebToolResultBoundaryJson.ParseSearchPayload(
+                    await PostJsonAsync(token, url, new { query, limit = maxResults }, ct));
+            }
+
             var path = $"/search?q={Uri.EscapeDataString(query)}&limit={maxResults}";
-            var url = $"{_options.NyxIdBaseUrl.TrimEnd('/')}/api/v1/proxy/{Uri.EscapeDataString(_options.NyxIdSearchSlug)}{path}";
-            return WebToolResultBoundaryJson.ParseSearchPayload(await GetAsync(token, url, ct));
+            return WebToolResultBoundaryJson.ParseSearchPayload(await GetAsync(token, $"{proxyBaseUrl}{path}", ct));
         }
 
         if (!string.IsNullOrWhiteSpace(_options.SearchApiBaseUrl))
@@ -55,14 +66,7 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
         {
             var validation = await WebFetchUrlGuard.ValidateResolvedAsync(url, ct);
             if (!validation.IsAllowed)
-            {
-                return new WebFetchResult(
-                    0,
-                    "rejected",
-                    validation.RejectionCode ?? "url_rejected",
-                    null,
-                    url);
-            }
+                return ValidationFailure(url, validation.RejectionCode);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(_options.FetchTimeoutSeconds));
@@ -85,14 +89,10 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
                         redirectUri.ToString(),
                         cts.Token);
                     if (!redirectValidation.IsAllowed)
-                    {
-                        return new WebFetchResult(
-                            statusCode,
-                            contentType,
-                            redirectValidation.RejectionCode ?? "url_rejected",
-                            redirectUri.ToString(),
-                            originalUrl);
-                    }
+                        return ValidationFailure(
+                            originalUrl,
+                            redirectValidation.RejectionCode,
+                            statusCode);
 
                     if (!string.Equals(
                             new Uri(currentUrl).Host,
@@ -108,26 +108,59 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    var errorBody = await ReadLimitedAsync(response, cts.Token);
-                    return new WebFetchResult(statusCode, contentType, errorBody, null, originalUrl);
+                    return Failure(
+                        originalUrl,
+                        $"WEB_FETCH_HTTP_{statusCode}",
+                        "The web request failed.",
+                        statusCode);
                 }
 
                 var body = await ReadLimitedAsync(response, cts.Token);
                 return new WebFetchResult(statusCode, contentType, body, null, originalUrl);
             }
 
-            return new WebFetchResult(0, "redirect", "Too many redirects", null, originalUrl);
+            return Failure(
+                originalUrl,
+                "WEB_FETCH_TRANSPORT_FAILURE",
+                "The web request failed.");
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return new WebFetchResult(0, "timeout", $"Request timed out after {_options.FetchTimeoutSeconds}s", null, url);
+            return Failure(url, "WEB_FETCH_TIMEOUT", "The web request timed out.");
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogWarning(ex, "WebFetch failed for {Url}", url);
+            return ex.HttpRequestError switch
+            {
+                HttpRequestError.NameResolutionError =>
+                    Failure(url, "WEB_FETCH_DNS_FAILURE", "The web host could not be resolved."),
+                HttpRequestError.SecureConnectionError =>
+                    Failure(url, "WEB_FETCH_TLS_FAILURE", "The secure web connection failed."),
+                _ => Failure(url, "WEB_FETCH_TRANSPORT_FAILURE", "The web request failed."),
+            };
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "WebFetch failed for {Url}", url);
-            return new WebFetchResult(0, "error", ex.Message, null, url);
+            return Failure(url, "WEB_FETCH_TRANSPORT_FAILURE", "The web request failed.");
         }
     }
+
+    private static WebFetchResult Failure(
+        string url,
+        string code,
+        string message,
+        int statusCode = 0) =>
+        new(statusCode, "error", null, null, url, new WebToolError(code, message));
+
+    private static WebFetchResult ValidationFailure(
+        string url,
+        string? rejectionCode,
+        int statusCode = 0) =>
+        rejectionCode == "host_resolution_failed"
+            ? Failure(url, "WEB_FETCH_DNS_FAILURE", "The web host could not be resolved.", statusCode)
+            : Failure(url, "WEB_FETCH_URL_REJECTED", "The web URL was rejected.", statusCode);
 
     private static HttpClient CreateDefaultHttpClient() =>
         new(new SocketsHttpHandler
@@ -179,6 +212,24 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
         if (!string.IsNullOrWhiteSpace(token))
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
+        return await SendAsync(request, url, ct);
+    }
+
+    private async Task<string> PostJsonAsync(string token, string url, object payload, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        if (!string.IsNullOrWhiteSpace(token))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        return await SendAsync(request, url, ct);
+    }
+
+    private async Task<string> SendAsync(HttpRequestMessage request, string url, CancellationToken ct)
+    {
         try
         {
             using var response = await _http.SendAsync(request, ct);

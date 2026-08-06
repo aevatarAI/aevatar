@@ -90,7 +90,8 @@ public class NyxIdChatSystemPromptTests
         var prompt = NyxIdChatSystemPrompt.Value.Content;
 
         prompt.Should().Contain("## Honest Success Rule");
-        prompt.Should().Contain("successful mutating tool result or typed success receipt");
+        prompt.Should().Contain("typed successful mutating tool receipt for that exact mutation");
+        prompt.Should().Contain("A successful receipt for another action");
         prompt.Should().Contain("Read-only checks, searches, observation, trigger/rerun requests");
         prompt.Should().Contain("genuine successful mutating tool receipt");
     }
@@ -106,6 +107,15 @@ public class NyxIdChatSystemPromptTests
         prompt.Should().Contain("`SERVICE_REGISTRATION_REQUIRED`");
         prompt.Should().Contain("must not fabricate a missing-service blocker");
         prompt.Should().Contain("does not create a pending approval");
+        prompt.Should().Contain("catalog definitions are not connected UserServices");
+        prompt.Should().Contain("For every connect, add, or authorize request, call `nyxid_catalog` in the current turn");
+        prompt.Should().Contain("`catalogIdentityCandidate`");
+        prompt.Should().Contain("only the exact `slug` returned by that catalog read may enter");
+        prompt.Should().Contain("Never pass a provider slug, display name, or guessed value");
+        prompt.Should().Contain("for a bare source-code-hosting connection");
+        prompt.Should().Contain("repository access scope instead of omitting scopes");
+        prompt.Should().Contain("Never replace this typed handoff with NyxID CLI commands");
+        prompt.Should().Contain("credential instructions");
     }
 
     [Fact]
@@ -121,9 +131,71 @@ public class NyxIdChatSystemPromptTests
     }
 
     [Fact]
+    public void Value_ShouldLoadNyxIdServiceDiscoveryBeforeReadingSenderInventory()
+    {
+        var prompt = NyxIdChatSystemPrompt.Value.Content;
+        var skillCall = prompt.IndexOf(
+            "first call `use_skill(skill=\"nyxid-service-discovery\")`",
+            StringComparison.Ordinal);
+        var inventoryCall = prompt.IndexOf(
+            "then call `nyxid_service_inventory`",
+            StringComparison.Ordinal);
+
+        skillCall.Should().BeGreaterThanOrEqualTo(0);
+        inventoryCall.Should().BeGreaterThan(skillCall);
+        prompt.Should().Contain("current sender's live inventory");
+        prompt.Should().Contain("temporary read failure");
+        prompt.Should().Contain("binding is explicitly missing or revoked");
+        prompt.Should().Contain("Do not call `code_execute`");
+        prompt.Should().Contain("`nyxid service list`");
+        prompt.Should().NotContain("skill=\"nyxid\"");
+        prompt.Should().NotContain("call `nyxid_service_inventory` directly");
+        prompt.Should().NotContain("Do not load a skill");
+    }
+
+    [Fact]
+    public void ComposedPrompt_ShouldRouteNyxIdServiceWorkToCurrentSkills()
+    {
+        var prompt = ComposedAgentPrompt();
+
+        prompt.Should().Contain("use_skill(skill=\"nyxid-service-connect\")");
+        prompt.Should().Contain("use_skill(skill=\"nyxid-service-discovery\")");
+        prompt.Should().Contain("use_skill(skill=\"nyxid-service-maintenance\")");
+        prompt.Should().Contain("use_skill(skill=\"nyxid-service-call\")");
+        prompt.Should().NotContain("skill=\"nyxid\"");
+    }
+
+    [Fact]
+    public void ComposedPrompt_ShouldKeepGenericRuntimePromptProviderNeutral()
+    {
+        var prompt = ComposedAgentPrompt();
+
+        prompt.Should().Contain("<channel-context>");
+        prompt.Should().Contain("identity_hints");
+        prompt.Should().Contain("subject");
+        prompt.Should().Contain("kind");
+        prompt.Should().Contain("value");
+        prompt.Should().Contain("provider-backed relay registration");
+        prompt.Should().NotContain("Lark");
+        prompt.Should().NotContain("lark");
+        prompt.Should().NotContain("Feishu");
+        prompt.Should().NotContain("api-lark-bot");
+        prompt.Should().NotContain("lark_messages_");
+        prompt.Should().NotContain("developer-console");
+        prompt.Should().NotContain("/open-apis/");
+        prompt.Should().NotContain("open_id");
+        prompt.Should().NotContain("union_id");
+        prompt.Should().NotContain("employee_id");
+        prompt.Should().NotContain("lark_chat_id");
+        prompt.Should().NotContain("lark_union_id");
+    }
+
+    [Fact]
     public void DecorateSystemPrompt_ShouldUseCatalogSlotsWithoutShadowCandidateBody()
     {
-        var agent = new NyxIdChatGAgent(new SystemSkillOverlayPromptInjectionTests.StubBuiltInPromptFloorProvider());
+        var agent = new NyxIdChatGAgent(
+            new SystemSkillOverlayPromptInjectionTests.StubBuiltInPromptFloorProvider(),
+            TestAgentToolExecutionPort.Instance);
         var profileLayer = new ProfileRoutingPromptLayer(
             "profile routing layer",
             new ProfileRoutingPromptProvenance("profile-test"),

@@ -14,12 +14,12 @@ public sealed class ExternalWorkflowCapabilityAccessContext
     public ExternalWorkflowCapabilityAccessContext(
         string scopeId,
         string callerId,
-        string? nyxIdCallerBearerToken = null,
+        NyxIdCallerCredentialSelection? nyxIdCallerCredential = null,
         string? nyxIdOrganizationBearerToken = null)
     {
         ScopeId = Normalize(scopeId);
         CallerId = Normalize(callerId);
-        NyxIdCallerBearerToken = NormalizeOptional(nyxIdCallerBearerToken);
+        NyxIdCallerCredential = nyxIdCallerCredential;
         NyxIdOrganizationBearerToken = NormalizeOptional(nyxIdOrganizationBearerToken);
     }
 
@@ -27,7 +27,7 @@ public sealed class ExternalWorkflowCapabilityAccessContext
 
     public string CallerId { get; }
 
-    public string? NyxIdCallerBearerToken { get; }
+    public NyxIdCallerCredentialSelection? NyxIdCallerCredential { get; }
 
     public string? NyxIdOrganizationBearerToken { get; }
 
@@ -45,7 +45,7 @@ public sealed record ListExternalWorkflowCapabilitiesRequest(
 
 public sealed record InspectExternalWorkflowCapabilityReadinessRequest(
     ExternalWorkflowCapabilityAccessContext Access,
-    ExternalWorkflowCapabilityRef Capability,
+    ExternalWorkflowCapabilitySelector Selector,
     ExternalCapabilityExecutionMode ExecutionMode);
 
 public sealed class WorkflowExternalCapabilityAdmissionRequest
@@ -55,13 +55,21 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
         string workflowYaml,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
         string sourceKind,
-        ExternalCapabilityExecutionMode executionMode)
+        ExternalCapabilityExecutionMode executionMode,
+        IEnumerable<NyxIdExplicitRequestConfirmation>? explicitRequestConfirmations = null,
+        string? workflowId = null,
+        string? revisionId = null,
+        ExternalCapabilityExecutionMode? explicitRequestGrantMode = null)
     {
         Access = access ?? throw new ArgumentNullException(nameof(access));
         WorkflowYaml = workflowYaml ?? string.Empty;
         InlineWorkflowYamls = inlineWorkflowYamls ?? new Dictionary<string, string>();
         SourceKind = sourceKind?.Trim() ?? string.Empty;
         ExecutionMode = executionMode;
+        ExplicitRequestGrantMode = explicitRequestGrantMode ?? executionMode;
+        ExplicitRequestConfirmations = CloneConfirmations(explicitRequestConfirmations);
+        WorkflowId = NormalizeOptional(workflowId);
+        RevisionId = NormalizeOptional(revisionId);
     }
 
     public ExternalWorkflowCapabilityAccessContext Access { get; }
@@ -74,13 +82,25 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
 
     public ExternalCapabilityExecutionMode ExecutionMode { get; }
 
+    public ExternalCapabilityExecutionMode ExplicitRequestGrantMode { get; }
+
+    public IReadOnlyList<NyxIdExplicitRequestConfirmation> ExplicitRequestConfirmations { get; }
+
+    public string? WorkflowId { get; }
+
+    public string? RevisionId { get; }
+
     public IReadOnlyList<string>? WorkflowYamls { get; private init; }
 
     public static WorkflowExternalCapabilityAdmissionRequest FromWorkflowYamls(
         ExternalWorkflowCapabilityAccessContext access,
         IReadOnlyList<string> workflowYamls,
         string sourceKind,
-        ExternalCapabilityExecutionMode executionMode)
+        ExternalCapabilityExecutionMode executionMode,
+        IEnumerable<NyxIdExplicitRequestConfirmation>? explicitRequestConfirmations = null,
+        string? workflowId = null,
+        string? revisionId = null,
+        ExternalCapabilityExecutionMode? explicitRequestGrantMode = null)
     {
         ArgumentNullException.ThrowIfNull(workflowYamls);
         if (workflowYamls.Count == 0)
@@ -91,14 +111,29 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
             string.Empty,
             new Dictionary<string, string>(),
             sourceKind,
-            executionMode)
+            executionMode,
+            explicitRequestConfirmations,
+            workflowId,
+            revisionId,
+            explicitRequestGrantMode)
         {
             WorkflowYamls = workflowYamls.ToArray(),
         };
     }
 
     public override string ToString() =>
-        $"{nameof(WorkflowExternalCapabilityAdmissionRequest)} {{ Access = {Access}, SourceKind = {SourceKind}, ExecutionMode = {ExecutionMode}, Definition = [REDACTED] }}";
+        $"{nameof(WorkflowExternalCapabilityAdmissionRequest)} {{ Access = {Access}, SourceKind = {SourceKind}, ExecutionMode = {ExecutionMode}, ExplicitRequestGrantMode = {ExplicitRequestGrantMode}, Definition = [REDACTED] }}";
+
+    private static IReadOnlyList<NyxIdExplicitRequestConfirmation> CloneConfirmations(
+        IEnumerable<NyxIdExplicitRequestConfirmation>? confirmations) =>
+        confirmations?.Select(static confirmation =>
+                confirmation?.Clone() ?? throw new ArgumentException(
+                    "Explicit request confirmations cannot contain null values.",
+                    nameof(confirmations)))
+            .ToArray() ?? [];
+
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
 
 public sealed class PersistedWorkflowCapabilityAdmissionRequest
@@ -108,7 +143,9 @@ public sealed class PersistedWorkflowCapabilityAdmissionRequest
         string workflowYaml,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
         string sourceKind,
-        ExternalCapabilityExecutionMode expectedExecutionMode)
+        ExternalCapabilityExecutionMode expectedExecutionMode,
+        string? workflowId = null,
+        string? revisionId = null)
     {
         Plan = plan?.Clone() ?? throw new ArgumentNullException(nameof(plan));
         if (expectedExecutionMode == ExternalCapabilityExecutionMode.Unspecified)
@@ -118,6 +155,8 @@ public sealed class PersistedWorkflowCapabilityAdmissionRequest
         InlineWorkflowYamls = inlineWorkflowYamls ?? new Dictionary<string, string>();
         SourceKind = sourceKind?.Trim() ?? string.Empty;
         ExpectedExecutionMode = expectedExecutionMode;
+        WorkflowId = NormalizeOptional(workflowId);
+        RevisionId = NormalizeOptional(revisionId);
     }
 
     public WorkflowCapabilityAdmissionPlan Plan { get; }
@@ -130,13 +169,19 @@ public sealed class PersistedWorkflowCapabilityAdmissionRequest
 
     public ExternalCapabilityExecutionMode ExpectedExecutionMode { get; }
 
+    public string? WorkflowId { get; }
+
+    public string? RevisionId { get; }
+
     public IReadOnlyList<string>? WorkflowYamls { get; private init; }
 
     public static PersistedWorkflowCapabilityAdmissionRequest FromWorkflowYamls(
         WorkflowCapabilityAdmissionPlan plan,
         IReadOnlyList<string> workflowYamls,
         string sourceKind,
-        ExternalCapabilityExecutionMode expectedExecutionMode)
+        ExternalCapabilityExecutionMode expectedExecutionMode,
+        string? workflowId = null,
+        string? revisionId = null)
     {
         ArgumentNullException.ThrowIfNull(workflowYamls);
         if (workflowYamls.Count == 0)
@@ -147,7 +192,9 @@ public sealed class PersistedWorkflowCapabilityAdmissionRequest
             string.Empty,
             new Dictionary<string, string>(),
             sourceKind,
-            expectedExecutionMode)
+            expectedExecutionMode,
+            workflowId,
+            revisionId)
         {
             WorkflowYamls = workflowYamls.ToArray(),
         };
@@ -155,26 +202,29 @@ public sealed class PersistedWorkflowCapabilityAdmissionRequest
 
     public override string ToString() =>
         $"{nameof(PersistedWorkflowCapabilityAdmissionRequest)} {{ SourceKind = {SourceKind}, ExpectedExecutionMode = {ExpectedExecutionMode}, Definition = [REDACTED], Plan = [REDACTED] }}";
+
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
 
 public interface IExternalWorkflowCapabilitySource
 {
-    ExternalWorkflowCapabilityRef.CapabilityOneofCase CapabilityKind { get; }
+    ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind { get; }
 
-    Task<IReadOnlyList<ExternalWorkflowCapabilityDescriptor>> ListAsync(
+    Task<ExternalWorkflowCapabilityDiscoveryResult> ListAsync(
         ExternalWorkflowCapabilityAccessContext access,
         CancellationToken cancellationToken = default);
 
     Task<ExternalCapabilityReadiness> InspectAsync(
         ExternalWorkflowCapabilityAccessContext access,
-        ExternalWorkflowCapabilityRef capability,
+        ExternalWorkflowCapabilitySelector selector,
         ExternalCapabilityExecutionMode executionMode,
         CancellationToken cancellationToken = default);
 }
 
 public interface IExternalWorkflowCapabilityListPort
 {
-    Task<IReadOnlyList<ExternalWorkflowCapabilityDescriptor>> ListAsync(
+    Task<ExternalWorkflowCapabilityDiscoveryResult> ListAsync(
         ListExternalWorkflowCapabilitiesRequest request,
         CancellationToken cancellationToken = default);
 }
@@ -184,6 +234,21 @@ public interface IExternalWorkflowCapabilityReadinessPort
     Task<ExternalCapabilityReadiness> InspectAsync(
         InspectExternalWorkflowCapabilityReadinessRequest request,
         CancellationToken cancellationToken = default);
+}
+
+public sealed record WorkflowArtifactCompatibilityRequest(
+    string WorkflowYaml,
+    IReadOnlyDictionary<string, string> InlineWorkflowYamls,
+    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan,
+    ExternalCapabilityExecutionMode ExpectedExecutionMode,
+    string WorkflowId = "",
+    string RevisionId = "");
+
+public interface IWorkflowArtifactCompatibilityPreflight
+{
+    Task ValidateAsync(
+        WorkflowArtifactCompatibilityRequest request,
+        CancellationToken ct = default);
 }
 
 public interface IWorkflowExternalCapabilityAdmissionService
@@ -199,13 +264,45 @@ public interface IWorkflowExternalCapabilityAdmissionService
 
 public sealed class WorkflowExternalCapabilityAdmissionException : InvalidOperationException
 {
+    private const string AdmissionRejectedCode = "WORKFLOW_ADMISSION_REJECTED";
+    private const string AdmissionRejectedMessage = "Workflow admission was rejected.";
+
     public WorkflowExternalCapabilityAdmissionException(ExternalCapabilityReadiness readiness)
         : base(BuildSafeMessage(readiness))
     {
         Readiness = readiness?.Clone() ?? throw new ArgumentNullException(nameof(readiness));
+        var blocker = Readiness.Blockers.FirstOrDefault(static item => !string.IsNullOrWhiteSpace(item.Code));
+        SafeBlockerCode = NormalizeSafeBlockerCode(blocker?.Code);
+        StableCode = NormalizeStableCode(SafeBlockerCode);
+        SafeMessage = string.IsNullOrWhiteSpace(blocker?.SafeMessage)
+            ? AdmissionRejectedMessage
+            : blocker.SafeMessage.Trim();
     }
 
     public ExternalCapabilityReadiness Readiness { get; }
+    public string SafeBlockerCode { get; }
+    public string StableCode { get; }
+    public string SafeMessage { get; }
+
+    private static string NormalizeSafeBlockerCode(string? code)
+    {
+        var normalized = code?.Trim();
+        return !string.IsNullOrWhiteSpace(normalized) &&
+               normalized.Length <= 128 &&
+               normalized.All(static character =>
+                   char.IsAsciiLetterOrDigit(character) || character == '_')
+            ? normalized
+            : AdmissionRejectedCode;
+    }
+
+    private static string NormalizeStableCode(string? code) =>
+        code?.Trim() switch
+        {
+            "WORKFLOW_DEFINITION_INVALID" => "WORKFLOW_DEFINITION_INVALID",
+            "NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED" => "NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED",
+            "CAPABILITY_ADMISSION_REBIND_REQUIRED" => "CAPABILITY_ADMISSION_REBIND_REQUIRED",
+            _ => AdmissionRejectedCode,
+        };
 
     private static string BuildSafeMessage(ExternalCapabilityReadiness? readiness)
     {

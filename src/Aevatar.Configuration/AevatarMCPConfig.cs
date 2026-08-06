@@ -3,6 +3,7 @@
 //
 // 解析 Cursor 兼容的 MCP 服务器配置格式：
 // { "mcpServers": { "name": { "command": "...", "args": [...] } } }
+// { "mcpServers": { "name": { "url": "https://.../mcp", "headers": { ... } } } }
 // ─────────────────────────────────────────────────────────────
 
 using System.Text.Json;
@@ -20,11 +21,17 @@ public sealed class MCPServerEntry
     /// <summary>启动命令。</summary>
     public string Command { get; init; } = "";
 
+    /// <summary>远程 Streamable HTTP MCP 端点。</summary>
+    public string Url { get; init; } = "";
+
     /// <summary>命令参数。</summary>
     public string[] Args { get; init; } = [];
 
     /// <summary>环境变量。</summary>
     public Dictionary<string, string> Env { get; init; } = [];
+
+    /// <summary>远程 MCP 静态请求头。</summary>
+    public Dictionary<string, string> Headers { get; init; } = [];
 
     /// <summary>超时（毫秒）。</summary>
     public int TimeoutMs { get; init; } = 60000;
@@ -58,6 +65,7 @@ public static class AevatarMCPConfig
                 {
                     Name = prop.Name,
                     Command = prop.Value.TryGetProperty("command", out var cmd) ? cmd.GetString() ?? "" : "",
+                    Url = prop.Value.TryGetProperty("url", out var url) ? url.GetString() ?? "" : "",
                     Args = prop.Value.TryGetProperty("args", out var args)
                         ? args.EnumerateArray().Select(a => a.GetString() ?? "").ToArray()
                         : [],
@@ -68,6 +76,12 @@ public static class AevatarMCPConfig
                 {
                     foreach (var e in env.EnumerateObject())
                         entry.Env[e.Name] = e.Value.GetString() ?? "";
+                }
+
+                if (prop.Value.TryGetProperty("headers", out var headers))
+                {
+                    foreach (var header in headers.EnumerateObject())
+                        entry.Headers[header.Name] = header.Value.GetString() ?? "";
                 }
 
                 result.Add(entry);

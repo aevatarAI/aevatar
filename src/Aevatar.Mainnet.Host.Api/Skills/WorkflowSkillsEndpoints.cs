@@ -1,10 +1,12 @@
-using System.Security.Claims;
 using Aevatar.BackendConsole.Hosting;
 using Aevatar.Capabilities;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Mainnet.Host.Api.Skills;
 
@@ -45,6 +47,11 @@ internal static class WorkflowSkillsEndpoints
             .WithSummary("Skill detail (authoritative runKind + whenToUse) resolved on selection.")
             .RequireAuthorization();
 
+        data.MapGet("/{guid}/exact", GetExactSkill)
+            .WithName("GetWorkflowExactSkill")
+            .WithSummary("Exact Ornn authority fields for an Agent Profile skill reference.")
+            .RequireAuthorization();
+
         data.MapPost("/{guid}/invoke", InvokeSkill)
             .WithName("InvokeWorkflowSkill")
             .WithSummary("Invoke a skill once as a workflow run; returns the run id for the observatory.")
@@ -52,7 +59,7 @@ internal static class WorkflowSkillsEndpoints
 
         data.MapPost("/{guid}/schedule", ScheduleSkill)
             .WithName("ScheduleWorkflowSkill")
-            .WithSummary("Provision a recurring (cron) schedule for a skill; runs surface in the observatory.")
+            .WithSummary("Accept recurring skill schedule provisioning; poll the returned Location for completion.")
             .RequireAuthorization();
 
         return app;
@@ -106,6 +113,66 @@ internal static class WorkflowSkillsEndpoints
         return detail is null ? Results.NotFound() : Results.Json(detail);
     }
 
+    internal static async Task<IResult> GetExactSkill(
+        HttpContext http,
+        string guid,
+        [FromServices] IUserSkillCatalogQueryService catalog,
+        string? literalVersion = null,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(http);
+        ArgumentNullException.ThrowIfNull(catalog);
+
+        if (!TryGetBearerToken(http, out var token))
+            return Results.Unauthorized();
+        if (!Guid.TryParseExact(guid, "D", out var parsedGuid) ||
+            !string.Equals(parsedGuid.ToString("D"), guid, StringComparison.Ordinal))
+        {
+            return Results.BadRequest(new AgentProfileExactSkillError(
+                "invalid_guid",
+                "guid must be a canonical lowercase UUID."));
+        }
+        if (literalVersion is not null && !IsLiteralVersion(literalVersion))
+        {
+            return Results.BadRequest(new AgentProfileExactSkillError(
+                "invalid_literal_version",
+                "literalVersion must use canonical major.minor form."));
+        }
+
+        var read = await catalog.GetExactSkillAsync(token, guid, literalVersion, ct);
+        if (read.Detail is not null)
+            return Results.Json(read.Detail);
+        if (read.UpstreamStatus == StatusCodes.Status403Forbidden)
+            return Results.Forbid();
+        if (string.Equals(read.Error, "exact_skill_not_found", StringComparison.Ordinal))
+        {
+            return Results.NotFound(new AgentProfileExactSkillError(
+                "exact_skill_not_found",
+                "The requested exact skill was not found."));
+        }
+
+        return Results.Json(
+            new AgentProfileExactSkillError(
+                read.Error ?? "exact_skill_upstream_failure",
+                "The exact skill authority could not be resolved."),
+            statusCode: StatusCodes.Status502BadGateway);
+    }
+
+    internal static bool IsLiteralVersion(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            value.Split('.', StringSplitOptions.None) is not [var major, var minor] ||
+            !int.TryParse(major, out var majorValue) ||
+            !int.TryParse(minor, out var minorValue) ||
+            majorValue < 0 || minorValue < 0)
+        {
+            return false;
+        }
+
+        return string.Equals(majorValue.ToString(), major, StringComparison.Ordinal) &&
+               string.Equals(minorValue.ToString(), minor, StringComparison.Ordinal);
+    }
+
     internal static async Task<IResult> InvokeSkill(
         HttpContext http,
         string guid,
@@ -115,11 +182,22 @@ internal static class WorkflowSkillsEndpoints
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(runService);
 
-        if (!TryGetBearerToken(http, out var token))
-            return Results.Unauthorized();
         // The run is attributed to the caller's scope so it surfaces in their observatory.
         if (!AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var scopeId))
             return Results.Unauthorized();
+
+        var loggerFactory = http.RequestServices.GetService<ILoggerFactory>();
+        var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
+            http,
+            http.RequestServices.GetService<IExternalIdentityBindingQueryPort>(),
+            loggerFactory?.CreateLogger("Aevatar.Mainnet.Host.Api.WorkflowSkills"),
+            ct);
+        if (!callerCredential.Succeeded ||
+            callerCredential.Credential == null ||
+            string.IsNullOrWhiteSpace(callerCredential.Credential.BearerToken))
+        {
+            return Results.Unauthorized();
+        }
 
         SkillInvokeRequest body;
         try
@@ -131,7 +209,12 @@ internal static class WorkflowSkillsEndpoints
             return Results.BadRequest(new { error = "invalid_json" });
         }
 
-        var outcome = await runService.InvokeOnceAsync(guid, token, scopeId, body.Prompt ?? string.Empty, ct);
+        var outcome = await runService.InvokeOnceAsync(
+            guid,
+            callerCredential.Credential,
+            scopeId,
+            body.Prompt ?? string.Empty,
+            ct);
         if (outcome.Succeeded)
             return Results.Json(outcome.Receipt);
 
@@ -150,10 +233,22 @@ internal static class WorkflowSkillsEndpoints
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(runService);
 
-        if (!TryGetBearerToken(http, out var token))
-            return Results.Unauthorized();
         if (!AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var scopeId))
             return Results.Unauthorized();
+
+        var loggerFactory = http.RequestServices.GetService<ILoggerFactory>();
+        var logger = loggerFactory?.CreateLogger("Aevatar.Mainnet.Host.Api.WorkflowSkills");
+        var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
+            http,
+            http.RequestServices.GetService<IExternalIdentityBindingQueryPort>(),
+            logger,
+            ct);
+        if (!callerCredential.Succeeded ||
+            callerCredential.Credential == null ||
+            string.IsNullOrWhiteSpace(callerCredential.Credential.BearerToken))
+        {
+            return Results.Unauthorized();
+        }
 
         SkillScheduleHttpRequest body;
         try
@@ -172,36 +267,88 @@ internal static class WorkflowSkillsEndpoints
 
         var outcome = await runService.ScheduleAsync(
             guid,
-            token,
+            callerCredential.Credential,
             scopeId,
-            ResolveOwnerSubject(http),
             body.Prompt ?? string.Empty,
             body.CronExpression!,
             body.Timezone ?? string.Empty,
             body.DisplayName ?? string.Empty,
             body.TeamId!,
+            body.WorkflowConfirmationToken ?? string.Empty,
             ct);
-        if (outcome.Succeeded)
-            return Results.Json(outcome.Receipt);
+        if (outcome.Succeeded && outcome.Receipt is { } receipt)
+        {
+            return Results.Accepted(
+                BuildSkillScheduleLocation(receipt),
+                receipt);
+        }
+        if (outcome.Confirmation is not null)
+        {
+            logger?.LogInformation(
+                "Workflow skill schedule confirmation returned. SkillGuid={SkillGuid} Stage={Stage} Status={Status} FailureCode={FailureCode}",
+                guid,
+                "confirmation",
+                outcome.Confirmation.Status,
+                outcome.Confirmation.FailureCode ?? string.Empty);
+            return Results.Json(outcome.Confirmation);
+        }
 
-        var scheduleStatus = string.Equals(outcome.ErrorCode, "skill_not_found", StringComparison.Ordinal)
-            ? StatusCodes.Status404NotFound
-            : StatusCodes.Status502BadGateway;
+        logger?.LogWarning(
+            "Workflow skill schedule failed. SkillGuid={SkillGuid} Stage={Stage} ErrorCode={ErrorCode}",
+            guid,
+            ResolveScheduleFailureStage(outcome.ErrorCode),
+            outcome.ErrorCode ?? "skill_schedule_unknown_failure");
+
+        var scheduleStatus = ResolveScheduleFailureStatus(outcome.ErrorCode);
         return Results.Json(new { code = outcome.ErrorCode, message = outcome.ErrorMessage }, statusCode: scheduleStatus);
     }
 
-    // The caller's NyxID subject (uid/sub claim) is the schedule's owner subject; the provisioning adapter
-    // substitutes the scope id when this is absent.
-    private static string? ResolveOwnerSubject(HttpContext http)
+    private static string BuildSkillScheduleLocation(SkillScheduleReceipt receipt) =>
+        string.IsNullOrWhiteSpace(receipt.ScheduleId)
+            ? $"/api/scopes/{Uri.EscapeDataString(receipt.ScopeId)}/members/{Uri.EscapeDataString(receipt.MemberId)}"
+            : $"/api/schedules/{Uri.EscapeDataString(receipt.ScheduleId)}";
+
+    private static int ResolveScheduleFailureStatus(string? errorCode) => errorCode switch
     {
-        foreach (var claimType in new[] { "uid", "sub", ClaimTypes.NameIdentifier, "user_id" })
+        "skill_not_found" or "api_key_scope_plan_not_found" => StatusCodes.Status404NotFound,
+        "authentication_failed" or "unauthorized" or "token_expired" => StatusCodes.Status401Unauthorized,
+        "forbidden" or "api_key_scope_plan_denied" => StatusCodes.Status403Forbidden,
+        "bad_request" or "validation_error" or "api_key_scope_plan_owner_unsupported" =>
+            StatusCodes.Status400BadRequest,
+        "conflict" or "api_key_scope_plan_route_unresolved" or "api_key_scope_plan_stale" =>
+            StatusCodes.Status409Conflict,
+        "rate_limited" => StatusCodes.Status429TooManyRequests,
+        "nyxid_scope_plan_provider_timed_out" => StatusCodes.Status504GatewayTimeout,
+        _ => StatusCodes.Status502BadGateway,
+    };
+
+    private static string ResolveScheduleFailureStage(string? errorCode)
+    {
+        if (string.IsNullOrWhiteSpace(errorCode))
+            return "unknown";
+
+        if (errorCode is "invalid_caller_credential" or
+            "authenticated_authorization_owner_required" or
+            "source_readable_caller_credential_required")
         {
-            var value = http.User.FindFirst(claimType)?.Value?.Trim();
-            if (!string.IsNullOrWhiteSpace(value))
-                return value;
+            return "caller_authority";
         }
 
-        return null;
+        if (string.Equals(errorCode, "skill_not_found", StringComparison.Ordinal))
+            return "skill_fetch";
+        if (errorCode.StartsWith("skill_schedule_workflow_", StringComparison.Ordinal))
+            return "workflow_resolution";
+        if (errorCode.Contains("confirmation", StringComparison.OrdinalIgnoreCase))
+            return "confirmation";
+        if (errorCode.StartsWith("schedule_authorization_", StringComparison.Ordinal) ||
+            string.Equals(errorCode, "schedule_reauthorization_required", StringComparison.Ordinal) ||
+            errorCode.StartsWith("api_key_scope_plan_", StringComparison.Ordinal) ||
+            errorCode.StartsWith("nyxid_scope_plan_", StringComparison.Ordinal))
+        {
+            return "authorization_catalog";
+        }
+
+        return "provisioning";
     }
 
     private static bool TryGetBearerToken(HttpContext http, out string token)

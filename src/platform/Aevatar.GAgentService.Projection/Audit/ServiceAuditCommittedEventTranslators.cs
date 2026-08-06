@@ -150,6 +150,7 @@ public sealed class ScheduledDispatchConfiguredAuditTranslator
         ScheduleSeed(
             "scheduled.dispatch.configured",
             evt.ScheduleId,
+            ResolveScheduleScopeId(evt.TeamAutomationOwner?.ScopeId, evt.Headers),
             evt.Headers,
             evt.Enabled ? "Scheduled dispatch configured and enabled." : "Scheduled dispatch configured.");
 }
@@ -163,7 +164,12 @@ public sealed class ScheduledDispatchEnabledAuditTranslator
     protected override CommittedAuditSeed BuildSeed(
         CommittedAuditTranslationContext context,
         ScheduledDispatchEnabledEvent evt) =>
-        ScheduleSeed("scheduled.dispatch.enabled", context.OriginActorId, null, "Scheduled dispatch enabled.");
+        ScheduleSeed(
+            "scheduled.dispatch.enabled",
+            evt.ScheduleId,
+            evt.ScopeId,
+            null,
+            "Scheduled dispatch enabled.");
 }
 
 public sealed class ScheduledDispatchDisabledAuditTranslator
@@ -177,7 +183,8 @@ public sealed class ScheduledDispatchDisabledAuditTranslator
         ScheduledDispatchDisabledEvent evt) =>
         ScheduleSeed(
             "scheduled.dispatch.disabled",
-            context.OriginActorId,
+            evt.ScheduleId,
+            evt.ScopeId,
             null,
             "Scheduled dispatch disabled.",
             AuditSensitivityLevel.Restricted,
@@ -195,7 +202,8 @@ public sealed class ScheduledDispatchDeletedAuditTranslator
         ScheduledDispatchDeletedEvent evt) =>
         ScheduleSeed(
             "scheduled.dispatch.deleted",
-            context.OriginActorId,
+            evt.ScheduleId,
+            evt.ScopeId,
             null,
             "Scheduled dispatch deleted.",
             AuditSensitivityLevel.Restricted,
@@ -423,6 +431,7 @@ internal static class RunAuditAnnotations
             ServiceRunStatus.Completed => "completed",
             ServiceRunStatus.Failed => "failed",
             ServiceRunStatus.Stopped => "stopped",
+            ServiceRunStatus.OutcomeUncertain => "outcome_uncertain",
             _ => "unspecified",
         };
 
@@ -490,6 +499,7 @@ public abstract class AuditTranslatorBase<TEvent> : IAuditCommittedEventTranslat
     protected static CommittedAuditSeed ScheduleSeed(
         string operationName,
         string scheduleId,
+        string scopeId,
         IDictionary<string, string>? headers,
         string resultSummary,
         AuditSensitivityLevel sensitivityLevel = AuditSensitivityLevel.Confidential,
@@ -501,12 +511,22 @@ public abstract class AuditTranslatorBase<TEvent> : IAuditCommittedEventTranslat
             operationName,
             "scheduled_dispatch",
             scheduleId,
-            ReadHeader(headers, "scope_id", "scopeId"),
+            scopeId,
             sensitivityLevel,
             isDestructive,
             commandId,
             requestId,
             ResultSummary: resultSummary);
+    }
+
+    protected static string ResolveScheduleScopeId(
+        string? ownerScopeId,
+        IDictionary<string, string>? headers)
+    {
+        if (!string.IsNullOrWhiteSpace(ownerScopeId))
+            return ownerScopeId.Trim();
+
+        return ReadHeader(headers, "scope_id", "scopeId");
     }
 
     private static string BuildScopeId(ServiceIdentity? identity)
@@ -536,7 +556,10 @@ public abstract class AuditTranslatorBase<TEvent> : IAuditCommittedEventTranslat
     protected static AuditLifecyclePhase LifecyclePhase(ServiceRunStatus status) => status switch
     {
         ServiceRunStatus.Accepted => AuditLifecyclePhase.Accepted,
-        ServiceRunStatus.Completed or ServiceRunStatus.Failed or ServiceRunStatus.Stopped =>
+        ServiceRunStatus.Completed or
+            ServiceRunStatus.Failed or
+            ServiceRunStatus.Stopped or
+            ServiceRunStatus.OutcomeUncertain =>
             AuditLifecyclePhase.Terminal,
         _ => AuditLifecyclePhase.Running,
     };
@@ -546,13 +569,16 @@ public abstract class AuditTranslatorBase<TEvent> : IAuditCommittedEventTranslat
         ServiceRunStatus.Completed => AuditTerminalOutcome.Succeeded,
         ServiceRunStatus.Failed => AuditTerminalOutcome.Failed,
         ServiceRunStatus.Stopped => AuditTerminalOutcome.Cancelled,
+        ServiceRunStatus.OutcomeUncertain => AuditTerminalOutcome.Unspecified,
         _ => AuditTerminalOutcome.Unspecified,
     };
 
     protected static AuditFailure? BuildRunFailure(ServiceRunStatus status) =>
-        status == ServiceRunStatus.Failed
+        status is ServiceRunStatus.Failed or ServiceRunStatus.OutcomeUncertain
             ? Failure(
-                "service_run_failed",
+                status == ServiceRunStatus.Failed
+                    ? "service_run_failed"
+                    : "service_run_outcome_uncertain",
                 AuditFailureCategory.Execution,
                 AuditLifecyclePhase.Running)
             : null;

@@ -76,7 +76,15 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         var identity = string.IsNullOrWhiteSpace(request.ServiceId)
             ? ScopeWorkflowCapabilityConventions.BuildDefaultServiceIdentity(_options, normalizedScopeId, request.AppId)
             : ScopeWorkflowCapabilityConventions.BuildServiceIdentity(_options, normalizedScopeId, request.ServiceId.Trim(), request.AppId);
-        var desiredBinding = await ResolveDesiredBindingAsync(request, normalizedScopeId, identity, ct);
+        var revisionId = ScopeWorkflowCapabilityConventions.ResolveRevisionId(request.RevisionId);
+        var explicitRequestConfirmations = request.CapabilityAdmission?.ExplicitRequestConfirmations;
+        var desiredBinding = await ResolveDesiredBindingAsync(
+            request,
+            normalizedScopeId,
+            identity,
+            revisionId,
+            explicitRequestConfirmations,
+            ct);
         var existingService = await _serviceLifecycleQueryPort.GetServiceAsync(identity, ct);
         ApplyExternalExposureIntent(request, desiredBinding.ServiceDefinition);
 
@@ -103,7 +111,6 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             _serviceGovernanceQueryPort,
             ct);
 
-        var revisionId = ScopeWorkflowCapabilityConventions.ResolveRevisionId(request.RevisionId);
         var revisionSpec = desiredBinding.BuildRevision(identity, revisionId);
 
         if (await ShouldCreateRevisionAsync(request, revisionSpec, ct))
@@ -220,6 +227,14 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         {
             throw new InvalidOperationException(
                 $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}'.");
+        }
+
+        if (request.ImplementationKind == ScopeBindingImplementationKind.Workflow &&
+            existingRevision.PreparedArtifact != null &&
+            WorkflowServiceArtifactReadiness.RequiresCapabilityAdmissionRebind(existingRevision.PreparedArtifact))
+        {
+            throw new InvalidOperationException(
+                $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but its workflow capability admission plan requires rebind; publish a new revision id.");
         }
 
         if (string.IsNullOrWhiteSpace(existingRevision.ArtifactHash))
@@ -353,12 +368,20 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         ScopeBindingUpsertRequest request,
         string normalizedScopeId,
         ServiceIdentity identity,
+        string revisionId,
+        IReadOnlyList<NyxIdExplicitRequestConfirmation>? explicitRequestConfirmations,
         CancellationToken ct)
     {
         return request.ImplementationKind switch
         {
             ScopeBindingImplementationKind.Workflow =>
-                await BuildWorkflowBindingAsync(request, normalizedScopeId, identity, ct),
+                await BuildWorkflowBindingAsync(
+                    request,
+                    normalizedScopeId,
+                    identity,
+                    revisionId,
+                    explicitRequestConfirmations,
+                    ct),
             ScopeBindingImplementationKind.Scripting =>
                 await BuildScriptBindingAsync(request, normalizedScopeId, identity, ct),
             ScopeBindingImplementationKind.GAgent =>
@@ -371,9 +394,15 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         ScopeBindingUpsertRequest request,
         string normalizedScopeId,
         ServiceIdentity identity,
+        string revisionId,
+        IReadOnlyList<NyxIdExplicitRequestConfirmation>? explicitRequestConfirmations,
         CancellationToken ct)
     {
         var workflowBundle = await ParseWorkflowBundleAsync(request.Workflow?.WorkflowYamls, ct);
+        var suppliedWorkflowId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.Workflow?.WorkflowId);
+        var workflowId = string.IsNullOrWhiteSpace(suppliedWorkflowId)
+            ? string.Empty
+            : ScopeWorkflowCapabilityConventions.NormalizeWorkflowId(suppliedWorkflowId);
         var admissionContext = request.CapabilityAdmission;
         var executionMode = admissionContext?.ExecutionMode ?? ExternalCapabilityExecutionMode.Interactive;
         var capabilityAdmissionPlan = admissionContext?.ExistingPlan is { } existingPlan
@@ -383,22 +412,25 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     workflowBundle.EntryWorkflowYaml,
                     workflowBundle.SubWorkflowYamls,
                     "scope_binding_upsert",
-                    executionMode),
+                    executionMode,
+                    workflowId,
+                    revisionId),
                 ct)
             : await _capabilityAdmissionService.AdmitAsync(
                 new WorkflowExternalCapabilityAdmissionRequest(
                 new ExternalWorkflowCapabilityAccessContext(
                     normalizedScopeId,
                     admissionContext?.CallerId ?? string.Empty,
-                    admissionContext?.NyxIdCallerBearerToken,
+                    admissionContext?.NyxIdCallerCredential,
                     admissionContext?.NyxIdOrganizationBearerToken),
                 workflowBundle.EntryWorkflowYaml,
                 workflowBundle.SubWorkflowYamls,
                 "scope_binding_upsert",
-                executionMode),
+                executionMode,
+                explicitRequestConfirmations,
+                workflowId,
+                revisionId),
                 ct);
-        var suppliedWorkflowId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.Workflow?.WorkflowId);
-        var workflowId = ResolveWorkflowBindingWorkflowId(suppliedWorkflowId, identity);
         var definitionActorIdPrefix = string.IsNullOrWhiteSpace(suppliedWorkflowId)
             ? ScopeWorkflowCapabilityConventions.BuildDefaultDefinitionActorIdPrefix(_options, normalizedScopeId)
             : ScopeWorkflowCapabilityConventions.BuildDefinitionActorIdPrefix(
@@ -426,6 +458,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     ImplementationKind = ServiceImplementationKind.Workflow,
                     WorkflowSpec = new WorkflowServiceRevisionSpec
                     {
+                        WorkflowId = workflowId,
                         WorkflowName = workflowBundle.EntryWorkflowName,
                         WorkflowYaml = workflowBundle.EntryWorkflowYaml,
                         DefinitionActorId = definitionActorIdPrefix,
@@ -585,15 +618,6 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     GAgent: new ScopeBindingGAgentResult(
                         diagnosticClrTypeName),
                     ExpectedDeploymentId: expectedDeploymentId));
-    }
-
-    private static string ResolveWorkflowBindingWorkflowId(
-        string? suppliedWorkflowId,
-        ServiceIdentity identity)
-    {
-        return string.IsNullOrWhiteSpace(suppliedWorkflowId)
-            ? ScopeWorkflowCapabilityOptions.NormalizeRequired(identity.ServiceId, nameof(identity.ServiceId))
-            : ScopeWorkflowCapabilityConventions.NormalizeWorkflowId(suppliedWorkflowId);
     }
 
     private string NormalizeGAgentKind(ScopeBindingGAgentSpec gagent)

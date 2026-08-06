@@ -102,7 +102,7 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
                 AccessToken: "user-token",
                 AppId: "cli_a1b2c3",
                 AppSecret: "secret-xyz",
-                VerificationToken: string.Empty,
+                VerificationToken: "verify-123",
                 WebhookBaseUrl: "https://aevatar.example.com",
                 ScopeId: "scope-1",
                 Label: "Ops Bot",
@@ -425,7 +425,8 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
             nyxClient,
             CreateOutboundPort(nyxHandler),
             null,
-            NullLogger<ChannelConversationTurnRunner>.Instance);
+            NullLogger<ChannelConversationTurnRunner>.Instance,
+            toolExecutionPort: Substitute.For<IAgentToolExecutionPort>());
     }
 
     private static AevatarInvocationDispatcher CreateInvocationDispatcher(
@@ -442,6 +443,7 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
             actorDispatchPort,
             Substitute.For<IGAgentActorRegistryQueryPort>(),
             teamEntryMemberResolver ?? Substitute.For<ITeamEntryMemberResolver>(),
+            Substitute.For<IMemberPublishedServiceResolver>(),
             Substitute.For<IStaticGAgentStreamInvocationPort<AGUIEvent>>(),
             workflowDispatchService,
             serviceInvocationResolutionPort ?? Substitute.For<IServiceInvocationResolutionPort>(),
@@ -589,11 +591,16 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
 
             Agent = await actorNetwork.CreateWorkflowRunAsync(actorId, ct);
             await Agent.BindWorkflowRunDefinitionAsync(
-                "contract-inline-definition",
-                workflowYaml,
-                workflowName,
+                definitionActorId: "contract-inline-definition",
+                workflowYaml: workflowYaml,
+                workflowName: workflowName,
+                inlineWorkflowYamls: null,
                 runId: actorId,
                 scopeId: command.ScopeId,
+                runOrigin: null,
+                scheduleId: null,
+                capabilityAdmissionPlan: null,
+                expectedExecutionMode: command.ExpectedExecutionMode,
                 ct: ct);
 
             var context = new DefaultCommandContextPolicy().Create(
@@ -679,6 +686,7 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
                         WorkflowName = "wf-alpha",
                         WorkflowYaml = "name: wf-alpha\nroles: []\nsteps:\n  - id: result\n    type: transform",
                         DefinitionActorId = "wf-definition-alpha",
+                        ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
                     },
                 },
             };
@@ -727,6 +735,7 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
                         [plan.WorkflowYaml],
                         plan.WorkflowName,
                         WorkflowActorId),
+                    ExpectedExecutionMode: plan.ExecutionMode,
                     SessionId: chatRequest.SessionId,
                     ScopeId: request.Identity?.TenantId ?? chatRequest.ScopeId,
                     CommandIdSeed: request.CommandId,
@@ -880,6 +889,7 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
 
             var agent = new WorkflowRunDeliveryGAgent(
                 _outboundPort,
+                Substitute.For<IInteractiveReplyDispatcher>(),
                 _credentialResolver,
                 _callbackScheduler,
                 NullLogger<WorkflowRunDeliveryGAgent>.Instance)

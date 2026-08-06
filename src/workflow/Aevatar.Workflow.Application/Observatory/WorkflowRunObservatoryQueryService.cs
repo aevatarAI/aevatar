@@ -317,6 +317,19 @@ public sealed class WorkflowRunObservatoryQueryService
             RequestParameters = step.RequestParameters,
             NextStepId = step.NextStepId,
             BranchKey = step.BranchKey,
+            SuspensionType = step.SuspensionType,
+            SuspensionPrompt = step.SuspensionPrompt,
+            SuspensionContent = step.SuspensionContent,
+            SuspensionTimeoutSeconds = step.SuspensionTimeoutSeconds,
+            ToolApproval = step.ToolApproval == null
+                ? null
+                : new ObservatoryToolApprovalDetail
+                {
+                    ExecutionId = step.ToolApproval.ExecutionId,
+                    ToolName = step.ToolApproval.ToolName,
+                    ToolCallId = step.ToolApproval.ToolCallId,
+                    ApprovalRequestId = step.ToolApproval.ApprovalRequestId,
+                },
             Usage = new ObservatoryUsageTotals
             {
                 PromptTokens = step.Usage.PromptTokens,
@@ -346,6 +359,8 @@ public sealed class WorkflowRunObservatoryQueryService
 
         AppendCurrentStateDiagnostics(diagnostics, snapshot);
         AppendReportDiagnostics(diagnostics, snapshot, report, steps, viewEvents);
+        AppendToolApprovalResumeRejectionDiagnostics(diagnostics, viewEvents);
+        AppendAwaitingToolApprovalDiagnostic(diagnostics, snapshot, steps);
         AppendActiveStepDiagnostic(diagnostics, steps);
 
         if (IsProblemTerminal(snapshot.CompletionStatus))
@@ -474,6 +489,53 @@ public sealed class WorkflowRunObservatoryQueryService
         });
     }
 
+    private static void AppendToolApprovalResumeRejectionDiagnostics(
+        ICollection<ObservatoryRunDiagnostic> diagnostics,
+        IEnumerable<ObservatoryViewEvent> viewEvents)
+    {
+        foreach (var item in viewEvents.Where(static item =>
+                     string.Equals(item.Stage, "tool_approval.resume_rejected", StringComparison.Ordinal)))
+        {
+            AppendDistinct(diagnostics, new ObservatoryRunDiagnostic
+            {
+                TimestampUtc = item.TimestampUtc,
+                Severity = "warning",
+                Code = "tool_approval_resume_rejected",
+                Source = "run-report.timeline",
+                StepId = item.StepId,
+                StepType = item.StepType,
+                Message = item.Message,
+                Hint = "Refresh the pending approval identity and submit all three IDs under the nested toolApproval object.",
+            });
+        }
+    }
+
+    private static void AppendAwaitingToolApprovalDiagnostic(
+        ICollection<ObservatoryRunDiagnostic> diagnostics,
+        WorkflowActorSnapshot snapshot,
+        IEnumerable<ObservatoryStepDetail> steps)
+    {
+        if (snapshot.CompletionStatus != WorkflowRunCompletionStatus.AwaitingToolApproval)
+            return;
+
+        var approvalStep = steps
+            .Where(static step => step.CompletedAtUtc == null && step.ToolApproval != null)
+            .OrderBy(static step => step.RequestedAtUtc)
+            .LastOrDefault();
+        AppendDistinct(diagnostics, new ObservatoryRunDiagnostic
+        {
+            TimestampUtc = approvalStep?.RequestedAtUtc ?? NonDefault(snapshot.LastUpdatedAt),
+            Severity = "info",
+            Code = "awaiting_tool_approval",
+            Source = approvalStep == null ? "current-state" : "run-report.step",
+            StepId = approvalStep?.StepId ?? string.Empty,
+            StepType = approvalStep?.StepType ?? string.Empty,
+            TargetRole = approvalStep?.TargetRole ?? string.Empty,
+            Message = "Run is suspended pending per-run approval for an admitted tool call.",
+            Hint = "Submit a typed resume command with the execution id, tool call id, and approval request id.",
+        });
+    }
+
     private static void AppendTerminalDiagnostics(
         ICollection<ObservatoryRunDiagnostic> diagnostics,
         WorkflowActorSnapshot snapshot,
@@ -590,6 +652,8 @@ public sealed class WorkflowRunObservatoryQueryService
             WorkflowRunCompletionStatus.Stopped => "stopped",
             WorkflowRunCompletionStatus.NotFound => "not_found",
             WorkflowRunCompletionStatus.Disabled => "disabled",
+            WorkflowRunCompletionStatus.AwaitingToolApproval => "awaiting_tool_approval",
+            WorkflowRunCompletionStatus.WaitingForSignal => "waiting_for_signal",
             _ => "unknown",
         };
 }

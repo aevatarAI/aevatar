@@ -482,10 +482,53 @@ function getToken(){ const raw=localStorage.getItem(TOKEN_KEY); if(!raw) return 
 function setToken(t){ localStorage.setItem(TOKEN_KEY, JSON.stringify(t)); }
 function clearToken(){ localStorage.removeItem(TOKEN_KEY); }
 function isEmbeddedInAdmin(){ try { return window.parent && window.parent !== window && window.frameElement && window.frameElement.getAttribute("data-console-frame") === "1"; } catch(e){ return false; } }
-function notifyAdminShellAuth(type, reason){
+function notifyAdminShellAuth(type, reason, rejectedAccessToken){
   if(!isEmbeddedInAdmin()) return false;
-  window.parent.postMessage({ source:"aevatar-backend-console-suite", type, reason: reason || "" }, location.origin);
+  window.parent.postMessage({ source:"aevatar-backend-console-suite", type, reason: reason || "", rejectedAccessToken:rejectedAccessToken || "" }, location.origin);
   return true;
+}
+function replacementToken(rejectedAccessToken){
+  const current=getToken();
+  return current&&current.access_token&&current.access_token!==rejectedAccessToken ? current : null;
+}
+async function requestAdminShellTokenRefresh(rejectedAccessToken){
+  const existing=replacementToken(rejectedAccessToken); if(existing) return existing;
+  if(!isEmbeddedInAdmin()) return null;
+  const requestId="auth-"+Date.now().toString(36)+"-"+randomString(10);
+  return await new Promise(resolve=>{
+    let timer=null,settled=false;
+    function finish(){
+      if(settled) return; settled=true;
+      window.removeEventListener("message",onMessage);
+      if(timer!==null) clearTimeout(timer);
+      resolve(replacementToken(rejectedAccessToken));
+    }
+    function onMessage(ev){
+      const msg=ev.data||{};
+      if(ev.origin===location.origin&&ev.source===window.parent&&msg.source==="aevatar-backend-console-suite"&&msg.type==="auth-refresh-result"&&msg.requestId===requestId) finish();
+    }
+    window.addEventListener("message",onMessage);
+    timer=setTimeout(finish,10000);
+    window.parent.postMessage({source:"aevatar-backend-console-suite",type:"auth-refresh-request",requestId,rejectedAccessToken},location.origin);
+  });
+}
+async function fetchWithConsoleAuth(path,options){
+  let token=getToken(); if(!token||!token.access_token) throw new Error("not-authenticated");
+  options=options||{};
+  function request(activeToken){
+    const headers=Object.assign({},options.headers||{},{Authorization:"Bearer "+activeToken.access_token});
+    return fetch(path,Object.assign({},options,{headers}));
+  }
+  let res=await request(token);
+  if(res.status!==401) return res;
+  let replacement=replacementToken(token.access_token);
+  if(!replacement) replacement=await requestAdminShellTokenRefresh(token.access_token);
+  if(replacement&&replacement.access_token!==token.access_token){
+    token=replacement; res=await request(token);
+    if(res.status!==401) return res;
+  }
+  signOutSilent(token.access_token);
+  const error=new Error("unauthorized"); error.status=401; throw error;
 }
 
 async function beginLogin(){
@@ -540,18 +583,19 @@ function toAccount(info){ return info ? { label: info.email || info.preferred_us
 
 // Reserved for the live-data increment: scope-gated bearer fetch helper, identical to observatory.
 async function api(path){
-  const token = getToken(); if(!token) throw new Error("not-authenticated");
-  const res = await fetch(path, { headers:{ Authorization:"Bearer " + token.access_token } });
-  if(res.status === 401){ signOutSilent(); throw new Error("unauthorized"); }
+  const res = await fetchWithConsoleAuth(path);
   if(res.status === 404) return null;
   if(!res.ok) throw new Error("api-error-" + res.status);
   return await res.json();
 }
 
 function signOut(){ clearToken(); if(notifyAdminShellAuth("auth-required", "已登出 NyxID，请重新登录。")) return; beginLogin(); }
-function signOutSilent(){ clearToken(); state.signedIn = false; if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。")) return; render(); }
+function signOutSilent(rejectedAccessToken){ const current=getToken(); if(rejectedAccessToken&&current&&current.access_token!==rejectedAccessToken) return false;
+  if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。",rejectedAccessToken)) return true;
+  clearToken(); state.signedIn=false;
+  render(); return true; }
 
-const OBS = "/workflow/observatory";   // 运行观测台路由
+const OBS = "/admin#/observatory";   // admin 运行观测台路由
 
 /* Account label shown in the top-bar chip: decoded from the signed-in identity once
    available; until then we show a neutral placeholder. */
@@ -570,7 +614,7 @@ let accountLabel = "已登录";
 /* ---- Session persistence (localStorage) -------------------------------- */
 const SESSIONS_KEY = "aevatar-studio:sessions";
 /* Session schema:
-   { id, title, createdAt(ms), updatedAt(ms),
+   { id, conversationId?, title, createdAt(ms), updatedAt(ms),
      messages: [
        { role:"user", text },
        { role:"agent", text, status:"working"|"done"|"error",
@@ -592,23 +636,23 @@ function saveSessions(){
   catch(e){ console.warn("studio: sessions save failed", e); }
 }
 function newSessionId(){ return "s_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2,7); }
-function makeSession(){ const now=Date.now(); return { id:newSessionId(), title:"新会话", createdAt:now, updatedAt:now, messages:[] }; }
+function newClientRequestId(){ return crypto.randomUUID ? crypto.randomUUID() : "chat_" + Date.now().toString(36) + "_" + randomString(16); }
+function makeSession(){ const now=Date.now(); return { id:newSessionId(), conversationId:"", title:"新会话", createdAt:now, updatedAt:now, messages:[] }; }
 function activeSession(){ return state.sessions.find(s=>s.id===state.selectedSession) || null; }
 function sessionTitleFrom(text){ const t=(text||"").trim().replace(/\s+/g," "); if(!t) return "新会话"; return t.length>26 ? t.slice(0,26)+"…" : t; }
 
 /* ---- Chat streaming (POST /api/chat, SSE) ------------------------------ */
 // Reads the response body as a stream, buffers, splits on the SSE record
 // separator (\n\n), and invokes onFrame(parsedJson) per `data:` line.
-async function streamChat(prompt, sessionId, onFrame, signal){
-  const token = getToken(); if(!token) throw new Error("not-authenticated");
-  const body = { prompt, sessionId, workflow: "studio" };
-  const res = await fetch("/api/chat", {
+async function streamChat(prompt, conversationId, clientRequestId, onFrame, signal){
+  const body = { type:"text", clientRequestId, prompt };
+  if(conversationId) body.conversationId = conversationId;
+  const res = await fetchWithConsoleAuth("/api/chat", {
     method:"POST",
-    headers:{ Authorization:"Bearer " + token.access_token, "Content-Type":"application/json", "Accept":"text/event-stream" },
+    headers:{ "Content-Type":"application/json", "Accept":"text/event-stream", "Idempotency-Key":clientRequestId },
     body: JSON.stringify(body),
     signal
   });
-  if(res.status === 401){ signOutSilent(); throw new Error("unauthorized"); }
   if(!res.ok || !res.body) throw new Error("chat-http-" + res.status);
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -641,9 +685,27 @@ function emitSseChunk(chunk, onFrame){
   onFrame(frame);
 }
 
-// Apply one SSE frame to an agent message object (mutates msg in place).
+// Apply one canonical Assistant SSE frame to an agent message and conversation (mutates both in place).
 // Returns true when the run reached a terminal state (finished or errored).
-function applyFrameToMessage(frame, msg){
+function applyFrameToMessage(frame, msg, sess){
+  if(frame.runStarted || frame.type === "RUN_STARTED"){
+    const started = frame.runStarted || {};
+    const conversationId = String(frame.actorId || started.threadId || "").trim();
+    if(!conversationId) throw new Error("chat-run-started-missing-conversation-id");
+    if(sess.conversationId && sess.conversationId !== conversationId) throw new Error("chat-conversation-id-mismatch");
+    sess.conversationId = conversationId;
+    msg.actorId = conversationId;
+  }
+  if(frame.textMessageContent && typeof frame.textMessageContent.delta === "string"){
+    msg.text += frame.textMessageContent.delta;
+  }
+  if(frame.toolCallStart && frame.toolCallStart.toolName){
+    mergeToolCalls(msg, [{
+      toolName:frame.toolCallStart.toolName,
+      callId:frame.toolCallStart.toolCallId || "",
+      argumentsJson:""
+    }]);
+  }
   // top-level run completion → final assistant text
   if(frame.runFinished){
     const out = frame.runFinished.result && frame.runFinished.result.output;
@@ -813,8 +875,8 @@ function catIcon(t){ return t==="llm"?ICON.chat : t==="tool"?ICON.tool : t==="fo
 
 /* shared suite navigation — identical markup/behaviour across the five console pages */
 const SUITE_NAV=[
-  {k:"observatory",href:"/workflow/observatory",label:"观测台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'},
-  {k:"studio",href:"/workflow/studio",label:"Studio",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>'},
+  {k:"observatory",href:"/admin#/observatory",label:"观测台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'},
+  {k:"studio",href:"/workflow/studio",label:"工作台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>'},
   {k:"schedules",href:"/schedules",label:"定时任务",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>'},
   {k:"channels",href:"/channels",label:"渠道",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.6"/><path d="M12 4.5v4.9M12 14.6v4.9M4.5 12h4.9M14.6 12h4.9"/></svg>'},
   {k:"voice",href:"/voice",label:"语音",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>'},
@@ -1142,31 +1204,6 @@ function makeSend(ta){
   return sb;
 }
 
-/* ---- conversation continuity ------------------------------------------- */
-// The /api/chat run is stateless: one prompt per call, and SessionId is a
-// correlation tag only (the backend never rehydrates prior turns from it). This
-// page already owns the full transcript in localStorage, so to give the agent
-// memory we fold a bounded slice of prior turns into the prompt. The first turn
-// (no prior context) sends the bare prompt — identical to the previous behavior.
-const HISTORY_TURN_CAP = 10;     // most recent prior messages to include
-const HISTORY_CHAR_CAP = 6000;   // hard ceiling on the injected transcript length
-function composePromptWithHistory(sess, currentPrompt){
-  const msgs = (sess && Array.isArray(sess.messages)) ? sess.messages : [];
-  // The current user turn is the last user message; history is everything before it.
-  let lastUserIdx = -1;
-  for(let i=msgs.length-1;i>=0;i--){ if(msgs[i].role==="user"){ lastUserIdx=i; break; } }
-  const prior = (lastUserIdx>=0 ? msgs.slice(0,lastUserIdx) : msgs)
-    .filter(m => m && (m.role==="user"||m.role==="agent") && m.text && m.text.trim());
-  if(!prior.length) return currentPrompt;
-  const recent = prior.slice(-HISTORY_TURN_CAP);
-  const lines = recent.map(m => (m.role==="user" ? "用户" : "助手") + "：" + m.text.trim());
-  let transcript = lines.join("\n");
-  if(transcript.length > HISTORY_CHAR_CAP) transcript = "…（更早内容已省略）\n" + transcript.slice(-HISTORY_CHAR_CAP);
-  return "以下是本次对话的前序记录，仅供你保持上下文连续，请勿复述：\n"
-    + "<对话历史>\n" + transcript + "\n</对话历史>\n\n"
-    + "用户最新消息：\n" + currentPrompt;
-}
-
 /* ---- send / stop / retry (live chat) ----------------------------------- */
 function sendComposer(){
   const ta=$("#composerInput");
@@ -1190,9 +1227,7 @@ function retryLastRun(){
   runChat(sess, lastUser.text);
 }
 function runChat(sess, prompt){
-  // Build the history-augmented prompt BEFORE pushing the in-flight agent
-  // placeholder, so the placeholder (empty text) is never part of the transcript.
-  const promptWithHistory = composePromptWithHistory(sess, prompt);
+  const clientRequestId = newClientRequestId();
   const agent = { role:"agent", text:"", status:"working", steps:[], toolCalls:[] };
   sess.messages.push(agent);
   state.streaming = true;
@@ -1201,8 +1236,8 @@ function runChat(sess, prompt){
   scrollChatToBottom();
   let rafPending = false;
   const scheduleRender = ()=>{ if(rafPending) return; rafPending = true; requestAnimationFrame(()=>{ rafPending=false; if(state.streaming){ patchActiveAgent(agent); scrollChatToBottom(); } }); };
-  streamChat(promptWithHistory, sess.id, (frame)=>{
-    const terminal = applyFrameToMessage(frame, agent);
+  streamChat(prompt, sess.conversationId || "", clientRequestId, (frame)=>{
+    const terminal = applyFrameToMessage(frame, agent, sess);
     sess.updatedAt = Date.now();
     if(terminal){ finishRun(sess, agent); } else { scheduleRender(); }
   }, state.abort.signal)
@@ -1315,13 +1350,12 @@ function ctxPanel(icon,color,title,metaHtml,bodyNode){
 
 // Live schedules (GET /api/schedules) — reuses the existing .sched component.
 // Deep-link to the observatory filtered to THIS schedule's runs (read-only view).
-// schedule rides the query string (?schedule=<id>); scope rides the hash (#scope=<id>),
-// matching how WorkflowRunObservatoryPage parses each. The observatory ignores an
-// unknown ?schedule= until the per-schedule filter is wired, so this href is forward-safe.
+// The admin route owns the hash, so all observatory filters live in its hash query.
 function observatoryRunsHref(s){
-  const q = `?schedule=${encodeURIComponent(s.scheduleId||"")}`;
-  const hash = state.scopeId ? `#scope=${encodeURIComponent(state.scopeId)}` : "";
-  return `${OBS}${q}${hash}`;
+  const query = new URLSearchParams();
+  query.set("schedule", s.scheduleId || "");
+  if(state.scopeId) query.set("scope", state.scopeId);
+  return `${OBS}?${query.toString()}`;
 }
 function schedulesSkeleton(){
   return el("div",{class:"sched"},`<div class="sched-top"><span class="sk" style="width:9px;height:9px;border-radius:50%"></span><span class="sk" style="height:13px;width:160px"></span></div><div class="sched-grid" style="margin-top:8px"><span class="sk" style="height:12px"></span><span class="sk" style="height:12px"></span><span class="sk" style="height:12px"></span><span class="sk" style="height:12px"></span></div>`);

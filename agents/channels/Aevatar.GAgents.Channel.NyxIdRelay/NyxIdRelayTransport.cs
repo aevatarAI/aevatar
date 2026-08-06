@@ -233,14 +233,14 @@ public sealed class NyxIdRelayTransport
             {
                 var attachment = BuildAttachment(callbackAttachment);
                 if (attachment is not null)
-                    AddAttachment(attachments, seenAttachmentKeys, attachment);
+                    AddAttachment(attachments, seenAttachmentKeys, attachment, platform);
             }
         }
 
         if (IsLark(platform))
         {
             foreach (var candidate in EnumerateLarkRawAttachmentCandidates(payload))
-                AddAttachment(attachments, seenAttachmentKeys, BuildLarkAttachment(candidate));
+                AddAttachment(attachments, seenAttachmentKeys, BuildLarkAttachment(candidate), platform);
         }
 
         return attachments;
@@ -249,11 +249,20 @@ public sealed class NyxIdRelayTransport
     private static void AddAttachment(
         List<AttachmentRef> attachments,
         HashSet<string> seenAttachmentKeys,
-        AttachmentRef attachment)
+        AttachmentRef attachment,
+        string platform)
     {
-        var dedupeKey = $"{attachment.Kind}:{attachment.AttachmentId}";
+        var dedupeKey = BuildAttachmentDedupeKey(attachment, platform);
         if (seenAttachmentKeys.Add(dedupeKey))
             attachments.Add(attachment);
+    }
+
+    private static string BuildAttachmentDedupeKey(AttachmentRef attachment, string platform)
+    {
+        var attachmentId = IsLark(platform)
+            ? LarkAttachmentResourceKeys.Normalize(attachment.AttachmentId) ?? attachment.AttachmentId
+            : attachment.AttachmentId;
+        return $"{attachment.Kind}:{attachmentId}";
     }
 
     private static AttachmentRef? BuildAttachment(NyxIdRelayAttachmentPayload attachment)
@@ -771,6 +780,19 @@ public sealed class NyxIdRelayTransport
                 "nyxid_approval_request_id",
                 "nyxid_approval_approved");
         }
+
+        if (TryBuildAgentRunApprovalPayload(submission, out var agentRunApproval))
+        {
+            submission.AgentRunApproval = agentRunApproval;
+            RemoveKeys(
+                submission.Arguments,
+                "agent_run_id",
+                "agent_run_approval_request_id",
+                "agent_run_tool_call_id",
+                "agent_run_tool_name",
+                "agent_run_arguments_sha256",
+                "agent_run_approved");
+        }
     }
 
     private static ActionElementKind ResolveActionKind(
@@ -963,6 +985,31 @@ public sealed class NyxIdRelayTransport
         }
 
         payload.RequestId = requestId;
+        payload.Approved = approved;
+        return true;
+    }
+
+    private static bool TryBuildAgentRunApprovalPayload(
+        CardActionSubmission submission,
+        out AgentRunApprovalActionPayload payload)
+    {
+        payload = new AgentRunApprovalActionPayload();
+        if (!TryGetRequiredValue(submission.Arguments, "agent_run_id", out var runId) ||
+            !TryGetRequiredValue(submission.Arguments, "agent_run_approval_request_id", out var approvalRequestId) ||
+            !TryGetRequiredValue(submission.Arguments, "agent_run_tool_call_id", out var toolCallId) ||
+            !TryGetRequiredValue(submission.Arguments, "agent_run_tool_name", out var toolName) ||
+            !TryGetRequiredValue(submission.Arguments, "agent_run_arguments_sha256", out var argumentsSha256) ||
+            !submission.Arguments.TryGetValue("agent_run_approved", out var rawApproved) ||
+            !bool.TryParse(rawApproved, out var approved))
+        {
+            return false;
+        }
+
+        payload.RunId = runId;
+        payload.ApprovalRequestId = approvalRequestId;
+        payload.ToolCallId = toolCallId;
+        payload.ToolName = toolName;
+        payload.ArgumentsSha256 = argumentsSha256;
         payload.Approved = approved;
         return true;
     }

@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.GAgentService.Infrastructure.Activation;
@@ -47,7 +48,12 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
                     request.Identity?.TenantId,
                     ct),
             ServiceDeploymentPlan.PlanSpecOneofCase.WorkflowPlan =>
-                await ActivateWorkflowAsync(request.Artifact.DeploymentPlan.WorkflowPlan, deploymentId, ct),
+                await ActivateWorkflowAsync(
+                    request.Artifact,
+                    request.RevisionId,
+                    deploymentId,
+                    request.Identity?.TenantId,
+                    ct),
             _ => throw new InvalidOperationException("Unsupported deployment plan."),
         };
     }
@@ -117,10 +123,21 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
     }
 
     private async Task<ServiceRuntimeActivationResult> ActivateWorkflowAsync(
-        WorkflowServiceDeploymentPlan plan,
+        PreparedServiceRevisionArtifact artifact,
+        string resolvedRevisionId,
         string deploymentId,
+        string? scopeId,
         CancellationToken ct)
     {
+        var plan = artifact.DeploymentPlan.WorkflowPlan;
+        if (plan.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
+            !Enum.IsDefined(plan.ExecutionMode))
+        {
+            throw new InvalidOperationException("Workflow service deployment execution mode is required.");
+        }
+        var bindingIdentity = WorkflowServiceDeploymentPlanIntegrity.ResolveBindingIdentity(
+            artifact,
+            resolvedRevisionId);
         var preferredActorId = string.IsNullOrWhiteSpace(plan.DefinitionActorId)
             ? $"gagent-service:workflow-definition:{deploymentId}"
             : $"{plan.DefinitionActorId}:{deploymentId}";
@@ -130,8 +147,12 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
                 plan.WorkflowName,
                 plan.WorkflowYaml,
                 plan.InlineWorkflowYamls,
+                plan.ExecutionMode,
+                ScopeId: scopeId?.Trim() ?? string.Empty,
                 SourceKind: "service_revision",
-                CapabilityAdmissionPlan: plan.CapabilityAdmissionPlan?.Clone()),
+                CapabilityAdmissionPlan: plan.CapabilityAdmissionPlan?.Clone(),
+                WorkflowId: bindingIdentity.WorkflowId,
+                RevisionId: bindingIdentity.RevisionId),
             preferredActorId,
             ct);
 

@@ -22,6 +22,30 @@ public sealed class AgentRunLarkCardDeliveryTests
     private const string ConversationActorId = "conversation-1";
 
     [Fact]
+    public async Task CardChunkWithBlockingMutationReceipt_ShouldReplaceModelNarrativeBeforeCreate()
+    {
+        var runner = new RecordingCardRunner();
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(runner, publisher: publisher);
+        agent.State.GenerationStep.ToolReceipts.Add(new Aevatar.AI.Abstractions.AgentToolReceipt
+        {
+            CallId = "call-submit",
+            ToolName = "submit_invoice",
+            Status = Aevatar.AI.Abstractions.AgentToolReceiptStatus.Error,
+            Effect = Aevatar.AI.Abstractions.AgentToolReceiptEffect.Mutating,
+            ErrorMessage = "The invoice was not submitted.",
+        });
+
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("Submission confirmed")));
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+
+        var visible = runner.CreateCalls.Should().ContainSingle().Subject.AccumulatedText;
+        visible.Should().Contain("[tool receipt] Failed: submit_invoice");
+        visible.Should().NotContain("Submission confirmed");
+        agent.State.LarkCardDelivery.LastFlushedText.Should().Be(visible);
+    }
+
+    [Fact]
     public async Task CardChunkEnvelope_StartsCreateOnRunActorState()
     {
         var runner = new RecordingCardRunner();
@@ -1692,12 +1716,23 @@ public sealed class AgentRunLarkCardDeliveryTests
 
         public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
         {
-            CurrentVersion += _pending.Count;
-            _pending.Clear();
-            return Task.FromResult(new EventStoreCommitResult
+            var result = new EventStoreCommitResult();
+            foreach (var evt in _pending)
             {
-                LatestVersion = CurrentVersion,
-            });
+                CurrentVersion++;
+                result.CommittedEvents.Add(new StateEvent
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                    Version = CurrentVersion,
+                    EventType = evt.Descriptor.FullName,
+                    EventData = Any.Pack(evt),
+                });
+            }
+
+            result.LatestVersion = CurrentVersion;
+            _pending.Clear();
+            return Task.FromResult(result);
         }
 
         public Task PersistSnapshotAsync(TState currentState, CancellationToken ct = default) =>

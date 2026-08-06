@@ -43,6 +43,7 @@ timestamp="$(date +%Y%m%d-%H%M%S)"
 cluster_id="aevatar-mainnet-mixed-ci-cluster-${timestamp}"
 service_id="aevatar-mainnet-host-api"
 log_dir="/tmp/aevatar-mixed-distributed-smoke-${timestamp}"
+secret_store_keyring_path="${log_dir}/secret-store-keyring.json"
 mkdir -p "${log_dir}"
 
 declare -a pids=()
@@ -65,9 +66,13 @@ cleanup() {
   if [[ "${STARTED_DOCKER_INFRA}" == "1" ]]; then
     docker compose "${COMPOSE_ARGS[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
   fi
+  rm -f "${secret_store_keyring_path}"
   release_distributed_smoke_lock
 }
 trap cleanup EXIT INT TERM
+
+create_synthetic_secret_store_keyring "${secret_store_keyring_path}"
+create_synthetic_scope_service_token
 
 publish_default_app() {
   echo "Publishing host app for default old/new binary..." >&2
@@ -124,10 +129,19 @@ start_node() {
   (
     ASPNETCORE_ENVIRONMENT=Distributed \
     ASPNETCORE_URLS="http://127.0.0.1:${http_port}" \
+    Aevatar__Authentication__Authority="" \
+    Aevatar__Authentication__ScopeServiceTokens__Enabled=true \
+    Aevatar__Authentication__ScopeServiceTokens__Issuer="${DISTRIBUTED_SMOKE_SCOPE_TOKEN_ISSUER}" \
+    Aevatar__Authentication__ScopeServiceTokens__Audience="${DISTRIBUTED_SMOKE_SCOPE_TOKEN_AUDIENCE}" \
+    Aevatar__Authentication__ScopeServiceTokens__SigningKeys__0__Kid="${DISTRIBUTED_SMOKE_SCOPE_TOKEN_KID}" \
+    Aevatar__Authentication__ScopeServiceTokens__SigningKeys__0__Algorithm=HS256 \
+    Aevatar__Authentication__ScopeServiceTokens__SigningKeys__0__KeyBase64="${DISTRIBUTED_SMOKE_SCOPE_TOKEN_KEY_BASE64}" \
     AEVATAR_ActorRuntime__Provider=Orleans \
     AEVATAR_ActorRuntime__OrleansStreamBackend="${STREAM_BACKEND}" \
     AEVATAR_ActorRuntime__OrleansPersistenceBackend=Garnet \
     AEVATAR_ActorRuntime__OrleansGarnetConnectionString="${GARNET_HOST}:${GARNET_PORT}" \
+    AEVATAR_ActorRuntime__SecretStoreBackend=Garnet \
+    AEVATAR_ActorRuntime__SecretStoreKeyringPath="${secret_store_keyring_path}" \
     AEVATAR_ActorRuntime__KafkaBootstrapServers="${KAFKA_BOOTSTRAP_SERVERS}" \
     AEVATAR_ActorRuntime__KafkaTopicName=aevatar-mainnet-agent-events \
     AEVATAR_ActorRuntime__KafkaConsumerGroup="aevatar-mainnet-mixed-ci-group" \
@@ -148,6 +162,10 @@ start_node() {
     Projection__Graph__Providers__Neo4j__Username="${NEO4J_USERNAME}" \
     Projection__Graph__Providers__Neo4j__Password="${NEO4J_PASSWORD}" \
     Projection__Graph__Providers__InMemory__Enabled=false \
+    Audit__ActorIdentityHasher__ActiveKeyId=distributed-smoke-key \
+    Audit__ActorIdentityHasher__Keys__0__KeyId=distributed-smoke-key \
+    Audit__ActorIdentityHasher__Keys__0__Key="distributed-smoke-audit-identity-key-0001" \
+    ChannelIdentity__OAuthClient__Bootstrap__Enabled=false \
     AEVATAR_TEST_NODE_VERSION_TAG="${version_tag}" \
     AEVATAR_TEST_FAIL_EVENT_TYPE_URLS="${fail_event_type_urls}" \
     AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS="${retry_max_attempts}" \
@@ -157,9 +175,86 @@ start_node() {
   pids+=("$!")
 }
 
+query_workflow_name() {
+  local old_node_port="$1"
+
+  OLD_NODE_PORT="${old_node_port}" \
+  AEVATAR_TEST_CLUSTER_BEARER_TOKEN="${DISTRIBUTED_SMOKE_BEARER_TOKEN}" \
+  python3 - <<'PY'
+import json
+import os
+import socket
+import sys
+import time
+import urllib.error
+import urllib.request
+
+port = os.environ["OLD_NODE_PORT"]
+bearer_token = os.environ["AEVATAR_TEST_CLUSTER_BEARER_TOKEN"]
+max_attempts = 5
+retryable_status_codes = {502, 503, 504}
+
+for attempt in range(1, max_attempts + 1):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/workflows",
+        headers={"Authorization": f"Bearer {bearer_token}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as error:
+        if error.code not in retryable_status_codes or attempt == max_attempts:
+            print(f"Workflow catalog probe returned HTTP {error.code}.", file=sys.stderr)
+            raise SystemExit(1)
+        print(
+            f"Workflow catalog probe attempt {attempt}/{max_attempts} returned HTTP {error.code}; retrying.",
+            file=sys.stderr,
+        )
+    except (ConnectionError, urllib.error.URLError, TimeoutError, socket.timeout) as error:
+        if attempt == max_attempts:
+            print(
+                f"Workflow catalog probe failed after {max_attempts} attempts with {type(error).__name__}.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        print(
+            f"Workflow catalog probe attempt {attempt}/{max_attempts} failed with {type(error).__name__}; retrying.",
+            file=sys.stderr,
+        )
+    else:
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            print("Workflow catalog probe returned invalid JSON.", file=sys.stderr)
+            raise SystemExit(1)
+
+        if not isinstance(data, list):
+            print("Workflow catalog probe returned an unexpected payload.", file=sys.stderr)
+            raise SystemExit(1)
+
+        workflow_name = next(
+            (item.strip() for item in data if isinstance(item, str) and item.strip()),
+            "",
+        )
+        if workflow_name:
+            print(workflow_name)
+            raise SystemExit(0)
+
+        if attempt == max_attempts:
+            print("No workflow available for event-path probe.", file=sys.stderr)
+            raise SystemExit(1)
+        print(
+            f"Workflow catalog probe attempt {attempt}/{max_attempts} returned no workflows; retrying.",
+            file=sys.stderr,
+        )
+
+    time.sleep(attempt)
+PY
+}
+
 probe_event_path() {
   local old_node_port="$1"
-  local workflow_payload
   local workflow_name
   local chat_status
   local probe_log_file="${log_dir}/event-probe-response.log"
@@ -170,36 +265,8 @@ probe_event_path() {
   fi
 
   echo "Running event-path probe against old node on port ${old_node_port}..."
-  workflow_payload="$(curl --max-time 3 -sS "http://127.0.0.1:${old_node_port}/api/workflows" || true)"
-  if [[ -z "${workflow_payload}" ]]; then
+  if ! workflow_name="$(query_workflow_name "${old_node_port}")"; then
     echo "Unable to query workflows from old node."
-    return 1
-  fi
-
-  workflow_name="$(WORKFLOW_JSON="${workflow_payload}" python3 - <<'PY'
-import json
-import os
-
-raw = os.environ.get("WORKFLOW_JSON", "")
-try:
-    data = json.loads(raw)
-except Exception:
-    print("")
-    raise SystemExit(0)
-
-if isinstance(data, list) and data:
-    first = data[0]
-    if isinstance(first, str):
-        print(first)
-    else:
-        print("")
-else:
-    print("")
-PY
-)"
-
-  if [[ -z "${workflow_name}" ]]; then
-    echo "No workflow available for event-path probe."
     return 1
   fi
 
@@ -207,55 +274,81 @@ PY
     OLD_NODE_PORT="${old_node_port}" \
     WORKFLOW_NAME="${workflow_name}" \
     PROBE_LOG_FILE="${probe_log_file}" \
+    AEVATAR_TEST_CLUSTER_BEARER_TOKEN="${DISTRIBUTED_SMOKE_BEARER_TOKEN}" \
     python3 - <<'PY'
 import json
 import os
 import socket
+import sys
+import time
 import urllib.error
 import urllib.request
 
 port = os.environ["OLD_NODE_PORT"]
 workflow_name = os.environ["WORKFLOW_NAME"]
 probe_log_file = os.environ["PROBE_LOG_FILE"]
+bearer_token = os.environ["AEVATAR_TEST_CLUSTER_BEARER_TOKEN"]
 payload = json.dumps(
     {
         "prompt": "mixed-version-event-probe",
         "workflow": workflow_name,
     }
 ).encode("utf-8")
-request = urllib.request.Request(
-    f"http://127.0.0.1:{port}/api/chat",
-    data=payload,
-    headers={"Content-Type": "application/json"},
-    method="POST",
-)
-
 def write_log(content: str) -> None:
     with open(probe_log_file, "w", encoding="utf-8") as handle:
         handle.write(content)
 
-try:
-    with urllib.request.urlopen(request, timeout=40) as response:
-        with open(probe_log_file, "w", encoding="utf-8") as handle:
-            while True:
-                line = response.readline()
-                if not line:
-                    break
+max_attempts = 5
+retryable_status_codes = {502, 503, 504}
+for attempt in range(1, max_attempts + 1):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/chat",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {bearer_token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
 
-                text = line.decode("utf-8", errors="replace")
-                handle.write(text)
-                handle.flush()
+    try:
+        with urllib.request.urlopen(request, timeout=40) as response:
+            with open(probe_log_file, "w", encoding="utf-8") as handle:
+                while True:
+                    line = response.readline()
+                    if not line:
+                        break
 
-                if text.startswith("data:"):
-                    break
+                    text = line.decode("utf-8", errors="replace")
+                    handle.write(text)
+                    handle.flush()
 
-        print(response.status)
-except urllib.error.HTTPError as error:
-    write_log(error.read().decode("utf-8", errors="replace"))
-    print(error.code)
-except (urllib.error.URLError, TimeoutError, socket.timeout):
-    write_log("")
-    print("000")
+                    if text.startswith("data:"):
+                        break
+
+            print(response.status)
+            break
+    except urllib.error.HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        if error.code not in retryable_status_codes or attempt == max_attempts:
+            write_log(body)
+            print(error.code)
+            break
+        print(
+            f"Event-path probe attempt {attempt}/{max_attempts} returned HTTP {error.code}; retrying.",
+            file=sys.stderr,
+        )
+    except (ConnectionError, urllib.error.URLError, TimeoutError, socket.timeout) as error:
+        if attempt == max_attempts:
+            write_log("")
+            print("000")
+            break
+        print(
+            f"Event-path probe attempt {attempt}/{max_attempts} failed with {type(error).__name__}; retrying.",
+            file=sys.stderr,
+        )
+
+    time.sleep(attempt)
 PY
   )"
 
@@ -367,6 +460,15 @@ dll_spec="$(resolve_app_dlls)"
 old_app_dll="${dll_spec%%|*}"
 new_app_dll="${dll_spec##*|}"
 
+echo "Building distributed integration tests before starting the cluster..."
+dotnet build test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj \
+  -c Release \
+  --nologo \
+  --tl:off \
+  -m:1 \
+  -p:UseSharedCompilation=false \
+  -p:NuGetAudit=false
+
 echo "Old app dll: ${old_app_dll}"
 echo "New app dll: ${new_app_dll}"
 echo "Starting mixed cluster: old=${OLD_NODE_COUNT}, new=${NEW_NODE_COUNT}"
@@ -416,8 +518,8 @@ for _ in $(seq 1 "${WAIT_SECONDS}"); do
   for ((node=1; node<=total_nodes; node++)); do
     index=$((node - 1))
     port="${HTTP_PORTS[$index]}"
-    code="$(curl --max-time 1 -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${port}/api/agents" || true)"
-    if [[ "${code}" == "200" || "${code}" == "204" ]]; then
+    code="$(curl --max-time 1 -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${port}/health/ready" || true)"
+    if [[ "${code}" == "200" ]]; then
       healthy=$((healthy + 1))
     fi
   done
@@ -434,7 +536,7 @@ echo "READY=${ready}"
 for ((node=1; node<=total_nodes; node++)); do
   index=$((node - 1))
   port="${HTTP_PORTS[$index]}"
-  code="$(curl --max-time 1 -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${port}/api/agents" || true)"
+  code="$(curl --max-time 1 -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${port}/health/ready" || true)"
   echo "HTTP_node${node}_${port}=${code}"
 done
 
@@ -465,6 +567,7 @@ for ((node=1; node<=total_nodes; node++)); do
   export "AEVATAR_TEST_CLUSTER_NODE${node}_BASE_URL=http://127.0.0.1:${HTTP_PORTS[$index]}"
 done
 export AEVATAR_TEST_CLUSTER_EXPECTED_NODE_COUNT="${total_nodes}"
+export AEVATAR_TEST_CLUSTER_BEARER_TOKEN="${DISTRIBUTED_SMOKE_BEARER_TOKEN}"
 
 echo "Running mixed-version distributed integration tests..."
 test_filter="FullyQualifiedName~DistributedClusterConsistencyIntegrationTests|FullyQualifiedName~DistributedMixedVersionClusterIntegrationTests"
@@ -473,7 +576,10 @@ if [[ "${MIXED_EVENT_PROBE_ENABLED}" == "true" ]]; then
 fi
 
 dotnet test test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj \
+  -c Release \
   --nologo \
+  --no-build \
+  --no-restore \
   --filter "${test_filter}"
 
 echo "Distributed mixed-version smoke test passed."

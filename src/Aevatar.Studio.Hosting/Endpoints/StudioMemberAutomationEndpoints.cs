@@ -1,17 +1,17 @@
-using System.Security.Claims;
 using System.Text.Json.Serialization;
 using Aevatar.Capabilities;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Studio.Hosting.Endpoints;
 
@@ -19,6 +19,10 @@ internal static class StudioMemberAutomationEndpoints
 {
     private const string BasePath =
         "/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations";
+    private static readonly EventId CreateAcceptedEventId =
+        new(
+            StudioMemberAutomationAuditContract.CreateAcceptedEventId,
+            StudioMemberAutomationAuditContract.CreateAcceptedEventName);
 
     public static void Map(IEndpointRouteBuilder app)
     {
@@ -30,12 +34,12 @@ internal static class StudioMemberAutomationEndpoints
         app.MapPut($"{BasePath}/{{scheduleId}}", HandleUpdateAsync).WithTags("StudioTeamAutomations");
         app.MapPost($"{BasePath}/{{scheduleId}}/reauthorize", HandleReauthorizeAsync)
             .WithTags("StudioTeamAutomations");
-        app.MapPost($"{BasePath}/{{scheduleId}}/retry-revocation", HandleRetryRevocationAsync)
-            .WithTags("StudioTeamAutomations");
-        app.MapDelete($"{BasePath}/{{scheduleId}}", HandleDeleteAsync).WithTags("StudioTeamAutomations");
         app.MapPost($"{BasePath}/{{scheduleId}}/pause", HandlePauseAsync).WithTags("StudioTeamAutomations");
         app.MapPost($"{BasePath}/{{scheduleId}}/resume", HandleResumeAsync).WithTags("StudioTeamAutomations");
         app.MapPost($"{BasePath}/{{scheduleId}}/run-now", HandleRunNowAsync).WithTags("StudioTeamAutomations");
+        app.MapDelete($"{BasePath}/{{scheduleId}}", HandleDeleteAsync).WithTags("StudioTeamAutomations");
+        app.MapPost($"{BasePath}/{{scheduleId}}/retry-revocation", HandleRetryRevocationAsync)
+            .WithTags("StudioTeamAutomations");
     }
 
     internal static async Task<IResult> HandlePreflightAsync(
@@ -46,6 +50,7 @@ internal static class StudioMemberAutomationEndpoints
         StudioMemberAutomationPreflightRequest body,
         [FromServices] IStudioMemberWorkflowSchedulePort schedules,
         [FromServices] IExternalIdentityBindingQueryPort bindingQuery,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
@@ -53,10 +58,31 @@ internal static class StudioMemberAutomationEndpoints
 
         try
         {
-            var owner = await ResolveOwnerAsync(http, bindingQuery, ct);
-            return Results.Ok(await schedules.PreflightAsync(
-                BuildScheduleRequest(scopeId, teamId, memberId, body, owner.Context, ResolveBearerToken(http)),
-                ct));
+            var authority =
+                await StudioMemberAutomationHttpAuthorityResolver.ResolveAsync(
+                    http,
+                    bindingQuery,
+                    ct);
+            var authorization = await schedules.PreflightForWriteAsync(
+                BuildScheduleRequest(
+                    scopeId,
+                    teamId,
+                    memberId,
+                    body,
+                    authority.AuthenticatedOwner,
+                    authority.ProvisioningBearerToken),
+                ct);
+            if (authorization.Success)
+                return Results.Ok(authorization);
+
+            loggerFactory.CreateLogger(StudioMemberAutomationAuditContract.Category).LogWarning(
+                "Team automation preflight authorization failed. scope={ScopeId} team={TeamId} member={MemberId} " +
+                "failureCode={FailureCode}",
+                scopeId,
+                teamId,
+                memberId,
+                authorization.FailureCode);
+            return MapPreflightFailure(authorization.FailureCode);
         }
         catch (Exception ex) when (TryMapError(ex, scopeId, teamId, memberId, out var error))
         {
@@ -72,6 +98,7 @@ internal static class StudioMemberAutomationEndpoints
         StudioMemberAutomationMutationRequest body,
         [FromServices] IStudioMemberWorkflowSchedulePort schedules,
         [FromServices] IExternalIdentityBindingQueryPort bindingQuery,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
@@ -79,9 +106,18 @@ internal static class StudioMemberAutomationEndpoints
 
         try
         {
-            var owner = await ResolveOwnerAsync(http, bindingQuery, ct);
-            var bearer = ResolveBearerToken(http);
-            var request = BuildScheduleRequest(scopeId, teamId, memberId, body, owner.Context, bearer) with
+            var authority =
+                await StudioMemberAutomationHttpAuthorityResolver.ResolveAsync(
+                    http,
+                    bindingQuery,
+                    ct);
+            var request = BuildScheduleRequest(
+                scopeId,
+                teamId,
+                memberId,
+                body,
+                authority.AuthenticatedOwner,
+                authority.ProvisioningBearerToken) with
             {
                 OperationId = body.OperationId,
                 IdempotencyKey = body.IdempotencyKey,
@@ -89,6 +125,20 @@ internal static class StudioMemberAutomationEndpoints
                 ConfirmedPolicyVersion = body.ConfirmedPolicyVersion,
             };
             var result = await schedules.CreateAsync(request, body.ConfirmedPermissionDigest, ct);
+            if (result.Success && result.NewOperationCommitted)
+            {
+                loggerFactory.CreateLogger(StudioMemberAutomationAuditContract.Category).LogInformation(
+                    CreateAcceptedEventId,
+                    "Accepted Studio member automation create for scope {ScopeId}, team {TeamId}, member {MemberId}, " +
+                    "schedule {ScheduleId}, operation {OperationId}, and verified binding {BindingId}.",
+                    scopeId,
+                    teamId,
+                    memberId,
+                    result.ScheduleId,
+                    result.OperationId,
+                    authority.AuthenticatedOwner.VerifiedBindingId);
+            }
+
             return Results.Accepted(value: new StudioMemberAutomationMutationReceipt(
                 result.Success,
                 result.Status,
@@ -118,14 +168,18 @@ internal static class StudioMemberAutomationEndpoints
 
         try
         {
-            var owner = await ResolveOwnerAsync(http, bindingQuery, ct);
+            var authority =
+                await StudioMemberAutomationHttpAuthorityResolver.ResolveAsync(
+                    http,
+                    bindingQuery,
+                    ct);
             var request = BuildScheduleRequest(
                 scopeId,
                 teamId,
                 memberId,
                 body,
-                owner.Context,
-                ResolveBearerToken(http)) with
+                authority.AuthenticatedOwner,
+                authority.ProvisioningBearerToken) with
             {
                 ScheduleId = scheduleId,
                 OperationId = body.OperationId,
@@ -215,7 +269,11 @@ internal static class StudioMemberAutomationEndpoints
             return denied;
         try
         {
-            var owner = await ResolveOwnerAsync(http, bindingQuery, ct);
+            var authority =
+                await StudioMemberAutomationHttpAuthorityResolver.ResolveAsync(
+                    http,
+                    bindingQuery,
+                    ct);
             var receipt = await schedules.UpdateAsync(new StudioMemberAutomationUpdateCommand(
                 scopeId,
                 teamId,
@@ -226,11 +284,11 @@ internal static class StudioMemberAutomationEndpoints
                 body.Enabled,
                 body.OperationId,
                 body.IdempotencyKey,
-                owner.Context)
+                authority.AuthenticatedOwner)
             {
                 DisplayName = body.DisplayName,
                 Prompt = body.Prompt,
-                ProvisioningBearerToken = ResolveBearerToken(http),
+                ProvisioningBearerToken = authority.ProvisioningBearerToken,
             }, ct);
             return Results.Accepted(value: receipt);
         }
@@ -288,7 +346,11 @@ internal static class StudioMemberAutomationEndpoints
             return denied;
         try
         {
-            var owner = await ResolveOwnerAsync(http, bindingQuery, ct);
+            var authority =
+                await StudioMemberAutomationHttpAuthorityResolver.ResolveAsync(
+                    http,
+                    bindingQuery,
+                    ct);
             var receipt = await schedules.DeleteAsync(
                 new StudioMemberAutomationActionCommand(
                     scopeId,
@@ -298,8 +360,8 @@ internal static class StudioMemberAutomationEndpoints
                     body.OperationId,
                     body.IdempotencyKey)
                 {
-                    AuthenticatedOwner = owner.Context,
-                    ProvisioningBearerToken = ResolveBearerToken(http),
+                    AuthenticatedOwner = authority.AuthenticatedOwner,
+                    ProvisioningBearerToken = authority.ProvisioningBearerToken,
                 },
                 ct);
             return Results.Accepted(value: receipt);
@@ -316,7 +378,6 @@ internal static class StudioMemberAutomationEndpoints
         string teamId,
         string memberId,
         string scheduleId,
-        StudioMemberAutomationActionRequest body,
         [FromServices] IStudioMemberWorkflowSchedulePort schedules,
         [FromServices] IExternalIdentityBindingQueryPort bindingQuery,
         CancellationToken ct)
@@ -325,18 +386,20 @@ internal static class StudioMemberAutomationEndpoints
             return denied;
         try
         {
-            var owner = await ResolveOwnerAsync(http, bindingQuery, ct);
+            var authority =
+                await StudioMemberAutomationHttpAuthorityResolver.ResolveAsync(
+                    http,
+                    bindingQuery,
+                    ct);
             var receipt = await schedules.RetryRevocationAsync(
-                new StudioMemberAutomationActionCommand(
+                new StudioMemberAutomationRetryRevocationCommand(
                     scopeId,
                     teamId,
                     memberId,
-                    scheduleId,
-                    body.OperationId,
-                    body.IdempotencyKey)
+                    scheduleId)
                 {
-                    AuthenticatedOwner = owner.Context,
-                    ProvisioningBearerToken = ResolveBearerToken(http),
+                    AuthenticatedOwner = authority.AuthenticatedOwner,
+                    ProvisioningBearerToken = authority.ProvisioningBearerToken,
                 },
                 ct);
             return Results.Accepted(value: receipt);
@@ -398,51 +461,6 @@ internal static class StudioMemberAutomationEndpoints
             ProvisioningBearerToken = bearerToken,
         };
 
-    private static async Task<ResolvedOwner> ResolveOwnerAsync(
-        HttpContext http,
-        IExternalIdentityBindingQueryPort bindingQuery,
-        CancellationToken ct)
-    {
-        var subject = http.User.FindFirst(ClaimTypes.NameIdentifier)?.Value
-            ?? http.User.FindFirst("sub")?.Value;
-        if (string.IsNullOrWhiteSpace(subject))
-            throw new UnauthorizedAccessException("nyxid_subject_missing");
-
-        var normalizedSubject = subject.Trim();
-        var externalSubject = new ExternalSubjectRef
-        {
-            Platform = OwnerScope.NyxIdPlatform,
-            Tenant = string.Empty,
-            ExternalUserId = normalizedSubject,
-        };
-        var binding = await bindingQuery.ResolveAsync(externalSubject, ct);
-        if (binding == null || string.IsNullOrWhiteSpace(binding.Value))
-            throw new InvalidOperationException("nyxid_binding_missing");
-        return new ResolvedOwner(new AuthenticatedAuthorizationOwnerContext(
-            new AuthorizationOwnerIdentity
-            {
-                Authority = NyxIdAuthorizationAuthorities.NyxId,
-                OwnerKind = AuthorizationOwnerKind.Personal,
-                OwnerSubject = normalizedSubject,
-            },
-            OwnerScope.NyxIdPlatform,
-            string.Empty,
-            normalizedSubject,
-            binding.Value));
-    }
-
-    private static string ResolveBearerToken(HttpContext http)
-    {
-        var header = http.Request.Headers.Authorization.FirstOrDefault()?.Trim();
-        const string prefix = "Bearer ";
-        if (header == null || !header.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            throw new UnauthorizedAccessException("provisioning_bearer_missing");
-        var token = header[prefix.Length..].Trim();
-        if (token.Length == 0 || token.Contains(','))
-            throw new UnauthorizedAccessException("provisioning_bearer_invalid");
-        return token;
-    }
-
     private static bool TryMapError(
         Exception exception,
         string scopeId,
@@ -452,6 +470,13 @@ internal static class StudioMemberAutomationEndpoints
     {
         result = exception switch
         {
+            StudioMemberAutomationAuthorizationBindingRequiredException => Results.Json(
+                new
+                {
+                    code = "TEAM_AUTOMATION_AUTHORIZATION_BINDING_REQUIRED",
+                    message = "Reconnect NyxID to authorize this automation.",
+                },
+                statusCode: StatusCodes.Status409Conflict),
             UnauthorizedAccessException => Results.Json(
                 new { code = "TEAM_AUTOMATION_UNAUTHORIZED", message = exception.Message },
                 statusCode: StatusCodes.Status401Unauthorized),
@@ -483,13 +508,21 @@ internal static class StudioMemberAutomationEndpoints
                     retryable = true,
                 },
                 statusCode: StatusCodes.Status503ServiceUnavailable),
+            StudioScheduledCredentialMaterializationException materialization
+                when !string.IsNullOrWhiteSpace(materialization.FailureCode) => Results.Json(
+                    new
+                    {
+                        code = materialization.FailureCode,
+                        message = ToCredentialProvisioningFailureMessage(materialization.FailureCode),
+                    },
+                    statusCode: ResolveCredentialProvisioningFailureStatus(materialization.FailureCode)),
             StudioMemberAutomationPlanConflictException conflict => Results.Json(
-                new
-                {
-                    code = ToPlanConflictCode(conflict.Code),
-                    message = ToPlanConflictMessage(conflict.Code),
-                    preflightLocator = BuildPreflightLocator(scopeId, teamId, memberId),
-                },
+                new StudioMemberAutomationConflictResponse(
+                    ToPlanConflictCode(conflict.Code),
+                    ToPlanConflictMessage(conflict.Code),
+                    BuildPreflightLocator(scopeId, teamId, memberId),
+                    ScheduledAuthorizationPlanMismatchReasons.ToWireValue(
+                        conflict.AuthorizationPlanMismatchReason)),
                 statusCode: StatusCodes.Status409Conflict),
             ScheduledDispatchConflictException => Results.Conflict(
                 new { code = "TEAM_AUTOMATION_CONFLICT", message = exception.Message }),
@@ -502,11 +535,152 @@ internal static class StudioMemberAutomationEndpoints
         return result != null;
     }
 
+    private static int ResolveCredentialProvisioningFailureStatus(string failureCode) => failureCode switch
+    {
+        "api_key_scope_plan_not_found" => StatusCodes.Status404NotFound,
+        "authentication_failed" or "unauthorized" or "token_expired" => StatusCodes.Status401Unauthorized,
+        "forbidden" or "api_key_scope_plan_denied" => StatusCodes.Status403Forbidden,
+        "bad_request" or "validation_error" or "api_key_scope_plan_owner_unsupported" =>
+            StatusCodes.Status400BadRequest,
+        "conflict" or "api_key_scope_plan_route_unresolved" or "api_key_scope_plan_stale" =>
+            StatusCodes.Status409Conflict,
+        "rate_limited" => StatusCodes.Status429TooManyRequests,
+        "nyxid_scope_plan_provider_timed_out" => StatusCodes.Status504GatewayTimeout,
+        _ => StatusCodes.Status502BadGateway,
+    };
+
+    private static string ToCredentialProvisioningFailureMessage(string failureCode) => failureCode switch
+    {
+        "api_key_scope_plan_denied" =>
+            "NyxID denied the requested Agent Key scope for this caller.",
+        "api_key_scope_plan_not_found" =>
+            "A required NyxID service in the Agent Key scope was not found.",
+        "api_key_scope_plan_owner_unsupported" =>
+            "NyxID does not support the requested Agent Key owner.",
+        "api_key_scope_plan_route_unresolved" =>
+            "NyxID could not resolve a configured route required by the Agent Key scope.",
+        "api_key_scope_plan_stale" =>
+            "The NyxID Agent Key scope plan changed before the credential was created.",
+        "nyxid_scope_plan_provider_timed_out" =>
+            "NyxID timed out while planning the Agent Key scope.",
+        _ => "The scheduled Agent Key could not be issued.",
+    };
+
     private static IResult NotFound(string code, string message) =>
         Results.Json(new { code, message }, statusCode: StatusCodes.Status404NotFound);
 
     private static IResult AutomationNotFound() =>
         NotFound("TEAM_AUTOMATION_NOT_FOUND", "Team automation resource was not found.");
+
+    private static IResult MapPreflightFailure(
+        ScheduledInvocationAuthorizationFailureCode failureCode)
+    {
+        var (statusCode, code, message, retryable) = failureCode switch
+        {
+            ScheduledInvocationAuthorizationFailureCode.TargetInvalid => (
+                StatusCodes.Status400BadRequest,
+                "TEAM_AUTOMATION_AUTHORIZATION_TARGET_INVALID",
+                "The automation authorization target is invalid.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.OwnerInvalid => (
+                StatusCodes.Status400BadRequest,
+                "TEAM_AUTOMATION_AUTHORIZATION_OWNER_INVALID",
+                "The authenticated authorization owner is invalid.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.OwnerMismatch => (
+                StatusCodes.Status403Forbidden,
+                "TEAM_AUTOMATION_AUTHORIZATION_OWNER_MISMATCH",
+                "The authorization owner does not match this automation.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.ServiceNotFound => (
+                StatusCodes.Status403Forbidden,
+                "TEAM_AUTOMATION_AUTHORIZATION_SERVICE_NOT_FOUND",
+                "One or more required services are not available to this automation.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.ServiceAmbiguous => (
+                StatusCodes.Status403Forbidden,
+                "TEAM_AUTOMATION_AUTHORIZATION_SERVICE_AMBIGUOUS",
+                "A required service could not be identified unambiguously.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.ServiceAccessDenied => (
+                StatusCodes.Status403Forbidden,
+                "TEAM_AUTOMATION_AUTHORIZATION_SERVICE_ACCESS_DENIED",
+                "This automation is not authorized to use one or more required services.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.NodeGrantMissing => (
+                StatusCodes.Status403Forbidden,
+                "TEAM_AUTOMATION_AUTHORIZATION_NODE_GRANT_MISSING",
+                "This automation is missing a required service permission.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.AuthorizationPlanChanged => (
+                StatusCodes.Status409Conflict,
+                "TEAM_AUTOMATION_AUTHORIZATION_PLAN_CHANGED",
+                "The authorization plan changed. Run preflight again.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound => (
+                StatusCodes.Status503ServiceUnavailable,
+                "TEAM_AUTOMATION_AUTHORIZATION_SNAPSHOT_NOT_FOUND",
+                "Authorization data is temporarily unavailable. Retry this request.",
+                true),
+            ScheduledInvocationAuthorizationFailureCode.SnapshotStale => (
+                StatusCodes.Status503ServiceUnavailable,
+                "TEAM_AUTOMATION_AUTHORIZATION_SNAPSHOT_STALE",
+                "Authorization data is temporarily stale. Retry this request.",
+                true),
+            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable => (
+                StatusCodes.Status503ServiceUnavailable,
+                "TEAM_AUTOMATION_AUTHORIZATION_DURABLE_AUTHORIZATION_UNAVAILABLE",
+                "Authorization is temporarily unavailable. Retry this request.",
+                true),
+            ScheduledInvocationAuthorizationFailureCode.DurableAdmissionRequired => (
+                StatusCodes.Status409Conflict,
+                "TEAM_AUTOMATION_DURABLE_ADMISSION_REQUIRED",
+                "The serving workflow revision requires durable admission before it can be scheduled.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.DurableRequestGrantMismatch => (
+                StatusCodes.Status409Conflict,
+                "TEAM_AUTOMATION_DURABLE_REQUEST_GRANT_MISMATCH",
+                "The serving workflow revision does not carry an exact durable request grant.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.NyxIdOperationGrantRequired => (
+                StatusCodes.Status409Conflict,
+                "TEAM_AUTOMATION_NYXID_OPERATION_GRANT_REQUIRED",
+                "NyxID requires an operation-scoped approval grant before this automation can be scheduled.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.NyxIdOperationApprovalRequired => (
+                StatusCodes.Status409Conflict,
+                "TEAM_AUTOMATION_NYXID_OPERATION_APPROVAL_REQUIRED",
+                "NyxID requires per-request approval before this operation can run on a schedule.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.NyxIdOperationDenied => (
+                StatusCodes.Status403Forbidden,
+                "TEAM_AUTOMATION_NYXID_OPERATION_DENIED",
+                "NyxID policy denies this scheduled operation.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.NyxIdOperationAuthorityContractUnavailable => (
+                StatusCodes.Status503ServiceUnavailable,
+                "TEAM_AUTOMATION_NYXID_OPERATION_AUTHORITY_CONTRACT_UNAVAILABLE",
+                "NyxID operation authorization cannot be previewed without executing the external request.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.CatalogProjectionPending => (
+                StatusCodes.Status503ServiceUnavailable,
+                "TEAM_AUTOMATION_AUTHORIZATION_PROJECTION_PENDING",
+                "The authorization catalog is still being projected. Retry this request.",
+                true),
+            ScheduledInvocationAuthorizationFailureCode.UnknownEnum => (
+                StatusCodes.Status400BadRequest,
+                "TEAM_AUTOMATION_AUTHORIZATION_UNKNOWN_ENUM",
+                "The automation authorization request contains an unsupported value.",
+                false),
+            _ => (
+                StatusCodes.Status400BadRequest,
+                "TEAM_AUTOMATION_AUTHORIZATION_FAILED",
+                "Authorization could not continue.",
+                false),
+        };
+
+        return Results.Json(new { code, message, retryable }, statusCode: statusCode);
+    }
 
     private static string ToPlanConflictCode(string code) => code switch
     {
@@ -528,7 +702,12 @@ internal static class StudioMemberAutomationEndpoints
         $"/api/scopes/{Uri.EscapeDataString(scopeId.Trim())}/teams/{Uri.EscapeDataString(teamId.Trim())}" +
         $"/members/{Uri.EscapeDataString(memberId.Trim())}/automations/preflight";
 
-    private sealed record ResolvedOwner(AuthenticatedAuthorizationOwnerContext Context);
+    private sealed record StudioMemberAutomationConflictResponse(
+        string code,
+        string message,
+        string preflightLocator,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? authorizationPlanMismatchReason);
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]

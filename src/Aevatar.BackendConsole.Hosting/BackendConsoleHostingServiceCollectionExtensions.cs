@@ -8,6 +8,8 @@ namespace Aevatar.BackendConsole.Hosting;
 
 public static class BackendConsoleHostingServiceCollectionExtensions
 {
+    private const string OfflineAccessScope = "offline_access";
+
     public static IServiceCollection AddBackendConsoleStaticAssets(
         this IServiceCollection services,
         IConfiguration configuration)
@@ -43,7 +45,8 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         };
         ApplyFallbacks(configuration, options);
         ApplyHostEnvironmentOverrides(options);
-        NormalizeOidcResources(options);
+        NormalizeOidcScope(options);
+        NormalizeOidcResources(configuration, options);
         return options;
     }
 
@@ -74,7 +77,23 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         options.DefaultReturnPath = EnvironmentOverride("HOST_BACKEND_CONSOLE_DEFAULT_RETURN_PATH", options.DefaultReturnPath);
     }
 
-    private static void NormalizeOidcResources(BackendConsoleOptions options)
+    private static void NormalizeOidcScope(BackendConsoleOptions options)
+    {
+        var scopes = options.OidcScope
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (scopes.Length == 0)
+            return;
+
+        options.OidcScope = string.Join(
+            ' ',
+            scopes.Append(OfflineAccessScope).Distinct(StringComparer.Ordinal));
+    }
+
+    private static void NormalizeOidcResources(
+        IConfiguration configuration,
+        BackendConsoleOptions options)
     {
         options.NyxApiBaseUrl = options.NyxApiBaseUrl.Trim().TrimEnd('/');
         var resources = options.OidcResources
@@ -90,7 +109,13 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         }
 
         var requiredResource =
-            $"{options.NyxApiBaseUrl.Trim().TrimEnd('/')}/api/v1/proxy/s/aevatar";
+            $"{options.NyxApiBaseUrl}/api/v1/proxy/s/aevatar";
+        var configuredOrnnServiceSlug = configuration["Aevatar:Ornn:NyxIdSlug"]?.Trim();
+        var ornnServiceSlug = string.IsNullOrEmpty(configuredOrnnServiceSlug)
+            ? "ornn-api"
+            : configuredOrnnServiceSlug;
+        var ornnResource =
+            $"{options.NyxApiBaseUrl}/api/v1/proxy/s/{Uri.EscapeDataString(ornnServiceSlug)}";
         var legacyAuthorityResource = string.IsNullOrWhiteSpace(options.OidcAuthority)
             ? null
             : $"{options.OidcAuthority.Trim().TrimEnd('/')}/api/v1/proxy/s/aevatar";
@@ -101,9 +126,10 @@ public static class BackendConsoleHostingServiceCollectionExtensions
                 .ToArray();
         }
 
-        options.OidcResources = resources.Contains(requiredResource, StringComparer.Ordinal)
-            ? resources
-            : [requiredResource, .. resources];
+        options.OidcResources = new[] { requiredResource, ornnResource }
+            .Concat(resources)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
     }
 
     private static string EnvironmentOverride(string key, string configuredValue)

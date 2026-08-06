@@ -53,8 +53,6 @@ public sealed class UserConfigController : ControllerBase
             var receipt = await _userConfigService.SaveAsync(
                 ExtractBearerToken(),
                 new SaveUserConfigCommand(
-                    request.DefaultModel,
-                    request.PreferredLlmRoute,
                     request.RuntimeMode,
                     request.LocalRuntimeBaseUrl,
                     request.RemoteRuntimeBaseUrl,
@@ -74,9 +72,8 @@ public sealed class UserConfigController : ControllerBase
         }
     }
 
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     public sealed record SaveUserConfigRequest(
-        [property: JsonPropertyName("defaultModel")] string? DefaultModel = null,
-        [property: JsonPropertyName("preferredLlmRoute")] string? PreferredLlmRoute = null,
         [property: JsonPropertyName("runtimeMode")] string? RuntimeMode = null,
         [property: JsonPropertyName("localRuntimeBaseUrl")] string? LocalRuntimeBaseUrl = null,
         [property: JsonPropertyName("remoteRuntimeBaseUrl")] string? RemoteRuntimeBaseUrl = null,
@@ -114,12 +111,9 @@ public sealed class UserConfigController : ControllerBase
             if (request is null)
                 return BadRequest(new { message = "Request body is required." });
 
-            if (request.RouteValue is null)
-                return BadRequest(new { message = "routeValue is required; use an empty string for the gateway route." });
-
             var receipt = await _userConfigService.SaveLlmPreferenceAsync(
                 ExtractBearerToken(),
-                request.ToCommand(),
+                request.ToIntent(),
                 cancellationToken).ConfigureAwait(false);
             return Accepted(UserConfigSaveReceiptResponse.FromApplication(receipt));
         }

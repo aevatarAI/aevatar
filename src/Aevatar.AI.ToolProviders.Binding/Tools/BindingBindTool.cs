@@ -188,7 +188,7 @@ public sealed class BindingBindTool : IAgentTool
         {
             CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
                 access.CallerId,
-                access.NyxIdCallerBearerToken,
+                access.NyxIdCallerCredential,
                 access.NyxIdOrganizationBearerToken),
         };
     }

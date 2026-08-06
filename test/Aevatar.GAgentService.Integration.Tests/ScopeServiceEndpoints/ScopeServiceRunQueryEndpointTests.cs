@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Claims;
+using Aevatar.AGUI.Contracts;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -9,23 +10,22 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
-using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.ScopeScripts;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.Workflows;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Scripting.Abstractions.Queries;
-using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
@@ -35,10 +35,10 @@ using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -73,6 +73,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "default-flow",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a",
                 CreatedAt: createdAt,
                 UpdatedAt: updatedAt),
@@ -121,6 +122,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "approval",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a",
                 CreatedAt: createdAt,
                 UpdatedAt: updatedAt),
@@ -186,6 +188,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "member-flow",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a",
                 CreatedAt: createdAt,
                 UpdatedAt: updatedAt),
@@ -207,7 +210,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
 
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/scopes/scope-a/members/member-a/runs?take=5");
         request.Headers.Add("X-Test-Scope-Id", "scope-a");
-        request.Headers.Add("X-Test-Member-Id", "member-b");
+        request.Headers.Add("X-Test-Member-Id", "member-a");
 
         var httpResponse = await host.Client.SendAsync(request);
         var response = await httpResponse.Content.ReadFromJsonAsync<ScopeServiceEndpoints.MemberScopeServiceRunCatalogHttpResponse>();
@@ -246,6 +249,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "member-flow",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a",
                 CreatedAt: createdAt,
                 UpdatedAt: updatedAt),
@@ -271,7 +275,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
 
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/scopes/scope-a/members/member-a/runs/run-member-detail-1");
         request.Headers.Add("X-Test-Scope-Id", "scope-a");
-        request.Headers.Add("X-Test-Member-Id", "member-b");
+        request.Headers.Add("X-Test-Member-Id", "member-a");
 
         var httpResponse = await host.Client.SendAsync(request);
         var response = await httpResponse.Content.ReadFromJsonAsync<ScopeServiceEndpoints.MemberScopeServiceRunSummaryHttpResponse>();
@@ -312,6 +316,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "member-flow",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a",
                 CreatedAt: createdAt,
                 UpdatedAt: updatedAt),
@@ -353,7 +358,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
 
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/scopes/scope-a/members/member-a/runs/run-member-audit-1/audit");
         request.Headers.Add("X-Test-Scope-Id", "scope-a");
-        request.Headers.Add("X-Test-Member-Id", "member-b");
+        request.Headers.Add("X-Test-Member-Id", "member-a");
 
         var httpResponse = await host.Client.SendAsync(request);
         var response = await httpResponse.Content.ReadFromJsonAsync<ScopeServiceEndpoints.MemberScopeServiceRunAuditHttpResponse>();
@@ -383,6 +388,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "member-flow",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
         ];
 
@@ -401,7 +407,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 },
             },
             "scope-a");
-        request.Headers.Add("X-Test-Member-Id", "member-b");
+        request.Headers.Add("X-Test-Member-Id", "member-a");
 
         var response = await host.Client.SendAsync(request);
 
@@ -414,6 +420,53 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
         host.ResumeDispatchService.LastCommand.ToolApproval!.ExecutionId.Should().Be("exec-member-1");
         host.ResumeDispatchService.LastCommand.ToolApproval.ToolCallId.Should().Be("tool-call-member-1");
         host.ResumeDispatchService.LastCommand.ToolApproval.ApprovalRequestId.Should().Be("approval-member-1");
+    }
+
+    [Fact]
+    public async Task ResumeMemberRunEndpoint_ShouldRejectFlatToolApprovalIdentityWithoutDispatch()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "member-a", "def-member-resume-flat");
+        host.LifecycleQueryPort.Deployments = BuildDeployments(
+            "scope-a:default:default:member-a",
+            "dep-member-resume-flat",
+            "rev-1",
+            "def-member-resume-flat");
+        host.RunBindingReader.BindingsByRunId["run-member-resume-flat"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-member-resume-flat",
+                "def-member-resume-flat",
+                "run-member-resume-flat",
+                "member-flow",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Interactive,
+                "scope-a"),
+        ];
+
+        using var request = CreateAuthenticatedJsonRequest(
+            HttpMethod.Post,
+            "/api/scopes/scope-a/members/member-a/runs/run-member-resume-flat:resume",
+            new
+            {
+                stepId = "approval-1",
+                approved = true,
+                executionId = "exec-member-flat",
+                toolCallId = "tool-call-member-flat",
+                approvalRequestId = "approval-member-flat",
+            },
+            "scope-a");
+        request.Headers.Add("X-Test-Member-Id", "member-a");
+
+        var response = await host.Client.SendAsync(request);
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("INVALID_TOOL_APPROVAL_RESUME_REQUEST");
+        host.ResumeDispatchService.LastCommand.Should().BeNull();
     }
 
     [Fact]
@@ -432,6 +485,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "member-flow",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
         ];
 
@@ -444,7 +498,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 stepId = "wait-1",
             },
             "scope-a");
-        request.Headers.Add("X-Test-Member-Id", "member-b");
+        request.Headers.Add("X-Test-Member-Id", "member-a");
 
         var response = await host.Client.SendAsync(request);
 
@@ -471,6 +525,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "member-flow",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
         ];
 
@@ -482,7 +537,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 reason = "manual",
             },
             "scope-a");
-        request.Headers.Add("X-Test-Member-Id", "member-b");
+        request.Headers.Add("X-Test-Member-Id", "member-a");
 
         var response = await host.Client.SendAsync(request);
 
@@ -509,6 +564,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "member-flow",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
         ];
 
@@ -551,6 +607,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "orders",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a",
                 CreatedAt: createdAt,
                 UpdatedAt: updatedAt),
@@ -645,6 +702,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "member-flow",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a",
                 CreatedAt: baseTime.AddMinutes(10),
                 UpdatedAt: baseTime.AddHours(1)),
@@ -661,7 +719,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
             HttpMethod.Get,
             "/api/scopes/scope-a/members/member-a/runs?take=1&scheduleId=schedule-member&status=Completed&updatedFrom=2026-04-27T00:30:00Z&updatedTo=2026-04-27T01:30:00Z");
         request.Headers.Add("X-Test-Scope-Id", "scope-a");
-        request.Headers.Add("X-Test-Member-Id", "other-member");
+        request.Headers.Add("X-Test-Member-Id", "member-a");
 
         var httpResponse = await host.Client.SendAsync(request);
         var response = await httpResponse.Content.ReadFromJsonAsync<ScopeServiceEndpoints.MemberScopeServiceRunCatalogHttpResponse>();
@@ -768,6 +826,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "orders",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a",
                 CreatedAt: createdAt,
                 UpdatedAt: updatedAt),
@@ -937,6 +996,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "approval",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a",
                 CreatedAt: createdAt,
                 UpdatedAt: updatedAt),
@@ -1010,6 +1070,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "orders",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a",
                 CreatedAt: createdAt,
                 UpdatedAt: updatedAt),

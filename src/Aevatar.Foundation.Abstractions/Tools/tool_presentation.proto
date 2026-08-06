@@ -49,6 +49,9 @@ message NyxIdOperationRef {
   string operation_id = 6;
   string http_method = 7;
   string path_template = 8;
+  // Exact capability identity from the NyxID assistant readiness contract.
+  // Producers omit this when they do not own an authoritative mapping.
+  optional string readiness_capability_id = 9;
 }
 
 message McpToolRef {

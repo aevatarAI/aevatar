@@ -125,6 +125,9 @@ public abstract class GAgentBase : IAgent, IEventModuleContainer<IEventHandlerCo
         _activeInboundEnvelope = envelope;
         try
         {
+            if (!await PrepareEnvelopeHandlingAsync(envelope, ct))
+                return;
+
             var ctx = CreateHandlerContext(envelope);
             // Refactor (iter22/cluster-004):
             //   Old pattern: internal external-link callback envelopes could fall through the normal handler/module pipeline.
@@ -203,6 +206,15 @@ public abstract class GAgentBase : IAgent, IEventModuleContainer<IEventHandlerCo
     }
 
     // Dual hook channels #1: virtual methods (subclasses may override)
+
+    /// <summary>
+    /// Framework preparation before handler selection. Returning <c>false</c> consumes
+    /// the envelope without invoking business handlers.
+    /// </summary>
+    protected virtual Task<bool> PrepareEnvelopeHandlingAsync(
+        EventEnvelope envelope,
+        CancellationToken ct) =>
+        Task.FromResult(true);
 
     /// <summary>Virtual hook before handler execution. Subclasses may override.</summary>
     protected virtual Task OnEventHandlerStartAsync(
@@ -376,6 +388,10 @@ public abstract class GAgentBase : IAgent, IEventModuleContainer<IEventHandlerCo
         return Services.GetRequiredService<IActorRuntimeCallbackScheduler>()
             .CancelAsync(lease, ct);
     }
+
+    protected Task PurgeDurableCallbacksAsync(CancellationToken ct = default) =>
+        Services.GetRequiredService<IActorRuntimeCallbackScheduler>()
+            .PurgeActorAsync(Id, ct);
 
     // Internal methods
 

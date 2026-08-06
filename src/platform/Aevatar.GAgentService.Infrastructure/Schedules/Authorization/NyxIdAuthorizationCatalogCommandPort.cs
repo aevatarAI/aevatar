@@ -7,7 +7,6 @@ namespace Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
 
 public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCatalogCommandPort
 {
-    private const string PublisherId = "gagent-service.nyxid-authorization-catalog";
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
 
@@ -44,8 +43,16 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
             PolicyVersion = observation.PolicyVersion,
             EvaluatedAt = Timestamp.FromDateTimeOffset(observation.EvaluatedAtUtc),
             ContentDigest = observation.ContentDigest,
+            CoverageKind = ToCoverageKindState(observation.Coverage),
         };
         command.Services.Add(observation.Services.Select(static service => service.Clone()));
+        if (observation.GatewayLLMTarget != null)
+            command.GatewayLlmTarget = observation.GatewayLLMTarget.Clone();
+        command.CoveredUserServiceIds.Add((observation.CoveredUserServiceIds ?? [])
+            .Select(static serviceId => serviceId?.Trim() ?? string.Empty)
+            .Where(static serviceId => serviceId.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(static serviceId => serviceId, StringComparer.Ordinal));
         return DispatchAsync(observation.Owner, command, ct);
     }
 
@@ -54,6 +61,7 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
         string refreshId,
         DateTimeOffset failedAtUtc,
         string failureCode,
+        NyxIdAuthorizationCatalogRefreshStatus status = NyxIdAuthorizationCatalogRefreshStatus.Failed,
         CancellationToken ct = default) =>
         DispatchAsync(owner, new RecordNyxIdAuthorizationCatalogRefreshFailureCommand
         {
@@ -61,6 +69,7 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
             RefreshId = refreshId ?? string.Empty,
             FailedAt = Timestamp.FromDateTimeOffset(failedAtUtc),
             FailureCode = failureCode ?? string.Empty,
+            OutcomeStatus = ToRefreshFailureOutcomeStatusState(status),
         }, ct);
 
     public Task InvalidateAsync(
@@ -122,23 +131,13 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
     private async Task DispatchAsync(
         AuthorizationOwnerIdentity owner,
         Google.Protobuf.IMessage command,
-        CancellationToken ct)
-    {
-        ArgumentNullException.ThrowIfNull(owner);
-        var actorId = NyxIdAuthorizationCatalogActorIds.Build(owner);
-        var actor = await _runtime.GetAsync(actorId) ??
-                    await _runtime.CreateAsync<NyxIdAuthorizationCatalogGAgent>(actorId, ct);
-        var commandId = Guid.NewGuid().ToString("N");
-        var envelope = new EventEnvelope
-        {
-            Id = commandId,
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(command),
-            Route = EnvelopeRouteSemantics.CreateDirect(PublisherId, actor.Id),
-            Propagation = new EnvelopePropagation { CorrelationId = commandId },
-        };
-        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
-    }
+        CancellationToken ct) =>
+        await NyxIdAuthorizationCatalogCommandDispatch.DispatchAsync(
+            _runtime,
+            _dispatchPort,
+            owner,
+            command,
+            ct);
 
     private static NyxIdAuthorizationCatalogRefreshOutcomeStatusState ToOutcomeStatusState(
         NyxIdAuthorizationCatalogRefreshOutcomeStatus status) => status switch
@@ -152,4 +151,55 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
             status,
             "Catalog refresh invalidation requires an access-denied or unstable outcome."),
     };
+
+    private static NyxIdAuthorizationCatalogRefreshOutcomeStatusState ToRefreshFailureOutcomeStatusState(
+        NyxIdAuthorizationCatalogRefreshStatus status) => status switch
+    {
+        NyxIdAuthorizationCatalogRefreshStatus.Failed =>
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Failed,
+        NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable =>
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.CatalogUnstable,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(status),
+            status,
+            "Refresh failure recording only supports failed or catalog-unstable outcomes."),
+    };
+
+    private static NyxIdAuthorizationCatalogObservationCoverageKind ToCoverageKindState(
+        NyxIdAuthorizationCatalogObservationCoverage coverage) => coverage switch
+    {
+        NyxIdAuthorizationCatalogObservationCoverage.FullOwner =>
+            NyxIdAuthorizationCatalogObservationCoverageKind.FullOwner,
+        NyxIdAuthorizationCatalogObservationCoverage.RequiredServiceSubset =>
+            NyxIdAuthorizationCatalogObservationCoverageKind.RequiredServiceSubset,
+        _ => throw new ArgumentOutOfRangeException(nameof(coverage), coverage, null),
+    };
+}
+
+internal static class NyxIdAuthorizationCatalogCommandDispatch
+{
+    private const string PublisherId = "gagent-service.nyxid-authorization-catalog";
+
+    public static async Task DispatchAsync(
+        IActorRuntime runtime,
+        IActorDispatchPort dispatchPort,
+        AuthorizationOwnerIdentity owner,
+        Google.Protobuf.IMessage command,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        var actorId = NyxIdAuthorizationCatalogActorIds.Build(owner);
+        var actor = await runtime.GetAsync(actorId) ??
+                    await runtime.CreateAsync<NyxIdAuthorizationCatalogGAgent>(actorId, ct);
+        var commandId = Guid.NewGuid().ToString("N");
+        var envelope = new EventEnvelope
+        {
+            Id = commandId,
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(command),
+            Route = EnvelopeRouteSemantics.CreateDirect(PublisherId, actor.Id),
+            Propagation = new EnvelopePropagation { CorrelationId = commandId },
+        };
+        await dispatchPort.DispatchAsync(actor.Id, envelope, ct);
+    }
 }

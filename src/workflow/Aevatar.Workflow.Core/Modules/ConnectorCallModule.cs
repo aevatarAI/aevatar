@@ -208,6 +208,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             timeoutMs,
             string.Equals(onError, "continue", StringComparison.OrdinalIgnoreCase),
             isSecureStep,
+            ResolveIssuedAtUnixMs(envelope),
             ctx,
             ct);
     }
@@ -313,7 +314,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         }
 
         var errorText = string.IsNullOrWhiteSpace(evt.Error) ? "connector call failed" : evt.Error;
-        if (pending.Attempt < pending.Attempts)
+        if (pending.Attempt < pending.Attempts && CanRetry(evt))
         {
             ctx.Logger.LogWarning(
                 "ConnectorCall: step={StepId} connector={Connector} attempt={Attempt}/{Attempts} failed: {Error}",
@@ -346,6 +347,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
                 pending.TimeoutMs,
                 pending.OnErrorContinue,
                 pending.SecureStep,
+                pending.IssuedAtUnixMs,
                 ctx,
                 ct);
             return;
@@ -374,6 +376,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         int timeoutMs,
         bool onErrorContinue,
         bool isSecureStep,
+        long issuedAtUnixMs,
         IWorkflowExecutionContext ctx,
         CancellationToken ct,
         string approvalActionId = "")
@@ -390,6 +393,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             timeoutMs,
             onErrorContinue,
             isSecureStep,
+            issuedAtUnixMs,
             ctx,
             ct,
             approvalActionId);
@@ -405,6 +409,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             Payload = await ResolvePayloadAsync(request, isSecureStep, ctx, ct) ?? string.Empty,
             Parameters = request.Parameters.ToDictionary(kv => kv.Key, kv => kv.Value),
             IdempotencyKey = request.IdempotencyKey ?? string.Empty,
+            IssuedAtUnixMs = pending.IssuedAtUnixMs,
         };
         _ = ExecuteConnectorAndSignalAsync(ctx, connector, connectorRequest, pending);
     }
@@ -430,6 +435,10 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             completed.Success = response.Success;
             completed.Output = response.Output ?? string.Empty;
             completed.Error = response.Error ?? string.Empty;
+            if (response.TerminalInvoked is { } terminalInvoked)
+                completed.TerminalInvoked = terminalInvoked;
+            if (response.Retryable is { } retryable)
+                completed.Retryable = retryable;
             foreach (var (key, value) in response.Metadata)
                 completed.Annotations[key] = value;
         }
@@ -437,10 +446,23 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         {
             completed.Success = false;
             completed.Error = ex.Message;
+            completed.TerminalInvoked = false;
+            completed.Retryable = true;
         }
 
         completed.Annotations["connector.duration_ms"] = ctx.GetElapsedTime(startedAt).TotalMilliseconds.ToString("F2");
         await ctx.PublishAsync(completed, TopologyAudience.Self, CancellationToken.None);
+    }
+
+    private static bool CanRetry(WorkflowConnectorAttemptCompletedEvent evt)
+    {
+        if (!evt.HasTerminalInvoked && !evt.HasRetryable)
+            return true;
+
+        return evt.HasTerminalInvoked &&
+               evt.HasRetryable &&
+               !evt.TerminalInvoked &&
+               evt.Retryable;
     }
 
     private async Task<PendingConnectorCallState> RegisterPendingAsync(
@@ -455,6 +477,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         int timeoutMs,
         bool onErrorContinue,
         bool isSecureStep,
+        long issuedAtUnixMs,
         IWorkflowExecutionContext ctx,
         CancellationToken ct,
         string approvalActionId = "")
@@ -485,6 +508,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             IdempotencyKey = request.IdempotencyKey ?? string.Empty,
             ApprovalActionId = approvalActionId,
             RequestDispatched = false,
+            IssuedAtUnixMs = issuedAtUnixMs,
         };
         if (string.IsNullOrWhiteSpace(approvalActionId))
         {
@@ -585,6 +609,9 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         string.IsNullOrWhiteSpace(envelope.Id)
             ? Guid.NewGuid().ToString("N")
             : envelope.Id;
+
+    private static long ResolveIssuedAtUnixMs(EventEnvelope envelope) =>
+        envelope.Timestamp?.ToDateTimeOffset().ToUnixTimeMilliseconds() ?? 0;
 
     private static string BuildOperationId(
         string runId,

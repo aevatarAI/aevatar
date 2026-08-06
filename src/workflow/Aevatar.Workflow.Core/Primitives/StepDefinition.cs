@@ -1,3 +1,5 @@
+using Aevatar.Workflow.Abstractions;
+
 namespace Aevatar.Workflow.Core.Primitives;
 
 /// <summary>
@@ -25,8 +27,11 @@ public sealed class StepDefinition
     /// </summary>
     public Dictionary<string, string> Parameters { get; init; } = [];
 
+    /// <summary>Authoring-owned external capability selector; derived proof fields never enter this option.</summary>
+    public ExternalWorkflowCapabilitySelector? Capability { get; init; }
+
     /// <summary>
-    /// Typed deterministic transform operation for bounded numeric and grouping transforms.
+    /// Typed deterministic transform operation for bounded numeric, grouping, and template transforms.
     /// </summary>
     public TransformOperationSpec? TransformOperation { get; init; }
 

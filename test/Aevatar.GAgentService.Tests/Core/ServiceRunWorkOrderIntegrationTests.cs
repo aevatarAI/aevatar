@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Foundation.Runtime.Deduplication;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Core.GAgents;
@@ -124,7 +123,6 @@ public sealed class ServiceRunWorkOrderIntegrationTests
             {
                 Chat = new WorkOrderChatInput { Prompt = "perform the work" },
             },
-            PermissionPlan = new WorkOrderPermissionPlan(),
             ExpectedLifecycleVersion = 0,
             RequestedAtUtc = Timestamp.FromDateTimeOffset(requestedAt),
             TimeoutAtUtc = Timestamp.FromDateTimeOffset(requestedAt.AddHours(1)),
@@ -158,8 +156,7 @@ public sealed class ServiceRunWorkOrderIntegrationTests
         });
 
         workOrder.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
-        workOrder.State.Execution.RunId.Should().Be(requestedRunId);
-        workOrder.State.Execution.StartedAtUtc.Should().BeNull();
+        workOrder.State.Run.RunId.Should().Be(requestedRunId);
 
         await serviceRun.HandleRegisterAsync(new RegisterServiceRunRequested
         {
@@ -233,18 +230,17 @@ public sealed class ServiceRunWorkOrderIntegrationTests
         serviceRun.State.PendingTerminalNotification.Should().BeNull();
 
         workOrder.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.Completed);
-        workOrder.State.Execution.StartedAtUtc.Should().BeNull();
-        workOrder.State.TerminalEvidence.RunId.Should().Be(requestedRunId);
-        workOrder.State.TerminalEvidence.RunActorId.Should().Be(scriptActorId);
-        workOrder.State.TerminalEvidence.CommandId.Should().Be(dispatchCommandId);
-        workOrder.State.TerminalEvidence.Outcome.Should().Be(WorkOrderTerminalOutcome.Succeeded);
-        workOrder.State.TerminalEvidence.TerminalAtUtc.Should().Be(
+        workOrder.State.RunOutcome.RunId.Should().Be(requestedRunId);
+        workOrder.State.RunOutcome.RunActorId.Should().Be(scriptActorId);
+        workOrder.State.RunOutcome.CommandId.Should().Be(dispatchCommandId);
+        workOrder.State.RunOutcome.Outcome.Should().Be(WorkOrderTerminalOutcome.Succeeded);
+        workOrder.State.RunOutcome.TerminalAtUtc.Should().Be(
             Timestamp.FromDateTimeOffset(
                 DateTimeOffset.FromUnixTimeMilliseconds(committedTerminal.OccurredAtUnixTimeMs)));
 
         var scriptTerminalSend = router.Sends.Should().ContainSingle(sent =>
             sent.Message is ScriptRunOutcomeRecordedEvent).Subject;
-        var scriptTerminalOperationId = scriptTerminalSend.Options?.Delivery?.DeduplicationOperationId;
+        var scriptTerminalOperationId = scriptTerminalSend.Options?.Delivery?.OperationId;
         scriptTerminalOperationId.Should().Be($"script-run-terminal:{scriptDeliveryId}");
         var scriptTerminalEnvelope = new EventEnvelope
         {
@@ -254,21 +250,14 @@ public sealed class ServiceRunWorkOrderIntegrationTests
             Route = EnvelopeRouteSemantics.CreateDirect(scriptActorId, serviceRunActorId),
             Propagation = new EnvelopePropagation { CorrelationId = dispatchCommandId },
         };
-        scriptTerminalEnvelope.EnsureRuntime().EnsureDeduplication().OperationId =
+        scriptTerminalEnvelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId =
             scriptTerminalOperationId;
-        RuntimeEnvelopeDeduplication.TryBuildDedupKey(
-                serviceRunActorId,
-                scriptTerminalEnvelope,
-                out var scriptTerminalDedupKey)
-            .Should().BeTrue();
-        var deduplicator = new MemoryCacheDeduplicator();
-        (await deduplicator.TryRecordAsync(scriptTerminalDedupKey)).Should().BeTrue();
-        (await deduplicator.TryRecordAsync(scriptTerminalDedupKey)).Should().BeFalse();
+        scriptTerminalEnvelope.Runtime.DeliveryIdentity.OperationId.Should().Be(scriptTerminalOperationId);
         router.Sends.Should().ContainSingle(sent =>
             sent.Message is ServiceRunTerminalNotification &&
             sent.Options != null &&
             sent.Options.Delivery != null &&
-            sent.Options.Delivery.DeduplicationOperationId ==
+            sent.Options.Delivery.OperationId ==
             $"service-run-terminal-{terminalDeliveryId}");
     }
 

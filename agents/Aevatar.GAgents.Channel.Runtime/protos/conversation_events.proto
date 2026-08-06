@@ -27,6 +27,9 @@ message ConversationTurnCompletedEvent {
   // History entries to append to the conversation-owned transcript window
   // after this turn is terminal. Non-LLM turns leave this empty.
   repeated ConversationHistoryEntry appended_history = 9;
+  // Records that this conversation turn completed by transferring visible
+  // reply ownership to the workflow run background delivery actor.
+  aevatar.ai.WorkflowRunBackgroundDeliveryReceipt workflow_run_delivery = 10;
 }
 
 // Committed domain event: the conversation cleared its retained transcript window
@@ -120,6 +123,10 @@ message NeedsWorkflowDraftRunEvent {
   string reply_token = 10;
   int64 reply_token_expires_at_unix_ms = 11;
   string nyx_user_access_token = 12;
+  // Durable encrypted handles for workflow-run recovery. Raw credentials stay
+  // command-only and are cleared before this request enters actor state.
+  aevatar.credentials.RuntimeSecretReference relay_reply_token_ref = 13;
+  aevatar.credentials.RuntimeSecretReference relay_user_access_token_ref = 14;
 }
 
 message ConversationHistoryEntry {
@@ -206,6 +213,19 @@ message LlmReplyReadyEvent {
   // History entries produced by this LLM turn. ConversationGAgent persists
   // them only after the reply reaches a terminal user-visible outcome.
   repeated ConversationHistoryEntry appended_history = 13;
+  // Optional encrypted handles used by durable output outboxes. ConversationGAgent
+  // resolves them only for the outbound operation; raw credentials never enter
+  // the producer actor's committed state.
+  aevatar.credentials.RuntimeSecretReference relay_reply_token_ref = 14;
+  aevatar.credentials.RuntimeSecretReference relay_user_access_token_ref = 15;
+  // Approval continuations receive a fresh relay credential from the card
+  // callback. When true, delivery uses this event's activity rather than the
+  // original pending turn activity while correlation still closes that turn.
+  bool use_source_activity_delivery_context = 16;
+  // When present, ConversationGAgent completes the pending turn without
+  // invoking a channel runner. WorkflowRunDeliveryGAgent exclusively owns the
+  // approval card and terminal workflow result for this run.
+  aevatar.ai.WorkflowRunBackgroundDeliveryReceipt workflow_run_delivery = 17;
 }
 
 enum ConversationReplyLifecycleMode {

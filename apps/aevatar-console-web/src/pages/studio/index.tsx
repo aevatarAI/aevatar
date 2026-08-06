@@ -27,7 +27,7 @@ import {
 } from '@/shared/agui/runtimeEventSemantics';
 import {
   buildConversationHeaders,
-  normalizeUserLlmRoute,
+  resolveSavedConversationLlmConfig,
 } from '../chat/chatConversationConfig';
 import {
   Button,
@@ -76,7 +76,16 @@ import {
   buildStudioGraphElements,
   buildStudioWorkflowLayout,
 } from '@/shared/studio/graph';
+import {
+  confirmInteractiveExplicitRequestPreview,
+  createWorkflowRevisionIdentityCandidate,
+} from '@/shared/studio/explicitRequestConfirmation';
 import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
+import {
+  isStudioMemberNotFound,
+  StudioMemberDeletionNotConfirmedError,
+  waitForStudioMemberDeletion,
+} from '@/shared/studio/memberDeletion';
 import { scriptsApi } from '@/shared/studio/scriptsApi';
 import type { ScopedScriptDetail } from '@/shared/studio/scriptsModels';
 import {
@@ -670,6 +679,23 @@ function hasValidationError(findings: StudioValidationFinding[]): boolean {
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
+}
+
+function splitWorkflowYamlBundle(workflowYamls: readonly string[]): {
+  readonly inlineWorkflowYamls: Record<string, string>;
+  readonly workflowYaml: string;
+} {
+  const [workflowYaml, ...inlineWorkflowYamls] = workflowYamls;
+  if (!workflowYaml) {
+    throw new Error('Workflow YAML is required.');
+  }
+
+  return {
+    workflowYaml,
+    inlineWorkflowYamls: Object.fromEntries(
+      inlineWorkflowYamls.map((yaml, index) => [`workflow_${index + 1}`, yaml]),
+    ),
+  };
 }
 
 function normalizeWorkflowSaveResult(
@@ -3027,6 +3053,8 @@ const StudioPage: React.FC = () => {
   const [optimisticStudioMembers, setOptimisticStudioMembers] = useState<
     StudioMemberSummary[]
   >([]);
+  const [confirmedDeletedStudioMemberIds, setConfirmedDeletedStudioMemberIds] =
+    useState(() => new Set<string>());
   const [createMemberModalOpen, setCreateMemberModalOpen] = useState(false);
   const [createMemberKind, setCreateMemberKind] = useState<BuildMode>('workflow');
   const [createMemberName, setCreateMemberName] = useState('');
@@ -3410,14 +3438,21 @@ const StudioPage: React.FC = () => {
         optimisticStudioMembers,
         resolvedStudioScopeId,
         resolvedStudioTeamId,
+      ).filter(
+        (member) =>
+          !confirmedDeletedStudioMemberIds.has(trimOptional(member.memberId)),
       ),
     [
+      confirmedDeletedStudioMemberIds,
       optimisticStudioMembers,
       resolvedStudioScopeId,
       resolvedStudioTeamId,
       studioMembersQuery.data?.members,
     ],
   );
+  useEffect(() => {
+    setConfirmedDeletedStudioMemberIds(new Set());
+  }, [resolvedStudioScopeId, resolvedStudioTeamId]);
   const studioMemberByPublishedServiceId = useMemo(() => {
     const members = new Map<string, (typeof studioScopeMembers)[number]>();
     for (const member of studioScopeMembers) {
@@ -3719,61 +3754,33 @@ const StudioPage: React.FC = () => {
       ),
     [userLlmSettingsQuery.data?.routeOptions],
   );
-  const effectiveWorkflowDryRunRoute = useMemo(
-    () => normalizeUserLlmRoute(userLlmSettingsQuery.data?.effectiveRoute),
-    [userLlmSettingsQuery.data?.effectiveRoute],
+  const workflowDryRunLlmConfig = useMemo(
+    () => resolveSavedConversationLlmConfig(userLlmSettingsQuery.data),
+    [userLlmSettingsQuery.data],
   );
-  const effectiveWorkflowProviderModels = useMemo(
-    () =>
-      (userLlmSettingsQuery.data?.modelGroupsByRoute ?? [])
-        .filter(
-          (group) =>
-            normalizeUserLlmRoute(group.routeValue) ===
-            effectiveWorkflowDryRunRoute,
-        )
-        .flatMap((group) => group.models)
-        .filter((model) => trimOptional(model)),
-    [
-      effectiveWorkflowDryRunRoute,
-      userLlmSettingsQuery.data?.modelGroupsByRoute,
-    ],
-  );
-  const effectiveWorkflowDryRunModel = useMemo(() => {
-    const preferredModel = trimOptional(userLlmSettingsQuery.data?.defaultModel);
-    const canReusePreferredModel =
-      Boolean(preferredModel) &&
-      (
-        effectiveWorkflowProviderModels.length === 0 ||
-        effectiveWorkflowProviderModels.includes(preferredModel)
-      );
-
-    if (preferredModel && canReusePreferredModel) {
-      return preferredModel;
-    }
-
-    return (
-      effectiveWorkflowProviderModels[0] ||
-      preferredModel ||
-      ''
-    );
-  }, [
-    effectiveWorkflowProviderModels,
-    userLlmSettingsQuery.data?.defaultModel,
-  ]);
   const workflowDryRunHeaders = useMemo(
     () =>
-      buildConversationHeaders(
-        effectiveWorkflowDryRunRoute,
-        effectiveWorkflowDryRunModel,
-      ),
-    [effectiveWorkflowDryRunModel, effectiveWorkflowDryRunRoute],
+      workflowDryRunLlmConfig.status === 'ready'
+        ? buildConversationHeaders(
+            workflowDryRunLlmConfig.route,
+            workflowDryRunLlmConfig.model,
+          )
+        : undefined,
+    [workflowDryRunLlmConfig],
   );
-  const workflowDryRunRouteLabel = userLlmSettingsQuery.data?.effectiveRouteLabel ||
-    effectiveWorkflowDryRunRoute ||
-    'Config default';
+  const workflowDryRunRouteLabel = workflowDryRunLlmConfig.status === 'system_default'
+    ? 'Config default'
+    : workflowDryRunLlmConfig.routeLabel;
   const workflowDryRunBlockedReason = useMemo(() => {
     if (userLlmSettingsQuery.isLoading) {
       return t("pages.studio.index.studio.provider", "Studio is checking available providers. Try running again shortly.");
+    }
+
+    if (workflowDryRunLlmConfig.status === 'action_required') {
+      return t(
+        "pages.studio.index.llm.selection.action.required",
+        "The saved LLM selection needs attention in Settings before this workflow can run.",
+      );
     }
 
     if (readyUserRoutes.length === 0) {
@@ -3781,7 +3788,11 @@ const StudioPage: React.FC = () => {
     }
 
     return '';
-  }, [readyUserRoutes.length, userLlmSettingsQuery.isLoading]);
+  }, [
+    readyUserRoutes.length,
+    userLlmSettingsQuery.isLoading,
+    workflowDryRunLlmConfig.status,
+  ]);
   const matchingWorkspaceWorkflow = useMemo(
     () =>
       visibleWorkflowSummaries.find((item) => item.name === templateWorkflow) ??
@@ -5083,12 +5094,35 @@ const StudioPage: React.FC = () => {
           throw new Error('Resolve a stable workflow draft id before binding this member.');
         }
 
+        const workflowYamls = await buildWorkflowYamlBundle();
+        const { workflowYaml, inlineWorkflowYamls } = splitWorkflowYamlBundle(
+          workflowYamls,
+        );
+        const revisionIdentityCandidate = createWorkflowRevisionIdentityCandidate();
+        const explicitRequestPreview = await studioApi.previewExplicitRequests({
+          scopeId: resolvedStudioScopeId,
+          workflowId: workflowIdForBinding,
+          workflowYaml,
+          inlineWorkflowYamls,
+          executionMode: 'interactive',
+          revisionId: revisionIdentityCandidate,
+        });
+        const explicitRequestConfirmations =
+          await confirmInteractiveExplicitRequestPreview(explicitRequestPreview);
+        if (explicitRequestConfirmations === null) {
+          return;
+        }
+
         const receipt = await studioApi.bindMemberWorkflow({
           scopeId: resolvedStudioScopeId,
           memberId: resolvedBuildMemberId,
           displayName: buildPendingBindCandidate.displayName,
           workflowId: workflowIdForBinding,
-          workflowYamls: await buildWorkflowYamlBundle(),
+          revisionId: explicitRequestPreview.revisionId,
+          workflowYamls,
+          ...(explicitRequestConfirmations.length > 0
+            ? { explicitRequestConfirmations }
+            : {}),
         });
         await queryClient.invalidateQueries({
           queryKey: [
@@ -9391,31 +9425,40 @@ const StudioPage: React.FC = () => {
           setInventoryBusyAction('delete');
 
           try {
+            let alreadyDeleted = false;
             try {
               await studioApi.deleteMember({
                 scopeId,
                 memberId,
               });
             } catch (error) {
-              if (!isStudioApiStatus(error, 404)) {
-                void message.error(
-                  error instanceof Error
-                    ? error.message
-                    : t("pages.studio.index.failed.delete.member", "Failed to delete member."),
-                );
-                return;
+              if (!isStudioMemberNotFound(error)) {
+                throw error;
               }
+              alreadyDeleted = true;
             }
 
+            if (!alreadyDeleted) {
+              void message.info(
+                t(
+                  "pages.studio.index.delete.member.submitted",
+                  "Deletion submitted. Waiting for confirmation.",
+                ),
+              );
+            }
+            if (!alreadyDeleted) {
+              await waitForStudioMemberDeletion({ scopeId, memberId });
+            }
+
+            setConfirmedDeletedStudioMemberIds((current) => {
+              const next = new Set(current);
+              next.add(memberId);
+              return next;
+            });
             setOptimisticStudioMembers((current) =>
               current.filter(
                 (member) => trimOptional(member.memberId) !== memberId,
               ),
-            );
-            queryClient.setQueryData<StudioMemberRoster>(
-              studioMembersQueryKey,
-              (current) =>
-                removeStudioMemberRosterMember(current, scopeId, memberId),
             );
 
             const invalidations = [
@@ -9440,6 +9483,11 @@ const StudioPage: React.FC = () => {
               );
             }
             await Promise.all(invalidations);
+            queryClient.setQueryData<StudioMemberRoster>(
+              studioMembersQueryKey,
+              (current) =>
+                removeStudioMemberRosterMember(current, scopeId, memberId),
+            );
 
             const deletedMemberKey = buildBackendMemberKey(memberId);
             if (
@@ -9474,12 +9522,17 @@ const StudioPage: React.FC = () => {
             );
           } catch (error) {
             void message.error(
-              error instanceof Error
-                ? error.message
-                : t(
-                    "pages.studio.index.failed.delete.member",
-                    "Failed to delete member.",
-                  ),
+              error instanceof StudioMemberDeletionNotConfirmedError
+                ? t(
+                    "pages.studio.index.delete.member.not.confirmed",
+                    "Deletion was not confirmed. The member remains in the list; refresh and retry.",
+                  )
+                : error instanceof Error
+                  ? error.message
+                  : t(
+                      "pages.studio.index.failed.delete.member",
+                      "Failed to delete member.",
+                    ),
             );
           } finally {
             setInventoryBusyKey('');
@@ -10948,7 +11001,11 @@ const StudioPage: React.FC = () => {
       buildWorkflowYamls={buildWorkflowYamlBundle}
       runMetadata={workflowDryRunHeaders}
       dryRunRouteLabel={workflowDryRunRouteLabel}
-      dryRunModelLabel={effectiveWorkflowDryRunModel || undefined}
+      dryRunModelLabel={
+        workflowDryRunLlmConfig.status === 'ready'
+          ? workflowDryRunLlmConfig.model || 'Provider default'
+          : undefined
+      }
       dryRunBlockedReason={workflowDryRunBlockedReason || undefined}
       onOpenRunSetup={() => history.push('/chat')}
       availableStepTypes={availableStepTypes}

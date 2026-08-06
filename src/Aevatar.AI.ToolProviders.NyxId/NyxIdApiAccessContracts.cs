@@ -70,6 +70,41 @@ public sealed record NyxIdUserService(
 
 public sealed record NyxIdUserServices(IReadOnlyList<NyxIdUserService> Services);
 
+public enum NyxIdUserServiceCredentialStatus
+{
+    Unspecified = 0,
+    Active = 1,
+    Expired = 2,
+    Revoked = 3,
+    Failed = 4,
+    RefreshFailed = 5,
+    PendingAuthorization = 6,
+}
+
+public enum NyxIdUserServiceNodeStatus
+{
+    Unspecified = 0,
+    NotBound = 1,
+    Online = 2,
+    Offline = 3,
+    Draining = 4,
+    Unknown = 5,
+    Inaccessible = 6,
+}
+
+public sealed record NyxIdUserServiceKey(
+    string Id,
+    string Slug,
+    string? Label,
+    string? CatalogServiceName,
+    bool IsActive,
+    NyxIdUserServiceCredentialStatus CredentialStatus,
+    string? NodeId,
+    NyxIdUserServiceNodeStatus NodeStatus,
+    NyxIdUserServiceCredentialSource CredentialSource);
+
+public sealed record NyxIdUserServiceKeys(IReadOnlyList<NyxIdUserServiceKey> Services);
+
 public enum NyxIdScopePlanPrincipalKind
 {
     Unspecified = 0,
@@ -153,6 +188,7 @@ public static class NyxIdApiAccessResponseParser
 
     private const string ScopePlanPreconditionField = "scope_plan_digest";
     private const string UserServicesFailurePrefix = "nyxid_user_services";
+    private const string UserServiceKeysFailurePrefix = "nyxid_user_service_keys";
     private const string ScopePlanFailurePrefix = "nyxid_scope_plan";
 
     private static readonly HashSet<string> PublishedErrorCodes = new(StringComparer.Ordinal)
@@ -184,6 +220,9 @@ public static class NyxIdApiAccessResponseParser
 
     public static NyxIdApiAccessResult<NyxIdUserServices> ParseUserServices(string response) =>
         Parse(response, UserServicesFailurePrefix, ParseUserServicesDocument);
+
+    public static NyxIdApiAccessResult<NyxIdUserServiceKeys> ParseUserServiceKeys(string response) =>
+        Parse(response, UserServiceKeysFailurePrefix, ParseUserServiceKeysDocument);
 
     public static NyxIdApiAccessResult<NyxIdApiKeyScopePlan> ParseScopePlan(string response) =>
         Parse(response, ScopePlanFailurePrefix, ParseScopePlanDocument);
@@ -240,6 +279,68 @@ public static class NyxIdApiAccessResponseParser
         }
 
         return new NyxIdUserServices(services);
+    }
+
+    private static NyxIdUserServiceKeys ParseUserServiceKeysDocument(JsonElement root)
+    {
+        var keysElement = RequireProperty(root, "keys", JsonValueKind.Array);
+        var services = new List<NyxIdUserServiceKey>();
+        var serviceIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var serviceElement in keysElement.EnumerateArray())
+        {
+            RequireKind(serviceElement, JsonValueKind.Object);
+            var id = RequireNormalizedString(serviceElement, "id");
+            if (!serviceIds.Add(id))
+                throw new NyxIdContractException();
+
+            var nodeId = ReadOptionalNormalizedString(serviceElement, "node_id");
+            services.Add(new NyxIdUserServiceKey(
+                id,
+                RequireNormalizedString(serviceElement, "slug"),
+                ReadOptionalString(serviceElement, "label"),
+                ReadOptionalString(serviceElement, "catalog_service_name"),
+                RequireBoolean(serviceElement, "is_active"),
+                ParseCredentialStatus(RequireNormalizedString(serviceElement, "status")),
+                nodeId,
+                ParseNodeStatus(serviceElement, nodeId),
+                ParseCredentialSource(RequireProperty(
+                    serviceElement,
+                    "credential_source",
+                    JsonValueKind.Object))));
+        }
+
+        return new NyxIdUserServiceKeys(services);
+    }
+
+    private static NyxIdUserServiceCredentialStatus ParseCredentialStatus(string value) => value switch
+    {
+        "active" => NyxIdUserServiceCredentialStatus.Active,
+        "expired" => NyxIdUserServiceCredentialStatus.Expired,
+        "revoked" => NyxIdUserServiceCredentialStatus.Revoked,
+        "failed" => NyxIdUserServiceCredentialStatus.Failed,
+        "refresh_failed" => NyxIdUserServiceCredentialStatus.RefreshFailed,
+        "pending_auth" => NyxIdUserServiceCredentialStatus.PendingAuthorization,
+        _ => throw new NyxIdContractException(),
+    };
+
+    private static NyxIdUserServiceNodeStatus ParseNodeStatus(JsonElement service, string? nodeId)
+    {
+        if (nodeId is null)
+        {
+            if (service.TryGetProperty("node_status", out _))
+                throw new NyxIdContractException();
+            return NyxIdUserServiceNodeStatus.NotBound;
+        }
+
+        return RequireNormalizedString(service, "node_status") switch
+        {
+            "online" => NyxIdUserServiceNodeStatus.Online,
+            "offline" => NyxIdUserServiceNodeStatus.Offline,
+            "draining" => NyxIdUserServiceNodeStatus.Draining,
+            "unknown" => NyxIdUserServiceNodeStatus.Unknown,
+            "inaccessible" => NyxIdUserServiceNodeStatus.Inaccessible,
+            _ => throw new NyxIdContractException(),
+        };
     }
 
     private static NyxIdUserServiceCredentialSource ParseCredentialSource(JsonElement source)
@@ -616,6 +717,23 @@ public static class NyxIdApiAccessResponseParser
         }
         RequireKind(property, JsonValueKind.String);
         return property.GetString();
+    }
+
+    private static string? ReadOptionalNormalizedString(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+        RequireKind(property, JsonValueKind.String);
+        var value = property.GetString();
+        if (string.IsNullOrWhiteSpace(value) ||
+            !string.Equals(value, value.Trim(), StringComparison.Ordinal))
+        {
+            throw new NyxIdContractException();
+        }
+        return value;
     }
 
     private static bool RequireBoolean(JsonElement root, string propertyName)

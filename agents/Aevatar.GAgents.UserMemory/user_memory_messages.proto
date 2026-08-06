@@ -4,17 +4,43 @@ option csharp_namespace = "Aevatar.GAgents.UserMemory";
 
 // ─── State ───
 
+enum UserMemoryCategory {
+  USER_MEMORY_CATEGORY_UNSPECIFIED = 0;
+  USER_MEMORY_CATEGORY_PREFERENCE = 1;
+  USER_MEMORY_CATEGORY_INSTRUCTION = 2;
+  USER_MEMORY_CATEGORY_CONTEXT = 3;
+}
+
+enum UserMemorySource {
+  USER_MEMORY_SOURCE_UNSPECIFIED = 0;
+  USER_MEMORY_SOURCE_EXPLICIT = 1;
+  USER_MEMORY_SOURCE_INFERRED = 2;
+}
+
 message UserMemoryEntryProto {
   string id = 1;
-  string category = 2;
+  UserMemoryCategory category = 2;
   string content = 3;
-  string source = 4;
-  int64 created_at = 5;
-  int64 updated_at = 6;
+  UserMemorySource source = 4;
+  int64 created_at_ms = 5;
+  int64 updated_at_ms = 6;
 }
 
 message UserMemoryState {
   repeated UserMemoryEntryProto entries = 1;
+}
+
+// ─── Commands ───
+
+message AddUserMemoryEntryCommand {
+  UserMemoryEntryProto entry = 1;
+}
+
+message RemoveUserMemoryEntryCommand {
+  string entry_id = 1;
+}
+
+message ClearUserMemoryEntriesCommand {
 }
 
 // ─── Events ───
@@ -29,4 +55,3 @@ message MemoryEntryRemovedEvent {
 
 message MemoryEntriesClearedEvent {
 }
-

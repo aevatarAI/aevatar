@@ -100,6 +100,41 @@ public sealed class InMemoryAuditTrailStoreTests
         page.Coverage.SchemaCompatibility.ShouldBe(AuditSchemaCompatibility.Current);
     }
 
+    [Fact]
+    public async Task QueryAsync_FiltersChatActivityBeforePaginationAcrossRetainedActorKeys()
+    {
+        var store = new InMemoryAuditTrailStore();
+        await store.AppendManyAsync(
+        [
+            CreateRecord("audit-non-chat", "scope-alpha", "actor-key-2", "tool.call", AuditOutcome.Error, seconds: 10),
+            WithChat(CreateRecord("audit-other-user", "scope-alpha", "actor-beta", "tool.call", AuditOutcome.Error, seconds: 9)),
+            WithChat(CreateRecord("audit-workflow", "scope-alpha", "actor-key-2", "tool.call", AuditOutcome.Error, seconds: 8), AuditChatSurface.WorkflowChat),
+            WithChat(CreateRecord("audit-other-conversation", "scope-alpha", "actor-key-2", "tool.call", AuditOutcome.Error, seconds: 7), conversationId: "conversation-beta"),
+            WithChat(CreateRecord("audit-success", "scope-alpha", "actor-key-2", "tool.call", AuditOutcome.Success, seconds: 6)),
+            WithChat(CreateRecord("audit-current-key", "scope-alpha", "actor-key-2", "tool.call", AuditOutcome.Error, seconds: 5)),
+            WithChat(CreateRecord("audit-retained-key", "scope-alpha", "actor-key-1", "tool.call", AuditOutcome.Error, seconds: 4))
+        ]);
+
+        var query = new AuditTrailQuery
+        {
+            ScopeId = "scope-alpha",
+            AuditActorIds = [" actor-key-2 ", "actor-key-1"],
+            RequireChatProvenance = true,
+            ChatSurface = AuditChatSurface.NyxidAssistant,
+            ChatConversationId = "conversation-alpha",
+            TerminalOutcome = AuditTerminalOutcome.Failed,
+            Take = 1,
+        };
+
+        var first = await store.QueryAsync(query);
+        var second = await store.QueryAsync(query with { Cursor = first.NextCursor });
+
+        first.Records.Select(static record => record.AuditId).ShouldBe(["audit-current-key"]);
+        first.NextCursor.ShouldNotBeNull();
+        second.Records.Select(static record => record.AuditId).ShouldBe(["audit-retained-key"]);
+        second.NextCursor.ShouldBeNull();
+    }
+
     [Theory]
     [InlineData("occurred_from")]
     [InlineData("occurred_to")]
@@ -355,6 +390,20 @@ public sealed class InMemoryAuditTrailStoreTests
             };
         }
 
+        return record;
+    }
+
+    private static AuditRecord WithChat(
+        AuditRecord record,
+        AuditChatSurface surface = AuditChatSurface.NyxidAssistant,
+        string conversationId = "conversation-alpha")
+    {
+        record.Provenance.Chat = new AuditChatProvenance
+        {
+            Surface = surface,
+            ConversationId = conversationId,
+            TurnId = "turn-alpha",
+        };
         return record;
     }
 

@@ -106,15 +106,27 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
         Func<string, string> fieldPathResolver,
         Func<ProjectionDocumentFilter, string, string> exactMatchFieldPathResolver)
     {
+        var tombstoneExclusion = new Dictionary<string, object?>
+        {
+            ["term"] = new Dictionary<string, object?>
+            {
+                [ElasticsearchProjectionDeleteMarkerPayload.TombstoneField] = true,
+            },
+        };
+
         if (query.Filters.Count == 0 && query.AnyOfFilters.Count == 0)
         {
             return new Dictionary<string, object?>
             {
-                ["match_all"] = new Dictionary<string, object?>(),
+                ["bool"] = new Dictionary<string, object?>
+                {
+                    ["must_not"] = new object[] { tombstoneExclusion },
+                },
             };
         }
 
         var booleanQuery = new Dictionary<string, object?>();
+        booleanQuery["must_not"] = new object[] { tombstoneExclusion };
         if (query.Filters.Count > 0)
         {
             booleanQuery["filter"] = query.Filters

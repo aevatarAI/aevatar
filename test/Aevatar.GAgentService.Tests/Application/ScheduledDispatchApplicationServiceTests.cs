@@ -1,15 +1,18 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Application.Schedules;
 using Aevatar.GAgentService.Core.Schedules;
 using Aevatar.GAgentService.Infrastructure.Schedules;
 using Aevatar.GAgentService.Projection.Queries;
 using Aevatar.GAgentService.Projection.ReadModels;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Tests.Application;
@@ -17,26 +20,20 @@ namespace Aevatar.GAgentService.Tests.Application;
 public sealed class ScheduledDispatchApplicationServiceTests
 {
     [Fact]
-    public async Task CreateAsync_ShouldNormalizeGeneratedEnvelopeScheduleAndDispatchCreate()
+    public async Task CreateAsync_ShouldNormalizeGeneratedServiceInvocationScheduleAndDispatchCreate()
     {
         var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
-        var queryPort = new RecordingScheduledDispatchQueryPort();
         var service = new ScheduledDispatchApplicationService(
             actorPort,
-            queryPort,
-            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
-        var envelope = new EventEnvelope
-        {
-            Payload = Any.Pack(new StringValue { Value = "run" }),
-            Route = EnvelopeRouteSemantics.CreateDirect("publisher-1", "target-1"),
-        };
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var target = CreateDefaultServiceInvocationConfiguration("schedule-placeholder").Target;
 
         var receipt = await service.CreateAsync(new ScheduledDispatchConfiguration(
             string.Empty,
             " Daily ",
-            new ScheduledDispatchTargetDescriptor(
-                ScheduledDispatchTargetKind.Envelope,
-                Envelope: envelope),
+            target,
             " 0 9 * * * ",
             " UTC ",
             true,
@@ -53,12 +50,77 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var created = actorPort.Created.Should().ContainSingle().Which;
         created.Configuration.ScheduleId.Should().Be(receipt.ScheduleId);
         created.Configuration.DisplayName.Should().Be("Daily");
-        created.Configuration.Target.ActorId.Should().Be("target-1");
+        created.Configuration.Target.Kind.Should().Be(ScheduledDispatchTargetKind.ServiceInvocation);
+        created.Configuration.Target.ActorId.Should().BeNull();
+        created.Configuration.Target.Envelope.Should().BeNull();
+        created.Configuration.Target.ServiceInvocation!.Identity.ServiceId.Should().Be("svc-alpha");
         created.Configuration.Headers.Should().Contain("trace", "enabled");
         created.Configuration.Headers.Should().NotContainKey("empty");
-        created.Dispatch.TargetActorId.Should().Be("target-1");
+        created.Dispatch.TargetActorId.Should().Be(ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId);
         created.Dispatch.TriggerEnvelope.Id.Should().Be($"schedule-{receipt.ScheduleId}-trigger");
         created.Dispatch.TriggerEnvelope.Propagation!.CorrelationId.Should().Be($"schedule-{receipt.ScheduleId}");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectRawEnvelopeBeforeActorDispatch()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var act = () => service.CreateAsync(CreateRawEnvelopeConfiguration("schedule-alpha"));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*raw envelope*not supported*");
+        actorPort.ResolvedScheduleIds.Should().BeEmpty();
+        actorPort.EnsuredScheduleIds.Should().BeEmpty();
+        actorPort.Created.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldRejectRawEnvelopeBeforeQueryReadActorResolutionAndDispatch()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var queryPort = new RecordingScheduledDispatchQueryPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var act = () => service.UpdateAsync(
+            "schedule-update-raw",
+            CreateRawEnvelopeConfiguration("schedule-ignored"));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*raw envelope*not supported*");
+        queryPort.GetScheduleIds.Should().BeEmpty();
+        actorPort.ResolvedScheduleIds.Should().BeEmpty();
+        actorPort.EnsuredScheduleIds.Should().BeEmpty();
+        actorPort.Updated.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task EnsureAsync_ShouldRejectRawEnvelopeBeforeQueryReadActorResolutionAndDispatch()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var queryPort = new RecordingScheduledDispatchQueryPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var act = () => service.EnsureAsync(CreateRawEnvelopeConfiguration("schedule-ensure-raw"));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*raw envelope*not supported*");
+        queryPort.GetScheduleIds.Should().BeEmpty();
+        actorPort.ResolvedScheduleIds.Should().BeEmpty();
+        actorPort.EnsuredScheduleIds.Should().BeEmpty();
+        actorPort.Ensured.Should().BeEmpty();
     }
 
     [Fact]
@@ -71,7 +133,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
             queryPort,
             new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
 
-        await service.CreateAsync(CreateEnvelopeConfiguration("schedule-1"));
+        await service.CreateAsync(CreateDefaultServiceInvocationConfiguration("schedule-1"));
 
         actorPort.ResolvedScheduleIds.Should().ContainSingle().Which.Should().Be("schedule-1");
         actorPort.Created.Should().ContainSingle();
@@ -88,7 +150,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new RecordingScheduledDispatchQueryPort(),
             new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
 
-        var act = () => service.CreateAsync(CreateEnvelopeConfiguration("schedule-1"));
+        var act = () => service.CreateAsync(CreateDefaultServiceInvocationConfiguration("schedule-1"));
 
         await act.Should().ThrowAsync<ScheduledDispatchConflictException>()
             .WithMessage("*already exists*");
@@ -109,10 +171,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         await service.CreateAsync(new ScheduledDispatchConfiguration(
             "one-shot-1",
             " Reminder ",
-            new ScheduledDispatchTargetDescriptor(
-                ScheduledDispatchTargetKind.Envelope,
-                ActorId: "actor-1",
-                Envelope: new EventEnvelope { Payload = Any.Pack(new Empty()) }),
+            CreateDefaultServiceInvocationConfiguration("one-shot-1").Target,
             "0 9 * * *",
             " Asia/Shanghai ",
             true,
@@ -131,12 +190,12 @@ public sealed class ScheduledDispatchApplicationServiceTests
     public async Task CreateAsync_ShouldRejectMissingOrPastOneShotFireTime()
     {
         var service = CreateService();
-        var missingFireAt = () => service.CreateAsync(CreateEnvelopeConfiguration("one-shot-missing") with
+        var missingFireAt = () => service.CreateAsync(CreateDefaultServiceInvocationConfiguration("one-shot-missing") with
         {
             ScheduleMode = ScheduledDispatchScheduleMode.OneShotAtUtc,
             OneShotFireAt = null,
         });
-        var pastFireAt = () => service.CreateAsync(CreateEnvelopeConfiguration("one-shot-past") with
+        var pastFireAt = () => service.CreateAsync(CreateDefaultServiceInvocationConfiguration("one-shot-past") with
         {
             ScheduleMode = ScheduledDispatchScheduleMode.OneShotAtUtc,
             OneShotFireAt = DateTimeOffset.UtcNow.AddMinutes(-1),
@@ -303,6 +362,43 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task NormalizeConfiguration_AgentKey_ShouldPreserveCallerAuthority()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var callerAuthority = new ScheduledCallerNyxIdAuthority
+        {
+            Platform = " lark ",
+            Tenant = " tenant-alpha ",
+            ExternalUserId = " sender-alpha ",
+            Scope = " proxy ",
+            BindingId = " bnd-owner-alpha ",
+        };
+        var auth = new ScheduledServiceInvocationAuth(CreateScheduledInvocationAgentKeyReference())
+        {
+            CallerAuthority = callerAuthority,
+        };
+
+        await service.CreateAsync(CreateServiceInvocationConfiguration("schedule-agent-key-authority", auth));
+
+        var normalized = actorPort.Created.Should().ContainSingle().Which.Configuration
+            .Target.ServiceInvocation!.Auth!;
+        normalized.CallerAuthority.Should().NotBeSameAs(callerAuthority);
+        normalized.CallerAuthority.Should().BeEquivalentTo(new ScheduledCallerNyxIdAuthority
+        {
+            Platform = "lark",
+            Tenant = "tenant-alpha",
+            ExternalUserId = "sender-alpha",
+            Scope = "proxy",
+            BindingId = "bnd-owner-alpha",
+        });
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldRejectScheduledInvocationAgentKeyReferenceWithWrongPurpose()
     {
         var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
@@ -454,9 +550,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     SenderNyxIdAccessToken = "sender-token",
                 },
             })));
-        var headerCredential = () => service.CreateAsync(CreateEnvelopeConfiguration("schedule-header-credential") with
+        var headerCredential = () => service.CreateAsync(CreateDefaultServiceInvocationConfiguration("schedule-header-credential") with
         {
-            CredentialRequirementTargetKind = ScheduledDispatchCredentialRequirementTargetKind.Envelope,
             Headers = new Dictionary<string, string>
             {
                 [ScheduledDispatchCredentialRequirementRequests.LegacyConnectorHttpAuthorizationHeader] = "Bearer current-token",
@@ -466,6 +561,34 @@ public sealed class ScheduledDispatchApplicationServiceTests
         await payloadCredential.Should().ThrowAsync<ArgumentException>()
             .WithMessage("*current-session credentials*");
         await headerCredential.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*current-session credentials*");
+        actorPort.Created.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("Connector.Http.Authorization")]
+    [InlineData("CONNECTOR.HTTP.AUTHORIZATION")]
+    public async Task CreateAsync_WithCaseVariantConnectorAuthorizationHeader_ShouldRejectBeforeActorDispatch(
+        string authorizationHeader)
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var configuration = CreateDefaultServiceInvocationConfiguration("schedule-header-case-variant") with
+        {
+            Headers = new Dictionary<string, string>
+            {
+                [authorizationHeader] = "redacted",
+                ["trace"] = "kept",
+            },
+        };
+
+        var act = () => service.CreateAsync(configuration);
+
+        await act.Should().ThrowAsync<ArgumentException>()
             .WithMessage("*current-session credentials*");
         actorPort.Created.Should().BeEmpty();
     }
@@ -528,6 +651,56 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task UpdateAsync_WhenTeamAutomationReplacementIsPending_ShouldRejectBeforeActorDispatch()
+    {
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "member-alpha", "team-alpha");
+        var existing = CreateSummaryDetail(
+            "schedule-replacement-pending",
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey);
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var queryPort = new RecordingScheduledDispatchQueryPort
+        {
+            Detail = existing with
+            {
+                Schedule = existing.Schedule with
+                {
+                    TeamOwned = true,
+                    TeamOwnerScopeId = owner.ScopeId,
+                    TeamId = owner.TeamId,
+                    TeamOwnerMemberId = owner.MemberId,
+                    TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatus.ReplacementPending,
+                },
+            },
+        };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var configuration = CreateServiceInvocationConfiguration(
+            "schedule-replacement-pending",
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService) with
+        {
+            TeamAutomationOwner = owner,
+        };
+
+        var act = () => service.UpdateAsync(
+            configuration.ScheduleId,
+            configuration,
+            new ScheduledDispatchMutationContext(TeamAutomationOwner: owner));
+
+        await act.Should().ThrowAsync<ScheduledDispatchConflictException>()
+            .WithMessage("team_automation_replacement_pending");
+        queryPort.GetScheduleIds.Should().ContainSingle().Which.Should().Be(configuration.ScheduleId);
+        actorPort.ResolvedScheduleIds.Should().BeEmpty();
+        actorPort.Updated.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task EnsureAsync_ShouldNormalizePrepareEnsureActorAndDispatch()
     {
         var actorPort = new RecordingScheduledDispatchActorPort();
@@ -539,7 +712,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
             preparation,
             new NoopScheduledDispatchCredentialAdmissionPort());
 
-        var receipt = await service.EnsureAsync(CreateEnvelopeConfiguration(" schedule-1 "));
+        var receipt = await service.EnsureAsync(CreateDefaultServiceInvocationConfiguration(" schedule-1 "));
 
         receipt.ScheduleId.Should().Be("schedule-1");
         receipt.ScheduleActorId.Should().Be("actor:schedule-1");
@@ -561,12 +734,12 @@ public sealed class ScheduledDispatchApplicationServiceTests
     [InlineData(nameof(ScheduleMutationKind.Create), true)]
     [InlineData(nameof(ScheduleMutationKind.Ensure), false)]
     [InlineData(nameof(ScheduleMutationKind.Ensure), true)]
-    public async Task GenericCreationMutations_ShouldRejectTeamOwnerBeforeAnyDownstreamCall(
+    public async Task CreationMutations_WithTeamOwner_ShouldWriteTypedOwnerThroughSchedulePath(
         string mutationName,
         bool ownerOnConfiguration)
     {
         var mutation = System.Enum.Parse<ScheduleMutationKind>(mutationName);
-        var owner = new TeamMemberAutomationOwner("scope-alpha", "member-alpha");
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
         var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
         var queryPort = new RecordingScheduledDispatchQueryPort();
         var preparation = new RecordingScheduledDispatchTargetPreparationService();
@@ -576,26 +749,33 @@ public sealed class ScheduledDispatchApplicationServiceTests
             queryPort,
             preparation,
             admissionPort);
-        var configuration = CreateScopeOwnerConfiguration() with
+        var configuration = CreateDefaultServiceInvocationConfiguration("sch-alpha") with
         {
             TeamAutomationOwner = ownerOnConfiguration ? owner : null,
         };
-        var context = CreateScopeOwnerContext() with { TeamAutomationOwner = owner };
+        var context = new ScheduledDispatchMutationContext(TeamAutomationOwner: owner);
 
-        var act = () => ExecuteMutationAsync(service, mutation, configuration, context);
+        await ExecuteMutationAsync(service, mutation, configuration, context);
 
-        await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*dedicated team automation lifecycle*");
         admissionPort.Requests.Should().BeEmpty();
-        preparation.Requests.Should().BeEmpty();
-        AssertNoActorMutationDispatch(actorPort);
-        AssertNoScheduleQuery(queryPort);
+        preparation.Requests.Should().ContainSingle()
+            .Which.TeamAutomationOwner.Should().Be(owner);
+        if (mutation == ScheduleMutationKind.Create)
+        {
+            actorPort.Created.Should().ContainSingle()
+                .Which.Configuration.TeamAutomationOwner.Should().Be(owner);
+        }
+        else
+        {
+            actorPort.Ensured.Should().ContainSingle()
+                .Which.Configuration.TeamAutomationOwner.Should().Be(owner);
+        }
     }
 
     [Theory]
     [InlineData(nameof(ScheduleMutationKind.Create))]
     [InlineData(nameof(ScheduleMutationKind.Ensure))]
-    public async Task GenericCreationMutations_WithoutTeamOwner_ShouldKeepLegacyBehavior(string mutationName)
+    public async Task GenericCreationMutations_WithoutTeamOwner_ShouldDispatchServiceInvocation(string mutationName)
     {
         var mutation = System.Enum.Parse<ScheduleMutationKind>(mutationName);
         var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
@@ -612,13 +792,265 @@ public sealed class ScheduledDispatchApplicationServiceTests
                 string.Empty,
                 "owner-alpha"));
 
-        await ExecuteMutationAsync(service, mutation, CreateEnvelopeConfiguration("schedule-legacy"), context);
+        await ExecuteMutationAsync(service, mutation, CreateDefaultServiceInvocationConfiguration("schedule-generic"), context);
 
         preparation.Requests.Should().ContainSingle();
         if (mutation == ScheduleMutationKind.Create)
             actorPort.Created.Should().ContainSingle();
         else
             actorPort.Ensured.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task RetryTeamAutomationRevocationAsync_ShouldUseActorOwnedOperationIdentity()
+    {
+        const string scheduleId = "schedule-revocation-alpha";
+        var projectedOwner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
+        var projectedOperationId = "delete-operation-actor-owned";
+        var projectedIdempotencyKey = "delete-idempotency-actor-owned";
+        var authenticatedCredentialOwner = new ScheduledInvocationAuthorizationOwner(
+            "nyxid",
+            "Personal",
+            "credential-owner-alpha");
+        var baseDetail = CreateSummaryDetail(
+            scheduleId,
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey);
+        var detail = baseDetail with
+        {
+            Schedule = baseDetail.Schedule with
+            {
+                TeamOwned = true,
+                TeamOwnerScopeId = projectedOwner.ScopeId,
+                TeamId = projectedOwner.TeamId,
+                TeamOwnerMemberId = projectedOwner.MemberId,
+                RevocationPending = true,
+                TeamAutomationOperationId = $" {projectedOperationId} ",
+                TeamAutomationIdempotencyKey = $" {projectedIdempotencyKey} ",
+            },
+        };
+        var observationPort = new RecordingTeamAutomationObservationPort();
+        var actorPort = new RecordingScheduledDispatchActorPort
+        {
+            RetryOutcomeScheduleId = scheduleId,
+            RetryOutcomeSink = observationPort.Push,
+        };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort { Detail = detail },
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort(),
+            teamOperationObservationPreparation: observationPort,
+            teamOperationObservationProjection: observationPort);
+
+        var receipt = await service.RetryTeamAutomationRevocationAsync(
+            $" {scheduleId} ",
+            new TeamMemberAutomationOwner(" scope-alpha ", " m-alpha ", " team-alpha "),
+            new ScheduledInvocationAuthorizationOwner(
+                " nyxid ",
+                " Personal ",
+                " credential-owner-alpha "));
+
+        var retry = actorPort.TeamRevocationRetries.Should().ContainSingle().Which;
+        retry.ActorId.Should().Be($"actor:{scheduleId}");
+        retry.Owner.Should().Be(projectedOwner);
+        retry.OperationId.Should().Be(projectedOperationId);
+        retry.IdempotencyKey.Should().Be(projectedIdempotencyKey);
+        retry.AuthenticatedCredentialOwner.Should().Be(authenticatedCredentialOwner);
+        retry.ObservationRequestId.Should().NotBeNullOrWhiteSpace();
+        receipt.Admission.ScheduleId.Should().Be(scheduleId);
+        receipt.Outcome.OperationId.Should().Be(projectedOperationId);
+        receipt.Outcome.IdempotencyKey.Should().Be(projectedIdempotencyKey);
+        receipt.Outcome.Stage.Should().Be(TeamAutomationOperationObservationStages.Delete);
+    }
+
+    [Fact]
+    public async Task DeleteTeamAutomationAsync_WithoutCredentialLifecycle_ShouldDispatchOwnerScopedDelete()
+    {
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
+        var baseDetail = CreateSummaryDetail(
+            "sch-alpha",
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialSourceKind.None);
+        var detail = baseDetail with
+        {
+            Schedule = baseDetail.Schedule with
+            {
+                TeamOwned = true,
+                TeamOwnerScopeId = owner.ScopeId,
+                TeamId = owner.TeamId,
+                TeamOwnerMemberId = owner.MemberId,
+            },
+        };
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort { Detail = detail },
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var receipt = await service.DeleteTeamAutomationAsync(" sch-alpha ", owner, " cleanup ");
+
+        receipt.ScheduleId.Should().Be("sch-alpha");
+        receipt.ScheduleActorId.Should().Be("actor:sch-alpha");
+        actorPort.TeamDeleted.Should().ContainSingle()
+            .Which.Should().Be(("actor:sch-alpha", owner, "cleanup"));
+        actorPort.Deleted.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DeleteTeamAutomationAsync_WithCredentialLifecycle_ShouldRequireRevocationContext()
+    {
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
+        var baseDetail = CreateSummaryDetail(
+            "sch-alpha",
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialSourceKind.None);
+        var detail = baseDetail with
+        {
+            Schedule = baseDetail.Schedule with
+            {
+                TeamOwned = true,
+                TeamOwnerScopeId = owner.ScopeId,
+                TeamId = owner.TeamId,
+                TeamOwnerMemberId = owner.MemberId,
+                TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatus.Active,
+                CredentialGeneration = 1,
+            },
+        };
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort { Detail = detail },
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var act = () => service.DeleteTeamAutomationAsync("sch-alpha", owner, "cleanup");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_delete_requires_revocation_context");
+        actorPort.TeamDeleted.Should().BeEmpty();
+        actorPort.Deleted.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunTeamAutomationNowAsync_WithoutCredentialLifecycle_ShouldBuildBackendOperationAndDispatchOwnerScopedRunNow()
+    {
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
+        var baseDetail = CreateSummaryDetail(
+            "sch-alpha",
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey);
+        var detail = baseDetail with
+        {
+            Schedule = baseDetail.Schedule with
+            {
+                TeamOwned = true,
+                TeamOwnerScopeId = owner.ScopeId,
+                TeamId = owner.TeamId,
+                TeamOwnerMemberId = owner.MemberId,
+            },
+        };
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort { Detail = detail },
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var receipt = await service.RunTeamAutomationNowAsync(
+            " sch-alpha ",
+            new TeamMemberAutomationOwner(" scope-alpha ", " m-alpha ", " team-alpha "));
+
+        receipt.ScheduleId.Should().Be("sch-alpha");
+        receipt.ScheduleActorId.Should().Be("actor:sch-alpha");
+        receipt.IdempotencyKey.Should().StartWith("schedule:sch-alpha:schedule-run-now-sch-alpha-");
+        var runNow = actorPort.TeamRunNow.Should().ContainSingle().Which;
+        runNow.ActorId.Should().Be("actor:sch-alpha");
+        runNow.Owner.Should().Be(owner);
+        runNow.OperationId.Should().StartWith("schedule-run-now-sch-alpha-");
+        runNow.IdempotencyKey.Should().Be($"schedule:sch-alpha:{runNow.OperationId}");
+        actorPort.RunNow.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunTeamAutomationNowAsync_WithCredentialLifecycleNotActive_ShouldRejectBeforeDispatch()
+    {
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
+        var baseDetail = CreateSummaryDetail(
+            "sch-alpha",
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey);
+        var detail = baseDetail with
+        {
+            Schedule = baseDetail.Schedule with
+            {
+                TeamOwned = true,
+                TeamOwnerScopeId = owner.ScopeId,
+                TeamId = owner.TeamId,
+                TeamOwnerMemberId = owner.MemberId,
+                TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatus.NeedsAuthorization,
+                CredentialGeneration = 1,
+            },
+        };
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort { Detail = detail },
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var act = () => service.RunTeamAutomationNowAsync("sch-alpha", owner);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_credential_not_active");
+        actorPort.TeamRunNow.Should().BeEmpty();
+        actorPort.RunNow.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunTeamAutomationNowAsync_WithMismatchedTeamOwner_ShouldReturnNotFoundBeforeDispatch()
+    {
+        var baseDetail = CreateSummaryDetail(
+            "sch-alpha",
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey);
+        var detail = baseDetail with
+        {
+            Schedule = baseDetail.Schedule with
+            {
+                TeamOwned = true,
+                TeamOwnerScopeId = "scope-alpha",
+                TeamId = "team-alpha",
+                TeamOwnerMemberId = "m-alpha",
+            },
+        };
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort { Detail = detail },
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var act = () => service.RunTeamAutomationNowAsync(
+            "sch-alpha",
+            new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-beta"));
+
+        await act.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        actorPort.TeamRunNow.Should().BeEmpty();
+        actorPort.RunNow.Should().BeEmpty();
     }
 
     [Fact]
@@ -631,7 +1063,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new RecordingScheduledDispatchQueryPort(),
             new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
 
-        var act = () => service.UpdateAsync(" missing ", CreateEnvelopeConfiguration("ignored"));
+        var act = () => service.UpdateAsync(" missing ", CreateDefaultServiceInvocationConfiguration("ignored"));
 
         await act.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
         actorPort.EnsuredScheduleIds.Should().BeEmpty();
@@ -646,10 +1078,42 @@ public sealed class ScheduledDispatchApplicationServiceTests
     {
         var service = CreateService();
 
-        var act = () => service.CreateAsync(CreateEnvelopeConfiguration(scheduleId));
+        var act = () => service.CreateAsync(CreateDefaultServiceInvocationConfiguration(scheduleId));
 
         await act.Should().ThrowAsync<ArgumentException>()
             .WithMessage("*letters, digits, '.', '_', and '-'*");
+    }
+
+    [Fact]
+    public void ScheduledDispatchOwner_ShouldTrimTypedStudioMemberAutomationOwner()
+    {
+        var owner = new ScheduledDispatchOwner(
+            "studio_member_automation",
+            " scope-alpha ",
+            " team-alpha ",
+            " m-alpha ");
+
+        owner.ToTeamMemberAutomationOwner().Should().Be(
+            new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha"));
+    }
+
+    [Theory]
+    [InlineData("other", "scope-alpha", "team-alpha", "m-alpha", "Unsupported scheduled dispatch owner kind 'other'.*")]
+    [InlineData("studio_member_automation", " ", "team-alpha", "m-alpha", "Owner scopeId is required.*")]
+    [InlineData("studio_member_automation", "scope-alpha", " ", "m-alpha", "Owner teamId is required.*")]
+    [InlineData("studio_member_automation", "scope-alpha", "team-alpha", " ", "Owner memberId is required.*")]
+    public void ScheduledDispatchOwner_ShouldRejectUnsupportedKindOrMissingOwnerFields(
+        string kind,
+        string scopeId,
+        string teamId,
+        string memberId,
+        string expectedMessage)
+    {
+        var owner = new ScheduledDispatchOwner(kind, scopeId, teamId, memberId);
+
+        var act = () => owner.ToTeamMemberAutomationOwner();
+
+        act.Should().Throw<ArgumentException>().WithMessage(expectedMessage);
     }
 
     [Theory]
@@ -688,17 +1152,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
     {
         var service = CreateService();
 
-        var missingEnvelopePayload = () => service.CreateAsync(new ScheduledDispatchConfiguration(
-            "schedule-1",
-            string.Empty,
-            new ScheduledDispatchTargetDescriptor(
-                ScheduledDispatchTargetKind.Envelope,
-                ActorId: "actor-1",
-                Envelope: new EventEnvelope()),
-            "0 9 * * *",
-            "UTC",
-            true,
-            new Dictionary<string, string>()));
+        var rawEnvelope = () => service.CreateAsync(CreateRawEnvelopeConfiguration("schedule-1"));
         var missingServiceId = () => service.CreateAsync(new ScheduledDispatchConfiguration(
             "schedule-2",
             string.Empty,
@@ -718,7 +1172,13 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new ScheduledDispatchTargetDescriptor(
                 ScheduledDispatchTargetKind.ServiceInvocation,
                 ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
-                    new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
+                    new ServiceIdentity
+                    {
+                        TenantId = "tenant-alpha",
+                        AppId = "app-alpha",
+                        Namespace = "default",
+                        ServiceId = "svc-alpha",
+                    },
                     " ",
                     Any.Pack(new Empty()))),
             "0 9 * * *",
@@ -726,8 +1186,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
             true,
             new Dictionary<string, string>()));
 
-        await missingEnvelopePayload.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*envelope payload*");
+        await rawEnvelope.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*raw envelope*not supported*");
         await missingServiceId.Should().ThrowAsync<ArgumentException>()
             .WithMessage("*service id*");
         await missingEndpoint.Should().ThrowAsync<ArgumentException>()
@@ -1139,6 +1599,14 @@ public sealed class ScheduledDispatchApplicationServiceTests
     public async Task ScheduledDispatchActorPort_ShouldPersistPerServiceAuthorizationGrants()
     {
         var now = new DateTimeOffset(2026, 7, 15, 8, 0, 0, TimeSpan.Zero);
+        var ownerLLMSelection = new ScheduledInvocationOwnerLLMSelection
+        {
+            RouteKind = LLMRouteKind.NyxIdUserService,
+            RouteValue = "/api/v1/proxy/s/chrono-llm-public",
+            NyxIdUserServiceId = "nyx-llm-service-alpha",
+            ServiceSlugSnapshot = "chrono-llm-public",
+            Model = "gpt-5.5",
+        };
         var authorizationFact = new ScheduledInvocationAuthorizationFact(
             "digest-alpha",
             "policy-v1",
@@ -1159,7 +1627,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
                 "catalog-digest-alpha",
                 "scope-plan-contract/v1",
                 "scope-plan-policy/v1",
-                now.AddMinutes(-2)));
+                now.AddMinutes(-2)),
+            ownerLLMSelection);
         var configuration = CreateServiceInvocationConfiguration(
             "schedule-authorization-fact",
             ScheduledDispatchScheduleKind.Workflow,
@@ -1196,6 +1665,104 @@ public sealed class ScheduledDispatchApplicationServiceTests
         stateFact.Authority.CatalogContractVersion.Should().Be("scope-plan-contract/v1");
         stateFact.Authority.CatalogPolicyVersion.Should().Be("scope-plan-policy/v1");
         stateFact.Authority.CatalogEvaluatedAt.ToDateTimeOffset().Should().Be(now.AddMinutes(-2));
+        stateFact.OwnerLlmSelection.Should().BeEquivalentTo(ownerLLMSelection);
+        stateFact.OwnerLlmSelection.Should().NotBeSameAs(ownerLLMSelection);
+
+        dispatchPort.Envelopes.Clear();
+        var callerAuthority = new ScheduledCallerNyxIdAuthority
+        {
+            Platform = "nyxid",
+            Tenant = "tenant-alpha",
+            ExternalUserId = "owner-alpha",
+            Scope = "proxy",
+            BindingId = "binding-alpha",
+        };
+        var decision = new TeamAutomationActivationDecision(
+            configuration.ScheduleId,
+            "Authorization fact schedule",
+            new TeamMemberAutomationOwner("scope-alpha", "member-alpha", "team-alpha"),
+            configuration.Target.ServiceInvocation!.Identity.Clone(),
+            configuration.Target.ServiceInvocation.EndpointId,
+            configuration.Target.ServiceInvocation.Payload.Clone(),
+            callerAuthority,
+            authorizationFact,
+            configuration.CronExpression,
+            configuration.Timezone,
+            configuration.Enabled,
+            configuration.ScheduleKind,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["trace"] = "scheduled",
+            },
+            configuration.ScheduleMode,
+            configuration.OneShotFireAt,
+            configuration.CredentialRequirementTargetKind,
+            "revision-alpha",
+            new ServiceInvocationCaller
+            {
+                ServiceKey = "tenant-alpha:app-alpha:default:caller-alpha",
+                TenantId = "tenant-alpha",
+                AppId = "app-alpha",
+            });
+        await port.DispatchBeginTeamAutomationCredentialOperationAsync(
+            actorId,
+            new TeamAutomationCredentialOperation(
+                configuration.ScheduleId,
+                decision.Owner,
+                "operation-alpha",
+                "idempotency-alpha",
+                authorizationFact.PermissionDigest,
+                authorizationFact.PolicyVersion,
+                TeamAutomationOperationKind.Create,
+                new ScheduledCredentialEffectLocator(
+                    "credential-alpha",
+                    "secret-alpha",
+                    CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                    "schedule:schedule-authorization-fact",
+                    authorizationFact.Owner),
+                decision,
+                "mutation-alpha"),
+            "observation-alpha");
+
+        var begin = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload
+            .Unpack<BeginTeamAutomationCredentialOperationCommand>();
+        begin.ActivationDecision.ScheduleId.Should().Be(decision.ScheduleId);
+        begin.ActivationDecision.Owner.Should().BeEquivalentTo(new TeamMemberAutomationOwnerState
+        {
+            ScopeId = "scope-alpha",
+            MemberId = "member-alpha",
+            TeamId = "team-alpha",
+        });
+        begin.ActivationDecision.ServiceIdentity.Should().BeEquivalentTo(decision.ServiceIdentity);
+        begin.ActivationDecision.Payload.Should().Be(decision.Payload);
+        begin.ActivationDecision.CallerAuthority.Should().BeEquivalentTo(callerAuthority);
+        begin.ActivationDecision.AuthorizationFact.Should().BeEquivalentTo(stateFact);
+        begin.ActivationDecision.AuthorizationFact.OwnerLlmSelection.Should().NotBeSameAs(ownerLLMSelection);
+        begin.ActivationDecision.Headers.Should().Contain("trace", "scheduled");
+        begin.ActivationDecision.CredentialRequirementTargetKind.Should()
+            .Be(ScheduledDispatchCredentialRequirementTargetKindState.WorkflowService);
+        begin.ActivationDecision.RevisionId.Should().Be("revision-alpha");
+        begin.ActivationDecision.Caller.ServiceKey.Should().Be(decision.Caller!.ServiceKey);
+
+        dispatchPort.Envelopes.Clear();
+        await port.DispatchRetryTeamAutomationCredentialOperationAsync(
+            actorId,
+            decision.Owner,
+            "operation-stale",
+            "idempotency-stale",
+            "observation-retry");
+
+        var retry = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload
+            .Unpack<RetryTeamAutomationCredentialOperationCommand>();
+        retry.Owner.Should().BeEquivalentTo(new TeamMemberAutomationOwnerState
+        {
+            ScopeId = "scope-alpha",
+            MemberId = "member-alpha",
+            TeamId = "team-alpha",
+        });
+        retry.OperationId.Should().Be("operation-stale");
+        retry.IdempotencyKey.Should().Be("idempotency-stale");
+        retry.ObservationRequestId.Should().Be("observation-retry");
     }
 
     [Fact]
@@ -1255,7 +1822,17 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
                     "run",
                     Any.Pack(new StringValue { Value = "invoke" }),
-                    Auth: new ScheduledServiceInvocationAuth(ScheduledInvocationAgentKey: reference))),
+                    Auth: new ScheduledServiceInvocationAuth(ScheduledInvocationAgentKey: reference)
+                    {
+                        CallerAuthority = new ScheduledCallerNyxIdAuthority
+                        {
+                            Platform = "lark",
+                            Tenant = "tenant-alpha",
+                            ExternalUserId = "sender-alpha",
+                            Scope = "proxy",
+                            BindingId = "bnd-owner-alpha",
+                        },
+                    })),
             "0 9 * * *",
             "UTC",
             true,
@@ -1274,6 +1851,16 @@ public sealed class ScheduledDispatchApplicationServiceTests
         auth.ScheduledInvocationAgentKey.SecretReference.Purpose.Should().Be(CredentialSecretPurposes.ScheduledInvocationAgentKey);
         auth.ScheduledInvocationAgentKey.ApiKeyId.Should().Be("key-schedule");
         auth.ScheduledInvocationAgentKey.KeyExpiresAtUnixMs.Should().Be(reference.KeyExpiresAtUnixMs);
+        var roundTripped = ScheduledDispatchCreateCommand.Parser.ParseFrom(command.ToByteArray());
+        roundTripped.Target.ServiceInvocation.Auth.CallerAuthority.Should().BeEquivalentTo(
+            new ScheduledCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-alpha",
+                ExternalUserId = "sender-alpha",
+                Scope = "proxy",
+                BindingId = "bnd-owner-alpha",
+            });
     }
 
     [Fact]
@@ -1336,12 +1923,35 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task ScheduledDispatchActorPort_ShouldMapOwnerScopedDeleteWithoutCredentialLifecycleFields()
+    {
+        var dispatchPort = new RecordingActorDispatchPort();
+        var port = new ScheduledDispatchActorPort(new RecordingActorRuntime(), dispatchPort);
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "member-alpha", "team-alpha");
+
+        await port.DispatchDeleteTeamAutomationAsync(
+            "scheduled-dispatch:sch-alpha",
+            owner,
+            "cleanup");
+
+        var command = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload.Unpack<ScheduledDispatchDeleteCommand>();
+        command.Reason.Should().Be("cleanup");
+        command.TeamAutomationOwner.ScopeId.Should().Be("scope-alpha");
+        command.TeamAutomationOwner.TeamId.Should().Be("team-alpha");
+        command.TeamAutomationOwner.MemberId.Should().Be("member-alpha");
+        command.OperationId.Should().BeEmpty();
+        command.IdempotencyKey.Should().BeEmpty();
+        command.AuthenticatedCredentialOwner.Should().BeNull();
+        command.ObservationRequestId.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ScheduledDispatchActorPort_ShouldMapOneShotScheduleMode()
     {
         var dispatchPort = new RecordingActorDispatchPort();
         var port = new ScheduledDispatchActorPort(new RecordingActorRuntime(), dispatchPort);
         var fireAt = new DateTimeOffset(2026, 7, 14, 1, 30, 0, TimeSpan.Zero);
-        var configuration = CreateEnvelopeConfiguration("one-shot-1") with
+        var configuration = CreateDefaultServiceInvocationConfiguration("one-shot-1") with
         {
             CronExpression = string.Empty,
             ScheduleMode = ScheduledDispatchScheduleMode.OneShotAtUtc,
@@ -1359,11 +1969,11 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
-    public async Task ScheduledDispatchActorPort_ShouldMapEnvelopeUpdateAndRejectUnsupportedTarget()
+    public async Task ScheduledDispatchActorPort_ShouldMapServiceInvocationUpdateAndRejectUnsupportedTarget()
     {
         var dispatchPort = new RecordingActorDispatchPort();
         var port = new ScheduledDispatchActorPort(new RecordingActorRuntime(), dispatchPort);
-        var configuration = CreateEnvelopeConfiguration("schedule-1");
+        var configuration = CreateDefaultServiceInvocationConfiguration("schedule-1");
         var prepared = await new ScheduledDispatchTargetPreparationService()
             .PrepareAsync(configuration, "cmd-1", "corr-1");
 
@@ -1378,9 +1988,9 @@ public sealed class ScheduledDispatchApplicationServiceTests
                 new ScheduledDispatchTargetDescriptor((ScheduledDispatchTargetKind)99)));
 
         var command = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload.Unpack<ScheduledDispatchUpdateCommand>();
-        command.Target.Kind.Should().Be(ScheduledDispatchTargetKindState.Envelope);
-        command.Target.ActorId.Should().Be("actor-1");
-        command.Target.Envelope.Payload.Unpack<Empty>().Should().NotBeNull();
+        command.Target.Kind.Should().Be(ScheduledDispatchTargetKindState.ServiceInvocation);
+        command.Target.ServiceInvocation.Identity.ServiceId.Should().Be("svc-alpha");
+        command.Target.ServiceInvocation.EndpointId.Should().Be("run");
         command.ScheduleKind.Should().Be(ScheduledDispatchScheduleKindState.Generic);
         await unsupported.Should().ThrowAsync<ArgumentException>()
             .WithMessage("*Unsupported scheduled dispatch target kind*");
@@ -1394,9 +2004,9 @@ public sealed class ScheduledDispatchApplicationServiceTests
         {
             Detail = CreateSummaryDetail(
                 "schedule-1",
-                ScheduledDispatchTargetKind.Envelope,
+                ScheduledDispatchTargetKind.ServiceInvocation,
                 ScheduledDispatchScheduleKind.Generic,
-                ScheduledDispatchCredentialRequirementTargetKind.Envelope,
+                ScheduledDispatchCredentialRequirementTargetKind.StaticService,
                 ScheduledDispatchCredentialSourceKind.None),
         };
         var service = new ScheduledDispatchApplicationService(
@@ -1466,8 +2076,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
                 new ScheduledDispatchSummary(
                     "schedule-1",
                     string.Empty,
-                    ScheduledDispatchTargetKind.Envelope,
-                    "actor-1",
+                    ScheduledDispatchTargetKind.ServiceInvocation,
+                    string.Empty,
                     string.Empty,
                     string.Empty,
                     string.Empty,
@@ -1479,6 +2089,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     DateTimeOffset.Parse("2026-05-29T09:00:00+00:00"),
                     null,
                     null,
+                    string.Empty,
                     string.Empty,
                     string.Empty,
                     string.Empty,
@@ -1497,8 +2108,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
 
         var get = await service.GetAsync(" schedule-1 ");
-        var update = () => service.UpdateAsync("schedule-1", CreateEnvelopeConfiguration("schedule-1"));
-        var ensure = () => service.EnsureAsync(CreateEnvelopeConfiguration("schedule-1"));
+        var update = () => service.UpdateAsync("schedule-1", CreateDefaultServiceInvocationConfiguration("schedule-1"));
+        var ensure = () => service.EnsureAsync(CreateDefaultServiceInvocationConfiguration("schedule-1"));
         var enable = () => service.EnableAsync("schedule-1", string.Empty);
         var disable = () => service.DisableAsync("schedule-1", string.Empty);
         var delete = () => service.DeleteAsync("schedule-1", string.Empty);
@@ -1525,9 +2136,9 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var actorPort = new RecordingScheduledDispatchActorPort();
         var detail = CreateSummaryDetail(
             "team-schedule",
-            ScheduledDispatchTargetKind.Envelope,
+            ScheduledDispatchTargetKind.ServiceInvocation,
             ScheduledDispatchScheduleKind.Generic,
-            ScheduledDispatchCredentialRequirementTargetKind.Envelope,
+            ScheduledDispatchCredentialRequirementTargetKind.StaticService,
             ScheduledDispatchCredentialSourceKind.None);
         var queryPort = new RecordingScheduledDispatchQueryPort
         {
@@ -1549,8 +2160,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
         (await service.GetAsync("team-schedule")).Should().BeNull();
         var update = () => service.UpdateAsync(
-            "team-schedule", CreateEnvelopeConfiguration("team-schedule"));
-        var ensure = () => service.EnsureAsync(CreateEnvelopeConfiguration("team-schedule"));
+            "team-schedule", CreateDefaultServiceInvocationConfiguration("team-schedule"));
+        var ensure = () => service.EnsureAsync(CreateDefaultServiceInvocationConfiguration("team-schedule"));
         var enable = () => service.EnableAsync("team-schedule", string.Empty);
         var disable = () => service.DisableAsync("team-schedule", string.Empty);
         var delete = () => service.DeleteAsync("team-schedule", string.Empty);
@@ -1570,6 +2181,134 @@ public sealed class ScheduledDispatchApplicationServiceTests
         actorPort.Disabled.Should().BeEmpty();
         actorPort.Deleted.Should().BeEmpty();
         actorPort.RunNow.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task LegacyEnvelopeSchedule_ShouldBeHiddenFromGenericGetAndLifecycleBeforeActorDispatch()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var queryPort = new RecordingScheduledDispatchQueryPort
+        {
+            Detail = CreateSummaryDetail(
+                "schedule-legacy-envelope",
+                ScheduledDispatchTargetKind.Envelope,
+                ScheduledDispatchScheduleKind.Generic,
+                ScheduledDispatchCredentialRequirementTargetKind.Envelope,
+                ScheduledDispatchCredentialSourceKind.None),
+        };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var get = await service.GetAsync("schedule-legacy-envelope");
+        var enable = () => service.EnableAsync("schedule-legacy-envelope", "resume");
+        var disable = () => service.DisableAsync("schedule-legacy-envelope", "pause");
+        var delete = () => service.DeleteAsync("schedule-legacy-envelope", "remove");
+        var runNow = () => service.RunNowAsync("schedule-legacy-envelope");
+
+        get.Should().BeNull();
+        await enable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await disable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await delete.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await runNow.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        actorPort.ResolvedScheduleIds.Should().BeEmpty();
+        actorPort.Enabled.Should().BeEmpty();
+        actorPort.Disabled.Should().BeEmpty();
+        actorPort.Deleted.Should().BeEmpty();
+        actorPort.RunNow.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task LegacyEnvelopeSchedule_ShouldBeHiddenFromTeamGetAndLifecycleBeforeActorDispatch()
+    {
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
+        var legacy = CreateSummaryDetail(
+            "schedule-team-legacy-envelope",
+            ScheduledDispatchTargetKind.Envelope,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.Envelope,
+            ScheduledDispatchCredentialSourceKind.None);
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var queryPort = new RecordingScheduledDispatchQueryPort
+        {
+            Detail = legacy with
+            {
+                Schedule = legacy.Schedule with
+                {
+                    TeamOwned = true,
+                    TeamOwnerScopeId = owner.ScopeId,
+                    TeamId = owner.TeamId,
+                    TeamOwnerMemberId = owner.MemberId,
+                },
+            },
+        };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var getByScope = await service.GetTeamScheduleAsync(
+            "schedule-team-legacy-envelope",
+            owner.ScopeId,
+            owner.TeamId,
+            owner.MemberId);
+        var getByOwner = await service.GetTeamAutomationAsync("schedule-team-legacy-envelope", owner);
+        var enable = () => service.EnableTeamAutomationAsync("schedule-team-legacy-envelope", owner, "resume");
+        var disable = () => service.DisableTeamAutomationAsync("schedule-team-legacy-envelope", owner, "pause");
+        var delete = () => service.DeleteTeamAutomationAsync("schedule-team-legacy-envelope", owner, "remove");
+        var runNow = () => service.RunTeamAutomationNowAsync("schedule-team-legacy-envelope", owner);
+
+        getByScope.Should().BeNull();
+        getByOwner.Should().BeNull();
+        await enable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await disable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await delete.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await runNow.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        actorPort.ResolvedScheduleIds.Should().BeEmpty();
+        actorPort.TeamDeleted.Should().BeEmpty();
+        actorPort.TeamRunNow.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PendingTeamAutomation_ShouldBeVisibleToOwnerBeforeTargetActivation()
+    {
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
+        var pending = CreateSummaryDetail(
+            "schedule-team-pending",
+            ScheduledDispatchTargetKind.Envelope,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialSourceKind.None);
+        var queryPort = new RecordingScheduledDispatchQueryPort
+        {
+            Detail = pending with
+            {
+                Schedule = pending.Schedule with
+                {
+                    TeamOwned = true,
+                    TeamOwnerScopeId = owner.ScopeId,
+                    TeamId = owner.TeamId,
+                    TeamOwnerMemberId = owner.MemberId,
+                    TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatus.ProvisioningPending,
+                    TeamAutomationOperationId = "operation-alpha",
+                    TeamAutomationIdempotencyKey = "idempotency-alpha",
+                },
+            },
+        };
+        var service = new ScheduledDispatchApplicationService(
+            new RecordingScheduledDispatchActorPort(),
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var detail = await service.GetTeamAutomationAsync("schedule-team-pending", owner);
+
+        detail.Should().NotBeNull();
+        detail!.Schedule.TeamAutomationOperationId.Should().Be("operation-alpha");
+        detail.Schedule.TargetKind.Should().Be(ScheduledDispatchTargetKind.Envelope);
     }
 
     [Fact]
@@ -1627,9 +2366,15 @@ public sealed class ScheduledDispatchApplicationServiceTests
             ScheduledDispatchScheduleKind.Workflow));
         queryPort.FilteredListRequests.Should().HaveCount(3);
         queryPort.FilteredListRequests[0].Should().Be(new ScheduledDispatchListQuery(
-            1, "cursor-1", true, ExcludeTeamOwned: true));
+            1,
+            "cursor-1",
+            true,
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            ExcludeTeamOwned: true));
         queryPort.FilteredListRequests[1].Should().Be(new ScheduledDispatchListQuery(
-            200, ExcludeTeamOwned: true));
+            200,
+            TargetKind: ScheduledDispatchTargetKind.ServiceInvocation,
+            ExcludeTeamOwned: true));
         queryPort.FilteredListRequests[2].Should().Be(new ScheduledDispatchListQuery(
             25,
             "cursor-2",
@@ -1638,9 +2383,52 @@ public sealed class ScheduledDispatchApplicationServiceTests
             "chat",
             ScheduledDispatchScheduleKind.Workflow,
             ExcludeTeamOwned: true));
+        await service.ListAsync(new ScheduledDispatchListQuery(
+            25,
+            "cursor-3",
+            true,
+            TeamAutomationScopeId: " scope-alpha ",
+            TeamAutomationTeamId: " team-alpha ",
+            TeamAutomationMemberId: " member-alpha "));
+        queryPort.FilteredListRequests.Should().HaveCount(4);
+        queryPort.FilteredListRequests[3].Should().Be(new ScheduledDispatchListQuery(
+            Take: 25,
+            Cursor: "cursor-3",
+            IncludeTotalCount: true,
+            TeamAutomationScopeId: "scope-alpha",
+            TeamAutomationTeamId: "team-alpha",
+            TeamAutomationMemberId: "member-alpha",
+            TargetKind: ScheduledDispatchTargetKind.ServiceInvocation));
         preview.Timezone.Should().Be("UTC");
         preview.NextFireTimes.Should().HaveCount(100);
         await invalidPreview.Should().ThrowAsync<ArgumentException>();
+    }
+
+    [Fact]
+    public async Task ListAsync_WithTypedTeamOwner_ShouldForwardOwnerToQueryPort()
+    {
+        var queryPort = new RecordingScheduledDispatchQueryPort();
+        var service = new ScheduledDispatchApplicationService(
+            new RecordingScheduledDispatchActorPort(),
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var owner = new TeamMemberAutomationOwner(" scope-alpha ", " m-alpha ", " team-alpha ");
+
+        await service.ListAsync(new ScheduledDispatchListQuery(
+            Take: 25,
+            Cursor: "cursor-owner",
+            IncludeTotalCount: true,
+            TeamAutomationOwner: owner));
+
+        queryPort.FilteredListRequests.Should().ContainSingle().Which.Should().Be(new ScheduledDispatchListQuery(
+            Take: 25,
+            Cursor: "cursor-owner",
+            IncludeTotalCount: true,
+            TargetKind: ScheduledDispatchTargetKind.ServiceInvocation,
+            TeamAutomationOwner: new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha"),
+            ExcludeTeamOwned: false,
+            ExcludeCompletedTeamAutomationDeletions: true));
     }
 
     [Fact]
@@ -1663,7 +2451,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new NoopScheduledDispatchCredentialAdmissionPort());
 
         var result = await service.ListTeamAutomationsAsync(
-            new TeamMemberAutomationOwner(" scope-alpha ", " member-alpha "),
+            new TeamMemberAutomationOwner(" scope-alpha ", " member-alpha ", " team-alpha "),
             25,
             "cursor-input",
             includeTotalCount: true);
@@ -1674,8 +2462,45 @@ public sealed class ScheduledDispatchApplicationServiceTests
                 Take: 25,
                 Cursor: "cursor-input",
                 IncludeTotalCount: true,
-                TeamAutomationOwner: new TeamMemberAutomationOwner("scope-alpha", "member-alpha"),
+                TargetKind: ScheduledDispatchTargetKind.ServiceInvocation,
+                TeamAutomationOwner: new TeamMemberAutomationOwner("scope-alpha", "member-alpha", "team-alpha"),
                 ExcludeCompletedTeamAutomationDeletions: true));
+    }
+
+    [Fact]
+    public async Task ListMethods_ShouldHideLegacyEnvelopeRowsBeforePaging()
+    {
+        var legacy = CreateSummaryDetail(
+            "schedule-legacy-envelope",
+            ScheduledDispatchTargetKind.Envelope,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.Envelope,
+            ScheduledDispatchCredentialSourceKind.None);
+        var queryPort = new RecordingScheduledDispatchQueryPort
+        {
+            ListResult = new ScheduledDispatchListResult([legacy.Schedule], "legacy-cursor", 1),
+        };
+        var service = new ScheduledDispatchApplicationService(
+            new RecordingScheduledDispatchActorPort(),
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
+
+        var generic = await service.ListAsync();
+        var teamScope = await service.ListAsync(new ScheduledDispatchListQuery(
+            TeamAutomationScopeId: owner.ScopeId,
+            TeamAutomationTeamId: owner.TeamId,
+            TeamAutomationMemberId: owner.MemberId));
+        var teamOwner = await service.ListAsync(new ScheduledDispatchListQuery(TeamAutomationOwner: owner));
+        var teamAutomations = await service.ListTeamAutomationsAsync(owner);
+
+        generic.Items.Should().BeEmpty();
+        teamScope.Items.Should().BeEmpty();
+        teamOwner.Items.Should().BeEmpty();
+        teamAutomations.Items.Should().BeEmpty();
+        queryPort.FilteredListRequests.Should().HaveCount(4)
+            .And.OnlyContain(query => query.TargetKind == ScheduledDispatchTargetKind.ServiceInvocation);
     }
 
     [Fact]
@@ -1756,6 +2581,117 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task ScheduledDispatchQueryPort_ShouldMapPinnedServiceRevision()
+    {
+        var document = new ScheduledDispatchDocument
+        {
+            ScheduleId = "workflow-revision-pinned",
+            TargetKind = ScheduledDispatchTargetKind.ServiceInvocation.ToString(),
+            ServiceId = "svc-alpha",
+            ServiceEndpointId = "chat",
+        };
+        SetRequiredStringProperty(document, "ServiceRevisionId", "rev-pinned");
+        var reader = new RecordingScheduledDispatchDocumentReader
+        {
+            Result = new ProjectionDocumentQueryResult<ScheduledDispatchDocument>
+            {
+                Items = [document],
+            },
+        };
+        var port = new ScheduledDispatchQueryPort(reader);
+
+        var result = await port.ListAsync(new ScheduledDispatchListQuery(25));
+
+        var item = result.Items.Should().ContainSingle().Which;
+        item.ServiceId.Should().Be("svc-alpha");
+        item.ServiceEndpointId.Should().Be("chat");
+        ReadRequiredStringProperty(item, "ServiceRevisionId").Should().Be("rev-pinned");
+    }
+
+    [Fact]
+    public async Task ScheduledDispatchQueryPort_ShouldMapOwnerLLMRuntimeEvidence()
+    {
+        var document = new ScheduledDispatchDocument
+        {
+            ScheduleId = "workflow-owner-llm",
+            StateVersion = 31,
+        };
+        SetRequiredStringProperty(document, "OwnerLlmRouteKind", "nyx_id_user_service");
+        SetRequiredStringProperty(document, "OwnerLlmRoute", "/api/v1/proxy/s/chrono-llm-public");
+        SetRequiredStringProperty(document, "OwnerLlmUserServiceId", "us-chrono");
+        SetRequiredStringProperty(document, "OwnerLlmServiceSlug", "chrono-llm-public");
+        SetRequiredStringProperty(document, "OwnerLlmModel", "gpt-5.5");
+        var reader = new RecordingScheduledDispatchDocumentReader
+        {
+            Result = new ProjectionDocumentQueryResult<ScheduledDispatchDocument>
+            {
+                Items = [document],
+            },
+        };
+        var port = new ScheduledDispatchQueryPort(reader);
+
+        var result = await port.ListAsync(new ScheduledDispatchListQuery(25));
+
+        var item = result.Items.Should().ContainSingle().Which;
+        ReadRequiredStringProperty(item, "OwnerLLMRouteKind").Should().Be("nyx_id_user_service");
+        ReadRequiredStringProperty(item, "OwnerLLMRoute").Should()
+            .Be("/api/v1/proxy/s/chrono-llm-public");
+        ReadRequiredStringProperty(item, "OwnerLLMUserServiceId").Should().Be("us-chrono");
+        ReadRequiredStringProperty(item, "OwnerLLMServiceSlug").Should().Be("chrono-llm-public");
+        ReadRequiredStringProperty(item, "OwnerLLMModel").Should().Be("gpt-5.5");
+        item.StateVersion.Should().Be(31);
+    }
+
+    [Fact]
+    public async Task ScheduledDispatchQueryPort_ShouldPreserveDistinctRevocationTrackStatuses()
+    {
+        var document = new ScheduledDispatchDocument
+        {
+            ScheduleId = "workflow-revocation-evidence",
+            RevocationPending = true,
+            StateVersion = 37,
+        };
+        SetRequiredStringProperty(document, "NyxidRevocationStatus", "nyx-track-terminal");
+        SetRequiredStringProperty(document, "VaultRevocationStatus", "vault-track-terminal");
+        var reader = new RecordingScheduledDispatchDocumentReader
+        {
+            Result = new ProjectionDocumentQueryResult<ScheduledDispatchDocument>
+            {
+                Items = [document],
+            },
+        };
+        var port = new ScheduledDispatchQueryPort(reader);
+
+        var result = await port.ListAsync(new ScheduledDispatchListQuery(25));
+
+        var item = result.Items.Should().ContainSingle().Which;
+        ReadRequiredStringProperty(item, "NyxIdRevocationStatus").Should().Be("nyx-track-terminal");
+        ReadRequiredStringProperty(item, "VaultRevocationStatus").Should().Be("vault-track-terminal");
+        item.RevocationPending.Should().BeTrue();
+        item.StateVersion.Should().Be(37);
+    }
+
+    [Fact]
+    public async Task ScheduledDispatchQueryPort_ShouldUseUnspecifiedOwnerLLMRouteKindForHistoricalDocument()
+    {
+        var reader = new RecordingScheduledDispatchDocumentReader
+        {
+            Result = new ProjectionDocumentQueryResult<ScheduledDispatchDocument>
+            {
+                Items = [new ScheduledDispatchDocument { ScheduleId = "historical-schedule" }],
+            },
+        };
+        var port = new ScheduledDispatchQueryPort(reader);
+
+        var result = await port.ListAsync(new ScheduledDispatchListQuery(25));
+
+        var item = result.Items.Should().ContainSingle().Which;
+        ReadRequiredStringProperty(item, "OwnerLLMRouteKind").Should().Be("unspecified");
+        ReadRequiredStringProperty(item, "NyxIdRevocationStatus").Should().BeEmpty();
+        ReadRequiredStringProperty(item, "VaultRevocationStatus").Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ScheduledDispatchQueryPort_ShouldFailClosedForUnknownLifecycleStatus()
     {
         var reader = new RecordingScheduledDispatchDocumentReader
@@ -1782,11 +2718,71 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task GetTeamScheduleAsync_ShouldFilterByScopeAndOptionalMember()
+    {
+        var baseDetail = CreateSummaryDetail(
+            "schedule-1",
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey);
+        var detail = baseDetail with
+        {
+            Schedule = baseDetail.Schedule with
+            {
+                TeamOwnerScopeId = "scope-alpha",
+                TeamOwnerMemberId = "member-alpha",
+                TeamId = "team-alpha",
+            },
+        };
+        var queryPort = new RecordingScheduledDispatchQueryPort { Detail = detail };
+        var service = new ScheduledDispatchApplicationService(
+            new RecordingScheduledDispatchActorPort(),
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var scopeOnly = await service.GetTeamScheduleAsync(" schedule-1 ", " scope-alpha ");
+        var teamMatch = await service.GetTeamScheduleAsync(
+            "schedule-1",
+            "scope-alpha",
+            teamId: " team-alpha ");
+        var memberMatch = await service.GetTeamScheduleAsync(
+            "schedule-1",
+            "scope-alpha",
+            teamId: "team-alpha",
+            memberId: " member-alpha ");
+        var teamMismatch = await service.GetTeamScheduleAsync(
+            "schedule-1",
+            "scope-alpha",
+            teamId: "team-beta");
+        var memberMismatch = await service.GetTeamScheduleAsync(
+            "schedule-1",
+            "scope-alpha",
+            memberId: "member-beta");
+        var scopeMismatch = await service.GetTeamScheduleAsync("schedule-1", "scope-beta");
+
+        scopeOnly.Should().BeSameAs(detail);
+        teamMatch.Should().BeSameAs(detail);
+        memberMatch.Should().BeSameAs(detail);
+        teamMismatch.Should().BeNull();
+        memberMismatch.Should().BeNull();
+        scopeMismatch.Should().BeNull();
+        queryPort.GetScheduleIds.Should().Equal(
+            "schedule-1",
+            "schedule-1",
+            "schedule-1",
+            "schedule-1",
+            "schedule-1",
+            "schedule-1");
+    }
+
+    [Fact]
     public async Task ScheduledDispatchQueryPort_ShouldApplyTeamOwnerFilterBeforePagingAndCount()
     {
         var reader = new RecordingScheduledDispatchDocumentReader();
         var port = new ScheduledDispatchQueryPort(reader);
-        var owner = new TeamMemberAutomationOwner("scope-alpha", "member-alpha");
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "member-alpha", "team-alpha");
 
         await port.ListAsync(new ScheduledDispatchListQuery(
             Take: 25,
@@ -1799,12 +2795,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
         reader.LastQuery!.Take.Should().Be(25);
         reader.LastQuery.Cursor.Should().Be("cursor");
         reader.LastQuery.IncludeTotalCount.Should().BeTrue();
-        reader.LastQuery.Filters.Should().ContainEquivalentOf(new ProjectionDocumentFilter
-        {
-            FieldPath = nameof(ScheduledDispatchDocument.TeamOwned),
-            Operator = ProjectionDocumentFilterOperator.Eq,
-            Value = ProjectionDocumentValue.FromBool(true),
-        }, options => options.ComparingByMembers<ProjectionDocumentValue>());
+        reader.LastQuery.Filters.Should().NotContain(filter =>
+            filter.FieldPath == nameof(ScheduledDispatchDocument.TeamOwned));
         reader.LastQuery.Filters.Should().ContainEquivalentOf(new ProjectionDocumentFilter
         {
             FieldPath = $"{nameof(ScheduledDispatchDocument.TeamAutomationOwner)}.{nameof(TeamMemberAutomationOwnerDocument.ScopeId)}",
@@ -1813,12 +2805,16 @@ public sealed class ScheduledDispatchApplicationServiceTests
         }, options => options.ComparingByMembers<ProjectionDocumentValue>());
         reader.LastQuery.Filters.Should().ContainEquivalentOf(new ProjectionDocumentFilter
         {
+            FieldPath = nameof(ScheduledDispatchDocument.TeamId),
+            Operator = ProjectionDocumentFilterOperator.Eq,
+            Value = ProjectionDocumentValue.FromString("team-alpha"),
+        }, options => options.ComparingByMembers<ProjectionDocumentValue>());
+        reader.LastQuery.Filters.Should().ContainEquivalentOf(new ProjectionDocumentFilter
+        {
             FieldPath = $"{nameof(ScheduledDispatchDocument.TeamAutomationOwner)}.{nameof(TeamMemberAutomationOwnerDocument.MemberId)}",
             Operator = ProjectionDocumentFilterOperator.Eq,
             Value = ProjectionDocumentValue.FromString("member-alpha"),
         }, options => options.ComparingByMembers<ProjectionDocumentValue>());
-        reader.LastQuery.Filters.Should().NotContain(filter =>
-            filter.FieldPath.EndsWith("CurrentTeamId", StringComparison.Ordinal));
         reader.LastQuery.AnyOfFilters.Should().BeEquivalentTo(
             new[]
             {
@@ -1839,55 +2835,41 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
-    public async Task TargetPreparation_ShouldPreserveExistingEnvelopeIdentityAndCorrelation()
+    public async Task ScheduledDispatchQueryPort_ShouldApplyTeamScopeWithoutTeamOwnedTeamOrMemberFilter()
     {
-        var service = new ScheduledDispatchTargetPreparationService();
-        var envelope = new EventEnvelope
+        var reader = new RecordingScheduledDispatchDocumentReader();
+        var port = new ScheduledDispatchQueryPort(reader);
+
+        await port.ListAsync(new ScheduledDispatchListQuery(
+            Take: 25,
+            Cursor: "cursor",
+            IncludeTotalCount: true,
+            TeamAutomationScopeId: " scope-alpha "));
+
+        reader.LastQuery.Should().NotBeNull();
+        reader.LastQuery!.Filters.Should().ContainEquivalentOf(new ProjectionDocumentFilter
         {
-            Id = "existing-command",
-            Payload = Any.Pack(new StringValue { Value = "run" }),
-            Route = EnvelopeRouteSemantics.CreateDirect("publisher-1", "route-target"),
-            Propagation = new EnvelopePropagation { CorrelationId = "existing-correlation" },
-        };
-
-        var prepared = await service.PrepareAsync(
-            new ScheduledDispatchConfiguration(
-                "schedule-1",
-                string.Empty,
-                new ScheduledDispatchTargetDescriptor(
-                    ScheduledDispatchTargetKind.Envelope,
-                    Envelope: envelope),
-                "0 9 * * *",
-                "UTC",
-                true,
-                new Dictionary<string, string>()),
-            "cmd-1",
-            "corr-1");
-
-        prepared.TargetActorId.Should().Be("route-target");
-        prepared.TriggerEnvelope.Id.Should().Be("existing-command");
-        prepared.TriggerEnvelope.Route.PublisherActorId.Should().Be("publisher-1");
-        prepared.TriggerEnvelope.Propagation!.CorrelationId.Should().Be("existing-correlation");
-        envelope.Id.Should().Be("existing-command");
+            FieldPath = nameof(ScheduledDispatchDocument.Deleted),
+            Operator = ProjectionDocumentFilterOperator.EqOrMissing,
+            Value = ProjectionDocumentValue.FromBool(false),
+        }, options => options.ComparingByMembers<ProjectionDocumentValue>());
+        reader.LastQuery.Filters.Should().NotContain(filter =>
+            filter.FieldPath == nameof(ScheduledDispatchDocument.TeamOwned));
+        reader.LastQuery.Filters.Should().ContainEquivalentOf(new ProjectionDocumentFilter
+        {
+            FieldPath = $"{nameof(ScheduledDispatchDocument.TeamAutomationOwner)}.{nameof(TeamMemberAutomationOwnerDocument.ScopeId)}",
+            Operator = ProjectionDocumentFilterOperator.Eq,
+            Value = ProjectionDocumentValue.FromString("scope-alpha"),
+        }, options => options.ComparingByMembers<ProjectionDocumentValue>());
+        reader.LastQuery.Filters.Should().HaveCount(2);
+        reader.LastQuery.Filters.Should().NotContain(filter =>
+            filter.FieldPath == $"{nameof(ScheduledDispatchDocument.TeamAutomationOwner)}.{nameof(TeamMemberAutomationOwnerDocument.MemberId)}");
     }
 
     [Fact]
-    public async Task TargetPreparation_ShouldRejectMissingEnvelopeTargetActorAndUnsupportedKind()
+    public async Task TargetPreparation_ShouldRejectUnsupportedKind()
     {
         var service = new ScheduledDispatchTargetPreparationService();
-        var missingActor = () => service.PrepareAsync(
-            new ScheduledDispatchConfiguration(
-                "schedule-1",
-                string.Empty,
-                new ScheduledDispatchTargetDescriptor(
-                    ScheduledDispatchTargetKind.Envelope,
-                    Envelope: new EventEnvelope { Payload = Any.Pack(new Empty()) }),
-                "0 9 * * *",
-                "UTC",
-                true,
-                new Dictionary<string, string>()),
-            "cmd-1",
-            "corr-1");
         var unsupported = () => service.PrepareAsync(
             new ScheduledDispatchConfiguration(
                 "schedule-1",
@@ -1900,8 +2882,6 @@ public sealed class ScheduledDispatchApplicationServiceTests
             "cmd-1",
             "corr-1");
 
-        await missingActor.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*actor id*");
         await unsupported.Should().ThrowAsync<ArgumentException>()
             .WithMessage("*Unsupported scheduled dispatch target kind*");
     }
@@ -1939,13 +2919,19 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new ScheduledDispatchTargetPreparationService(),
             new NoopScheduledDispatchCredentialAdmissionPort());
 
-    private static ScheduledDispatchConfiguration CreateEnvelopeConfiguration(string scheduleId) =>
+    private static ScheduledDispatchConfiguration CreateDefaultServiceInvocationConfiguration(string scheduleId) =>
+        CreateServiceInvocationConfiguration(
+            scheduleId,
+            ScheduledDispatchScheduleKind.Generic,
+            ScheduledDispatchCredentialRequirementTargetKind.StaticService);
+
+    private static ScheduledDispatchConfiguration CreateRawEnvelopeConfiguration(string scheduleId) =>
         new(
             scheduleId,
             string.Empty,
             new ScheduledDispatchTargetDescriptor(
                 ScheduledDispatchTargetKind.Envelope,
-                ActorId: "actor-1",
+                ActorId: "actor-cross-owner",
                 Envelope: new EventEnvelope { Payload = Any.Pack(new Empty()) }),
             "0 9 * * *",
             "UTC",
@@ -1963,7 +2949,13 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new ScheduledDispatchTargetDescriptor(
                 ScheduledDispatchTargetKind.ServiceInvocation,
                 ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
-                    new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
+                    new ServiceIdentity
+                    {
+                        TenantId = "tenant-alpha",
+                        AppId = "app-alpha",
+                        Namespace = "default",
+                        ServiceId = "svc-alpha",
+                    },
                     "run",
                     payload ?? Any.Pack(new Empty()))),
             "0 9 * * *",
@@ -2016,6 +3008,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
                 DateTimeOffset.UnixEpoch,
                 null,
                 null,
+                string.Empty,
                 string.Empty,
                 string.Empty,
                 string.Empty,
@@ -2217,7 +3210,18 @@ public sealed class ScheduledDispatchApplicationServiceTests
         public List<(string ActorId, string Reason)> Enabled { get; } = [];
         public List<(string ActorId, string Reason)> Disabled { get; } = [];
         public List<(string ActorId, string Reason)> Deleted { get; } = [];
+        public List<(string ActorId, TeamMemberAutomationOwner Owner, string Reason)> TeamDeleted { get; } = [];
         public List<(string ActorId, DateTimeOffset ScheduledFireAt)> RunNow { get; } = [];
+        public List<(string ActorId, TeamMemberAutomationOwner Owner, DateTimeOffset ScheduledFireAt, string OperationId, string IdempotencyKey)> TeamRunNow { get; } = [];
+        public List<(
+            string ActorId,
+            TeamMemberAutomationOwner Owner,
+            string OperationId,
+            string IdempotencyKey,
+            ScheduledInvocationAuthorizationOwner AuthenticatedCredentialOwner,
+            string ObservationRequestId)> TeamRevocationRetries { get; } = [];
+        public string RetryOutcomeScheduleId { get; init; } = string.Empty;
+        public Action<TeamAutomationOperationCommittedOutcome>? RetryOutcomeSink { get; init; }
 
         public Task<string> EnsureScheduleActorAsync(string scheduleId, CancellationToken ct = default)
         {
@@ -2299,6 +3303,17 @@ public sealed class ScheduledDispatchApplicationServiceTests
             return Task.FromResult(CreateAdmission(actorId));
         }
 
+        public Task<DispatchAdmission> DispatchDeleteTeamAutomationAsync(
+            string actorId,
+            TeamMemberAutomationOwner owner,
+            string reason,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            TeamDeleted.Add((actorId, owner, reason));
+            return Task.FromResult(CreateAdmission(actorId));
+        }
+
         public Task<DispatchAdmission> DispatchRunNowAsync(
             string actorId,
             DateTimeOffset scheduledFireAt,
@@ -2309,8 +3324,128 @@ public sealed class ScheduledDispatchApplicationServiceTests
             return Task.FromResult(CreateAdmission(actorId));
         }
 
+        public Task<DispatchAdmission> DispatchRetryTeamAutomationRevocationAsync(
+            string actorId,
+            TeamMemberAutomationOwner owner,
+            string operationId,
+            string idempotencyKey,
+            ScheduledInvocationAuthorizationOwner authenticatedCredentialOwner,
+            string observationRequestId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            TeamRevocationRetries.Add((
+                actorId,
+                owner,
+                operationId,
+                idempotencyKey,
+                authenticatedCredentialOwner,
+                observationRequestId));
+            RetryOutcomeSink.Should().NotBeNull();
+            RetryOutcomeSink!.Invoke(new TeamAutomationOperationCommittedOutcome(
+                RetryOutcomeScheduleId,
+                operationId,
+                idempotencyKey,
+                TeamAutomationOperationObservationStages.Delete,
+                OwnsEffectAttempt: false,
+                StateVersion: 11,
+                ErrorCode: string.Empty,
+                ErrorMessage: string.Empty,
+                ObservedAtUtc: DateTimeOffset.UtcNow,
+                PendingRevocationCredential: null,
+                PendingRevocationOwner: null,
+                NyxIdRevocationPending: true,
+                VaultRevocationPending: true,
+                ObservationRequestId: observationRequestId));
+            return Task.FromResult(CreateAdmission(actorId));
+        }
+
+        public Task<DispatchAdmission> DispatchRunTeamAutomationNowAsync(
+            string actorId,
+            TeamMemberAutomationOwner owner,
+            DateTimeOffset scheduledFireAt,
+            string operationId,
+            string idempotencyKey,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            TeamRunNow.Add((actorId, owner, scheduledFireAt, operationId, idempotencyKey));
+            return Task.FromResult(CreateAdmission(actorId));
+        }
+
         private static DispatchAdmission CreateAdmission(string actorId) =>
             new(true, "cmd-1", DateTimeOffset.UtcNow, actorId, "corr-1");
+    }
+
+    private sealed class RecordingTeamAutomationObservationPort
+        : ITeamAutomationOperationObservationScopeLeasePreparationPort,
+          ITeamAutomationOperationObservationProjectionPort
+    {
+        private IEventSink<TeamAutomationOperationCommittedOutcome>? _sink;
+
+        public bool ProjectionEnabled => true;
+
+        public Task<TeamAutomationOperationObservationScopeLeasePreparation?> PrepareAsync(
+            string actorId,
+            string operationId,
+            CancellationToken ct = default) =>
+            Task.FromResult<TeamAutomationOperationObservationScopeLeasePreparation?>(
+                new TeamAutomationOperationObservationScopeLeasePreparation(actorId, operationId));
+
+        public Task ReleaseAsync(
+            TeamAutomationOperationObservationScopeLeasePreparation preparation,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<EventSinkProjectionAttachment<ITeamAutomationOperationObservationProjectionLease>?>
+            AttachExistingOperationProjectionAsync(
+                string actorId,
+                string operationId,
+                IEventSink<TeamAutomationOperationCommittedOutcome> sink,
+                CancellationToken ct = default)
+        {
+            _sink = sink;
+            return Task.FromResult<EventSinkProjectionAttachment<ITeamAutomationOperationObservationProjectionLease>?>(
+                new EventSinkProjectionAttachment<ITeamAutomationOperationObservationProjectionLease>(
+                    new RecordingTeamAutomationObservationLease(actorId, operationId),
+                    null));
+        }
+
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
+            ITeamAutomationOperationObservationProjectionLease lease,
+            IEventSink<TeamAutomationOperationCommittedOutcome> sink,
+            CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task DetachLiveSinkAsync(
+            IAsyncDisposable? liveSinkLease,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task ReleaseActorProjectionAsync(
+            ITeamAutomationOperationObservationProjectionLease lease,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public void Push(TeamAutomationOperationCommittedOutcome outcome)
+        {
+            _sink.Should().NotBeNull();
+            _sink!.Push(outcome);
+        }
+
+        private sealed record RecordingTeamAutomationObservationLease(
+            string ActorId,
+            string OperationId) : ITeamAutomationOperationObservationProjectionLease;
+    }
+
+    private static void SetRequiredStringProperty(object target, string propertyName, string value)
+    {
+        var property = target.GetType().GetProperty(propertyName);
+        property.Should().NotBeNull($"{propertyName} is part of the runtime evidence contract");
+        property!.SetValue(target, value);
+    }
+
+    private static string ReadRequiredStringProperty(object value, string propertyName)
+    {
+        var property = value.GetType().GetProperty(propertyName);
+        property.Should().NotBeNull($"{propertyName} is part of the runtime evidence contract");
+        return property!.GetValue(value).Should().BeOfType<string>().Which;
     }
 
     private sealed class RecordingScheduledDispatchDocumentReader : IProjectionDocumentReader<ScheduledDispatchDocument, string>
@@ -2363,6 +3498,16 @@ public sealed class ScheduledDispatchApplicationServiceTests
         {
             ct.ThrowIfCancellationRequested();
             FilteredListRequests.Add(query);
+            var visibleItems = query.TargetKind is { } targetKind
+                ? ListResult.Items.Where(item => item.TargetKind == targetKind).ToArray()
+                : ListResult.Items;
+            if (visibleItems.Count != ListResult.Items.Count)
+            {
+                return Task.FromResult(new ScheduledDispatchListResult(
+                    visibleItems,
+                    NextCursor: null,
+                    TotalCount: query.IncludeTotalCount ? visibleItems.Count : null));
+            }
             if (query.IncludeTotalCount && ListResult.TotalCount.HasValue)
                 return Task.FromResult(ListResult);
             return Task.FromResult(ListResult with

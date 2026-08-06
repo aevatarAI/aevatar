@@ -21,20 +21,29 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
     public async Task BindWorkflowDefinitionAsync(
         string workflowYaml,
         string? workflowName,
-        IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
-        string? scopeId = null,
-        string? sourceKind = null,
-        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+        string? scopeId,
+        string? sourceKind,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+        string? workflowId,
+        string? revisionId,
+        ExternalCapabilityExecutionMode expectedExecutionMode,
         CancellationToken ct = default)
     {
+        EnsureExpectedExecutionMode(expectedExecutionMode);
         EnsureWorkflowNameCanBind(workflowName);
+        EnsureExistingBindingCanBind(capabilityAdmissionPlan, workflowId, revisionId, expectedExecutionMode);
         var bindDefinitionEvent = new BindWorkflowDefinitionEvent
         {
             WorkflowName = workflowName ?? string.Empty,
             WorkflowYaml = workflowYaml ?? string.Empty,
-            ScopeId = scopeId?.Trim() ?? string.Empty,
             SourceKind = sourceKind?.Trim() ?? string.Empty,
+            WorkflowId = workflowId ?? string.Empty,
+            RevisionId = revisionId ?? string.Empty,
+            ExpectedExecutionMode = expectedExecutionMode,
         };
+        if (scopeId is not null)
+            bindDefinitionEvent.ScopeId = scopeId.Trim();
         if (inlineWorkflowYamls != null)
         {
             foreach (var (key, value) in inlineWorkflowYamls)
@@ -51,7 +60,10 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
                 bindDefinitionEvent.WorkflowYaml,
                 bindDefinitionEvent.InlineWorkflowYamls,
                 dependencies,
-                capabilityAdmissionPlan);
+                capabilityAdmissionPlan,
+                expectedExecutionMode,
+                bindDefinitionEvent.WorkflowId,
+                bindDefinitionEvent.RevisionId);
             bindDefinitionEvent.AuthorizationDependencies = dependencies;
             bindDefinitionEvent.CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone();
         }
@@ -65,9 +77,12 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             request.WorkflowYaml,
             request.WorkflowName,
             request.InlineWorkflowYamls,
-            request.ScopeId,
+            request.HasScopeId ? request.ScopeId : null,
             request.SourceKind,
-            request.CapabilityAdmissionPlan);
+            request.CapabilityAdmissionPlan,
+            request.WorkflowId,
+            request.RevisionId,
+            request.ExpectedExecutionMode);
 
     [EventHandler]
     public Task HandleSubWorkflowDefinitionResolveRequested(SubWorkflowDefinitionResolveRequestedEvent request) =>
@@ -107,19 +122,69 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             : evt.WorkflowName.Trim();
         if (!string.IsNullOrWhiteSpace(incomingWorkflowName))
             next.WorkflowName = incomingWorkflowName;
-        if (!string.IsNullOrWhiteSpace(evt.ScopeId))
+        if (evt.HasScopeId)
             next.ScopeId = evt.ScopeId.Trim();
         next.SourceKind = string.IsNullOrWhiteSpace(evt.SourceKind)
             ? "builtin"
             : evt.SourceKind.Trim();
         next.AuthorizationDependencies = evt.AuthorizationDependencies?.Clone();
         next.CapabilityAdmissionPlan = evt.CapabilityAdmissionPlan?.Clone();
+        next.WorkflowId = evt.WorkflowId ?? string.Empty;
+        next.RevisionId = evt.RevisionId ?? string.Empty;
+        next.ExpectedExecutionMode = evt.ExpectedExecutionMode;
 
         var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
         next.Compiled = compileResult.Compiled;
         next.CompilationError = compileResult.CompilationError;
         next.Version = current.Version + 1;
         return next;
+    }
+
+    private void EnsureExistingBindingCanBind(
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+        string? workflowId,
+        string? revisionId,
+        ExternalCapabilityExecutionMode expectedExecutionMode)
+    {
+        if (State.ExpectedExecutionMode != ExternalCapabilityExecutionMode.Unspecified &&
+            State.ExpectedExecutionMode != expectedExecutionMode)
+        {
+            throw new InvalidOperationException(
+                "Workflow definition is already bound to a different expected execution mode.");
+        }
+
+        var existingRequiresExplicitIdentity = WorkflowCapabilityAdmissionPlanIntegrity
+            .RequiresExplicitRequestBindingIdentity(State.CapabilityAdmissionPlan);
+        var requestedRequiresExplicitIdentity = WorkflowCapabilityAdmissionPlanIntegrity
+            .RequiresExplicitRequestBindingIdentity(capabilityAdmissionPlan);
+        var hasExistingWorkflowId = !string.IsNullOrWhiteSpace(State.WorkflowId);
+        var hasExistingRevisionId = !string.IsNullOrWhiteSpace(State.RevisionId);
+
+        if (hasExistingWorkflowId)
+        {
+            if (!hasExistingRevisionId)
+                throw new WorkflowCapabilityAdmissionRebindRequiredException();
+
+            if (!requestedRequiresExplicitIdentity ||
+                !string.Equals(State.WorkflowId, workflowId, StringComparison.Ordinal) ||
+                !string.Equals(State.RevisionId, revisionId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Workflow definition actor workflow revision identity does not match the binding request.");
+            }
+
+            return;
+        }
+
+        if (existingRequiresExplicitIdentity)
+            throw new WorkflowCapabilityAdmissionRebindRequiredException();
+
+        if (hasExistingRevisionId &&
+            !string.Equals(State.RevisionId, revisionId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Workflow definition actor workflow revision identity does not match the binding request.");
+        }
     }
 
     internal WorkflowAuthorizationDependencies? EvaluateAuthorizationDependencies(string workflowYaml)
@@ -150,21 +215,26 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             all.Add(WorkflowAuthorizationDependencyEvaluator.Evaluate(compilation.Workflow!));
         }
 
-        var capabilities = all
-            .SelectMany(static dependencies => dependencies.ExternalCapabilities)
-            .GroupBy(WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey, StringComparer.Ordinal)
-            .Select(static group => group.First().Clone())
-            .OrderBy(WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey, StringComparer.Ordinal)
+        var invocations = all
+            .SelectMany(static dependencies => dependencies.ExternalInvocations)
+            .Select(static invocation => invocation.Clone())
+            .OrderBy(static invocation => invocation.CallSiteId, StringComparer.Ordinal)
             .ToArray();
+        var duplicate = invocations
+            .GroupBy(static invocation => invocation.CallSiteId, StringComparer.Ordinal)
+            .FirstOrDefault(static group => group.Count() > 1);
+        if (duplicate is not null)
+            throw new InvalidOperationException(
+                $"Workflow external capability call site '{duplicate.Key}' is duplicated.");
         var result = new WorkflowAuthorizationDependencies
         {
             OwnerLlmRouteRequired = all.Any(static dependencies => dependencies.OwnerLlmRouteRequired),
-            ServiceGrantPolicy = capabilities.Any(static capability =>
-                capability.CapabilityCase == ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService)
+            ServiceGrantPolicy = all.Any(static dependencies =>
+                dependencies.ServiceGrantPolicy == WorkflowServiceGrantPolicy.Required)
                 ? WorkflowServiceGrantPolicy.Required
                 : WorkflowServiceGrantPolicy.NotRequiredNoExternalService,
         };
-        result.ExternalCapabilities.Add(capabilities);
+        result.ExternalInvocations.Add(invocations);
         return result;
     }
 
@@ -172,11 +242,14 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         string workflowYaml,
         IReadOnlyDictionary<string, string> inlineWorkflowYamls,
         WorkflowAuthorizationDependencies dependencies,
-        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan)
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+        ExternalCapabilityExecutionMode expectedExecutionMode,
+        string? workflowId,
+        string? revisionId)
     {
         if (capabilityAdmissionPlan is null)
         {
-            if (dependencies.ExternalCapabilities.Count > 0)
+            if (dependencies.ExternalInvocations.Count > 0)
                 throw new InvalidOperationException("Workflow external capabilities require an admission plan.");
             return;
         }
@@ -185,8 +258,16 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             capabilityAdmissionPlan,
             workflowYaml,
             inlineWorkflowYamls,
-            capabilityAdmissionPlan.ExecutionMode,
-            dependencies.ExternalCapabilities);
+            expectedExecutionMode,
+            dependencies.ExternalInvocations,
+            workflowId,
+            revisionId);
+    }
+
+    private static void EnsureExpectedExecutionMode(ExternalCapabilityExecutionMode executionMode)
+    {
+        if (executionMode == ExternalCapabilityExecutionMode.Unspecified || !Enum.IsDefined(executionMode))
+            throw new InvalidOperationException("Workflow expected execution mode is required.");
     }
 
     private WorkflowCompilationResult EvaluateWorkflowCompilation(string yaml)

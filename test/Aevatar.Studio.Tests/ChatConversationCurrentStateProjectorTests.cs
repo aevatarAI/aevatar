@@ -17,6 +17,47 @@ public sealed class ChatConversationCurrentStateProjectorTests
     private const string RootActorId = "chat-history-conversation-scope-a-conversation-a";
 
     [Fact]
+    public async Task ProjectAsync_ShouldMaterializeInitializedConversationWithoutTurns()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new ChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-07-28T09:00:00Z")));
+        var state = new ChatConversationState
+        {
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+            Title = "Initial title",
+            ServiceId = "service-a",
+            ServiceKind = "nyxid.chat",
+            CreatedAtMs = 1785200523000,
+            UpdatedAtMs = 1785200523000,
+        };
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new ChatConversationInitializedEvent
+                {
+                    OperationId = "initialize-1",
+                    ScopeId = "scope-a",
+                    ConversationId = "conversation-a",
+                },
+                state,
+                version: 1,
+                eventId: "evt-chat-initialized",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-07-28T01:02:03Z")));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.ScopeId.Should().Be("scope-a");
+        document.ConversationId.Should().Be("conversation-a");
+        document.ServiceKind.Should().Be("nyxid.chat");
+        document.StateVersion.Should().Be(1);
+        document.MessageCount.Should().Be(0);
+        document.Turns.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldMaterializeBlockedTurnStatus()
     {
         var dispatcher = new RecordingWriteDispatcher();
@@ -116,6 +157,17 @@ public sealed class ChatConversationCurrentStateProjectorTests
             {
                 TurnId = "turn-4",
                 Sequence = 4,
+                UserText = "side effect",
+                AssistantText = "outcome unknown",
+                TerminalStatus = ChatTurnTerminalStatus.OutcomeUncertain,
+                SanitizedError = "SESSION_OUTCOME_UNCERTAIN",
+                LlmRoute = "route-d",
+                LlmModel = "model-d",
+            },
+            new ChatTurn
+            {
+                TurnId = "turn-5",
+                Sequence = 5,
                 UserText = "pending",
                 AssistantText = "no terminal name",
                 TerminalStatus = ChatTurnTerminalStatus.Unspecified,
@@ -146,14 +198,14 @@ public sealed class ChatConversationCurrentStateProjectorTests
         written.ServiceKind.Should().Be("workflow");
         written.CreatedAtMs.Should().Be(1784170000000);
         written.UpdatedAtMs.Should().Be(1784170300000);
-        written.MessageCount.Should().Be(4);
+        written.MessageCount.Should().Be(5);
         written.LlmRoute.Should().Be("route-final");
         written.LlmModel.Should().Be("model-final");
         written.Deleted.Should().BeTrue();
 
-        written.Turns.Should().HaveCount(4);
+        written.Turns.Should().HaveCount(5);
         written.Turns.Select(turn => turn.TerminalStatus)
-            .Should().Equal("complete", "error", "stopped", string.Empty);
+            .Should().Equal("complete", "error", "stopped", "outcome_uncertain", string.Empty);
         written.Turns[0].TurnId.Should().Be("turn-1");
         written.Turns[0].Sequence.Should().Be(1);
         written.Turns[0].UserText.Should().Be("hello");
@@ -163,7 +215,91 @@ public sealed class ChatConversationCurrentStateProjectorTests
         written.Turns[0].LlmRoute.Should().Be("route-a");
         written.Turns[0].LlmModel.Should().Be("model-a");
         written.Turns[1].SanitizedError.Should().Be("safe error");
-        written.Turns[3].TerminalTimeMs.Should().Be(0);
+        written.Turns[3].SanitizedError.Should().Be("SESSION_OUTCOME_UNCERTAIN");
+        written.Turns[4].TerminalTimeMs.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldKeepEntireTranscriptBeyondPromptWindow()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new ChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-01T09:00:00Z")));
+        var state = new ChatConversationState
+        {
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+            NextTurnSequence = 252,
+        };
+        for (var sequence = 1; sequence <= 251; sequence++)
+        {
+            state.Turns.Add(new ChatTurn
+            {
+                TurnId = $"turn-{sequence}",
+                Sequence = sequence,
+                UserText = $"user-{sequence}",
+                AssistantText = $"assistant-{sequence}",
+                TerminalStatus = ChatTurnTerminalStatus.Completed,
+            });
+        }
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new ChatTurnAppendedEvent { ScopeId = "scope-a", ConversationId = "conversation-a" },
+                state,
+                version: 251,
+                eventId: "evt-chat-251",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-08-01T08:30:00Z")));
+
+        var written = dispatcher.Upserts.Should().ContainSingle().Subject;
+        written.MessageCount.Should().Be(251);
+        written.Turns.Should().HaveCount(251);
+        written.Turns[0].TurnId.Should().Be("turn-1");
+        written.Turns[^1].TurnId.Should().Be("turn-251");
+        written.Turns[^1].Sequence.Should().Be(251);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_WhenDeletionIsRedeliveredExactly_ShouldKeepContentStableAndReportDuplicate()
+    {
+        var dispatcher = new IdempotencyRecordingWriteDispatcher();
+        var projector = new ChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-02T09:00:00Z")));
+        var deletedAt = DateTimeOffset.Parse("2026-08-02T08:30:00Z");
+        var deletedEvent = new ConversationDeletedEvent
+        {
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+            DeletedAt = Timestamp.FromDateTimeOffset(deletedAt),
+        };
+        var state = new ChatConversationState
+        {
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+            Deleted = true,
+            UpdatedAtMs = deletedAt.ToUnixTimeMilliseconds(),
+            NextTurnSequence = 1,
+        };
+        var envelope = WrapCommitted(
+            deletedEvent,
+            state,
+            version: 2,
+            eventId: "evt-chat-deleted",
+            stateEventTimestamp: deletedAt);
+
+        await projector.ProjectAsync(NewContext(), envelope);
+        await projector.ProjectAsync(NewContext(), envelope.Clone());
+
+        dispatcher.Results.Select(static result => result.Disposition).Should().Equal(
+            ProjectionWriteDisposition.Applied,
+            ProjectionWriteDisposition.Duplicate);
+        dispatcher.Inputs.Should().HaveCount(2);
+        dispatcher.Inputs[1].ToByteString().Should().Equal(dispatcher.Inputs[0].ToByteString());
+        dispatcher.Inputs[1].UpdatedAtMs.Should().Be(deletedAt.ToUnixTimeMilliseconds());
+        dispatcher.Inputs[1].Deleted.Should().BeTrue();
     }
 
     private static StudioMaterializationContext NewContext() => new()
@@ -216,6 +352,32 @@ public sealed class ChatConversationCurrentStateProjectorTests
         {
             throw new NotSupportedException();
         }
+    }
+
+    private sealed class IdempotencyRecordingWriteDispatcher
+        : IProjectionWriteDispatcher<ChatConversationCurrentStateDocument>
+    {
+        private ChatConversationCurrentStateDocument? _current;
+
+        public List<ChatConversationCurrentStateDocument> Inputs { get; } = [];
+        public List<ProjectionWriteResult> Results { get; } = [];
+
+        public Task<ProjectionWriteResult> UpsertAsync(
+            ChatConversationCurrentStateDocument readModel,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var input = readModel.Clone();
+            var result = ProjectionWriteResultEvaluator.Evaluate(_current, input);
+            Inputs.Add(input);
+            Results.Add(result);
+            if (result.IsApplied)
+                _current = input.Clone();
+            return Task.FromResult(result);
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class FixedProjectionClock(DateTimeOffset utcNow) : IProjectionClock

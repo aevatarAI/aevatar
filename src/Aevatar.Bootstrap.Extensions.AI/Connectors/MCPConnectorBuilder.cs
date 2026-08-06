@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.MCP;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Configuration;
@@ -9,14 +10,18 @@ namespace Aevatar.Bootstrap.Extensions.AI.Connectors;
 public sealed class MCPConnectorBuilder : IConnectorBuilder
 {
     private readonly IHttpClientFactory? _httpClientFactory;
+    private readonly IAgentToolExecutionPort? _toolExecutionPort;
 
     public MCPConnectorBuilder()
     {
     }
 
-    public MCPConnectorBuilder(IHttpClientFactory httpClientFactory)
+    public MCPConnectorBuilder(
+        IHttpClientFactory httpClientFactory,
+        IAgentToolExecutionPort toolExecutionPort)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
+        _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
     }
 
     public string Type => "mcp";
@@ -24,15 +29,18 @@ public sealed class MCPConnectorBuilder : IConnectorBuilder
     public bool TryBuild(ConnectorConfigEntry entry, ILogger logger, out IConnector? connector)
     {
         connector = null;
-        if (string.IsNullOrWhiteSpace(entry.MCP.Command) &&
-            string.IsNullOrWhiteSpace(entry.MCP.Url))
+        var hasCommand = !string.IsNullOrWhiteSpace(entry.MCP.Command);
+        var hasUrl = !string.IsNullOrWhiteSpace(entry.MCP.Url);
+        if (hasCommand == hasUrl)
         {
-            logger.LogWarning("Skip connector {Name}: mcp.command or mcp.url is required", entry.Name);
+            logger.LogWarning(
+                "Skip connector {Name}: exactly one of mcp.command or mcp.url is required",
+                entry.Name);
             return false;
         }
 
         HttpClient? transportHttpClient = null;
-        if (!string.IsNullOrWhiteSpace(entry.MCP.Url))
+        if (hasUrl)
         {
             var innerHandler = new HttpClientHandler();
             if (ClientCredentialsConnectorAuthorizationProvider.IsConfigured(entry.MCP.Auth))
@@ -49,8 +57,8 @@ public sealed class MCPConnectorBuilder : IConnectorBuilder
                 transportHttpClient = new HttpClient(innerHandler);
             }
 
-            // Remote MCP uses a long-lived session transport, so request-scoped timeout belongs to workflow
-            // cancellation, not HttpClient.Timeout.
+            // MCP may span discovery, fallback, and multi-round-trip tool calls. The actor-owned
+            // workflow timeout governs the operation, so HttpClient must not terminate one HTTP leg.
             transportHttpClient.Timeout = Timeout.InfiniteTimeSpan;
         }
 
@@ -72,6 +80,8 @@ public sealed class MCPConnectorBuilder : IConnectorBuilder
             entry.MCP.DefaultTool,
             entry.MCP.AllowedTools,
             entry.MCP.AllowedInputKeys,
+            toolExecutionPort: _toolExecutionPort
+                ?? throw new InvalidOperationException("IAgentToolExecutionPort is required to build MCP connectors."),
             logger: logger);
         return true;
     }

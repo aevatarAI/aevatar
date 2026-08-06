@@ -1,6 +1,8 @@
 namespace Aevatar.AI.Application.CodexExecution;
 
-internal sealed record ManagedCodexNyxIdEligibility(string ChronoSandboxUserServiceId);
+internal sealed record ManagedCodexNyxIdEligibility(
+    string ChronoSandboxUserServiceId,
+    string ChronoLlmUserServiceId);
 
 internal sealed class ManagedCodexNyxIdCatalogResolver
 {
@@ -26,37 +28,37 @@ internal sealed class ManagedCodexNyxIdCatalogResolver
                 StringComparison.Ordinal))
             .ToArray();
 
-        if (sandboxMatches.Length != 1)
+        if (sandboxMatches.Length != 1 || llmMatches.Length != 1)
         {
             throw Failure(
-                "chrono_sandbox_service_unavailable",
-                "The user's chrono-sandbox service is not uniquely available.");
-        }
-        if (llmMatches.Length != 1 || !IsUsable(llmMatches[0]))
-        {
-            throw Failure(
-                "chrono_llm_route_unavailable",
-                "The user's chrono-llm-public route is not usable.");
+                "managed_user_services_unavailable",
+                "The user's required managed Codex services are not uniquely available.");
         }
 
         var sandbox = sandboxMatches[0];
+        var llm = llmMatches[0];
+        var sandboxId = sandbox.Id?.Trim() ?? string.Empty;
+        var llmId = llm.Id?.Trim() ?? string.Empty;
         if (!IsUsable(sandbox) ||
-            sandbox.ForwardAccessToken != false ||
+            !IsUsable(llm) ||
+            string.IsNullOrWhiteSpace(sandboxId) ||
+            string.IsNullOrWhiteSpace(llmId) ||
+            string.Equals(sandboxId, llmId, StringComparison.Ordinal))
+        {
+            throw Failure(
+                "managed_user_services_unavailable",
+                "The user's required managed Codex services are not usable.");
+        }
+        if (sandbox.ForwardAccessToken != false ||
             sandbox.InjectDelegationToken != true ||
-            !string.Equals(sandbox.DelegationTokenScope, "llm:proxy", StringComparison.Ordinal))
+            !string.Equals(sandbox.DelegationTokenScope, "proxy:*", StringComparison.Ordinal))
         {
             throw Failure(
                 "chrono_sandbox_delegation_misconfigured",
                 "The chrono-sandbox NyxID delegation policy is not ready for managed Codex.");
         }
-        if (string.IsNullOrWhiteSpace(sandbox.Id))
-        {
-            throw Failure(
-                "chrono_sandbox_service_invalid",
-                "The user's chrono-sandbox service has no stable UserService ID.");
-        }
 
-        return new ManagedCodexNyxIdEligibility(sandbox.Id.Trim());
+        return new ManagedCodexNyxIdEligibility(sandboxId, llmId);
     }
 
     private static bool IsUsable(ManagedCodexNyxIdService service) =>

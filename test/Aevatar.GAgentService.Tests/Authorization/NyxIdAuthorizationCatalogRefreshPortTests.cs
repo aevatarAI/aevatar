@@ -1,10 +1,12 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -16,6 +18,24 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
 {
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-07-21T09:00:00Z");
     private static readonly DateTimeOffset EvaluatedAt = DateTimeOffset.Parse("2026-07-21T08:59:59Z");
+
+    [Fact]
+    public void ConcreteRefreshPort_ShouldNotImplementRepairRefreshPort()
+    {
+        typeof(INyxIdAuthorizationCatalogRepairRefreshPort)
+            .IsAssignableFrom(typeof(NyxIdAuthorizationCatalogRefreshPort))
+            .Should()
+            .BeFalse();
+    }
+
+    [Fact]
+    public void ConcreteCommandPort_ShouldNotImplementRepairCommandPort()
+    {
+        typeof(INyxIdAuthorizationCatalogRepairCommandPort)
+            .IsAssignableFrom(typeof(NyxIdAuthorizationCatalogCommandPort))
+            .Should()
+            .BeFalse();
+    }
 
     [Fact]
     public async Task RefreshPersonalAsync_ShouldNotTreatDispatchAdmissionAsCommittedBegin()
@@ -137,6 +157,61 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         catalog.Owners.Should().ContainSingle().Which.Should().BeEquivalentTo(Owner());
         commands.Beginnings.Should().ContainSingle()
             .Which.ExpectedLifecycleFence.Should().Be(7);
+    }
+
+    [Fact]
+    public async Task RefreshPersonalAsync_ShouldCaptureStartTimeBeforeLifecycleFenceQueryCompletes()
+    {
+        var commands = new RecordingCommandPort();
+        var catalog = new DelayedCatalogQueryPort(lifecycleFence: 7);
+        var clock = new FakeTimeProvider(Now);
+
+        var refresh = Create(
+                commands,
+                new RoutingJsonHandler(Ok(UserServicesJson()), Ok(ScopePlanJson())),
+                timeProvider: clock,
+                catalogQuery: catalog)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret");
+
+        await catalog.QueryStarted;
+        clock.Advance(TimeSpan.FromMinutes(1));
+        catalog.Complete();
+
+        var result = await refresh;
+
+        result.Success.Should().BeTrue();
+        commands.Beginnings.Should().ContainSingle()
+            .Which.At.Should().Be(Now);
+    }
+
+    [Fact]
+    public async Task RepairRefreshPersonalAsync_ShouldSkipCatalogQueryAndDispatchRepairBegin()
+    {
+        var commands = new RecordingCommandPort();
+        var repairRefresh = CreateRepair(
+            commands,
+            new RoutingJsonHandler(Ok(UserServicesJson()), Ok(ScopePlanJson())));
+
+        var result = await repairRefresh.RefreshPersonalAsync(
+            " owner-alpha ",
+            "bearer-secret",
+            minimumSourceStateVersion: 3,
+            repairRequestId: " repair-alpha ");
+
+        result.Success.Should().BeTrue();
+        typeof(NyxIdAuthorizationCatalogRepairRefreshPort)
+            .GetConstructors()
+            .SelectMany(static constructor => constructor.GetParameters())
+            .Should()
+            .NotContain(static parameter =>
+                parameter.ParameterType == typeof(INyxIdAuthorizationCatalogQueryPort));
+        commands.Beginnings.Should().BeEmpty();
+        var beginning = commands.RepairBeginnings.Should().ContainSingle().Subject;
+        beginning.Owner.Should().BeEquivalentTo(Owner());
+        beginning.MinimumSourceStateVersion.Should().Be(3);
+        beginning.RepairRequestId.Should().Be("repair-alpha");
+        beginning.RefreshId.Should().NotBeNullOrWhiteSpace();
+        beginning.At.Should().Be(Now);
     }
 
     [Theory]
@@ -718,6 +793,252 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
     }
 
     [Fact]
+    public async Task RefreshAsync_ForExactUserService_ShouldFetchOnlyVerifiedInventoryRoute()
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(
+            Ok(UserServicesJson()),
+            Ok(ScopePlanJsonForServiceA()),
+            Ok(ModelsJson("gpt-5.5", "GPT-5.5")));
+
+        var result = await Create(commands, handler)
+            .RefreshAsync(Owner(), "bearer-secret", UserServiceRefreshRequest());
+
+        result.Success.Should().BeTrue();
+        handler.Requests.Select(static request => (request.Method, request.Path))
+            .Should().Equal(
+                (HttpMethod.Get, "/api/v1/user-services"),
+                (HttpMethod.Post, "/api/v1/api-keys/scope-plan"),
+                (HttpMethod.Get, "/api/v1/proxy/s/api-alpha/models?_nyxid_via=service-a"));
+        var target = commands.Observations.Should().ContainSingle().Subject.Services
+            .Should().ContainSingle().Subject.LlmTarget;
+        target.RouteKind.Should().Be(LLMRouteKind.NyxIdUserService);
+        target.RouteValue.Should().Be("/api/v1/proxy/s/api-alpha");
+        target.NyxIdUserServiceId.Should().Be("service-a");
+        target.ServiceSlugSnapshot.Should().Be("api-alpha");
+        target.ModelCatalog.Certainty.Should().Be(LLMModelCatalogCertainty.Enumerated);
+        target.ModelCatalog.ModelIds.Should().Equal("GPT-5.5", "gpt-5.5");
+        handler.AuthorizationHeaders.Should().OnlyContain(static value => value == "Bearer bearer-secret");
+        string.Join('\n', commands.Observations).Should().NotContain("bearer-secret");
+    }
+
+    [Fact]
+    public async Task RefreshAsync_ForGateway_ShouldIgnoreCallerRouteAndUseConfiguredAuthority()
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(Ok(ModelsJson("gpt-5.5")));
+        var request = new NyxIdAuthorizationCatalogRefreshRequest(
+            [],
+            new ScheduledInvocationLLMRefreshRequirement(
+                LLMRouteKind.Gateway,
+                "https://evil.example/models",
+                string.Empty,
+                string.Empty,
+                "gpt-5.5",
+                17));
+
+        var result = await Create(commands, handler)
+            .RefreshAsync(Owner(), "bearer-secret", request);
+
+        result.Success.Should().BeTrue();
+        handler.Requests.Should().Equal(
+            (HttpMethod.Get, "/api/v1/llm/gateway/v1/models"));
+        var observation = commands.Observations.Should().ContainSingle().Subject;
+        observation.Services.Should().BeEmpty();
+        observation.GatewayLLMTarget.Should().NotBeNull();
+        observation.GatewayLLMTarget!.RouteValue.Should().Be("/api/v1/llm/gateway/v1");
+        observation.GatewayLLMTarget.ModelCatalog.ModelIds.Should().Equal("gpt-5.5");
+    }
+
+    [Fact]
+    public async Task RefreshAsync_WhenUserServiceSlugDoesNotMatchInventory_ShouldFailBeforeModelFetch()
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(Ok(UserServicesJson()));
+        var request = UserServiceRefreshRequest(serviceSlug: "other-slug");
+
+        var result = await Create(commands, handler)
+            .RefreshAsync(Owner(), "bearer-secret", request);
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable);
+        result.FailureCode.Should().Be("nyxid_llm_target_inventory_mismatch");
+        handler.Requests.Should().Equal((HttpMethod.Get, "/api/v1/user-services"));
+        commands.Observations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RefreshAsync_WhenModelsResponseExceedsBound_ShouldCommitOnlyResponseTooLargeEvidence()
+    {
+        var commands = new RecordingCommandPort();
+        var sensitiveBody = JsonSerializer.Serialize(new
+        {
+            data = new[] { new { id = "gpt-5.5" } },
+            secret = new string('x', 1024 * 1024),
+        });
+        var handler = new RoutingJsonHandler(Ok(sensitiveBody));
+
+        var result = await Create(commands, handler)
+            .RefreshAsync(Owner(), "bearer-secret", GatewayRefreshRequest());
+
+        result.Success.Should().BeTrue();
+        var catalog = commands.Observations.Single().GatewayLLMTarget!.ModelCatalog;
+        catalog.Certainty.Should().Be(LLMModelCatalogCertainty.NotVerifiable);
+        catalog.DiagnosticKind.Should().Be(LLMModelCatalogDiagnosticKind.ResponseTooLarge);
+        catalog.ModelIds.Should().BeEmpty();
+        string.Join('\n', commands.Observations).Should().NotContain(new string('x', 128));
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidModelsResponses))]
+    public async Task RefreshAsync_WhenModelsAreNotAuthoritative_ShouldCommitNotVerifiableEvidence(
+        string response,
+        LLMModelCatalogDiagnosticKind expectedDiagnostic)
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(Ok(response));
+
+        var result = await Create(commands, handler)
+            .RefreshAsync(Owner(), "bearer-secret", GatewayRefreshRequest());
+
+        result.Success.Should().BeTrue();
+        var catalog = commands.Observations.Single().GatewayLLMTarget!.ModelCatalog;
+        catalog.Certainty.Should().Be(LLMModelCatalogCertainty.NotVerifiable);
+        catalog.DiagnosticKind.Should().Be(expectedDiagnostic);
+        catalog.ModelIds.Should().BeEmpty();
+    }
+
+    public static TheoryData<string, LLMModelCatalogDiagnosticKind> InvalidModelsResponses => new()
+    {
+        {
+            JsonSerializer.Serialize(new
+            {
+                data = Enumerable.Range(0, 2_049).Select(index => new { id = $"model-{index}" }),
+            }),
+            LLMModelCatalogDiagnosticKind.ResponseTooLarge
+        },
+        { ModelsJson("model-*"), LLMModelCatalogDiagnosticKind.PatternOnly },
+        { ModelsJson(" model-a"), LLMModelCatalogDiagnosticKind.ResponseInvalid },
+        { "{\"models\":[]}", LLMModelCatalogDiagnosticKind.ResponseInvalid },
+    };
+
+    [Fact]
+    public async Task RefreshAsync_WhenGatewayAccessIsDenied_ShouldCommitUnavailableEvidenceWithoutBody()
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(
+            Error(HttpStatusCode.Forbidden, "sensitive-upstream-denial", 9004));
+
+        var result = await Create(commands, handler)
+            .RefreshAsync(Owner(), "bearer-secret", GatewayRefreshRequest());
+
+        result.Success.Should().BeTrue();
+        var catalog = commands.Observations.Single().GatewayLLMTarget!.ModelCatalog;
+        catalog.Certainty.Should().Be(LLMModelCatalogCertainty.Unavailable);
+        catalog.DiagnosticKind.Should().Be(LLMModelCatalogDiagnosticKind.AccessDenied);
+        string.Join('\n', commands.Observations).Should().NotContain("sensitive-upstream-denial");
+    }
+
+    [Fact]
+    public async Task RefreshAsync_WhenGatewayModelReadTimesOut_ShouldPreserveCommittedTarget()
+    {
+        var existingTarget = new NyxIdAuthorizationLLMTargetEvidence
+        {
+            RouteKind = LLMRouteKind.Gateway,
+            RouteValue = "/api/v1/llm/gateway/v1",
+        };
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(ProviderTimeout());
+        var catalogQuery = new RecordingCatalogQueryPort(
+            snapshot: CatalogWithGateway(existingTarget));
+
+        var result = await Create(commands, handler, catalogQuery: catalogQuery)
+            .RefreshAsync(Owner(), "bearer-secret", GatewayRefreshRequest());
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.Failed);
+        result.FailureCode.Should().Be("nyxid_catalog_refresh_provider_timed_out");
+        commands.Failures.Should().ContainSingle();
+        commands.Observations.Should().BeEmpty();
+        catalogQuery.Snapshot!.GatewayLLMTarget.Should().BeSameAs(existingTarget);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_WhenRequiredServicesAreProvided_ShouldRequestOnlyRequiredScopePlanServices()
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(
+            Ok(UserServicesJson()),
+            Ok(ScopePlanJsonForServiceA()));
+
+        var result = await Create(commands, handler)
+            .RefreshAsync(
+                Owner(),
+                "bearer-secret",
+                new NyxIdAuthorizationCatalogRefreshRequest(
+                    [new NyxIdUserServiceCapabilityRef { UserServiceId = "service-a" }],
+                    LLMTarget: null));
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.Observed);
+        result.FailureCode.Should().BeEmpty();
+        handler.Requests.Select(static request => (request.Method, request.Path))
+            .Should().Equal(
+                (HttpMethod.Get, "/api/v1/user-services"),
+                (HttpMethod.Post, "/api/v1/api-keys/scope-plan"));
+        handler.RequestBodies.Should().ContainSingle();
+        using (var request = JsonDocument.Parse(handler.RequestBodies.Single()))
+        {
+            request.RootElement.GetProperty("selected_service_ids")
+                .EnumerateArray()
+                .Select(static item => item.GetString())
+                .Should().Equal("service-a");
+        }
+
+        var observation = commands.Observations.Should().ContainSingle().Subject;
+        observation.Coverage.Should().Be(NyxIdAuthorizationCatalogObservationCoverage.RequiredServiceSubset);
+        observation.CoveredUserServiceIds.Should().Equal("service-a");
+        observation.ContentDigest.Should().BeEmpty();
+        observation.Services.Select(static service => service.UserServiceId)
+            .Should().Equal("service-a");
+        observation.Services.Single().Access.Should().Be(NyxIdAuthorizationAccess.Permitted);
+        observation.ContractVersion.Should().Be("1");
+        observation.PolicyVersion.Should().Be("api-key-scope-v1");
+        observation.EvaluatedAtUtc.Should().Be(EvaluatedAt);
+        observation.ObservedAtUtc.Should().Be(Now);
+        observation.FreshUntilUtc.Should().Be(Now.AddMinutes(15));
+        commands.Invalidations.Should().BeEmpty();
+        commands.Failures.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RefreshAsync_WhenRequiredServiceIsMissing_ShouldFailClosedWithoutObservation()
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(Ok(UserServicesJson()));
+
+        var result = await Create(commands, handler)
+            .RefreshAsync(
+                Owner(),
+                "bearer-secret",
+                new NyxIdAuthorizationCatalogRefreshRequest(
+                    [new NyxIdUserServiceCapabilityRef { UserServiceId = "service-missing" }],
+                    LLMTarget: null));
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable);
+        result.FailureCode.Should().Be("nyxid_required_service_not_found:service-missing");
+        handler.Requests.Select(static request => (request.Method, request.Path))
+            .Should().Equal((HttpMethod.Get, "/api/v1/user-services"));
+        commands.Invalidations.Should().BeEmpty();
+        commands.Observations.Should().BeEmpty();
+        commands.Failures.Should().ContainSingle().Which.Should().Match<(
+            AuthorizationOwnerIdentity Owner,
+            string RefreshId,
+            DateTimeOffset FailedAt,
+            string FailureCode,
+            NyxIdAuthorizationCatalogRefreshStatus Status)>(failure =>
+            failure.FailureCode == "nyxid_required_service_not_found:service-missing" &&
+            failure.Status == NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable);
+    }
+
+    [Fact]
     public async Task RefreshPersonalAsync_WhenNoServicesAreEligible_ShouldObserveEmptyCatalog()
     {
         var commands = new RecordingCommandPort();
@@ -807,6 +1128,11 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
 
         result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.AccessDenied);
         result.FailureCode.Should().Be("api_key_scope_plan_denied");
+        handler.Requests.Select(static request => (request.Method, request.Path))
+            .Should().Equal(
+                (HttpMethod.Get, "/api/v1/user-services"),
+                (HttpMethod.Post, "/api/v1/api-keys/scope-plan"));
+        handler.RequestBodies.Should().ContainSingle();
         commands.Beginnings.Should().ContainSingle();
         commands.Invalidations.Should().ContainSingle();
         commands.Invalidations[0].RefreshId.Should().Be(commands.Beginnings[0].RefreshId);
@@ -895,7 +1221,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         bool publishCommittedOutcomes = true,
         RecordingObservationRuntime? observation = null,
         TimeProvider? timeProvider = null,
-        RecordingCatalogQueryPort? catalogQuery = null,
+        INyxIdAuthorizationCatalogQueryPort? catalogQuery = null,
         ILogger<NyxIdAuthorizationCatalogRefreshPort>? logger = null)
     {
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example") };
@@ -915,7 +1241,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         bool publishCommittedOutcomes = true,
         RecordingObservationRuntime? observation = null,
         TimeProvider? timeProvider = null,
-        RecordingCatalogQueryPort? catalogQuery = null,
+        INyxIdAuthorizationCatalogQueryPort? catalogQuery = null,
         ILogger<NyxIdAuthorizationCatalogRefreshPort>? logger = null)
     {
         observation ??= new RecordingObservationRuntime();
@@ -933,12 +1259,82 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             logger ?? NullLogger<NyxIdAuthorizationCatalogRefreshPort>.Instance);
     }
 
+    private static NyxIdAuthorizationCatalogRepairRefreshPort CreateRepair(
+        RecordingCommandPort commands,
+        HttpMessageHandler handler,
+        bool publishCommittedOutcomes = true,
+        RecordingObservationRuntime? observation = null,
+        TimeProvider? timeProvider = null,
+        ILogger<NyxIdAuthorizationCatalogRefreshPort>? logger = null)
+    {
+        observation ??= new RecordingObservationRuntime();
+        commands.Observation = publishCommittedOutcomes ? observation : null;
+        var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example") };
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            httpClient);
+        return new NyxIdAuthorizationCatalogRepairRefreshPort(
+            commands,
+            commands,
+            new TestNyxIdApiClientFactory(client),
+            observation,
+            observation,
+            timeProvider ?? new FakeTimeProvider(Now),
+            logger ?? NullLogger<NyxIdAuthorizationCatalogRefreshPort>.Instance);
+    }
+
     private static AuthorizationOwnerIdentity Owner() => new()
     {
         Authority = NyxIdAuthorizationAuthorities.NyxId,
         OwnerKind = AuthorizationOwnerKind.Personal,
         OwnerSubject = "owner-alpha",
     };
+
+    private static NyxIdAuthorizationCatalogRefreshRequest GatewayRefreshRequest() => new(
+        [],
+        new ScheduledInvocationLLMRefreshRequirement(
+            LLMRouteKind.Gateway,
+            "/api/v1/llm/gateway/v1",
+            string.Empty,
+            string.Empty,
+            "gpt-5.5",
+            17));
+
+    private static NyxIdAuthorizationCatalogRefreshRequest UserServiceRefreshRequest(
+        string serviceSlug = "api-alpha") => new(
+        [new NyxIdUserServiceCapabilityRef
+        {
+            UserServiceId = "service-a",
+            ServiceSlugSnapshot = serviceSlug,
+        }],
+        new ScheduledInvocationLLMRefreshRequirement(
+            LLMRouteKind.NyxIdUserService,
+            $"/api/v1/proxy/s/{serviceSlug}",
+            "service-a",
+            serviceSlug,
+            "gpt-5.5",
+            17));
+
+    private static string ModelsJson(params string[] modelIds) =>
+        JsonSerializer.Serialize(new
+        {
+            @object = "list",
+            data = modelIds.Select(static modelId => new { id = modelId, @object = "model" }),
+        });
+
+    private static NyxIdAuthorizationCatalogSnapshot CatalogWithGateway(
+        NyxIdAuthorizationLLMTargetEvidence target) => new(
+        Owner(),
+        StateVersion: 19,
+        ObservedAtUtc: Now.AddMinutes(-1),
+        FreshUntilUtc: Now.AddMinutes(14),
+        ContractVersion: "1",
+        PolicyVersion: "api-key-scope-v1",
+        EvaluatedAtUtc: EvaluatedAt,
+        ContentDigest: "digest",
+        Services: [],
+        LifecycleFence: 7,
+        GatewayLLMTarget: target);
 
     private static string UserServicesJson() => """
         {
@@ -972,6 +1368,25 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
           "allowed_node_ids":["node-a","node-b"],
           "evaluated_at":"{{{EvaluatedAt:O}}}",
           "normalized_grant_digest":"sha256:{{{new string('a', 64)}}}",
+          "freshness":{"mode":"mutation_revalidated_snapshot","precondition_field":"scope_plan_digest","post_creation_drift":"fail_closed"},
+          "completeness":{"list_complete":true,"no_duplicates":true,"route_candidate_basis":"active_configured_routes","transient_node_state_excluded":true}
+        }
+        """;
+
+    private static string ScopePlanJsonForServiceA() => $$$"""
+        {
+          "authority":"nyxid",
+          "contract_version":"1",
+          "policy_version":"api-key-scope-v1",
+          "authenticated_actor":{"id":"owner-alpha","type":"personal"},
+          "intended_key_owner":{"id":"owner-alpha","type":"personal"},
+          "services":[
+            {"user_service_id":"service-a","resource_owner":{"id":"owner-alpha","type":"personal"},"node_grant":{"type":"not_required"}}
+          ],
+          "allowed_service_ids":["service-a"],
+          "allowed_node_ids":[],
+          "evaluated_at":"{{{EvaluatedAt:O}}}",
+          "normalized_grant_digest":"sha256:{{{new string('b', 64)}}}",
           "freshness":{"mode":"mutation_revalidated_snapshot","precondition_field":"scope_plan_digest","post_creation_drift":"fail_closed"},
           "completeness":{"list_complete":true,"no_duplicates":true,"route_candidate_basis":"active_configured_routes","transient_node_state_excluded":true}
         }
@@ -1017,6 +1432,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
 
         public List<bool> CancellationStates { get; } = [];
 
+        public Action<int>? OnRequest { get; set; }
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -1026,6 +1443,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             CancellationStates.Add(cancellationToken.IsCancellationRequested);
             if (request.Content != null)
                 RequestBodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
+            OnRequest?.Invoke(Requests.Count - 1);
             if (!_responses.TryDequeue(out var response))
                 throw new InvalidOperationException("No queued response remains.");
             if (response.Failure != null)
@@ -1333,15 +1751,23 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             throw new InvalidOperationException("logger-failure");
     }
 
-    private sealed class RecordingCommandPort : INyxIdAuthorizationCatalogCommandPort
+    private sealed class RecordingCommandPort
+        : INyxIdAuthorizationCatalogCommandPort,
+          INyxIdAuthorizationCatalogRepairCommandPort
     {
         public List<(
             AuthorizationOwnerIdentity Owner,
             string RefreshId,
             DateTimeOffset At,
             long ExpectedLifecycleFence)> Beginnings { get; } = [];
+        public List<(
+            AuthorizationOwnerIdentity Owner,
+            string RefreshId,
+            DateTimeOffset At,
+            long MinimumSourceStateVersion,
+            string RepairRequestId)> RepairBeginnings { get; } = [];
         public List<NyxIdAuthorizationCatalogObservation> Observations { get; } = [];
-        public List<(AuthorizationOwnerIdentity Owner, string RefreshId, DateTimeOffset At, string Code)> Failures { get; } = [];
+        public List<(AuthorizationOwnerIdentity Owner, string RefreshId, DateTimeOffset At, string Code, NyxIdAuthorizationCatalogRefreshStatus Status)> Failures { get; } = [];
         public List<(
             AuthorizationOwnerIdentity Owner,
             string RefreshId,
@@ -1361,7 +1787,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         public NyxIdAuthorizationCatalogRefreshOutcomeStatus BeginOutcomeStatus { get; init; } =
             NyxIdAuthorizationCatalogRefreshOutcomeStatus.Started;
 
-        public int AllCalls => Beginnings.Count + Observations.Count + Failures.Count +
+        public int AllCalls => Beginnings.Count + RepairBeginnings.Count +
+                               Observations.Count + Failures.Count +
                                Invalidations.Count + Cleanups.Count;
 
         public Task BeginRefreshAsync(
@@ -1372,6 +1799,30 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             CancellationToken ct = default)
         {
             Beginnings.Add((owner.Clone(), refreshId, startedAtUtc, expectedLifecycleFence));
+            Observation?.Publish(
+                refreshId,
+                BeginOutcomeStatus,
+                BeginOutcomeStatus == NyxIdAuthorizationCatalogRefreshOutcomeStatus.Superseded
+                    ? "nyxid_catalog_refresh_superseded"
+                    : string.Empty,
+                startedAtUtc: startedAtUtc);
+            return Task.CompletedTask;
+        }
+
+        public Task BeginRepairRefreshAsync(
+            AuthorizationOwnerIdentity owner,
+            string refreshId,
+            DateTimeOffset startedAtUtc,
+            long minimumSourceStateVersion,
+            string repairRequestId,
+            CancellationToken ct = default)
+        {
+            RepairBeginnings.Add((
+                owner.Clone(),
+                refreshId,
+                startedAtUtc,
+                minimumSourceStateVersion,
+                repairRequestId));
             Observation?.Publish(
                 refreshId,
                 BeginOutcomeStatus,
@@ -1404,16 +1855,19 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             string refreshId,
             DateTimeOffset failedAtUtc,
             string failureCode,
+            NyxIdAuthorizationCatalogRefreshStatus status = NyxIdAuthorizationCatalogRefreshStatus.Failed,
             CancellationToken ct = default)
         {
-            Failures.Add((owner.Clone(), refreshId, failedAtUtc, failureCode));
+            Failures.Add((owner.Clone(), refreshId, failedAtUtc, failureCode, status));
             if (RefreshFailureException != null)
                 return Task.FromException(RefreshFailureException);
             if (PublishTerminalOutcomes)
             {
                 Observation?.Publish(
                     refreshId,
-                    NyxIdAuthorizationCatalogRefreshOutcomeStatus.Failed,
+                    status == NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable
+                        ? NyxIdAuthorizationCatalogRefreshOutcomeStatus.CatalogUnstable
+                        : NyxIdAuthorizationCatalogRefreshOutcomeStatus.Failed,
                     failureCode,
                     failedAtUtc);
             }
@@ -1460,10 +1914,13 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         }
     }
 
-    private sealed class RecordingCatalogQueryPort(long? lifecycleFence = null)
+    private sealed class RecordingCatalogQueryPort(
+        long? lifecycleFence = null,
+        NyxIdAuthorizationCatalogSnapshot? snapshot = null)
         : INyxIdAuthorizationCatalogQueryPort
     {
         public List<AuthorizationOwnerIdentity> Owners { get; } = [];
+        public NyxIdAuthorizationCatalogSnapshot? Snapshot { get; } = snapshot;
 
         public Task<NyxIdAuthorizationCatalogSnapshot?> GetAsync(
             AuthorizationOwnerIdentity owner,
@@ -1471,7 +1928,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         {
             ct.ThrowIfCancellationRequested();
             Owners.Add(owner.Clone());
-            return Task.FromResult(lifecycleFence.HasValue
+            return Task.FromResult(Snapshot ?? (lifecycleFence.HasValue
                 ? new NyxIdAuthorizationCatalogSnapshot(
                     owner.Clone(),
                     StateVersion: 19,
@@ -1483,7 +1940,39 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
                     ContentDigest: "digest",
                     Services: [],
                     LifecycleFence: lifecycleFence.Value)
-                : null);
+                : null));
+        }
+    }
+
+    private sealed class DelayedCatalogQueryPort(long lifecycleFence)
+        : INyxIdAuthorizationCatalogQueryPort
+    {
+        private readonly TaskCompletionSource _queryStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task QueryStarted => _queryStarted.Task;
+
+        public void Complete() => _release.TrySetResult();
+
+        public async Task<NyxIdAuthorizationCatalogSnapshot?> GetAsync(
+            AuthorizationOwnerIdentity owner,
+            CancellationToken ct = default)
+        {
+            _queryStarted.TrySetResult();
+            await _release.Task.WaitAsync(ct);
+            return new NyxIdAuthorizationCatalogSnapshot(
+                owner.Clone(),
+                StateVersion: 19,
+                ObservedAtUtc: Now.AddMinutes(-1),
+                FreshUntilUtc: Now.AddMinutes(14),
+                ContractVersion: "1",
+                PolicyVersion: "api-key-scope-v1",
+                EvaluatedAtUtc: EvaluatedAt,
+                ContentDigest: "digest",
+                Services: [],
+                LifecycleFence: lifecycleFence);
         }
     }
 

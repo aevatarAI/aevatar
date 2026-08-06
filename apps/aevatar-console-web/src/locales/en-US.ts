@@ -45,6 +45,8 @@ const enUSMessages = {
     'Describe the workflow you want, or ask about the current setup...',
   'pages.chat.index.confirmAndCreate': 'Confirm and create',
   'pages.chat.index.confirmPrompt': 'Confirm. Please create it now.',
+  'pages.chat.index.continuationContextMissing':
+    'The continuation may have been accepted, but its turn identity was not received. Reload this page before continuing.',
   'pages.chat.index.cancel': 'Cancel',
   'pages.chat.index.delete': 'Delete',
   'pages.chat.index.deleteChat': 'Delete {title}',
@@ -63,6 +65,8 @@ const enUSMessages = {
   'pages.chat.index.historyTitle': 'Chat history',
   'pages.chat.index.loadingConversation': 'Loading conversation',
   'pages.chat.index.loadingHistory': 'Loading chat history',
+  'pages.chat.index.historySynchronizing':
+    'Conversation history is still synchronizing. Try again shortly.',
   'pages.chat.index.missingChatHistoryContext':
     'Chat completed without a conversation context.',
   'pages.chat.index.newChat': 'New chat',
@@ -777,8 +781,47 @@ const enUSMessages = {
   'teams.automations.actions.delete': 'Delete',
   'teams.automations.actions.edit': 'Edit',
   'teams.automations.actions.pause': 'Pause',
+  'teams.automations.actions.reauthorize': 'Review and reauthorize',
+  'teams.automations.actions.refresh': 'Refresh',
+  'teams.automations.actions.retryRevocation': 'Retry revocation',
   'teams.automations.actions.resume': 'Resume',
   'teams.automations.actions.runNow': 'Run now',
+  'teams.automations.actions.runHistory': 'View member run history',
+  'teams.automations.actions.tryAgain': 'Try again',
+  'teams.automations.authorization.back': 'Back',
+  'teams.automations.authorization.confirm': 'Authorize and continue',
+  'teams.automations.authorization.description':
+    "Aevatar keeps this schedule's restricted key in its Vault. The browser never receives the key. Pausing preserves it; deleting revokes it.",
+  'teams.automations.authorization.diagnostics': 'Authorization diagnostics',
+  'teams.automations.authorization.disclosure.aevatar_secret_custody':
+    'Aevatar holds the secret',
+  'teams.automations.authorization.disclosure.browser_never_receives_secret':
+    'The browser never receives the secret',
+  'teams.automations.authorization.disclosure.dedicated_credential':
+    'Dedicated credential for this schedule',
+  'teams.automations.authorization.disclosure.delete_revokes_credential':
+    'Deleting revokes the credential',
+  'teams.automations.authorization.disclosure.node_ids_are_permission_set':
+    'Node IDs define the permission set',
+  'teams.automations.authorization.disclosure.pause_resume_preserves_credential':
+    'Pausing and resuming preserve the credential',
+  'teams.automations.authorization.error': 'Authorization could not continue',
+  'teams.automations.authorization.exactAccess': 'Exact access',
+  'teams.automations.authorization.expiry': 'Credential expiry',
+  'teams.automations.authorization.noExternalGrants': 'No external NyxID service or owner LLM model grant is required.',
+  'teams.automations.authorization.noOwnerLLMGrant': 'No owner LLM model grant is required for this workflow.',
+  'teams.automations.authorization.preparing': 'Preparing authorization review',
+  'teams.automations.authorization.review': 'Review authorization',
+  'teams.automations.authorization.reviewAgain': 'Review again',
+  'teams.automations.authorization.serviceModel': 'Service and model',
+  'teams.automations.authorization.title': 'Dedicated Agent Key',
+  'teams.automations.authorizationStatus.active': 'Credential active',
+  'teams.automations.authorizationStatus.deleting': 'Deleting',
+  'teams.automations.authorizationStatus.failed': 'Authorization failed',
+  'teams.automations.authorizationStatus.needs_authorization': 'Authorization required',
+  'teams.automations.authorizationStatus.provisioning_pending': 'Preparing authorization',
+  'teams.automations.authorizationStatus.replacement_pending': 'Replacing authorization',
+  'teams.automations.authorizationStatus.revocation_pending': 'Revocation pending',
   'teams.automations.columns.actions': 'Actions',
   'teams.automations.columns.automation': 'Automation',
   'teams.automations.columns.member': 'Member',
@@ -804,9 +847,14 @@ const enUSMessages = {
   'teams.automations.empty.publishHint':
     'Publish a workflow member before scheduling recurring work.',
   'teams.automations.empty.title': 'No recurring work yet',
+  'teams.automations.empty.member': 'No automations for this member',
   'teams.automations.error.description':
     'Refresh the page or try again after the schedule service is available.',
   'teams.automations.error.title': 'Automations could not load',
+  'teams.automations.error.stateLoad': 'Automation state could not be loaded',
+  'teams.automations.expiry.soon': 'Credential expires within 14 days',
+  'teams.automations.firing.enabled': 'Firing enabled',
+  'teams.automations.firing.paused': 'Firing paused',
   'teams.automations.form.cadence': 'Cadence',
   'teams.automations.form.cadenceAria': 'Automation cadence',
   'teams.automations.form.create': 'Create automation',
@@ -822,6 +870,11 @@ const enUSMessages = {
     'Optional: leave it blank to save without a recurring prompt.',
   'teams.automations.form.editTitle': 'Edit automation',
   'teams.automations.form.enabled': 'Enabled',
+  'teams.automations.form.enableAfterAuthorization':
+    'Enable firing after authorization',
+  'teams.automations.form.firingEnabled': 'Firing enabled',
+  'teams.automations.form.description':
+    'Configure recurring work for {memberName}. Authorization is reviewed separately before creation or replacement.',
   'teams.automations.form.identityMissing':
     "Waiting for this member's published service identity.",
   'teams.automations.form.identityReady':
@@ -858,16 +911,31 @@ const enUSMessages = {
   'teams.automations.form.timezone': 'Timezone',
   'teams.automations.form.timezoneAria': 'Timezone',
   'teams.automations.form.title': 'New member automation',
+  'teams.automations.loading': 'Loading automations',
   'teams.automations.member.publishFirst':
     'Publish this member before adding recurring work.',
   'teams.automations.member.publishedServiceReady':
     'Published service ready',
   'teams.automations.member.unknown': 'Unknown member',
+  'teams.automations.memberDescription':
+    'Dedicated Agent Keys are authorized per schedule and held by Aevatar.',
+  'teams.automations.memberSelector.description':
+    'Automations are owned by one published member. Choose the member to open its canonical resource.',
+  'teams.automations.memberSelector.title': 'Choose a team member',
+  'teams.automations.memberTitle': '{memberName} automations',
+  'teams.automations.memberUnavailable.description':
+    'This member is not part of the current Team. Choose another member.',
+  'teams.automations.memberUnavailable.title': 'Member unavailable for automation',
   'teams.automations.member.workflowOnly':
     'Only workflow members can have recurring work.',
+  'teams.automations.schedule.next': 'Next {time}',
+  'teams.automations.schedule.notScheduled': 'not scheduled',
   'teams.automations.messages.createFailed':
     'Automation was not created: {message}',
   'teams.automations.messages.createSuccess': 'Automation created.',
+  'teams.automations.messages.authorizationAccepted':
+    'Authorization request accepted',
+  'teams.automations.messages.deleteAccepted': 'Delete request accepted',
   'teams.automations.messages.cronRequired': 'Enter a cron expression first.',
   'teams.automations.messages.deleteSuccess': 'Automation deleted.',
   'teams.automations.messages.disableSuccess': 'Automation paused.',
@@ -877,6 +945,12 @@ const enUSMessages = {
     'Recurring prompt must be {maxLength} characters or fewer.',
   'teams.automations.messages.runNowFailed': 'Run request failed: {message}',
   'teams.automations.messages.runNowSuccess': 'Run requested.',
+  'teams.automations.messages.pauseAccepted': 'Pause request accepted',
+  'teams.automations.messages.resumeAccepted': 'Resume request accepted',
+  'teams.automations.messages.revocationRetryAccepted':
+    'Revocation retry accepted',
+  'teams.automations.messages.runAccepted': 'Run request accepted',
+  'teams.automations.messages.updateAccepted': 'Update request accepted',
   'teams.automations.messages.serviceIdentityLoading':
     'Service identity is still loading.',
   'teams.automations.messages.serviceIdentityMissing':
@@ -887,6 +961,18 @@ const enUSMessages = {
   'teams.automations.noPublishedMember.description':
     'Automations need a member with a published service identity before they can run.',
   'teams.automations.noPublishedMember.title': 'Publish a member first',
+  'teams.automations.pending.description':
+    'Automatic refresh stopped. Use Refresh to check authoritative state.',
+  'teams.automations.pending.title': 'Still pending',
+  'teams.automations.planChanged.description':
+    'The previous digest and operation identity were discarded. Run preflight and consent again.',
+  'teams.automations.planChanged.title': 'Authorization plan changed',
+  'teams.automations.delete.description':
+    'The row remains visible until NyxID and Vault revocation are complete.',
+  'teams.automations.delete.title': 'Delete automation?',
+  'teams.automations.revocation.nyxId': 'NyxID: {status}',
+  'teams.automations.revocation.vault': 'Vault: {status}',
+  'teams.automations.row.noPrompt': 'No recurring prompt',
   'teams.automations.preview.daily.cadence': 'Every weekday · 09:00',
   'teams.automations.preview.daily.member': 'Support Analyst',
   'teams.automations.preview.daily.nextRun': 'Next run today',
@@ -950,6 +1036,10 @@ const enUSMessages = {
     'This member is the Team entry member. Deleting it removes the member authority and clears it from the Team roster; published service artifacts, revisions, and historical runs stay intact.',
   'teams.members.delete.failed': 'Failed to delete member.',
   'teams.members.delete.keep': 'Keep member',
+  'teams.members.delete.notConfirmed':
+    'Deletion was not confirmed. The member remains in the list; refresh and retry.',
+  'teams.members.delete.submitted':
+    'Deletion submitted. Waiting for confirmation.',
   'teams.members.delete.success': 'Deleted member {member}.',
   'teams.members.delete.title': 'Delete member',
   'teams.members.delete.warning':
@@ -1040,10 +1130,33 @@ const enUSMessages = {
   'pages.runs.memberPublishedRuns.timeline': 'Timeline',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
     'You can build or edit the workflow YAML here. Saving creates a reusable workflow draft until the member link is materialized.',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.publishedDescription':
+    'This published member has no materialized draft workflow link. Refresh after the member read model exposes its draft workflow id.',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
     'No workflow draft is linked to this member yet.',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.description':
+    'Studio resolved draft workflow {workflowId}, but loading it failed: {reason}',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.title':
+    'Workflow draft could not be loaded.',
   'teamMemberWorkflowStudio.common.close': 'Close',
   'teamMemberWorkflowStudio.executionPanel.consoleAria': 'Draft run console',
+  'teamMemberWorkflowStudio.explicitRequest.approval': 'Approval',
+  'teamMemberWorkflowStudio.explicitRequest.body': 'Request body',
+  'teamMemberWorkflowStudio.explicitRequest.cancel': 'Cancel',
+  'teamMemberWorkflowStudio.explicitRequest.confirm': 'Confirm and publish',
+  'teamMemberWorkflowStudio.explicitRequest.description':
+    'Review each external request before publishing this workflow.',
+  'teamMemberWorkflowStudio.explicitRequest.executionModes':
+    'Allowed execution modes',
+  'teamMemberWorkflowStudio.explicitRequest.interactiveUnavailable':
+    'An external request is not available for interactive publication.',
+  'teamMemberWorkflowStudio.explicitRequest.methodPath': 'Method and path',
+  'teamMemberWorkflowStudio.explicitRequest.notRequired': 'Not required',
+  'teamMemberWorkflowStudio.explicitRequest.required': 'Required',
+  'teamMemberWorkflowStudio.explicitRequest.response': 'Response',
+  'teamMemberWorkflowStudio.explicitRequest.risk': 'Risk',
+  'teamMemberWorkflowStudio.explicitRequest.service': 'Service',
+  'teamMemberWorkflowStudio.explicitRequest.title': 'Review external requests',
   'teamMemberWorkflowStudio.executionPanel.duration': 'Duration',
   'teamMemberWorkflowStudio.executionPanel.clear': 'Clear logs',
   'teamMemberWorkflowStudio.executionPanel.copyAll': 'Copy all logs',
@@ -1090,6 +1203,7 @@ const enUSMessages = {
     'Select a log entry to inspect its input, output, and raw event data.',
   'teamMemberWorkflowStudio.executionPanel.steps': 'Steps',
   'teamMemberWorkflowStudio.executionPanel.status.error': 'Error',
+  'teamMemberWorkflowStudio.executionPanel.status.pending': 'Pending',
   'teamMemberWorkflowStudio.executionPanel.status.recorded': 'Recorded',
   'teamMemberWorkflowStudio.executionPanel.status.running': 'Running',
   'teamMemberWorkflowStudio.executionPanel.status.success': 'Success',
@@ -1109,6 +1223,9 @@ const enUSMessages = {
     'Service ready',
   'teamMemberWorkflowStudio.executionsPanel.title': 'Executions',
   'teamMemberWorkflowStudio.executionsPanel.unknownStatus': 'unknown',
+  'teamMemberWorkflowStudio.graph.branchCount.one': '1 branch',
+  'teamMemberWorkflowStudio.graph.branchCount.other': '{count} branches',
+  'teamMemberWorkflowStudio.graph.role': 'Role',
   'teamMemberWorkflowStudio.header.activateAria': 'Activate workflow member',
   'teamMemberWorkflowStudio.header.activation.active': 'Active',
   'teamMemberWorkflowStudio.header.activation.error': 'Error',
@@ -1504,6 +1621,66 @@ const enUSMessages = {
     'Runtime available',
   'pages.studio.studioworkbenchsections.runtime.facts.available':
     'Runtime facts available',
+  'menu.WorkOrder Details': 'Request details',
+  'teams.detail.tabs.workOrders': 'Requests',
+  'workOrders.actions.backToRequests': 'Back to requests',
+  'workOrders.actions.backToTeams': 'Back to teams',
+  'workOrders.actions.cancel': 'Cancel request',
+  'workOrders.actions.close': 'Close',
+  'workOrders.actions.dispatch': 'Dispatch',
+  'workOrders.actions.loadMore': 'Load more',
+  'workOrders.actions.open': 'Open request',
+  'workOrders.actions.openAria': 'Open request {workOrderId}',
+  'workOrders.actions.openRun': 'Open Run',
+  'workOrders.actions.reassign': 'Reassign',
+  'workOrders.actions.refresh': 'Refresh requests',
+  'workOrders.actions.retry': 'Retry',
+  'workOrders.authorization.error': 'Requester authorization could not be resolved.',
+  'workOrders.authorization.requesterOnly': 'Only the original requester can manage this request.',
+  'workOrders.cancel.reason': 'Cancellation reason',
+  'workOrders.cancel.reasonPlaceholder': 'Optional reason',
+  'workOrders.cancel.title': 'Cancel this request?',
+  'workOrders.detail.actions': 'Request actions',
+  'workOrders.detail.assignment': 'Assignment',
+  'workOrders.detail.error': 'The request could not be loaded.',
+  'workOrders.detail.invalidRoute': 'This request link is incomplete.',
+  'workOrders.detail.noRun': 'No Run is linked yet.',
+  'workOrders.detail.observedVersion': 'Observed version {version}',
+  'workOrders.detail.request': 'Request',
+  'workOrders.detail.run': 'Run link',
+  'workOrders.detail.runAcceptedAt': 'Accepted at {time}',
+  'workOrders.dispatch.confirm': 'Dispatch this request using its current assignment?',
+  'workOrders.dispatch.title': 'Dispatch request',
+  'workOrders.fields.assignment': 'Assignment',
+  'workOrders.fields.created': 'Created',
+  'workOrders.fields.deadline': 'Deadline',
+  'workOrders.fields.intent': 'Intent',
+  'workOrders.fields.member': 'Member',
+  'workOrders.fields.prompt': 'Prompt',
+  'workOrders.fields.request': 'Request',
+  'workOrders.fields.requester': 'Requester',
+  'workOrders.fields.service': 'Published service',
+  'workOrders.fields.updated': 'Updated',
+  'workOrders.fields.workflow': 'Workflow',
+  'workOrders.list.empty': 'No requests for this Team.',
+  'workOrders.list.error': 'The Team requests could not be loaded.',
+  'workOrders.list.title': 'Requests',
+  'workOrders.reassign.error': 'The Team members could not be loaded.',
+  'workOrders.reassign.placeholder': 'Select a published Team member',
+  'workOrders.reassign.title': 'Reassign request',
+  'workOrders.receipt.accepted': 'Command accepted. Refreshing observed state.',
+  'workOrders.receipt.description': 'Command {commandId} was accepted. The page currently shows observed state version {version}.',
+  'workOrders.receipt.title': 'Awaiting read-model observation',
+  'workOrders.status.accepted': 'Accepted',
+  'workOrders.status.cancelled': 'Cancelled',
+  'workOrders.status.completed': 'Completed',
+  'workOrders.status.dispatch_pending': 'Dispatch pending',
+  'workOrders.status.failed': 'Failed',
+  'workOrders.status.ready': 'Ready',
+  'workOrders.status.running': 'Running',
+  'workOrders.status.stopped': 'Stopped',
+  'workOrders.status.timed_out': 'Timed out',
+  'workOrders.values.noDeadline': 'No deadline',
 };
 
 export default enUSMessages;

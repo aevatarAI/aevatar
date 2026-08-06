@@ -63,8 +63,18 @@ public static class WorkflowAuditReportSanitizer
             AssignedValue = WorkflowAuditTextSanitizer.SanitizeValue(step.AssignedVariable, step.AssignedValue),
             SuspensionType = WorkflowAuditTextSanitizer.Sanitize(step.SuspensionType),
             SuspensionPrompt = WorkflowAuditTextSanitizer.Sanitize(step.SuspensionPrompt),
+            SuspensionContent = WorkflowAuditTextSanitizer.Sanitize(step.SuspensionContent),
             SuspensionTimeoutSeconds = step.SuspensionTimeoutSeconds,
             RequestedVariableName = WorkflowAuditTextSanitizer.Sanitize(step.RequestedVariableName),
+            ToolApproval = step.ToolApproval == null
+                ? null
+                : new WorkflowRunToolApproval
+                {
+                    ExecutionId = WorkflowAuditTextSanitizer.Sanitize(step.ToolApproval.ExecutionId),
+                    ToolName = WorkflowAuditTextSanitizer.Sanitize(step.ToolApproval.ToolName),
+                    ToolCallId = WorkflowAuditTextSanitizer.Sanitize(step.ToolApproval.ToolCallId),
+                    ApprovalRequestId = WorkflowAuditTextSanitizer.Sanitize(step.ToolApproval.ApprovalRequestId),
+                },
             Usage = SanitizeUsage(step.Usage),
         };
 

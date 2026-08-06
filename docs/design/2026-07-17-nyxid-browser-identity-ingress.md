@@ -57,6 +57,15 @@ removes any inbound `scope_id` or `workflow.scope_id` assertion claim and writes
 
 ## NyxID service configuration
 
+> **2026-07-25 internal P0 amendment:** managed Codex transparent readiness
+> currently requires the NyxID UserService fronting Aevatar to keep
+> `forward_access_token=true`. When both inbound credentials exist, workflow
+> ingress selects the forwarded Authorization bearer before the delegation
+> token. Do not execute the former rollout step that disables forwarding until
+> Aevatar carries both credential purposes as separate typed contracts or NyxID
+> provides a delegated self-service readiness capability. The canonical current
+> rule is in `docs/canon/nyxid-llm-integration.md`.
+
 The NyxID service that proxies Aevatar must use this effective configuration:
 
 ```json

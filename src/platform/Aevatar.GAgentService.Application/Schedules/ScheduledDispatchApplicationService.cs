@@ -3,12 +3,20 @@ using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgentService.Application.Schedules;
 
 public sealed class ScheduledDispatchApplicationService : IScheduledDispatchApplicationService
 {
     private const string ScheduleIdAllowedCharacters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-";
+    private const string TeamAutomationCommitObservationUnavailableCode =
+        "team_automation_commit_observation_unavailable";
+    private const string TeamAutomationCommitObservationEndedCode =
+        "team_automation_commit_observation_ended";
+    private const string TeamAutomationDispatchRejectedCode =
+        "team_automation_dispatch_rejected";
     private readonly IScheduledDispatchActorPort _actorPort;
     private readonly IScheduledDispatchQueryPort _queryPort;
     private readonly IScheduledDispatchTargetPreparationService _targetPreparationService;
@@ -16,6 +24,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     private readonly IScheduledDispatchCredentialRequirementPolicy _credentialRequirementPolicy;
     private readonly ITeamAutomationOperationObservationScopeLeasePreparationPort? _teamOperationObservationPreparation;
     private readonly ITeamAutomationOperationObservationProjectionPort? _teamOperationObservationProjection;
+    private readonly ILogger<ScheduledDispatchApplicationService> _logger;
 
     public ScheduledDispatchApplicationService(
         IScheduledDispatchActorPort actorPort,
@@ -24,7 +33,8 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         IScheduledDispatchCredentialAdmissionPort credentialAdmissionPort,
         IScheduledDispatchCredentialRequirementPolicy? credentialRequirementPolicy = null,
         ITeamAutomationOperationObservationScopeLeasePreparationPort? teamOperationObservationPreparation = null,
-        ITeamAutomationOperationObservationProjectionPort? teamOperationObservationProjection = null)
+        ITeamAutomationOperationObservationProjectionPort? teamOperationObservationProjection = null,
+        ILogger<ScheduledDispatchApplicationService>? logger = null)
     {
         _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
@@ -34,6 +44,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             DefaultScheduledDispatchCredentialRequirementPolicy.Instance;
         _teamOperationObservationPreparation = teamOperationObservationPreparation;
         _teamOperationObservationProjection = teamOperationObservationProjection;
+        _logger = logger ?? NullLogger<ScheduledDispatchApplicationService>.Instance;
     }
 
     public async Task<ScheduledDispatchMutationReceipt> CreateAsync(
@@ -41,7 +52,6 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default)
     {
-        RejectTeamAutomationOwnerForGenericMutation(configuration, context);
         var normalized = await NormalizeAndAdmitMutationAsync(configuration, context, requireScheduleId: false, ct);
         await EnsureCreatableAsync(normalized.ScheduleId, ct);
         normalized = AdmitCredentialRequirement(
@@ -63,7 +73,6 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default)
     {
-        RejectTeamAutomationOwnerForGenericMutation(configuration, context);
         var normalized = await NormalizeAndAdmitMutationAsync(configuration, context, requireScheduleId: true, ct);
         // A deleted schedule is a permanent tombstone: the actor rejects any
         // reconfigure, and the admission-only dispatch would swallow that
@@ -99,6 +108,17 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             requireScheduleId: true,
             ct);
         var existing = await GetMutableScheduleAsync(normalized.ScheduleId, normalized.TeamAutomationOwner, ct);
+        if (existing?.Schedule is
+            {
+                TeamOwned: true,
+                TeamAutomationLifecycleStatus: TeamAutomationLifecycleStatus.ReplacementPending,
+            })
+        {
+            throw new ScheduledDispatchConflictException(
+                normalized.ScheduleId,
+                "team_automation_replacement_pending");
+        }
+
         normalized = AdmitCredentialRequirement(
             normalized,
             ScheduledDispatchCredentialRequirementOperation.Update,
@@ -156,7 +176,14 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     {
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
         var schedule = await _queryPort.GetAsync(normalizedScheduleId, ct);
-        return schedule?.Schedule is { Deleted: false, TeamOwned: false } ? schedule : null;
+        return schedule?.Schedule is
+        {
+            Deleted: false,
+            TeamOwned: false,
+            TargetKind: ScheduledDispatchTargetKind.ServiceInvocation,
+        }
+            ? schedule
+            : null;
     }
 
     public Task<ScheduledDispatchListResult> ListAsync(
@@ -171,9 +198,41 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(query);
+        if (query.TeamAutomationOwner != null)
+        {
+            return _queryPort.ListAsync(query with
+            {
+                Take = Math.Clamp(query.Take, 1, 200),
+                TargetKind = ScheduledDispatchTargetKind.ServiceInvocation,
+                TeamAutomationOwner = NormalizeTeamOwner(query.TeamAutomationOwner),
+                TeamAutomationScopeId = null,
+                TeamAutomationTeamId = null,
+                TeamAutomationMemberId = null,
+                ExcludeTeamOwned = false,
+                IncludeDeleted = false,
+                ExcludeCompletedTeamAutomationDeletions = true,
+            }, ct);
+        }
+
+        var teamAutomationScopeId = NormalizeNullable(query.TeamAutomationScopeId);
+        if (teamAutomationScopeId is not null)
+        {
+            return _queryPort.ListAsync(query with
+            {
+                Take = Math.Clamp(query.Take, 1, 200),
+                TargetKind = ScheduledDispatchTargetKind.ServiceInvocation,
+                TeamAutomationOwner = null,
+                TeamAutomationScopeId = teamAutomationScopeId,
+                TeamAutomationTeamId = NormalizeNullable(query.TeamAutomationTeamId),
+                TeamAutomationMemberId = NormalizeNullable(query.TeamAutomationMemberId),
+                IncludeDeleted = false,
+            }, ct);
+        }
+
         return _queryPort.ListAsync(query with
         {
             Take = Math.Clamp(query.Take, 1, 200),
+            TargetKind = ScheduledDispatchTargetKind.ServiceInvocation,
             TeamAutomationOwner = null,
             ExcludeTeamOwned = true,
             IncludeDeleted = false,
@@ -250,6 +309,34 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             TeamAutomationOperationObservationStages.Begin,
             (requestId, token) => _actorPort.DispatchBeginTeamAutomationCredentialOperationAsync(
                 actorId, normalized, requestId, token),
+            ct);
+    }
+
+    public async Task<TeamAutomationCommittedMutationReceipt> RetryTeamAutomationCredentialOperationAsync(
+        string scheduleId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
+        CancellationToken ct = default)
+    {
+        var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        var normalizedOwner = NormalizeTeamOwner(owner);
+        var normalizedOperationId = NormalizeRequired(operationId, nameof(operationId));
+        var normalizedIdempotencyKey = NormalizeRequired(idempotencyKey, nameof(idempotencyKey));
+        var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
+        return await DispatchObservedTeamOperationAsync(
+            normalizedScheduleId,
+            actorId,
+            normalizedOperationId,
+            normalizedIdempotencyKey,
+            TeamAutomationOperationObservationStages.Begin,
+            (requestId, token) => _actorPort.DispatchRetryTeamAutomationCredentialOperationAsync(
+                actorId,
+                normalizedOwner,
+                normalizedOperationId,
+                normalizedIdempotencyKey,
+                requestId,
+                token),
             ct);
     }
 
@@ -438,11 +525,32 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             ct);
     }
 
+    public async Task<ScheduledDispatchMutationReceipt> DeleteTeamAutomationAsync(
+        string scheduleId,
+        TeamMemberAutomationOwner owner,
+        string reason,
+        CancellationToken ct = default)
+    {
+        var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        var normalizedOwner = NormalizeTeamOwner(owner);
+        var existing = await GetTeamMutableScheduleAsync(normalizedScheduleId, normalizedOwner, ct);
+        if (HasTeamCredentialLifecycle(existing.Schedule))
+        {
+            throw new InvalidOperationException("team_automation_delete_requires_revocation_context");
+        }
+
+        var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
+        var admission = await _actorPort.DispatchDeleteTeamAutomationAsync(
+            actorId,
+            normalizedOwner,
+            NormalizeOptional(reason),
+            ct);
+        return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
+    }
+
     public async Task<TeamAutomationCommittedMutationReceipt> RetryTeamAutomationRevocationAsync(
         string scheduleId,
         TeamMemberAutomationOwner owner,
-        string operationId,
-        string idempotencyKey,
         ScheduledInvocationAuthorizationOwner authenticatedCredentialOwner,
         CancellationToken ct = default)
     {
@@ -455,15 +563,12 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         if (!existing.Schedule.RevocationPending)
             throw new InvalidOperationException("team_automation_revocation_not_pending");
 
-        var normalizedOperationId = NormalizeRequired(operationId, nameof(operationId));
-        var normalizedIdempotencyKey = NormalizeRequired(idempotencyKey, nameof(idempotencyKey));
-        if (!string.Equals(existing.Schedule.TeamAutomationOperationId, normalizedOperationId, StringComparison.Ordinal) ||
-            !string.Equals(existing.Schedule.TeamAutomationIdempotencyKey, normalizedIdempotencyKey, StringComparison.Ordinal))
-        {
-            throw new ScheduledDispatchConflictException(
-                normalizedScheduleId,
-                "team_automation_revocation_operation_conflict");
-        }
+        var normalizedOperationId = NormalizeRequired(
+            existing.Schedule.TeamAutomationOperationId,
+            nameof(existing.Schedule.TeamAutomationOperationId));
+        var normalizedIdempotencyKey = NormalizeRequired(
+            existing.Schedule.TeamAutomationIdempotencyKey,
+            nameof(existing.Schedule.TeamAutomationIdempotencyKey));
 
         var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
         return await DispatchObservedTeamOperationAsync(
@@ -526,6 +631,17 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     public async Task<ScheduledDispatchRunNowReceipt> RunTeamAutomationNowAsync(
         string scheduleId,
         TeamMemberAutomationOwner owner,
+        CancellationToken ct = default)
+    {
+        var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        var operationId = BuildBackendOperationId(normalizedScheduleId, "run-now");
+        var idempotencyKey = BuildBackendIdempotencyKey(normalizedScheduleId, operationId);
+        return await RunTeamAutomationNowAsync(normalizedScheduleId, owner, operationId, idempotencyKey, ct);
+    }
+
+    public async Task<ScheduledDispatchRunNowReceipt> RunTeamAutomationNowAsync(
+        string scheduleId,
+        TeamMemberAutomationOwner owner,
         string operationId,
         string idempotencyKey,
         CancellationToken ct = default)
@@ -533,8 +649,11 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
         var normalizedOwner = NormalizeTeamOwner(owner);
         var detail = await GetTeamMutableScheduleAsync(normalizedScheduleId, normalizedOwner, ct);
-        if (detail.Schedule.TeamAutomationLifecycleStatus != TeamAutomationLifecycleStatus.Active)
+        if (HasTeamCredentialLifecycle(detail.Schedule) &&
+            detail.Schedule.TeamAutomationLifecycleStatus != TeamAutomationLifecycleStatus.Active)
+        {
             throw new InvalidOperationException("team_automation_credential_not_active");
+        }
 
         AdmitRunNowCredentialRequirement(detail.Schedule);
         var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
@@ -560,6 +679,30 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             "accepted");
     }
 
+    public async Task<ScheduledDispatchDetail?> GetTeamScheduleAsync(
+        string scheduleId,
+        string scopeId,
+        string? teamId = null,
+        string? memberId = null,
+        CancellationToken ct = default)
+    {
+        var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var normalizedTeamId = NormalizeNullable(teamId);
+        var normalizedMemberId = NormalizeNullable(memberId);
+        var detail = await _queryPort.GetAsync(normalizedScheduleId, ct);
+        return detail?.Schedule is
+               {
+                   Deleted: false,
+                   TargetKind: ScheduledDispatchTargetKind.ServiceInvocation,
+               } &&
+               TeamScopeEquals(detail.Schedule, normalizedScopeId) &&
+               (normalizedTeamId is null || TeamEquals(detail.Schedule, normalizedTeamId)) &&
+               (normalizedMemberId is null || TeamMemberEquals(detail.Schedule, normalizedMemberId))
+            ? detail
+            : null;
+    }
+
     public async Task<ScheduledDispatchDetail?> GetTeamAutomationAsync(
         string scheduleId,
         TeamMemberAutomationOwner owner,
@@ -569,11 +712,18 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var normalizedOwner = NormalizeTeamOwner(owner);
         var detail = await _queryPort.GetAsync(normalizedScheduleId, ct);
         return detail?.Schedule is { TeamOwned: true } &&
+               IsVisibleTeamAutomationTarget(detail.Schedule) &&
                (!detail.Schedule.Deleted || detail.Schedule.RevocationPending) &&
                TeamOwnerEquals(detail.Schedule, normalizedOwner)
             ? detail
             : null;
     }
+
+    private static bool IsVisibleTeamAutomationTarget(ScheduledDispatchSummary schedule) =>
+        schedule.TargetKind == ScheduledDispatchTargetKind.ServiceInvocation ||
+        schedule.TeamAutomationLifecycleStatus is
+            TeamAutomationLifecycleStatus.ProvisioningPending or
+            TeamAutomationLifecycleStatus.ReplacementPending;
 
     public async Task<ScheduledDispatchListResult> ListTeamAutomationsAsync(
         TeamMemberAutomationOwner owner,
@@ -586,6 +736,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             Take: Math.Clamp(take, 1, 200),
             Cursor: cursor,
             IncludeTotalCount: includeTotalCount,
+            TargetKind: ScheduledDispatchTargetKind.ServiceInvocation,
             TeamAutomationOwner: NormalizeTeamOwner(owner),
             ExcludeCompletedTeamAutomationDeletions: true), ct);
         return result;
@@ -608,19 +759,6 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             : await _actorPort.DispatchDisableTeamAutomationAsync(
                 actorId, normalizedOwner, NormalizeOptional(reason), ct);
         return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
-    }
-
-    private static void RejectTeamAutomationOwnerForGenericMutation(
-        ScheduledDispatchConfiguration configuration,
-        ScheduledDispatchMutationContext? context)
-    {
-        ArgumentNullException.ThrowIfNull(configuration);
-        if (configuration.TeamAutomationOwner == null && context?.TeamAutomationOwner == null)
-            return;
-
-        throw new ArgumentException(
-            "Team automation ownership is reserved for the dedicated team automation lifecycle.",
-            nameof(configuration));
     }
 
     private async Task<ScheduledDispatchDetail> GetTeamMutableScheduleAsync(
@@ -766,7 +904,8 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         ArgumentNullException.ThrowIfNull(owner);
         return new TeamMemberAutomationOwner(
             NormalizeRequired(owner.ScopeId, nameof(owner.ScopeId)),
-            NormalizeRequired(owner.MemberId, nameof(owner.MemberId)));
+            NormalizeRequired(owner.MemberId, nameof(owner.MemberId)),
+            NormalizeRequired(owner.TeamId, nameof(owner.TeamId)));
     }
 
     private static ScheduledInvocationAuthorizationOwner NormalizeAuthorizationOwner(
@@ -794,7 +933,93 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             NormalizeRequired(operation.PolicyVersion, nameof(operation.PolicyVersion)),
             kind,
             NormalizeCredentialEffectLocator(operation.CredentialEffectLocator),
+            NormalizeTeamActivationDecision(operation.ActivationDecision),
             NormalizeRequired(operation.MutationDigest, nameof(operation.MutationDigest)));
+    }
+
+    private static TeamAutomationActivationDecision NormalizeTeamActivationDecision(
+        TeamAutomationActivationDecision decision)
+    {
+        ArgumentNullException.ThrowIfNull(decision);
+        var mode = NormalizeScheduleMode(decision.ScheduleMode);
+        var callerAuthority = NormalizeCallerAuthority(decision.CallerAuthority) ??
+            throw new ArgumentException("Team automation caller authority is required.", nameof(decision));
+        return new TeamAutomationActivationDecision(
+            NormalizeScheduleId(decision.ScheduleId),
+            NormalizeOptional(decision.DisplayName),
+            NormalizeTeamOwner(decision.Owner),
+            NormalizeServiceInvocationIdentity(decision.ServiceIdentity),
+            NormalizeRequired(decision.EndpointId, nameof(decision.EndpointId)),
+            decision.Payload?.Clone() ??
+                throw new ArgumentException("Team automation payload is required.", nameof(decision)),
+            callerAuthority,
+            NormalizeAuthorizationFact(decision.AuthorizationFact),
+            mode == ScheduledDispatchScheduleMode.RecurringCron
+                ? NormalizeRequired(decision.CronExpression, nameof(decision.CronExpression))
+                : string.Empty,
+            ScheduledDispatchCalculator.NormalizeTimezone(decision.Timezone),
+            decision.Enabled,
+            decision.ScheduleKind,
+            NormalizeHeaders(decision.Headers),
+            mode,
+            NormalizeOneShotFireAt(mode, decision.OneShotFireAt),
+            decision.CredentialRequirementTargetKind,
+            NormalizeOptional(decision.RevisionId),
+            decision.Caller == null
+                ? null
+                : new ServiceInvocationCaller
+                {
+                    ServiceKey = NormalizeOptional(decision.Caller.ServiceKey),
+                    TenantId = NormalizeOptional(decision.Caller.TenantId),
+                    AppId = NormalizeOptional(decision.Caller.AppId),
+                });
+    }
+
+    private static ScheduledInvocationAuthorizationFact NormalizeAuthorizationFact(
+        ScheduledInvocationAuthorizationFact fact)
+    {
+        ArgumentNullException.ThrowIfNull(fact);
+        ArgumentNullException.ThrowIfNull(fact.Disclosure);
+        ArgumentNullException.ThrowIfNull(fact.Authority);
+        var grants = (fact.ServiceGrants ?? [])
+            .Select(static grant => new ScheduledInvocationAuthorizationServiceGrant(
+                NormalizeRequired(grant.ServiceId, nameof(grant.ServiceId)),
+                (grant.NodeIds ?? [])
+                    .Select(static nodeId => NormalizeRequired(nodeId, nameof(nodeId)))
+                    .Order(StringComparer.Ordinal)
+                    .ToArray(),
+                grant.NodeGrantsNotRequired))
+            .OrderBy(static grant => grant.ServiceId, StringComparer.Ordinal)
+            .ThenBy(static grant => grant.NodeGrantsNotRequired)
+            .ThenBy(static grant => string.Join('\n', grant.NodeIds), StringComparer.Ordinal)
+            .ToArray();
+        return new ScheduledInvocationAuthorizationFact(
+            NormalizeRequired(fact.PermissionDigest, nameof(fact.PermissionDigest)),
+            NormalizeRequired(fact.PolicyVersion, nameof(fact.PolicyVersion)),
+            NormalizeAuthorizationOwner(fact.Owner),
+            grants,
+            NormalizeOptional(fact.Scopes),
+            fact.ExpiresAt.ToUniversalTime(),
+            fact.ServiceGrantsNotRequired,
+            new ScheduledInvocationAuthorizationDisclosure(
+                fact.Disclosure.DedicatedToSchedule,
+                fact.Disclosure.SecretManagedByAevatar,
+                fact.Disclosure.BrowserReceivesRawKey,
+                fact.Disclosure.DeleteRevokesCredential,
+                fact.Disclosure.PauseResumeRevokesCredential),
+            new ScheduledInvocationAuthorizationAuthority(
+                fact.Authority.MemberStateVersion,
+                fact.Authority.WorkflowStateVersion,
+                fact.Authority.ConnectorStateVersion,
+                fact.Authority.OwnerLlmStateVersion,
+                fact.Authority.CatalogStateVersion,
+                fact.Authority.CatalogObservedAt.ToUniversalTime(),
+                fact.Authority.CatalogFreshUntil.ToUniversalTime(),
+                NormalizeOptional(fact.Authority.CatalogContentDigest),
+                NormalizeOptional(fact.Authority.CatalogContractVersion),
+                NormalizeOptional(fact.Authority.CatalogPolicyVersion),
+                fact.Authority.CatalogEvaluatedAt.ToUniversalTime()),
+            fact.OwnerLLMSelection?.Clone());
     }
 
     private static ScheduledCredentialEffectLocator NormalizeCredentialEffectLocator(
@@ -812,11 +1037,22 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     private static bool TeamOwnerEquals(TeamMemberAutomationOwner left, TeamMemberAutomationOwner? right) =>
         right != null &&
         string.Equals(left.ScopeId, right.ScopeId, StringComparison.Ordinal) &&
+        string.Equals(left.TeamId, right.TeamId, StringComparison.Ordinal) &&
         string.Equals(left.MemberId, right.MemberId, StringComparison.Ordinal);
 
     private static bool TeamOwnerEquals(ScheduledDispatchSummary schedule, TeamMemberAutomationOwner owner) =>
         string.Equals(schedule.TeamOwnerScopeId, owner.ScopeId, StringComparison.Ordinal) &&
+        string.Equals(schedule.TeamId, owner.TeamId, StringComparison.Ordinal) &&
         string.Equals(schedule.TeamOwnerMemberId, owner.MemberId, StringComparison.Ordinal);
+
+    private static bool TeamScopeEquals(ScheduledDispatchSummary schedule, string scopeId) =>
+        string.Equals(schedule.TeamOwnerScopeId, scopeId, StringComparison.Ordinal);
+
+    private static bool TeamEquals(ScheduledDispatchSummary schedule, string teamId) =>
+        string.Equals(schedule.TeamId, teamId, StringComparison.Ordinal);
+
+    private static bool TeamMemberEquals(ScheduledDispatchSummary schedule, string memberId) =>
+        string.Equals(schedule.TeamOwnerMemberId, memberId, StringComparison.Ordinal);
 
     private async Task<TeamAutomationCommittedMutationReceipt> DispatchObservedTeamOperationAsync(
         string scheduleId,
@@ -828,32 +1064,101 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         CancellationToken ct)
     {
         if (_teamOperationObservationPreparation == null || _teamOperationObservationProjection == null)
-            throw new InvalidOperationException("team_automation_commit_observation_unavailable");
+            throw TeamAutomationOperationUnavailable();
 
         TeamAutomationOperationObservationScopeLeasePreparation? preparation = null;
         EventSinkProjectionAttachment<ITeamAutomationOperationObservationProjectionLease>? attachment = null;
         await using var sink = new EventChannel<TeamAutomationOperationCommittedOutcome>(8);
+        TeamAutomationCommittedMutationReceipt receipt;
         try
         {
-            preparation = await _teamOperationObservationPreparation.PrepareAsync(actorId, operationId, ct)
+            preparation = await InvokeWithStableFailureAsync(
+                    () => _teamOperationObservationPreparation.PrepareAsync(actorId, operationId, ct),
+                    ct,
+                    TeamAutomationCommitObservationUnavailableCode)
                 .ConfigureAwait(false);
             if (preparation == null)
-                throw new InvalidOperationException("team_automation_commit_observation_unavailable");
+                throw TeamAutomationOperationUnavailable();
 
-            attachment = await _teamOperationObservationProjection.AttachExistingOperationProjectionAsync(
-                    actorId,
-                    operationId,
-                    sink,
-                    ct)
+            attachment = await InvokeWithStableFailureAsync(
+                    () => _teamOperationObservationProjection.AttachExistingOperationProjectionAsync(
+                        actorId,
+                        operationId,
+                        sink,
+                        ct),
+                    ct,
+                    TeamAutomationCommitObservationUnavailableCode)
                 .ConfigureAwait(false);
             if (attachment == null)
-                throw new InvalidOperationException("team_automation_commit_observation_unavailable");
+                throw TeamAutomationOperationUnavailable();
 
             var observationRequestId = Guid.NewGuid().ToString("N");
-            var admission = await dispatchAsync(observationRequestId, ct).ConfigureAwait(false);
+            var admission = await InvokeWithStableFailureAsync(
+                    () => dispatchAsync(observationRequestId, ct),
+                    ct,
+                    TeamAutomationDispatchRejectedCode)
+                .ConfigureAwait(false);
             if (!admission.Accepted)
-                throw new InvalidOperationException("team_automation_dispatch_rejected");
+                throw new InvalidOperationException(TeamAutomationDispatchRejectedCode);
 
+            var outcome = await ReadCorrelatedTeamAutomationOutcomeAsync(
+                    sink,
+                    scheduleId,
+                    operationId,
+                    idempotencyKey,
+                    expectedStage,
+                    observationRequestId,
+                    ct)
+                .ConfigureAwait(false);
+            ThrowIfTeamAutomationOperationRejected(scheduleId, outcome);
+            receipt = new TeamAutomationCommittedMutationReceipt(
+                CreateMutationReceipt(scheduleId, actorId, admission),
+                outcome);
+        }
+        finally
+        {
+            if (attachment != null)
+            {
+                await TryCleanupTeamAutomationObservationAsync(
+                        () => _teamOperationObservationProjection.DetachLiveSinkAsync(
+                            attachment.LiveSinkLease,
+                            CancellationToken.None),
+                        "detach_live_sink")
+                    .ConfigureAwait(false);
+                await TryCleanupTeamAutomationObservationAsync(
+                        () => _teamOperationObservationProjection.ReleaseActorProjectionAsync(
+                            attachment.ProjectionLease,
+                            CancellationToken.None),
+                        "release_projection")
+                    .ConfigureAwait(false);
+            }
+
+            if (preparation != null)
+            {
+                await TryCleanupTeamAutomationObservationAsync(
+                        () => _teamOperationObservationPreparation.ReleaseAsync(
+                            preparation,
+                            CancellationToken.None),
+                        "release_preparation")
+                    .ConfigureAwait(false);
+            }
+        }
+
+        return receipt;
+    }
+
+    private static async Task<TeamAutomationOperationCommittedOutcome>
+        ReadCorrelatedTeamAutomationOutcomeAsync(
+            EventChannel<TeamAutomationOperationCommittedOutcome> sink,
+            string scheduleId,
+            string operationId,
+            string idempotencyKey,
+            string expectedStage,
+            string observationRequestId,
+            CancellationToken ct)
+    {
+        try
+        {
             await foreach (var outcome in sink.ReadAllAsync(ct).ConfigureAwait(false))
             {
                 if (!string.Equals(outcome.ScheduleId, scheduleId, StringComparison.Ordinal) ||
@@ -869,37 +1174,59 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
                 }
 
                 sink.Complete();
-                ThrowIfTeamAutomationOperationRejected(scheduleId, outcome);
-                return new TeamAutomationCommittedMutationReceipt(
-                    CreateMutationReceipt(scheduleId, actorId, admission),
-                    outcome);
+                return outcome;
             }
-
-            throw new InvalidOperationException("team_automation_commit_observation_ended");
         }
-        finally
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            if (attachment != null)
-            {
-                await _teamOperationObservationProjection.DetachLiveSinkAsync(
-                        attachment.LiveSinkLease,
-                        CancellationToken.None)
-                    .ConfigureAwait(false);
-                await _teamOperationObservationProjection.ReleaseActorProjectionAsync(
-                        attachment.ProjectionLease,
-                        CancellationToken.None)
-                    .ConfigureAwait(false);
-            }
+            throw;
+        }
+        catch
+        {
+            throw new InvalidOperationException(TeamAutomationCommitObservationEndedCode);
+        }
 
-            if (preparation != null)
-            {
-                await _teamOperationObservationPreparation.ReleaseAsync(
-                        preparation,
-                        CancellationToken.None)
-                    .ConfigureAwait(false);
-            }
+        throw new InvalidOperationException(TeamAutomationCommitObservationEndedCode);
+    }
+
+    private static async Task<T> InvokeWithStableFailureAsync<T>(
+        Func<Task<T>> operation,
+        CancellationToken callerCancellationToken,
+        string stableFailureCode)
+    {
+        try
+        {
+            return await operation().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (callerCancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            throw new InvalidOperationException(stableFailureCode);
         }
     }
+
+    private async Task TryCleanupTeamAutomationObservationAsync(
+        Func<Task> cleanup,
+        string cleanupOperation)
+    {
+        try
+        {
+            await cleanup().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to clean up team automation operation observation resource {CleanupOperation}.",
+                cleanupOperation);
+        }
+    }
+
+    private static InvalidOperationException TeamAutomationOperationUnavailable() =>
+        new(TeamAutomationCommitObservationUnavailableCode);
 
     private static void ThrowIfTeamAutomationOperationRejected(
         string scheduleId,
@@ -950,6 +1277,11 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         CancellationToken ct)
     {
         var existing = await _queryPort.GetAsync(scheduleId, ct);
+        if (existing is not null &&
+            existing.Schedule.TargetKind != ScheduledDispatchTargetKind.ServiceInvocation)
+        {
+            throw new ScheduledDispatchNotFoundException(scheduleId);
+        }
         if (existing?.Schedule.Deleted == true)
             throw new ScheduledDispatchNotFoundException(scheduleId);
         if (existing?.Schedule.TeamOwned == true)
@@ -971,8 +1303,14 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         CancellationToken ct)
     {
         var existing = await _queryPort.GetAsync(scheduleId, ct);
-        if (existing?.Schedule.TeamOwned != true || !TeamOwnerEquals(existing.Schedule, owner))
+        if (existing?.Schedule is not
+            {
+                TeamOwned: true,
+                TargetKind: ScheduledDispatchTargetKind.ServiceInvocation,
+            } || !TeamOwnerEquals(existing.Schedule, owner))
+        {
             throw new ScheduledDispatchNotFoundException(scheduleId);
+        }
         return existing;
     }
 
@@ -988,6 +1326,39 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             admission.CorrelationId,
             admission.AckedAt,
             "accepted");
+
+    private static bool HasTeamCredentialLifecycle(ScheduledDispatchSummary schedule) =>
+        schedule.TeamAutomationLifecycleStatus != TeamAutomationLifecycleStatus.Unspecified ||
+        schedule.CredentialGeneration > 0 ||
+        schedule.CredentialExpiresAt != null ||
+        schedule.RevocationPending ||
+        !string.IsNullOrWhiteSpace(schedule.TeamAutomationOperationId) ||
+        !string.IsNullOrWhiteSpace(schedule.TeamAutomationIdempotencyKey) ||
+        !string.IsNullOrWhiteSpace(schedule.CredentialOwnerAuthority) ||
+        !string.IsNullOrWhiteSpace(schedule.CredentialOwnerKind) ||
+        !string.IsNullOrWhiteSpace(schedule.CredentialOwnerSubject);
+
+    private static ScheduledInvocationAuthorizationOwner ResolveActiveCredentialOwner(
+        ScheduledDispatchSummary schedule)
+    {
+        if (string.IsNullOrWhiteSpace(schedule.CredentialOwnerAuthority) ||
+            string.IsNullOrWhiteSpace(schedule.CredentialOwnerKind) ||
+            string.IsNullOrWhiteSpace(schedule.CredentialOwnerSubject))
+        {
+            throw new InvalidOperationException("team_automation_credential_owner_missing");
+        }
+
+        return new ScheduledInvocationAuthorizationOwner(
+            schedule.CredentialOwnerAuthority,
+            schedule.CredentialOwnerKind,
+            schedule.CredentialOwnerSubject);
+    }
+
+    private static string BuildBackendOperationId(string scheduleId, string operation) =>
+        $"schedule-{NormalizeRequired(operation, nameof(operation))}-{NormalizeScheduleId(scheduleId)}-{Guid.NewGuid():N}";
+
+    private static string BuildBackendIdempotencyKey(string scheduleId, string operationId) =>
+        $"schedule:{NormalizeScheduleId(scheduleId)}:{NormalizeRequired(operationId, nameof(operationId))}";
 
     private ScheduledDispatchConfiguration AdmitCredentialRequirement(
         ScheduledDispatchConfiguration configuration,
@@ -1074,30 +1445,11 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         ArgumentNullException.ThrowIfNull(target);
         return target.Kind switch
         {
-            ScheduledDispatchTargetKind.Envelope => NormalizeEnvelopeTarget(target),
             ScheduledDispatchTargetKind.ServiceInvocation => NormalizeServiceInvocationTarget(target),
+            ScheduledDispatchTargetKind.Envelope => throw new ArgumentException(
+                "Raw envelope scheduled dispatch targets are not supported by the Application contract.",
+                nameof(target)),
             _ => throw new ArgumentException($"Unsupported scheduled dispatch target kind '{target.Kind}'.", nameof(target)),
-        };
-    }
-
-    private static ScheduledDispatchTargetDescriptor NormalizeEnvelopeTarget(ScheduledDispatchTargetDescriptor target)
-    {
-        if (target.Envelope?.Payload == null)
-            throw new ArgumentException("Envelope scheduled dispatch target requires an envelope payload.", nameof(target));
-
-        var actorId = NormalizeNullable(target.ActorId);
-        if (string.IsNullOrWhiteSpace(actorId))
-        {
-            actorId = NormalizeNullable(target.Envelope.Route.GetTargetActorId());
-            if (string.IsNullOrWhiteSpace(actorId))
-                throw new ArgumentException("Envelope scheduled dispatch target requires an actor id.", nameof(target));
-        }
-
-        return target with
-        {
-            ActorId = actorId,
-            Envelope = target.Envelope.Clone(),
-            ServiceInvocation = null,
         };
     }
 
@@ -1164,12 +1516,31 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             null => throw new ArgumentException("Exactly one service invocation credential source is required.", nameof(auth)),
             ScheduledServiceInvocationNyxIdCredentialSource nyxId => NormalizeNyxIdAuth(nyxId, auth),
             ScheduledServiceInvocationDurableCredentialReference durable =>
-                new ScheduledServiceInvocationAuth(NormalizeDurableCredentialReference(durable)),
+                new ScheduledServiceInvocationAuth(NormalizeDurableCredentialReference(durable))
+                {
+                    CallerAuthority = NormalizeCallerAuthority(auth.CallerAuthority),
+                },
             ScheduledInvocationAgentKeyCredentialReference agentKey =>
-                new ScheduledServiceInvocationAuth(NormalizeScheduledInvocationAgentKey(agentKey)),
+                new ScheduledServiceInvocationAuth(NormalizeScheduledInvocationAgentKey(agentKey))
+                {
+                    CallerAuthority = NormalizeCallerAuthority(auth.CallerAuthority),
+                },
             _ => throw new ArgumentException("Unsupported service invocation credential source.", nameof(auth)),
         };
     }
+
+    private static ScheduledCallerNyxIdAuthority? NormalizeCallerAuthority(
+        ScheduledCallerNyxIdAuthority? authority) =>
+        authority == null
+            ? null
+            : new ScheduledCallerNyxIdAuthority
+            {
+                Platform = NormalizeRequired(authority.Platform, nameof(authority.Platform)),
+                Tenant = NormalizeNullable(authority.Tenant) ?? string.Empty,
+                ExternalUserId = NormalizeRequired(authority.ExternalUserId, nameof(authority.ExternalUserId)),
+                Scope = NormalizeRequired(authority.Scope, nameof(authority.Scope)),
+                BindingId = NormalizeRequired(authority.BindingId, nameof(authority.BindingId)),
+            };
 
     private static ScheduledServiceInvocationAuth NormalizeNyxIdAuth(
         ScheduledServiceInvocationNyxIdCredentialSource source,
@@ -1191,13 +1562,19 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
                 new ScheduledServiceInvocationNyxIdCredentialSource(
                     null!,
                     NormalizeRequired(source.Scope, nameof(source.Scope)),
-                    role));
+                    role))
+            {
+                CallerAuthority = NormalizeCallerAuthority(auth.CallerAuthority),
+            };
         }
 
         return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
             NormalizeSubject(source.Subject),
             NormalizeRequired(source.Scope, nameof(source.Scope)),
-            role));
+            role))
+        {
+            CallerAuthority = NormalizeCallerAuthority(auth.CallerAuthority),
+        };
     }
 
     private static ScheduledServiceInvocationDurableCredentialReference NormalizeDurableCredentialReference(

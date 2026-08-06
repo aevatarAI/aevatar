@@ -73,6 +73,29 @@ describe('console locale catalogs', () => {
     expect(zhCNMessages['teams.detail.status.buildReady']).toBe('可构建');
   });
 
+  it('keeps Settings selection status and remediation labels localized', () => {
+    expect(enUSMessages['pages.settings.index.system.default']).toBe('System default');
+    expect(zhCNMessages['pages.settings.index.system.default']).toBe('系统默认值');
+    expect(enUSMessages['pages.settings.index.update.submitted']).toBe(
+      'Update submitted · {commandId}',
+    );
+    expect(zhCNMessages['pages.settings.index.update.submitted']).toBe(
+      '更新已提交 · {commandId}',
+    );
+    expect(enUSMessages['pages.settings.index.selection.needs.repair']).toBe(
+      'Saved selection needs repair',
+    );
+    expect(zhCNMessages['pages.settings.index.selection.needs.repair']).toBe(
+      '已保存选择需要修复',
+    );
+    expect(enUSMessages['pages.settings.index.verification.unavailable']).toBe(
+      'Verification unavailable',
+    );
+    expect(zhCNMessages['pages.settings.index.verification.unavailable']).toBe(
+      '暂时无法验证',
+    );
+  });
+
   it('keeps Chinese engineering and product terms from regressing to literal machine translations', () => {
     const zhCatalogText = Object.values(zhCNMessages).join('\n');
     const bannedMachineTranslations = [

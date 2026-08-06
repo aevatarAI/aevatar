@@ -43,6 +43,15 @@ public sealed class ServiceDeploymentCatalogQueryReader : IServiceDeploymentCata
                     x.ActivatedAt,
                     x.UpdatedAt))
                 .ToList(),
+            readModel.ActivationFailures
+                .OrderByDescending(x => x.OccurredAtUtcValue?.ToDateTimeOffset() ?? DateTimeOffset.UnixEpoch)
+                .ThenBy(x => x.RevisionId, StringComparer.Ordinal)
+                .Select(x => new ServiceDeploymentActivationFailureSnapshot(
+                    x.RevisionId,
+                    x.FailureCode,
+                    x.FailureReason,
+                    x.OccurredAtUtcValue?.ToDateTimeOffset() ?? DateTimeOffset.UnixEpoch))
+                .ToList(),
             readModel.UpdatedAt);
     }
 }

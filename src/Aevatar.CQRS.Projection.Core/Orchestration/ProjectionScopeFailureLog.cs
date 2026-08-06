@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
@@ -22,7 +23,16 @@ internal static class ProjectionScopeFailureLog
             Reason = reason,
             Envelope = envelope.Clone(),
             OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+            SourceActorId = ResolveSourceActorId(envelope),
         };
+    }
+
+    private static string ResolveSourceActorId(EventEnvelope envelope)
+    {
+        var sourceActorId = CommittedStateEventEnvelope.GetOriginActorId(envelope);
+        return string.IsNullOrWhiteSpace(sourceActorId)
+            ? envelope.Route?.PublisherActorId ?? string.Empty
+            : sourceActorId;
     }
 
     public static IReadOnlyList<ProjectionScopeFailure> GetPendingFailures(

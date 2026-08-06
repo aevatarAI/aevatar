@@ -1,0 +1,3342 @@
+{
+  "schemaVersion": 2,
+  "generatedAtUtc": "2026-08-02T09:55:47.777453+00:00",
+  "sourceCommit": "54bbc8d9f72d5b528c4bde55aad45bef2a91a79c",
+  "sourceDirtyPaths": [
+    "tools/measurements/Aevatar.RoleStreamingWriteAmplification/Program.cs",
+    "tools/measurements/Aevatar.RoleStreamingWriteAmplification/RoleContentionMeasurement.cs"
+  ],
+  "measurementAssemblySha256": "6DE872879419D6F832BB0893515EDFA9F1123CC87542B0312AD3DCBBEE67E520",
+  "roleAgentAssemblySha256": "9646C138D3FA09DE2F36BD8F22B5876A22E6170E90BAD561D30094D9891A3C6A",
+  "runPhase": "post-3135",
+  "baselineCodeCommit": "dcb05b683b911db037eb51c071b4495f1195ee28",
+  "configSha256": "AA835BE81AF3B7FBD4184E083380C8B47CDD33DD500A51739D822263A16BB739",
+  "entrypoint": "scoped_role",
+  "metricLabels": {
+    "allowed": [
+      "entrypoint",
+      "scenario",
+      "turn_kind",
+      "outcome"
+    ],
+    "forbidden": [
+      "actor_id",
+      "session_id",
+      "command_id",
+      "correlation_id"
+    ]
+  },
+  "config": {
+    "schemaVersion": 1,
+    "baselineCodeCommit": "dcb05b683b911db037eb51c071b4495f1195ee28",
+    "warmupIterations": 2,
+    "measuredIterations": 12,
+    "fastSessionCount": 8,
+    "slowReleaseYieldCount": 131072,
+    "fastTextChunks": 2,
+    "slowTextChunks": 16,
+    "chunkCharacters": 24,
+    "timeoutMilliseconds": 30000,
+    "watchdogSeconds": 60,
+    "snapshotInterval": 1000
+  },
+  "scenarios": [
+    {
+      "scenario": "distinct_actor",
+      "concurrentSessionsPerActor": 1,
+      "samples": [
+        {
+          "iteration": 0,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0815,
+              "serviceTimeMs": 44.1901,
+              "completionLatencyMs": 44.2717,
+              "firstOutputLatencyMs": 38.1223,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 1,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0778,
+              "serviceTimeMs": 2.6282,
+              "completionLatencyMs": 2.7061,
+              "firstOutputLatencyMs": 0.2857,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 2,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 0.3555,
+              "serviceTimeMs": 2.3382,
+              "completionLatencyMs": 2.6938,
+              "firstOutputLatencyMs": 0.5023,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 3,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 0.5577,
+              "serviceTimeMs": 2.2368,
+              "completionLatencyMs": 2.7945,
+              "firstOutputLatencyMs": 0.8558,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 4,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 0.9332,
+              "serviceTimeMs": 1.9088,
+              "completionLatencyMs": 2.842,
+              "firstOutputLatencyMs": 1.0689,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 5,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 1.1345,
+              "serviceTimeMs": 1.7769,
+              "completionLatencyMs": 2.9115,
+              "firstOutputLatencyMs": 1.2737,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 6,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 1.8678,
+              "serviceTimeMs": 1.0648,
+              "completionLatencyMs": 2.9327,
+              "firstOutputLatencyMs": 2.0595,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 7,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 1.9959,
+              "serviceTimeMs": 0.9884,
+              "completionLatencyMs": 2.9843,
+              "firstOutputLatencyMs": 2.1877,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 8,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 2.197,
+              "serviceTimeMs": 0.8504,
+              "completionLatencyMs": 3.0474,
+              "firstOutputLatencyMs": 2.3658,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 1,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 9,
+          "actorStates": [
+            {
+              "serializedBytes": 659,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            }
+          ],
+          "aggregateStateBytes": 3251,
+          "deactivationCount": 9,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 1,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0376,
+              "serviceTimeMs": 33.467,
+              "completionLatencyMs": 33.5046,
+              "firstOutputLatencyMs": 32.1582,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 1,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0603,
+              "serviceTimeMs": 1.9724,
+              "completionLatencyMs": 2.0328,
+              "firstOutputLatencyMs": 0.2156,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 2,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 0.2751,
+              "serviceTimeMs": 1.7512,
+              "completionLatencyMs": 2.0263,
+              "firstOutputLatencyMs": 0.4026,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 3,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 0.4632,
+              "serviceTimeMs": 1.5692,
+              "completionLatencyMs": 2.0325,
+              "firstOutputLatencyMs": 0.581,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 4,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 0.6379,
+              "serviceTimeMs": 3.7022,
+              "completionLatencyMs": 4.3401,
+              "firstOutputLatencyMs": 0.7492,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 5,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 0.8075,
+              "serviceTimeMs": 1.3268,
+              "completionLatencyMs": 2.1344,
+              "firstOutputLatencyMs": 0.9205,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 6,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 0.975,
+              "serviceTimeMs": 4.8629,
+              "completionLatencyMs": 5.8379,
+              "firstOutputLatencyMs": 1.0877,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 7,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 1.1442,
+              "serviceTimeMs": 1.0634,
+              "completionLatencyMs": 2.2076,
+              "firstOutputLatencyMs": 1.5855,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 8,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 1.5175,
+              "serviceTimeMs": 1.9741,
+              "completionLatencyMs": 3.4917,
+              "firstOutputLatencyMs": 1.75,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 1,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 9,
+          "actorStates": [
+            {
+              "serializedBytes": 659,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            }
+          ],
+          "aggregateStateBytes": 3251,
+          "deactivationCount": 9,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 2,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0298,
+              "serviceTimeMs": 40.9879,
+              "completionLatencyMs": 41.0178,
+              "firstOutputLatencyMs": 38.7373,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 1,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0556,
+              "serviceTimeMs": 1.6119,
+              "completionLatencyMs": 1.6675,
+              "firstOutputLatencyMs": 0.2111,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 2,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 0.1792,
+              "serviceTimeMs": 0.9941,
+              "completionLatencyMs": 1.1734,
+              "firstOutputLatencyMs": 0.3787,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 3,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 0.2656,
+              "serviceTimeMs": 0.9296,
+              "completionLatencyMs": 1.1952,
+              "firstOutputLatencyMs": 0.3807,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 4,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 0.4355,
+              "serviceTimeMs": 0.9068,
+              "completionLatencyMs": 1.3424,
+              "firstOutputLatencyMs": 0.5564,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 5,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 0.4403,
+              "serviceTimeMs": 0.8401,
+              "completionLatencyMs": 1.2804,
+              "firstOutputLatencyMs": 0.5612,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 6,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 0.6149,
+              "serviceTimeMs": 0.8143,
+              "completionLatencyMs": 1.4292,
+              "firstOutputLatencyMs": 0.7311,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 7,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 0.6198,
+              "serviceTimeMs": 0.7498,
+              "completionLatencyMs": 1.3697,
+              "firstOutputLatencyMs": 0.7382,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 8,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 0.7873,
+              "serviceTimeMs": 0.6638,
+              "completionLatencyMs": 1.4512,
+              "firstOutputLatencyMs": 0.9044,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 1,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 9,
+          "actorStates": [
+            {
+              "serializedBytes": 659,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            }
+          ],
+          "aggregateStateBytes": 3251,
+          "deactivationCount": 9,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 3,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0274,
+              "serviceTimeMs": 33.5062,
+              "completionLatencyMs": 33.5337,
+              "firstOutputLatencyMs": 30.4199,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 1,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0424,
+              "serviceTimeMs": 1.0525,
+              "completionLatencyMs": 1.0949,
+              "firstOutputLatencyMs": 0.1891,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 2,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 0.2855,
+              "serviceTimeMs": 1.6128,
+              "completionLatencyMs": 1.8983,
+              "firstOutputLatencyMs": 0.7709,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 3,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 0.2388,
+              "serviceTimeMs": 0.9723,
+              "completionLatencyMs": 1.2112,
+              "firstOutputLatencyMs": 0.3517,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 4,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 0.3389,
+              "serviceTimeMs": 0.957,
+              "completionLatencyMs": 1.2959,
+              "firstOutputLatencyMs": 0.761,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 5,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 0.4038,
+              "serviceTimeMs": 0.8022,
+              "completionLatencyMs": 1.206,
+              "firstOutputLatencyMs": 0.5225,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 6,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 0.435,
+              "serviceTimeMs": 0.74,
+              "completionLatencyMs": 1.1751,
+              "firstOutputLatencyMs": 0.625,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 7,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 0.5792,
+              "serviceTimeMs": 0.6925,
+              "completionLatencyMs": 1.2717,
+              "firstOutputLatencyMs": 0.6963,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 8,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 0.6912,
+              "serviceTimeMs": 0.9191,
+              "completionLatencyMs": 1.6103,
+              "firstOutputLatencyMs": 0.819,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 1,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 9,
+          "actorStates": [
+            {
+              "serializedBytes": 659,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            }
+          ],
+          "aggregateStateBytes": 3251,
+          "deactivationCount": 9,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 4,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0585,
+              "serviceTimeMs": 53.258,
+              "completionLatencyMs": 53.3166,
+              "firstOutputLatencyMs": 48.4552,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 1,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0973,
+              "serviceTimeMs": 1.5587,
+              "completionLatencyMs": 1.6561,
+              "firstOutputLatencyMs": 0.4065,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 2,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0931,
+              "serviceTimeMs": 1.6532,
+              "completionLatencyMs": 1.7464,
+              "firstOutputLatencyMs": 0.5494,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 3,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 0.4615,
+              "serviceTimeMs": 1.2729,
+              "completionLatencyMs": 1.7345,
+              "firstOutputLatencyMs": 0.6,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 4,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 0.5676,
+              "serviceTimeMs": 1.3962,
+              "completionLatencyMs": 1.9639,
+              "firstOutputLatencyMs": 0.9924,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 5,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 0.6363,
+              "serviceTimeMs": 1.0765,
+              "completionLatencyMs": 1.7129,
+              "firstOutputLatencyMs": 0.7702,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 6,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 0.8037,
+              "serviceTimeMs": 1.2006,
+              "completionLatencyMs": 2.0043,
+              "firstOutputLatencyMs": 1.1179,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 7,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 0.8093,
+              "serviceTimeMs": 0.9728,
+              "completionLatencyMs": 1.7821,
+              "firstOutputLatencyMs": 0.9511,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 8,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 1.0041,
+              "serviceTimeMs": 0.8757,
+              "completionLatencyMs": 1.8798,
+              "firstOutputLatencyMs": 1.1235,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 1,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 9,
+          "actorStates": [
+            {
+              "serializedBytes": 659,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            }
+          ],
+          "aggregateStateBytes": 3251,
+          "deactivationCount": 9,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 5,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0397,
+              "serviceTimeMs": 51.5479,
+              "completionLatencyMs": 51.5876,
+              "firstOutputLatencyMs": 50.2799,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 1,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 0.1552,
+              "serviceTimeMs": 4.5291,
+              "completionLatencyMs": 4.6843,
+              "firstOutputLatencyMs": 1.0591,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 2,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 1.2117,
+              "serviceTimeMs": 3.5695,
+              "completionLatencyMs": 4.7812,
+              "firstOutputLatencyMs": 1.4017,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 3,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 1.4597,
+              "serviceTimeMs": 3.6119,
+              "completionLatencyMs": 5.0716,
+              "firstOutputLatencyMs": 1.7162,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 4,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 1.8235,
+              "serviceTimeMs": 3.6601,
+              "completionLatencyMs": 5.4836,
+              "firstOutputLatencyMs": 1.9804,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 5,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 2.0388,
+              "serviceTimeMs": 3.5805,
+              "completionLatencyMs": 5.6194,
+              "firstOutputLatencyMs": 2.1605,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 6,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 2.2195,
+              "serviceTimeMs": 3.4939,
+              "completionLatencyMs": 5.7135,
+              "firstOutputLatencyMs": 2.3382,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 7,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 2.3934,
+              "serviceTimeMs": 3.5219,
+              "completionLatencyMs": 5.9153,
+              "firstOutputLatencyMs": 2.5091,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 8,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 2.5655,
+              "serviceTimeMs": 3.7227,
+              "completionLatencyMs": 6.2882,
+              "firstOutputLatencyMs": 3.0135,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 1,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 9,
+          "actorStates": [
+            {
+              "serializedBytes": 658,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            }
+          ],
+          "aggregateStateBytes": 3250,
+          "deactivationCount": 9,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 6,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0812,
+              "serviceTimeMs": 52.8174,
+              "completionLatencyMs": 52.8986,
+              "firstOutputLatencyMs": 48.0025,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 1,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 0.1038,
+              "serviceTimeMs": 2.2662,
+              "completionLatencyMs": 2.37,
+              "firstOutputLatencyMs": 0.5002,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 2,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 0.5808,
+              "serviceTimeMs": 1.5787,
+              "completionLatencyMs": 2.1596,
+              "firstOutputLatencyMs": 0.7217,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 3,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 0.7697,
+              "serviceTimeMs": 1.4651,
+              "completionLatencyMs": 2.2348,
+              "firstOutputLatencyMs": 0.892,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 4,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 0.9329,
+              "serviceTimeMs": 1.3155,
+              "completionLatencyMs": 2.2484,
+              "firstOutputLatencyMs": 1.0494,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 5,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 1.0092,
+              "serviceTimeMs": 1.2804,
+              "completionLatencyMs": 2.2896,
+              "firstOutputLatencyMs": 1.5222,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 6,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 1.088,
+              "serviceTimeMs": 1.2606,
+              "completionLatencyMs": 2.3486,
+              "firstOutputLatencyMs": 1.2075,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 7,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 1.2514,
+              "serviceTimeMs": 0.7985,
+              "completionLatencyMs": 2.05,
+              "firstOutputLatencyMs": 1.3705,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 8,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 1.4232,
+              "serviceTimeMs": 0.7335,
+              "completionLatencyMs": 2.1567,
+              "firstOutputLatencyMs": 1.5336,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 1,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 9,
+          "actorStates": [
+            {
+              "serializedBytes": 658,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 323,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 323,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 323,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 323,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 323,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 323,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 323,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 323,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            }
+          ],
+          "aggregateStateBytes": 3242,
+          "deactivationCount": 9,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 7,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0633,
+              "serviceTimeMs": 49.4195,
+              "completionLatencyMs": 49.4829,
+              "firstOutputLatencyMs": 46.6175,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 1,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 0.088,
+              "serviceTimeMs": 1.3412,
+              "completionLatencyMs": 1.4292,
+              "firstOutputLatencyMs": 0.3729,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 2,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0392,
+              "serviceTimeMs": 1.1157,
+              "completionLatencyMs": 1.1549,
+              "firstOutputLatencyMs": 0.4445,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 3,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0312,
+              "serviceTimeMs": 1.2489,
+              "completionLatencyMs": 1.2801,
+              "firstOutputLatencyMs": 0.4357,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 4,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0545,
+              "serviceTimeMs": 1.0815,
+              "completionLatencyMs": 1.136,
+              "firstOutputLatencyMs": 0.5896,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 5,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 0.068,
+              "serviceTimeMs": 1.0799,
+              "completionLatencyMs": 1.148,
+              "firstOutputLatencyMs": 0.4193,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 6,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0771,
+              "serviceTimeMs": 1.1835,
+              "completionLatencyMs": 1.2606,
+              "firstOutputLatencyMs": 0.4112,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 7,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 0.5515,
+              "serviceTimeMs": 0.6947,
+              "completionLatencyMs": 1.2462,
+              "firstOutputLatencyMs": 0.7139,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 8,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 0.5499,
+              "serviceTimeMs": 0.8369,
+              "completionLatencyMs": 1.3868,
+              "firstOutputLatencyMs": 0.724,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 1,
+          "maxTotalQueueDepth": 6,
+          "activationCount": 9,
+          "actorStates": [
+            {
+              "serializedBytes": 659,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 323,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 323,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 323,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 323,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 323,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 323,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 323,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 323,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            }
+          ],
+          "aggregateStateBytes": 3243,
+          "deactivationCount": 9,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 8,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0342,
+              "serviceTimeMs": 39.6801,
+              "completionLatencyMs": 39.7144,
+              "firstOutputLatencyMs": 37.6163,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 1,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0695,
+              "serviceTimeMs": 2.7376,
+              "completionLatencyMs": 2.8071,
+              "firstOutputLatencyMs": 0.2046,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 2,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 0.2495,
+              "serviceTimeMs": 2.3383,
+              "completionLatencyMs": 2.5878,
+              "firstOutputLatencyMs": 0.3358,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 3,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 0.378,
+              "serviceTimeMs": 2.2774,
+              "completionLatencyMs": 2.6554,
+              "firstOutputLatencyMs": 1.4379,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 4,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 0.4232,
+              "serviceTimeMs": 2.1938,
+              "completionLatencyMs": 2.6171,
+              "firstOutputLatencyMs": 1.115,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 5,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 1.3264,
+              "serviceTimeMs": 1.437,
+              "completionLatencyMs": 2.7634,
+              "firstOutputLatencyMs": 2.049,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 6,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 1.5378,
+              "serviceTimeMs": 1.2935,
+              "completionLatencyMs": 2.8314,
+              "firstOutputLatencyMs": 1.7945,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 7,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 1.5731,
+              "serviceTimeMs": 1.1817,
+              "completionLatencyMs": 2.7548,
+              "firstOutputLatencyMs": 1.7901,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 8,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 1.9639,
+              "serviceTimeMs": 0.9436,
+              "completionLatencyMs": 2.9075,
+              "firstOutputLatencyMs": 2.2347,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 1,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 9,
+          "actorStates": [
+            {
+              "serializedBytes": 659,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            }
+          ],
+          "aggregateStateBytes": 3251,
+          "deactivationCount": 9,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 9,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0317,
+              "serviceTimeMs": 31.527,
+              "completionLatencyMs": 31.5587,
+              "firstOutputLatencyMs": 29.5411,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 1,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0409,
+              "serviceTimeMs": 3.3332,
+              "completionLatencyMs": 3.3742,
+              "firstOutputLatencyMs": 0.2366,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 2,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0432,
+              "serviceTimeMs": 3.0974,
+              "completionLatencyMs": 3.1406,
+              "firstOutputLatencyMs": 0.2006,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 3,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 0.1055,
+              "serviceTimeMs": 3.4815,
+              "completionLatencyMs": 3.587,
+              "firstOutputLatencyMs": 0.5234,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 4,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 0.2606,
+              "serviceTimeMs": 3.1805,
+              "completionLatencyMs": 3.4411,
+              "firstOutputLatencyMs": 0.3702,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 5,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 0.38,
+              "serviceTimeMs": 3.1307,
+              "completionLatencyMs": 3.5107,
+              "firstOutputLatencyMs": 0.5392,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 6,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 0.4174,
+              "serviceTimeMs": 3.6876,
+              "completionLatencyMs": 4.1051,
+              "firstOutputLatencyMs": 3.9315,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 7,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 0.5775,
+              "serviceTimeMs": 3.8759,
+              "completionLatencyMs": 4.4534,
+              "firstOutputLatencyMs": 0.6588,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 8,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 0.6816,
+              "serviceTimeMs": 3.1435,
+              "completionLatencyMs": 3.8251,
+              "firstOutputLatencyMs": 0.7633,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 1,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 9,
+          "actorStates": [
+            {
+              "serializedBytes": 659,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 324,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            }
+          ],
+          "aggregateStateBytes": 3251,
+          "deactivationCount": 9,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 10,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0159,
+              "serviceTimeMs": 62.2876,
+              "completionLatencyMs": 62.3035,
+              "firstOutputLatencyMs": 60.3564,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 1,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0113,
+              "serviceTimeMs": 0.493,
+              "completionLatencyMs": 0.5043,
+              "firstOutputLatencyMs": 0.1377,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 2,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 0.037,
+              "serviceTimeMs": 0.6842,
+              "completionLatencyMs": 0.7212,
+              "firstOutputLatencyMs": 0.3997,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 3,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0317,
+              "serviceTimeMs": 0.6513,
+              "completionLatencyMs": 0.6831,
+              "firstOutputLatencyMs": 0.3993,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 4,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0234,
+              "serviceTimeMs": 0.5203,
+              "completionLatencyMs": 0.5437,
+              "firstOutputLatencyMs": 0.1816,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 5,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0212,
+              "serviceTimeMs": 0.4222,
+              "completionLatencyMs": 0.4435,
+              "firstOutputLatencyMs": 0.1804,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 6,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0382,
+              "serviceTimeMs": 0.6664,
+              "completionLatencyMs": 0.7046,
+              "firstOutputLatencyMs": 0.3646,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 7,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0432,
+              "serviceTimeMs": 0.6777,
+              "completionLatencyMs": 0.721,
+              "firstOutputLatencyMs": 0.4502,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 8,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0513,
+              "serviceTimeMs": 0.5785,
+              "completionLatencyMs": 0.6298,
+              "firstOutputLatencyMs": 0.3595,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 1,
+          "maxTotalQueueDepth": 7,
+          "activationCount": 9,
+          "actorStates": [
+            {
+              "serializedBytes": 660,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 325,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 325,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 325,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 325,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 325,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 325,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 325,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 325,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            }
+          ],
+          "aggregateStateBytes": 3260,
+          "deactivationCount": 9,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 11,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0117,
+              "serviceTimeMs": 43.3398,
+              "completionLatencyMs": 43.3516,
+              "firstOutputLatencyMs": 40.6932,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 1,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0098,
+              "serviceTimeMs": 0.4285,
+              "completionLatencyMs": 0.4384,
+              "firstOutputLatencyMs": 0.1151,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 2,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0184,
+              "serviceTimeMs": 0.4933,
+              "completionLatencyMs": 0.5118,
+              "firstOutputLatencyMs": 0.1552,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 3,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 0.021,
+              "serviceTimeMs": 0.5183,
+              "completionLatencyMs": 0.5393,
+              "firstOutputLatencyMs": 0.1589,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 4,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0271,
+              "serviceTimeMs": 0.3813,
+              "completionLatencyMs": 0.4085,
+              "firstOutputLatencyMs": 0.1702,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 5,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0934,
+              "serviceTimeMs": 0.674,
+              "completionLatencyMs": 0.7674,
+              "firstOutputLatencyMs": 0.4623,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 6,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0866,
+              "serviceTimeMs": 0.5917,
+              "completionLatencyMs": 0.6784,
+              "firstOutputLatencyMs": 0.5096,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 7,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0866,
+              "serviceTimeMs": 0.665,
+              "completionLatencyMs": 0.7517,
+              "firstOutputLatencyMs": 0.5267,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 8,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 0.0817,
+              "serviceTimeMs": 0.4348,
+              "completionLatencyMs": 0.5166,
+              "firstOutputLatencyMs": 0.2995,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 1,
+          "maxTotalQueueDepth": 6,
+          "activationCount": 9,
+          "actorStates": [
+            {
+              "serializedBytes": 660,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 325,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 325,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 325,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 325,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 325,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 325,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 325,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            },
+            {
+              "serializedBytes": 325,
+              "trackedSessionCount": 1,
+              "completedSessionCount": 1
+            }
+          ],
+          "aggregateStateBytes": 3260,
+          "deactivationCount": 9,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        }
+      ],
+      "summary": {
+        "fastQueueTimeMs": {
+          "count": 96,
+          "p50": 0.4232,
+          "p95": 2.0388,
+          "p99": 2.5655,
+          "max": 2.5655
+        },
+        "fastServiceTimeMs": {
+          "count": 96,
+          "p50": 1.2006,
+          "p95": 3.7022,
+          "p99": 4.8629,
+          "max": 4.8629
+        },
+        "fastCompletionLatencyMs": {
+          "count": 96,
+          "p50": 2.0043,
+          "p95": 5.6194,
+          "p99": 6.2882,
+          "max": 6.2882
+        },
+        "fastFirstOutputLatencyMs": {
+          "count": 96,
+          "p50": 0.6588,
+          "p95": 2.3382,
+          "p99": 3.9315,
+          "max": 3.9315
+        },
+        "slowQueueTimeMs": {
+          "count": 12,
+          "p50": 0.0342,
+          "p95": 0.0815,
+          "p99": 0.0815,
+          "max": 0.0815
+        },
+        "slowServiceTimeMs": {
+          "count": 12,
+          "p50": 43.3398,
+          "p95": 62.2876,
+          "p99": 62.2876,
+          "max": 62.2876
+        },
+        "slowCompletionLatencyMs": {
+          "count": 12,
+          "p50": 43.3516,
+          "p95": 62.3035,
+          "p99": 62.3035,
+          "max": 62.3035
+        },
+        "maxQueueDepthPerActor": {
+          "count": 12,
+          "p50": 1,
+          "p95": 1,
+          "p99": 1,
+          "max": 1
+        },
+        "maxTotalQueueDepth": {
+          "count": 12,
+          "p50": 8,
+          "p95": 8,
+          "p99": 8,
+          "max": 8
+        },
+        "activationCount": {
+          "count": 12,
+          "p50": 9,
+          "p95": 9,
+          "p99": 9,
+          "max": 9
+        },
+        "actorStateBytes": {
+          "count": 108,
+          "p50": 324,
+          "p95": 659,
+          "p99": 660,
+          "max": 660
+        },
+        "aggregateStateBytes": {
+          "count": 12,
+          "p50": 3251,
+          "p95": 3260,
+          "p99": 3260,
+          "max": 3260
+        },
+        "cleanupFailureCount": 0,
+        "orphanedActiveActorCount": 0
+      }
+    },
+    {
+      "scenario": "same_actor",
+      "concurrentSessionsPerActor": 9,
+      "samples": [
+        {
+          "iteration": 0,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0375,
+              "serviceTimeMs": 48.0221,
+              "completionLatencyMs": 48.0597,
+              "firstOutputLatencyMs": 42.5105,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 47.5406,
+              "serviceTimeMs": 3.8219,
+              "completionLatencyMs": 51.3626,
+              "firstOutputLatencyMs": 50.1775,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 51.4102,
+              "serviceTimeMs": 2.3517,
+              "completionLatencyMs": 53.762,
+              "firstOutputLatencyMs": 52.071,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 53.7885,
+              "serviceTimeMs": 0.7194,
+              "completionLatencyMs": 54.508,
+              "firstOutputLatencyMs": 54.0582,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 54.5173,
+              "serviceTimeMs": 1.8823,
+              "completionLatencyMs": 56.3997,
+              "firstOutputLatencyMs": 54.8347,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 56.4499,
+              "serviceTimeMs": 2.37,
+              "completionLatencyMs": 58.82,
+              "firstOutputLatencyMs": 57.3895,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 58.8777,
+              "serviceTimeMs": 1.4041,
+              "completionLatencyMs": 60.2818,
+              "firstOutputLatencyMs": 59.9131,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 61.0338,
+              "serviceTimeMs": 0.9258,
+              "completionLatencyMs": 61.9597,
+              "firstOutputLatencyMs": 61.4139,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 61.9738,
+              "serviceTimeMs": 0.6196,
+              "completionLatencyMs": 62.5934,
+              "firstOutputLatencyMs": 62.3246,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 8,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 1,
+          "actorStates": [
+            {
+              "serializedBytes": 2207,
+              "trackedSessionCount": 9,
+              "completedSessionCount": 9
+            }
+          ],
+          "aggregateStateBytes": 2207,
+          "deactivationCount": 1,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 1,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0316,
+              "serviceTimeMs": 36.5781,
+              "completionLatencyMs": 36.6097,
+              "firstOutputLatencyMs": 27.1532,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 36.3195,
+              "serviceTimeMs": 1.0956,
+              "completionLatencyMs": 37.4152,
+              "firstOutputLatencyMs": 36.5153,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 37.4445,
+              "serviceTimeMs": 0.7102,
+              "completionLatencyMs": 38.1547,
+              "firstOutputLatencyMs": 37.8344,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 38.1693,
+              "serviceTimeMs": 0.4857,
+              "completionLatencyMs": 38.6551,
+              "firstOutputLatencyMs": 38.3385,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 38.6621,
+              "serviceTimeMs": 0.3806,
+              "completionLatencyMs": 39.0427,
+              "firstOutputLatencyMs": 38.8138,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 39.0502,
+              "serviceTimeMs": 0.3711,
+              "completionLatencyMs": 39.4213,
+              "firstOutputLatencyMs": 39.1952,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 39.4257,
+              "serviceTimeMs": 0.3922,
+              "completionLatencyMs": 39.818,
+              "firstOutputLatencyMs": 39.5771,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 39.8245,
+              "serviceTimeMs": 0.4112,
+              "completionLatencyMs": 40.2358,
+              "firstOutputLatencyMs": 39.9723,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 40.2427,
+              "serviceTimeMs": 0.4111,
+              "completionLatencyMs": 40.6538,
+              "firstOutputLatencyMs": 40.4057,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 8,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 1,
+          "actorStates": [
+            {
+              "serializedBytes": 2207,
+              "trackedSessionCount": 9,
+              "completedSessionCount": 9
+            }
+          ],
+          "aggregateStateBytes": 2207,
+          "deactivationCount": 1,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 2,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0281,
+              "serviceTimeMs": 30.4039,
+              "completionLatencyMs": 30.432,
+              "firstOutputLatencyMs": 28.6451,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 28.949,
+              "serviceTimeMs": 1.7782,
+              "completionLatencyMs": 30.7272,
+              "firstOutputLatencyMs": 30.0063,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 30.7455,
+              "serviceTimeMs": 0.4415,
+              "completionLatencyMs": 31.187,
+              "firstOutputLatencyMs": 30.9499,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 31.198,
+              "serviceTimeMs": 1.2939,
+              "completionLatencyMs": 32.4919,
+              "firstOutputLatencyMs": 31.3731,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 32.5458,
+              "serviceTimeMs": 1.1462,
+              "completionLatencyMs": 33.692,
+              "firstOutputLatencyMs": 33.043,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 33.7169,
+              "serviceTimeMs": 0.504,
+              "completionLatencyMs": 34.2209,
+              "firstOutputLatencyMs": 33.9229,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 34.2365,
+              "serviceTimeMs": 0.4552,
+              "completionLatencyMs": 34.6917,
+              "firstOutputLatencyMs": 34.4317,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 34.7011,
+              "serviceTimeMs": 0.4201,
+              "completionLatencyMs": 35.1212,
+              "firstOutputLatencyMs": 34.8676,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 35.129,
+              "serviceTimeMs": 0.4437,
+              "completionLatencyMs": 35.5727,
+              "firstOutputLatencyMs": 35.2947,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 8,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 1,
+          "actorStates": [
+            {
+              "serializedBytes": 2207,
+              "trackedSessionCount": 9,
+              "completedSessionCount": 9
+            }
+          ],
+          "aggregateStateBytes": 2207,
+          "deactivationCount": 1,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 3,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0667,
+              "serviceTimeMs": 33.5217,
+              "completionLatencyMs": 33.5885,
+              "firstOutputLatencyMs": 31.3702,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 33.0629,
+              "serviceTimeMs": 0.3958,
+              "completionLatencyMs": 33.4587,
+              "firstOutputLatencyMs": 33.2368,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 33.4518,
+              "serviceTimeMs": 0.3463,
+              "completionLatencyMs": 33.7982,
+              "firstOutputLatencyMs": 33.5829,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 33.7996,
+              "serviceTimeMs": 0.3568,
+              "completionLatencyMs": 34.1565,
+              "firstOutputLatencyMs": 33.9391,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 34.1569,
+              "serviceTimeMs": 0.4477,
+              "completionLatencyMs": 34.6046,
+              "firstOutputLatencyMs": 34.304,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 34.6106,
+              "serviceTimeMs": 1.4291,
+              "completionLatencyMs": 36.0397,
+              "firstOutputLatencyMs": 34.7844,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 36.0899,
+              "serviceTimeMs": 2.1765,
+              "completionLatencyMs": 38.2664,
+              "firstOutputLatencyMs": 37.2921,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 38.3187,
+              "serviceTimeMs": 1.3527,
+              "completionLatencyMs": 39.6715,
+              "firstOutputLatencyMs": 39.2829,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 39.6912,
+              "serviceTimeMs": 4.6509,
+              "completionLatencyMs": 44.3421,
+              "firstOutputLatencyMs": 39.8817,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 8,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 1,
+          "actorStates": [
+            {
+              "serializedBytes": 2207,
+              "trackedSessionCount": 9,
+              "completedSessionCount": 9
+            }
+          ],
+          "aggregateStateBytes": 2207,
+          "deactivationCount": 1,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 4,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0338,
+              "serviceTimeMs": 33.0487,
+              "completionLatencyMs": 33.0825,
+              "firstOutputLatencyMs": 29.6135,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 31.8624,
+              "serviceTimeMs": 0.443,
+              "completionLatencyMs": 32.3054,
+              "firstOutputLatencyMs": 32.053,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 32.3013,
+              "serviceTimeMs": 0.383,
+              "completionLatencyMs": 32.6843,
+              "firstOutputLatencyMs": 32.4541,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 32.6925,
+              "serviceTimeMs": 0.3869,
+              "completionLatencyMs": 33.0795,
+              "firstOutputLatencyMs": 32.845,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 33.0867,
+              "serviceTimeMs": 0.3679,
+              "completionLatencyMs": 33.4546,
+              "firstOutputLatencyMs": 33.2319,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 33.4615,
+              "serviceTimeMs": 1.2345,
+              "completionLatencyMs": 34.6961,
+              "firstOutputLatencyMs": 34.0508,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 34.7346,
+              "serviceTimeMs": 0.9286,
+              "completionLatencyMs": 35.6633,
+              "firstOutputLatencyMs": 34.9642,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 35.7106,
+              "serviceTimeMs": 2.3644,
+              "completionLatencyMs": 38.075,
+              "firstOutputLatencyMs": 36.3378,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 38.1117,
+              "serviceTimeMs": 4.1265,
+              "completionLatencyMs": 42.2382,
+              "firstOutputLatencyMs": 41.6468,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 8,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 1,
+          "actorStates": [
+            {
+              "serializedBytes": 2207,
+              "trackedSessionCount": 9,
+              "completedSessionCount": 9
+            }
+          ],
+          "aggregateStateBytes": 2207,
+          "deactivationCount": 1,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 5,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0392,
+              "serviceTimeMs": 33.671,
+              "completionLatencyMs": 33.7103,
+              "firstOutputLatencyMs": 32.457,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 33.4342,
+              "serviceTimeMs": 0.4182,
+              "completionLatencyMs": 33.8525,
+              "firstOutputLatencyMs": 33.6223,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 33.8541,
+              "serviceTimeMs": 0.3572,
+              "completionLatencyMs": 34.2114,
+              "firstOutputLatencyMs": 33.9926,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 34.2197,
+              "serviceTimeMs": 0.3626,
+              "completionLatencyMs": 34.5824,
+              "firstOutputLatencyMs": 34.3573,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 34.588,
+              "serviceTimeMs": 0.3684,
+              "completionLatencyMs": 34.9565,
+              "firstOutputLatencyMs": 34.731,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 34.9621,
+              "serviceTimeMs": 0.3773,
+              "completionLatencyMs": 35.3394,
+              "firstOutputLatencyMs": 35.1077,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 35.3476,
+              "serviceTimeMs": 0.3911,
+              "completionLatencyMs": 35.7387,
+              "firstOutputLatencyMs": 35.5012,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 35.7473,
+              "serviceTimeMs": 0.3962,
+              "completionLatencyMs": 36.1435,
+              "firstOutputLatencyMs": 35.9013,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 36.1506,
+              "serviceTimeMs": 0.4031,
+              "completionLatencyMs": 36.5538,
+              "firstOutputLatencyMs": 36.3065,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 8,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 1,
+          "actorStates": [
+            {
+              "serializedBytes": 2198,
+              "trackedSessionCount": 9,
+              "completedSessionCount": 9
+            }
+          ],
+          "aggregateStateBytes": 2198,
+          "deactivationCount": 1,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 6,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0521,
+              "serviceTimeMs": 47.3444,
+              "completionLatencyMs": 47.3966,
+              "firstOutputLatencyMs": 42.0219,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 47.1332,
+              "serviceTimeMs": 1.7287,
+              "completionLatencyMs": 48.8619,
+              "firstOutputLatencyMs": 47.5796,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 48.9349,
+              "serviceTimeMs": 2.9642,
+              "completionLatencyMs": 51.8992,
+              "firstOutputLatencyMs": 49.747,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 51.9339,
+              "serviceTimeMs": 0.5635,
+              "completionLatencyMs": 52.4975,
+              "firstOutputLatencyMs": 52.1769,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 52.5114,
+              "serviceTimeMs": 0.7139,
+              "completionLatencyMs": 53.2253,
+              "firstOutputLatencyMs": 52.6874,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 53.2512,
+              "serviceTimeMs": 0.5672,
+              "completionLatencyMs": 53.8184,
+              "firstOutputLatencyMs": 53.4978,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 53.8315,
+              "serviceTimeMs": 0.8792,
+              "completionLatencyMs": 54.7108,
+              "firstOutputLatencyMs": 54.0098,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 54.7243,
+              "serviceTimeMs": 0.4695,
+              "completionLatencyMs": 55.1938,
+              "firstOutputLatencyMs": 54.9156,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 55.2027,
+              "serviceTimeMs": 0.4336,
+              "completionLatencyMs": 55.6364,
+              "firstOutputLatencyMs": 55.37,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 8,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 1,
+          "actorStates": [
+            {
+              "serializedBytes": 2198,
+              "trackedSessionCount": 9,
+              "completedSessionCount": 9
+            }
+          ],
+          "aggregateStateBytes": 2198,
+          "deactivationCount": 1,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 7,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0205,
+              "serviceTimeMs": 35.2577,
+              "completionLatencyMs": 35.2782,
+              "firstOutputLatencyMs": 30.6965,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 35.1012,
+              "serviceTimeMs": 0.6278,
+              "completionLatencyMs": 35.729,
+              "firstOutputLatencyMs": 35.2612,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 35.7522,
+              "serviceTimeMs": 0.314,
+              "completionLatencyMs": 36.0662,
+              "firstOutputLatencyMs": 35.9039,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 36.0727,
+              "serviceTimeMs": 0.26,
+              "completionLatencyMs": 36.3328,
+              "firstOutputLatencyMs": 36.1787,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 36.3371,
+              "serviceTimeMs": 0.2467,
+              "completionLatencyMs": 36.5839,
+              "firstOutputLatencyMs": 36.4371,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 36.5884,
+              "serviceTimeMs": 0.8114,
+              "completionLatencyMs": 37.3998,
+              "firstOutputLatencyMs": 36.6975,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 37.434,
+              "serviceTimeMs": 0.9274,
+              "completionLatencyMs": 38.3615,
+              "firstOutputLatencyMs": 37.867,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 38.3799,
+              "serviceTimeMs": 1.1926,
+              "completionLatencyMs": 39.5725,
+              "firstOutputLatencyMs": 38.5447,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 39.6634,
+              "serviceTimeMs": 0.9984,
+              "completionLatencyMs": 40.6619,
+              "firstOutputLatencyMs": 40.159,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 8,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 1,
+          "actorStates": [
+            {
+              "serializedBytes": 2207,
+              "trackedSessionCount": 9,
+              "completedSessionCount": 9
+            }
+          ],
+          "aggregateStateBytes": 2207,
+          "deactivationCount": 1,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 8,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0363,
+              "serviceTimeMs": 30.2197,
+              "completionLatencyMs": 30.256,
+              "firstOutputLatencyMs": 28.9497,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 29.9405,
+              "serviceTimeMs": 0.9292,
+              "completionLatencyMs": 30.8697,
+              "firstOutputLatencyMs": 30.2698,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 30.8621,
+              "serviceTimeMs": 0.3213,
+              "completionLatencyMs": 31.1835,
+              "firstOutputLatencyMs": 30.9899,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 31.1878,
+              "serviceTimeMs": 0.2875,
+              "completionLatencyMs": 31.4753,
+              "firstOutputLatencyMs": 31.3144,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 31.4752,
+              "serviceTimeMs": 0.3069,
+              "completionLatencyMs": 31.7822,
+              "firstOutputLatencyMs": 31.5873,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 31.7837,
+              "serviceTimeMs": 0.3358,
+              "completionLatencyMs": 32.1195,
+              "firstOutputLatencyMs": 31.8923,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 32.124,
+              "serviceTimeMs": 0.3232,
+              "completionLatencyMs": 32.4473,
+              "firstOutputLatencyMs": 32.2571,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 32.4508,
+              "serviceTimeMs": 0.7732,
+              "completionLatencyMs": 33.224,
+              "firstOutputLatencyMs": 32.5773,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 33.2349,
+              "serviceTimeMs": 1.5911,
+              "completionLatencyMs": 34.8261,
+              "firstOutputLatencyMs": 33.3942,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 8,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 1,
+          "actorStates": [
+            {
+              "serializedBytes": 2207,
+              "trackedSessionCount": 9,
+              "completedSessionCount": 9
+            }
+          ],
+          "aggregateStateBytes": 2207,
+          "deactivationCount": 1,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 9,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0222,
+              "serviceTimeMs": 65.3689,
+              "completionLatencyMs": 65.3911,
+              "firstOutputLatencyMs": 61.4298,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 65.069,
+              "serviceTimeMs": 0.404,
+              "completionLatencyMs": 65.473,
+              "firstOutputLatencyMs": 65.2283,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 65.4535,
+              "serviceTimeMs": 0.4034,
+              "completionLatencyMs": 65.8569,
+              "firstOutputLatencyMs": 65.5937,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 65.8607,
+              "serviceTimeMs": 0.5299,
+              "completionLatencyMs": 66.3906,
+              "firstOutputLatencyMs": 66.0232,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 66.405,
+              "serviceTimeMs": 0.429,
+              "completionLatencyMs": 66.834,
+              "firstOutputLatencyMs": 66.6004,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 66.8414,
+              "serviceTimeMs": 0.2968,
+              "completionLatencyMs": 67.1383,
+              "firstOutputLatencyMs": 66.9687,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 67.1431,
+              "serviceTimeMs": 0.5478,
+              "completionLatencyMs": 67.691,
+              "firstOutputLatencyMs": 67.2593,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 67.6999,
+              "serviceTimeMs": 0.4462,
+              "completionLatencyMs": 68.1462,
+              "firstOutputLatencyMs": 67.8454,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 68.1534,
+              "serviceTimeMs": 0.632,
+              "completionLatencyMs": 68.7854,
+              "firstOutputLatencyMs": 68.2872,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 8,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 1,
+          "actorStates": [
+            {
+              "serializedBytes": 2207,
+              "trackedSessionCount": 9,
+              "completedSessionCount": 9
+            }
+          ],
+          "aggregateStateBytes": 2207,
+          "deactivationCount": 1,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 10,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0237,
+              "serviceTimeMs": 37.2262,
+              "completionLatencyMs": 37.2499,
+              "firstOutputLatencyMs": 35.5398,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 37.0111,
+              "serviceTimeMs": 0.6081,
+              "completionLatencyMs": 37.6192,
+              "firstOutputLatencyMs": 37.3518,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 37.6277,
+              "serviceTimeMs": 0.4878,
+              "completionLatencyMs": 38.1156,
+              "firstOutputLatencyMs": 37.7692,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 38.122,
+              "serviceTimeMs": 0.4575,
+              "completionLatencyMs": 38.5795,
+              "firstOutputLatencyMs": 38.2497,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 38.5839,
+              "serviceTimeMs": 0.6066,
+              "completionLatencyMs": 39.1906,
+              "firstOutputLatencyMs": 38.702,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 39.2179,
+              "serviceTimeMs": 0.7415,
+              "completionLatencyMs": 39.9594,
+              "firstOutputLatencyMs": 39.5554,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 39.9727,
+              "serviceTimeMs": 0.553,
+              "completionLatencyMs": 40.5257,
+              "firstOutputLatencyMs": 40.1387,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 40.5545,
+              "serviceTimeMs": 0.924,
+              "completionLatencyMs": 41.4785,
+              "firstOutputLatencyMs": 41.0158,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 41.4977,
+              "serviceTimeMs": 0.6147,
+              "completionLatencyMs": 42.1125,
+              "firstOutputLatencyMs": 41.6931,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 8,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 1,
+          "actorStates": [
+            {
+              "serializedBytes": 2216,
+              "trackedSessionCount": 9,
+              "completedSessionCount": 9
+            }
+          ],
+          "aggregateStateBytes": 2216,
+          "deactivationCount": 1,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        },
+        {
+          "iteration": 11,
+          "turns": [
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 0,
+              "turnKind": "slow",
+              "queueTimeMs": 0.0324,
+              "serviceTimeMs": 17.5464,
+              "completionLatencyMs": 17.5788,
+              "firstOutputLatencyMs": 16.5164,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 1,
+              "turnKind": "fast",
+              "queueTimeMs": 17.3443,
+              "serviceTimeMs": 2.5092,
+              "completionLatencyMs": 19.8535,
+              "firstOutputLatencyMs": 17.506,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 2,
+              "turnKind": "fast",
+              "queueTimeMs": 19.889,
+              "serviceTimeMs": 0.4825,
+              "completionLatencyMs": 20.3716,
+              "firstOutputLatencyMs": 20.1175,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 3,
+              "turnKind": "fast",
+              "queueTimeMs": 20.3802,
+              "serviceTimeMs": 0.3154,
+              "completionLatencyMs": 20.6957,
+              "firstOutputLatencyMs": 20.5192,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 4,
+              "turnKind": "fast",
+              "queueTimeMs": 20.6988,
+              "serviceTimeMs": 0.2819,
+              "completionLatencyMs": 20.9807,
+              "firstOutputLatencyMs": 20.8061,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 5,
+              "turnKind": "fast",
+              "queueTimeMs": 20.9878,
+              "serviceTimeMs": 0.3035,
+              "completionLatencyMs": 21.2913,
+              "firstOutputLatencyMs": 21.1184,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 6,
+              "turnKind": "fast",
+              "queueTimeMs": 21.298,
+              "serviceTimeMs": 0.3364,
+              "completionLatencyMs": 21.6345,
+              "firstOutputLatencyMs": 21.4252,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 7,
+              "turnKind": "fast",
+              "queueTimeMs": 21.6408,
+              "serviceTimeMs": 0.3368,
+              "completionLatencyMs": 21.9776,
+              "firstOutputLatencyMs": 21.775,
+              "outcome": "completed"
+            },
+            {
+              "actorOrdinal": 0,
+              "turnOrdinal": 8,
+              "turnKind": "fast",
+              "queueTimeMs": 21.9838,
+              "serviceTimeMs": 0.3267,
+              "completionLatencyMs": 22.3106,
+              "firstOutputLatencyMs": 22.1196,
+              "outcome": "completed"
+            }
+          ],
+          "maxQueueDepthPerActor": 8,
+          "maxTotalQueueDepth": 8,
+          "activationCount": 1,
+          "actorStates": [
+            {
+              "serializedBytes": 2216,
+              "trackedSessionCount": 9,
+              "completedSessionCount": 9
+            }
+          ],
+          "aggregateStateBytes": 2216,
+          "deactivationCount": 1,
+          "cleanupFailureCount": 0,
+          "orphanedActiveActorCount": 0
+        }
+      ],
+      "summary": {
+        "fastQueueTimeMs": {
+          "count": 96,
+          "p50": 36.1506,
+          "p95": 66.405,
+          "p99": 68.1534,
+          "max": 68.1534
+        },
+        "fastServiceTimeMs": {
+          "count": 96,
+          "p50": 0.4825,
+          "p95": 2.5092,
+          "p99": 4.6509,
+          "max": 4.6509
+        },
+        "fastCompletionLatencyMs": {
+          "count": 96,
+          "p50": 37.3998,
+          "p95": 66.834,
+          "p99": 68.7854,
+          "max": 68.7854
+        },
+        "fastFirstOutputLatencyMs": {
+          "count": 96,
+          "p50": 36.4371,
+          "p95": 66.6004,
+          "p99": 68.2872,
+          "max": 68.2872
+        },
+        "slowQueueTimeMs": {
+          "count": 12,
+          "p50": 0.0324,
+          "p95": 0.0667,
+          "p99": 0.0667,
+          "max": 0.0667
+        },
+        "slowServiceTimeMs": {
+          "count": 12,
+          "p50": 33.671,
+          "p95": 65.3689,
+          "p99": 65.3689,
+          "max": 65.3689
+        },
+        "slowCompletionLatencyMs": {
+          "count": 12,
+          "p50": 33.7103,
+          "p95": 65.3911,
+          "p99": 65.3911,
+          "max": 65.3911
+        },
+        "maxQueueDepthPerActor": {
+          "count": 12,
+          "p50": 8,
+          "p95": 8,
+          "p99": 8,
+          "max": 8
+        },
+        "maxTotalQueueDepth": {
+          "count": 12,
+          "p50": 8,
+          "p95": 8,
+          "p99": 8,
+          "max": 8
+        },
+        "activationCount": {
+          "count": 12,
+          "p50": 1,
+          "p95": 1,
+          "p99": 1,
+          "max": 1
+        },
+        "actorStateBytes": {
+          "count": 12,
+          "p50": 2207,
+          "p95": 2216,
+          "p99": 2216,
+          "max": 2216
+        },
+        "aggregateStateBytes": {
+          "count": 12,
+          "p50": 2207,
+          "p95": 2216,
+          "p99": 2216,
+          "max": 2216
+        },
+        "cleanupFailureCount": 0,
+        "orphanedActiveActorCount": 0
+      }
+    }
+  ],
+  "headOfLineDelta": {
+    "fastQueueTimeMs": {
+      "p50": 35.727399999999996,
+      "p95": 64.3662,
+      "p99": 65.5879
+    },
+    "fastCompletionLatencyMs": {
+      "p50": 35.3955,
+      "p95": 61.214600000000004,
+      "p99": 62.49719999999999
+    }
+  },
+  "comparisonStatus": "Post-#3135 run. Compare only with a baseline that has the same config digest."
+}

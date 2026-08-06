@@ -74,6 +74,20 @@ public static class ScopeGAgentAguiEventMapper
             return MapTextCompletion(ai.SessionId, ai.Content);
         }
 
+        if (payload.Is(RoleChatSessionErrorEvent.Descriptor))
+        {
+            var error = payload.Unpack<RoleChatSessionErrorEvent>();
+            return new AGUIEvent
+            {
+                RunError = new RunErrorEvent
+                {
+                    Message = error.Message,
+                    RunId = error.SessionId,
+                    Code = error.Reason,
+                },
+            };
+        }
+
         if (payload.Is(AiToolCall.Descriptor))
         {
             var ai = payload.Unpack<AiToolCall>();

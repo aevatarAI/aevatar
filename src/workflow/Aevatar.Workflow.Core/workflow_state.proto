@@ -38,6 +38,7 @@ message WorkflowState
     map<string, string> inline_workflow_yamls = 14;
     string root_run_id = 15;
     int32 depth = 16;
+    repeated WorkflowFileRef input_file_refs = 17;
   }
 
   message PendingSubWorkflowDefinitionResolution
@@ -54,6 +55,7 @@ message WorkflowState
     int32 timeout_ms = 10;
     string root_run_id = 11;
     int32 requested_depth = 12;
+    repeated WorkflowFileRef input_file_refs = 13;
   }
 
   message ChildRunIdSet
@@ -81,6 +83,9 @@ message WorkflowState
   int32 max_active_sub_workflows = 17;
   WorkflowAuthorizationDependencies authorization_dependencies = 18;
   WorkflowCapabilityAdmissionPlan capability_admission_plan = 19;
+  string workflow_id = 20;
+  string revision_id = 21;
+  ExternalCapabilityExecutionMode expected_execution_mode = 22;
 }
 
 message WorkflowRunState
@@ -112,6 +117,7 @@ message WorkflowRunState
     map<string, string> inline_workflow_yamls = 14;
     string root_run_id = 15;
     int32 depth = 16;
+    repeated WorkflowFileRef input_file_refs = 17;
   }
 
   message PendingSubWorkflowDefinitionResolution
@@ -128,6 +134,7 @@ message WorkflowRunState
     int32 timeout_ms = 10;
     string root_run_id = 11;
     int32 requested_depth = 12;
+    repeated WorkflowFileRef input_file_refs = 13;
   }
 
   message ChildRunIdSet
@@ -182,6 +189,20 @@ message WorkflowRunState
   int32 terminal_notification_attempt = 40;
   WorkflowRunTerminalNotificationDeliveryStatus terminal_notification_delivery_status = 41;
   string terminal_notification_retry_callback_id = 42;
+  // Committed call-site admission proof owned by this Run for its whole lifetime.
+  WorkflowCapabilityAdmissionPlan capability_admission_plan = 43;
+  ExternalCapabilityExecutionMode expected_execution_mode = 44;
+  repeated WorkflowArtifactSourceIdentity processed_artifact_sources = 45;
+  string current_turn_id = 46;
+  repeated WorkflowInteractiveActionHandoffState interactive_action_handoffs = 47;
+}
+
+message WorkflowInteractiveActionHandoffState
+{
+  string handoff_id = 1;
+  WorkflowInteractiveActionRequestWirePayload request = 2;
+  WorkflowLlmInvocationCompletedEvent terminal_continuation = 3;
+  bool continuation_dispatched = 4;
 }
 
 message WorkflowRunExecutionContextState
@@ -209,6 +230,9 @@ message WorkflowCallerCredentialState
   aevatar.credentials.RuntimeSecretReference runtime_secret_reference = 2;
   aevatar.credentials.DurableCallerCredentialRef durable_caller_credential = 3;
   WorkflowCallerNyxIdAuthority nyx_id_authority = 4;
+  NyxIdCallerCredentialKind kind = 5;
+  string source_readable_user_bearer_token = 6;
+  aevatar.credentials.RuntimeSecretReference source_readable_user_bearer_runtime_secret_reference = 7;
 }
 
 message WorkflowToolRuntimeContextState
@@ -444,6 +468,8 @@ message PendingToolCallApprovalState
   string input = 8;
   repeated WorkflowFileRef input_file_refs = 9;
   string idempotency_key = 10;
+  ExternalToolInvocationSpec external_invocation = 11;
+  int64 issued_at_unix_ms = 12;
 }
 
 message ToolCallModuleState
@@ -479,6 +505,7 @@ message WhileRuntimeState
   int32 iteration = 6;
   int32 max_iterations = 7;
   string condition_expression = 8;
+  ExternalToolInvocationSpec sub_external_invocation = 9;
 }
 
 message WhileModuleState
@@ -595,7 +622,7 @@ message PendingLlmCallState
   WorkflowRuntimeCallbackLeaseState watchdog_lease = 4;
   bool request_dispatched = 5;
   string watchdog_callback_id = 6;
-  string dispatch_dedup_id = 7;
+  string dispatch_operation_id = 7;
 }
 
 message LLMCallModuleState
@@ -625,6 +652,7 @@ message PendingConnectorCallState
   string idempotency_key = 17;
   string approval_action_id = 18;
   bool request_dispatched = 19;
+  int64 issued_at_unix_ms = 20;
 }
 
 message ConnectorCallProtectedParameter
@@ -758,6 +786,7 @@ message BackpressureQueueEntry
   string target_role = 5;
   map<string, string> parameters = 6;
   repeated WorkflowFileRef input_file_refs = 7;
+  ExternalToolInvocationSpec external_invocation = 8;
 }
 
 message BackpressureQueueState

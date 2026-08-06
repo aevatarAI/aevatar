@@ -70,26 +70,35 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
                 Value = ProjectionDocumentValue.FromBool(false),
             });
         }
-        if (query.TeamAutomationOwner != null)
+        if (query.TeamAutomationOwner != null || !string.IsNullOrWhiteSpace(query.TeamAutomationScopeId))
         {
-            filters.Add(new ProjectionDocumentFilter
-            {
-                FieldPath = nameof(ScheduledDispatchDocument.TeamOwned),
-                Operator = ProjectionDocumentFilterOperator.Eq,
-                Value = ProjectionDocumentValue.FromBool(true),
-            });
             filters.Add(new ProjectionDocumentFilter
             {
                 FieldPath = $"{nameof(ScheduledDispatchDocument.TeamAutomationOwner)}.{nameof(TeamMemberAutomationOwnerDocument.ScopeId)}",
                 Operator = ProjectionDocumentFilterOperator.Eq,
-                Value = ProjectionDocumentValue.FromString(query.TeamAutomationOwner.ScopeId),
+                Value = ProjectionDocumentValue.FromString(
+                    query.TeamAutomationOwner?.ScopeId ?? query.TeamAutomationScopeId!.Trim()),
             });
-            filters.Add(new ProjectionDocumentFilter
+            var teamId = query.TeamAutomationOwner?.TeamId ?? query.TeamAutomationTeamId?.Trim();
+            if (!string.IsNullOrWhiteSpace(teamId))
             {
-                FieldPath = $"{nameof(ScheduledDispatchDocument.TeamAutomationOwner)}.{nameof(TeamMemberAutomationOwnerDocument.MemberId)}",
-                Operator = ProjectionDocumentFilterOperator.Eq,
-                Value = ProjectionDocumentValue.FromString(query.TeamAutomationOwner.MemberId),
-            });
+                filters.Add(new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(ScheduledDispatchDocument.TeamId),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString(teamId),
+                });
+            }
+            var memberId = query.TeamAutomationOwner?.MemberId ?? query.TeamAutomationMemberId?.Trim();
+            if (!string.IsNullOrWhiteSpace(memberId))
+            {
+                filters.Add(new ProjectionDocumentFilter
+                {
+                    FieldPath = $"{nameof(ScheduledDispatchDocument.TeamAutomationOwner)}.{nameof(TeamMemberAutomationOwnerDocument.MemberId)}",
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString(memberId),
+                });
+            }
         }
         if (query.TargetKind != null)
         {
@@ -185,6 +194,7 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             document.LastCommandId ?? string.Empty,
             document.LastCorrelationId ?? string.Empty,
             document.LastError ?? string.Empty,
+            document.LastErrorCode ?? string.Empty,
             document.FireCount,
             document.FailureCount,
             document.Headers.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
@@ -202,6 +212,7 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             document.TeamOwned,
             document.TeamAutomationOwner?.ScopeId ?? string.Empty,
             document.TeamAutomationOwner?.MemberId ?? string.Empty,
+            document.TeamId ?? string.Empty,
             ParseTeamAutomationLifecycleStatus(document.TeamAutomationLifecycleStatus),
             document.CredentialExpiresAt,
             document.TeamAutomationOperationId ?? string.Empty,
@@ -214,7 +225,19 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             document.TeamAutomationIdempotencyKey ?? string.Empty,
             document.ActiveCredentialOwner?.Authority ?? string.Empty,
             document.ActiveCredentialOwner?.OwnerKind ?? string.Empty,
-            document.ActiveCredentialOwner?.OwnerSubject ?? string.Empty);
+            document.ActiveCredentialOwner?.OwnerSubject ?? string.Empty)
+        {
+            OwnerLLMRouteKind = string.IsNullOrEmpty(document.OwnerLlmRouteKind)
+                ? "unspecified"
+                : document.OwnerLlmRouteKind,
+            OwnerLLMRoute = document.OwnerLlmRoute ?? string.Empty,
+            OwnerLLMUserServiceId = document.OwnerLlmUserServiceId ?? string.Empty,
+            OwnerLLMServiceSlug = document.OwnerLlmServiceSlug ?? string.Empty,
+            OwnerLLMModel = document.OwnerLlmModel ?? string.Empty,
+            ServiceRevisionId = document.ServiceRevisionId ?? string.Empty,
+            NyxIdRevocationStatus = document.NyxidRevocationStatus ?? string.Empty,
+            VaultRevocationStatus = document.VaultRevocationStatus ?? string.Empty,
+        };
     }
 
     private static ScheduledDispatchFireRecord MapFireRecord(ScheduledDispatchFireRecordDocument document) =>
@@ -226,6 +249,7 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             document.CommandId ?? string.Empty,
             document.CorrelationId ?? string.Empty,
             document.Error ?? string.Empty,
+            document.ErrorCode ?? string.Empty,
             document.Manual);
 
     private static ScheduledDispatchTargetKind ParseTargetKind(string? value) =>

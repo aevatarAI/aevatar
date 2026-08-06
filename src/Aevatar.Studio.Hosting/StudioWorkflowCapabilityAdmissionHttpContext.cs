@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Microsoft.AspNetCore.Http;
 
 namespace Aevatar.Studio.Hosting;
@@ -15,13 +16,20 @@ internal static class StudioWorkflowCapabilityAdmissionHttpContext
 
     public static WorkflowCapabilityAdmissionContext Create(
         HttpContext http,
-        ExternalCapabilityExecutionMode executionMode)
+        ExternalCapabilityExecutionMode executionMode,
+        IEnumerable<NyxIdExplicitRequestConfirmationInput>? explicitRequestConfirmations = null)
     {
         ArgumentNullException.ThrowIfNull(http);
+        var extraction = WorkflowCallerCredentialExtractor.Extract(http);
+        if (!extraction.Succeeded)
+            throw new WorkflowCallerCredentialSelectionException();
+
         return new WorkflowCapabilityAdmissionContext(
             ResolveCallerId(http.User),
-            ExtractBearerToken(http),
-            executionMode: executionMode);
+            extraction.NyxIdCredentialSelection,
+            executionMode: executionMode,
+            explicitRequestConfirmations: NyxIdExplicitRequestConfirmationInputs.ToConfirmations(
+                explicitRequestConfirmations));
     }
 
     private static string ResolveCallerId(ClaimsPrincipal? user)
@@ -41,13 +49,4 @@ internal static class StudioWorkflowCapabilityAdmissionHttpContext
         return string.Empty;
     }
 
-    private static string? ExtractBearerToken(HttpContext http)
-    {
-        var header = http.Request.Headers.Authorization.ToString().Trim();
-        if (!header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            return null;
-
-        var token = header["Bearer ".Length..].Trim();
-        return token.Length == 0 ? null : token;
-    }
 }

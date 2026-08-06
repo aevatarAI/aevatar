@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
@@ -94,12 +96,14 @@ public sealed class ResponsesRouteResolverTests
 
     private static NyxIdLlmService MakeService(string slug, string routeValue, bool allowed) =>
         new(
-            UserServiceId: slug,
+            CatalogEntryId: slug,
             ServiceSlug: slug,
             DisplayName: slug,
             RouteValue: routeValue,
-            DefaultModel: null,
-            Models: [],
+            ModelCatalog: LLMSelectionPolicy.NormalizeCatalog(
+                [],
+                null,
+                LLMModelCatalogDiagnosticKind.NotPublished),
             Status: allowed ? "ready" : "not_connected",
             Source: NyxIdLlmProviderSource.GatewayProvider,
             Allowed: allowed,
@@ -118,6 +122,9 @@ public sealed class ResponsesRouteResolverTests
             return Task.FromResult(_result);
         }
 
+        public Task<NyxIdLlmServicesResult> GetFreshServicesAsync(string bearerToken, CancellationToken ct) =>
+            GetServicesAsync(bearerToken, ct);
+
         public Task<NyxIdLlmService> ProvisionAsync(string bearerToken, string provisionEndpointId, CancellationToken ct) =>
             throw new NotSupportedException("Provision not used by route resolver.");
     }
@@ -134,6 +141,9 @@ public sealed class ResponsesRouteResolverTests
             FetchCount++;
             return Task.FromResult(Result);
         }
+
+        public Task<NyxIdLlmServicesResult> GetFreshServicesAsync(string bearerToken, CancellationToken ct) =>
+            GetServicesAsync(bearerToken, ct);
 
         public Task<NyxIdLlmService> ProvisionAsync(string bearerToken, string provisionEndpointId, CancellationToken ct) =>
             throw new NotSupportedException("Provision not used by route resolver.");

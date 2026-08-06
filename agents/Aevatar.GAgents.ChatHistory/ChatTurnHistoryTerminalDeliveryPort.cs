@@ -73,11 +73,12 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
             ConversationId = conversationResolution.ConversationId,
             TurnId = turnId,
             UserText = request.UserText.Trim(),
-            WorkflowActorId = request.WorkflowActorId.Trim(),
-            WorkflowCommandId = workflowCommandId,
-            WorkflowCorrelationId = request.WorkflowCorrelationId,
+            SourceActorId = request.WorkflowActorId.Trim(),
+            SourceCommandId = workflowCommandId,
+            SourceCorrelationId = request.WorkflowCorrelationId,
             CreateConversationIfMissing = conversationResolution.CreateConversationIfMissing,
             RequestFingerprint = request.RequestFingerprint?.Trim() ?? string.Empty,
+            ExposeCreateRecovery = conversationResolution.CreateConversationIfMissing,
         };
         await DispatchAsync(deliveryActorId, command, request.WorkflowCorrelationId, $"chat-history-delivery-reserve:{deliveryActorId}", ct)
             .ConfigureAwait(false);
@@ -162,9 +163,9 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
         var command = new ChatTurnHistoryDeliveryAcceptedBound
         {
             DeliveryId = reservation.DeliveryId,
-            WorkflowActorId = receipt.ActorId,
-            WorkflowCommandId = receipt.CommandId,
-            WorkflowCorrelationId = receipt.CorrelationId,
+            SourceActorId = receipt.ActorId,
+            SourceCommandId = receipt.CommandId,
+            SourceCorrelationId = receipt.CorrelationId,
         };
         await DispatchAsync(reservation.DeliveryActorId, command, receipt.CorrelationId, $"chat-history-delivery-bind:{reservation.DeliveryActorId}", ct)
             .ConfigureAwait(false);
@@ -207,7 +208,7 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
                     : correlationId.Trim(),
             },
         };
-        envelope.EnsureRuntime().EnsureDeduplication().OperationId = operationId;
+        envelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId = operationId;
 
         var admission = await _dispatchPort.DispatchAsync(actorId, envelope, ct).ConfigureAwait(false);
         if (!admission.Accepted)

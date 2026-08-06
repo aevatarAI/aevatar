@@ -1,6 +1,7 @@
 using System.Text;
 using Aevatar.AGUI.Contracts;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 
 namespace Aevatar.GAgentService.Application.ServiceRuns;
 
@@ -84,6 +85,9 @@ internal sealed class ServiceRunTerminalAguiObservation
 
     private void ObserveRunFinished(RunFinishedEvent evt)
     {
+        if (Status == ServiceRunStatus.OutcomeUncertain)
+            return;
+
         HasTerminalObservation = true;
         Status = ServiceRunStatus.Completed;
         LastError = string.Empty;
@@ -94,8 +98,16 @@ internal sealed class ServiceRunTerminalAguiObservation
 
     private void ObserveRunError(RunErrorEvent evt)
     {
+        if (Status == ServiceRunStatus.OutcomeUncertain)
+            return;
+
         HasTerminalObservation = true;
-        Status = ServiceRunStatus.Failed;
+        Status = string.Equals(
+            evt.Code,
+            GAgentRunFailureCodes.OutcomeUncertain,
+            StringComparison.Ordinal)
+            ? ServiceRunStatus.OutcomeUncertain
+            : ServiceRunStatus.Failed;
         LastOutput = ResolveObservedOutput();
         LastError = evt.Message ?? string.Empty;
     }

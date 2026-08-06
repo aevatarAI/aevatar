@@ -36,6 +36,8 @@ public sealed class WorkflowRunDurableCompletionResolverCoverageTests
 
     [Theory]
     [InlineData(WorkflowRunCompletionStatus.Running)]
+    [InlineData(WorkflowRunCompletionStatus.AwaitingToolApproval)]
+    [InlineData(WorkflowRunCompletionStatus.WaitingForSignal)]
     [InlineData(WorkflowRunCompletionStatus.Unknown)]
     public async Task ResolveAsync_ShouldReturnIncomplete_ForNonTerminalStatuses(
         WorkflowRunCompletionStatus snapshotStatus)

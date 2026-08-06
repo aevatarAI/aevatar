@@ -13,14 +13,12 @@ public sealed class ProjectionWorkOrderQueryPort : IWorkOrderQueryPort
     private static readonly IReadOnlySet<string> KnownStatuses = new HashSet<string>(StringComparer.Ordinal)
     {
         WorkOrderLifecycleStatusNames.Accepted,
-        WorkOrderLifecycleStatusNames.WaitingApproval,
         WorkOrderLifecycleStatusNames.Ready,
         WorkOrderLifecycleStatusNames.DispatchPending,
         WorkOrderLifecycleStatusNames.Running,
         WorkOrderLifecycleStatusNames.Completed,
         WorkOrderLifecycleStatusNames.Failed,
         WorkOrderLifecycleStatusNames.Stopped,
-        WorkOrderLifecycleStatusNames.Denied,
         WorkOrderLifecycleStatusNames.Cancelled,
         WorkOrderLifecycleStatusNames.TimedOut,
     };
@@ -128,75 +126,47 @@ public sealed class ProjectionWorkOrderQueryPort : IWorkOrderQueryPort
             document.LifecycleStatus,
             document.LifecycleVersion,
             document.StateVersion,
+            new WorkOrderAvailableActionsResponse(
+                document.AvailableActions?.CanReassign ?? false,
+                document.AvailableActions?.CanDispatch ?? false,
+                document.AvailableActions?.CanCancel ?? false),
             new WorkOrderServiceInputContract(
                 new WorkOrderChatInputContract(document.InputPrompt),
                 document.InputArtifacts.Select(ToArtifact).ToArray(),
                 document.DeclaredResultArtifacts.Select(ToArtifact).ToArray()),
-            new WorkOrderPermissionPlanContract(
-                document.ExternalActions.Select(action =>
-                    new WorkOrderExternalActionReferenceContract(
-                        action.ActionId,
-                        action.System,
-                        action.Action,
-                        action.ResourceId)).ToArray(),
-                document.PermissionRequirements.Select(requirement =>
-                    new WorkOrderPermissionRequirementContract(
-                        requirement.PermissionId,
-                        requirement.ActionId,
-                        requirement.Capability,
-                        requirement.RequiresApproval)).ToArray(),
-                document.ApproverPrincipalIds.ToArray()),
-            ToApproval(document),
-            ToExecution(document),
-            ToTerminalEvidence(document.TerminalEvidence),
-            ToTerminalEvidence(document.LateTerminalEvidence),
+            ToRun(document),
+            ToRunOutcome(document.RunOutcome),
+            ToRunOutcome(document.LateRunOutcome),
             ToFailure(document),
             NormalizeOptional(document.TerminalReason),
             FromUnixTimeMilliseconds(document.CreatedAtUnixMs) ?? DateTimeOffset.MinValue,
             document.WorkOrderUpdatedAtUtc?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
             FromUnixTimeMilliseconds(document.TimeoutAtUnixMs));
 
-    private static WorkOrderApprovalResponse ToApproval(WorkOrderCurrentStateDocument document) =>
-        new(
-            NormalizeOptional(document.ApprovalId),
-            document.ApprovalStatus,
-            NormalizeOptional(document.ApprovalDecisionId),
-            string.IsNullOrWhiteSpace(document.ApprovalDecidedById)
-                ? null
-                : new WorkOrderPrincipalContract(
-                    document.ApprovalDecidedById,
-                    document.ApprovalDecidedByKind),
-            NormalizeOptional(document.ApprovalReason),
-            FromUnixTimeMilliseconds(document.ApprovalDecidedAtUnixMs));
-
-    private static WorkOrderExecutionResponse? ToExecution(WorkOrderCurrentStateDocument document) =>
+    private static WorkOrderRunLinkResponse? ToRun(WorkOrderCurrentStateDocument document) =>
         string.IsNullOrWhiteSpace(document.RunId)
             ? null
-            : new WorkOrderExecutionResponse(
+            : new WorkOrderRunLinkResponse(
                 document.RunId,
                 document.RunActorId,
                 document.RunCommandId,
                 document.RunCorrelationId,
                 document.RunRevisionId,
                 document.RunDeploymentId,
-                FromUnixTimeMilliseconds(document.RunAcceptedAtUnixMs) ?? DateTimeOffset.MinValue,
-                FromUnixTimeMilliseconds(document.RunStartedAtUnixMs));
+                FromUnixTimeMilliseconds(document.RunAcceptedAtUnixMs) ?? DateTimeOffset.MinValue);
 
-    private static WorkOrderTerminalEvidenceResponse? ToTerminalEvidence(
-        WorkOrderTerminalEvidenceDocument? document) =>
+    private static WorkOrderRunOutcomeReferenceResponse? ToRunOutcome(
+        WorkOrderRunOutcomeReferenceDocument? document) =>
         document == null || string.IsNullOrWhiteSpace(document.DeliveryId)
             ? null
-            : new WorkOrderTerminalEvidenceResponse(
+            : new WorkOrderRunOutcomeReferenceResponse(
                 document.DeliveryId,
                 document.RunId,
                 document.RunActorId,
                 document.CommandId,
                 document.CorrelationId,
                 document.Outcome,
-                NormalizeOptional(document.Output),
-                NormalizeOptional(document.Error),
-                FromUnixTimeMilliseconds(document.TerminalAtUnixMs) ?? DateTimeOffset.MinValue,
-                document.ResultArtifacts.Select(ToArtifact).ToArray());
+                FromUnixTimeMilliseconds(document.TerminalAtUnixMs) ?? DateTimeOffset.MinValue);
 
     private static WorkOrderFailureResponse? ToFailure(WorkOrderCurrentStateDocument document) =>
         string.IsNullOrWhiteSpace(document.FailureCode)

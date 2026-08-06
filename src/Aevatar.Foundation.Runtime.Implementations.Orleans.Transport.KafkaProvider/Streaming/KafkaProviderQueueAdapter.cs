@@ -78,6 +78,7 @@ internal sealed class KafkaProviderQueueAdapter : IQueueAdapter
     public IQueueAdapterReceiver CreateReceiver(QueueId queueId) =>
         new KafkaProviderQueueAdapterReceiver(
             queueId,
+            _providerName,
             _producer,
             _transportOptions,
             Mapper,

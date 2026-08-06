@@ -1,3 +1,6 @@
+using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.AI.ToolProviders.Skills;
+
 namespace Aevatar.Mainnet.Host.Api.Skills;
 
 // Invoke request body read manually via ReadFromJsonAsync.
@@ -27,49 +30,71 @@ internal sealed record SkillScheduleHttpRequest(
     string? CronExpression = null,
     string? Timezone = null,
     string? DisplayName = null,
-    string? TeamId = null);
+    string? TeamId = null,
+    string? WorkflowConfirmationToken = null);
 
-// Returned after a schedule is provisioned; ObservatoryUrl shows the schedule's recurring runs.
+// Returned after actor-owned schedule provisioning is accepted. ScheduleId remains null until
+// the schedule becomes visible; clients poll the member read model through the response Location.
 public sealed record SkillScheduleReceipt(
-    string ScheduleId,
     string MemberId,
+    string ScopeId,
     string TeamId,
-    string Status,
+    string BindingStatus,
     string ObservatoryUrl,
-    string StudioUrl);
+    string StudioUrl)
+{
+    public string? ScheduleId { get; init; }
+
+    public string? BindingRunId { get; init; }
+
+    public string? ScheduleProvisioningId { get; init; }
+
+    public string? ScheduleProvisioningStatus { get; init; }
+}
+
+public sealed record SkillScheduleConfirmationReceipt(
+    string Status,
+    string? ConfirmationToken,
+    IReadOnlyList<SkillWorkflowMountPreview> Workflows,
+    string? FailureCode = null,
+    string? Message = null);
 
 internal sealed record SkillScheduleOutcome(
     bool Succeeded,
     SkillScheduleReceipt? Receipt = null,
+    SkillScheduleConfirmationReceipt? Confirmation = null,
     string? ErrorCode = null,
     string? ErrorMessage = null)
 {
     public static SkillScheduleOutcome Ok(SkillScheduleReceipt receipt) => new(true, receipt);
 
-    public static SkillScheduleOutcome Failed(string code, string message) => new(false, null, code, message);
+    public static SkillScheduleOutcome ConfirmationRequired(SkillScheduleConfirmationReceipt confirmation) =>
+        new(false, Confirmation: confirmation);
+
+    public static SkillScheduleOutcome Failed(string code, string message) =>
+        new(false, ErrorCode: code, ErrorMessage: message);
 }
 
 // Invokes a visible ornn skill once as an observable workflow run, or provisions a recurring schedule for it.
-// The access token + scope + owner subject are INPUTS (resolved from the caller at the endpoint), not read
-// from HttpContext here.
+// Caller credentials are INPUTS resolved from the caller at the endpoint, not read from HttpContext here.
 internal interface IUserSkillRunService
 {
     Task<SkillRunOutcome> InvokeOnceAsync(
         string skillGuid,
-        string accessToken,
+        WorkflowCallerCredential callerCredential,
         string scopeId,
         string prompt,
         CancellationToken ct = default);
 
     Task<SkillScheduleOutcome> ScheduleAsync(
         string skillGuid,
-        string accessToken,
+        WorkflowCallerCredential callerCredential,
         string scopeId,
-        string? ownerSubjectExternalUserId,
         string prompt,
         string cronExpression,
         string timezone,
         string displayName,
         string teamId,
+        string workflowConfirmationToken,
         CancellationToken ct = default);
 }

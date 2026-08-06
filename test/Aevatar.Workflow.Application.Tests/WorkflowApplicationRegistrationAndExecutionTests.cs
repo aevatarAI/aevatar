@@ -8,6 +8,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.RunForks;
@@ -125,6 +126,9 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var options = provider.GetRequiredService<WorkflowRunBehaviorOptions>();
 
         options.DefaultWorkflowName.Should().Be("direct");
+        options.AcceptedObservationTimeout.Should().Be(TimeSpan.FromSeconds(30));
+        options.ChatHistoryReservationObservationTimeout.Should().Be(TimeSpan.FromSeconds(3));
+        options.ChatHistoryReservationObservationInterval.Should().Be(TimeSpan.FromMilliseconds(50));
         options.UseAutoAsDefaultWhenWorkflowUnspecified.Should().BeFalse();
         options.EnableDirectFallback.Should().BeTrue();
         options.DirectFallbackWorkflowWhitelist.Should().Contain("auto");
@@ -156,13 +160,13 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         options.DirectFallbackWorkflowWhitelist.Should().ContainSingle().Which.Should().Be("analysis");
         options.DirectFallbackExceptionWhitelist.Should().ContainSingle().Which.Should().Be(typeof(TimeoutException));
 
-        policy.ShouldFallback(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("analysis")), new TimeoutException("timeout"))
+        policy.ShouldFallback(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("analysis"), ExternalCapabilityExecutionMode.Interactive), new TimeoutException("timeout"))
             .Should().BeTrue();
         policy.ShouldFallback(
-                new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("analysis")),
+                new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("analysis"), ExternalCapabilityExecutionMode.Interactive),
                 new WorkflowDirectFallbackTriggerException("boom"))
             .Should().BeFalse();
-        policy.ShouldFallback(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("analysis")), new InvalidOperationException("boom"))
+        policy.ShouldFallback(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("analysis"), ExternalCapabilityExecutionMode.Interactive), new InvalidOperationException("boom"))
             .Should().BeFalse();
     }
 
@@ -324,6 +328,90 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
+    public async Task AddWorkflowApplication_ShouldWireDraftRunExternalCapabilityAdmissionIntoResolver()
+    {
+        const string workflowYaml =
+            """
+            name: inline_external
+            roles: []
+            steps:
+              - id: call_external
+                type: tool_call
+                capability:
+                  nyxid_request:
+                    user_service_id: user-service-alpha
+                    method: POST
+                    path_template: /open-apis/im/v1/messages
+                    query_parameters: [receive_id_type]
+                    body_required: true
+                    body_mode: json
+                    response_mode: text
+                parameters:
+                  tool: nyxid_proxy
+                  arguments: "{}"
+            """ + "\n";
+        var selector = new NyxIdRequestSelector
+        {
+            UserServiceId = "user-service-alpha",
+            Method = NyxIdRequestMethod.Post,
+            PathTemplate = "/open-apis/im/v1/messages",
+            BodyRequired = true,
+            BodyMode = NyxIdRequestBodyMode.Json,
+            ResponseMode = NyxIdRequestResponseMode.Text,
+        };
+        selector.QueryParameters.Add("receive_id_type");
+        var dependencies = new WorkflowAuthorizationDependencies();
+        dependencies.ExternalInvocations.Add(new ExternalToolInvocationSpec
+        {
+            CallSiteId = "inline_external/call_external",
+            ToolName = "nyxid_proxy",
+            Selector = new ExternalWorkflowCapabilitySelector
+            {
+                NyxIdRequest = selector.Clone(),
+            },
+        });
+        var actorPort = new RecordingWorkflowRunActorPort();
+        actorPort.ParseResults[workflowYaml] = WorkflowYamlParseResult.Success("inline_external", dependencies);
+
+        var services = new ServiceCollection();
+        services.AddSingleton<IWorkflowActorBindingReader>(new StaticWorkflowActorBindingReader(null));
+        services.AddSingleton(actorPort);
+        services.AddSingleton<IWorkflowRunProvisioningPort>(sp => sp.GetRequiredService<RecordingWorkflowRunActorPort>());
+        services.AddSingleton<IWorkflowDefinitionParser>(sp => sp.GetRequiredService<RecordingWorkflowRunActorPort>());
+        services.AddSingleton<IExternalWorkflowCapabilitySource>(new ReadyNyxIdRequestCapabilitySource(selector));
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+
+        var result = await provider.GetRequiredService<IWorkflowRunActorResolver>().ResolveOrCreateAsync(
+            new WorkflowChatRunRequest(
+                "run the draft",
+                WorkflowChatSource.InlineYamlBundle([workflowYaml]),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
+                ScopeId: "scope-alpha",
+                CallerCredential: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential(
+                    "bearer-alpha",
+                    new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority(
+                        "nyxid",
+                        string.Empty,
+                        "owner-alpha",
+                        "proxy"),
+                    NyxIdCallerCredentialKind.SourceReadableUserBearer),
+                CommandIdSeed: "command-alpha"),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        actorPort.CreateRunBindings.Should().ContainSingle();
+        var binding = actorPort.CreateRunBindings[0];
+        binding.SourceKind.Should().Be("workflow_draft_run");
+        binding.CapabilityAdmissionPlan.Should().NotBeNull();
+        binding.CapabilityAdmissionPlan!.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+        binding.CapabilityAdmissionPlan.InvocationAdmissions.Should().ContainSingle()
+            .Which.CallSiteId.Should().Be("inline_external/call_external");
+        binding.WorkflowId.Should().StartWith("workflow-draft-run-");
+        binding.RevisionId.Should().StartWith("rev-draft-run-");
+    }
+
+    [Fact]
     public void EnvelopeFactory_ShouldKeepCommandMetadataOutOfHeaders()
     {
         var services = new ServiceCollection();
@@ -342,6 +430,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var command = new WorkflowChatRunRequest(
             "hello",
             WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            ExternalCapabilityExecutionMode.Interactive,
             SessionId: "session-42",
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
             {
@@ -382,6 +471,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var command = new WorkflowChatRunRequest(
             "hello",
             WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            ExternalCapabilityExecutionMode.Interactive,
             LlmControl: new WorkflowLlmControl(
                 ModelOverride: " model-a ",
                 MaxToolRoundsOverride: 3,
@@ -411,6 +501,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var command = new WorkflowChatRunRequest(
             "resume-input",
             WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            ExternalCapabilityExecutionMode.Interactive,
             ForkSeed: new WorkflowChatRunForkSeed(
                 "source-run",
                 "step-b",
@@ -444,6 +535,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var command = new WorkflowChatRunRequest(
             "resume-input",
             WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            ExternalCapabilityExecutionMode.Interactive,
             ForkSeed: new WorkflowChatRunForkSeed(
                 "source-run",
                 "step-b",
@@ -488,6 +580,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var command = new WorkflowChatRunRequest(
             "hello",
             WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            ExternalCapabilityExecutionMode.Interactive,
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 [WorkflowRunCommandMetadataKeys.ScopeId] = "evil-scope",
@@ -506,7 +599,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
                     "nyxid",
                     string.Empty,
                     "nyx-user-42",
-                    "proxy")));
+                    "proxy"),
+                Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.ProxyDelegation));
 
         var envelope = factory.CreateEnvelope(command, new CommandContext(
             "actor-1",
@@ -521,6 +615,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.LlmControl.UserMemoryPrompt.Should().Be("memory");
         request.LlmControl.RoutePreference.Should().Be("route-a");
         request.CallerCredential.BearerToken.Should().Be("trusted-token");
+        request.CallerCredential.Kind.Should().Be(
+            Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.ProxyDelegation);
         request.CallerCredential.NyxIdAuthority.Should().BeEquivalentTo(
             new Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority
             {
@@ -543,6 +639,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var command = new WorkflowChatRunRequest(
             "hello",
             WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            ExternalCapabilityExecutionMode.Interactive,
             CallerCredential: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential("Bearer token-123"));
 
         FluentActions.Invoking(() => factory.CreateEnvelope(command, new CommandContext(
@@ -565,6 +662,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var command = new WorkflowChatRunRequest(
             "describe this",
             WorkflowChatSource.DefinitionActor("actor-1"),
+            ExternalCapabilityExecutionMode.Interactive,
             InputParts:
             [
                 new WorkflowChatInputPart
@@ -629,7 +727,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.AddWorkflowApplication();
         using var provider = services.BuildServiceProvider();
         var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
-        var command = new WorkflowChatRunRequest("hello", WorkflowChatSource.Direct());
+        var command = new WorkflowChatRunRequest("hello", WorkflowChatSource.Direct(), ExternalCapabilityExecutionMode.Interactive);
 
         var noMetadata = factory.CreateEnvelope(command, new CommandContext(
             "actor-2",
@@ -638,12 +736,152 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             new Dictionary<string, string>()));
         noMetadata.Payload.Unpack<WorkflowChatRequestEvent>().SessionId.Should().Be("corr-2");
 
-        var whiteSpaceSession = factory.CreateEnvelope(new WorkflowChatRunRequest("hello", WorkflowChatSource.Direct(), SessionId: "   "), new CommandContext(
+        var whiteSpaceSession = factory.CreateEnvelope(new WorkflowChatRunRequest("hello", WorkflowChatSource.Direct(), ExternalCapabilityExecutionMode.Interactive, SessionId: "   "), new CommandContext(
             "actor-3",
             "cmd-3",
             "corr-3",
             new Dictionary<string, string>()));
         whiteSpaceSession.Payload.Unpack<WorkflowChatRequestEvent>().SessionId.Should().Be("corr-3");
+    }
+
+    private sealed class StaticWorkflowActorBindingReader(WorkflowActorBinding? binding) : IWorkflowActorBindingReader
+    {
+        public Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(binding);
+        }
+    }
+
+    private sealed class RecordingWorkflowRunActorPort : IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
+    {
+        public Dictionary<string, WorkflowYamlParseResult> ParseResults { get; } = new(StringComparer.Ordinal);
+
+        public List<WorkflowDefinitionBinding> CreateRunBindings { get; } = [];
+
+        public Task<WorkflowRunCreationReceipt> CreateRunAsync(
+            WorkflowDefinitionBinding definition,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            CreateRunBindings.Add(definition);
+            return Task.FromResult(new WorkflowRunCreationReceipt(
+                "run-1",
+                "definition-isolated-1",
+                ["definition-isolated-1", "run-1"]));
+        }
+
+        public Task DestroyAsync(string actorId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
+            string workflowYaml,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(ParseResults.TryGetValue(workflowYaml, out var result)
+                ? result
+                : WorkflowYamlParseResult.Invalid($"Unexpected workflow YAML: {workflowYaml}"));
+        }
+
+        public async Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default)
+        {
+            if (inlineWorkflowDocuments.Count == 0)
+                return WorkflowInlineYamlBundleParseResult.Invalid("workflowYamls is required.");
+
+            var workflowYamlsByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            string entryWorkflowName = string.Empty;
+            string entryWorkflowYaml = string.Empty;
+            for (var i = 0; i < inlineWorkflowDocuments.Count; i++)
+            {
+                var document = inlineWorkflowDocuments[i];
+                var parseResult = await ParseWorkflowYamlAsync(document.Yaml, ct);
+                if (!parseResult.Succeeded)
+                    return WorkflowInlineYamlBundleParseResult.Invalid(
+                        parseResult.Error,
+                        parseResult.ExternalCapabilityReadiness);
+
+                if (!workflowYamlsByName.TryAdd(parseResult.WorkflowName, document.Yaml))
+                    return WorkflowInlineYamlBundleParseResult.Invalid(
+                        $"Duplicate workflow name '{parseResult.WorkflowName}' in workflowYamls.");
+
+                if (i == 0)
+                {
+                    entryWorkflowName = parseResult.WorkflowName;
+                    entryWorkflowYaml = document.Yaml;
+                }
+            }
+
+            return WorkflowInlineYamlBundleParseResult.Success(
+                entryWorkflowName,
+                entryWorkflowYaml,
+                workflowYamlsByName);
+        }
+    }
+
+    private sealed class ReadyNyxIdRequestCapabilitySource(NyxIdRequestSelector requestContract) :
+        IExternalWorkflowCapabilitySource
+    {
+        public ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind =>
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest;
+
+        public Task<ExternalWorkflowCapabilityDiscoveryResult> ListAsync(
+            ExternalWorkflowCapabilityAccessContext access,
+            CancellationToken cancellationToken = default)
+        {
+            _ = access;
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new ExternalWorkflowCapabilityDiscoveryResult());
+        }
+
+        public Task<ExternalCapabilityReadiness> InspectAsync(
+            ExternalWorkflowCapabilityAccessContext access,
+            ExternalWorkflowCapabilitySelector selector,
+            ExternalCapabilityExecutionMode executionMode,
+            CancellationToken cancellationToken = default)
+        {
+            _ = access;
+            cancellationToken.ThrowIfCancellationRequested();
+            var policy = new NyxIdOperationExecutionPolicy
+            {
+                Risk = NyxIdOperationRisk.Write,
+                Approval = NyxIdOperationApproval.None,
+                EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+            };
+            policy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
+            var requestDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                .ComputeNyxIdRequestContractDigest(requestContract);
+            var result = new ExternalCapabilityReadiness
+            {
+                ExecutionMode = executionMode,
+                Status = ExternalCapabilityReadinessStatus.Ready,
+                SelectedSelector = selector.Clone(),
+                SelectedCapability = new ExternalWorkflowCapabilityRef
+                {
+                    NyxIdUserRequest = new NyxIdUserRequestCapabilityRef
+                    {
+                        Request = requestContract.Clone(),
+                        ServiceSlugSnapshot = "api-lark-bot",
+                        ContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                            .ComputeNyxIdExplicitRequestProofDigest(requestDigest, "api-lark-bot"),
+                        ExecutionPolicy = policy,
+                    },
+                },
+            };
+            var observedAt = DateTimeOffset.UtcNow;
+            result.Sources.Add(new ExternalCapabilitySourceStamp
+            {
+                SourceKind = ExternalCapabilitySourceKind.NyxIdUserServices,
+                SourceId = "nyxid-user-services:caller:owner-alpha",
+                ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
+                FreshUntil = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(5)),
+                ContentDigest = "user-services-alpha",
+            });
+            return Task.FromResult(result);
+        }
     }
 
 }

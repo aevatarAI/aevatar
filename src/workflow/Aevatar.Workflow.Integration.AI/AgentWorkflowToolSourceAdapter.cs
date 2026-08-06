@@ -1,9 +1,5 @@
-using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.Core.Auditing;
-using Aevatar.AI.Core.Hooks;
-using Aevatar.AI.Core.Middleware;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Modules;
 using Microsoft.Extensions.Logging;
@@ -13,18 +9,13 @@ namespace Aevatar.Workflow.Integration.AI;
 
 public sealed class AgentWorkflowToolSourceAdapter(
     IEnumerable<IAgentToolSource> agentToolSources,
-    IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
-    IToolApprovalHandler? approvalHandler = null,
-    IEnumerable<IAIGAgentExecutionHook>? hooks = null,
+    IAgentToolExecutionPort toolExecutionPort,
     ILogger<AgentWorkflowToolSourceAdapter>? logger = null) : IWorkflowToolSource
 {
     private readonly IEnumerable<IAgentToolSource> _agentToolSources =
         agentToolSources ?? throw new ArgumentNullException(nameof(agentToolSources));
-    private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares =
-        ToolCallMiddlewareChainFactory.ForAgentRuntime(
-            toolMiddlewares ?? [],
-            approvalHandler,
-            hooks == null ? null : new AgentHookPipeline(hooks));
+    private readonly IAgentToolExecutionPort _toolExecutionPort =
+        toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
     private readonly ILogger<AgentWorkflowToolSourceAdapter> _logger =
         logger ?? NullLogger<AgentWorkflowToolSourceAdapter>.Instance;
 
@@ -35,7 +26,7 @@ public sealed class AgentWorkflowToolSourceAdapter(
         {
             var tools = await source.DiscoverToolsAsync(ct).ConfigureAwait(false);
             foreach (var tool in tools)
-                workflowTools.Add(new AgentWorkflowToolAdapter(tool, _toolMiddlewares, _logger));
+                workflowTools.Add(new AgentWorkflowToolAdapter(tool, _toolExecutionPort, _logger));
         }
 
         return workflowTools;
@@ -43,12 +34,12 @@ public sealed class AgentWorkflowToolSourceAdapter(
 
     private sealed class AgentWorkflowToolAdapter(
         IAgentTool tool,
-        IReadOnlyList<IToolCallMiddleware> toolMiddlewares,
+        IAgentToolExecutionPort toolExecutionPort,
         ILogger logger) : IWorkflowTool
     {
         private readonly IAgentTool _tool = tool ?? throw new ArgumentNullException(nameof(tool));
-        private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares =
-            toolMiddlewares ?? throw new ArgumentNullException(nameof(toolMiddlewares));
+        private readonly IAgentToolExecutionPort _toolExecutionPort =
+            toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         private readonly ILogger _logger = logger ?? NullLogger.Instance;
 
         public string Name => _tool.Name;
@@ -66,19 +57,29 @@ public sealed class AgentWorkflowToolSourceAdapter(
             var credentialContext = WorkflowCallerCredentialToolContextMapper.FromCredential(
                 request.CallerCredential,
                 workflowRuntimeContext);
-            var toolContext = credentialContext with
+            var toolContext = WorkflowRunScopeToolContextMapper.Apply(request.ScopeId, credentialContext with
             {
                 Request = credentialContext.Request with
                 {
+                    RequestId = Normalize(request.RunId),
                     CallId = Normalize(request.CallId),
                     IdempotencyKey = Normalize(request.IdempotencyKey),
-                },
-                Caller = credentialContext.Caller with
-                {
-                    ScopeId = Normalize(request.ScopeId),
+                    IssuedAtUnixMs = request.IssuedAtUnixMs,
                 },
                 Schedule = new AgentToolScheduleContext(Normalize(request.ScheduleId)),
-            };
+                OperationAdmission = WorkflowOperationAdmissionToolContextMapper.Map(
+                    request.InvocationAdmission),
+                InvocationSurface = AgentToolInvocationSurface.WorkflowToolCall,
+                Chat = new AgentChatInvocationContext(
+                    AgentChatInvocationSurface.WorkflowChat,
+                    Normalize(request.RunId),
+                    null,
+                    null,
+                    Normalize(request.StepId),
+                    null),
+                InputFileRefs = request.InputFileRefs.Select(ToChatFileRef).ToArray(),
+                ExecutionOwner = AgentToolExecutionOwners.WorkflowRun(request.RunId),
+            });
             _logger.LogInformation(
                 "Workflow tool credential context prepared. toolName={ToolName} scopeId={ScopeId} rootRunId={RootRunId} parentRunId={ParentRunId} parentStepId={ParentStepId} hasCallerCredentialBearer={HasCallerCredentialBearer} hasNyxIdAccessToken={HasNyxIdAccessToken} hasNyxIdOrgToken={HasNyxIdOrgToken}",
                 _tool.Name,
@@ -89,81 +90,108 @@ public sealed class AgentWorkflowToolSourceAdapter(
                 !string.IsNullOrWhiteSpace(request.CallerCredential?.BearerToken),
                 !string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdAccessToken),
                 !string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdOrgToken));
-            using var scope = AgentToolContextScope.Push(toolContext);
-            var toolCallContext = new ToolCallContext
-            {
-                Tool = _tool,
-                ToolName = _tool.Name,
-                ToolCallId = Normalize(request.CallId) ?? string.Empty,
-                ArgumentsJson = request.ArgumentsJson,
-                CancellationToken = ct,
-                ExecutionContext = toolContext,
-                ApprovalGrant = request.ApprovalGrant == null
+            var executionRequest = new AgentToolExecutionRequest(
+                _tool,
+                request.ArgumentsJson,
+                toolContext,
+                AgentToolApprovalContinuationMode.ActorOwned,
+                request.ApprovalGrant == null
                     ? null
-                    : new Aevatar.AI.Abstractions.Middleware.ToolApprovalGrant(
+                    : new AgentToolApprovalGrant(
+                        toolContext.ExecutionOwner.Clone(),
                         request.ApprovalGrant.ApprovalRequestId,
+                        request.RunId,
                         request.ApprovalGrant.ToolName,
-                        request.ApprovalGrant.ToolCallId),
-            };
-
-            await MiddlewarePipeline.RunToolCallAsync(_toolMiddlewares, toolCallContext, async () =>
+                        request.ApprovalGrant.ToolCallId,
+                        AgentToolArgumentsDigest.ComputeSha256(request.ArgumentsJson)));
+            var outcome = await _toolExecutionPort.ExecuteAsync(executionRequest, ct).ConfigureAwait(false);
+            if (IsActorRedeliveryAdmission(outcome))
             {
-                if (toolCallContext.Terminate)
-                    return;
+                outcome = await _toolExecutionPort.ExecuteAsync(
+                    executionRequest with
+                    {
+                        ExecutionAttemptKind = AgentToolExecutionAttemptKind.ActorRecovery,
+                    },
+                    ct).ConfigureAwait(false);
+            }
 
-                toolCallContext.Result = await _tool.ExecuteAsync(toolCallContext.ArgumentsJson, ct).ConfigureAwait(false);
-            }).ConfigureAwait(false);
-
-            if (toolCallContext.Terminate &&
-                toolCallContext.TerminationKind == ToolCallTerminationKind.ApprovalPending &&
-                toolCallContext.PendingApproval != null)
+            if (outcome.Kind == AgentToolExecutionOutcomeKind.ApprovalRequired)
             {
                 return new WorkflowToolExecutionResult(
                     string.Empty,
-                    PendingApproval: ToWorkflowToolApprovalPendingOutcome(toolCallContext.PendingApproval));
+                    PendingApproval: new WorkflowToolApprovalPendingOutcome(
+                        outcome.Receipt.ApprovalRequestId,
+                        outcome.Receipt.ToolName,
+                        outcome.Receipt.CallId,
+                        request.ArgumentsJson,
+                        outcome.Receipt.ApprovalMode.ToString(),
+                        IsReadOnly: !outcome.IsMutation,
+                        outcome.Receipt.IsDestructive));
             }
 
-            if (toolCallContext.Terminate)
-                throw new InvalidOperationException(FormatMiddlewareTermination(toolCallContext));
+            if (outcome.Kind is not (AgentToolExecutionOutcomeKind.Executed or
+                AgentToolExecutionOutcomeKind.ExecutedAuditIncomplete))
+            {
+                return WorkflowToolExecutionResult.Failed(
+                    outcome.ResultJson,
+                    outcome.FailureCode,
+                    string.IsNullOrWhiteSpace(outcome.SafeMessage)
+                        ? outcome.FailureCode
+                        : outcome.SafeMessage,
+                    outcome.TerminalInvoked,
+                    outcome.Retryable);
+            }
 
-            var resultJson = toolCallContext.Result
-                             ?? throw new InvalidOperationException(
-                                 $"Tool '{_tool.Name}' returned no result.");
-            return AgentWorkflowToolReceiptOutcomeMapper.Map(
-                ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt,
-                resultJson);
+            return AgentWorkflowToolReceiptOutcomeMapper.Map(outcome.Receipt, outcome.ResultJson);
         }
 
-        private static WorkflowToolApprovalPendingOutcome ToWorkflowToolApprovalPendingOutcome(
-            ToolApprovalPendingContext pending) =>
-            new(
-                pending.ApprovalRequestId,
-                pending.ToolName,
-                pending.ToolCallId,
-                pending.ArgumentsJson,
-                pending.ApprovalMode.ToString(),
-                pending.IsReadOnly,
-                pending.IsDestructive);
+        private static bool IsActorRedeliveryAdmission(AgentToolExecutionOutcome outcome) =>
+            outcome.Kind == AgentToolExecutionOutcomeKind.Failed &&
+            outcome.FailureStage == AgentToolExecutionFailureStage.Admission &&
+            string.Equals(
+                outcome.FailureCode,
+                "tool_execution_already_started",
+                StringComparison.Ordinal) &&
+            !outcome.TerminalInvoked &&
+            !outcome.Retryable;
+
+        private static ChatFileRef ToChatFileRef(WorkflowFileRef fileRef) =>
+            new()
+            {
+                FileId = Normalize(fileRef.FileId) ?? string.Empty,
+                ArtifactId = Normalize(fileRef.ArtifactId) ?? string.Empty,
+                SourceKind = fileRef.SourceKind switch
+                {
+                    WorkflowFileSourceKind.ChatInput => ChatFileSourceKind.ChatInput,
+                    WorkflowFileSourceKind.FormUpload => ChatFileSourceKind.FormUpload,
+                    WorkflowFileSourceKind.ConnectedServiceResource => ChatFileSourceKind.ConnectedServiceResource,
+                    WorkflowFileSourceKind.ExternalResource => ChatFileSourceKind.ExternalResource,
+                    WorkflowFileSourceKind.Generated => ChatFileSourceKind.Generated,
+                    _ => ChatFileSourceKind.Unspecified,
+                },
+                SourceMessageId = Normalize(fileRef.SourceMessageId) ?? string.Empty,
+                SourceResourceKey = Normalize(fileRef.SourceResourceKey) ?? string.Empty,
+                FileName = Normalize(fileRef.FileName) ?? string.Empty,
+                MediaType = Normalize(fileRef.MediaType) ?? string.Empty,
+                SizeBytes = fileRef.SizeBytes,
+                Sha256 = Normalize(fileRef.Sha256) ?? string.Empty,
+                CreatedAtUnixMs = fileRef.CreatedAtUnixMs,
+                ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs,
+                OwnerRunId = Normalize(fileRef.OwnerRunId) ?? string.Empty,
+                OwnerScopeId = Normalize(fileRef.OwnerScopeId) ?? string.Empty,
+            };
 
         private static string? Normalize(string? value) =>
             string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-        private static string FormatMiddlewareTermination(ToolCallContext context)
-        {
-            var reason = string.IsNullOrWhiteSpace(context.TerminationReason)
-                ? context.Result
-                : context.TerminationReason;
-            var suffix = string.IsNullOrWhiteSpace(reason)
-                ? string.Empty
-                : $": {reason}";
-            return $"Tool '{context.ToolName}' execution terminated by middleware ({context.TerminationKind}){suffix}";
-        }
 
     }
 }
 
 file static class AgentWorkflowToolReceiptOutcomeMapper
 {
+    private const string UnknownErrorCode = "tool_outcome_unknown";
+    private const string UnknownErrorMessage = "The tool outcome could not be verified.";
+
     public static WorkflowToolExecutionResult Map(AgentToolReceipt receipt, string resultJson)
     {
         if (IsFailure(receipt.Status))
@@ -182,7 +210,8 @@ file static class AgentWorkflowToolReceiptOutcomeMapper
     private static bool IsFailure(AgentToolReceiptStatus status) =>
         status is AgentToolReceiptStatus.Error or
             AgentToolReceiptStatus.Denied or
-            AgentToolReceiptStatus.AuthorizationRequired;
+            AgentToolReceiptStatus.AuthorizationRequired or
+            AgentToolReceiptStatus.Unspecified;
 
     private static string ResolveFailureCode(AgentToolReceipt receipt)
     {
@@ -193,13 +222,16 @@ file static class AgentWorkflowToolReceiptOutcomeMapper
         {
             AgentToolReceiptStatus.Denied => "tool_denied",
             AgentToolReceiptStatus.AuthorizationRequired => "authorization_required",
+            AgentToolReceiptStatus.Unspecified => UnknownErrorCode,
             _ => "tool_error",
         };
     }
 
     private static string ResolveFailureMessage(AgentToolReceipt receipt) =>
         string.IsNullOrWhiteSpace(receipt.ErrorMessage)
-            ? ResolveFailureCode(receipt)
+            ? receipt.Status == AgentToolReceiptStatus.Unspecified
+                ? UnknownErrorMessage
+                : ResolveFailureCode(receipt)
             : receipt.ErrorMessage.Trim();
 
     private static WorkflowManagedHandoffOutcome? ToWorkflowManagedHandoffOutcome(

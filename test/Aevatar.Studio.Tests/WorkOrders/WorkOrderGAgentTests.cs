@@ -5,8 +5,8 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
-using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgents.WorkOrder;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
@@ -33,83 +33,6 @@ public sealed class WorkOrderGAgentTests
         ?? throw new InvalidOperationException("WorkOrderGAgent.TransitionState was not found.");
 
     [Fact]
-    public async Task CreateAndApprove_ShouldPreserveSeparateIdentitiesAndAdvanceVersion()
-    {
-        var agent = await CreateAgentAsync();
-        var create = BuildCreate(requiresApproval: true);
-
-        await agent.HandleCreateAsync(create);
-
-        agent.State.WorkOrderId.Should().Be(WorkOrderId);
-        agent.State.ScopeId.Should().Be(ScopeId);
-        agent.State.TeamId.Should().Be("team-1");
-        agent.State.Requester.PrincipalId.Should().Be("requester-1");
-        agent.State.MemberId.Should().Be("member-1");
-        agent.State.WorkflowId.Should().Be("workflow-1");
-        agent.State.PublishedServiceId.Should().Be("service-1");
-        agent.State.Approval.ApprovalId.Should().Be(WorkOrderConventions.BuildApprovalId(WorkOrderId));
-        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.WaitingApproval);
-        agent.State.LifecycleVersion.Should().Be(2);
-
-        await agent.HandleApproveAsync(new ApproveWorkOrder
-        {
-            WorkOrderId = WorkOrderId,
-            ExpectedLifecycleVersion = 2,
-            DecisionId = "decision-1",
-            DecidedBy = Principal("approver-1"),
-            Reason = "approved",
-        });
-
-        agent.State.Approval.Status.Should().Be(WorkOrderApprovalStatus.Approved);
-        agent.State.Approval.DecisionId.Should().Be("decision-1");
-        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.Ready);
-        agent.State.LifecycleVersion.Should().Be(3);
-    }
-
-    [Fact]
-    public async Task Deny_ShouldBecomeTerminalWithoutAuthorizingDispatch()
-    {
-        var agent = await CreateAgentAsync();
-        await agent.HandleCreateAsync(BuildCreate(requiresApproval: true));
-
-        await agent.HandleDenyAsync(new DenyWorkOrder
-        {
-            WorkOrderId = WorkOrderId,
-            ExpectedLifecycleVersion = 2,
-            DecisionId = "decision-denied",
-            DecidedBy = Principal("approver-1"),
-            Reason = "not authorized",
-        });
-
-        agent.State.Approval.Status.Should().Be(WorkOrderApprovalStatus.Denied);
-        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.Denied);
-        agent.State.TerminalReason.Should().Be("not authorized");
-    }
-
-    [Fact]
-    public async Task Approval_ShouldContinueAfterActorRestart()
-    {
-        var eventStore = new InMemoryEventStore();
-        var original = await CreateAgentAsync(eventStore: eventStore);
-        await original.HandleCreateAsync(BuildCreate(requiresApproval: true));
-
-        var recovered = await CreateAgentAsync(eventStore: eventStore);
-        await recovered.HandleApproveAsync(new ApproveWorkOrder
-        {
-            WorkOrderId = WorkOrderId,
-            ExpectedLifecycleVersion = 2,
-            DecisionId = "decision-after-restart",
-            DecidedBy = Principal("approver-1"),
-            Reason = "approved after recovery",
-        });
-
-        recovered.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.Ready);
-        recovered.State.Approval.Status.Should().Be(WorkOrderApprovalStatus.Approved);
-        recovered.State.Approval.DecisionId.Should().Be("decision-after-restart");
-        recovered.State.Approval.DecidedBy.PrincipalId.Should().Be("approver-1");
-    }
-
-    [Fact]
     public async Task Reassign_ShouldRejectStaleConcurrentCommand()
     {
         var agent = await CreateAgentAsync();
@@ -127,6 +50,72 @@ public sealed class WorkOrderGAgentTests
             .WithMessage("*lifecycle version is 3, not 2*");
         agent.State.MemberId.Should().Be("member-2");
         agent.State.PublishedServiceId.Should().Be("service-2");
+    }
+
+    [Fact]
+    public async Task Reassign_WhenAssignmentAlreadyMatches_ShouldStillRejectStaleVersion()
+    {
+        var agent = await CreateAgentAsync();
+        await agent.HandleCreateAsync(BuildCreate());
+        await agent.HandleReassignAsync(BuildReassign(expectedVersion: 2));
+
+        var stale = () => agent.HandleReassignAsync(BuildReassign(expectedVersion: 2));
+
+        await stale.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*lifecycle version is 3, not 2*");
+    }
+
+    [Fact]
+    public async Task Reassign_WhenAssignmentAlreadyMatches_ShouldStillRejectAfterDispatch()
+    {
+        var agent = await CreateDispatchPendingAgentAsync(new RecordingExecutionScheduler());
+        var sameAssignment = new ReassignWorkOrder
+        {
+            WorkOrderId = WorkOrderId,
+            ExpectedLifecycleVersion = agent.State.LifecycleVersion,
+            RequestedBy = Principal("requester-1"),
+            MemberId = agent.State.MemberId,
+            PublishedServiceId = agent.State.PublishedServiceId,
+            WorkflowId = agent.State.WorkflowId,
+            ServiceRevisionId = agent.State.ServiceRevisionId,
+            ImplementationKind = agent.State.ImplementationKind,
+        };
+
+        var reassign = () => agent.HandleReassignAsync(sameAssignment);
+
+        await reassign.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*cannot be reassigned from*DispatchPending*");
+    }
+
+    [Fact]
+    public async Task Cancel_WhenAlreadyCancelled_ShouldStillRejectStaleVersion()
+    {
+        var agent = await CreateAgentAsync();
+        await agent.HandleCreateAsync(BuildCreate());
+        var cancel = new CancelWorkOrder
+        {
+            WorkOrderId = WorkOrderId,
+            ExpectedLifecycleVersion = 2,
+            RequestedBy = Principal("requester-1"),
+            Reason = "withdrawn",
+        };
+        await agent.HandleCancelAsync(cancel);
+
+        var stale = () => agent.HandleCancelAsync(cancel.Clone());
+
+        await stale.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*lifecycle version is 3, not 2*");
+    }
+
+    [Fact]
+    public async Task Dispatch_WhenSameDispatchAlreadyPending_ShouldStillRejectStaleVersion()
+    {
+        var agent = await CreateDispatchPendingAgentAsync(new RecordingExecutionScheduler());
+
+        var stale = () => agent.HandleDispatchAsync(BuildDispatch(expectedVersion: 2));
+
+        await stale.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*lifecycle version is 3, not 2*");
     }
 
     [Fact]
@@ -205,19 +194,40 @@ public sealed class WorkOrderGAgentTests
     }
 
     [Fact]
-    public async Task CreateWorkOrder_WithoutDeadline_ShouldRejectBeforePersisting()
+    public async Task CreateWorkOrder_WithoutDeadline_ShouldPersistReadyStateWithoutInventingDeadline()
     {
         var eventStore = new InMemoryEventStore();
         var agent = await CreateAgentAsync(eventStore: eventStore);
         var command = BuildCreate();
         command.TimeoutAtUtc = null;
 
-        var create = () => agent.HandleCreateAsync(command);
+        await agent.HandleCreateAsync(command);
 
-        await create.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*timeout_at_utc*required*");
-        agent.State.WorkOrderId.Should().BeEmpty();
-        (await eventStore.GetEventsAsync(ActorId, ct: CancellationToken.None)).Should().BeEmpty();
+        agent.State.WorkOrderId.Should().Be(WorkOrderId);
+        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.Ready);
+        agent.State.LifecycleVersion.Should().Be(2);
+        agent.State.TimeoutAtUtc.Should().BeNull();
+        agent.State.AvailableActions.Should().BeEquivalentTo(new WorkOrderAvailableActions
+        {
+            CanReassign = true,
+            CanDispatch = true,
+            CanCancel = true,
+        });
+        (await eventStore.GetEventsAsync(ActorId, ct: CancellationToken.None)).Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task Dispatch_ShouldCloseAllPreRunManagementActions()
+    {
+        var agent = await CreateDispatchPendingAgentAsync(new RecordingExecutionScheduler());
+
+        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
+        agent.State.AvailableActions.Should().BeEquivalentTo(new WorkOrderAvailableActions
+        {
+            CanReassign = false,
+            CanDispatch = false,
+            CanCancel = false,
+        });
     }
 
     [Fact]
@@ -237,7 +247,7 @@ public sealed class WorkOrderGAgentTests
     }
 
     [Fact]
-    public async Task DispatchAndTerminalEvidence_ShouldLinkRunAndDeclaredArtifacts()
+    public async Task DispatchAndRunOutcome_ShouldLinkRunWithoutCopyingTerminalPayload()
     {
         var scheduler = new RecordingExecutionScheduler();
         var agent = await CreateDispatchPendingAgentAsync(scheduler);
@@ -249,8 +259,8 @@ public sealed class WorkOrderGAgentTests
         await agent.HandleExecutionAcceptedAsync(BuildAcceptedContinuation(agent.State));
 
         agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
-        agent.State.Execution.RunId.Should().Be(RequestedRunId);
-        agent.State.Execution.CommandId.Should().Be(DispatchCommandId);
+        agent.State.Run.RunId.Should().Be(RequestedRunId);
+        agent.State.Run.CommandId.Should().Be(DispatchCommandId);
         scheduler.Requests.Should().ContainSingle();
 
         await agent.HandleWorkflowStartedAsync(BuildWorkflowStarted());
@@ -270,11 +280,9 @@ public sealed class WorkOrderGAgentTests
         });
 
         agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.Completed);
-        agent.State.TerminalEvidence.RunId.Should().Be(RequestedRunId);
-        agent.State.TerminalEvidence.CorrelationId.Should().Be(DispatchCommandId);
-        agent.State.TerminalEvidence.Output.Should().Be("done");
-        agent.State.TerminalEvidence.ResultArtifacts.Should().ContainSingle()
-            .Which.ArtifactId.Should().Be("result-1");
+        agent.State.RunOutcome.RunId.Should().Be(RequestedRunId);
+        agent.State.RunOutcome.CorrelationId.Should().Be(DispatchCommandId);
+        agent.State.RunOutcome.Outcome.Should().Be(WorkOrderTerminalOutcome.Succeeded);
     }
 
     [Fact]
@@ -284,9 +292,136 @@ public sealed class WorkOrderGAgentTests
 
         await agent.HandleExecutionAcceptedAsync(BuildAcceptedContinuation(agent.State));
 
-        agent.State.Execution.RunId.Should().Be(RequestedRunId);
-        agent.State.Execution.StartedAtUtc.Should().BeNull();
+        agent.State.Run.RunId.Should().Be(RequestedRunId);
         agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ExecutionContinuation_ShouldRejectEnvelopeFromDifferentPublisher(bool accepted)
+    {
+        var agent = await CreateDispatchPendingAgentAsync(new RecordingExecutionScheduler());
+        var lifecycleVersion = agent.State.LifecycleVersion;
+        IMessage continuation = accepted
+            ? BuildAcceptedContinuation(agent.State)
+            : BuildFailedContinuation(agent.State);
+
+        var act = () => agent.HandleEventAsync(
+            BuildInboundEnvelope(continuation, "forged-execution-worker"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*publisher*does not match*");
+        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
+        agent.State.LifecycleVersion.Should().Be(lifecycleVersion);
+        agent.State.Run.Should().BeNull();
+        agent.State.Failure.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("revision")]
+    [InlineData("deployment")]
+    [InlineData("acceptedAt")]
+    public async Task AcceptedContinuation_WhenRunLinkIsIncompleteOrUnauthorized_ShouldReject(string invalidField)
+    {
+        var agent = await CreateDispatchPendingAgentAsync(new RecordingExecutionScheduler());
+        var lifecycleVersion = agent.State.LifecycleVersion;
+        var continuation = BuildAcceptedContinuation(agent.State);
+        switch (invalidField)
+        {
+            case "revision":
+                continuation.Accepted.RevisionId = "revision-unrelated";
+                break;
+            case "deployment":
+                continuation.Accepted.DeploymentId = string.Empty;
+                break;
+            case "acceptedAt":
+                continuation.Accepted.AcceptedAtUtc = null;
+                break;
+        }
+
+        var act = () => agent.HandleExecutionAcceptedAsync(continuation);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*execution receipt*");
+        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
+        agent.State.LifecycleVersion.Should().Be(lifecycleVersion);
+        agent.State.Run.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ExecuteInternalSignal_ShouldRejectEnvelopeFromDifferentPublisher()
+    {
+        var scheduler = new RecordingExecutionScheduler();
+        var agent = await CreateDispatchPendingAgentAsync(scheduler);
+        var lifecycleVersion = agent.State.LifecycleVersion;
+
+        var act = () => agent.HandleEventAsync(BuildInboundEnvelope(
+            new ExecuteWorkOrder
+            {
+                WorkOrderId = agent.State.WorkOrderId,
+                DispatchCommandId = agent.State.DispatchCommandId,
+            },
+            "forged-signal-publisher"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*publisher*does not match*");
+        scheduler.Requests.Should().BeEmpty();
+        agent.State.LifecycleVersion.Should().Be(lifecycleVersion);
+        agent.State.ExecutionRetryAttempt.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecutionRetryInternalSignal_ShouldRejectEnvelopeFromDifferentPublisher()
+    {
+        var scheduler = new RecordingExecutionScheduler();
+        var agent = await CreateDispatchPendingAgentAsync(scheduler);
+        await agent.HandleExecuteAsync(new ExecuteWorkOrder
+        {
+            WorkOrderId = agent.State.WorkOrderId,
+            DispatchCommandId = agent.State.DispatchCommandId,
+        });
+        var retryAttempt = agent.State.ExecutionRetryAttempt;
+
+        var act = () => agent.HandleEventAsync(BuildInboundEnvelope(
+            new WorkOrderExecutionRetryFired
+            {
+                WorkOrderId = agent.State.WorkOrderId,
+                DispatchCommandId = agent.State.DispatchCommandId,
+                RequestedRunId = agent.State.RequestedRunId,
+                Attempt = retryAttempt,
+            },
+            "forged-signal-publisher"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*publisher*does not match*");
+        scheduler.Requests.Should().ContainSingle();
+        agent.State.ExecutionRetryAttempt.Should().Be(retryAttempt);
+    }
+
+    [Fact]
+    public async Task TimeoutInternalSignal_ShouldRejectEnvelopeFromDifferentPublisher()
+    {
+        var requestedAt = DateTimeOffset.UtcNow.AddMinutes(-2);
+        var create = BuildCreate();
+        create.RequestedAtUtc = Timestamp.FromDateTimeOffset(requestedAt);
+        create.TimeoutAtUtc = Timestamp.FromDateTimeOffset(requestedAt.AddMinutes(1));
+        var agent = await CreateAgentAsync();
+        await agent.HandleCreateAsync(create);
+        var lifecycleVersion = agent.State.LifecycleVersion;
+
+        var act = () => agent.HandleEventAsync(BuildInboundEnvelope(
+            new WorkOrderTimeoutFired
+            {
+                WorkOrderId = agent.State.WorkOrderId,
+                TimeoutAtUtc = agent.State.TimeoutAtUtc.Clone(),
+            },
+            "forged-signal-publisher"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*publisher*does not match*");
+        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.Ready);
+        agent.State.LifecycleVersion.Should().Be(lifecycleVersion);
     }
 
     [Fact]
@@ -303,7 +438,7 @@ public sealed class WorkOrderGAgentTests
 
         scheduler.Requests.Should().ContainSingle();
         agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
-        agent.State.Execution.RunId.Should().BeEmpty();
+        agent.State.Run.Should().BeNull();
     }
 
     [Fact]
@@ -398,6 +533,31 @@ public sealed class WorkOrderGAgentTests
         var retry = callbackScheduler.Timeouts.Should().ContainSingle().Subject;
         retry.CallbackId.Should().Be(agent.State.ExecutionRetryCallbackId);
         retry.TriggerEnvelope.Payload.Unpack<WorkOrderExecutionRetryFired>().Attempt.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ExecuteWorkOrder_WhenQueueFullWithoutDeadline_ShouldScheduleDurableRetry()
+    {
+        var scheduler = new RecordingExecutionScheduler(queueFull: true);
+        var callbackScheduler = new RecordingCallbackScheduler();
+        var create = BuildCreate();
+        create.TimeoutAtUtc = null;
+        var agent = await CreateDispatchPendingAgentAsync(
+            scheduler,
+            callbackScheduler,
+            create: create);
+
+        await agent.HandleExecuteAsync(new ExecuteWorkOrder
+        {
+            WorkOrderId = agent.State.WorkOrderId,
+            DispatchCommandId = agent.State.DispatchCommandId,
+        });
+
+        agent.State.TimeoutAtUtc.Should().BeNull();
+        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
+        agent.State.ExecutionRetryAttempt.Should().Be(1);
+        callbackScheduler.Timeouts.Should().ContainSingle()
+            .Which.TriggerEnvelope.Payload.Unpack<WorkOrderExecutionRetryFired>().Attempt.Should().Be(1);
     }
 
     [Fact]
@@ -623,17 +783,17 @@ public sealed class WorkOrderGAgentTests
     {
         var current = BuildRetryState(attempt: 4);
         current.LifecycleStatus = WorkOrderLifecycleStatus.Running;
-        current.Execution = new WorkOrderExecutionProvenance
+        current.Run = new WorkOrderRunLink
         {
             RunId = RequestedRunId,
             RunActorId = "workflow-run-actor-1",
             CommandId = DispatchCommandId,
             CorrelationId = DispatchCommandId,
         };
-        var terminal = new WorkOrderTerminalEvidenceRecordedEvent
+        var terminal = new WorkOrderRunOutcomeObservedEvent
         {
             LifecycleStatus = WorkOrderLifecycleStatus.Completed,
-            Evidence = new WorkOrderTerminalEvidence
+            Outcome = new WorkOrderRunOutcomeReference
             {
                 DeliveryId = TerminalDeliveryId,
                 RunId = RequestedRunId,
@@ -701,12 +861,11 @@ public sealed class WorkOrderGAgentTests
         await agent.HandleWorkflowStartedAsync(started.Clone());
 
         agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.Running);
-        agent.State.Execution.StartedAtUtc.Should().Be(started.StartedAt);
         agent.State.LifecycleVersion.Should().Be(startedVersion);
     }
 
     [Fact]
-    public async Task TerminalEvidenceBeforeStarted_ShouldConvergeWithoutInventingStartTime()
+    public async Task RunOutcomeBeforeStarted_ShouldRemainTerminalWhenStartedArrivesLate()
     {
         var agent = await CreateAcceptedDispatchAgentAsync();
 
@@ -723,15 +882,16 @@ public sealed class WorkOrderGAgentTests
         });
 
         agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.Completed);
-        agent.State.Execution.StartedAtUtc.Should().BeNull();
+        agent.State.RunOutcome.Outcome.Should().Be(WorkOrderTerminalOutcome.Succeeded);
         var terminalUpdatedAt = agent.State.UpdatedAtUtc.Clone();
+        var terminalVersion = agent.State.LifecycleVersion;
 
         var started = BuildWorkflowStarted();
         await agent.HandleWorkflowStartedAsync(started);
 
         agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.Completed);
-        agent.State.Execution.StartedAtUtc.Should().Be(started.StartedAt);
         agent.State.UpdatedAtUtc.Should().Be(terminalUpdatedAt);
+        agent.State.LifecycleVersion.Should().Be(terminalVersion);
     }
 
     [Fact]
@@ -755,7 +915,7 @@ public sealed class WorkOrderGAgentTests
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*publisher*does not match*");
         agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
-        agent.State.TerminalEvidence.Should().BeNull();
+        agent.State.RunOutcome.Should().BeNull();
     }
 
     [Fact]
@@ -769,7 +929,6 @@ public sealed class WorkOrderGAgentTests
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*publisher*does not match*");
         agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
-        agent.State.Execution.StartedAtUtc.Should().BeNull();
     }
 
     [Fact]
@@ -796,11 +955,11 @@ public sealed class WorkOrderGAgentTests
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*publisher*does not match*");
         agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
-        agent.State.TerminalEvidence.Should().BeNull();
+        agent.State.RunOutcome.Should().BeNull();
     }
 
     [Fact]
-    public async Task TerminalEvidence_ShouldRejectMismatchedRunActorIdentity()
+    public async Task RunOutcome_ShouldRejectMismatchedRunActorIdentity()
     {
         var agent = await CreateAcceptedDispatchAgentAsync();
         await agent.HandleWorkflowStartedAsync(BuildWorkflowStarted());
@@ -819,15 +978,14 @@ public sealed class WorkOrderGAgentTests
         await record.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*does not match*Run identity*");
         agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.Running);
-        agent.State.TerminalEvidence.Should().BeNull();
+        agent.State.RunOutcome.Should().BeNull();
     }
 
     [Fact]
-    public async Task DuplicateDispatchAndExecute_ShouldNotCreateAnotherRun()
+    public async Task RedispatchAtCurrentVersion_ShouldNotCreateAnotherRun()
     {
         var scheduler = new RecordingExecutionScheduler();
         var agent = await CreateDispatchPendingAgentAsync(scheduler);
-        var dispatch = BuildDispatch(expectedVersion: 2);
         var execute = new ExecuteWorkOrder
         {
             WorkOrderId = WorkOrderId,
@@ -836,12 +994,12 @@ public sealed class WorkOrderGAgentTests
         await agent.HandleExecuteAsync(execute);
         await agent.HandleExecutionAcceptedAsync(BuildAcceptedContinuation(agent.State));
 
-        await agent.HandleDispatchAsync(dispatch.Clone());
+        await agent.HandleDispatchAsync(BuildDispatch(agent.State.LifecycleVersion));
         await agent.HandleExecuteAsync(execute.Clone());
 
         scheduler.Requests.Should().ContainSingle();
         agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
-        agent.State.Execution.RunId.Should().Be(RequestedRunId);
+        agent.State.Run.RunId.Should().Be(RequestedRunId);
     }
 
     [Fact]
@@ -856,7 +1014,6 @@ public sealed class WorkOrderGAgentTests
         create.ScopeId = scopeId;
         create.DedupKey = dedupKey;
         create.WorkOrderId = workOrderId;
-        create.ApprovalId = WorkOrderConventions.BuildApprovalId(workOrderId);
         await agent.HandleCreateAsync(create);
         var dispatch = new DispatchWorkOrder
         {
@@ -902,7 +1059,7 @@ public sealed class WorkOrderGAgentTests
     }
 
     [Fact]
-    public async Task TimeoutThenTerminalEvidence_ShouldKeepTimedOutAndRecordLateEvidence()
+    public async Task TimeoutThenRunOutcome_ShouldKeepTimedOutAndRecordLateReference()
     {
         var requestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(-2));
         var past = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(-1));
@@ -930,8 +1087,9 @@ public sealed class WorkOrderGAgentTests
         });
 
         agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.TimedOut);
-        agent.State.TerminalEvidence.Should().BeNull();
-        agent.State.LateTerminalEvidence.Error.Should().Be("late failure");
+        agent.State.RunOutcome.Should().BeNull();
+        agent.State.LateRunOutcome.DeliveryId.Should().Be(TerminalDeliveryId);
+        agent.State.LateRunOutcome.Outcome.Should().Be(WorkOrderTerminalOutcome.Failed);
     }
 
     [Fact]
@@ -961,7 +1119,7 @@ public sealed class WorkOrderGAgentTests
     }
 
     [Fact]
-    public void ProtobufContracts_ShouldRoundTripDistinctIdentityAndEvidenceFields()
+    public void ProtobufContracts_ShouldRoundTripDistinctIdentityAndRunReferenceFields()
     {
         var state = new WorkOrderState
         {
@@ -972,18 +1130,23 @@ public sealed class WorkOrderGAgentTests
             MemberId = "member-1",
             WorkflowId = "workflow-1",
             PublishedServiceId = "service-1",
-            Approval = new WorkOrderApprovalState { ApprovalId = "approval-1" },
-            Execution = new WorkOrderExecutionProvenance { RunId = "run-1" },
+            Run = new WorkOrderRunLink { RunId = "run-1" },
             ExecutionRetryAttempt = 3,
             ExecutionRetryCallbackId = "retry-3",
             ExecutionRetryAtUtc = Timestamp.FromDateTimeOffset(
                 DateTimeOffset.Parse("2099-01-01T00:00:03Z")),
-            TerminalEvidence = new WorkOrderTerminalEvidence
+            RunOutcome = new WorkOrderRunOutcomeReference
             {
                 DeliveryId = "delivery-1",
                 RunId = "run-1",
                 CorrelationId = "correlation-1",
                 Outcome = WorkOrderTerminalOutcome.Succeeded,
+            },
+            AvailableActions = new WorkOrderAvailableActions
+            {
+                CanReassign = true,
+                CanDispatch = true,
+                CanCancel = true,
             },
         };
 
@@ -993,12 +1156,14 @@ public sealed class WorkOrderGAgentTests
         restored.MemberId.Should().Be("member-1");
         restored.WorkflowId.Should().Be("workflow-1");
         restored.PublishedServiceId.Should().Be("service-1");
-        restored.Approval.ApprovalId.Should().Be("approval-1");
-        restored.Execution.RunId.Should().Be("run-1");
+        restored.Run.RunId.Should().Be("run-1");
         restored.ExecutionRetryAttempt.Should().Be(3);
         restored.ExecutionRetryCallbackId.Should().Be("retry-3");
-        restored.TerminalEvidence.DeliveryId.Should().Be("delivery-1");
-        restored.TerminalEvidence.CorrelationId.Should().Be("correlation-1");
+        restored.RunOutcome.DeliveryId.Should().Be("delivery-1");
+        restored.RunOutcome.CorrelationId.Should().Be("correlation-1");
+        restored.AvailableActions.CanReassign.Should().BeTrue();
+        restored.AvailableActions.CanDispatch.Should().BeTrue();
+        restored.AvailableActions.CanCancel.Should().BeTrue();
     }
 
     private static async Task<WorkOrderGAgent> CreateDispatchPendingAgentAsync(
@@ -1075,7 +1240,7 @@ public sealed class WorkOrderGAgentTests
         return agent;
     }
 
-    private static CreateWorkOrder BuildCreate(bool requiresApproval = false)
+    private static CreateWorkOrder BuildCreate()
     {
         var requestedAt = DateTimeOffset.UtcNow;
         var command = new CreateWorkOrder
@@ -1096,8 +1261,6 @@ public sealed class WorkOrderGAgentTests
             {
                 Chat = new WorkOrderChatInput { Prompt = "do the work" },
             },
-            PermissionPlan = new WorkOrderPermissionPlan(),
-            ApprovalId = WorkOrderConventions.BuildApprovalId(WorkOrderId),
             RequestedAtUtc = Timestamp.FromDateTimeOffset(requestedAt),
             TimeoutAtUtc = Timestamp.FromDateTimeOffset(requestedAt.AddHours(1)),
             ExpectedLifecycleVersion = 0,
@@ -1107,24 +1270,6 @@ public sealed class WorkOrderGAgentTests
             ArtifactId = "result-1",
             ArtifactKind = "report",
         });
-        if (requiresApproval)
-        {
-            command.PermissionPlan.ExternalActions.Add(new WorkOrderExternalActionReference
-            {
-                ActionId = "action-1",
-                System = "github",
-                Action = "write",
-                ResourceId = "repo-1",
-            });
-            command.PermissionPlan.Requirements.Add(new WorkOrderPermissionRequirement
-            {
-                PermissionId = "permission-1",
-                ActionId = "action-1",
-                Capability = "repository.write",
-                RequiresApproval = true,
-            });
-            command.PermissionPlan.ApproverPrincipalIds.Add("approver-1");
-        }
         return command;
     }
 
@@ -1210,7 +1355,6 @@ public sealed class WorkOrderGAgentTests
             RequestedRunId = RequestedRunId,
             LifecycleStatus = WorkOrderLifecycleStatus.DispatchPending,
             LifecycleVersion = 7,
-            Execution = new WorkOrderExecutionProvenance(),
             ExecutionRetryAttempt = attempt,
             ExecutionRetryCallbackId = $"retry-{attempt}",
             ExecutionRetryAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),

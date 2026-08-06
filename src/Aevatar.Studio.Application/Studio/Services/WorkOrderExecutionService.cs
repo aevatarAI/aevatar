@@ -7,7 +7,6 @@ namespace Aevatar.Studio.Application.Studio.Services;
 
 public sealed class WorkOrderExecutionService
 {
-    private const string PublisherActorId = "studio.work-order-execution-worker";
     private readonly IWorkOrderExecutionPort _executionPort;
     private readonly IActorDispatchPort _dispatchPort;
 
@@ -90,7 +89,7 @@ public sealed class WorkOrderExecutionService
                 {
                     Code = "WORK_ORDER_EXECUTION_UNEXPECTED_FAILURE",
                     Message = $"WorkOrder execution failed unexpectedly ({exception.GetType().Name}).",
-                    Source = PublisherActorId,
+                    Source = WorkOrderConventions.ExecutionWorkerPublisherActorId,
                     ReferenceId = request.DispatchCommandId,
                 },
                 FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
@@ -106,7 +105,7 @@ public sealed class WorkOrderExecutionService
             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Payload = Any.Pack(continuation),
             Route = EnvelopeRouteSemantics.CreateDirect(
-                PublisherActorId,
+                WorkOrderConventions.ExecutionWorkerPublisherActorId,
                 targetActorId),
             Propagation = new EnvelopePropagation
             {

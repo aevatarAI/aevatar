@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Hosting.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Orleans.Configuration;
@@ -61,6 +62,9 @@ public static class MainnetDistributedHostBuilderExtensions
                         options.TopicName = runtimeOptions.KafkaTopicName;
                         options.ConsumerGroup = runtimeOptions.KafkaConsumerGroup;
                         options.TopicPartitionCount = hostOptions.QueueCount;
+                        options.ReceiverBufferCapacity = runtimeOptions.KafkaReceiverBufferCapacity;
+                        options.ReceiverBufferHighWatermark = runtimeOptions.KafkaReceiverBufferHighWatermark;
+                        options.ReceiverBufferLowWatermark = runtimeOptions.KafkaReceiverBufferLowWatermark;
                     });
                 });
             }
@@ -209,6 +213,18 @@ public static class MainnetDistributedHostBuilderExtensions
         var configuredKafkaConsumerGroup = configuration[$"{AevatarActorRuntimeOptions.SectionName}:KafkaConsumerGroup"];
         if (!string.IsNullOrWhiteSpace(configuredKafkaConsumerGroup))
             options.KafkaConsumerGroup = configuredKafkaConsumerGroup;
+        options.KafkaReceiverBufferCapacity = ResolveIntSetting(
+            configuration,
+            nameof(AevatarActorRuntimeOptions.KafkaReceiverBufferCapacity),
+            options.KafkaReceiverBufferCapacity);
+        options.KafkaReceiverBufferHighWatermark = ResolveIntSetting(
+            configuration,
+            nameof(AevatarActorRuntimeOptions.KafkaReceiverBufferHighWatermark),
+            options.KafkaReceiverBufferHighWatermark);
+        options.KafkaReceiverBufferLowWatermark = ResolveIntSetting(
+            configuration,
+            nameof(AevatarActorRuntimeOptions.KafkaReceiverBufferLowWatermark),
+            options.KafkaReceiverBufferLowWatermark);
 
         if (string.IsNullOrWhiteSpace(options.SecretStoreBackend))
         {
@@ -227,6 +243,22 @@ public static class MainnetDistributedHostBuilderExtensions
         }
 
         return options;
+    }
+
+    private static int ResolveIntSetting(
+        IConfiguration configuration,
+        string settingName,
+        int defaultValue)
+    {
+        var configuredValue = configuration[$"{AevatarActorRuntimeOptions.SectionName}:{settingName}"];
+        if (string.IsNullOrWhiteSpace(configuredValue))
+            return defaultValue;
+
+        if (int.TryParse(configuredValue, out var value))
+            return value;
+
+        throw new FormatException(
+            $"Invalid ActorRuntime:{settingName} value '{configuredValue}'.");
     }
 
     private static OrleansHostOptions ResolveOrleansHostOptions(IConfiguration configuration)
@@ -331,7 +363,7 @@ public static class MainnetDistributedHostBuilderExtensions
 
         public int QueueCount { get; set; } = 8;
 
-        public int QueueCacheSize { get; set; } = 4096;
+        public int QueueCacheSize { get; set; } = AevatarOrleansRuntimeOptions.DefaultQueueCacheSize;
 
         public bool ListenOnAnyHostAddress { get; set; }
     }

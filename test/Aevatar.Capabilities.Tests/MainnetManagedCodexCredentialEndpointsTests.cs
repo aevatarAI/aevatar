@@ -34,6 +34,33 @@ public sealed class MainnetManagedCodexCredentialEndpointsTests
     }
 
     [Fact]
+    public async Task StatusAsync_WhenCredentialIsMissing_ReportsEligibilityWithoutProvisioning()
+    {
+        var query = Substitute.For<IManagedCodexCredentialQueryPort>();
+
+        var result = await ManagedCodexCredentialEndpoints.StatusAsync(
+            Context(subject: "user-a"),
+            query,
+            Options.Create(ManagedOptions(enabled: true)),
+            TimeProvider.System,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status200OK);
+        using var payload = JsonDocument.Parse(
+            JsonSerializer.Serialize(((IValueHttpResult)result).Value));
+        payload.RootElement.GetProperty("enabled").GetBoolean().Should().BeTrue();
+        payload.RootElement.GetProperty("eligible").GetBoolean().Should().BeTrue();
+        payload.RootElement.GetProperty("status").GetString().Should().Be("not_provisioned");
+        payload.RootElement.GetProperty("execution_ready").GetBoolean().Should().BeFalse();
+        payload.RootElement.GetProperty("execution_readiness_reason").GetString()
+            .Should().Be("managed_credential_not_provisioned");
+        await query.Received(1).ResolveAsync(
+            Arg.Is<ExternalSubjectRef>(owner =>
+                owner.ExternalUserId == "user-a"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task ProvisionAsync_DerivesTheUserFromClaimsAndReturnsOnlyAnAcceptedReceipt()
     {
         var lifecycle = Substitute.For<IManagedCodexCredentialLifecycle>();
@@ -61,13 +88,13 @@ public sealed class MainnetManagedCodexCredentialEndpointsTests
     }
 
     [Fact]
-    public async Task ProvisionAsync_UsesTheSameNyxIdAuthorityClaimPriorityAsWorkflowExecution()
+    public async Task ProvisionAsync_IgnoresScopeIdAndUsesTheNyxIdUid()
     {
         var lifecycle = Substitute.For<IManagedCodexCredentialLifecycle>();
-        lifecycle.ProvisionAsync("user-bearer", "scope-user", Arg.Any<CancellationToken>())
+        lifecycle.ProvisionAsync("user-bearer", "uid-user", Arg.Any<CancellationToken>())
             .Returns(new ManagedCodexCredentialMutationResult(
                 "provisioning_accepted",
-                "managed-codex-credential:nyxid::scope-user",
+                "managed-codex-credential:nyxid::uid-user",
                 "key-1",
                 1_800_000_000_000,
                 "command-1"));
@@ -87,7 +114,31 @@ public sealed class MainnetManagedCodexCredentialEndpointsTests
         StatusCode(result).Should().Be(StatusCodes.Status202Accepted);
         await lifecycle.Received(1).ProvisionAsync(
             "user-bearer",
-            "scope-user",
+            "uid-user",
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task StatusAsync_WhenScopeIdDiffersFromNyxIdSubject_UsesNyxIdSubject()
+    {
+        var http = Context();
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("scope_id", "scope-alpha"),
+            new Claim("sub", "user-alpha"),
+        ], "test"));
+        var query = Substitute.For<IManagedCodexCredentialQueryPort>();
+
+        _ = await ManagedCodexCredentialEndpoints.StatusAsync(
+            http,
+            query,
+            Options.Create(ManagedOptions(enabled: true)),
+            TimeProvider.System,
+            CancellationToken.None);
+
+        await query.Received(1).ResolveAsync(
+            Arg.Is<ExternalSubjectRef>(owner =>
+                owner.ExternalUserId == "user-alpha"),
             Arg.Any<CancellationToken>());
     }
 
@@ -99,7 +150,12 @@ public sealed class MainnetManagedCodexCredentialEndpointsTests
                 Arg.Is<ExternalSubjectRef>(owner =>
                     owner.Platform == "nyxid" && owner.ExternalUserId == "user-a"),
                 Arg.Any<CancellationToken>())
-            .Returns(new ManagedCodexCredentialSnapshot(Descriptor(), [], 7));
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = Descriptor(),
+                StateVersion = 7,
+                LastEventId = "event-7",
+            });
 
         var result = await ManagedCodexCredentialEndpoints.StatusAsync(
             Context(subject: "user-a"),
@@ -110,8 +166,103 @@ public sealed class MainnetManagedCodexCredentialEndpointsTests
 
         StatusCode(result).Should().Be(StatusCodes.Status200OK);
         var json = JsonSerializer.Serialize(((IValueHttpResult)result).Value);
-        json.Should().Contain("active").And.Contain("\"enabled\":false");
-        json.Should().NotContain("sec-1").And.NotContain("fingerprint");
+        using var payload = JsonDocument.Parse(json);
+        payload.RootElement.GetProperty("status").GetString().Should().Be("active");
+        payload.RootElement.GetProperty("execution_ready").GetBoolean().Should().BeFalse();
+        payload.RootElement.GetProperty("execution_readiness_reason").GetString()
+            .Should().Be("managed_target_disabled");
+        json.Should().Contain("\"enabled\":false");
+        json.Should().NotContain("sec-1")
+            .And.NotContain("fingerprint")
+            .And.NotContain("key-1");
+    }
+
+    [Fact]
+    public async Task StatusAsync_WhenCommittedCredentialIsExecutionReady_ReportsReady()
+    {
+        var query = Substitute.For<IManagedCodexCredentialQueryPort>();
+        query.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = Descriptor(),
+                StateVersion = 7,
+                LastEventId = "event-7",
+            });
+
+        var result = await ManagedCodexCredentialEndpoints.StatusAsync(
+            Context(subject: "user-a"),
+            query,
+            Options.Create(ManagedOptions(enabled: true)),
+            new FakeTimeProvider(DateTimeOffset.Parse("2026-07-28T00:00:00Z")),
+            CancellationToken.None);
+
+        using var payload = JsonDocument.Parse(
+            JsonSerializer.Serialize(((IValueHttpResult)result).Value));
+        payload.RootElement.GetProperty("status").GetString().Should().Be("active");
+        payload.RootElement.GetProperty("execution_ready").GetBoolean().Should().BeTrue();
+        payload.RootElement.GetProperty("execution_readiness_reason").GetString()
+            .Should().Be("ready");
+        payload.RootElement.GetProperty("state_version").GetInt64().Should().Be(7);
+    }
+
+    [Fact]
+    public async Task StatusAsync_WhenActiveCredentialHasInvalidReference_ReportsNotReadyWithoutSecrets()
+    {
+        var credential = Descriptor();
+        credential.SecretReference.OwnerScopeKey =
+            "managed-codex-credential:nyxid::other-user";
+        var query = Substitute.For<IManagedCodexCredentialQueryPort>();
+        query.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = credential,
+                StateVersion = 8,
+                LastEventId = "event-8",
+            });
+
+        var result = await ManagedCodexCredentialEndpoints.StatusAsync(
+            Context(subject: "user-a"),
+            query,
+            Options.Create(ManagedOptions(enabled: true)),
+            new FakeTimeProvider(DateTimeOffset.Parse("2026-07-28T00:00:00Z")),
+            CancellationToken.None);
+
+        var json = JsonSerializer.Serialize(((IValueHttpResult)result).Value);
+        using var payload = JsonDocument.Parse(json);
+        payload.RootElement.GetProperty("status").GetString().Should().Be("active");
+        payload.RootElement.GetProperty("execution_ready").GetBoolean().Should().BeFalse();
+        payload.RootElement.GetProperty("execution_readiness_reason").GetString()
+            .Should().Be("managed_credential_reference_invalid");
+        json.Should().NotContain("sec-1")
+            .And.NotContain("fingerprint")
+            .And.NotContain("key-1")
+            .And.NotContain("other-user");
+    }
+
+    [Fact]
+    public async Task StatusAsync_WhenUserIsIneligible_ReportsFeatureNotEnabled()
+    {
+        var query = Substitute.For<IManagedCodexCredentialQueryPort>();
+        query.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = Descriptor(),
+                StateVersion = 7,
+            });
+
+        var result = await ManagedCodexCredentialEndpoints.StatusAsync(
+            Context(subject: "user-b"),
+            query,
+            Options.Create(ManagedOptions(enabled: true)),
+            TimeProvider.System,
+            CancellationToken.None);
+
+        using var payload = JsonDocument.Parse(
+            JsonSerializer.Serialize(((IValueHttpResult)result).Value));
+        payload.RootElement.GetProperty("eligible").GetBoolean().Should().BeFalse();
+        payload.RootElement.GetProperty("execution_ready").GetBoolean().Should().BeFalse();
+        payload.RootElement.GetProperty("execution_readiness_reason").GetString()
+            .Should().Be("managed_feature_not_enabled");
     }
 
     [Fact]
@@ -119,7 +270,12 @@ public sealed class MainnetManagedCodexCredentialEndpointsTests
     {
         var query = Substitute.For<IManagedCodexCredentialQueryPort>();
         query.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
-            .Returns(new ManagedCodexCredentialSnapshot(Descriptor(), [], 7));
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = Descriptor(),
+                StateVersion = 7,
+                LastEventId = "event-7",
+            });
         var now = new FakeTimeProvider(DateTimeOffset.Parse("2031-01-01T00:00:00Z"));
 
         var result = await ManagedCodexCredentialEndpoints.StatusAsync(
@@ -133,6 +289,9 @@ public sealed class MainnetManagedCodexCredentialEndpointsTests
         using var json = JsonDocument.Parse(
             JsonSerializer.Serialize(((IValueHttpResult)result).Value));
         json.RootElement.GetProperty("status").GetString().Should().Be("expired");
+        json.RootElement.GetProperty("execution_ready").GetBoolean().Should().BeFalse();
+        json.RootElement.GetProperty("execution_readiness_reason").GetString()
+            .Should().Be("managed_credential_expired");
         json.RootElement.GetProperty("state_version").GetInt64().Should().Be(7);
     }
 
@@ -154,6 +313,32 @@ public sealed class MainnetManagedCodexCredentialEndpointsTests
         StatusCode(result).Should().Be(StatusCodes.Status503ServiceUnavailable);
         JsonSerializer.Serialize(((IValueHttpResult)result).Value)
             .Should().Contain("managed_target_disabled");
+    }
+
+    [Theory]
+    [InlineData("managed_user_authorization_unavailable", StatusCodes.Status401Unauthorized)]
+    [InlineData("managed_feature_not_enabled", StatusCodes.Status403Forbidden)]
+    [InlineData("managed_credential_commit_timeout", StatusCodes.Status503ServiceUnavailable)]
+    [InlineData("managed_user_services_unavailable", StatusCodes.Status503ServiceUnavailable)]
+    public async Task ProvisionAsync_MapsTransparentReadinessFailures(
+        string code,
+        int expectedStatus)
+    {
+        var lifecycle = Substitute.For<IManagedCodexCredentialLifecycle>();
+        lifecycle.ProvisionAsync("user-bearer", "user-a", Arg.Any<CancellationToken>())
+            .Returns<Task<ManagedCodexCredentialMutationResult>>(_ =>
+                throw new ManagedCodexCredentialLifecycleException(
+                    code,
+                    "Managed Codex readiness failed."));
+
+        var result = await ManagedCodexCredentialEndpoints.ProvisionAsync(
+            Context(subject: "user-a", bearer: "user-bearer"),
+            lifecycle,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(expectedStatus);
+        JsonSerializer.Serialize(((IValueHttpResult)result).Value)
+            .Should().Contain(code);
     }
 
     [Theory]
@@ -221,31 +406,41 @@ public sealed class MainnetManagedCodexCredentialEndpointsTests
     private static ManagedCodexOptions ManagedOptions(bool enabled) => new()
     {
         Enabled = enabled,
-        ProvisioningAllowedNyxIdUserIds = ["user-a"],
+        RolloutBoundary = ManagedCodexRolloutBoundary.InternalOnly,
+        Eligibility = new ManagedCodexEligibilityOptions
+        {
+            Mode = ManagedCodexEligibilityMode.Allowlist,
+            AllowedNyxIdUserIds = ["user-a"],
+        },
     };
 
-    private static ManagedCodexCredentialDescriptor Descriptor() => new()
+    private static ManagedCodexCredentialDescriptor Descriptor()
     {
-        Owner = new ExternalSubjectRef
+        var expiresAt = DateTimeOffset.Parse("2030-01-01T00:00:00Z");
+        return new ManagedCodexCredentialDescriptor
         {
-            Platform = "nyxid",
-            ExternalUserId = "user-a",
-        },
-        ApiKeyId = "key-1",
-        SecretReference = new SecretReference
-        {
-            Ref = "sec-1",
-            Purpose = "managed.codex-invocation-agent-key",
-            OwnerScopeKey = "managed-codex-credential:nyxid::user-a",
-            Fingerprint = "fingerprint",
-            Version = 1,
-        },
-        ChronoSandboxUserServiceId = "us-sandbox",
-        ChronoSandboxServiceSlug = "chrono-sandbox",
-        ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
-            DateTimeOffset.Parse("2030-01-01T00:00:00Z")),
-        Status = ManagedCodexCredentialStatus.Active,
-    };
+            Owner = new ExternalSubjectRef
+            {
+                Platform = "nyxid",
+                ExternalUserId = "user-a",
+            },
+            ApiKeyId = "key-1",
+            SecretReference = new SecretReference
+            {
+                Ref = "sec-1",
+                Purpose = "managed.codex-invocation-agent-key",
+                OwnerScopeKey = "managed-codex-credential:nyxid::user-a",
+                Fingerprint = "fingerprint",
+                Version = 1,
+                ExpiresAtUnixMs = expiresAt.ToUnixTimeMilliseconds(),
+            },
+            ChronoSandboxUserServiceId = "us-sandbox",
+            ChronoLlmUserServiceId = "us-llm",
+            ChronoSandboxServiceSlug = "chrono-sandbox",
+            ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(expiresAt),
+            Status = ManagedCodexCredentialStatus.Active,
+        };
+    }
 
     private static int StatusCode(IResult result) =>
         ((IStatusCodeHttpResult)result).StatusCode ?? StatusCodes.Status200OK;

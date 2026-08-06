@@ -27,10 +27,18 @@ public sealed class ScheduledInvocationAuthorizationRevalidator
         var current = await _planner.PlanAsync(currentRequest, ct);
         if (!current.Success)
         {
+            var failureCode = current.FailureCode is
+                ScheduledInvocationAuthorizationFailureCode.OwnerLlmRouteUnavailable or
+                ScheduledInvocationAuthorizationFailureCode.OwnerLlmModelNotVerifiable or
+                ScheduledInvocationAuthorizationFailureCode.OwnerLlmModelUnavailable
+                    ? current.FailureCode
+                    : ScheduledInvocationAuthorizationFailureCode.AuthorizationPlanChanged;
             return ScheduledInvocationAuthorizationValidationResult.Failed(
-                ScheduledInvocationAuthorizationFailureCode.AuthorizationPlanChanged,
+                failureCode,
                 current.Detail,
-                current.ObservedCatalogStateVersion);
+                current.ObservedCatalogStateVersion,
+                current.RequiredNyxIdServices,
+                current.LLMRefreshRequirement);
         }
 
         var plan = current.Plan!;

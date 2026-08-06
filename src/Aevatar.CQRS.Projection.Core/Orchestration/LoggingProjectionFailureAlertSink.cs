@@ -17,15 +17,28 @@ public sealed class LoggingProjectionFailureAlertSink : IProjectionFailureAlertS
         ArgumentNullException.ThrowIfNull(alert);
         ct.ThrowIfCancellationRequested();
 
-        _logger.LogWarning(
-            "Projection failure recorded. scope={Scope} stage={Stage} eventId={EventId} eventType={EventType} sourceVersion={SourceVersion} failureCount={FailureCount} reason={Reason}",
-            alert.ScopeKey,
-            alert.Stage,
-            alert.EventId,
-            alert.EventType,
-            alert.SourceVersion,
-            alert.FailureCount,
-            alert.Reason);
+        if (alert.Kind == ProjectionFailureAlertKind.DiagnosticRetentionDropped)
+        {
+            _logger.LogWarning(
+                "Projection failure diagnostics dropped after durable repair handoff. scope={Scope} droppedCount={DroppedCount} droppedFailureIds={DroppedFailureIds} diagnosticDroppedTotal={DiagnosticDroppedTotal} unresolvedFailureCount={UnresolvedFailureCount}",
+                alert.ScopeKey,
+                alert.DroppedCount,
+                alert.DroppedFailureIds,
+                alert.DiagnosticDroppedTotal,
+                alert.UnresolvedFailureCount);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "Projection failure recorded. scope={Scope} stage={Stage} eventId={EventId} eventType={EventType} sourceVersion={SourceVersion} unresolvedFailureCount={UnresolvedFailureCount} reason={Reason}",
+                alert.ScopeKey,
+                alert.Stage,
+                alert.EventId,
+                alert.EventType,
+                alert.SourceVersion,
+                alert.UnresolvedFailureCount,
+                alert.Reason);
+        }
         return Task.CompletedTask;
     }
 }

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "baselineCodeCommit": "dcb05b683b911db037eb51c071b4495f1195ee28",
+  "warmupIterations": 2,
+  "measuredIterations": 12,
+  "fastSessionCount": 8,
+  "slowReleaseYieldCount": 131072,
+  "fastTextChunks": 2,
+  "slowTextChunks": 16,
+  "chunkCharacters": 24,
+  "timeoutMilliseconds": 30000,
+  "watchdogSeconds": 60,
+  "snapshotInterval": 1000
+}

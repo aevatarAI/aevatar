@@ -2,6 +2,7 @@ using System.Collections;
 using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Voice;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.Foundation.Abstractions;
@@ -100,6 +101,7 @@ public class AIFeatureBootstrapCoverageTests
     public void AddAevatarAIFeatures_ShouldRegisterCoreServicesWithExplicitApiKey()
     {
         var services = new ServiceCollection();
+        VoicePresenceBootstrapTests.AddToolExecutionAuditDependencies(services);
         var config = new ConfigurationBuilder().Build();
 
         services.AddAevatarAIFeatures(config, options =>
@@ -228,6 +230,7 @@ public class AIFeatureBootstrapCoverageTests
         services.AddSingleton<IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>>(
             new EmptyVoicePresenceCapabilityReader());
         AddVoicePresenceTestCredentialResolver(services);
+        VoicePresenceBootstrapTests.AddToolExecutionAuditDependencies(services);
 
         services.AddAevatarAIFeatures(config, options =>
         {
@@ -292,6 +295,7 @@ public class AIFeatureBootstrapCoverageTests
         services.AddSingleton<IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>>(
             new EmptyVoicePresenceCapabilityReader());
         AddVoicePresenceTestCredentialResolver(services);
+        VoicePresenceBootstrapTests.AddToolExecutionAuditDependencies(services);
 
         services.AddAevatarAIFeatures(config, options =>
         {
@@ -567,10 +571,10 @@ public class AIFeatureBootstrapCoverageTests
                 """
                 {
                   "mcpServers": {
-                    "local": {
-                      "command": "echo",
-                      "args": ["hello"],
-                      "env": { "K": "V" }
+                    "remote": {
+                      "url": "https://mcp.example.com/mcp",
+                      "headers": { "x-tenant": "demo" },
+                      "timeoutMs": 12345
                     }
                   }
                 }
@@ -593,8 +597,10 @@ public class AIFeatureBootstrapCoverageTests
 
             var mcpOptions = provider.GetRequiredService<MCPToolsOptions>();
             mcpOptions.Servers.Should().ContainSingle();
-            mcpOptions.Servers[0].Name.Should().Be("local");
-            mcpOptions.Servers[0].Environment["K"].Should().Be("V");
+            mcpOptions.Servers[0].Name.Should().Be("remote");
+            mcpOptions.Servers[0].Url.Should().Be("https://mcp.example.com/mcp");
+            mcpOptions.Servers[0].AdditionalHeaders["x-tenant"].Should().Be("demo");
+            mcpOptions.Servers[0].InitializationTimeout.Should().Be(TimeSpan.FromMilliseconds(12345));
         }
         finally
         {
@@ -604,47 +610,11 @@ public class AIFeatureBootstrapCoverageTests
     }
 
     [Fact]
-    public async Task AddAevatarAIFeatures_ShouldRegisterWorkflowToolSourceAdapterForAgentTools()
-    {
-        var source = new StubAgentToolSource([new StubAgentTool("demo_tool", """{"ok":true}""")]);
-        var services = new ServiceCollection()
-            .AddSingleton<IAgentToolSource>(source);
-        var config = new ConfigurationBuilder().Build();
-
-        services.AddAevatarAIFeatures(config, options => options.EnableMEAIProviders = false);
-
-        await using var provider = services.BuildServiceProvider();
-        // Yield capability follows the actor, never the container (#2004): bootstrap must
-        // not hand a yielding handler to surfaces without a pending-approval continuation.
-        provider.GetService<IToolApprovalHandler>().Should().BeNull();
-        provider.GetServices<IToolCallMiddleware>().Should().NotContain(x => x is ToolApprovalMiddleware);
-
-        var workflowSource = provider.GetServices<IWorkflowToolSource>()
-            .Should()
-            .ContainSingle()
-            .Subject;
-        var tool = (await workflowSource.GetToolsAsync())
-            .Should()
-            .ContainSingle()
-            .Subject;
-
-        tool.Name.Should().Be("demo_tool");
-        var result = await tool.ExecuteAsync(
-            new WorkflowToolExecutionRequest(
-                ArgumentsJson: "{}",
-                RunId: "run-1",
-                StepId: "step-1",
-                ExecutionId: "exec-1",
-                CallId: "call-1",
-                ScopeId: "scope-1",
-                CallerCredential: new WorkflowCallerCredential()));
-        result.ResultJson.Should().Be("""{"ok":true}""");
-    }
-
-    [Fact]
     public void MCPConnectorBuilder_ShouldValidateCommandAndBuildConnector()
     {
-        var builder = new MCPConnectorBuilder();
+        var builder = new MCPConnectorBuilder(
+            new VoicePresenceBootstrapTests.TestHttpClientFactory(),
+            new VoicePresenceBootstrapTests.UnusedAgentToolExecutionPort());
 
         var invalidEntry = new ConnectorConfigEntry
         {
@@ -683,7 +653,9 @@ public class AIFeatureBootstrapCoverageTests
     [Fact]
     public void MCPConnectorBuilder_ShouldSupportRemoteUrlConfiguration()
     {
-        var builder = new MCPConnectorBuilder();
+        var builder = new MCPConnectorBuilder(
+            new VoicePresenceBootstrapTests.TestHttpClientFactory(),
+            new VoicePresenceBootstrapTests.UnusedAgentToolExecutionPort());
         var entry = new ConnectorConfigEntry
         {
             Name = "nyxid_mcp",
@@ -712,6 +684,29 @@ public class AIFeatureBootstrapCoverageTests
         serverConfig.Url.Should().Be("https://nyxid.example.com/mcp");
         serverConfig.HttpClient.Should().NotBeNull();
         serverConfig.HttpClient!.Timeout.Should().Be(Timeout.InfiniteTimeSpan);
+    }
+
+    [Fact]
+    public void MCPConnectorBuilder_ShouldRejectAmbiguousTransportConfiguration()
+    {
+        var builder = new MCPConnectorBuilder(
+            new VoicePresenceBootstrapTests.TestHttpClientFactory(),
+            new VoicePresenceBootstrapTests.UnusedAgentToolExecutionPort());
+        var entry = new ConnectorConfigEntry
+        {
+            Name = "ambiguous-mcp",
+            Type = "mcp",
+            MCP = new MCPConnectorConfig
+            {
+                Command = "npx",
+                Url = "https://mcp.example.com/mcp",
+            },
+        };
+
+        var ok = builder.TryBuild(entry, NullLogger.Instance, out var connector);
+
+        ok.Should().BeFalse();
+        connector.Should().BeNull();
     }
 
     private static IReadOnlyList<object> InvokeReadConfiguredProviders(
@@ -796,29 +791,6 @@ public class AIFeatureBootstrapCoverageTests
         public void Set(string key, string value) => _values[key] = value;
 
         public void Remove(string key) => _values.Remove(key);
-    }
-
-    private sealed class StubAgentToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
-    {
-        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
-        {
-            _ = ct;
-            return Task.FromResult(tools);
-        }
-    }
-
-    private sealed class StubAgentTool(string name, string resultJson) : IAgentTool
-    {
-        public string Name { get; } = name;
-        public string Description => "test tool";
-        public string ParametersSchema => """{"type":"object"}""";
-
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
-        {
-            _ = argumentsJson;
-            _ = ct;
-            return Task.FromResult(resultJson);
-        }
     }
 
     private static void WriteFlatSecrets(string path, IReadOnlyDictionary<string, string> values)

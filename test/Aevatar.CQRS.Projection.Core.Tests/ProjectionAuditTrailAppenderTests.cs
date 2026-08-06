@@ -53,6 +53,32 @@ public sealed class ProjectionAuditTrailAppenderTests
     }
 
     [Fact]
+    public async Task AppendAsync_ToolExecution_ShouldMapTypedDetailsIntoArtifactDocument()
+    {
+        var store = new RecordingAuditTrailArtifactStore();
+        var appender = new ProjectionAuditTrailAppender([store]);
+        var record = CreateRecord("audit-tool");
+        record.CapturePlane = AuditCapturePlane.ToolExecution;
+        record.OperationKind = AuditOperationKind.Tool;
+        record.Source = "urn:aevatar:audit:tool-execution";
+        record.ToolExecution = new AuditToolExecution
+        {
+            ArgumentsSha256 = new string('a', 64),
+            ExecutionPhase = AuditToolExecutionPhase.Terminal,
+            IsMutation = true,
+        };
+
+        var result = await appender.AppendAsync(record);
+
+        result.Status.Should().Be(AuditTrailAppendStatus.Appended);
+        var document = store.Documents.Should().ContainSingle().Subject;
+        document.ToolArgumentsSha256.Should().Be(new string('a', 64));
+        document.ToolExecutionPhase.Should().Be(AuditToolExecutionPhase.Terminal);
+        document.ToolIsMutation.Should().BeTrue();
+        document.Record.ToolExecution.Should().Be(record.ToolExecution);
+    }
+
+    [Fact]
     public async Task AppendAsync_ShouldSanitizeBeforeHashingAndWriting()
     {
         var store = new RecordingAuditTrailArtifactStore();
@@ -125,6 +151,35 @@ public sealed class ProjectionAuditTrailAppenderTests
             Existing = new AuditTrailDocument
             {
                 AuditId = "audit-1",
+                ContentHash = ComputeContentHash(original),
+                Record = original,
+            },
+        };
+        var appender = new ProjectionAuditTrailAppender([store]);
+
+        var result = await appender.AppendAsync(retry);
+
+        result.Status.Should().Be(AuditTrailAppendStatus.Duplicate);
+        store.Documents.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("waiting_approval")]
+    [InlineData("running")]
+    [InlineData("terminal")]
+    public async Task AppendAsync_WhenSamePhaseFactIsRecreatedAtLaterClock_ShouldRemainDuplicate(
+        string executionPhase)
+    {
+        var original = CreateRecord($"audit-{executionPhase}");
+        original.Annotations.Add("execution_phase", executionPhase);
+        var retry = original.Clone();
+        retry.OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-03T08:10:10+00:00"));
+        retry.RecordedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-03T08:10:11+00:00"));
+        var store = new RecordingAuditTrailArtifactStore
+        {
+            Existing = new AuditTrailDocument
+            {
+                AuditId = original.AuditId,
                 ContentHash = ComputeContentHash(original),
                 Record = original,
             },
@@ -279,6 +334,7 @@ public sealed class ProjectionAuditTrailAppenderTests
     private static string ComputeContentHash(AuditRecord record)
     {
         var semanticRecord = record.Clone();
+        semanticRecord.OccurredAt = null;
         semanticRecord.RecordedAt = null;
         return Convert.ToHexString(SHA256.HashData(semanticRecord.ToByteArray())).ToLowerInvariant();
     }

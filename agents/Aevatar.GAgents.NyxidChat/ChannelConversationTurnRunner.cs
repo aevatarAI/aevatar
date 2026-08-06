@@ -70,7 +70,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     private sealed record LarkSubjectContactIds(string? UserId, string? EmployeeId);
 
+    private sealed record ReplyChannelContext(
+        IReadOnlyDictionary<string, string> Metadata,
+        IReadOnlyList<AgentToolChannelIdentityHint> IdentityHints);
+
     private readonly IServiceProvider _toolServiceProvider;
+    private readonly IAgentToolExecutionPort _toolExecutionPort;
     private readonly IChannelBotRegistrationQueryPort _registrationQueryPort;
     private readonly IChannelBotRegistrationQueryByNyxIdentityPort? _registrationQueryByNyxIdentityPort;
     private readonly IEnumerable<IPlatformAdapter> _platformAdapters;
@@ -95,6 +100,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly INyxIdCurrentUserResolver? _nyxIdCurrentUserResolver;
     private readonly IChannelRelayTailTextSender? _relayTailTextSender;
     private readonly IChannelRelayProxyResponseClassifier? _relayProxyResponseClassifier;
+    private readonly IAgentRunToolApprovalDecisionDispatcher? _agentRunToolApprovalDecisionDispatcher;
 
     public ChannelConversationTurnRunner(
         IServiceProvider services,
@@ -105,6 +111,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         NyxIdRelayOutboundPort relayOutboundPort,
         IInteractiveReplyDispatcher? interactiveReplyDispatcher,
         ILogger<ChannelConversationTurnRunner> logger,
+        IAgentToolExecutionPort toolExecutionPort,
         IOwnerLlmConfigSource? ownerLlmConfigSource = null,
         IExternalIdentityBindingQueryPort? identityBindingQueryPort = null,
         ChannelSlashCommandRegistry? slashCommandRegistry = null,
@@ -121,9 +128,11 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ILarkBotIdentityResolver? botIdentityResolver = null,
         INyxIdCurrentUserResolver? nyxIdCurrentUserResolver = null,
         IChannelRelayTailTextSender? relayTailTextSender = null,
-        IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null)
+        IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null,
+        IAgentRunToolApprovalDecisionDispatcher? agentRunToolApprovalDecisionDispatcher = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
+        _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
         _registrationQueryByNyxIdentityPort = registrationQueryByNyxIdentityPort;
         _platformAdapters = platformAdapters ?? throw new ArgumentNullException(nameof(platformAdapters));
@@ -148,6 +157,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _nyxIdCurrentUserResolver = nyxIdCurrentUserResolver;
         _relayTailTextSender = relayTailTextSender;
         _relayProxyResponseClassifier = relayProxyResponseClassifier;
+        _agentRunToolApprovalDecisionDispatcher = agentRunToolApprovalDecisionDispatcher;
     }
 
     public async Task<ConversationTurnResult> RunInboundAsync(
@@ -194,6 +204,17 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // that looks like /init is still a card-action. (deepseek-v4-pro L65)
         if (await TryHandleWorkflowResumeAsync(inbound, ct) is { } workflowResumeResult)
             return workflowResumeResult;
+
+        if (await TryHandleAgentRunToolApprovalCardActionAsync(
+                    activity,
+                    inbound,
+                    registration,
+                    runtimeContext,
+                    ct)
+                .ConfigureAwait(false) is { } agentRunApprovalResult)
+        {
+            return agentRunApprovalResult;
+        }
 
         if (await TryHandleNyxIdApprovalCardActionAsync(activity, inbound, registration, runtimeContext, ct)
                 .ConfigureAwait(false) is { } nyxIdApprovalResult)
@@ -547,7 +568,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     var challenge = await broker.StartExternalBindingAsync(subject, ct).ConfigureAwait(false);
                     reply = InitChannelSlashCommandHandler.BuildBindingCard(
                         challenge.AuthorizeUrl,
-                        challenge.ReviewsExistingBinding);
+                        challenge.RenewsExistingBinding);
                 }
                 catch (AevatarOAuthClientNotProvisionedException ex)
                 {
@@ -846,14 +867,24 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 if (string.IsNullOrWhiteSpace(action.Value))
                     return new MessageContent { Text = "缺少要切换的 LLM service,请重新发送 /models。" };
 
-                await selectionService.SetByServiceAsync(selectionContext, action.Value.Trim(), modelOverride: null, ct)
+                var picked = (await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false))
+                    .Available.FirstOrDefault(option =>
+                        option.Identity is
+                        {
+                            Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                        } identity &&
+                        string.Equals(identity.NyxIdUserServiceId, action.Value.Trim(), StringComparison.Ordinal));
+                await selectionService.SetByServiceAsync(
+                        selectionContext,
+                        action.Value.Trim(),
+                        new LLMModelSelection { Kind = LLMModelSelectionKind.ProviderDefault },
+                        ct)
                     .ConfigureAwait(false);
-                var updated = await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false);
-                var picked = updated.Current ?? updated.Available.FirstOrDefault(option =>
-                    string.Equals(option.ServiceId, action.Value.Trim(), StringComparison.OrdinalIgnoreCase));
                 return picked is null
-                    ? new MessageContent { Text = "已切换 LLM service。下一条消息会用新的设置回复。" }
-                    : renderer.RenderSelectionConfirm(picked, picked.DefaultModel);
+                    ? new MessageContent { Text = "LLM 选择更新已提交；观察到更新后的设置后生效。" }
+                    : renderer.RenderSelectionConfirm(
+                        picked,
+                        new LLMModelSelection { Kind = LLMModelSelectionKind.ProviderDefault });
             }
 
             if (string.Equals(action.Action, TextUserLlmOptionsRenderer.ApplyPresetAction, StringComparison.Ordinal))
@@ -862,10 +893,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     return new MessageContent { Text = "缺少要应用的 LLM preset,请重新发送 /models。" };
 
                 await selectionService.ApplyPresetAsync(selectionContext, action.Value.Trim(), ct).ConfigureAwait(false);
-                var updated = await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false);
-                return updated.Current is null
-                    ? new MessageContent { Text = $"已应用 preset **{action.Value.Trim()}**。下一条消息会用新的 LLM 设置回复。" }
-                    : renderer.RenderSelectionConfirm(updated.Current, updated.Current.DefaultModel);
+                return new MessageContent
+                {
+                    Text = $"LLM preset **{action.Value.Trim()}** 更新已提交；观察到更新后的设置后生效。",
+                };
             }
 
             if (string.Equals(action.Action, TextUserLlmOptionsRenderer.ListPageAction, StringComparison.Ordinal))
@@ -874,7 +905,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 return renderer.RenderOptions(updated, action.DisplayMode, action.Page);
             }
 
-            return new MessageContent { Text = "未识别的模型设置操作,请重新发送 /models。" };
+            return new MessageContent { Text = "这张模型设置卡片已失效，请重新发送 /models 获取最新选项。" };
         }
         catch (AevatarOAuthClientNotProvisionedException)
         {
@@ -892,6 +923,110 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             return new MessageContent { Text = ex.Message };
         }
+    }
+
+    private async Task<ConversationTurnResult?> TryHandleAgentRunToolApprovalCardActionAsync(
+        ChatActivity activity,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        if (activity.Type != ActivityType.CardAction)
+            return null;
+
+        var payload = activity.Content?.CardAction?.AgentRunApproval;
+        if (payload is null)
+            return null;
+
+        if (!AgentRunId.TryParse(payload.RunId, out _) ||
+            string.IsNullOrWhiteSpace(payload.ApprovalRequestId) ||
+            string.IsNullOrWhiteSpace(payload.ToolCallId) ||
+            string.IsNullOrWhiteSpace(payload.ToolName) ||
+            string.IsNullOrWhiteSpace(payload.ArgumentsSha256) ||
+            string.IsNullOrWhiteSpace(inbound.SenderId) ||
+            string.IsNullOrWhiteSpace(registration.ScopeId) ||
+            string.IsNullOrWhiteSpace(activity.Conversation?.CanonicalKey))
+        {
+            return ConversationTurnResult.PermanentFailure(
+                "agent_run_tool_approval_callback_invalid",
+                "The AgentRun tool approval callback is missing an exact typed identity.");
+        }
+
+        var relayDelivery = activity.OutboundDelivery;
+        var replyToken = relayDelivery is null
+            ? null
+            : ResolveRelayReplyToken(relayDelivery, runtimeContext);
+        if (replyToken is null)
+        {
+            return ConversationTurnResult.PermanentFailure(
+                "agent_run_tool_approval_reply_token_missing",
+                "The AgentRun tool approval callback reply credential is missing or expired.");
+        }
+
+        var dispatcher = _agentRunToolApprovalDecisionDispatcher;
+        if (dispatcher is null)
+        {
+            return ConversationTurnResult.PermanentFailure(
+                "agent_run_tool_approval_dispatcher_unavailable",
+                "The AgentRun tool approval decision dispatcher is unavailable.");
+        }
+
+        var callbackActivity = activity.Clone();
+        callbackActivity.TransportExtras ??= new TransportExtras();
+        callbackActivity.TransportExtras.NyxRegistrationScopeId = registration.ScopeId.Trim();
+        var userAccessToken = ResolveUserAccessToken(activity, runtimeContext);
+        if (userAccessToken is not null)
+            callbackActivity.TransportExtras.NyxUserAccessToken = userAccessToken;
+
+        var request = new NeedsLlmReplyEvent
+        {
+            RunId = payload.RunId.Trim(),
+            CorrelationId = activity.Id,
+            RegistrationId = registration.Id,
+            Activity = callbackActivity,
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            ReplyToken = replyToken,
+            ReplyTokenExpiresAtUnixMs = runtimeContext.NyxRelayReplyToken?.ExpiresAtUtc.ToUnixTimeMilliseconds() ?? 0,
+        };
+        var command = new AgentRunToolApprovalDecisionRequested
+        {
+            RunId = payload.RunId.Trim(),
+            ApprovalRequestId = payload.ApprovalRequestId.Trim(),
+            ToolCallId = payload.ToolCallId.Trim(),
+            ToolName = payload.ToolName.Trim(),
+            ArgumentsSha256 = payload.ArgumentsSha256.Trim(),
+            Approved = payload.Approved,
+            SenderId = inbound.SenderId.Trim(),
+            RegistrationScopeId = registration.ScopeId.Trim(),
+            ConversationKey = activity.Conversation!.CanonicalKey.Trim(),
+            Request = request,
+        };
+
+        try
+        {
+            await dispatcher.DispatchAsync(command, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "AgentRun tool approval callback dispatch failed: runId={RunId} approvalRequest={ApprovalRequestId} approved={Approved}",
+                command.RunId,
+                command.ApprovalRequestId,
+                command.Approved);
+            return ConversationTurnResult.TransientFailure(
+                "agent_run_tool_approval_dispatch_failed",
+                "The AgentRun tool approval decision could not be dispatched.");
+        }
+
+        return ConversationTurnResult.Ignored(
+            "agent_run_tool_approval_decision_dispatched",
+            activity.Id);
     }
 
     private async Task<ConversationTurnResult?> TryHandleNyxIdApprovalCardActionAsync(
@@ -1103,6 +1238,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 TextUserLlmOptionsRenderer.ApplyPresetActionId => TextUserLlmOptionsRenderer.ApplyPresetAction,
                 TextUserLlmOptionsRenderer.ListPageActionId => TextUserLlmOptionsRenderer.ListPageAction,
                 TextUserLlmOptionsRenderer.LegacySelectServiceActionId => TextUserLlmOptionsRenderer.SelectServiceAction,
+                TextUserLlmOptionsRenderer.LegacySelectModelActionId => TextUserLlmOptionsRenderer.LegacySelectModelAction,
                 TextUserLlmOptionsRenderer.LegacyApplyPresetActionId => TextUserLlmOptionsRenderer.ApplyPresetAction,
                 _ => string.Empty,
             };
@@ -1480,23 +1616,33 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var replyContent = decision.ReplyContent ?? new MessageContent { Text = decision.ReplyPayload };
         if (decision.RequiresToolExecution)
         {
-            var metadata = await BuildAgentBuilderMetadataAsync(
+            var channelContext = await BuildAgentBuilderChannelContextAsync(
                     activity,
                     inboundEvent,
                     runtimeContext,
                     ct);
-            using (AgentToolContextScope.Push(BuildAgentBuilderToolContext(
-                       inboundEvent,
-                       activity,
-                       registration,
-                       ResolveUserAccessToken(activity, runtimeContext),
-                       senderBinding,
-                       metadata)))
+            var executionContext = BuildAgentBuilderToolContext(
+                    inboundEvent,
+                    activity,
+                    registration,
+                    ResolveUserAccessToken(activity, runtimeContext),
+                    senderBinding,
+                    channelContext.Metadata,
+                    channelContext.IdentityHints)
+                .WithCallId($"{inboundEvent.MessageId}:agent-builder") with
             {
-                var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
-                var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
-                replyContent = AgentBuilderCardFlow.FormatToolResult(decision, toolResult);
-            }
+                ExecutionOwner = AgentToolExecutionOwners.ChannelRegistration(registration.Id),
+            };
+            var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
+            var outcome = await _toolExecutionPort.ExecuteAsync(
+                new AgentToolExecutionRequest(
+                    tool,
+                    decision.ToolArgumentsJson!,
+                    executionContext,
+                    AgentToolApprovalContinuationMode.None,
+                    null),
+                ct).ConfigureAwait(false);
+            replyContent = AgentBuilderCardFlow.FormatToolResult(decision, outcome.ResultJson);
         }
 
         var inbound = ToInboundMessage(activity);
@@ -1941,7 +2087,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             .ConfigureAwait(false);
     }
 
-    private async Task<IReadOnlyDictionary<string, string>> BuildReplyMetadataAsync(
+    private async Task<ReplyChannelContext> BuildReplyChannelContextAsync(
         ChannelInboundEvent inboundEvent,
         ChatActivity? activity,
         ConversationTurnRuntimeContext runtimeContext,
@@ -1956,6 +2102,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             [ChannelMetadataKeys.MessageId] = inboundEvent.MessageId,
             [ChannelMetadataKeys.ChatType] = inboundEvent.ChatType,
         };
+        var identityHints = new List<AgentToolChannelIdentityHint>();
 
         // Inbound channel-bot's NyxID provider slug. Scheduled workflow creation captures this
         // as the failure-notification provider so a failed outbound delivery
@@ -1982,11 +2129,17 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // not surface as `code:99992361 open_id cross app` rejections at send time.
         var larkUnionId = NormalizeOptional(activity?.TransportExtras?.NyxLarkUnionId);
         if (!string.IsNullOrWhiteSpace(larkUnionId))
+        {
             metadata[ChannelMetadataKeys.LarkUnionId] = larkUnionId;
+            AddIdentityHint(identityHints, "sender", "global", larkUnionId);
+        }
 
         var larkChatId = NormalizeOptional(activity?.TransportExtras?.NyxLarkChatId);
         if (!string.IsNullOrWhiteSpace(larkChatId))
+        {
             metadata[ChannelMetadataKeys.LarkChatId] = larkChatId;
+            AddIdentityHint(identityHints, "conversation", "platform", larkChatId);
+        }
 
         var deliveryAddressId = NormalizeOptional(activity?.TransportExtras?.DeliveryAddressId);
         if (!string.IsNullOrWhiteSpace(deliveryAddressId))
@@ -2006,23 +2159,39 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         var larkOperatorUserId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorUserId);
         if (!string.IsNullOrWhiteSpace(larkOperatorUserId))
+        {
             metadata[ChannelMetadataKeys.LarkOperatorUserId] = larkOperatorUserId;
+            AddIdentityHint(identityHints, "operator", "account", larkOperatorUserId);
+        }
 
         var larkOperatorOpenId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorOpenId);
         if (!string.IsNullOrWhiteSpace(larkOperatorOpenId))
+        {
             metadata[ChannelMetadataKeys.LarkOperatorOpenId] = larkOperatorOpenId;
+            AddIdentityHint(identityHints, "operator", "platform", larkOperatorOpenId);
+        }
 
         var larkOperatorUnionId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorUnionId);
         if (!string.IsNullOrWhiteSpace(larkOperatorUnionId))
+        {
             metadata[ChannelMetadataKeys.LarkOperatorUnionId] = larkOperatorUnionId;
+            AddIdentityHint(identityHints, "operator", "global", larkOperatorUnionId);
+        }
 
         if (await TryResolveLarkSubjectContactIdsAsync(inboundEvent, activity, runtimeContext, larkUnionId, ct)
                 .ConfigureAwait(false) is { } subjectContactIds)
         {
             if (!string.IsNullOrWhiteSpace(subjectContactIds.UserId))
+            {
                 metadata[ChannelMetadataKeys.LarkSubjectUserId] = subjectContactIds.UserId;
+                AddIdentityHint(identityHints, "subject", "account", subjectContactIds.UserId);
+            }
+
             if (!string.IsNullOrWhiteSpace(subjectContactIds.EmployeeId))
+            {
                 metadata[ChannelMetadataKeys.LarkSubjectEmployeeId] = subjectContactIds.EmployeeId;
+                AddIdentityHint(identityHints, "subject", "directory", subjectContactIds.EmployeeId);
+            }
         }
 
         // Surface resolved @-mentions (canonical id + name) so the agent can target a third party by a
@@ -2041,8 +2210,15 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 metadata[ChannelMetadataKeys.Mentions] = formattedMentions;
         }
 
-        return metadata;
+        return new ReplyChannelContext(metadata, identityHints);
     }
+
+    private static void AddIdentityHint(
+        ICollection<AgentToolChannelIdentityHint> identityHints,
+        string subject,
+        string kind,
+        string value) =>
+        identityHints.Add(new AgentToolChannelIdentityHint(subject, kind, value));
 
     private async Task<LarkSubjectContactIds?> TryResolveLarkSubjectContactIdsAsync(
         ChannelInboundEvent inboundEvent,
@@ -2166,7 +2342,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChannelBotRegistrationEntry registration,
         string? userAccessToken,
         ResolvedSenderBinding? senderBinding,
-        IReadOnlyDictionary<string, string> metadata)
+        IReadOnlyDictionary<string, string> metadata,
+        IReadOnlyList<AgentToolChannelIdentityHint> identityHints)
     {
         var token = NormalizeOptional(userAccessToken);
         return AgentToolExecutionContext.Empty with
@@ -2186,7 +2363,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId),
                 null,
                 BuildWorkflowResultDeliveryCredential(registration),
-                NormalizeOptional(registration.Id)),
+                NormalizeOptional(registration.Id),
+                identityHints),
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
         };
     }
@@ -2212,19 +2390,18 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         };
     }
 
-    private async Task<IReadOnlyDictionary<string, string>> BuildAgentBuilderMetadataAsync(
+    private async Task<ReplyChannelContext> BuildAgentBuilderChannelContextAsync(
         ChatActivity activity,
         ChannelInboundEvent inboundEvent,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
-        var metadata = new Dictionary<string, string>(
-            await BuildReplyMetadataAsync(inboundEvent, activity, runtimeContext, ct),
-            StringComparer.Ordinal)
+        var replyChannelContext = await BuildReplyChannelContextAsync(inboundEvent, activity, runtimeContext, ct);
+        var metadata = new Dictionary<string, string>(replyChannelContext.Metadata, StringComparer.Ordinal)
         {
             [ChannelMetadataKeys.ChatType] = ResolveConversationChatType(activity.Conversation),
         };
-        return metadata;
+        return new ReplyChannelContext(metadata, replyChannelContext.IdentityHints);
     }
 
     internal static InboundMessage ToInboundMessage(ChatActivity activity)
@@ -2308,7 +2485,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // would bypass the typed contract.
         if (cardAction.WorkflowResume is not null ||
             cardAction.LlmSelection is not null ||
-            cardAction.NyxIdApproval is not null)
+            cardAction.NyxIdApproval is not null ||
+            cardAction.AgentRunApproval is not null)
         {
             return false;
         }
@@ -2422,7 +2600,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             request.ReplyTokenExpiresAtUnixMs = token.ExpiresAtUtc.ToUnixTimeMilliseconds();
         }
 
-        var replyMetadata = await BuildReplyMetadataAsync(inboundEvent, activity, runtimeContext, ct);
+        var replyChannelContext = await BuildReplyChannelContextAsync(inboundEvent, activity, runtimeContext, ct);
+        var replyMetadata = replyChannelContext.Metadata;
         foreach (var pair in replyMetadata)
             request.Metadata[pair.Key] = pair.Value;
 
@@ -2446,8 +2625,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId),
                 null,
                 BuildWorkflowResultDeliveryCredential(registration),
-                NormalizeOptional(registration.Id)),
+                NormalizeOptional(registration.Id),
+                replyChannelContext.IdentityHints),
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyMetadata),
+            ExecutionOwner = AgentToolExecutionOwners.ChannelRegistration(registration.Id),
         }).ToPayload();
 
         if (TryBuildSkillRecoveryContext(inboundEvent.Text, inboundEvent.Platform, defaultSkillName, out var skillRecovery))
@@ -2500,6 +2681,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     senderBinding.BindingId,
                     NyxUserId: null,
                     SenderTenant: senderTenant),
+                NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                    senderBinding.Subject.Platform,
+                    senderBinding.Subject.Tenant,
+                    senderBinding.Subject.ExternalUserId),
                 Caller = AgentToolExecutionContextMapper.FromPayload(request.ToolContext).Caller with
                 {
                     OwnerScopeId = senderBinding.OwnerScopeId,
@@ -2682,7 +2867,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         prompt =
             invocationLine +
             "This command is not handled by Aevatar's local relay commands. Treat it as an Ornn skill-backed command, not an open-ended chat answer.\n" +
-            "Aevatar has already attempted `use_skill` for this command before this turn. If that load failed, use the tool results above and the recovery rules to search for the best matching skill before giving up.\n" +
+            "Use a matching successful `use_skill` result already present in this turn. If none is present, call `use_skill` with this skill name and the exact command arguments; omit `mount_workflows` because loading instructions is read-only and must not mutate scope workflows.\n" +
             $"Follow those skill instructions exactly, with `args` = {argsJson}, until the command's final result is ready.\n" +
             "Stick to the data sources the loaded skill names. Do NOT invent repository/path guesses, do NOT call `/api/v1/skills/.../files` (skill files are already inlined in the `use_skill` response above), and do NOT fall back to generic `nyxid_proxy` discovery when the loaded skill did not point you there.\n" +
             "If no matching skill was actually loaded above, or every matching skill fails to load, give one concise actionable failure that names the command and the Ornn lookup/load problem.\n" +
@@ -2735,7 +2920,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             _logger.LogWarning(
                 ex,
-                "Sender NyxID binding lacks a required service; preserving the binding for in-place /init grant review. subject={Platform}:{Tenant}:{User}",
+                "Sender NyxID binding lacks a required service; preserving it until /init service authorization renewal succeeds. subject={Platform}:{Tenant}:{User}",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);

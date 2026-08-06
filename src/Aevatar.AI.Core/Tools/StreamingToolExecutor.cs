@@ -6,12 +6,10 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Abstractions;
-using Aevatar.AI.Core.Auditing;
+using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
-using Aevatar.AI.Core.Middleware;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Diagnostics;
@@ -53,24 +51,33 @@ public sealed class StreamingToolExecutor
     private const string SafeToolFailureMessage = "The tool request failed.";
     private readonly ToolManager _tools;
     private readonly AgentHookPipeline? _hooks;
-    private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
     private readonly AgentToolExecutionContext? _toolContext;
+    private readonly IAgentToolExecutionPort? _toolExecutionPort;
+    private readonly IChatToolCheckpointPort _checkpointPort;
+    private readonly AgentToolApprovalContinuationMode _approvalContinuationMode;
+    private readonly AgentToolApprovalGrant? _approvalGrant;
     private readonly ILogger _logger;
 
     public StreamingToolExecutor(
         ToolManager tools,
         AgentHookPipeline? hooks = null,
-        IReadOnlyList<IToolCallMiddleware>? toolMiddlewares = null,
         IReadOnlyDictionary<string, string>? requestMetadata = null,
         AgentToolExecutionContext? toolContext = null,
+        IAgentToolExecutionPort? toolExecutionPort = null,
+        IChatToolCheckpointPort? checkpointPort = null,
+        AgentToolApprovalContinuationMode approvalContinuationMode = AgentToolApprovalContinuationMode.None,
+        AgentToolApprovalGrant? approvalGrant = null,
         ILogger? logger = null)
     {
         // Refactor (issue1574): Old pattern: streaming tool execution promoted request Metadata into tool control.
         // New principle: streaming tool control is typed; request Metadata remains external annotations only.
         _tools = tools;
         _hooks = hooks;
+        _toolExecutionPort = toolExecutionPort;
+        _checkpointPort = checkpointPort ?? NoOpChatToolCheckpointPort.Instance;
+        _approvalContinuationMode = approvalContinuationMode;
+        _approvalGrant = approvalGrant;
         _logger = logger ?? NullLogger.Instance;
-        _toolMiddlewares = toolMiddlewares ?? [];
         _toolContext = toolContext
             ?? AgentToolRequestContext.Current
             ?? (requestMetadata == null
@@ -83,38 +90,64 @@ public sealed class StreamingToolExecutor
 
     public ExecutionState CreateExecutionState() => new();
 
+    public async Task<IReadOnlyList<PreparedChatToolOperation>> PrepareBatchAsync(
+        string sessionId,
+        int round,
+        IReadOnlyList<ToolCall> toolCalls,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(toolCalls);
+        if (toolCalls.Count == 0)
+            return [];
+
+        var baseContext = _toolContext ?? AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty;
+        var intents = new List<ChatToolOperationIntent>(toolCalls.Count);
+        foreach (var toolCall in toolCalls)
+        {
+            ct.ThrowIfCancellationRequested();
+            var frozenCall = CloneToolCall(toolCall);
+            var callContext = baseContext.WithCallId(frozenCall.Id);
+            var tool = _tools.Get(frozenCall.Name);
+            AgentToolReplayPolicy replayPolicy;
+            using (AgentToolContextScope.Push(callContext))
+            {
+                replayPolicy = tool?.ResolveReplayPolicy(frozenCall.ArgumentsJson)
+                               ?? AgentToolReplayPolicy.NonReplayable;
+            }
+
+            if (replayPolicy == AgentToolReplayPolicy.Unspecified)
+                throw new InvalidOperationException("A prepared tool operation requires an explicit replay policy.");
+
+            intents.Add(new ChatToolOperationIntent(
+                frozenCall,
+                callContext,
+                replayPolicy,
+                ToolPresentationDescriptors.Snapshot(
+                    tool,
+                    frozenCall.Name,
+                    frozenCall.ArgumentsJson)));
+        }
+
+        var prepared = await _checkpointPort.PrepareBatchAsync(
+            new ChatToolBatchIntent(sessionId, round, intents),
+            ct);
+        ValidatePreparedBatch(intents, prepared);
+        return prepared;
+    }
+
     /// <summary>
     /// Queue a tool for execution. Immediately starts if concurrency rules allow.
     /// If <see cref="Discard"/> has already been called, the tool is recorded as
     /// an immediate discard-error without scheduling.
     /// </summary>
-    public void AddTool(ExecutionState state, ToolCall toolCall)
+    public void AddTool(ExecutionState state, PreparedChatToolOperation operation)
     {
         ArgumentNullException.ThrowIfNull(state);
-        ArgumentNullException.ThrowIfNull(toolCall);
+        ArgumentNullException.ThrowIfNull(operation);
 
-        if (!IsToolVisible(toolCall.Name))
-        {
-            var unauthorized = new ToolExecutionEntry(
-                Call: toolCall,
-                Tool: null,
-                IsConcurrencySafe: true)
-            {
-                Status = ToolStatus.Completed,
-                Result = new ToolExecutionResult(
-                    toolCall.Id,
-                    toolCall.Name,
-                    ToolManager.BuildErrorJson($"Tool '{toolCall.Name}' is not available in this context."),
-                    IsError: true),
-            };
-            state.Tools.Add(unauthorized);
-            Advance(state);
-            return;
-        }
-
-        var tool = _tools.Get(toolCall.Name);
+        var tool = _tools.Get(operation.ToolCall.Name);
         var tracked = new ToolExecutionEntry(
-            Call: toolCall,
+            Operation: operation,
             Tool: tool,
             IsConcurrencySafe: tool?.IsReadOnly == true && tool.IsDestructive == false);
 
@@ -123,8 +156,8 @@ public sealed class StreamingToolExecutor
         {
             tracked.Status = ToolStatus.Completed;
                 tracked.Result = new ToolExecutionResult(
-                    toolCall.Id,
-                    toolCall.Name,
+                    operation.ToolCall.Id,
+                    operation.ToolCall.Name,
                     "Tool execution was discarded",
                     IsError: true);
         }
@@ -139,11 +172,8 @@ public sealed class StreamingToolExecutor
     public List<ToolExecutionResult> GetCompletedResults(ExecutionState state)
     {
         ArgumentNullException.ThrowIfNull(state);
-        CompleteFinishedTools(state);
         Advance(state);
-        return DrainReadyResults(state)
-            .Select(NormalizeFailureReceipt)
-            .ToList();
+        return DrainReadyResults(state);
     }
 
     /// <summary>
@@ -157,6 +187,7 @@ public sealed class StreamingToolExecutor
 
         while (true)
         {
+            await CommitFinishedToolsAsync(state, ct);
             foreach (var result in GetCompletedResults(state))
                 yield return result;
 
@@ -173,7 +204,7 @@ public sealed class StreamingToolExecutor
                 continue;
             }
 
-            await Task.WhenAny(completions).WaitAsync(ct).ConfigureAwait(false);
+            await Task.WhenAny(completions).WaitAsync(ct);
         }
     }
 
@@ -193,49 +224,55 @@ public sealed class StreamingToolExecutor
 
     private void Advance(ExecutionState state)
     {
-        CompleteFinishedTools(state);
         ProcessQueue(state);
         PublishAvailableResults(state);
     }
 
-    private static void CompleteFinishedTools(ExecutionState state)
+    private async Task CommitFinishedToolsAsync(ExecutionState state, CancellationToken ct)
     {
         foreach (var tracked in state.Tools)
         {
-            if (tracked.Status != ToolStatus.Executing || tracked.Execution is not { IsCompleted: true } execution)
+            if (tracked.Status == ToolStatus.Executing &&
+                tracked.Execution is { IsCompleted: true } execution)
+            {
+                ToolExecutionCompletion completion;
+                if (execution.IsCanceled && state.DiscardCts.IsCancellationRequested)
+                {
+                    completion = new ToolExecutionCompletion(
+                        new ToolExecutionResult(
+                            tracked.Call.Id,
+                            tracked.Call.Name,
+                            "Tool execution was discarded",
+                            IsError: true),
+                        SchedulerFault: false);
+                }
+                else if (execution.IsFaulted)
+                {
+                    _ = execution.Exception;
+                    throw new InvalidOperationException("Tool execution failed before completion was recorded.");
+                }
+                else
+                {
+                    completion = execution.Result;
+                }
+
+                tracked.Status = ToolStatus.Completed;
+                tracked.Result = completion.Result;
+                if (completion.Result.IsError || completion.SchedulerFault)
+                    state.HasErrored = true;
+            }
+
+            if (tracked.Status != ToolStatus.Completed ||
+                tracked.CompletionCommitted ||
+                tracked.Result is not { } result)
+            {
                 continue;
-
-            ToolExecutionCompletion completion;
-            if (execution.IsCanceled && state.DiscardCts.IsCancellationRequested)
-            {
-                completion = new ToolExecutionCompletion(
-                    new ToolExecutionResult(
-                        tracked.Call.Id,
-                        tracked.Call.Name,
-                        "Tool execution was discarded",
-                        IsError: true),
-                    SchedulerFault: false);
-            }
-            else if (execution.IsFaulted)
-            {
-                _ = execution.Exception;
-                completion = new ToolExecutionCompletion(
-                    new ToolExecutionResult(
-                        tracked.Call.Id,
-                        tracked.Call.Name,
-                        BuildSafeFailureResult(),
-                        IsError: true),
-                    SchedulerFault: false);
-            }
-            else
-            {
-                completion = execution.Result;
             }
 
-            tracked.Status = ToolStatus.Completed;
-            tracked.Result = completion.Result;
-            if (completion.Result.IsError || completion.SchedulerFault)
-                state.HasErrored = true;
+            var normalized = NormalizeFailureReceipt(tracked, result);
+            tracked.Result = normalized;
+            await _checkpointPort.CommitCompletionAsync(tracked.Operation, normalized, ct);
+            tracked.CompletionCommitted = true;
         }
     }
 
@@ -283,7 +320,9 @@ public sealed class StreamingToolExecutor
         while (state.NextResultIndex < state.Tools.Count)
         {
             var tracked = state.Tools[state.NextResultIndex];
-            if (tracked.Status != ToolStatus.Completed || tracked.Result is not { } result)
+            if (tracked.Status != ToolStatus.Completed ||
+                !tracked.CompletionCommitted ||
+                tracked.Result is not { } result)
                 break;
 
             tracked.Status = ToolStatus.Yielded;
@@ -302,10 +341,40 @@ public sealed class StreamingToolExecutor
         return results;
     }
 
-    private static ToolExecutionResult NormalizeFailureReceipt(ToolExecutionResult result)
+    private ToolExecutionResult NormalizeFailureReceipt(
+        ToolExecutionEntry tracked,
+        ToolExecutionResult result)
     {
         if (!result.IsError || result.Receipt is not null)
             return result;
+
+        if (tracked.Tool is { } tool)
+        {
+            try
+            {
+                using var scope = AgentToolContextScope.Push(tracked.Operation.ExecutionContext);
+                var callSafety = tool.GetCallSafety(tracked.Call.ArgumentsJson ?? string.Empty);
+                return result with
+                {
+                    Receipt = AgentToolReceiptFactory.CreateError(
+                        tool,
+                        result.CallId,
+                        result.ToolName,
+                        callSafety,
+                        result.Result,
+                        "tool_execution_error",
+                        SafeToolFailureMessage),
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Failed to classify receipt effect for tool {ToolName} call {CallId}; treating the visible failure as mutating",
+                    result.ToolName,
+                    result.CallId);
+            }
+        }
 
         return result with
         {
@@ -314,6 +383,7 @@ public sealed class StreamingToolExecutor
                 CallId = result.CallId,
                 ToolName = result.ToolName,
                 Status = AgentToolReceiptStatus.Error,
+                Effect = AgentToolReceiptEffect.Mutating,
                 ErrorCode = "tool_execution_error",
                 ErrorMessage = "The tool request failed.",
                 ResultJson = result.Result,
@@ -323,6 +393,37 @@ public sealed class StreamingToolExecutor
 
     private static string BuildSafeFailureResult() =>
         ToolManager.BuildErrorJson(SafeToolFailureMessage);
+
+    private static void ValidatePreparedBatch(
+        IReadOnlyList<ChatToolOperationIntent> intents,
+        IReadOnlyList<PreparedChatToolOperation>? prepared)
+    {
+        if (prepared is null || prepared.Count != intents.Count)
+            throw new InvalidOperationException("The durable tool checkpoint returned an invalid prepared batch.");
+
+        for (var index = 0; index < prepared.Count; index++)
+        {
+            var expected = intents[index];
+            var actual = prepared[index];
+            if (string.IsNullOrWhiteSpace(actual.OperationId) ||
+                !string.Equals(actual.ExecutionContext.Request.OperationId, actual.OperationId, StringComparison.Ordinal) ||
+                actual.ReplayPolicy == AgentToolReplayPolicy.Unspecified ||
+                actual.ReplayPolicy != expected.ReplayPolicy ||
+                !string.Equals(actual.ToolCall.Id, expected.ToolCall.Id, StringComparison.Ordinal) ||
+                !string.Equals(actual.ToolCall.Name, expected.ToolCall.Name, StringComparison.Ordinal) ||
+                !string.Equals(actual.ToolCall.ArgumentsJson, expected.ToolCall.ArgumentsJson, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("The durable tool checkpoint altered a prepared operation identity.");
+            }
+        }
+    }
+
+    private static ToolCall CloneToolCall(ToolCall toolCall) => new()
+    {
+        Id = toolCall.Id,
+        Name = toolCall.Name,
+        ArgumentsJson = toolCall.ArgumentsJson,
+    };
 
     private static void CompletePendingToolsAsDiscarded(ExecutionState state)
     {
@@ -346,11 +447,19 @@ public sealed class StreamingToolExecutor
     private static bool HasRemainingTools(ExecutionState state) =>
         state.Tools.Any(static tracked => tracked.Status != ToolStatus.Yielded);
 
-    private async Task<ToolExecutionCompletion> ExecuteToolAsync(CancellationToken ct, ToolExecutionEntry tracked)
+    private Task<ToolExecutionCompletion> ExecuteToolAsync(
+        CancellationToken ct,
+        ToolExecutionEntry tracked) =>
+        ExecutePreparedToolAsync(ct, tracked);
+
+    private async Task<ToolExecutionCompletion> ExecutePreparedToolAsync(
+        CancellationToken ct,
+        ToolExecutionEntry tracked)
     {
         try
         {
-            using var _ = AgentToolContextScope.Push(ResolveExecutionContext(tracked.Call.Id, out var executionContext));
+            var executionContext = tracked.Operation.ExecutionContext;
+            using var _ = AgentToolContextScope.Push(executionContext);
 
             var call = tracked.Call;
             var toolCtx = new AIGAgentExecutionHookContext
@@ -372,7 +481,7 @@ public sealed class StreamingToolExecutor
 
             // Re-resolve tool after hooks — hooks may have rewritten the tool name.
             var effectiveToolName = string.IsNullOrWhiteSpace(toolCtx.ToolName) ? call.Name : toolCtx.ToolName!;
-            if (!IsToolVisible(effectiveToolName))
+            if (!executionContext.ToolVisibility.Allows(effectiveToolName))
             {
                 return new ToolExecutionCompletion(
                     new ToolExecutionResult(
@@ -385,89 +494,35 @@ public sealed class StreamingToolExecutor
 
             var effectiveTool = _tools.Get(effectiveToolName) ?? tracked.Tool ?? new NullAgentTool(call.Name);
 
-            // If the hook changed the tool name to a different tool, re-evaluate concurrency
-            // conservatively: force serial if the resolved tool is not read-only.
-            if (!string.Equals(effectiveToolName, call.Name, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(effectiveToolName, call.Name, StringComparison.Ordinal) ||
+                !string.Equals(toolCtx.ToolArguments, call.ArgumentsJson, StringComparison.Ordinal))
             {
-                var resolvedIsConcurrencySafe = effectiveTool.IsReadOnly && !effectiveTool.IsDestructive;
-                if (!resolvedIsConcurrencySafe && tracked.IsConcurrencySafe)
-                    return new ToolExecutionCompletion(
-                        new ToolExecutionResult(
-                            call.Id,
-                            call.Name,
-                            ToolManager.BuildErrorJson("Tool hook rewrote a concurrent read-only call to a non-read-only tool."),
-                            IsError: true),
-                        SchedulerFault: true);
+                return new ToolExecutionCompletion(
+                    new ToolExecutionResult(
+                        call.Id,
+                        call.Name,
+                        ToolManager.BuildErrorJson("A prepared tool operation cannot be rewritten after its intent is committed."),
+                        IsError: true),
+                    SchedulerFault: true);
             }
 
-            var toolCallContext = new ToolCallContext
-            {
-                Tool = effectiveTool,
-                ToolName = effectiveToolName,
-                ToolCallId = call.Id,
-                ArgumentsJson = toolCtx.ToolArguments ?? call.ArgumentsJson,
-                CancellationToken = ct, ExecutionContext = executionContext,
-            };
-
-            var executionFailed = false;
-            await MiddlewarePipeline.RunToolCallAsync(_toolMiddlewares, toolCallContext, async () =>
-            {
-                if (toolCallContext.Terminate) return;
-
-                var resolvedCall = new ToolCall
-                {
-                    Id = toolCallContext.ToolCallId,
-                    Name = toolCallContext.ToolName,
-                    ArgumentsJson = toolCallContext.ArgumentsJson,
-                };
-
-                var (result, error) = await _tools.ExecuteToolCallRawAsync(resolvedCall, ct);
-                toolCallContext.Result = result;
-                if (error is not null)
-                {
-                    executionFailed = true;
-                    var safeFailureResult = BuildSafeFailureResult();
-                    toolCallContext.Result = safeFailureResult;
-                    toolCallContext.Receipt = AgentToolReceiptFactory.CreateError(
-                        effectiveTool,
-                        toolCallContext.ToolCallId,
-                        toolCallContext.ToolName,
-                        callSafety: effectiveTool.GetCallSafety(toolCallContext.ArgumentsJson),
-                        resultJson: safeFailureResult,
-                        errorCode: "tool_execution_error",
-                        errorMessage: SafeToolFailureMessage) ??
-                        ToolCallReceiptFinalizer.Finalize(toolCallContext, error).Receipt;
-                }
-                else
-                {
-                    toolCallContext.Receipt = AgentToolReceiptFactory.CreateSuccess(
-                        effectiveTool,
-                        toolCallContext.ToolCallId,
-                        toolCallContext.ToolName,
-                        effectiveTool.GetCallSafety(toolCallContext.ArgumentsJson),
-                        result,
-                        toolCallContext.ArgumentsJson);
-                }
-            });
-
-            var toolResult = toolCallContext.Result
-                ?? (toolCallContext.Terminate
-                    ? "Tool call terminated by middleware"
-                    : $"Tool '{toolCallContext.ToolName}' returned no result");
-            var receipt = toolCallContext.Receipt;
-            if (receipt is null && toolCallContext.Terminate)
-                receipt = ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt;
-            receipt ??= AgentToolReceiptFactory.CreateSuccess(
-                effectiveTool,
-                toolCallContext.ToolCallId,
-                toolCallContext.ToolName,
-                effectiveTool.GetCallSafety(toolCallContext.ArgumentsJson),
-                toolResult,
-                toolCallContext.ArgumentsJson);
-            var isErrorReceipt = executionFailed ||
-                receipt?.Status is AgentToolReceiptStatus.Error or
+            var executionPort = _toolExecutionPort
+                ?? throw new InvalidOperationException("IAgentToolExecutionPort is required for server-owned tool execution.");
+            var outcome = await executionPort.ExecuteAsync(
+                new AgentToolExecutionRequest(
+                    effectiveTool,
+                    call.ArgumentsJson,
+                    executionContext,
+                    _approvalContinuationMode,
+                    _approvalGrant,
+                    tracked.Operation.ExecutionAttemptKind),
+                ct);
+            var toolResult = outcome.ResultJson;
+            var receipt = outcome.Receipt;
+            var isErrorReceipt = receipt?.Status is AgentToolReceiptStatus.Error or
                 AgentToolReceiptStatus.Denied or
-                AgentToolReceiptStatus.AuthorizationRequired;
+                AgentToolReceiptStatus.AuthorizationRequired or
+                AgentToolReceiptStatus.Unspecified;
             var safeToolResult = isErrorReceipt && !string.IsNullOrWhiteSpace(receipt?.ResultJson)
                 ? receipt.ResultJson
                 : toolResult;
@@ -480,8 +535,8 @@ public sealed class StreamingToolExecutor
                 _logger.LogWarning(
                     ex,
                     "Tool execution end hook failed for tool {ToolName} and call {CallId}",
-                    toolCallContext.ToolName,
-                    toolCallContext.ToolCallId);
+                    effectiveToolName,
+                    call.Id);
             }
 
             if (ct.IsCancellationRequested)
@@ -508,8 +563,14 @@ public sealed class StreamingToolExecutor
                     IsError: true),
                 SchedulerFault: false);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _logger.LogWarning(
+                ex,
+                "Tool execution failed before receipt finalization for tool {ToolName} and call {CallId}",
+                tracked.Call.Name,
+                tracked.Call.Id);
+
             return new ToolExecutionCompletion(
                 new ToolExecutionResult(
                     tracked.Call.Id,
@@ -520,17 +581,6 @@ public sealed class StreamingToolExecutor
         }
     }
 
-    private AgentToolExecutionContext? ResolveExecutionContext(
-        string callId,
-        out AgentToolExecutionContext? executionContext)
-    {
-        executionContext = (_toolContext ?? AgentToolRequestContext.Current)?.WithCallId(callId);
-        return executionContext;
-    }
-
-    private bool IsToolVisible(string? toolName) =>
-        (_toolContext ?? AgentToolRequestContext.Current)?.ToolVisibility.Allows(toolName) ?? true;
-
     private sealed class NullAgentTool(string name) : IAgentTool
     {
         public string Name => name;
@@ -539,22 +589,24 @@ public sealed class StreamingToolExecutor
         public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            Task.FromResult($"Tool '{name}' not found");
+            Task.FromException<string>(new InvalidOperationException($"Tool '{name}' was not found."));
     }
 
     internal enum ToolStatus { Queued, Executing, Completed, Yielded }
 
     internal sealed class ToolExecutionEntry(
-        ToolCall Call,
+        PreparedChatToolOperation Operation,
         IAgentTool? Tool,
         bool IsConcurrencySafe)
     {
-        public ToolCall Call { get; } = Call;
+        public PreparedChatToolOperation Operation { get; } = Operation;
+        public ToolCall Call => Operation.ToolCall;
         public IAgentTool? Tool { get; } = Tool;
         public bool IsConcurrencySafe { get; } = IsConcurrencySafe;
         public ToolStatus Status { get; set; }
         public ToolExecutionResult? Result { get; set; }
         public Task<ToolExecutionCompletion>? Execution { get; set; }
+        public bool CompletionCommitted { get; set; }
     }
 
     internal readonly record struct ToolExecutionCompletion(ToolExecutionResult Result, bool SchedulerFault);

@@ -1,7 +1,9 @@
 using System.Net;
 using System.Text;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
@@ -365,6 +367,8 @@ public sealed class ChannelConversationTurnRunnerTests
         toolContext.Caller.OwnerSubject.Should().Be("scope-1");
         toolContext.Caller.ResponseId.Should().Be("msg-sched-1");
         toolContext.Channel.RegistrationScopeId.Should().Be("scope-1");
+        toolContext.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.ChannelRegistration);
+        toolContext.ExecutionOwner.OwnerId.Should().Be("reg-1");
         // The inbound bot's provider slug is also exposed as the default OUTBOUND delivery provider,
         // so scheduled_agent_creator resolves one without manual config.
         toolContext.ExternalMetadata.Should().ContainKey(ChannelMetadataKeys.OutboundProviderSlug)
@@ -468,8 +472,16 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkChatId].Should().Be("oc_chat_1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkSubjectUserId].Should().Be("lark-user-1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkSubjectEmployeeId].Should().Be("emp-1");
-
         var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext);
+        toolContext.Channel.IdentityHints.Should().BeEquivalentTo(
+            new[]
+            {
+                new AgentToolChannelIdentityHint("sender", "global", "on_union_1"),
+                new AgentToolChannelIdentityHint("conversation", "platform", "oc_chat_1"),
+                new AgentToolChannelIdentityHint("subject", "account", "lark-user-1"),
+                new AgentToolChannelIdentityHint("subject", "directory", "emp-1"),
+            },
+            options => options.WithStrictOrdering());
         toolContext.ExternalMetadata[ChannelMetadataKeys.LarkSubjectUserId].Should().Be("lark-user-1");
         toolContext.ExternalMetadata[ChannelMetadataKeys.LarkSubjectEmployeeId].Should().Be("emp-1");
         nyxHandler.Requests.Should().ContainSingle();
@@ -540,6 +552,15 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkOperatorUserId].Should().NotBe("nyx-user-1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkOperatorOpenId].Should().Be("ou_open_operator_1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkOperatorUnionId].Should().Be("on_operator_1");
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext);
+        toolContext.Channel.IdentityHints.Should().BeEquivalentTo(
+            new[]
+            {
+                new AgentToolChannelIdentityHint("operator", "account", "lark-user-1"),
+                new AgentToolChannelIdentityHint("operator", "platform", "ou_open_operator_1"),
+                new AgentToolChannelIdentityHint("operator", "global", "on_operator_1"),
+            },
+            options => options.WithStrictOrdering());
         result.LlmReplyRequest.Metadata.Should().NotContainKey(ChannelMetadataKeys.LarkSubjectUserId);
         result.LlmReplyRequest.Metadata.Should().NotContainKey(ChannelMetadataKeys.LarkSubjectEmployeeId);
     }
@@ -647,10 +668,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
         var ownerSource = new StubOwnerLlmConfigSource(
-            new OwnerLlmConfig(
-                DefaultModel: "gpt-5.5",
-                PreferredLlmRoute: "/api/v1/proxy/s/chrono-llm",
-                MaxToolRounds: 12));
+            OwnerConfig("gpt-5.5", 12));
         var services = new ServiceCollection()
             .AddSingleton<IOwnerLlmConfigSource>(ownerSource)
             .BuildServiceProvider();
@@ -766,10 +784,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
         var ownerSource = new StubOwnerLlmConfigSource(
-            new OwnerLlmConfig(
-                DefaultModel: null,
-                PreferredLlmRoute: "/api/v1/proxy/s/chrono-llm",
-                MaxToolRounds: 0));
+            OwnerConfig(null, 0));
         var services = new ServiceCollection()
             .AddSingleton<IOwnerLlmConfigSource>(ownerSource)
             .BuildServiceProvider();
@@ -1381,6 +1396,59 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldRouteTypedAgentRunApprovalToExactRunActor()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var dispatcher = new RecordingAgentRunToolApprovalDecisionDispatcher();
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            agentRunToolApprovalDecisionDispatcher: dispatcher);
+        var activity = BuildCardActionActivity("evt-agent-run-approval-1");
+        activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "relay-card-action-1",
+            CorrelationId = activity.Id,
+        };
+        activity.Content.CardAction.ActionKind = ActionElementKind.Button;
+        activity.Content.CardAction.AgentRunApproval = new AgentRunApprovalActionPayload
+        {
+            RunId = "agent-run-approval-1",
+            ApprovalRequestId = "tool-approval-1",
+            ToolCallId = "call-approval-1",
+            ToolName = "use_skill",
+            ArgumentsSha256 = "sha256-approval-1",
+            Approved = true,
+        };
+
+        var result = await runner.RunInboundAsync(
+            activity,
+            RelayRuntimeContext(
+                activity.Id,
+                replyToken: "relay-token-callback-1",
+                replyMessageId: "relay-card-action-1",
+                nyxUserAccessToken: "callback-user-token-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().BeNull();
+        adapter.Replies.Should().BeEmpty();
+        var command = dispatcher.Commands.Should().ContainSingle().Subject;
+        command.RunId.Should().Be("agent-run-approval-1");
+        command.ApprovalRequestId.Should().Be("tool-approval-1");
+        command.ToolCallId.Should().Be("call-approval-1");
+        command.ToolName.Should().Be("use_skill");
+        command.ArgumentsSha256.Should().Be("sha256-approval-1");
+        command.SenderId.Should().Be("ou_user_1");
+        command.RegistrationScopeId.Should().Be("scope-1");
+        command.ConversationKey.Should().Be("lark:dm:ou_user_1");
+        command.Request.ReplyToken.Should().Be("relay-token-callback-1");
+        command.Request.Activity.TransportExtras.NyxUserAccessToken.Should().Be("callback-user-token-1");
+        command.Request.Activity.TransportExtras.NyxRegistrationScopeId.Should().Be("scope-1");
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldRouteNyxIdApprovalCardAction_WithCurrentUserToken()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
@@ -1732,16 +1800,17 @@ public sealed class ChannelConversationTurnRunnerTests
         var broker = new InMemoryCapabilityBroker();
         broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
         var option = new UserLlmOption(
-            ServiceId: "svc-openai",
             ServiceSlug: "openai-work",
             DisplayName: "OpenAI Work",
             RouteValue: "/api/v1/proxy/s/openai-work",
-            DefaultModel: "gpt-5.4",
-            AvailableModels: ["gpt-5.4"],
+            ModelCatalog: EnumeratedCatalog("gpt-5.4"),
             Status: "ready",
             Source: "user",
             Allowed: true,
-            Description: null);
+            Description: null,
+            Identity: new UserLlmServiceIdentity(
+                UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                "us-openai"));
         var optionsService = new StubUserLlmOptionsService(option);
         var selectionService = new RecordingUserLlmSelectionService();
         var services = new ServiceCollection()
@@ -1757,7 +1826,7 @@ public sealed class ChannelConversationTurnRunnerTests
         activity.Content.CardAction.LlmSelection = new LlmSelectionActionPayload
         {
             Action = TextUserLlmOptionsRenderer.SelectServiceAction,
-            ServiceId = "svc-openai",
+            ServiceId = "us-openai",
         };
 
         var result = await runner.RunInboundAsync(activity, CancellationToken.None);
@@ -1765,10 +1834,17 @@ public sealed class ChannelConversationTurnRunnerTests
         result.Success.Should().BeTrue();
         result.LlmReplyRequest.Should().BeNull();
         result.SentActivityId.Should().Be("direct-reply:evt-llm-select-1");
-        selectionService.SelectedServiceId.Should().Be("svc-openai");
+        selectionService.SelectedServiceId.Should().Be("us-openai");
+        selectionService.SelectedModelSelection.Should().NotBeNull();
+        selectionService.SelectedModelSelection!.Kind.Should().Be(LLMModelSelectionKind.ProviderDefault);
+        selectionService.SelectedModelSelection.ModelId.Should().BeEmpty();
         selectionService.Context?.BindingId.Value.Should().Be("bnd-user-1");
+        optionsService.Calls.Should().Be(1);
         adapter.Replies.Should().ContainSingle();
         adapter.Replies[0].ReplyText.Should().Contain("OpenAI Work");
+        adapter.Replies[0].ReplyText.Should().Contain("更新已提交");
+        adapter.Replies[0].ReplyText.Should().NotContain("已切换");
+        adapter.Replies[0].ReplyText.Should().NotContain("下一条消息");
     }
 
     [Fact]
@@ -1782,17 +1858,19 @@ public sealed class ChannelConversationTurnRunnerTests
         };
         var broker = new InMemoryCapabilityBroker();
         broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
+        const string userServiceId = "123e4567-e89b-12d3-a456-426614174000";
         var option = new UserLlmOption(
-            ServiceId: "123e4567-e89b-12d3-a456-426614174000",
             ServiceSlug: "openai-work",
             DisplayName: "OpenAI Work",
             RouteValue: "/api/v1/proxy/s/openai-work",
-            DefaultModel: "gpt-5.4",
-            AvailableModels: ["gpt-5.4"],
+            ModelCatalog: EnumeratedCatalog("gpt-5.4"),
             Status: "ready",
             Source: "user",
             Allowed: true,
-            Description: null);
+            Description: null,
+            Identity: new UserLlmServiceIdentity(
+                UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                userServiceId));
         var optionsService = new StubUserLlmOptionsService(option);
         var selectionService = new RecordingUserLlmSelectionService();
         var services = new ServiceCollection()
@@ -1806,12 +1884,12 @@ public sealed class ChannelConversationTurnRunnerTests
         var runner = CreateRunner(registrationQueryPort, adapter, services);
         var activity = BuildCardActionActivity("evt-llm-select-compact-1");
         activity.Content.CardAction!.ActionId = TextUserLlmOptionsRenderer.SelectServiceActionId;
-        activity.Content.CardAction.SubmittedValue = option.ServiceId;
+        activity.Content.CardAction.SubmittedValue = userServiceId;
 
         var result = await runner.RunInboundAsync(activity, CancellationToken.None);
 
         result.Success.Should().BeTrue();
-        selectionService.SelectedServiceId.Should().Be(option.ServiceId);
+        selectionService.SelectedServiceId.Should().Be(userServiceId);
         adapter.Replies.Should().ContainSingle();
         adapter.Replies[0].ReplyText.Should().Contain("OpenAI Work");
     }
@@ -1827,17 +1905,19 @@ public sealed class ChannelConversationTurnRunnerTests
         };
         var broker = new InMemoryCapabilityBroker();
         broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
+        const string userServiceId = "us-form";
         var option = new UserLlmOption(
-            ServiceId: "svc-form",
             ServiceSlug: "form-route",
             DisplayName: "Form Route",
             RouteValue: "/api/v1/proxy/s/form-route",
-            DefaultModel: "gpt-5.4",
-            AvailableModels: ["gpt-5.4"],
+            ModelCatalog: EnumeratedCatalog("gpt-5.4"),
             Status: "ready",
             Source: "user",
             Allowed: true,
-            Description: null);
+            Description: null,
+            Identity: new UserLlmServiceIdentity(
+                UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                userServiceId));
         var optionsService = new StubUserLlmOptionsService(option);
         var selectionService = new RecordingUserLlmSelectionService();
         var services = new ServiceCollection()
@@ -1849,7 +1929,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var runner = CreateRunner(BuildRegistrationQueryPort(), new RecordingPlatformAdapter(), services);
         var activity = BuildCardActionActivity(
             "evt-llm-select-form-1",
-            (TextUserLlmOptionsRenderer.ServiceIdArgument, option.ServiceId));
+            (TextUserLlmOptionsRenderer.ServiceIdArgument, userServiceId));
         activity.Content.CardAction!.ActionKind = ActionElementKind.FormSubmit;
         activity.Content.CardAction.LlmSelection = new LlmSelectionActionPayload
         {
@@ -1859,7 +1939,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var result = await runner.RunInboundAsync(activity, CancellationToken.None);
 
         result.Success.Should().BeTrue();
-        selectionService.SelectedServiceId.Should().Be(option.ServiceId);
+        selectionService.SelectedServiceId.Should().Be(userServiceId);
         selectionService.Context?.BindingId.Value.Should().Be("bnd-user-1");
     }
 
@@ -1876,16 +1956,17 @@ public sealed class ChannelConversationTurnRunnerTests
         broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
         var options = Enumerable.Range(1, 7)
             .Select(i => new UserLlmOption(
-                ServiceId: $"svc-{i}",
                 ServiceSlug: $"route-{i}",
                 DisplayName: $"Route {i}",
                 RouteValue: $"/api/v1/proxy/s/route-{i}",
-                DefaultModel: $"model-{i}",
-                AvailableModels: [$"model-{i}"],
+                ModelCatalog: EnumeratedCatalog($"model-{i}"),
                 Status: "ready",
                 Source: "user",
                 Allowed: true,
-                Description: null))
+                Description: null,
+                Identity: new UserLlmServiceIdentity(
+                    UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                    $"us-{i}")))
             .ToArray();
         var optionsService = new StubUserLlmOptionsService(options, current: options[0]);
         var selectionService = new RecordingUserLlmSelectionService();
@@ -1929,16 +2010,17 @@ public sealed class ChannelConversationTurnRunnerTests
         var broker = new InMemoryCapabilityBroker();
         broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
         var option = new UserLlmOption(
-            ServiceId: "svc-openai",
             ServiceSlug: "openai-work",
             DisplayName: "OpenAI Work",
             RouteValue: "/api/v1/proxy/s/openai-work",
-            DefaultModel: "gpt-5.4",
-            AvailableModels: ["gpt-5.4"],
+            ModelCatalog: EnumeratedCatalog("gpt-5.4"),
             Status: "ready",
             Source: "user",
             Allowed: true,
-            Description: null);
+            Description: null,
+            Identity: new UserLlmServiceIdentity(
+                UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                "us-openai"));
         var optionsService = new StubUserLlmOptionsService(option);
         var selectionService = new RecordingUserLlmSelectionService();
         var services = new ServiceCollection()
@@ -1964,9 +2046,89 @@ public sealed class ChannelConversationTurnRunnerTests
         result.SentActivityId.Should().Be("direct-reply:evt-llm-preset-typed-1");
         selectionService.PresetId.Should().Be("work-fast");
         selectionService.Context?.BindingId.Value.Should().Be("bnd-user-1");
+        selectionService.SelectedServiceId.Should().BeNull();
+        optionsService.Calls.Should().Be(0);
         adapter.Replies.Should().ContainSingle();
-        adapter.Replies[0].ReplyText.Should().Contain("OpenAI Work");
-        adapter.Replies[0].ReplyText.Should().Contain("/api/v1/proxy/s/openai-work");
+        adapter.Replies[0].ReplyText.Should().Contain("work-fast");
+        adapter.Replies[0].ReplyText.Should().Contain("更新已提交");
+        adapter.Replies[0].ReplyText.Should().NotContain("已应用");
+        adapter.Replies[0].ReplyText.Should().NotContain("下一条消息");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRejectLegacyLlmModelCardAction_WithRefreshHintAndNoWrite()
+    {
+        var subject = new ExternalSubjectRef
+        {
+            Platform = "lark",
+            Tenant = "scope-1",
+            ExternalUserId = "ou_user_1",
+        };
+        var broker = new InMemoryCapabilityBroker();
+        broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
+        var optionsService = new StubUserLlmOptionsService([]);
+        var selectionService = new RecordingUserLlmSelectionService();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<IUserLlmOptionsService>(optionsService)
+            .AddSingleton<IUserLlmSelectionService>(selectionService)
+            .AddSingleton<IUserLlmOptionsRenderer<MessageContent>>(new TextUserLlmOptionsRenderer())
+            .BuildServiceProvider();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(BuildRegistrationQueryPort(), adapter, services);
+        var activity = BuildCardActionActivity("evt-llm-model-legacy-1");
+        activity.Content.CardAction!.ActionId = TextUserLlmOptionsRenderer.LegacySelectModelActionId;
+        activity.Content.CardAction.SubmittedValue = "gpt-5.4";
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        selectionService.SelectedServiceId.Should().BeNull();
+        selectionService.PresetId.Should().BeNull();
+        selectionService.ResetCalled.Should().BeFalse();
+        optionsService.Calls.Should().Be(0);
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("/models");
+        adapter.Replies[0].ReplyText.Should().Contain("失效");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRejectUnknownLlmCardAction_WithRefreshHintAndNoWrite()
+    {
+        var subject = new ExternalSubjectRef
+        {
+            Platform = "lark",
+            Tenant = "scope-1",
+            ExternalUserId = "ou_user_1",
+        };
+        var broker = new InMemoryCapabilityBroker();
+        broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
+        var optionsService = new StubUserLlmOptionsService([]);
+        var selectionService = new RecordingUserLlmSelectionService();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<IUserLlmOptionsService>(optionsService)
+            .AddSingleton<IUserLlmSelectionService>(selectionService)
+            .AddSingleton<IUserLlmOptionsRenderer<MessageContent>>(new TextUserLlmOptionsRenderer())
+            .BuildServiceProvider();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(BuildRegistrationQueryPort(), adapter, services);
+        var activity = BuildCardActionActivity("evt-llm-action-unknown-1");
+        activity.Content.CardAction!.LlmSelection = new LlmSelectionActionPayload
+        {
+            Action = "select_future_model",
+        };
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        selectionService.SelectedServiceId.Should().BeNull();
+        selectionService.PresetId.Should().BeNull();
+        selectionService.ResetCalled.Should().BeFalse();
+        optionsService.Calls.Should().Be(0);
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("/models");
+        adapter.Replies[0].ReplyText.Should().Contain("失效");
     }
 
     [Fact]
@@ -2057,11 +2219,15 @@ public sealed class ChannelConversationTurnRunnerTests
         result.Success.Should().BeTrue();
         result.LlmReplyRequest.Should().NotBeNull();
         result.LlmReplyRequest!.ReplyToken.Should().Be("relay-token-goal-1");
-        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("Ornn skill-backed command");
-        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("use_skill");
-        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("goal");
-        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("ship command fix");
-        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("/goal ship command fix");
+        var prompt = result.LlmReplyRequest.Activity.Content.Text;
+        prompt.Should().Contain("Ornn skill-backed command");
+        prompt.Should().Contain("If none is present, call `use_skill`");
+        prompt.Should().Contain("omit `mount_workflows`");
+        prompt.Should().Contain("loading instructions is read-only");
+        prompt.Should().NotContain("already attempted `use_skill`");
+        prompt.Should().Contain("goal");
+        prompt.Should().Contain("ship command fix");
+        prompt.Should().Contain("/goal ship command fix");
         var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext).SkillRecovery;
         recovery.RequireInitialOrnnSearch.Should().BeTrue();
         recovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
@@ -2220,6 +2386,41 @@ public sealed class ChannelConversationTurnRunnerTests
         recovery.PrimarySkillName.Should().Be("model");
         recovery.CommandArguments.Should().Be("status");
         recovery.OriginalCommand.Should().Be("::model status");
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("请使用 lark-contact-batch-resolution 解析 1 个合成联系人标识，并只返回脱敏结果。")]
+    [InlineData("请使用已挂载的 lark-contact-batch-resolution 解析 1 个合成联系人标识，并只返回脱敏结果。")]
+    public async Task RunInboundAsync_ShouldRouteNamedSkillNaturalLanguageRequestThroughSkillRecovery(string message)
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                message,
+                "msg-mounted-skill-natural-language-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Activity.Content.Text.Should().Contain("Ornn skill-backed command");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("use_skill");
+        var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext).SkillRecovery;
+        recovery.RequireInitialOrnnSearch.Should().BeTrue();
+        recovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
+        recovery.CommandName.Should().Be("lark-contact-batch-resolution");
+        recovery.PrimarySkillName.Should().Be("lark-contact-batch-resolution");
+        recovery.CommandArguments.Should().Be(message);
+        recovery.OriginalCommand.Should().Be(message);
         adapter.Replies.Should().BeEmpty();
     }
 
@@ -2404,6 +2605,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var nyxHandler = new RecordingJsonHandler(
             """{"code":0,"data":{"user":{"user_id":"lark-user-direct","employee_id":"emp-direct"}}}""");
         var callerScopeResolver = new CapturingCallerScopeResolver();
+        var toolExecutionPort = new TestAgentToolExecutionPort();
         var services = new ServiceCollection()
             .AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>())
             .AddSingleton(Substitute.For<IScheduledDispatchApplicationService>())
@@ -2421,6 +2623,7 @@ public sealed class ChannelConversationTurnRunnerTests
                 {
                     BaseAddress = new Uri("https://example.com"),
                 })))
+            .AddSingleton<IAgentToolExecutionPort>(toolExecutionPort)
             .BuildServiceProvider();
         var runner = CreateRunner(
             registrationQueryPort,
@@ -2475,6 +2678,9 @@ public sealed class ChannelConversationTurnRunnerTests
         nyxHandler.Requests[0].Path.Should().Be(
             "/api/v1/proxy/s/api-lark-bot/open-apis/contact/v3/users/on_union_direct?user_id_type=union_id");
         nyxHandler.Requests[0].Authorization.Should().Be("Bearer runtime-user-token-1");
+        var executionRequest = toolExecutionPort.Requests.Should().ContainSingle().Subject;
+        executionRequest.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.ChannelRegistration);
+        executionRequest.ExecutionOwner.OwnerId.Should().Be("reg-1");
         AgentToolRequestContext.Current.Should().BeNull();
     }
 
@@ -2673,6 +2879,40 @@ public sealed class ChannelConversationTurnRunnerTests
         llmControl.SenderNyxIdAccessToken.Should().Be("test-access-token-for-bnd-user-1");
         userResolver.Tokens.Should().ContainSingle().Which.Should().Be("test-access-token-for-bnd-user-1");
         adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_WhenBoundSenderAsksForNyxIdInventory_QueuesAgentRunWithExactAuthority()
+    {
+        var queryPort = Substitute.For<IExternalIdentityBindingQueryPort>();
+        queryPort.ResolveAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<BindingId?>(new BindingId { Value = "bnd-user-1" }));
+        var services = new ServiceCollection()
+            .AddSingleton(queryPort)
+            .BuildServiceProvider();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(BuildRegistrationQueryPort(), adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "我在 nyxid 上有什么服务",
+                "msg-nyxid-inventory-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                transportExtras: new TransportExtras { NyxPlatform = "lark" }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull(
+            "natural-language intent and answer composition belong to AgentRun and the loaded NyxID skill");
+        adapter.Replies.Should().BeEmpty("the turn runner must not render a fixed inventory reply");
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
+        toolContext.SenderBinding.BindingId.Should().Be("bnd-user-1");
+        toolContext.NyxIdAuthority.Platform.Should().Be("lark");
+        toolContext.NyxIdAuthority.Tenant.Should().Be("scope-1");
+        toolContext.NyxIdAuthority.ExternalUserId.Should().Be("ou_user_1");
     }
 
     [Fact]
@@ -4641,7 +4881,8 @@ public sealed class ChannelConversationTurnRunnerTests
         ILarkBotIdentityResolver? botIdentityResolver = null,
         IChannelRelayTailTextSender? relayTailTextSender = null,
         IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null,
-        IBindingRevocationReconciler? bindingRevocationReconciler = null)
+        IBindingRevocationReconciler? bindingRevocationReconciler = null,
+        IAgentRunToolApprovalDecisionDispatcher? agentRunToolApprovalDecisionDispatcher = null)
     {
         services ??= BuildAgentBuilderToolServices();
         relayHandler ??= new RecordingJsonHandler("""{"message_id":"relay-reply"}""");
@@ -4699,7 +4940,55 @@ public sealed class ChannelConversationTurnRunnerTests
             relayTailTextSender: relayTailTextSender ?? new LarkChannelRelayTailTextSender(
                 new LarkOutboundDispatcher(nyxClient, NullLogger.Instance),
                 NullLogger<LarkChannelRelayTailTextSender>.Instance),
-            relayProxyResponseClassifier: relayProxyResponseClassifier ?? new LarkRelayProxyResponseClassifier());
+            relayProxyResponseClassifier: relayProxyResponseClassifier ?? new LarkRelayProxyResponseClassifier(),
+            toolExecutionPort: services.GetService<IAgentToolExecutionPort>() ?? new TestAgentToolExecutionPort(),
+            agentRunToolApprovalDecisionDispatcher: agentRunToolApprovalDecisionDispatcher);
+    }
+
+    private sealed class RecordingAgentRunToolApprovalDecisionDispatcher
+        : IAgentRunToolApprovalDecisionDispatcher
+    {
+        public List<AgentRunToolApprovalDecisionRequested> Commands { get; } = [];
+
+        public Task DispatchAsync(AgentRunToolApprovalDecisionRequested command, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Commands.Add(command.Clone());
+            return Task.CompletedTask;
+        }
+    }
+
+    internal sealed class TestAgentToolExecutionPort : IAgentToolExecutionPort
+    {
+        public List<AgentToolExecutionRequest> Requests { get; } = [];
+
+        public async Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            var safety = request.Tool.GetCallSafety(request.ArgumentsJson);
+            using var contextScope = AgentToolContextScope.Push(request.ExecutionContext);
+            var resultJson = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
+            return new AgentToolExecutionOutcome(
+                AgentToolExecutionOutcomeKind.Executed,
+                resultJson,
+                new AgentToolReceipt
+                {
+                    CallId = request.ExecutionContext.Request.CallId ?? string.Empty,
+                    ToolName = request.Tool.Name,
+                    Status = AgentToolReceiptStatus.Success,
+                    ResultJson = resultJson,
+                    IsDestructive = safety.IsDestructive,
+                },
+                IsMutation: !safety.IsReadOnly,
+                FailureCode: string.Empty,
+                SafeMessage: string.Empty,
+                AgentToolExecutionFailureStage.None,
+                TerminalInvoked: true,
+                Retryable: false,
+                AuditCompleted: true);
+        }
     }
 
     private static IServiceProvider BuildAgentBuilderToolServices(IScopeWorkflowQueryPort? workflowQueryPort = null)
@@ -5060,10 +5349,19 @@ public sealed class ChannelConversationTurnRunnerTests
         }
     }
 
+    private static LLMModelCatalog EnumeratedCatalog(string modelId) => new()
+    {
+        Certainty = LLMModelCatalogCertainty.Enumerated,
+        DefaultModelId = modelId,
+        ModelIds = { modelId },
+    };
+
     private sealed class StubUserLlmOptionsService : IUserLlmOptionsService
     {
         private readonly IReadOnlyList<UserLlmOption> _options;
         private readonly UserLlmOption? _current;
+
+        public int Calls { get; private set; }
 
         public StubUserLlmOptionsService(UserLlmOption option)
             : this([option], option)
@@ -5078,18 +5376,21 @@ public sealed class ChannelConversationTurnRunnerTests
             _current = current;
         }
 
-        public Task<UserLlmOptionsView> GetOptionsAsync(UserLlmOptionsQuery query, CancellationToken ct) =>
-            Task.FromResult(new UserLlmOptionsView(_current, _options, null)
+        public Task<UserLlmOptionsView> GetOptionsAsync(UserLlmOptionsQuery query, CancellationToken ct)
+        {
+            Calls++;
+            return Task.FromResult(new UserLlmOptionsView(_current, _options, null)
             {
                 CurrentRouteValue = _current?.RouteValue,
-                CurrentModel = _current?.DefaultModel,
+                CurrentModel = _current?.ModelCatalog.DefaultModelId,
             });
+        }
     }
 
     private sealed class RecordingUserLlmSelectionService : IUserLlmSelectionService
     {
         public string? SelectedServiceId { get; private set; }
-        public string? SelectedModel { get; private set; }
+        public LLMModelSelection? SelectedModelSelection { get; private set; }
         public string? PresetId { get; private set; }
         public bool ResetCalled { get; private set; }
         public UserLlmSelectionContext? Context { get; private set; }
@@ -5097,22 +5398,12 @@ public sealed class ChannelConversationTurnRunnerTests
         public Task SetByServiceAsync(
             UserLlmSelectionContext context,
             string serviceId,
-            string? modelOverride,
+            LLMModelSelection modelSelection,
             CancellationToken ct)
         {
             Context = context;
             SelectedServiceId = serviceId;
-            SelectedModel = modelOverride;
-            return Task.CompletedTask;
-        }
-
-        public Task SetModelOverrideAsync(
-            UserLlmSelectionContext context,
-            string model,
-            CancellationToken ct)
-        {
-            Context = context;
-            SelectedModel = model;
+            SelectedModelSelection = modelSelection.Clone();
             return Task.CompletedTask;
         }
 
@@ -5242,6 +5533,24 @@ public sealed class ChannelConversationTurnRunnerTests
             return response;
         }
     }
+
+    private static OwnerLlmConfig OwnerConfig(string? modelId, int maxToolRounds) => new(
+        new LLMSelection
+        {
+            RouteKind = LLMRouteKind.NyxIdUserService,
+            RouteValue = "/api/v1/proxy/s/chrono-llm",
+            NyxIdUserServiceId = "us-chrono",
+            ServiceSlugSnapshot = "chrono-llm",
+            ModelSelection = new LLMModelSelection
+            {
+                Kind = modelId is null
+                    ? LLMModelSelectionKind.ProviderDefault
+                    : LLMModelSelectionKind.ExplicitModel,
+                ModelId = modelId ?? string.Empty,
+            },
+        },
+        LLMSelectionPersistenceStatus.Ready,
+        maxToolRounds);
 
     private sealed class StubOwnerLlmConfigSource : IOwnerLlmConfigSource
     {

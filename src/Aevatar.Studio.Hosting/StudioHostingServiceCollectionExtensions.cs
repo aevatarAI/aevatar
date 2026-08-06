@@ -1,13 +1,16 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.ContentArtifacts.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.Studio.Application;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Application.Studio.WorkflowBoards;
 using Aevatar.Studio.Hosting.Controllers;
+using Aevatar.Studio.Hosting.ContentArtifacts;
 using Aevatar.Studio.Hosting.Endpoints;
 using Aevatar.Studio.Hosting.WorkflowBoards;
 using Aevatar.Studio.Hosting.WorkOrders;
@@ -41,10 +44,14 @@ internal static class StudioHostingServiceCollectionExtensions
                 json.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
                 json.JsonSerializerOptions.DefaultIgnoreCondition =
                     System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull;
+                json.JsonSerializerOptions.AllowDuplicateProperties = false;
             });
         services.AddHttpContextAccessor();
         services.AddHttpClient();
         services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<
+            IContentArtifactBackingContentPort,
+            WorkflowFileContentArtifactBackingContentPort>();
         services.AddSingleton<IAppScopeResolver, DefaultAppScopeResolver>();
         services.AddStudioApplication();
         AddWorkOrderExecutionWorker(services, configuration);
@@ -60,14 +67,6 @@ internal static class StudioHostingServiceCollectionExtensions
         services.AddStudioInfrastructure(configuration);
         services.AddStudioProjectionComponents(configuration);
         services.AddStudioProjectionReadModelProviders(configuration);
-        services.AddOptions<ScheduledInvocationOwnerLLMRouteOptions>()
-            .Configure(options =>
-            {
-                var configuredRoute = configuration["Aevatar:NyxId:DefaultRoute"];
-                options.DefaultRoutePreference = string.IsNullOrWhiteSpace(configuredRoute)
-                    ? LlmDefaults.NyxIdRoute
-                    : configuredRoute.Trim();
-            });
         services.AddNyxIdAuthorizationCatalogHosting(configuration);
         services.TryAddSingleton<INyxIdCatalogAccessLifecyclePort>(sp => new NyxIdCatalogAccessLifecyclePort(
             sp.GetRequiredService<INyxIdAuthorizationCatalogCommandPort>(),
@@ -81,10 +80,13 @@ internal static class StudioHostingServiceCollectionExtensions
     {
         services.AddSingleton(sp => new AppScopedWorkflowService(
             sp.GetRequiredService<IWorkflowYamlDocumentService>(),
-            sp.GetRequiredService<Aevatar.Workflow.Application.Abstractions.ExternalCapabilities.IWorkflowExternalCapabilityAdmissionService>(),
+            sp.GetRequiredService<IWorkflowDefinitionParser>(),
             sp.GetService<IStudioWorkspaceQueryPort>(),
             sp.GetService<IStudioWorkspaceCommandPort>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<AppScopedWorkflowService>>()));
+        services.TryAddSingleton<
+            IStudioMemberWorkflowDraftProvisioningPort,
+            StudioMemberWorkflowDraftProvisioningService>();
         services.AddSingleton(sp => new AppScopedScriptService(
             sp.GetRequiredService<IHttpClientFactory>(),
             sp.GetService<IScopeScriptQueryPort>(),

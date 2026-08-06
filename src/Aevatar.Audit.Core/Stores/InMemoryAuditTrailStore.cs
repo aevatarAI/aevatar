@@ -161,6 +161,7 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
         return MatchesTime(record, query) &&
                MatchesIdentity(record, query) &&
                MatchesOperation(record, query) &&
+               MatchesChat(record, query) &&
                MatchesTarget(record, query) &&
                MatchesCorrelation(record, query) &&
                MatchesCommittedFactReference(record, query);
@@ -177,8 +178,17 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
     {
         return Matches(record.ScopeId, query.ScopeId) &&
                Matches(record.AuditActorId, query.AuditActorId) &&
+               MatchesAny(record.AuditActorId, query.AuditActorIds) &&
                Matches(record.IdentityKeyId, query.IdentityKeyId) &&
                (!query.ActorKind.HasValue || record.ActorKind == query.ActorKind.Value);
+    }
+
+    private static bool MatchesChat(AuditRecord record, AuditTrailQuery query)
+    {
+        var chat = record.Provenance?.Chat;
+        return (!query.RequireChatProvenance || chat is not null) &&
+               (!query.ChatSurface.HasValue || chat?.Surface == query.ChatSurface.Value) &&
+               Matches(chat?.ConversationId, query.ChatConversationId);
     }
 
     private static bool MatchesOperation(AuditRecord record, AuditTrailQuery query)
@@ -226,6 +236,13 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
     private static bool Matches(string? actual, string? expected)
     {
         return string.IsNullOrWhiteSpace(expected) || string.Equals(actual, expected.Trim(), StringComparison.Ordinal);
+    }
+
+    private static bool MatchesAny(string? actual, IReadOnlyList<string>? expected)
+    {
+        return expected is null || expected.Any(value =>
+            !string.IsNullOrWhiteSpace(value) &&
+            string.Equals(actual, value.Trim(), StringComparison.Ordinal));
     }
 
     private static int ClampTake(int take)

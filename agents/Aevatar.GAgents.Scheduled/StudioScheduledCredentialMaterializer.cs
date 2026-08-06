@@ -49,7 +49,7 @@ public sealed class StudioScheduledCredentialMaterializer : IStudioScheduledCred
         string scheduleId,
         string operationId,
         ScheduledCredentialEffectLocator effectLocator,
-        long effectAttemptGeneration,
+        StudioScheduledCredentialMaterializationMode mode,
         OwnerScope ownerScope,
         CancellationToken ct = default)
     {
@@ -57,8 +57,11 @@ public sealed class StudioScheduledCredentialMaterializer : IStudioScheduledCred
         ArgumentException.ThrowIfNullOrWhiteSpace(scheduleId);
         ArgumentException.ThrowIfNullOrWhiteSpace(operationId);
         ArgumentNullException.ThrowIfNull(effectLocator);
-        if (effectAttemptGeneration <= 0)
-            throw new ArgumentOutOfRangeException(nameof(effectAttemptGeneration));
+        if (mode is not (StudioScheduledCredentialMaterializationMode.Initial or
+            StudioScheduledCredentialMaterializationMode.Recovery))
+        {
+            throw new ArgumentOutOfRangeException(nameof(mode));
+        }
         var plan = validatedPlan.Plan ??
             throw new InvalidOperationException("scheduled_authorization_plan_missing");
         var owner = plan.Owner ??
@@ -74,14 +77,16 @@ public sealed class StudioScheduledCredentialMaterializer : IStudioScheduledCred
             validatedPlan,
             effectLocator,
             ct);
-        if (effectAttemptGeneration > 1 && recoveredEffectCount == 0)
+        if (mode == StudioScheduledCredentialMaterializationMode.Recovery &&
+            recoveredEffectCount == 0)
         {
             const string errorCode = "scheduled_credential_recovery_evidence_missing";
             throw new StudioScheduledCredentialMaterializationException(
                 errorCode,
                 effectsCleaned: false,
                 new InvalidOperationException(errorCode),
-                recoveryBlocked: true);
+                recoveryBlocked: true,
+                failureCode: errorCode);
         }
 
         var issued = await _apiKeyIssuer.IssueAsync(
@@ -100,12 +105,35 @@ public sealed class StudioScheduledCredentialMaterializer : IStudioScheduledCred
                     issued.ApiKeyId,
                     effectLocator,
                     issueFailure);
+                if (string.Equals(issued.Error, "authorization_plan_changed", StringComparison.Ordinal) &&
+                    issued.AuthorizationPlanMismatchReason != ScheduledAuthorizationPlanMismatchReason.Unspecified)
+                {
+                    throw new StudioMemberAutomationPlanConflictException(
+                        "authorization_plan_changed",
+                        "authorization_plan_changed",
+                        issued.AuthorizationPlanMismatchReason);
+                }
+
                 throw new StudioScheduledCredentialMaterializationException(
                     issueFailure.Message,
                     effectsCleaned: true,
                     issueFailure);
             }
-            throw new InvalidOperationException(issued.Error ?? "scheduled_credential_materialization_failed");
+            if (string.Equals(issued.Error, "authorization_plan_changed", StringComparison.Ordinal) &&
+                issued.AuthorizationPlanMismatchReason != ScheduledAuthorizationPlanMismatchReason.Unspecified)
+            {
+                throw new StudioMemberAutomationPlanConflictException(
+                    "authorization_plan_changed",
+                    "authorization_plan_changed",
+                    issued.AuthorizationPlanMismatchReason);
+            }
+
+            var failureCode = issued.Error ?? "scheduled_credential_materialization_failed";
+            throw new StudioScheduledCredentialMaterializationException(
+                failureCode,
+                effectsCleaned: true,
+                new InvalidOperationException(failureCode),
+                failureCode: failureCode);
         }
 
         var expiresAt = DateTimeOffset.FromUnixTimeMilliseconds(issued.KeyExpiresAtUnixMs);

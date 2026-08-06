@@ -86,7 +86,8 @@ public interface IScheduledDispatchCredentialRequirementPolicy
 
 public static class ScheduledDispatchCredentialRequirementRequests
 {
-    public const string LegacyConnectorHttpAuthorizationHeader = "connector.http.authorization";
+    public const string LegacyConnectorHttpAuthorizationHeader =
+        ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey;
 
     public static ScheduledDispatchCredentialRequirementRequest FromConfiguration(
         ScheduledDispatchConfiguration configuration,
@@ -173,6 +174,13 @@ public static class ScheduledDispatchCredentialRequirementRequests
         if (!string.IsNullOrWhiteSpace(chatRequest.ConnectorHttpAuthorization))
             return new ScheduledDispatchPayloadCredentialSignal(true, nameof(ChatRequestEvent.ConnectorHttpAuthorization));
 
+        if (!string.IsNullOrWhiteSpace(chatRequest.CallerSourceReadableNyxIdBearerToken))
+        {
+            return new ScheduledDispatchPayloadCredentialSignal(
+                true,
+                nameof(ChatRequestEvent.CallerSourceReadableNyxIdBearerToken));
+        }
+
         if (!string.IsNullOrWhiteSpace(chatRequest.LlmControl?.NyxIdAccessToken) ||
             !string.IsNullOrWhiteSpace(chatRequest.LlmControl?.NyxIdOrgToken) ||
             !string.IsNullOrWhiteSpace(chatRequest.LlmControl?.SenderNyxIdAccessToken))
@@ -182,7 +190,9 @@ public static class ScheduledDispatchCredentialRequirementRequests
 
         if (!string.IsNullOrWhiteSpace(chatRequest.ToolContext?.Credentials?.NyxIdAccessToken) ||
             !string.IsNullOrWhiteSpace(chatRequest.ToolContext?.Credentials?.NyxIdOrgToken) ||
-            !string.IsNullOrWhiteSpace(chatRequest.ToolContext?.Credentials?.SenderNyxIdAccessToken))
+            !string.IsNullOrWhiteSpace(chatRequest.ToolContext?.Credentials?.SenderNyxIdAccessToken) ||
+            !string.IsNullOrWhiteSpace(
+                chatRequest.ToolContext?.Credentials?.SourceReadableNyxIdAccessToken))
         {
             return new ScheduledDispatchPayloadCredentialSignal(true, "ToolContext.Credentials");
         }
@@ -198,7 +208,7 @@ public static class ScheduledDispatchCredentialRequirementRequests
 
         foreach (var (key, value) in headers)
         {
-            if (string.Equals(key?.Trim(), LegacyConnectorHttpAuthorizationHeader, StringComparison.Ordinal) &&
+            if (ScheduledServiceInvocationPayloadPolicy.IsConnectorHttpAuthorizationKey(key) &&
                 !string.IsNullOrWhiteSpace(value))
             {
                 return new ScheduledDispatchPayloadCredentialSignal(

@@ -1,6 +1,7 @@
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.CommittedFacts;
 using Aevatar.Audit.Core.CommittedFacts;
+using Aevatar.Audit.Core.Sanitization;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.ChatHistory;
@@ -69,6 +70,9 @@ public sealed class StudioAuditTranslatorTests
                 typeof(UserConfigGithubUsernameUpdatedAuditTranslator),
                 typeof(MemoryEntriesClearedAuditTranslator),
                 typeof(ConversationDeletedAuditTranslator),
+                typeof(NyxIdChatActionRequestedAuditTranslator),
+                typeof(NyxIdChatActionContinuationResolvedAuditTranslator),
+                typeof(NyxIdChatActionPostconditionResolvedAuditTranslator),
             ]);
     }
 
@@ -116,6 +120,8 @@ public sealed class StudioAuditTranslatorTests
         AssertDestructiveAnnotation(record, expected.IsDestructive);
         foreach (var annotation in expected.Annotations)
             record.Annotations.Should().Contain(annotation.Key, annotation.Value);
+        if (targetKind is "studio_member" or "studio_team")
+            new AuditRecordSanitizer().Sanitize(record).Should().NotBeNull();
     }
 
     [Fact]
@@ -153,13 +159,15 @@ public sealed class StudioAuditTranslatorTests
             new StudioMemberImplementationUpdatedAuditTranslator(),
             new StudioMemberImplementationUpdatedEvent
             {
+                MemberId = "m-alpha",
+                ScopeId = "scope-alpha",
                 ImplementationKind = StudioMemberImplementationKind.Workflow,
             },
             "studio.member.implementation.updated",
             "studio_member",
-            "studio-member-actor",
+            "m-alpha",
             new ExpectedAuditFields(
-                "",
+                "scope-alpha",
                 AuditSensitivityLevel.Confidential,
                 false,
                 new Dictionary<string, string>(StringComparer.Ordinal)
@@ -271,14 +279,16 @@ public sealed class StudioAuditTranslatorTests
             new StudioMemberRenamedAuditTranslator(),
             new StudioMemberRenamedEvent
             {
+                MemberId = "m-alpha",
+                ScopeId = "scope-alpha",
                 DisplayName = "Renamed Member",
                 Description = "desc",
             },
             "studio.member.renamed",
             "studio_member",
-            "studio-member-actor",
+            "m-alpha",
             new ExpectedAuditFields(
-                "",
+                "scope-alpha",
                 AuditSensitivityLevel.Confidential,
                 false,
                 new Dictionary<string, string>(StringComparer.Ordinal)
@@ -292,6 +302,8 @@ public sealed class StudioAuditTranslatorTests
             new StudioMemberBindingCompletedEvent
             {
                 BindingRunId = "run-1",
+                MemberId = "m-alpha",
+                ScopeId = "scope-alpha",
                 PublishedServiceId = "svc-alpha",
                 RevisionId = "rev-1",
                 ImplementationKind = StudioMemberImplementationKind.Workflow,
@@ -299,9 +311,9 @@ public sealed class StudioAuditTranslatorTests
             },
             "studio.member.binding.completed",
             "studio_member",
-            "studio-member-actor",
+            "m-alpha",
             new ExpectedAuditFields(
-                "",
+                "scope-alpha",
                 AuditSensitivityLevel.Confidential,
                 false,
                 new Dictionary<string, string>(StringComparer.Ordinal)
@@ -318,6 +330,8 @@ public sealed class StudioAuditTranslatorTests
             new StudioMemberBindingFailedEvent
             {
                 BindingRunId = "run-1",
+                MemberId = "m-alpha",
+                ScopeId = "scope-alpha",
                 Failure = new StudioMemberBindingFailure
                 {
                     Code = "compactSecretToken123",
@@ -326,9 +340,9 @@ public sealed class StudioAuditTranslatorTests
             },
             "studio.member.binding.failed",
             "studio_member",
-            "studio-member-actor",
+            "m-alpha",
             new ExpectedAuditFields(
-                "",
+                "scope-alpha",
                 AuditSensitivityLevel.Confidential,
                 false,
                 new Dictionary<string, string>(StringComparer.Ordinal)

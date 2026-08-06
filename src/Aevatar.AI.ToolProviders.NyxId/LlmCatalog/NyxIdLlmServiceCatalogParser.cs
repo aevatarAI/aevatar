@@ -1,4 +1,7 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Studio.Application.Studio.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.NyxId.LlmCatalog;
@@ -6,6 +9,55 @@ namespace Aevatar.AI.ToolProviders.NyxId.LlmCatalog;
 public static class NyxIdLlmServiceCatalogParser
 {
     private const string ReadyStatus = "ready";
+
+    public static LLMModelCatalog ParseOpenAIModelsResponse(string response)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+            return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.ResponseInvalid);
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("data", out var data) ||
+                data.ValueKind != JsonValueKind.Array)
+            {
+                return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.ResponseInvalid);
+            }
+
+            if (data.GetArrayLength() > LLMSelectionPolicy.MaxModelsPerCatalog)
+                return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.ResponseTooLarge);
+
+            var modelIds = new List<string>(data.GetArrayLength());
+            foreach (var item in data.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object ||
+                    !item.TryGetProperty("id", out var id) ||
+                    id.ValueKind != JsonValueKind.String ||
+                    id.GetString() is not { } modelId)
+                {
+                    return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.ResponseInvalid);
+                }
+
+                modelIds.Add(modelId);
+            }
+
+            string? defaultModel = null;
+            if (root.TryGetProperty("default_model", out var defaultModelElement))
+            {
+                if (defaultModelElement.ValueKind == JsonValueKind.String)
+                    defaultModel = defaultModelElement.GetString();
+                else if (defaultModelElement.ValueKind != JsonValueKind.Null)
+                    return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.ResponseInvalid);
+            }
+            return BuildModelCatalog(modelIds, defaultModel, ReadyStatus, allowed: true);
+        }
+        catch (JsonException)
+        {
+            return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.ResponseInvalid);
+        }
+    }
 
     public static NyxIdLlmServicesResult ParseServicesResult(string response)
     {
@@ -47,6 +99,26 @@ public static class NyxIdLlmServiceCatalogParser
         return MergeRouteCandidates(result, ParseUserKeyRouteCandidates(userKeysResponse));
     }
 
+    public static NyxIdLlmServicesResult ComposeUserServiceInventory(
+        NyxIdLlmServicesResult diagnostics,
+        NyxIdUserServices inventory)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        ArgumentNullException.ThrowIfNull(inventory);
+
+        var gateway = diagnostics.Services
+            .Where(static service =>
+                UserLlmCatalogNormalization.NormalizeSource(service.Source) ==
+                UserLlmRouteSourceValue.GatewayProvider)
+            .Select(static service => service with { ModelCatalog = service.ModelCatalog.Clone() });
+        var inventoryServices = inventory.Services
+            .Where(IsEligible)
+            .OrderBy(static service => service.Id, StringComparer.Ordinal)
+            .Select(service => ComposeUserService(diagnostics.Services, service))
+            .ToArray();
+        return diagnostics with { Services = gateway.Concat(inventoryServices).ToArray() };
+    }
+
     private static NyxIdLlmServicesResult MergeRouteCandidates(
         NyxIdLlmServicesResult result,
         IReadOnlyList<NyxIdLlmService> candidates)
@@ -72,6 +144,45 @@ public static class NyxIdLlmServiceCatalogParser
         return result with { Services = merged };
     }
 
+    private static NyxIdLlmService ComposeUserService(
+        IReadOnlyList<NyxIdLlmService> diagnostics,
+        NyxIdUserService inventoryService)
+    {
+        var diagnostic = diagnostics.FirstOrDefault(candidate =>
+            string.Equals(candidate.ServiceSlug, inventoryService.Slug, StringComparison.OrdinalIgnoreCase));
+        return new NyxIdLlmService(
+            CatalogEntryId: diagnostic?.CatalogEntryId,
+            ServiceSlug: inventoryService.Slug,
+            DisplayName: FirstNonEmpty(
+                inventoryService.Label,
+                inventoryService.CatalogServiceName,
+                diagnostic?.DisplayName,
+                inventoryService.Slug),
+            RouteValue: $"/api/v1/proxy/s/{inventoryService.Slug}",
+            ModelCatalog: diagnostic?.ModelCatalog.Clone() ?? BuildModelCatalog(
+                [],
+                null,
+                ReadyStatus,
+                allowed: true),
+            Status: diagnostic?.Status ?? ReadyStatus,
+            Source: NyxIdLlmProviderSource.UserService,
+            Allowed: true,
+            Description: null,
+            Identity: InventoryIdentity(inventoryService));
+    }
+
+    private static bool IsEligible(NyxIdUserService service) =>
+        service.IsActive &&
+        (service.CredentialSource.Kind == NyxIdUserServiceCredentialSourceKind.Personal ||
+         service.CredentialSource.Kind == NyxIdUserServiceCredentialSourceKind.Organization &&
+         service.CredentialSource.Allowed);
+
+    private static UserLlmServiceIdentity InventoryIdentity(NyxIdUserService service) =>
+        new(UserLlmIdentityAuthority.NyxIdUserServicesInventory, service.Id);
+
+    private static string FirstNonEmpty(params string?[] candidates) =>
+        candidates.First(candidate => !string.IsNullOrWhiteSpace(candidate))!.Trim();
+
     public static IReadOnlyList<NyxIdLlmService> ParseProxyRouteCandidates(string response)
     {
         using var document = ParseSuccessDocument(response);
@@ -88,10 +199,9 @@ public static class NyxIdLlmServiceCatalogParser
 
     /// <summary>
     /// Parses the NyxID unified key list (<c>GET /api/v1/keys</c>) into LLM route
-    /// candidates. A key is the per-user credential binding for a service, so an
-    /// active key is authoritative evidence the route is usable by this user -
-    /// unlike <c>/api/v1/proxy/services</c>, whose <c>connected</c> flag only
-    /// reflects the legacy connections store.
+    /// diagnostics. Active keys can improve readiness information relative to the
+    /// legacy connection state from <c>/api/v1/proxy/services</c>, but exact identity
+    /// and eligibility come only from the strict user-services inventory.
     /// </summary>
     public static IReadOnlyList<NyxIdLlmService> ParseUserKeyRouteCandidates(string response)
     {
@@ -111,13 +221,10 @@ public static class NyxIdLlmServiceCatalogParser
     {
         using var document = ParseSuccessDocument(response);
         var root = document.RootElement;
-        if (root.ValueKind == JsonValueKind.Object &&
-            TryGetProperty(root, "service") is { } service)
-        {
-            return ParseService(service);
-        }
-
-        return ParseService(root);
+        return root.ValueKind == JsonValueKind.Object &&
+            TryGetProperty(root, "service") is { } service
+            ? ParseService(service)
+            : ParseService(root);
     }
 
     private static IEnumerable<JsonElement> EnumerateProxyServiceEntries(JsonElement root)
@@ -187,12 +294,11 @@ public static class NyxIdLlmServiceCatalogParser
         var allowed = string.Equals(status, ReadyStatus, StringComparison.OrdinalIgnoreCase) &&
                       ReadAllowedOverride(element) != false;
         return new NyxIdLlmService(
-            UserServiceId: ReadOptionalString(element, "id") ?? slug,
+            CatalogEntryId: ReadOptionalString(element, "id") ?? slug,
             ServiceSlug: slug.Trim(),
             DisplayName: displayName.Trim(),
             RouteValue: routeValue,
-            DefaultModel: null,
-            Models: [],
+            ModelCatalog: BuildModelCatalog([], null, status, allowed),
             Status: status,
             Source: NyxIdLlmProviderSource.UserService,
             Allowed: allowed,
@@ -280,7 +386,7 @@ public static class NyxIdLlmServiceCatalogParser
         var explicitAllowed = ReadAllowedOverride(element);
         var models = ReadStringArray(element, "models", "available_models", "availableModels");
         return new NyxIdLlmService(
-            UserServiceId: ReadOptionalString(
+            CatalogEntryId: ReadOptionalString(
                     element,
                     "user_service_id",
                     "userServiceId",
@@ -291,8 +397,11 @@ public static class NyxIdLlmServiceCatalogParser
             ServiceSlug: slug.Trim(),
             DisplayName: displayName.Trim(),
             RouteValue: routeValue,
-            DefaultModel: ReadOptionalString(element, "default_model", "defaultModel"),
-            Models: models,
+            ModelCatalog: BuildModelCatalog(
+                models,
+                ReadOptionalString(element, "default_model", "defaultModel"),
+                status,
+                explicitAllowed ?? string.Equals(status, ReadyStatus, StringComparison.OrdinalIgnoreCase)),
             Status: status,
             Source: NyxIdLlmProviderSource.ProxyService,
             Allowed: explicitAllowed ?? string.Equals(status, ReadyStatus, StringComparison.OrdinalIgnoreCase),
@@ -359,12 +468,15 @@ public static class NyxIdLlmServiceCatalogParser
             var routeValue = ResolveLegacyRouteValue(provider, slug);
 
             services.Add(new NyxIdLlmService(
-                UserServiceId: slug,
+                CatalogEntryId: slug,
                 ServiceSlug: slug,
                 DisplayName: ReadOptionalString(provider, "provider_name", "providerName") ?? slug,
                 RouteValue: routeValue,
-                DefaultModel: models.FirstOrDefault(),
-                Models: models,
+                ModelCatalog: BuildModelCatalog(
+                    models,
+                    models.FirstOrDefault(),
+                    status,
+                    string.Equals(status, "ready", StringComparison.OrdinalIgnoreCase)),
                 Status: status,
                 Source: ReadOptionalString(provider, "source") ?? NyxIdLlmProviderSource.GatewayProvider,
                 Allowed: string.Equals(status, "ready", StringComparison.OrdinalIgnoreCase),
@@ -406,7 +518,7 @@ public static class NyxIdLlmServiceCatalogParser
         if (element.ValueKind != JsonValueKind.Object)
             throw new InvalidOperationException("NyxID LLM service entry must be a JSON object.");
 
-        var userServiceId = ReadRequiredString(element, "user_service_id", "userServiceId", "service_id", "serviceId");
+        var catalogEntryId = ReadRequiredString(element, "user_service_id", "userServiceId", "service_id", "serviceId");
         var serviceSlug = ReadRequiredString(element, "service_slug", "serviceSlug");
         var displayName = ReadOptionalString(element, "display_name", "displayName", "service_name", "serviceName")
             ?? serviceSlug;
@@ -414,17 +526,72 @@ public static class NyxIdLlmServiceCatalogParser
         var models = ReadStringArray(element, "models", "available_models", "availableModels");
 
         return new NyxIdLlmService(
-            UserServiceId: userServiceId,
+            CatalogEntryId: catalogEntryId,
             ServiceSlug: serviceSlug,
             DisplayName: displayName,
             RouteValue: routeValue,
-            DefaultModel: ReadOptionalString(element, "default_model", "defaultModel"),
-            Models: models,
+            ModelCatalog: BuildModelCatalog(
+                models,
+                ReadOptionalString(element, "default_model", "defaultModel"),
+                ReadOptionalString(element, "status") ?? "unknown",
+                ReadOptionalBool(element, "allowed") ?? false),
             Status: ReadOptionalString(element, "status") ?? "unknown",
             Source: ReadOptionalString(element, "source") ?? NyxIdLlmProviderSource.UserService,
             Allowed: ReadOptionalBool(element, "allowed") ?? false,
             Description: ReadOptionalString(element, "description"));
     }
+
+    private static LLMModelCatalog BuildModelCatalog(
+        IReadOnlyList<string> models,
+        string? defaultModel,
+        string status,
+        bool allowed)
+    {
+        if (!allowed)
+        {
+            return UnavailableCatalog(LLMModelCatalogDiagnosticKind.AccessDenied);
+        }
+
+        if (!UserLlmCatalogNormalization.NormalizeStatus(status).IsReady)
+        {
+            return UnavailableCatalog(LLMModelCatalogDiagnosticKind.RouteNotReady);
+        }
+
+        if (models.Count > LLMSelectionPolicy.MaxModelsPerCatalog)
+        {
+            return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.ResponseTooLarge);
+        }
+
+        if (models.Any(static model => model.IndexOfAny(['*', '?', '[', ']', '{', '}']) >= 0) ||
+            defaultModel?.IndexOfAny(['*', '?', '[', ']', '{', '}']) >= 0)
+        {
+            return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.PatternOnly);
+        }
+
+        try
+        {
+            return LLMSelectionPolicy.NormalizeCatalog(
+                models,
+                defaultModel,
+                LLMModelCatalogDiagnosticKind.NotPublished);
+        }
+        catch (InvalidOperationException)
+        {
+            return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.ResponseInvalid);
+        }
+    }
+
+    private static LLMModelCatalog NotVerifiableCatalog(LLMModelCatalogDiagnosticKind diagnostic) => new()
+    {
+        Certainty = LLMModelCatalogCertainty.NotVerifiable,
+        DiagnosticKind = diagnostic,
+    };
+
+    private static LLMModelCatalog UnavailableCatalog(LLMModelCatalogDiagnosticKind diagnostic) => new()
+    {
+        Certainty = LLMModelCatalogCertainty.Unavailable,
+        DiagnosticKind = diagnostic,
+    };
 
     private static UserLlmSetupHint? ParseSetupHint(JsonElement element)
     {
@@ -470,7 +637,7 @@ public static class NyxIdLlmServiceCatalogParser
         return type.Trim().ToLowerInvariant() switch
         {
             "use_existing_service" or "use-existing-service" or "existing" => new UseExistingService(
-                ServiceId: ReadRequiredString(activationElement, "service_id", "serviceId"),
+                UserServiceId: ReadRequiredString(activationElement, "service_id", "serviceId"),
                 RouteValue: ReadRequiredString(activationElement, "route_value", "routeValue"),
                 DefaultModel: ReadOptionalString(activationElement, "default_model", "defaultModel")),
             "provision_then_use" or "provision-then-use" or "provision" => new ProvisionThenUse(
@@ -616,7 +783,7 @@ public static class NyxIdLlmServiceCatalogParser
 
     private static bool ShareServiceKey(NyxIdLlmService left, NyxIdLlmService right) =>
         EqualIfPresent(left.RouteValue, right.RouteValue) ||
-        EqualIfPresent(left.UserServiceId, right.UserServiceId) ||
+        EqualIfPresent(left.CatalogEntryId, right.CatalogEntryId) ||
         EqualIfPresent(left.ServiceSlug, right.ServiceSlug);
 
     private static bool EqualIfPresent(string? left, string? right) =>
@@ -746,11 +913,10 @@ public static class NyxIdLlmServiceCatalogParser
             }
 
             return property.EnumerateArray()
-                .Where(item => item.ValueKind == JsonValueKind.String)
-                .Select(item => item.GetString())
-                .Where(item => !string.IsNullOrWhiteSpace(item))
-                .Select(item => item!.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(static item => item.ValueKind == JsonValueKind.String
+                    ? item.GetString() ?? string.Empty
+                    : string.Empty)
+                .Distinct(StringComparer.Ordinal)
                 .ToArray();
         }
 
@@ -774,11 +940,10 @@ public static class NyxIdLlmServiceCatalogParser
                     item => item.Name,
                     item => (IReadOnlyList<string>)(item.Value.ValueKind == JsonValueKind.Array
                         ? item.Value.EnumerateArray()
-                            .Where(model => model.ValueKind == JsonValueKind.String)
-                            .Select(model => model.GetString())
-                            .Where(model => !string.IsNullOrWhiteSpace(model))
-                            .Select(model => model!.Trim())
-                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .Select(static model => model.ValueKind == JsonValueKind.String
+                                ? model.GetString() ?? string.Empty
+                                : string.Empty)
+                            .Distinct(StringComparer.Ordinal)
                             .ToArray()
                         : Array.Empty<string>()),
                     StringComparer.OrdinalIgnoreCase);

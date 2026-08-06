@@ -1,7 +1,7 @@
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
-using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Workflows;
 using FluentAssertions;
@@ -129,6 +129,47 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
     }
 
     [Fact]
+    public async Task ScopeBoundQueries_ShouldRejectMismatchedOwnerBeforeReadingArtifacts()
+    {
+        var calls = new List<string>();
+        var currentStatePort = new FakeCurrentStateQueryPort(calls)
+        {
+            WorkflowActorCurrentStateQueryEnabled = true,
+            SingleSnapshot = new WorkflowActorSnapshot
+            {
+                ActorId = "run-victim",
+                ScopeId = "victim-scope",
+            },
+        };
+        var service = new WorkflowExecutionQueryApplicationService(
+            new StaticWorkflowDefinitionCatalog([]),
+            currentStatePort,
+            new FakeArtifactQueryPort(calls) { WorkflowArtifactQueryEnabled = true },
+            new StaticWorkflowCatalogPort(),
+            new StaticWorkflowCapabilitiesPort());
+        IWorkflowExecutionScopeQueryApplicationService scopedService = service;
+
+        var currentState = await scopedService.GetWorkflowActorCurrentStateAsync(
+            "attacker-scope",
+            "run-victim");
+        var timeline = await scopedService.ListWorkflowRunTimelineExportAsync(
+            "attacker-scope",
+            "run-victim");
+        var edges = await scopedService.ListWorkflowRunGraphExportEdgesAsync(
+            "attacker-scope",
+            "run-victim");
+        var subgraph = await scopedService.GetWorkflowRunGraphExportSubgraphAsync(
+            "attacker-scope",
+            "run-victim");
+
+        currentState.Should().BeNull();
+        timeline.Should().BeNull();
+        edges.Should().BeNull();
+        subgraph.Should().BeNull();
+        calls.Should().OnlyContain(call => call == "GetWorkflowActorCurrentState:run-victim");
+    }
+
+    [Fact]
     public async Task ListWorkflowActorCurrentStatesAsync_ShouldDelegateStructuredCurrentStateQuery()
     {
         var snapshot = new WorkflowActorSnapshot
@@ -246,14 +287,16 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
             steps:
               - id: reply
                 type: llm_call
-            """);
+            """,
+            ExternalCapabilityExecutionMode.Interactive);
         registry.Register("alpha", """
             name: alpha
             description: Alpha workflow.
             steps:
               - id: reply
                 type: llm_call
-            """);
+            """,
+            ExternalCapabilityExecutionMode.Interactive);
         var port = new RegistryBackedWorkflowCatalogPort(registry);
 
         var catalog = await port.ListWorkflowCatalogAsync();
@@ -281,7 +324,11 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
 
     private sealed class StaticWorkflowDefinitionCatalog(IReadOnlyList<string> names) : IWorkflowDefinitionCatalog
     {
-        public void Register(string name, string yaml) => throw new NotSupportedException();
+        public void Register(
+            string name,
+            string yaml,
+            ExternalCapabilityExecutionMode expectedExecutionMode) =>
+            throw new NotSupportedException();
 
         public WorkflowDefinitionRegistration? GetDefinition(string name) => null;
 

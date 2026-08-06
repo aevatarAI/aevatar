@@ -15,8 +15,6 @@ public sealed record UserConfigSaveReceipt(
     DateTimeOffset AckedAtUtc);
 
 public sealed record SaveUserConfigCommand(
-    string? DefaultModel = null,
-    string? PreferredLlmRoute = null,
     string? RuntimeMode = null,
     string? LocalRuntimeBaseUrl = null,
     string? RemoteRuntimeBaseUrl = null,
@@ -38,6 +36,6 @@ public interface IUserConfigService
 
     Task<UserConfigSaveReceipt> SaveLlmPreferenceAsync(
         string? bearerToken,
-        SaveUserLlmPreferenceCommand command,
+        UserLlmPreferenceIntent intent,
         CancellationToken ct = default);
 }

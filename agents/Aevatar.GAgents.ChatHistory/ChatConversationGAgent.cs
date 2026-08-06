@@ -21,9 +21,36 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
 {
     public static string ProjectionKind => "chat-conversation";
 
-    public const int MaxTurns = 250;
     private const int MaxSynthesizedConversationTitleLength = 48;
     private const string TitleEllipsis = "…";
+
+    [EventHandler(EndpointName = "initializeChatConversation")]
+    public async Task HandleInitializeChatConversation(InitializeChatConversationCommand command)
+    {
+        ValidateInitialization(command);
+
+        if (State.Initialization is not null)
+        {
+            if (HasSameInitialization(State.Initialization, command))
+                return;
+
+            throw new InvalidOperationException("Chat conversation initialization conflicts with the committed initialization.");
+        }
+
+        if (State.Deleted || HasIdentityConflict(State, command))
+            throw new InvalidOperationException("Chat conversation initialization conflicts with the current conversation state.");
+
+        await PersistDomainEventAsync(new ChatConversationInitializedEvent
+        {
+            OperationId = command.OperationId,
+            ScopeId = command.ScopeId,
+            ConversationId = command.ConversationId,
+            ServiceId = command.ServiceId,
+            ServiceKind = command.ServiceKind,
+            CreatedAt = command.CreatedAt.Clone(),
+            InitialTitle = command.InitialTitle,
+        });
+    }
 
     [EventHandler(EndpointName = "appendChatTurn")]
     public async Task HandleAppendChatTurn(AppendChatTurnCommand command)
@@ -39,26 +66,31 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
             string.Equals(x.TurnId, turn.TurnId, StringComparison.Ordinal));
         if (existing is not null)
         {
-            if (!HasSamePayload(existing, turn))
+            if (HasSamePayload(existing, turn))
+            {
+                await DispatchAppendResultAsync(command, true, ChatTurnAppendRejectionReason.Unspecified);
+            }
+            else if (CanReconcileTerminal(existing, turn))
+            {
+                turn.Sequence = existing.Sequence;
+                await PersistDomainEventAsync(new ChatTurnTerminalReconciledEvent
+                {
+                    ScopeId = command.ScopeId,
+                    ConversationId = command.ConversationId,
+                    PreviousStatus = existing.TerminalStatus,
+                    Turn = turn,
+                });
+                await DispatchAppendResultAsync(command, true, ChatTurnAppendRejectionReason.Unspecified);
+            }
+            else
             {
                 await PersistRejectionAsync(command, ChatTurnAppendRejectionReason.Conflict);
                 await DispatchAppendResultAsync(command, false, ChatTurnAppendRejectionReason.Conflict);
             }
-            else
-            {
-                await DispatchAppendResultAsync(command, true, ChatTurnAppendRejectionReason.Unspecified);
-            }
             return;
         }
 
-        if (State.Turns.Count >= MaxTurns)
-        {
-            await PersistRejectionAsync(command, ChatTurnAppendRejectionReason.MaxTurnsExceeded);
-            await DispatchAppendResultAsync(command, false, ChatTurnAppendRejectionReason.MaxTurnsExceeded);
-            return;
-        }
-
-        turn.Sequence = State.Turns.Count + 1;
+        turn.Sequence = ResolveNextTurnSequence(State);
         await PersistDomainEventAsync(new ChatTurnAppendedEvent
         {
             ScopeId = command.ScopeId,
@@ -72,15 +104,29 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
     }
 
     [EventHandler(EndpointName = "deleteConversation")]
-    public async Task HandleConversationDeleted(ConversationDeletedEvent evt)
+    public async Task HandleDeleteConversation(DeleteConversationCommand command)
     {
-        if (string.IsNullOrWhiteSpace(evt.ConversationId))
+        ArgumentNullException.ThrowIfNull(command);
+        if (string.IsNullOrWhiteSpace(command.ScopeId) ||
+            string.IsNullOrWhiteSpace(command.ConversationId))
             return;
+
+        if (HasDifferentValue(State.ScopeId, command.ScopeId) ||
+            HasDifferentValue(State.ConversationId, command.ConversationId))
+        {
+            throw new InvalidOperationException(
+                "Chat conversation deletion conflicts with the current conversation identity.");
+        }
 
         if (State.Deleted || (string.IsNullOrWhiteSpace(State.ConversationId) && State.Turns.Count == 0))
             return;
 
-        await PersistDomainEventAsync(evt);
+        await PersistDomainEventAsync(new ConversationDeletedEvent
+        {
+            ConversationId = command.ConversationId,
+            ScopeId = command.ScopeId,
+            DeletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -94,11 +140,52 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
     {
         return StateTransitionMatcher
             .Match(current, evt)
+            .On<ChatConversationInitializedEvent>(ApplyChatConversationInitialized)
             .On<ChatTurnAppendedEvent>(ApplyChatTurnAppended)
+            .On<ChatTurnTerminalReconciledEvent>(ApplyChatTurnTerminalReconciled)
             .On<ChatTurnAppendRejectedEvent>(ApplyChatTurnAppendRejected)
             .On<ConversationDeletedEvent>(ApplyConversationDeleted)
             .OrCurrent();
     }
+
+    private static void ValidateInitialization(InitializeChatConversationCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (string.IsNullOrWhiteSpace(command.OperationId) ||
+            string.IsNullOrWhiteSpace(command.ScopeId) ||
+            string.IsNullOrWhiteSpace(command.ConversationId) ||
+            string.IsNullOrWhiteSpace(command.ServiceId) ||
+            string.IsNullOrWhiteSpace(command.ServiceKind) ||
+            command.CreatedAt is null)
+        {
+            throw new InvalidOperationException("Chat conversation initialization requires stable identity and creation time.");
+        }
+
+        _ = command.CreatedAt.ToDateTimeOffset();
+    }
+
+    private static bool HasIdentityConflict(
+        ChatConversationState state,
+        InitializeChatConversationCommand command) =>
+        HasDifferentValue(state.ScopeId, command.ScopeId) ||
+        HasDifferentValue(state.ConversationId, command.ConversationId) ||
+        HasDifferentValue(state.ServiceId, command.ServiceId) ||
+        HasDifferentValue(state.ServiceKind, command.ServiceKind);
+
+    private static bool HasDifferentValue(string existing, string candidate) =>
+        !string.IsNullOrWhiteSpace(existing) &&
+        !string.Equals(existing, candidate, StringComparison.Ordinal);
+
+    private static bool HasSameInitialization(
+        ChatConversationInitialization existing,
+        InitializeChatConversationCommand candidate) =>
+        string.Equals(existing.OperationId, candidate.OperationId, StringComparison.Ordinal) &&
+        string.Equals(existing.ScopeId, candidate.ScopeId, StringComparison.Ordinal) &&
+        string.Equals(existing.ConversationId, candidate.ConversationId, StringComparison.Ordinal) &&
+        string.Equals(existing.ServiceId, candidate.ServiceId, StringComparison.Ordinal) &&
+        string.Equals(existing.ServiceKind, candidate.ServiceKind, StringComparison.Ordinal) &&
+        Equals(existing.CreatedAt, candidate.CreatedAt) &&
+        string.Equals(existing.InitialTitle, candidate.InitialTitle, StringComparison.Ordinal);
 
     private bool TryValidateAppend(
         AppendChatTurnCommand command,
@@ -166,8 +253,7 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
                 CorrelationId = result.TurnId,
             },
         };
-        await dispatchPort.DispatchAsync(result.DeliveryActorId, envelope, CancellationToken.None)
-            .ConfigureAwait(false);
+        await dispatchPort.DispatchAsync(result.DeliveryActorId, envelope, CancellationToken.None);
     }
 
     private static bool HasSamePayload(ChatTurn existing, ChatTurn candidate) =>
@@ -178,6 +264,25 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
         string.Equals(existing.LlmRoute, candidate.LlmRoute, StringComparison.Ordinal) &&
         string.Equals(existing.LlmModel, candidate.LlmModel, StringComparison.Ordinal) &&
         Equals(existing.TerminalTime, candidate.TerminalTime);
+
+    private static int ResolveNextTurnSequence(ChatConversationState state)
+    {
+        if (state.NextTurnSequence > 0)
+            return state.NextTurnSequence;
+
+        // Snapshots written before next_turn_sequence existed need a one-time
+        // migration from already committed turn identities.
+        return state.Turns.Count == 0
+            ? 1
+            : checked(state.Turns.Max(static turn => turn.Sequence) + 1);
+    }
+
+    private static bool CanReconcileTerminal(ChatTurn existing, ChatTurn candidate) =>
+        existing.TerminalStatus == ChatTurnTerminalStatus.OutcomeUncertain &&
+        candidate.TerminalStatus is ChatTurnTerminalStatus.Completed or ChatTurnTerminalStatus.Failed &&
+        string.Equals(existing.UserText, candidate.UserText, StringComparison.Ordinal) &&
+        string.Equals(existing.LlmRoute, candidate.LlmRoute, StringComparison.Ordinal) &&
+        string.Equals(existing.LlmModel, candidate.LlmModel, StringComparison.Ordinal);
 
     private string ResolveAppendTitle(AppendChatTurnCommand command, ChatTurn turn)
     {
@@ -263,7 +368,75 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
         next.Deleted = false;
         next.LastRejectedAppend = null;
         if (evt.Turn is not null)
+        {
             next.Turns.Add(evt.Turn.Clone());
+            next.NextTurnSequence = checked(Math.Max(next.NextTurnSequence, evt.Turn.Sequence + 1));
+        }
+        return next;
+    }
+
+    private static ChatConversationState ApplyChatConversationInitialized(
+        ChatConversationState state,
+        ChatConversationInitializedEvent evt)
+    {
+        var next = state.Clone();
+        next.ScopeId = evt.ScopeId;
+        next.ConversationId = evt.ConversationId;
+        next.ServiceId = evt.ServiceId;
+        next.ServiceKind = evt.ServiceKind;
+        if (string.IsNullOrWhiteSpace(next.Title))
+            next.Title = evt.InitialTitle;
+
+        var createdAtMs = evt.CreatedAt.ToDateTimeOffset().ToUnixTimeMilliseconds();
+        next.CreatedAtMs = createdAtMs;
+        next.UpdatedAtMs = Math.Max(next.UpdatedAtMs, createdAtMs);
+        next.Deleted = false;
+        if (next.NextTurnSequence == 0 && next.Turns.Count == 0)
+            next.NextTurnSequence = 1;
+        next.Initialization = new ChatConversationInitialization
+        {
+            OperationId = evt.OperationId,
+            ScopeId = evt.ScopeId,
+            ConversationId = evt.ConversationId,
+            ServiceId = evt.ServiceId,
+            ServiceKind = evt.ServiceKind,
+            CreatedAt = evt.CreatedAt.Clone(),
+            InitialTitle = evt.InitialTitle,
+        };
+        return next;
+    }
+
+    private static ChatConversationState ApplyChatTurnTerminalReconciled(
+        ChatConversationState state,
+        ChatTurnTerminalReconciledEvent evt)
+    {
+        if (evt.Turn is null ||
+            !string.Equals(state.ScopeId, evt.ScopeId, StringComparison.Ordinal) ||
+            !string.Equals(state.ConversationId, evt.ConversationId, StringComparison.Ordinal))
+        {
+            return state;
+        }
+
+        var existingIndex = state.Turns
+            .Select((turn, index) => (turn, index))
+            .FirstOrDefault(entry => string.Equals(
+                entry.turn.TurnId,
+                evt.Turn.TurnId,
+                StringComparison.Ordinal));
+        if (existingIndex.turn is null ||
+            existingIndex.turn.TerminalStatus != evt.PreviousStatus ||
+            !CanReconcileTerminal(existingIndex.turn, evt.Turn))
+        {
+            return state;
+        }
+
+        var next = state.Clone();
+        var reconciledTurn = evt.Turn.Clone();
+        reconciledTurn.Sequence = existingIndex.turn.Sequence;
+        next.Turns[existingIndex.index] = reconciledTurn;
+        next.UpdatedAtMs = reconciledTurn.TerminalTime?.ToDateTimeOffset().ToUnixTimeMilliseconds()
+                           ?? next.UpdatedAtMs;
+        next.LastRejectedAppend = null;
         return next;
     }
 
@@ -289,7 +462,8 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
         next.Deleted = true;
         next.ScopeId = string.IsNullOrWhiteSpace(next.ScopeId) ? evt.ScopeId : next.ScopeId;
         next.ConversationId = string.IsNullOrWhiteSpace(next.ConversationId) ? evt.ConversationId : next.ConversationId;
-        next.UpdatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (evt.DeletedAt is not null)
+            next.UpdatedAtMs = evt.DeletedAt.ToDateTimeOffset().ToUnixTimeMilliseconds();
         return next;
     }
 }

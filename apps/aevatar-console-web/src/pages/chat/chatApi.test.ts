@@ -1,24 +1,16 @@
 import { authFetch } from "@/shared/auth/fetch";
 import {
-  ChatApiError,
-  extractChatHistoryContext,
   extractChatStreamArtifacts,
   readChatStreamFrames,
-  startChatStream,
-  startChatStreamWithProjectionRetry,
+  sendChatCommand,
 } from "./chatApi";
 
 jest.mock("@/shared/auth/fetch", () => ({
   authFetch: jest.fn(),
 }));
 
-const CHAT_HISTORY_CONTEXT_TYPE =
-  "type.googleapis.com/aevatar.workflow.runs.WorkflowChatContextPayload";
-
 function successfulStreamResponse(): Response {
-  return {
-    ok: true,
-  } as Response;
+  return { ok: true } as Response;
 }
 
 function createSseResponse(body: string): Response {
@@ -34,289 +26,148 @@ function createSseResponse(body: string): Response {
   } as Response;
 }
 
-function missingConversationResponse(): Response {
-  return {
-    ok: false,
-    status: 404,
-    statusText: "Not Found",
-    text: jest.fn().mockResolvedValue(
-      JSON.stringify({
-        code: "CONVERSATION_NOT_FOUND",
-        message: "Conversation was not found.",
-      })
-    ),
-  } as unknown as Response;
-}
 
 describe("chatApi", () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  it("omits scope and history intent when starting an unpersisted chat", async () => {
+  it("sends canonical typed text with stable transport identity", async () => {
     (authFetch as jest.Mock).mockResolvedValue(successfulStreamResponse());
+    const signal = new AbortController().signal;
 
-    const controller = new AbortController();
-    await startChatStream(
+    await sendChatCommand(
       {
+        type: "text",
         prompt: " Create a workflow ",
-        sessionId: " session-a ",
+        clientRequestId: " client-first ",
       },
-      controller.signal
+      signal
     );
-
-    expect(authFetch).toHaveBeenCalledWith(
-      "/api/chat",
-      expect.objectContaining({
-        body: JSON.stringify({
-          prompt: "Create a workflow",
-          sessionId: "session-a",
-          workflow: "studio",
-        }),
-        headers: {
-          Accept: "text/event-stream",
-          "Content-Type": "application/json",
-        },
-        method: "POST",
-      })
-    );
-  });
-
-  it("serializes new and continuing history conversations independently of sessionId", async () => {
-    (authFetch as jest.Mock).mockResolvedValue(successfulStreamResponse());
-    const controller = new AbortController();
-
-    await startChatStream(
+    await sendChatCommand(
       {
-        conversation: {
-          conversationId: null,
-          createIdempotencyKey: " create-key-a ",
-        },
-        prompt: "New conversation",
-        sessionId: "runtime-session-a",
+        type: "text",
+        conversationId: " conversation-alpha ",
+        prompt: " Continue ",
+        clientRequestId: " client-next ",
       },
-      controller.signal
-    );
-    await startChatStream(
-      {
-        conversation: { conversationId: " conversation-a " },
-        prompt: "Continue conversation",
-        sessionId: "runtime-session-b",
-      },
-      controller.signal
+      signal
     );
 
-    const firstBody = JSON.parse((authFetch as jest.Mock).mock.calls[0][1].body);
-    const secondBody = JSON.parse((authFetch as jest.Mock).mock.calls[1][1].body);
-    expect(firstBody).toEqual({
-      conversation: { createIdempotencyKey: "create-key-a" },
-      prompt: "New conversation",
-      sessionId: "runtime-session-a",
-      workflow: "studio",
+    expect(authFetch).toHaveBeenNthCalledWith(1, "/api/chat", {
+      body: JSON.stringify({
+        type: "text",
+        prompt: "Create a workflow",
+        clientRequestId: "client-first",
+      }),
+      headers: {
+        Accept: "text/event-stream",
+        "Content-Type": "application/json",
+        "Idempotency-Key": "client-first",
+      },
+      method: "POST",
+      signal,
     });
-    expect(secondBody).toEqual({
-      conversation: { conversationId: "conversation-a" },
-      prompt: "Continue conversation",
-      sessionId: "runtime-session-b",
-      workflow: "studio",
+    expect(authFetch).toHaveBeenNthCalledWith(2, "/api/chat", {
+      body: JSON.stringify({
+        type: "text",
+        conversationId: "conversation-alpha",
+        prompt: "Continue",
+        clientRequestId: "client-next",
+      }),
+      headers: {
+        Accept: "text/event-stream",
+        "Content-Type": "application/json",
+        "Idempotency-Key": "client-next",
+      },
+      method: "POST",
+      signal,
     });
-  });
-
-  it("rejects a create key on a continuation request", async () => {
-    await expect(
-      startChatStream(
-        {
-          conversation: {
-            conversationId: "conversation-a",
-            createIdempotencyKey: "create-key-a",
-          },
-          prompt: "Continue",
-          sessionId: "session-a",
-        },
-        new AbortController().signal
-      )
-    ).rejects.toMatchObject({
-      code: "INVALID_CONVERSATION_INPUT",
-      status: 400,
-    });
-    expect(authFetch).not.toHaveBeenCalled();
-  });
-
-  it("rejects a blank conversation id as a structured request error", async () => {
-    const controller = new AbortController();
-
-    await expect(
-      startChatStream(
-        {
-          conversation: { conversationId: "   " },
-          prompt: "Continue",
-          sessionId: "session-a",
-        },
-        controller.signal
-      )
-    ).rejects.toMatchObject({
-      code: "INVALID_CONVERSATION_ID",
-      message: "Conversation id is invalid.",
-      status: 400,
-    });
-    expect(authFetch).not.toHaveBeenCalled();
-  });
-
-  it("rejects invalid conversation shapes without leaking a TypeError", async () => {
-    await expect(
-      startChatStream(
-        {
-          conversation: "conversation-a" as never,
-          prompt: "Continue",
-          sessionId: "session-a",
-        },
-        new AbortController().signal
-      )
-    ).rejects.toMatchObject({
-      code: "INVALID_CONVERSATION_INPUT",
-      message: "Conversation input is invalid.",
-      status: 400,
-    });
-    expect(authFetch).not.toHaveBeenCalled();
-  });
-
-  it("throws structured errors returned before the SSE stream starts", async () => {
-    (authFetch as jest.Mock).mockResolvedValue(missingConversationResponse());
-
-    let error: unknown;
-    try {
-      await startChatStream(
-        {
-          conversation: { conversationId: "missing" },
-          prompt: "Continue",
-          sessionId: "session-a",
-        },
-        new AbortController().signal
+    for (const [, request] of (authFetch as jest.Mock).mock.calls) {
+      expect(Object.keys(JSON.parse(request.body))).not.toEqual(
+        expect.arrayContaining(["sessionId", "scopeId", "workflow"])
       );
-    } catch (caught) {
-      error = caught;
     }
-
-    expect(error).toBeInstanceOf(ChatApiError);
-    expect(error).toMatchObject({
-      code: "CONVERSATION_NOT_FOUND",
-      message: "Conversation was not found.",
-      status: 404,
-    });
   });
 
-  it("retries only a continuing conversation while its projection is unavailable", async () => {
-    (authFetch as jest.Mock)
-      .mockResolvedValueOnce(missingConversationResponse())
-      .mockResolvedValueOnce(missingConversationResponse())
-      .mockResolvedValueOnce(successfulStreamResponse());
-
-    await expect(
-      startChatStreamWithProjectionRetry(
+  it.each([
+    {
+      type: "input.resolve",
+      conversationId: "conversation-alpha",
+      requestId: "input-alpha",
+      clientRequestId: "client-input",
+      answer: { selectedOptionIds: ["option-alpha"] },
+      expectedStateVersion: 7,
+    },
+    {
+      type: "approval.resolve",
+      conversationId: "conversation-alpha",
+      requestId: "approval-alpha",
+      clientRequestId: "client-approval",
+      approved: false,
+      reason: "Not now",
+      expectedStateVersion: 8,
+    },
+    {
+      type: "task.stop",
+      conversationId: "conversation-alpha",
+      turnId: "turn-alpha",
+      stopRequestId: "stop-alpha",
+      clientRequestId: "client-stop",
+      expectedStateVersion: 9,
+    },
+    {
+      type: "task.steer",
+      conversationId: "conversation-alpha",
+      turnId: "turn-alpha",
+      steeringId: "steer-alpha",
+      clientRequestId: "client-steer",
+      instruction: "Use the safe path",
+      expectedStateVersion: 10,
+    },
+    {
+      type: "step.retry",
+      conversationId: "conversation-alpha",
+      turnId: "turn-alpha",
+      taskId: "task-alpha",
+      stepId: "step-alpha",
+      retryRequestId: "retry-alpha",
+      clientRequestId: "client-retry",
+      expectedOperationGeneration: 2,
+      expectedStateVersion: 11,
+    },
+    {
+      type: "step.skip",
+      conversationId: "conversation-alpha",
+      turnId: "turn-alpha",
+      taskId: "task-alpha",
+      stepId: "step-alpha",
+      skipRequestId: "skip-alpha",
+      clientRequestId: "client-skip",
+      expectedOperationGeneration: 2,
+      expectedStateVersion: 12,
+    },
+    {
+      type: "action.continue",
+      conversationId: "conversation-alpha",
+      originTurnId: "turn-alpha",
+      clientRequestId: "client-action",
+      actions: [
         {
-          conversation: { conversationId: "conversation-a" },
-          prompt: "Continue",
-          sessionId: "session-a",
+          actionRequestId: "action-alpha",
+          originTurnId: "turn-alpha",
+          disposition: "declined",
         },
-        new AbortController().signal,
-        [0, 0, 0]
-      )
-    ).resolves.toEqual(successfulStreamResponse());
-    expect(authFetch).toHaveBeenCalledTimes(3);
-  });
+      ],
+    },
+  ])("preserves the exact $type command body", async (command) => {
+    (authFetch as jest.Mock).mockResolvedValue(successfulStreamResponse());
 
-  it("caps continuation retries and never retries a new conversation", async () => {
-    (authFetch as jest.Mock).mockImplementation(async () =>
-      missingConversationResponse()
-    );
+    await sendChatCommand(command as never, new AbortController().signal);
 
-    await expect(
-      startChatStreamWithProjectionRetry(
-        {
-          conversation: { conversationId: "conversation-a" },
-          prompt: "Continue",
-          sessionId: "session-a",
-        },
-        new AbortController().signal,
-        [0, 0, 0]
-      )
-    ).rejects.toMatchObject({ code: "CONVERSATION_NOT_FOUND", status: 404 });
-    expect(authFetch).toHaveBeenCalledTimes(3);
-
-    jest.clearAllMocks();
-    (authFetch as jest.Mock).mockResolvedValue(missingConversationResponse());
-    await expect(
-      startChatStreamWithProjectionRetry(
-        {
-          conversation: {},
-          prompt: "Create",
-          sessionId: "session-b",
-        },
-        new AbortController().signal,
-        [0, 0, 0]
-      )
-    ).rejects.toMatchObject({ code: "CONVERSATION_NOT_FOUND", status: 404 });
-    expect(authFetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("extracts the exact flat chat history Any context", () => {
-    const frame = {
-      custom: {
-        name: "aevatar.chat.context",
-        payload: {
-          "@type": CHAT_HISTORY_CONTEXT_TYPE,
-          conversationId: "conversation-a",
-          scopeId: "scope-a",
-          turnId: "turn-a",
-        },
-      },
-      timestamp: 1784255700000,
-    };
-
-    expect(extractChatHistoryContext(frame)).toEqual({
-      conversationId: "conversation-a",
-      scopeId: "scope-a",
-      turnId: "turn-a",
-    });
-    expect(extractChatStreamArtifacts([frame])).toEqual({
-      chatHistoryContext: {
-        conversationId: "conversation-a",
-        scopeId: "scope-a",
-        turnId: "turn-a",
-      },
-    });
-
-    expect(
-      extractChatHistoryContext({
-        custom: {
-          name: "aevatar.run.context",
-          payload: frame.custom.payload,
-        },
-      })
-    ).toBeNull();
-    expect(
-      extractChatHistoryContext({
-        custom: {
-          name: "aevatar.chat.context",
-          payload: {
-            ...frame.custom.payload,
-            "@type": "type.googleapis.com/example.WrongPayload",
-          },
-        },
-      })
-    ).toBeNull();
-    expect(
-      extractChatHistoryContext({
-        custom: {
-          name: "aevatar.chat.context",
-          payload: {
-            fields: {
-              conversationId: { stringValue: "conversation-a" },
-            },
-          },
-        },
-      })
-    ).toBeNull();
+    const [, request] = (authFetch as jest.Mock).mock.calls[0];
+    expect(JSON.parse(request.body)).toEqual(command);
+    expect(request.headers["Idempotency-Key"]).toBe(command.clientRequestId);
   });
 
   it("keeps SSE keepalive comments out of parsed data frames", async () => {

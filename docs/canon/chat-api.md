@@ -1,13 +1,16 @@
 ---
-title: "Workflow Chat API 能力说明（框架层）"
+title: "Chat API 能力说明（Mainnet 与 Workflow）"
 status: active
 owner: eanzhao
 ---
 
-# Workflow Chat API 能力说明（框架层）
+# Chat API 能力说明（Mainnet 与 Workflow）
 
-> 单一事实源（Single Source of Truth）：`/api/chat`、`/api/ws/chat` 相关能力说明以本文为准。  
+> 单一事实源（Single Source of Truth）：Mainnet `/api/chat` 的组合与 Workflow Chat 能力说明以本文为准；NyxID Assistant 的 actor/task 细节见 `docs/canon/nyxid-chat-api.md`。
 > Host 侧入口文档：`src/workflow/Aevatar.Workflow.Host.Api/README.md`、`src/workflow/Aevatar.Workflow.Host.Api/CHAT_API_CAPABILITIES.md`。
+
+Transcript、execution state、prompt context 与 user memory 的跨能力语义以
+[conversation-context-and-memory.md](conversation-context-and-memory.md) 为准。
 
 本文档面向框架使用者，说明当前 `POST /api/chat` 与 `GET /api/ws/chat` 可以做什么，尤其是：
 
@@ -16,17 +19,63 @@ owner: eanzhao
 - 支持多轮“反馈 -> 重新生成 -> 再审批”
 - 审批通过后自动执行（`auto`）或只定稿不执行（`auto_review`）
 
+## Mainnet 统一 `/api/chat` facade
+
+Mainnet 只映射一个 `POST /api/chat`。该 Host-owned facade 在 HTTP 边界做确定性协议分流；它不从 prompt、模型输出、tool 名或错误文本推断产品 surface。
+
+| Request | Mainnet owner | Result |
+|---|---|---|
+| `multipart/form-data` | Workflow Chat | 继续使用既有 multipart parser、artifact ingress 与 Workflow command 主链。 |
+| JSON object without `type` | Workflow Chat | 保持既有 `HttpChatInput` 行为。 |
+| JSON with `type=text` | NyxID Assistant | 创建或复用现有 NyxIdChat conversation actor，并返回 AGUI SSE。 |
+| JSON with one of the other six recognized Assistant types | NyxID Assistant | 复用现有 action、approval 或 task-control application port。 |
+| JSON with malformed or unknown explicit `type` | none | `400 INVALID_CHAT_INPUT`; never falls through to Workflow. |
+| Other content type or malformed/non-object JSON | none | `400 INVALID_CHAT_INPUT`. |
+
+The seven closed Assistant discriminators are `text`, `action.continue`, `approval.resolve`, `task.stop`, `task.steer`, `step.retry`, and `step.skip`. Assistant JSON is strict: unknown fields are rejected, `scopeId` is not a request field, and scope is derived only from one unambiguous authenticated `scope_id` or `workflow.scope_id` claim.
+
+Mainnet also exposes the authenticated Assistant resource family:
+
+| Endpoint | Meaning |
+|---|---|
+| `GET /api/chat/conversations?pageSize={n}&cursor={cursor}` | List the caller's NyxIdChat transcript index; the response carries `nextCursor`. |
+| `GET /api/chat/conversations/{conversationId}` | Read the durable transcript, transcript `stateVersion`, and projection status. |
+| `GET /api/chat/conversations/{conversationId}/state?afterStateVersion={v}&turnId={turnId}` | Read the conditional actor current-state replica. |
+| `DELETE /api/chat/conversations/{conversationId}` | Submit the existing authoritative retirement/deletion workflow. |
+
+The transcript endpoint returns every committed terminal turn while the conversation is active. An acknowledged conversation whose transcript actor read model has not materialized yet returns `200` with `messages: []`, `stateVersion: 0`, and `projectionStatus: "pending"`; once materialized, it returns `projectionStatus: "current"` and the authoritative transcript version. `404` remains reserved for a conversation that was never accepted, belongs to another scope, was abandoned before acceptance, or was explicitly deleted. The current contract has no per-turn TTL or silent rolling eviction: the 251st and later turns remain appendable, and only explicit whole-conversation deletion removes query availability. LLM continuation context is independently bounded to the latest 24 nonblank messages; that prompt selection never prunes the durable transcript.
+
+Standalone Workflow Host behavior is unchanged: its own `POST /api/chat` remains Workflow JSON/multipart, and `GET /api/ws/chat` remains the Workflow WebSocket surface. Mainnet's WebSocket route is likewise not selected by the Assistant JSON discriminators. New NyxID clients use only the HTTP facade and `/api/chat/conversations/**`; scoped NyxIdChat routes are compatibility adapters, not a second evolving contract.
+
+## Chat Activity audit surface
+
+Mainnet exposes `GET /api/audit/chat-activity` as a sanitized Audit Trail view of tool calls
+from both `POST /api/chat` branches and committed NyxID browser-action facts. It stores and
+returns only typed tool/action identities, safe outcome/correlation fields, and typed chat
+provenance such as surface, conversation, turn, task, step, and action-request IDs.
+
+It does not store or return prompts, assistant text, reasoning, input parts, attachments, tool
+arguments/results, action parameters/resources, raw subjects, or credentials. It does not fetch
+conversation history or transcripts. An authenticated user is fixed to their own scope and every
+HMAC identity retained for the 30-day window. An Aevatar platform admin may explicitly request
+`scope=__all__`; admin reads remain personal by default.
+
+Tool capture reuses the existing tool-execution audit middleware. Browser-action capture consumes
+committed actor facts through the existing unified Projection Pipeline. Neither path creates a
+ChatLog store, Chat Activity actor/read model, or second projection rail. The default 30-day TTL
+applies only to Audit Trail artifacts with typed chat provenance.
+
 ## 1. 端点与职责
 
 | Endpoint | 协议 | 作用 |
 |---|---|---|
-| `POST /api/chat` | HTTP + SSE | 发起一次 run，并持续接收运行时 envelope 投影流 |
+| `POST /api/chat` | HTTP + SSE | Mainnet 先按上表分流；Workflow Host 直接发起 Workflow run |
 | `GET /api/ws/chat` | WebSocket | 与 `/api/chat` 同能力，使用 WS 封装 |
 | `POST /api/workflow-webhooks/{routeKey}` | HTTP JSON | 认证外部 webhook，并按 Host binding 启动新 run |
 | `POST /api/workflows/resume` | HTTP JSON | 恢复 `human_input/human_approval` 挂起步骤 |
 | `POST /api/workflows/signal` | HTTP JSON | 向等待信号的步骤发送 signal |
 
-说明：`/api/chat` 与 `/api/ws/chat` 走同一套执行链路，差别只有传输协议。
+说明：对于 Workflow 请求，`/api/chat` 与 `/api/ws/chat` 走同一套执行链路，差别只有传输协议。NyxID Assistant discriminator 只属于 Mainnet HTTP facade。
 
 口径补充：
 
@@ -36,6 +85,7 @@ owner: eanzhao
 - 这里的 `EventEnvelope` 是 runtime message envelope，不等于 Event Sourcing 的领域事件记录。
 - 命令主链路不额外经过 ingress queue/stream；stream 保留给 actor envelope 的投影、实时输出与读侧观察。
 - `command.ack` / `accepted=true` 对外只应被解释为“系统接受了该次交互并返回追踪句柄”，不应被解释为领域事件已提交或 ReadModel 已可见。
+- Workflow command accepted 后，interaction layer 要求在 30 秒内收到首个 projection-backed 业务 frame。该 deadline 只约束“accepted 到首次可观察”，不是整个 workflow 的执行超时；若超时，SSE 必须发送 `RUN_ERROR(code=RUN_OBSERVATION_TIMEOUT)` 并关闭，不能只保留 heartbeat。
 - Webhook ingress 是 start-run 入口，不是 `wait_signal` continuation；外部 JSON 只在 Host/Adapter 边界解析，进入应用层后只保留 typed `WorkflowExternalIngressContext` 与 `WorkflowChatRunRequest`。
 
 ## 2. 输入模型（chat）
@@ -69,7 +119,7 @@ owner: eanzhao
 
 ### HTTP 请求 producer
 
-`POST /api/chat` 支持两种 Host/API 边界 producer；两者最终都会被规范化为同一个 `WorkflowChatRunRequest`，并进入同一条 CQRS command skeleton。Host 不直接编排 workflow run，也不因为表单上传创建第二套执行链路。
+Workflow 所拥有的 `POST /api/chat` 请求支持两种 Host/API 边界 producer；两者最终都会被规范化为同一个 `WorkflowChatRunRequest`，并进入同一条 CQRS command skeleton。Host 不直接编排 workflow run，也不因为表单上传创建第二套执行链路。Mainnet 在此之前只执行上面的确定性 surface 分类。
 
 #### JSON Chat Input
 
@@ -292,6 +342,15 @@ POST /api/workflows/signal
 - `aevatar.llm.reasoning`：LLM 思考过程增量
 - `aevatar.media.chunk`：媒体分片，payload 为 `MediaContentEvent`
 - `aevatar.workflow.waiting_signal`
+
+SSE `: keepalive` 只维持传输连接，不表示 run 有业务进展，也不会延长 accepted observation deadline。任何已经 accepted 但在 deadline 内没有首个 projection-backed frame 的 run，都以 `RUN_OBSERVATION_TIMEOUT` 终止当前 stream；客户端可继续使用 `actorId + commandId` 查询该 run 后续状态。
+
+Workflow role 的用户可见输出只投影 actor 已提交的
+`RoleChatSessionProgressedEvent` 与 completion 内的 typed terminal tail。
+text/reasoning/media/tool/usage/authorization 均通过同一 Projection Pipeline
+生成 run-event；不存在 workflow 专用 transient chunk 旁路。Role terminal
+progress 不关闭 workflow stream，`RUN_FINISHED/RUN_ERROR` 的唯一权威仍是
+workflow 根 actor 的 committed terminal event。
 
 ## 6. WebSocket 请求/回包协议
 

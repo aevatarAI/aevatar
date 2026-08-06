@@ -32,17 +32,30 @@ internal static class ManagedCodexCredentialEndpoints
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(queryPort);
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(timeProvider);
         if (!TryResolveSubject(http, out var userId))
             return Results.Unauthorized();
 
-        var snapshot = await queryPort.ResolveAsync(Owner(userId), ct).ConfigureAwait(false);
+        var managedOptions = options.Value;
+        var eligible = managedOptions.IsEligible(userId);
+        var owner = Owner(userId);
+        var now = timeProvider.GetUtcNow();
+        var snapshot = await queryPort.ResolveAsync(owner, ct).ConfigureAwait(false);
+        var readiness = ManagedCodexCredentialReadiness.Assess(
+            managedOptions,
+            owner,
+            snapshot,
+            now);
         if (snapshot?.Credential is null)
         {
             return Results.Ok(new
             {
-                enabled = options.Value.Enabled,
+                enabled = managedOptions.Enabled,
+                eligible,
                 status = "not_provisioned",
+                execution_ready = readiness.ExecutionReady,
+                execution_readiness_reason = readiness.Reason,
                 state_version = 0L,
                 cleanup_pending = 0,
             });
@@ -51,8 +64,11 @@ internal static class ManagedCodexCredentialEndpoints
         var credential = snapshot.Credential;
         return Results.Ok(new
         {
-            enabled = options.Value.Enabled,
-            status = EffectiveStatus(credential, timeProvider.GetUtcNow()),
+            enabled = managedOptions.Enabled,
+            eligible,
+            status = EffectiveStatus(credential, now),
+            execution_ready = readiness.ExecutionReady,
+            execution_readiness_reason = readiness.Reason,
             expires_at_unix_ms = credential.ExpiresAt?.ToDateTimeOffset().ToUnixTimeMilliseconds(),
             state_version = snapshot.StateVersion,
             cleanup_pending = snapshot.PendingRevocations.Count,
@@ -117,10 +133,13 @@ internal static class ManagedCodexCredentialEndpoints
 
     private static int StatusFor(string code) => code switch
     {
+        "managed_user_authorization_unavailable" => StatusCodes.Status401Unauthorized,
         "managed_target_disabled" or
+        "managed_credential_commit_timeout" or
         "managed_credential_cleanup_pending" or
         "managed_credential_persistence_pending" or
-        "managed_credential_vault_unavailable" => StatusCodes.Status503ServiceUnavailable,
+        "managed_credential_vault_unavailable" or
+        "managed_user_services_unavailable" => StatusCodes.Status503ServiceUnavailable,
         "managed_feature_not_enabled" or
         "nyxid_identity_mismatch" => StatusCodes.Status403Forbidden,
         "managed_credential_not_provisioned" => StatusCodes.Status404NotFound,
@@ -149,7 +168,7 @@ internal static class ManagedCodexCredentialEndpoints
 
         foreach (var claimType in new[]
                  {
-                     "scope_id", "uid", "sub", ClaimTypes.NameIdentifier, "user_id",
+                     "uid", "sub", ClaimTypes.NameIdentifier, "user_id",
                  })
         {
             var value = http.User.FindFirst(claimType)?.Value?.Trim();

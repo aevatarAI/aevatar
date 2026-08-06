@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.LlmCatalog;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -50,8 +51,12 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
         EnsureSuccess(response, "NyxID LLM services");
         var result = NyxIdLlmServiceCatalogParser.ParseServicesResult(response.Body);
         result = await MergeUserKeyRouteCandidatesAsync(result, bearerToken, ct).ConfigureAwait(false);
-        return await MergeProxyRouteCandidatesAsync(result, bearerToken, ct).ConfigureAwait(false);
+        result = await MergeProxyRouteCandidatesAsync(result, bearerToken, ct).ConfigureAwait(false);
+        return await ComposeUserServiceInventoryAsync(result, bearerToken, ct).ConfigureAwait(false);
     }
+
+    public Task<NyxIdLlmServicesResult> GetFreshServicesAsync(string bearerToken, CancellationToken ct) =>
+        GetServicesAsync(bearerToken, ct);
 
     public async Task<NyxIdLlmService> ProvisionAsync(
         string bearerToken,
@@ -186,6 +191,29 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
             _logger.LogWarning(ex, "Failed to merge NyxID user keys into LLM route catalog");
             return result;
         }
+    }
+
+    private async Task<NyxIdLlmServicesResult> ComposeUserServiceInventoryAsync(
+        NyxIdLlmServicesResult diagnostics,
+        string bearerToken,
+        CancellationToken ct)
+    {
+        var response = await SendNyxIdAsync(
+            HttpMethod.Get,
+            "/api/v1/user-services",
+            bearerToken,
+            body: null,
+            ct).ConfigureAwait(false);
+        EnsureSuccess(response, "NyxID user services inventory");
+
+        var inventory = NyxIdApiAccessResponseParser.ParseUserServices(response.Body);
+        if (!inventory.Succeeded)
+        {
+            throw new InvalidOperationException(
+                $"NyxID user services inventory was rejected: {inventory.Failure?.Code ?? "unknown"}.");
+        }
+
+        return NyxIdLlmServiceCatalogParser.ComposeUserServiceInventory(diagnostics, inventory.Value!);
     }
 
     private string? ResolveNyxIdAuthorityBase()

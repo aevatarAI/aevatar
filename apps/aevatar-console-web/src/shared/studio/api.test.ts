@@ -1,4 +1,5 @@
 import { StudioApiError, studioApi } from './api';
+import type { StudioExplicitRequestConfirmation } from './models';
 import { persistAuthSession } from '@/shared/auth/session';
 
 describe('studioApi host-session requests', () => {
@@ -169,14 +170,21 @@ describe('studioApi host-session requests', () => {
       ok: true,
       status: 200,
       json: async () => ({
-        savedRoute: '',
-        savedRouteLabel: 'Company LLM Gateway',
-        effectiveRoute: '',
-        effectiveRouteLabel: 'Company LLM Gateway',
-        routeFallbackActive: false,
-        fallbackReason: null,
+        savedSelection: {
+          routeKind: 'nyx_id_user_service',
+          routeValue: '/api/v1/proxy/s/chrono-llm-public',
+          nyxIdUserServiceId: 'us-alpha',
+          serviceSlugSnapshot: 'chrono-llm-public',
+          modelSelection: {
+            kind: 'explicit_model',
+            modelId: 'gpt-5.5',
+          },
+        },
+        savedRouteLabel: 'OpenAI beta',
+        selectionStatus: 'needs_repair',
+        catalogDiagnostic: 'route_not_ready',
+        remediation: 'choose_replacement',
         catalogStatus: 'ready',
-        defaultModel: 'gpt-5.4-mini',
         capabilities: {
           canEditRoute: true,
           canEditModel: true,
@@ -185,14 +193,20 @@ describe('studioApi host-session requests', () => {
         },
         routeOptions: [
           {
-            routeValue: '',
+            routeValue: '/api/v1/llm/gateway/v1',
             label: 'Company LLM Gateway',
             source: 'gateway_provider',
             status: 'ready',
             allowed: true,
             ready: true,
-            serviceId: null,
+            userServiceId: null,
             serviceSlug: null,
+            modelCatalog: {
+              certainty: 'not_verifiable',
+              modelIds: [],
+              defaultModelId: null,
+              diagnostic: 'not_published',
+            },
             description: null,
           },
           {
@@ -202,8 +216,14 @@ describe('studioApi host-session requests', () => {
             status: 'ready',
             allowed: true,
             ready: true,
-            serviceId: 'svc-openai',
+            userServiceId: 'us-alpha',
             serviceSlug: 'openai',
+            modelCatalog: {
+              certainty: 'enumerated',
+              modelIds: ['gpt-5.5'],
+              defaultModelId: 'gpt-5.5',
+              diagnostic: 'unspecified',
+            },
             description: null,
           },
         ],
@@ -219,55 +239,118 @@ describe('studioApi host-session requests', () => {
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
-    await expect(studioApi.getUserLlmSettings()).resolves.toEqual({
-      savedRoute: '',
-      savedRouteLabel: 'Company LLM Gateway',
-      effectiveRoute: '',
-      effectiveRouteLabel: 'Company LLM Gateway',
-      routeFallbackActive: false,
-      fallbackReason: null,
-      catalogStatus: 'ready',
-      defaultModel: 'gpt-5.4-mini',
-      capabilities: {
-        canEditRoute: true,
-        canEditModel: true,
-        canSave: true,
-        canRetryCatalog: false,
+    const settings = await studioApi.getUserLlmSettings();
+    expect(settings).toMatchObject({
+      savedSelection: {
+        routeKind: 'nyx_id_user_service',
+        routeValue: '/api/v1/proxy/s/chrono-llm-public',
+        nyxIdUserServiceId: 'us-alpha',
+        modelSelection: { kind: 'explicit_model', modelId: 'gpt-5.5' },
       },
-      routeOptions: [
-        {
-          routeValue: '',
-          label: 'Company LLM Gateway',
-          source: 'gateway_provider',
-          status: 'ready',
-          allowed: true,
-          ready: true,
-          serviceId: null,
-          serviceSlug: null,
-          description: null,
-        },
-        {
-          routeValue: '/api/v1/proxy/s/openai',
-          label: 'OpenAI',
-          source: 'user_service',
-          status: 'ready',
-          allowed: true,
-          ready: true,
-          serviceId: 'svc-openai',
-          serviceSlug: 'openai',
-          description: null,
-        },
-      ],
-      modelGroupsByRoute: [
-        {
-          routeValue: '',
-          groupId: 'openai',
-          label: 'OpenAI',
-          models: ['gpt-5.4-mini'],
-        },
-      ],
-      setupHint: undefined,
+      selectionStatus: 'needs_repair',
+      remediation: 'choose_replacement',
     });
+    expect(settings).not.toHaveProperty('effectiveRoute');
+    expect(settings).not.toHaveProperty('routeFallbackActive');
+  });
+
+  it('rejects an unknown LLM selection enum at the adapter boundary', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        savedSelection: {
+          routeKind: 'future_selection_kind',
+          routeValue: '/api/v1/proxy/s/openai',
+          nyxIdUserServiceId: 'us-alpha',
+          serviceSlugSnapshot: 'openai',
+          modelSelection: { kind: 'provider_default', modelId: null },
+        },
+        savedRouteLabel: 'OpenAI alpha',
+        selectionStatus: 'needs_repair',
+        catalogDiagnostic: 'route_not_ready',
+        remediation: 'choose_replacement',
+        routeOptions: [],
+        modelGroupsByRoute: [],
+        catalogStatus: 'ready',
+        capabilities: {
+          canEditRoute: true,
+          canEditModel: true,
+          canSave: true,
+          canRetryCatalog: false,
+        },
+        setupHint: null,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(studioApi.getUserLlmSettings()).rejects.toThrow(
+      'StudioUserLlmSettings.savedSelection.routeKind is not supported.',
+    );
+  });
+
+  it.each([
+    [
+      'reset',
+      { action: 'reset' } as const,
+    ],
+    [
+      'Gateway',
+      {
+        action: 'select_gateway',
+        gateway: { model: { kind: 'provider_default' } },
+      } as const,
+    ],
+    [
+      'user service',
+      {
+        action: 'select_user_service',
+        userService: {
+          userServiceId: 'us-beta',
+          model: { kind: 'explicit_model', modelId: 'gpt-5.4-mini' },
+        },
+      } as const,
+    ],
+    [
+      'preset',
+      {
+        action: 'activate_preset',
+        preset: { presetId: 'work-fast' },
+      } as const,
+    ],
+  ])('sends the typed %s LLM intent unchanged', async (_label, intent) => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: { sub: 'user-1' },
+    });
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({
+        accepted: true,
+        commandId: 'cmd-typed',
+        ackStage: 'accepted_for_dispatch',
+        actorId: 'user-1',
+        correlationId: 'corr-1',
+        ackedAtUtc: '2026-07-23T08:00:00Z',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await studioApi.saveUserLlmSettings(intent);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/user-config/llm',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify(intent),
+      }),
+    );
   });
 
   it('loads Ornn skills from the Ornn platform using bearer auth', async () => {
@@ -971,6 +1054,201 @@ describe('studioApi host-session requests', () => {
     });
   });
 
+  it('previews sanitized explicit requests and forwards only their confirmations to workflow publication transports', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          workflowId: 'wf-alpha',
+          revisionId: 'rev-alpha',
+          items: [
+            {
+              callSiteId: 'wf-alpha/request-alpha',
+              requestContractDigest: 'digest-alpha',
+              userServiceId: 'usvc-alpha',
+              method: 'post',
+              pathTemplate: '/records/{id}',
+              bodyMode: 'json',
+              bodyRequired: true,
+              responseMode: 'text',
+              effectiveRisk: 'write',
+              approvalRequired: true,
+              allowedExecutionModes: ['interactive'],
+            },
+          ],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          status: 'accepted',
+          bindingRunId: 'bind-alpha',
+          scopeId: 'scope-alpha',
+          memberId: 'm-alpha',
+          ackStage: 'dispatch_accepted',
+          bindingRunRole: 'candidate',
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          scopeId: 'scope-alpha',
+          workflowId: 'wf-alpha',
+          revisionId: 'rev-alpha',
+          acceptanceStage: 'accepted',
+          propagationStage: 'readmodel_propagating',
+        }),
+      } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    const preview = await studioApi.previewExplicitRequests({
+      scopeId: 'scope-alpha',
+      workflowId: 'wf-alpha',
+      workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
+      executionMode: 'interactive',
+      revisionId: 'rev-alpha',
+    });
+
+    expect(preview).toEqual({
+      workflowId: 'wf-alpha',
+      revisionId: 'rev-alpha',
+      items: [
+        {
+          callSiteId: 'wf-alpha/request-alpha',
+          requestContractDigest: 'digest-alpha',
+          userServiceId: 'usvc-alpha',
+          method: 'post',
+          pathTemplate: '/records/{id}',
+          bodyMode: 'json',
+          bodyRequired: true,
+          responseMode: 'text',
+          effectiveRisk: 'write',
+          approvalRequired: true,
+          allowedExecutionModes: ['interactive'],
+        },
+      ],
+    });
+
+    const confirmations: StudioExplicitRequestConfirmation[] = [
+      {
+        workflowId: 'wf-alpha',
+        revisionId: 'rev-alpha',
+        callSiteId: 'wf-alpha/request-alpha',
+        requestContractDigest: 'digest-alpha',
+        attestedRisk: 'write',
+      },
+    ];
+    await studioApi.bindMemberWorkflow({
+      scopeId: 'scope-alpha',
+      memberId: 'm-alpha',
+      workflowId: 'wf-alpha',
+      revisionId: 'rev-alpha',
+      workflowYamls: ['name: Workflow Alpha\nsteps: []\n'],
+      explicitRequestConfirmations: confirmations,
+    });
+    await studioApi.saveAndBindWorkflow({
+      scopeId: 'scope-alpha',
+      workflowId: 'wf-alpha',
+      revisionId: 'rev-alpha',
+      workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
+      explicitRequestConfirmations: confirmations,
+    });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
+      executionMode: 'interactive',
+      workflowId: 'wf-alpha',
+      revisionId: 'rev-alpha',
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
+      implementationKind: 'workflow',
+      explicitRequestConfirmations: confirmations,
+      workflow: {
+        workflowId: 'wf-alpha',
+      },
+      revisionId: 'rev-alpha',
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toEqual({
+      workflowId: 'wf-alpha',
+      revisionId: 'rev-alpha',
+      workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
+      explicitRequestConfirmations: confirmations,
+    });
+  });
+
+  it.each([
+    ['callSiteId', { callSiteId: ' ' }],
+    ['requestContractDigest', { requestContractDigest: ' ' }],
+    ['userServiceId', { userServiceId: ' ' }],
+    ['pathTemplate', { pathTemplate: ' ' }],
+    ['duplicate callSiteId', { callSiteId: 'wf-alpha/request-alpha' }],
+  ])('rejects malformed explicit-request preview item: %s', async (_label, override) => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const previewItem = {
+      callSiteId: 'wf-alpha/request-alpha',
+      requestContractDigest: 'digest-alpha',
+      userServiceId: 'usvc-alpha',
+      method: 'post',
+      pathTemplate: '/records/{id}',
+      bodyMode: 'json',
+      bodyRequired: true,
+      responseMode: 'text',
+      effectiveRisk: 'write',
+      approvalRequired: true,
+      allowedExecutionModes: ['interactive'],
+      ...override,
+    };
+    const previewItems = _label === 'duplicate callSiteId'
+      ? [previewItem, { ...previewItem }]
+      : [previewItem];
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        workflowId: 'wf-alpha',
+        revisionId: 'rev-alpha',
+        items: previewItems,
+      }),
+    } as Response) as typeof global.fetch;
+
+    await expect(
+      studioApi.previewExplicitRequests({
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-alpha',
+        revisionId: 'rev-alpha',
+        workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
+        executionMode: 'interactive',
+      }),
+    ).rejects.toThrow();
+  });
+
   it('rejects member workflow binding without a stable workflow id', async () => {
     expect(() =>
       studioApi.bindMemberWorkflow({
@@ -978,6 +1256,7 @@ describe('studioApi host-session requests', () => {
         memberId: 'joker',
         displayName: 'joker',
         workflowId: ' ',
+        revisionId: 'rev-alpha',
         workflowYamls: ['name: joker\nsteps: []\n'],
       }),
     ).toThrow('Workflow member binding requires a stable workflow id.');
@@ -1029,6 +1308,7 @@ describe('studioApi host-session requests', () => {
     const result = await studioApi.saveAndBindWorkflow({
       scopeId: 'scope-1',
       workflowId: 'wf-alpha',
+      revisionId: 'rev-1',
       workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
       workflowName: 'Workflow Alpha',
       displayName: 'Workflow Alpha',
@@ -1056,6 +1336,7 @@ describe('studioApi host-session requests', () => {
     expect(init?.method).toBe('POST');
     expect(JSON.parse(String(init?.body))).toEqual({
       workflowId: 'wf-alpha',
+      revisionId: 'rev-1',
       workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
       workflowName: 'Workflow Alpha',
       displayName: 'Workflow Alpha',

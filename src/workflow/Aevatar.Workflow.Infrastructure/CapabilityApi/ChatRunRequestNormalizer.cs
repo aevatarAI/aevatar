@@ -4,7 +4,7 @@ using WorkflowProtocol = Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
-internal readonly record struct ChatRunRequestNormalizationResult(
+public readonly record struct ChatRunRequestNormalizationResult(
     WorkflowChatRunRequest? Request,
     WorkflowChatRunStartError Error)
 {
@@ -89,7 +89,12 @@ internal static class ChatRunRequestNormalizer
             return new CallerCredentialNormalizationResult(null, WorkflowChatRunStartError.None);
 
         var parsed = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(source.BearerToken);
-        if (parsed.IsInvalid)
+        var sourceReadable = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(
+            source.SourceReadableUserBearerToken);
+        if (WorkflowProtocol.WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
+                source.BearerToken,
+                source.Kind,
+                source.SourceReadableUserBearerToken))
             return new CallerCredentialNormalizationResult(null, WorkflowChatRunStartError.InvalidCallerCredential);
 
         var authority = NormalizeCallerNyxIdAuthority(source.NyxIdAuthority);
@@ -99,7 +104,9 @@ internal static class ChatRunRequestNormalizer
         return new CallerCredentialNormalizationResult(
             new WorkflowCallerCredential(
                 parsed.IsMissing ? null : parsed.NormalizedBearerToken,
-                authority),
+                authority,
+                source.Kind,
+                sourceReadable.NormalizedBearerToken),
             WorkflowChatRunStartError.None);
     }
 
@@ -241,6 +248,7 @@ internal static class ChatRunRequestNormalizer
             new WorkflowChatRunRequest(
                 Prompt: rawPrompt,
                 Source: sourceResult.Source!,
+                ExpectedExecutionMode: WorkflowProtocol.ExternalCapabilityExecutionMode.Interactive,
                 SessionId: NormalizeSessionId(input.SessionId),
                 InputParts: normalizedInputParts,
                 Metadata: normalizedMetadata,
@@ -489,16 +497,7 @@ internal static class ChatRunRequestNormalizer
             if (!TryParseContentPartKind(part.Type, out var kind))
                 continue;
 
-            ingested.Add(new WorkflowChatInputPart
-            {
-                Kind = kind,
-                Text = string.IsNullOrWhiteSpace(part.Text) ? null : part.Text,
-                DataBase64 = fileInputResult.DataBase64 ?? NormalizeContentPartValue(part.DataBase64),
-                MediaType = fileInputResult.MediaType ?? NormalizeContentPartValue(part.MediaType),
-                Uri = fileInputResult.Uri ?? NormalizeContentPartValue(part.Uri),
-                Name = fileInputResult.Name ?? NormalizeContentPartValue(part.Name),
-                FileRef = fileInputResult.FileRef,
-            });
+            ingested.Add(BuildWorkflowInputPart(part, kind, fileInputResult));
         }
 
         return new InputPartsNormalizationResult(
@@ -527,16 +526,7 @@ internal static class ChatRunRequestNormalizer
             if (!TryParseContentPartKind(part.Type, out var kind))
                 continue;
 
-            normalized.Add(new WorkflowChatInputPart
-            {
-                Kind = kind,
-                Text = string.IsNullOrWhiteSpace(part.Text) ? null : part.Text,
-                DataBase64 = fileInputResult.DataBase64 ?? NormalizeContentPartValue(part.DataBase64),
-                MediaType = fileInputResult.MediaType ?? NormalizeContentPartValue(part.MediaType),
-                Uri = fileInputResult.Uri ?? NormalizeContentPartValue(part.Uri),
-                Name = fileInputResult.Name ?? NormalizeContentPartValue(part.Name),
-                FileRef = fileInputResult.FileRef,
-            });
+            normalized.Add(BuildWorkflowInputPart(part, kind, fileInputResult));
         }
 
         return new InputPartsNormalizationResult(
@@ -551,6 +541,34 @@ internal static class ChatRunRequestNormalizer
         string? Name,
         FileArtifactRef? FileRef,
         WorkflowChatRunStartError Error);
+
+    private static WorkflowChatInputPart BuildWorkflowInputPart(
+        ChatInputContentPart part,
+        WorkflowChatInputPartKind kind,
+        FileInputNormalizationResult fileInputResult)
+    {
+        if (fileInputResult.FileRef is not null)
+        {
+            var filePart = WorkflowChatInputParts.FromFileRef(fileInputResult.FileRef, kind);
+            return filePart with
+            {
+                Text = string.IsNullOrWhiteSpace(part.Text) ? null : part.Text,
+                MediaType = filePart.MediaType ?? NormalizeContentPartValue(part.MediaType),
+                Uri = filePart.Uri ?? NormalizeContentPartValue(part.Uri),
+                Name = filePart.Name ?? NormalizeContentPartValue(part.Name),
+            };
+        }
+
+        return new WorkflowChatInputPart
+        {
+            Kind = kind,
+            Text = string.IsNullOrWhiteSpace(part.Text) ? null : part.Text,
+            DataBase64 = fileInputResult.DataBase64 ?? NormalizeContentPartValue(part.DataBase64),
+            MediaType = fileInputResult.MediaType ?? NormalizeContentPartValue(part.MediaType),
+            Uri = fileInputResult.Uri ?? NormalizeContentPartValue(part.Uri),
+            Name = fileInputResult.Name ?? NormalizeContentPartValue(part.Name),
+        };
+    }
 
     private static FileInputNormalizationResult NormalizeFileInput(ChatInputContentPart part)
     {

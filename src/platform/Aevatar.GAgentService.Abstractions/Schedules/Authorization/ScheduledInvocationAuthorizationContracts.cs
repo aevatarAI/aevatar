@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using System.Security.Cryptography;
 using System.Text;
 using Aevatar.Workflow.Abstractions;
@@ -7,7 +8,7 @@ namespace Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 
 public static class ScheduledInvocationAuthorizationContractVersions
 {
-    public const string Schema = "scheduled-invocation-authorization/v2";
+    public const string Schema = "scheduled-invocation-authorization/v3";
     public const string CredentialPolicy = "nyxid-api-key/scheduled-invocation/v2";
 }
 
@@ -35,7 +36,9 @@ public sealed record ScheduledInvocationAuthorizationPlanResult(
     ScheduledInvocationAuthorizationPlan? Plan,
     ScheduledInvocationAuthorizationFailureCode FailureCode,
     string Detail,
-    long ObservedCatalogStateVersion = 0)
+    long ObservedCatalogStateVersion = 0,
+    IReadOnlyList<NyxIdUserServiceCapabilityRef>? RequiredNyxIdServices = null,
+    ScheduledInvocationLLMRefreshRequirement? LLMRefreshRequirement = null)
 {
     public bool Success => Plan is not null;
 
@@ -50,8 +53,16 @@ public sealed record ScheduledInvocationAuthorizationPlanResult(
     public static ScheduledInvocationAuthorizationPlanResult Failed(
         ScheduledInvocationAuthorizationFailureCode failureCode,
         string detail,
-        long observedCatalogStateVersion = 0) =>
-        new(null, failureCode, detail, observedCatalogStateVersion);
+        long observedCatalogStateVersion = 0,
+        IReadOnlyList<NyxIdUserServiceCapabilityRef>? requiredNyxIdServices = null,
+        ScheduledInvocationLLMRefreshRequirement? llmRefreshRequirement = null) =>
+        new(
+            null,
+            failureCode,
+            detail,
+            observedCatalogStateVersion,
+            requiredNyxIdServices,
+            llmRefreshRequirement);
 }
 
 public sealed class ValidatedScheduledInvocationAuthorizationPlan
@@ -95,13 +106,60 @@ public static class NyxIdAuthorizationCatalogIntegrity
 {
     public static string ComputeContentDigest(
         AuthorizationOwnerIdentity owner,
-        IEnumerable<NyxIdAuthorizationServiceEvidence> services)
+        IEnumerable<NyxIdAuthorizationServiceEvidence> services,
+        NyxIdAuthorizationLLMTargetEvidence? gatewayLLMTarget = null)
     {
         ArgumentNullException.ThrowIfNull(owner);
         ArgumentNullException.ThrowIfNull(services);
         var content = new NyxIdAuthorizationCatalogContent { Owner = owner.Clone() };
-        content.Services.Add(services.Select(static service => service.Clone()));
+        content.Services.Add(services
+            .Select(static service => service.Clone())
+            .OrderBy(static service => service.UserServiceId, StringComparer.Ordinal));
+        if (gatewayLLMTarget != null)
+            content.GatewayLlmTarget = gatewayLLMTarget.Clone();
         return Convert.ToHexStringLower(SHA256.HashData(content.ToByteArray()));
+    }
+
+    public static bool TryResolveServiceAuthorityWindow(
+        NyxIdAuthorizationCatalogSnapshot snapshot,
+        NyxIdAuthorizationServiceEvidence service,
+        out DateTimeOffset observedAtUtc,
+        out DateTimeOffset freshUntilUtc)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(service);
+
+        var hasServiceAuthorityStamp =
+            service.ObservedAt != null ||
+            service.FreshUntil != null ||
+            service.EvaluatedAt != null ||
+            !string.IsNullOrWhiteSpace(service.AuthorityContractVersion) ||
+            !string.IsNullOrWhiteSpace(service.AuthorityPolicyVersion);
+        if (!hasServiceAuthorityStamp)
+        {
+            observedAtUtc = snapshot.ObservedAtUtc;
+            freshUntilUtc = snapshot.FreshUntilUtc;
+            return observedAtUtc != default && freshUntilUtc > observedAtUtc;
+        }
+
+        if (service.ObservedAt == null ||
+            service.FreshUntil == null ||
+            service.EvaluatedAt == null ||
+            string.IsNullOrWhiteSpace(service.AuthorityContractVersion) ||
+            string.IsNullOrWhiteSpace(service.AuthorityPolicyVersion))
+        {
+            observedAtUtc = default;
+            freshUntilUtc = default;
+            return false;
+        }
+
+        observedAtUtc = service.ObservedAt.ToDateTimeOffset();
+        freshUntilUtc = service.FreshUntil.ToDateTimeOffset();
+        var evaluatedAtUtc = service.EvaluatedAt.ToDateTimeOffset();
+        return observedAtUtc != default &&
+               evaluatedAtUtc != default &&
+               evaluatedAtUtc <= observedAtUtc &&
+               freshUntilUtc > observedAtUtc;
     }
 }
 
@@ -110,7 +168,9 @@ public sealed record ScheduledInvocationAuthorizationValidationResult(
     ScheduledInvocationAuthorizationFailureCode FailureCode,
     string Detail,
     long RequiredStateVersion = 0,
-    long ObservedCatalogStateVersion = 0)
+    long ObservedCatalogStateVersion = 0,
+    IReadOnlyList<NyxIdUserServiceCapabilityRef>? RequiredNyxIdServices = null,
+    ScheduledInvocationLLMRefreshRequirement? LLMRefreshRequirement = null)
 {
     public bool Success => ValidatedPlan is not null;
 
@@ -124,12 +184,16 @@ public sealed record ScheduledInvocationAuthorizationValidationResult(
     public static ScheduledInvocationAuthorizationValidationResult Failed(
         ScheduledInvocationAuthorizationFailureCode failureCode,
         string detail,
-        long observedCatalogStateVersion = 0) =>
+        long observedCatalogStateVersion = 0,
+        IReadOnlyList<NyxIdUserServiceCapabilityRef>? requiredNyxIdServices = null,
+        ScheduledInvocationLLMRefreshRequirement? llmRefreshRequirement = null) =>
         new(
             null,
             failureCode,
             detail,
-            ObservedCatalogStateVersion: observedCatalogStateVersion);
+            ObservedCatalogStateVersion: observedCatalogStateVersion,
+            RequiredNyxIdServices: requiredNyxIdServices,
+            LLMRefreshRequirement: llmRefreshRequirement);
 
     public static ScheduledInvocationAuthorizationValidationResult ProjectionPending(
         long requiredStateVersion,
@@ -167,7 +231,45 @@ public sealed record NyxIdAuthorizationCatalogSnapshot(
     bool Activated = false,
     bool Cleaned = false,
     DateTimeOffset? CleanedAtUtc = null,
-    string CleanupReason = "");
+    string CleanupReason = "",
+    NyxIdAuthorizationLLMTargetEvidence? GatewayLLMTarget = null);
+
+public enum ScheduledAuthorizationPlanMismatchReason
+{
+    Unspecified = 0,
+    ScopePlanAuthorityMismatch = 1,
+    ScopePlanVersionsMismatch = 2,
+    IntendedKeyOwnerMismatch = 3,
+    AuthenticatedActorMismatch = 4,
+    ScopePlanFreshnessMismatch = 5,
+    ScopePlanCompletenessMismatch = 6,
+    AllowedServiceIdsMismatch = 7,
+    AllowedNodeIdsMismatch = 8,
+    ServiceGrantCountMismatch = 9,
+    ServiceGrantIdentityMismatch = 10,
+    ServiceGrantResourceOwnerMismatch = 11,
+    ServiceGrantNodeMismatch = 12,
+}
+
+public static class ScheduledAuthorizationPlanMismatchReasons
+{
+    public static string? ToWireValue(ScheduledAuthorizationPlanMismatchReason reason) => reason switch
+    {
+        ScheduledAuthorizationPlanMismatchReason.ScopePlanAuthorityMismatch => "scope_plan_authority_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.ScopePlanVersionsMismatch => "scope_plan_versions_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.IntendedKeyOwnerMismatch => "intended_key_owner_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.AuthenticatedActorMismatch => "authenticated_actor_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.ScopePlanFreshnessMismatch => "scope_plan_freshness_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.ScopePlanCompletenessMismatch => "scope_plan_completeness_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.AllowedServiceIdsMismatch => "allowed_service_ids_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.AllowedNodeIdsMismatch => "allowed_node_ids_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.ServiceGrantCountMismatch => "service_grant_count_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.ServiceGrantIdentityMismatch => "service_grant_identity_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.ServiceGrantResourceOwnerMismatch => "service_grant_resource_owner_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.ServiceGrantNodeMismatch => "service_grant_node_mismatch",
+        _ => null,
+    };
+}
 
 public enum NyxIdAuthorizationCatalogVisibilityStatus
 {
@@ -198,6 +300,13 @@ public sealed record NyxIdAuthorizationCatalogVisibilityResult(
             "nyxid_catalog_visibility_unavailable");
 }
 
+public enum NyxIdAuthorizationCatalogObservationCoverage
+{
+    Unspecified = 0,
+    FullOwner = 1,
+    RequiredServiceSubset = 2,
+}
+
 public sealed record NyxIdAuthorizationCatalogObservation(
     AuthorizationOwnerIdentity Owner,
     string RefreshId,
@@ -207,7 +316,10 @@ public sealed record NyxIdAuthorizationCatalogObservation(
     string PolicyVersion,
     DateTimeOffset EvaluatedAtUtc,
     string ContentDigest,
-    IReadOnlyList<NyxIdAuthorizationServiceEvidence> Services);
+    IReadOnlyList<NyxIdAuthorizationServiceEvidence> Services,
+    NyxIdAuthorizationCatalogObservationCoverage Coverage = NyxIdAuthorizationCatalogObservationCoverage.FullOwner,
+    IReadOnlyList<string>? CoveredUserServiceIds = null,
+    NyxIdAuthorizationLLMTargetEvidence? GatewayLLMTarget = null);
 
 public enum NyxIdAuthorizationCatalogRefreshStatus
 {
@@ -247,7 +359,8 @@ public sealed record ScheduledInvocationWorkflowEvidence(
     long StateVersion,
     IReadOnlyList<ExternalWorkflowCapabilityRef> ExternalCapabilities,
     bool OwnerLLMRouteRequired,
-    AuthorizationGrantRequirement ServiceGrantRequirement);
+    AuthorizationGrantRequirement ServiceGrantRequirement,
+    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null);
 
 public sealed record ScheduledInvocationConnectorEvidence(
     long StateVersion,
@@ -255,14 +368,40 @@ public sealed record ScheduledInvocationConnectorEvidence(
 
 public sealed record ScheduledInvocationOwnerLLMEvidence(
     long StateVersion,
-    string NyxIdServiceId,
-    string NyxIdServiceSlug,
-    AuthorizationGrantRequirement ServiceGrantRequirement,
-    string NyxIdRoute = "");
+    ScheduledInvocationOwnerLLMSelection Selection);
 
-public sealed class ScheduledInvocationOwnerLLMRouteOptions
+public sealed record ScheduledInvocationLLMRefreshRequirement(
+    LLMRouteKind RouteKind,
+    string RouteValue,
+    string NyxIdUserServiceId,
+    string ServiceSlugSnapshot,
+    string ExplicitModelId,
+    long UserConfigStateVersion);
+
+public sealed record NyxIdAuthorizationCatalogRefreshRequest(
+    IReadOnlyList<NyxIdUserServiceCapabilityRef> RequiredServices,
+    ScheduledInvocationLLMRefreshRequirement? LLMTarget);
+
+public static class ScheduledInvocationOwnerLLMSelectionPolicy
 {
-    public string DefaultRoutePreference { get; set; } = string.Empty;
+    public const string GatewayRoute = "/api/v1/llm/gateway/v1";
+    public const string NyxIdProxyRoutePrefix = "/api/v1/proxy/s/";
+
+    public static bool IsDurableSelectionValid(ScheduledInvocationOwnerLLMSelection? value) =>
+        value?.RouteKind switch
+        {
+            LLMRouteKind.Gateway =>
+                value.RouteValue == GatewayRoute && Canonical(value.Model) &&
+                value.NyxIdUserServiceId.Length == 0 && value.ServiceSlugSnapshot.Length == 0,
+            LLMRouteKind.NyxIdUserService =>
+                Canonical(value.RouteValue) && Canonical(value.NyxIdUserServiceId) &&
+                Canonical(value.ServiceSlugSnapshot) && Canonical(value.Model) &&
+                !value.ServiceSlugSnapshot.Contains('/') &&
+                value.RouteValue == $"{NyxIdProxyRoutePrefix}{value.ServiceSlugSnapshot}",
+            _ => false,
+        };
+
+    private static bool Canonical(string value) => value.Length > 0 && value == value.Trim();
 }
 
 public interface INyxIdAuthorizationCatalogQueryPort
@@ -288,6 +427,7 @@ public interface INyxIdAuthorizationCatalogCommandPort
         string refreshId,
         DateTimeOffset failedAtUtc,
         string failureCode,
+        NyxIdAuthorizationCatalogRefreshStatus status = NyxIdAuthorizationCatalogRefreshStatus.Failed,
         CancellationToken ct = default);
 
     Task InvalidateAsync(
@@ -311,6 +451,17 @@ public interface INyxIdAuthorizationCatalogCommandPort
         CancellationToken ct = default);
 }
 
+public interface INyxIdAuthorizationCatalogRepairCommandPort
+{
+    Task BeginRepairRefreshAsync(
+        AuthorizationOwnerIdentity owner,
+        string refreshId,
+        DateTimeOffset startedAtUtc,
+        long minimumSourceStateVersion,
+        string repairRequestId,
+        CancellationToken ct = default);
+}
+
 public interface INyxIdAuthorizationCatalogRefreshPort
 {
     Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
@@ -318,9 +469,25 @@ public interface INyxIdAuthorizationCatalogRefreshPort
         string bearerToken,
         CancellationToken ct = default);
 
+    Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
+        AuthorizationOwnerIdentity owner,
+        string bearerToken,
+        NyxIdAuthorizationCatalogRefreshRequest request,
+        CancellationToken ct = default);
+
     Task<NyxIdAuthorizationCatalogRefreshResult> RefreshPersonalAsync(
         string verifiedOwnerSubject,
         string bearerToken,
+        CancellationToken ct = default);
+}
+
+public interface INyxIdAuthorizationCatalogRepairRefreshPort
+{
+    Task<NyxIdAuthorizationCatalogRefreshResult> RefreshPersonalAsync(
+        string verifiedOwnerSubject,
+        string bearerToken,
+        long minimumSourceStateVersion,
+        string repairRequestId,
         CancellationToken ct = default);
 }
 
@@ -360,15 +527,6 @@ public interface IScheduledInvocationOwnerLLMEvidenceQueryPort
 {
     Task<ScheduledInvocationOwnerLLMEvidence?> GetAsync(
         string scopeId,
-        AuthenticatedAuthorizationOwnerContext? ownerContext = null,
-        CancellationToken ct = default);
-}
-
-public interface IScheduledInvocationOwnerLLMServiceIdentityResolver
-{
-    Task<string> ResolveAsync(
-        ScheduledInvocationOwnerLLMEvidence evidence,
-        AuthenticatedAuthorizationOwnerContext ownerContext,
         CancellationToken ct = default);
 }
 

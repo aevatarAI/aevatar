@@ -365,6 +365,57 @@ public sealed class NyxIdRelayTransportTests
     }
 
     [Fact]
+    public void Parse_ShouldDeduplicateLarkResourceUrlAndRawFileKeyAttachments()
+    {
+        var body = """
+            {
+              "message_id": "msg-lark-file-dedupe",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "group" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": {
+                "type": "file",
+                "text": "   ",
+                "attachments": [
+                  {
+                    "content_type": "file",
+                    "url": "https://open.larksuite.com/open-apis/im/v1/messages/om_file_1/resources/file_v3_abc?type=file",
+                    "filename": "report.pdf",
+                    "mime_type": "application/pdf"
+                  }
+                ]
+              },
+              "raw_platform_data": {
+                "event": {
+                  "message": {
+                    "message_id": "om_file_1",
+                    "chat_id": "oc_group_1",
+                    "chat_type": "group",
+                    "message_type": "file",
+                    "content": {
+                      "file_key": "file_v3_abc",
+                      "file_name": "report.pdf",
+                      "mime_type": "application/pdf"
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Content.Text.Should().BeEmpty();
+        parsed.Activity.Content.Attachments.Should().ContainSingle();
+        var attachment = parsed.Activity.Content.Attachments.Single();
+        attachment.AttachmentId.Should().Be("https://open.larksuite.com/open-apis/im/v1/messages/om_file_1/resources/file_v3_abc?type=file");
+        attachment.Kind.Should().Be(AttachmentKind.File);
+        attachment.ExternalUrl.Should().Be("https://open.larksuite.com/open-apis/im/v1/messages/om_file_1/resources/file_v3_abc?type=file");
+    }
+
+    [Fact]
     public void Parse_ShouldIgnorePayload_WhenAttachmentIdentifiersAreMissing()
     {
         var body = """
@@ -793,6 +844,38 @@ public sealed class NyxIdRelayTransportTests
         cardAction.NyxIdApproval.Approved.Should().BeTrue();
         cardAction.Arguments.Should().NotContainKey("nyxid_approval_request_id");
         cardAction.Arguments.Should().NotContainKey("nyxid_approval_approved");
+        cardAction.Arguments.Should().ContainKey("external_note").WhoseValue.Should().Be("kept");
+    }
+
+    [Fact]
+    public void Parse_ShouldMapAgentRunApprovalFields_ToTypedPayloadAndRemoveAuthorityKeys()
+    {
+        var body = """
+            {
+              "message_id": "msg-card-agent-run-approval",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_chat_1", "type": "private" },
+              "sender": { "platform_id": "ou_1", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": "{\"value\":{\"action_id\":\"agent-run-approval-approve\",\"action_kind\":\"button\",\"agent_run_id\":\"agent-run-approval-1\",\"agent_run_approval_request_id\":\"tool-approval-1\",\"agent_run_tool_call_id\":\"call-approval-1\",\"agent_run_tool_name\":\"use_skill\",\"agent_run_arguments_sha256\":\"sha256-approval-1\",\"agent_run_approved\":true,\"external_note\":\"kept\"}}"
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        var cardAction = parsed.Activity!.Content.CardAction;
+        cardAction.Should().NotBeNull();
+        cardAction!.AgentRunApproval.RunId.Should().Be("agent-run-approval-1");
+        cardAction.AgentRunApproval.ApprovalRequestId.Should().Be("tool-approval-1");
+        cardAction.AgentRunApproval.ToolCallId.Should().Be("call-approval-1");
+        cardAction.AgentRunApproval.ToolName.Should().Be("use_skill");
+        cardAction.AgentRunApproval.ArgumentsSha256.Should().Be("sha256-approval-1");
+        cardAction.AgentRunApproval.Approved.Should().BeTrue();
+        cardAction.Arguments.Keys.Should().NotContain(key => key.StartsWith("agent_run_", StringComparison.Ordinal));
         cardAction.Arguments.Should().ContainKey("external_note").WhoseValue.Should().Be("kept");
     }
 

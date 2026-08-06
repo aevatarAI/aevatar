@@ -2,6 +2,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
@@ -98,7 +99,66 @@ public sealed class StudioMemberServiceContractAndRevisionTests
     }
 
     [Fact]
-    public async Task GetEndpointContractAsync_ShouldExposePreparedArtifactMissingReadiness()
+    public async Task InvocationReadinessQueryPort_ShouldReturnBackendResolvedServiceAndRevision()
+    {
+        var detail = NewDetail();
+        var lifecycle = new InMemoryServiceLifecycleQueryPort
+        {
+            Service = NewService(
+                endpoints:
+                [
+                    new ServiceEndpointSnapshot(
+                        EndpointId: "chat",
+                        DisplayName: "Chat",
+                        Kind: "chat",
+                        RequestTypeUrl: "type.googleapis.com/x.Request",
+                        ResponseTypeUrl: "type.googleapis.com/x.Response",
+                        Description: string.Empty),
+                ]),
+            Revisions = NewRevisions(
+                ServiceImplementationKind.Workflow,
+                [
+                    new ServiceEndpointSnapshot(
+                        EndpointId: "chat",
+                        DisplayName: "Chat",
+                        Kind: "chat",
+                        RequestTypeUrl: "type.googleapis.com/x.Request",
+                        ResponseTypeUrl: "type.googleapis.com/x.Response",
+                        Description: string.Empty),
+                ]),
+        };
+        var memberService = new StudioMemberService(
+            new InertMemberCommandPort(),
+            new InMemoryMemberQueryPort(detail),
+            new InertBindingRunQueryPort(),
+            new InertTeamQueryPort(),
+            lifecycle,
+            new ReadyScopeBindingReadinessQueryPort(),
+            new RecordingServiceCommandPort(),
+            new StudioWorkflowCapabilityAdmissionTestService());
+        var port = new StudioMemberInvocationReadinessQueryPort(memberService);
+
+        var result = await port.GetAsync(ScopeId, MemberId, "chat", CancellationToken.None);
+
+        result.Should().NotBeNull();
+        result!.ScopeId.Should().Be(ScopeId);
+        result.MemberId.Should().Be(MemberId);
+        result.PublishedServiceId.Should().Be(PublishedServiceId);
+        result.RevisionId.Should().Be("rev-1");
+        result.CanInvoke.Should().BeTrue();
+        lifecycle.LastIdentity!.ServiceId.Should().Be(PublishedServiceId);
+    }
+
+    [Theory]
+    [InlineData(
+        ScopeBindingReadinessStatus.PreparedArtifactMissing,
+        StudioMemberInvocationReadinessStatusNames.PreparedArtifactMissing)]
+    [InlineData(
+        ScopeBindingReadinessStatus.InvocationCatalogNotReady,
+        StudioMemberInvocationReadinessStatusNames.InvocationCatalogNotReady)]
+    public async Task GetEndpointContractAsync_ShouldExposeNotReadyStatus(
+        ScopeBindingReadinessStatus readinessStatus,
+        string expectedStatus)
     {
         var detail = NewDetail();
         var queryPort = new InMemoryMemberQueryPort(detail);
@@ -135,7 +195,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertBindingRunQueryPort(),
             new InertTeamQueryPort(),
             lifecycle,
-            new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.PreparedArtifactMissing, invokeReady: false),
+            new FixedScopeBindingReadinessQueryPort(readinessStatus, invokeReady: false),
             new RecordingServiceCommandPort(),
             new StudioWorkflowCapabilityAdmissionTestService());
 
@@ -143,8 +203,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
 
         contract.Should().NotBeNull();
         contract!.InvocationReadiness.CanInvoke.Should().BeFalse();
-        contract.InvocationReadiness.Status.Should().Be(StudioMemberInvocationReadinessStatusNames.PreparedArtifactMissing);
-        contract.InvocationReadiness.ReasonCode.Should().Be(StudioMemberInvocationReadinessStatusNames.PreparedArtifactMissing);
+        contract.InvocationReadiness.Status.Should().Be(expectedStatus);
+        contract.InvocationReadiness.ReasonCode.Should().Be(expectedStatus);
     }
 
     [Fact]

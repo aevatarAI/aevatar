@@ -9,7 +9,50 @@ import "google/protobuf/struct.proto";
 import "llm_sessions.proto";
 import "service_definition.proto";
 import "service_invocation_catalog.proto";
+import "service_deployment.proto";
 import "service_revision.proto";
+import "content_artifact_messages.proto";
+import "agent_profiles.proto";
+
+message AgentProfileCatalogReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  aevatar.gagentservice.AgentProfileOwner owner = 6;
+  repeated aevatar.gagentservice.AgentProfileCatalogEntry profiles = 7;
+  repeated aevatar.gagentservice.AgentProfileDefaultBinding default_bindings = 8;
+  aevatar.gagentservice.AgentProfileMutationOutcome last_mutation = 9;
+}
+
+message AgentProfileManagementReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  aevatar.gagentservice.AgentProfileIdentity identity = 6;
+  aevatar.gagentservice.AgentProfileDraft draft = 7;
+  int64 draft_revision = 8;
+  bytes draft_sha256 = 9;
+  string published_display_name = 10;
+  string published_purpose = 11;
+  int64 published_revision = 12;
+  bytes published_snapshot_sha256 = 13;
+  google.protobuf.Timestamp published_at = 14;
+  aevatar.gagentservice.AgentProfileMutationOutcome last_mutation = 15;
+}
+
+message AgentProfileExecutionReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  aevatar.gagentservice.AgentProfileIdentity identity = 6;
+  aevatar.gagentservice.AgentProfilePublishedSnapshot snapshot = 7;
+}
 
 // --- ServiceCatalogReadModel ---
 
@@ -63,6 +106,7 @@ message ServiceDeploymentCatalogReadModel {
   string last_event_id = 4;
   google.protobuf.Timestamp updated_at_utc_value = 5;
   repeated ServiceDeploymentReadModel deployment_entries = 6;
+  repeated ServiceDeploymentActivationFailureReadModel activation_failure_entries = 7;
 }
 
 message ServiceDeploymentReadModel {
@@ -72,6 +116,13 @@ message ServiceDeploymentReadModel {
   string status = 4;
   google.protobuf.Timestamp activated_at_utc_value = 5;
   google.protobuf.Timestamp updated_at_utc_value = 6;
+}
+
+message ServiceDeploymentActivationFailureReadModel {
+  string revision_id = 1;
+  aevatar.gagentservice.ServiceDeploymentActivationFailureCode failure_code = 2;
+  string failure_reason = 3;
+  google.protobuf.Timestamp occurred_at_utc_value = 4;
 }
 
 // --- ServiceRevisionCatalogReadModel ---
@@ -253,6 +304,7 @@ message ServiceRunCurrentStateReadModel {
   string last_output = 22;
   string last_error = 23;
   string schedule_id = 24;
+  repeated aevatar.content_artifacts.ContentArtifactReference result_artifacts = 25;
 }
 // --- GAgentRunTerminalReadModel ---
 
@@ -449,6 +501,14 @@ message ScheduledDispatchDocument {
   string team_automation_idempotency_key = 54;
   ScheduledInvocationAuthorizationOwnerDocument active_credential_owner = 55;
   reserved 56 to 57;
+  string team_id = 58;
+  string owner_llm_route_kind = 59;
+  string owner_llm_route = 60;
+  string owner_llm_user_service_id = 61;
+  string owner_llm_service_slug = 62;
+  string owner_llm_model = 63;
+  string last_error_code = 64;
+  string service_revision_id = 65;
 }
 
 enum TeamAutomationLifecycleStatusDocument {
@@ -483,4 +543,5 @@ message ScheduledDispatchFireRecordDocument {
   string correlation_id = 6;
   string error = 7;
   bool manual = 8;
+  string error_code = 9;
 }

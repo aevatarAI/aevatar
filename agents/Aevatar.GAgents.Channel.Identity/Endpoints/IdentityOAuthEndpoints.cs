@@ -66,6 +66,21 @@ public static class IdentityOAuthEndpoints
                 captureUnauthenticated: true)
             .AddEndpointFilter<RebuildAuthEndpointFilter>()
             .AllowAnonymous();
+        // Operator-only: force a fresh HMAC state-token signing key. Recovery
+        // path when the vault entry behind the persisted key reference is lost
+        // (secret store data loss): rotation writes new key material and its
+        // committed event re-materializes the readmodel. Same admin gate as
+        // the client rebuild.
+        app.MapPost("/api/oauth/aevatar-client/rotate-hmac", HandleAevatarOAuthClientRotateHmacAsync)
+            .WithTags("ChannelIdentity")
+            .WithEndpointAudit(
+                "identity.oauth-client.hmac-rotate",
+                AuditSensitivityLevel.Restricted,
+                "aevatar_oauth_client",
+                EndpointAuditTargetResolvers.Static("aevatar_oauth_client", "hmac-rotate"),
+                captureUnauthenticated: true)
+            .AddEndpointFilter<RebuildAuthEndpointFilter>()
+            .AllowAnonymous();
         // Operator-only: rebuild a wiped/reset current-state readmodel for one NyxID
         // owner binding from the surviving actor state — headless disaster recovery,
         // no browser round-trip. Same admin gate as the client rebuild.
@@ -91,8 +106,11 @@ public static class IdentityOAuthEndpoints
         [FromQuery] string? error,
         [FromQuery] string? format,
         [FromServices] INyxIdBrokerCallbackClient brokerCallback,
+        [FromServices] INyxIdCapabilityBroker capabilityBroker,
         [FromServices] IExternalIdentityBindingQueryPort queryPort,
         [FromServices] ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingDispatch,
+        [FromServices] ICommandDispatchService<ReplaceBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingReplaceDispatch,
+        [FromServices] IOwnerScopeResolver ownerScopeResolver,
         [FromServices] ICommandDispatchService<ObserveBrokerCapabilityCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> brokerCapabilityDispatch,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -144,7 +162,7 @@ public static class IdentityOAuthEndpoints
             // protection added in this PR). This is the same "still
             // initializing / drift not yet healed" condition the state-token
             // decoder surfaces above, so route it to the same retry-friendly
-            // 400 path instead of letting the generic catch return 502
+            // 400 path instead of letting the generic catch return 503
             // token_exchange_failed — that misclassifies a self-recoverable
             // condition as a NyxID outage.
             logger.LogWarning(
@@ -169,14 +187,28 @@ public static class IdentityOAuthEndpoints
                 detail = "NyxID 授权未包含 Aevatar、默认 LLM、Ornn service 或 Sandbox service。请回到 Lark 重新发送 /init,并在授权页保留这些必需 services。",
             }, statusCode: StatusCodes.Status409Conflict);
         }
+        // RFC 6749 §5.2: the token endpoint answers 400 for a bad grant
+        // (expired/replayed code) — a user-recoverable condition, not an
+        // upstream outage.
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
+        {
+            logger.LogWarning(ex, "NyxID rejected the OAuth callback authorization code for correlation {CorrelationId}", decode.CorrelationId);
+            return OAuthCallbackProblem(
+                StatusCodes.Status400BadRequest,
+                "authorization_code_rejected",
+                "NyxID 拒绝了本次授权码,绑定链接可能已过期。请回到 Lark 重新发送 /init。");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "OAuth callback authorization-code exchange failed for correlation {CorrelationId}", decode.CorrelationId);
-            return Results.Json(new
-            {
-                error = "token_exchange_failed",
-                detail = "NyxID 绑定失败,稍后重试 /init",
-            }, statusCode: StatusCodes.Status502BadGateway);
+            return OAuthCallbackProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "token_exchange_failed",
+                "NyxID 绑定失败,稍后重试 /init");
         }
 
         var existingBinding = await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false);
@@ -200,6 +232,16 @@ public static class IdentityOAuthEndpoints
                     detail = "Lark 中的 NyxID 绑定在授权期间发生了变化。请回到 Lark 重新发送 /init。",
                 }, statusCode: StatusCodes.Status409Conflict);
             }
+
+            var updatedBindingProbe = await ProbeIssuedBindingAsync(
+                    capabilityBroker,
+                    subject,
+                    existingBinding!.Value,
+                    logger,
+                    ct)
+                .ConfigureAwait(false);
+            if (updatedBindingProbe != IssuedBindingProbeResult.Usable)
+                return BuildIssuedBindingProbeError(updatedBindingProbe);
 
             logger.LogInformation(
                 "Updated NyxID service grant in place for {Platform}:{Tenant}:{User}; binding_id remained unchanged",
@@ -234,40 +276,148 @@ public static class IdentityOAuthEndpoints
                 "OAuth callback succeeded but id_token did not carry a stable NyxID uid/sub claim. correlation={CorrelationId}",
                 decode.CorrelationId);
             await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+            return OAuthCallbackProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "owner_scope_missing",
+                "NyxID binding succeeded but Aevatar could not resolve the canonical owner scope. Re-run /init later.");
+        }
+
+        var stateExpectedBindingHash = decode.ExpectedBindingHash?.Trim() ?? string.Empty;
+        var projectedBindingHash = existingBinding is null
+            ? string.Empty
+            : NyxIdRemoteCapabilityBroker.HashBindingId(existingBinding.Value);
+        if (!string.Equals(stateExpectedBindingHash, projectedBindingHash, StringComparison.Ordinal))
+        {
+            logger.LogWarning(
+                "OAuth callback received a new binding for a stale local binding reference. correlation={CorrelationId}",
+                decode.CorrelationId);
+            await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
             return Results.Json(new
             {
-                error = "owner_scope_missing",
-                detail = "NyxID binding succeeded but Aevatar could not resolve the canonical owner scope. Re-run /init later.",
-            }, statusCode: StatusCodes.Status502BadGateway);
+                error = "binding_changed_during_review",
+                detail = "Lark 中的 NyxID 绑定在授权期间发生了变化。请回到 Lark 重新发送 /init。",
+            }, statusCode: StatusCodes.Status409Conflict);
         }
 
         var actorId = subject.ToActorId();
-
-        if (existingBinding is not null)
+        var replacingExistingBinding = existingBinding is not null;
+        if (replacingExistingBinding)
         {
-            // Concurrent /init protection: if the subject is already bound,
-            // the freshly-issued binding_id we just got from NyxID is an
-            // orphan. Best-effort revoke at NyxID before responding so the
-            // orphan does not accumulate at NyxID with no local reference.
+            OwnerScopeId? existingOwnerScope;
+            try
+            {
+                existingOwnerScope = await ownerScopeResolver.ResolveAsync(subject, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(
+                    ex,
+                    "OAuth callback could not resolve the current binding owner for actor={ActorId}",
+                    actorId);
+                await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+                return Results.Json(new
+                {
+                    error = "binding_owner_lookup_failed",
+                    detail = "Aevatar 暂时无法核对当前 NyxID 账号。请稍后回到 Lark 重新发送 /init。",
+                }, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            if (string.IsNullOrWhiteSpace(existingOwnerScope?.Value))
+            {
+                try
+                {
+                    existingOwnerScope = await brokerCallback
+                        .ResolveBindingOwnerScopeAsync(existingBinding!.Value, ct)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(
+                        ex,
+                        "OAuth callback could not introspect the legacy binding owner for actor={ActorId}",
+                        actorId);
+                    await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+                    return Results.Json(new
+                    {
+                        error = "binding_owner_lookup_failed",
+                        detail = "Aevatar 暂时无法核对当前 NyxID 账号。请稍后回到 Lark 重新发送 /init。",
+                    }, statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+            }
+
+            var existingOwnerScopeId = existingOwnerScope?.Value?.Trim() ?? string.Empty;
+            if (existingOwnerScopeId.Length == 0)
+            {
+                logger.LogWarning(
+                    "OAuth callback cannot safely replace a binding without a materialized owner scope. actor={ActorId}, correlation={CorrelationId}",
+                    actorId,
+                    decode.CorrelationId);
+                await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+                return Results.Json(new
+                {
+                    error = "binding_owner_missing",
+                    detail = "当前绑定缺少可验证的 NyxID 账号归属。请先在 Lark 发送 /unbind，再发送 /init 重新绑定。",
+                }, statusCode: StatusCodes.Status409Conflict);
+            }
+
+            if (!string.Equals(existingOwnerScopeId, ownerScopeId, StringComparison.Ordinal))
+            {
+                logger.LogWarning(
+                    "OAuth callback rejected a silent NyxID account switch for actor={ActorId}, correlation={CorrelationId}",
+                    actorId,
+                    decode.CorrelationId);
+                await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+                return Results.Json(new
+                {
+                    error = "binding_owner_mismatch",
+                    detail = "当前 Lark 身份已绑定另一个 NyxID 账号。如需切换账号，请先在 Lark 发送 /unbind，再发送 /init。",
+                }, statusCode: StatusCodes.Status409Conflict);
+            }
+        }
+
+        var issuedBindingProbe = await ProbeIssuedBindingAsync(
+                capabilityBroker,
+                subject,
+                exchange.BindingId,
+                logger,
+                ct)
+            .ConfigureAwait(false);
+        if (issuedBindingProbe != IssuedBindingProbeResult.Usable)
+        {
             await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-            return RenderBoundSuccess(displayName: null, alreadyBound: true, format: format);
+            return BuildIssuedBindingProbeError(issuedBindingProbe);
         }
 
         CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> accepted;
         try
         {
-            accepted = await bindingDispatch
-                .DispatchAsync(new CommitBindingCommand
-                {
-                    ExternalSubject = subject.Clone(),
-                    BindingId = exchange.BindingId,
-                    OwnerScopeId = ownerScopeId,
-                }, ct)
-                .ConfigureAwait(false);
+            accepted = replacingExistingBinding
+                ? await bindingReplaceDispatch
+                    .DispatchAsync(new ReplaceBindingCommand
+                    {
+                        ExternalSubject = subject.Clone(),
+                        BindingId = exchange.BindingId,
+                        ExpectedPreviousBindingId = existingBinding!.Value,
+                        OwnerScopeId = ownerScopeId,
+                        Reason = "channel_service_access_review",
+                    }, ct)
+                    .ConfigureAwait(false)
+                : await bindingDispatch
+                    .DispatchAsync(new CommitBindingCommand
+                    {
+                        ExternalSubject = subject.Clone(),
+                        BindingId = exchange.BindingId,
+                        OwnerScopeId = ownerScopeId,
+                    }, ct)
+                    .ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "OAuth callback failed to dispatch CommitBindingCommand for actor={ActorId}", actorId);
+            logger.LogError(
+                ex,
+                "OAuth callback failed to dispatch the binding {Operation} command for actor={ActorId}",
+                replacingExistingBinding ? "replacement" : "commit",
+                actorId);
             await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
             return Results.Json(new
             {
@@ -279,7 +429,8 @@ public static class IdentityOAuthEndpoints
         if (!accepted.Succeeded || accepted.Receipt is null)
         {
             logger.LogError(
-                "OAuth callback dispatch rejected for actor={ActorId}: error={Error}",
+                "OAuth callback binding {Operation} dispatch rejected for actor={ActorId}: error={Error}",
+                replacingExistingBinding ? "replacement" : "commit",
                 actorId,
                 accepted.Error);
             await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
@@ -305,25 +456,143 @@ public static class IdentityOAuthEndpoints
 
         var displayName = ResolveDisplayName(exchange.IdToken);
         logger.LogInformation(
-            "Accepted external identity binding dispatch {Platform}:{Tenant}:{User} -> binding_id={BindingId}, command_id={CommandId}",
+            "Accepted external identity binding {Operation} dispatch for {Platform}:{Tenant}:{User}, command_id={CommandId}",
+            replacingExistingBinding ? "replacement" : "commit",
             subject.Platform,
             subject.Tenant,
             subject.ExternalUserId,
-            exchange.BindingId,
             accepted.Receipt.CommandId);
 
         return RenderBindingAccepted(displayName, accepted.Receipt, format);
     }
 
+    private enum IssuedBindingProbeResult
+    {
+        Usable,
+        MissingRequiredAccess,
+        Invalid,
+        Unavailable,
+    }
+
+    private static async Task<IssuedBindingProbeResult> ProbeIssuedBindingAsync(
+        INyxIdCapabilityBroker capabilityBroker,
+        ExternalSubjectRef subject,
+        string bindingId,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        try
+        {
+            await capabilityBroker
+                .IssueShortLivedByBindingIdAsync(
+                    subject,
+                    bindingId,
+                    new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy },
+                    ct)
+                .ConfigureAwait(false);
+            // The binding id itself is a bearer credential, so only its
+            // irreversible digest prefix is correlatable from logs.
+            logger.LogInformation(
+                "New channel NyxID binding cleared the configured runtime floor. probe_result={ProbeResult}, binding_digest={BindingDigest}",
+                nameof(IssuedBindingProbeResult.Usable),
+                BindingDigest(bindingId));
+            return IssuedBindingProbeResult.Usable;
+        }
+        catch (BindingScopeMismatchException ex)
+        {
+            logger.LogInformation(
+                ex,
+                "New channel NyxID binding lacks the required proxy scope. probe_result={ProbeResult}, binding_digest={BindingDigest}",
+                nameof(IssuedBindingProbeResult.MissingRequiredAccess),
+                BindingDigest(bindingId));
+            return IssuedBindingProbeResult.MissingRequiredAccess;
+        }
+        catch (BindingServiceAccessMismatchException ex)
+        {
+            logger.LogInformation(
+                ex,
+                "New channel NyxID binding lacks one or more required services. probe_result={ProbeResult}, binding_digest={BindingDigest}, unsatisfied_resource_count={UnsatisfiedResourceCount}",
+                nameof(IssuedBindingProbeResult.MissingRequiredAccess),
+                BindingDigest(bindingId),
+                ex.RequiredResources.Count);
+            return IssuedBindingProbeResult.MissingRequiredAccess;
+        }
+        catch (BindingRevokedException ex)
+        {
+            logger.LogWarning(
+                ex,
+                "New channel NyxID binding was already revoked before adoption. probe_result={ProbeResult}, binding_digest={BindingDigest}",
+                nameof(IssuedBindingProbeResult.Invalid),
+                BindingDigest(bindingId));
+            return IssuedBindingProbeResult.Invalid;
+        }
+        catch (BindingNotFoundException ex)
+        {
+            logger.LogWarning(
+                ex,
+                "New channel NyxID binding was not found before adoption. probe_result={ProbeResult}, binding_digest={BindingDigest}",
+                nameof(IssuedBindingProbeResult.Invalid),
+                BindingDigest(bindingId));
+            return IssuedBindingProbeResult.Invalid;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "New channel NyxID binding could not be verified before adoption. probe_result={ProbeResult}, binding_digest={BindingDigest}",
+                nameof(IssuedBindingProbeResult.Unavailable),
+                BindingDigest(bindingId));
+            return IssuedBindingProbeResult.Unavailable;
+        }
+    }
+
+    private static string BindingDigest(string bindingId) =>
+        NyxIdRemoteCapabilityBroker.BindingDigest(bindingId);
+
+    private static IResult BuildIssuedBindingProbeError(IssuedBindingProbeResult probeResult) =>
+        probeResult switch
+        {
+            IssuedBindingProbeResult.MissingRequiredAccess => OAuthCallbackProblem(
+                StatusCodes.Status409Conflict,
+                "required_service_access_missing",
+                "NyxID 授权没有覆盖 Aevatar 所需的 scope 或 services。请回到 Lark 重新发送 /init，并在授权页保留所有必需 services。"),
+            IssuedBindingProbeResult.Invalid => OAuthCallbackProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "issued_binding_invalid",
+                "NyxID 新授权在 Aevatar 接管前已失效。请回到 Lark 重新发送 /init。"),
+            _ => OAuthCallbackProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "issued_binding_probe_failed",
+                "Aevatar 暂时无法验证新的 NyxID 服务授权。请稍后回到 Lark 重新发送 /init。"),
+        };
+
+    // Callback failure branches must never answer with 502/504: Cloudflare
+    // replaces origin-generated 502/504 responses with its own opaque branded
+    // error page, which strips this structured body before it reaches the
+    // client (2026-07-28 login incident). Upstream faults are reported as 503
+    // with a stable error code.
+    private static IResult OAuthCallbackProblem(int statusCode, string errorCode, string detail) =>
+        Results.Problem(
+            detail: detail,
+            statusCode: statusCode,
+            extensions: new Dictionary<string, object?> { ["error"] = errorCode });
+
     // ─── Status endpoint ───
 
     internal static async Task<IResult> HandleAevatarOAuthClientStatusAsync(
         [FromServices] IAevatarOAuthClientProvider provider,
+        [FromServices] IOptions<NyxIdBrokerOptions> brokerOptions,
         CancellationToken ct)
     {
         try
         {
             var snapshot = await provider.GetAsync(ct).ConfigureAwait(false);
+            var options = brokerOptions.Value;
+            var requiredServiceSlugs = RequiredServiceSlugs(options);
             var resolvedRedirectUri = NyxIdRedirectUriResolver.Resolve();
             var resolvedRedirectUris = NyxIdRedirectUriResolver.ResolveRegisteredRedirectUris();
             var registeredRedirectUris = NyxIdRedirectUriResolver.NormalizeRedirectUris(snapshot.RedirectUris ?? []);
@@ -355,6 +624,16 @@ public static class IdentityOAuthEndpoints
                 oauth_scope_drifted = oauthScopeDrifted,
                 broker_capability_observed = snapshot.BrokerCapabilityObserved,
                 broker_capability_observed_at = snapshot.BrokerCapabilityObservedAt,
+                required_service_slugs = requiredServiceSlugs,
+                // /oauth/authorize deliberately sends no RFC 8707 `resource`, so
+                // NyxID's consent page no longer marks these as required. Consent
+                // defaults are what preselect them; without that, users routinely
+                // land in the callback's 409 repair loop.
+                consent_defaults_handoff =
+                    "Every slug in required_service_slugs must also appear in this OAuth client's NyxID "
+                    + "default_service_catalog_slugs. Those defaults only preselect checkboxes on the consent "
+                    + "page — they are never an authorization fact. Aevatar enforces this set fail-closed at "
+                    + "callback and at every short-lived capability issuance.",
                 ops_handoff = oauthScopeDrifted
                     ? "The configured OAuth client registration must include the canonical proxy-capable scope."
                     : snapshot.BrokerCapabilityObserved
@@ -372,6 +651,11 @@ public static class IdentityOAuthEndpoints
         }
     }
 
+    private static string[] RequiredServiceSlugs(NyxIdBrokerOptions options) =>
+        AevatarOAuthClientResources.RequiredServiceSlugs(
+            options.RequiredLlmServiceSlug,
+            options.AdditionalRequiredServiceSlugs);
+
     // ─── Operator rebuild ───
 
     /// <summary>
@@ -383,6 +667,7 @@ public static class IdentityOAuthEndpoints
         HttpContext http,
         [FromServices] IOptions<AevatarOAuthClientOptions> clientOptions,
         [FromServices] ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rebuildDispatch,
+        [FromServices] ICommandDispatchService<RebuildAevatarOAuthClientProjectionCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> projectionRebuildDispatch,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct) =>
         HandleAevatarOAuthClientRebuildCoreAsync(
@@ -390,6 +675,7 @@ public static class IdentityOAuthEndpoints
             clientOptions.Value,
             http.RequestServices.GetService<IPlatformAdminAuthorizer>(),
             rebuildDispatch,
+            projectionRebuildDispatch,
             loggerFactory,
             ct);
 
@@ -402,6 +688,7 @@ public static class IdentityOAuthEndpoints
         AevatarOAuthClientOptions clientOptions,
         IPlatformAdminAuthorizer? adminAuthorizer,
         ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rebuildDispatch,
+        ICommandDispatchService<RebuildAevatarOAuthClientProjectionCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> projectionRebuildDispatch,
         ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -465,12 +752,44 @@ public static class IdentityOAuthEndpoints
             }, statusCode: StatusCodes.Status503ServiceUnavailable);
         }
 
+        // Reconciliation is a no-op when the surviving actor state already
+        // matches deployment configuration, so a wiped projection store would
+        // stay empty forever. The explicit projection-rebuild command re-emits
+        // the current committed state without appending an event.
+        CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> projectionAccepted;
+        try
+        {
+            projectionAccepted = await projectionRebuildDispatch
+                .DispatchAsync(new RebuildAevatarOAuthClientProjectionCommand(), ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Rebuild endpoint failed to dispatch RebuildAevatarOAuthClientProjectionCommand.");
+            return Results.Json(new
+            {
+                error = "actor_dispatch_failed",
+                detail = "Provision reconciliation was accepted, but the projection rebuild command could not be dispatched. Check silo logs.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        if (!projectionAccepted.Succeeded || projectionAccepted.Receipt is null)
+        {
+            logger.LogError("Rebuild endpoint projection-rebuild dispatch rejected: error={Error}", projectionAccepted.Error);
+            return Results.Json(new
+            {
+                error = "actor_dispatch_rejected",
+                detail = "Provision reconciliation was accepted, but the projection rebuild command was rejected before entering the OAuth client actor inbox.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
         logger.LogWarning(
-            "Operator rebuild accepted for AevatarOAuthClientGAgent: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}, command_id={CommandId}, admin_user_id={AdminUserId}, admin_email={AdminEmail}, admin_grant_source={GrantSource}.",
+            "Operator rebuild accepted for AevatarOAuthClientGAgent: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}, command_id={CommandId}, projection_rebuild_command_id={ProjectionRebuildCommandId}, admin_user_id={AdminUserId}, admin_email={AdminEmail}, admin_grant_source={GrantSource}.",
             clientOptions.ClientId,
             authority,
             redirectUri,
             accepted.Receipt.CommandId,
+            projectionAccepted.Receipt.CommandId,
             authorization.Caller.UserId,
             authorization.Caller.Email,
             authorization.Caller.GrantSource);
@@ -481,9 +800,120 @@ public static class IdentityOAuthEndpoints
             command_id = accepted.Receipt.CommandId,
             correlation_id = accepted.Receipt.CorrelationId,
             actor_id = accepted.Receipt.ActorId,
+            projection_rebuild_command_id = projectionAccepted.Receipt.CommandId,
             status_url = OAuthClientStatusUrl,
             admin_grant_source = authorization.Caller.GrantSource,
             detail = "Configured client reconciliation accepted for dispatch. Re-poll the status URL until actor state and projection materialize.",
+        });
+    }
+
+    // ─── Operator HMAC key rotation (disaster recovery) ───
+
+    /// <summary>
+    /// Forces a fresh HMAC state-token signing key. Recovery path for a lost
+    /// secret-vault entry: rotation writes new key material to the vault and
+    /// commits a rotation event, which also re-materializes the readmodel.
+    /// Grace window: state tokens signed with the previous key (TTL ≤ 5 min)
+    /// keep verifying; in-flight callbacks older than that fail decode.
+    /// </summary>
+    internal static Task<IResult> HandleAevatarOAuthClientRotateHmacAsync(
+        HttpContext http,
+        [FromServices] ICommandDispatchService<RotateAevatarOAuthClientHmacKeyCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rotateDispatch,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct) =>
+        HandleAevatarOAuthClientRotateHmacCoreAsync(
+            http,
+            http.RequestServices.GetService<IPlatformAdminAuthorizer>(),
+            rotateDispatch,
+            loggerFactory,
+            ct);
+
+    /// <summary>
+    /// Core method exposed for tests to pass the admin authorizer and the typed
+    /// dispatch service directly, without resolving endpoint-bound services.
+    /// </summary>
+    internal static async Task<IResult> HandleAevatarOAuthClientRotateHmacCoreAsync(
+        HttpContext http,
+        IPlatformAdminAuthorizer? adminAuthorizer,
+        ICommandDispatchService<RotateAevatarOAuthClientHmacKeyCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rotateDispatch,
+        ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        var logger = loggerFactory.CreateLogger("Aevatar.Channel.Identity.OAuthHmacRotate");
+
+        var authorization = await AuthorizeRebuildAsync(http, adminAuthorizer, logger, ct)
+            .ConfigureAwait(false);
+        if (authorization.Rejection is not null)
+            return authorization.Rejection;
+
+        var idempotencyKeys = http.Request.Headers["Idempotency-Key"];
+        var idempotencyKey = idempotencyKeys.ToString().Trim();
+        var ifMatch = http.Request.Headers.IfMatch.ToString().Trim();
+        var strongIfMatch = ifMatch.Length >= 3 &&
+                            ifMatch[0] == '"' &&
+                            ifMatch[^1] == '"' &&
+                            !ifMatch.AsSpan(1, ifMatch.Length - 2).Contains('"');
+        var expectedCurrentKid = strongIfMatch ? ifMatch[1..^1] : string.Empty;
+        if (idempotencyKeys.Count != 1 ||
+            idempotencyKey.Length is 0 or > 200 ||
+            idempotencyKey.Contains(',') ||
+            expectedCurrentKid.Length is 0 or > 128 ||
+            expectedCurrentKid.Contains(','))
+        {
+            return Results.BadRequest(new
+            {
+                error = "rotation_precondition_required",
+                detail = "Supply one Idempotency-Key and the expected current kid as If-Match.",
+            });
+        }
+
+        CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> accepted;
+        try
+        {
+            accepted = await rotateDispatch
+                .DispatchAsync(new RotateAevatarOAuthClientHmacKeyCommand
+                {
+                    IdempotencyKey = idempotencyKey,
+                    ExpectedCurrentKid = expectedCurrentKid,
+                }, ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Rotate endpoint failed to dispatch RotateAevatarOAuthClientHmacKeyCommand.");
+            return Results.Json(new
+            {
+                error = "actor_dispatch_failed",
+                detail = "Failed to dispatch the HMAC rotation command to the OAuth client actor. Check silo logs.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        if (!accepted.Succeeded || accepted.Receipt is null)
+        {
+            logger.LogError("Rotate endpoint dispatch rejected: error={Error}", accepted.Error);
+            return Results.Json(new
+            {
+                error = "actor_dispatch_rejected",
+                detail = "HMAC rotation command was rejected before entering the OAuth client actor inbox.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        logger.LogWarning(
+            "Operator HMAC rotation accepted for AevatarOAuthClientGAgent: command_id={CommandId}, admin_user_id={AdminUserId}, admin_email={AdminEmail}, admin_grant_source={GrantSource}.",
+            accepted.Receipt.CommandId,
+            authorization.Caller.UserId,
+            authorization.Caller.Email,
+            authorization.Caller.GrantSource);
+
+        return Results.Accepted(OAuthClientStatusUrl, new
+        {
+            status = "rotate_pending",
+            command_id = accepted.Receipt.CommandId,
+            correlation_id = accepted.Receipt.CorrelationId,
+            actor_id = accepted.Receipt.ActorId,
+            status_url = OAuthClientStatusUrl,
+            admin_grant_source = authorization.Caller.GrantSource,
+            detail = "HMAC key rotation accepted for dispatch. Re-poll the status URL until the rotated key materializes.",
         });
     }
 
@@ -795,8 +1225,8 @@ public static class IdentityOAuthEndpoints
         {
             await brokerCallback.RevokeBindingByIdAsync(bindingId, ct).ConfigureAwait(false);
             logger.LogInformation(
-                "Revoked orphan binding_id={BindingId} after concurrent /init",
-                bindingId);
+                "Revoked unadopted NyxID binding after OAuth callback rejection. binding_digest={BindingDigest}",
+                BindingDigest(bindingId));
         }
         catch (Exception ex)
         {
@@ -804,8 +1234,8 @@ public static class IdentityOAuthEndpoints
             // to failing the user's already-bound response. NyxID's CAE
             // sweeper eventually reclaims unused bindings.
             logger.LogWarning(ex,
-                "Failed to revoke orphan binding_id={BindingId}; NyxID will eventually reap it",
-                bindingId);
+                "Failed to revoke unadopted NyxID binding; NyxID will eventually reap it. binding_digest={BindingDigest}",
+                BindingDigest(bindingId));
         }
     }
 

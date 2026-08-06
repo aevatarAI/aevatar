@@ -11,7 +11,7 @@ public sealed class ExternalWorkflowCapabilityReadinessService(
     private readonly IReadOnlyList<IExternalWorkflowCapabilitySource> _sources =
         sources?.ToArray() ?? throw new ArgumentNullException(nameof(sources));
 
-    public async Task<IReadOnlyList<ExternalWorkflowCapabilityDescriptor>> ListAsync(
+    public async Task<ExternalWorkflowCapabilityDiscoveryResult> ListAsync(
         ListExternalWorkflowCapabilitiesRequest request,
         CancellationToken cancellationToken = default)
     {
@@ -20,12 +20,25 @@ public sealed class ExternalWorkflowCapabilityReadinessService(
 
         var batches = await Task.WhenAll(_sources.Select(source =>
             source.ListAsync(request.Access, cancellationToken)));
-        return batches
-            .SelectMany(static batch => batch)
-            .Select(static descriptor => descriptor.Clone())
-            .OrderBy(static descriptor => descriptor.Capability.CapabilityCase)
-            .ThenBy(IdentityKey, StringComparer.Ordinal)
+        var capabilities = batches
+            .SelectMany(static batch => batch.Capabilities)
+            .Select(static descriptor => new
+            {
+                Descriptor = descriptor.Clone(),
+                Identity = IdentityKey(descriptor),
+            })
+            .OrderBy(static item => item.Descriptor.Selector.SelectorCase)
+            .ThenBy(static item => item.Identity, StringComparer.Ordinal)
+            .Select(static item => item.Descriptor)
             .ToArray();
+        var result = new ExternalWorkflowCapabilityDiscoveryResult
+        {
+            CandidateCount = batches.Sum(static batch => batch.CandidateCount),
+            RejectedCount = batches.Sum(static batch => batch.RejectedCount),
+        };
+        result.Capabilities.Add(capabilities);
+        result.Diagnostics.Add(batches.SelectMany(static batch => batch.Diagnostics));
+        return result;
     }
 
     public async Task<ExternalCapabilityReadiness> InspectAsync(
@@ -33,32 +46,34 @@ public sealed class ExternalWorkflowCapabilityReadinessService(
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        ArgumentNullException.ThrowIfNull(request.Capability);
+        ArgumentNullException.ThrowIfNull(request.Selector);
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (request.Capability.CapabilityCase == ExternalWorkflowCapabilityRef.CapabilityOneofCase.None)
-            return SelectionRequired(request.ExecutionMode, "CAPABILITY_SELECTION_REQUIRED");
+        if (request.Selector.SelectorCase == ExternalWorkflowCapabilitySelector.SelectorOneofCase.None)
+            return SelectionRequired(request.ExecutionMode, request.Selector, "CAPABILITY_SELECTION_REQUIRED");
 
         var source = _sources.SingleOrDefault(candidate =>
-            candidate.CapabilityKind == request.Capability.CapabilityCase);
+            candidate.SelectorKind == request.Selector.SelectorCase);
         if (source is null)
-            return SelectionRequired(request.ExecutionMode, "CAPABILITY_SOURCE_UNAVAILABLE");
+            return SelectionRequired(request.ExecutionMode, request.Selector, "CAPABILITY_SOURCE_UNAVAILABLE");
 
         return await source.InspectAsync(
             request.Access,
-            request.Capability,
+            request.Selector,
             request.ExecutionMode,
             cancellationToken);
     }
 
     private static ExternalCapabilityReadiness SelectionRequired(
         ExternalCapabilityExecutionMode executionMode,
+        ExternalWorkflowCapabilitySelector selector,
         string code)
     {
         var result = new ExternalCapabilityReadiness
         {
             ExecutionMode = executionMode,
             Status = ExternalCapabilityReadinessStatus.SelectionRequired,
+            SelectedSelector = selector.Clone(),
         };
         result.Blockers.Add(new ExternalCapabilityBlocker
         {
@@ -75,12 +90,17 @@ public sealed class ExternalWorkflowCapabilityReadinessService(
     }
 
     private static string IdentityKey(ExternalWorkflowCapabilityDescriptor descriptor) =>
-        descriptor.Capability.CapabilityCase switch
+        descriptor.Selector.SelectorCase switch
         {
-            ExternalWorkflowCapabilityRef.CapabilityOneofCase.HostConnector =>
-                $"{descriptor.Capability.HostConnector.ConnectorCapabilityRef}\n{descriptor.Capability.HostConnector.OperationId}",
-            ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService =>
-                $"{descriptor.Capability.NyxIdUserService.UserServiceId}\n{descriptor.Capability.NyxIdUserService.OperationId}",
-            _ => string.Empty,
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector =>
+                $"{descriptor.Selector.HostConnector.ConnectorCapabilityRef}\n{descriptor.Selector.HostConnector.OperationId}",
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation =>
+                $"{descriptor.Selector.NyxIdOperation.UserServiceId}\n{descriptor.Selector.NyxIdOperation.EndpointId}",
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest =>
+                $"{descriptor.Selector.NyxIdRequest.UserServiceId}\n" +
+                WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdRequestContractDigest(
+                    descriptor.Selector.NyxIdRequest),
+            _ => throw new InvalidOperationException(
+                "External workflow capability selector identity is unavailable."),
         };
 }

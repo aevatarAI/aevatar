@@ -1,7 +1,4 @@
-using Aevatar.CQRS.Projection.Core.Abstractions;
-using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.GAgents.StatusDashboard.Configuration;
 using Aevatar.GAgents.StatusDashboard.DependencyInjection;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -12,19 +9,14 @@ namespace Aevatar.GAgents.StatusDashboard.Tests;
 public sealed class StatusDashboardServiceCollectionExtensionsTests
 {
     [Fact]
-    public void AddStatusDashboard_RegistersCommittedStateProjectionActivationHook()
+    public void AddStatusDashboard_DoesNotRegisterProjectionServices()
     {
-        using var provider = new ServiceCollection()
-            .AddStatusDashboard(new ConfigurationBuilder().Build())
-            .BuildServiceProvider();
+        var services = new ServiceCollection()
+            .AddStatusDashboard(new ConfigurationBuilder().Build());
 
-        provider.GetService<ProjectionActivationPlanDispatcher>()
-            .Should().NotBeNull("the committed-state hook dispatches activation plans through the shared dispatcher");
-        provider.GetServices<ICommittedStatePublicationHook>()
-            .Should().ContainSingle(hook => hook is CommittedStateProjectionActivationHook);
-        provider.GetServices<IProjectionActivationPlanProvider>()
-            .Should().ContainSingle(planProvider =>
-                planProvider is HealthProbeCommittedStateProjectionActivationPlanProvider);
+        services.Should().NotContain(descriptor =>
+            IsProjectionType(descriptor.ServiceType) ||
+            IsProjectionType(descriptor.ImplementationType));
     }
 
     [Fact]
@@ -34,9 +26,13 @@ public sealed class StatusDashboardServiceCollectionExtensionsTests
             .AddStatusDashboard(new ConfigurationBuilder().Build());
 
         services.Should().ContainSingle(descriptor =>
-            descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<HealthProbeTargetDocument>));
-        services.Should().ContainSingle(descriptor =>
             descriptor.ServiceType == typeof(IHealthStatusQueryPort) &&
             descriptor.ImplementationType == typeof(HealthStatusQueryPort));
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IHealthProbeOperationalSnapshotStore) &&
+            descriptor.ImplementationType == typeof(InMemoryHealthProbeOperationalSnapshotStore));
     }
+
+    private static bool IsProjectionType(Type? type) =>
+        type?.Namespace?.StartsWith("Aevatar.CQRS.Projection", StringComparison.Ordinal) == true;
 }

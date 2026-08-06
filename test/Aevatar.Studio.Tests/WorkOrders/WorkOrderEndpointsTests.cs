@@ -221,12 +221,6 @@ public sealed class WorkOrderEndpointsTests
         public Task<WorkOrderAcceptedReceipt> ReassignAsync(string scopeId, string workOrderId, ReassignWorkOrderRequest request, WorkOrderPrincipalContract requester, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task<WorkOrderAcceptedReceipt> ApproveAsync(string scopeId, string workOrderId, DecideWorkOrderApprovalRequest request, WorkOrderPrincipalContract approver, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkOrderAcceptedReceipt> DenyAsync(string scopeId, string workOrderId, DecideWorkOrderApprovalRequest request, WorkOrderPrincipalContract approver, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
         public Task<WorkOrderAcceptedReceipt> DispatchAsync(string scopeId, string workOrderId, DispatchWorkOrderRequest request, WorkOrderPrincipalContract requester, CancellationToken ct = default) =>
             DispatchException is null
                 ? throw new NotSupportedException()

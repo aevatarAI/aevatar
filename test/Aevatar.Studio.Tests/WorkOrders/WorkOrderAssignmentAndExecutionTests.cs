@@ -5,9 +5,9 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
+using Aevatar.GAgents.WorkOrder;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.GAgents.WorkOrder;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
@@ -287,6 +287,29 @@ public sealed class ValidatedWorkOrderExecutionPortTests
         result.Failed.Failure.Code.Should().Be("WORK_ORDER_RUN_IDENTITY_MISMATCH");
     }
 
+    [Theory]
+    [InlineData("correlation")]
+    [InlineData("targetActor")]
+    [InlineData("deployment")]
+    public async Task ExecuteAsync_ShouldFailClosed_WhenInvocationReceiptCannotBuildAuthorizedRunLink(
+        string invalidField)
+    {
+        var invocationPort = new RecordingInvocationPort
+        {
+            ReceiptCorrelationId = invalidField == "correlation" ? "correlation-unrelated" : "command-1",
+            ReceiptTargetActorId = invalidField == "targetActor" ? string.Empty : "workflow-run-actor-1",
+            ReceiptDeploymentId = invalidField == "deployment" ? string.Empty : "deployment-1",
+        };
+        var port = new ValidatedWorkOrderExecutionPort(
+            WorkOrderAssignmentValidatorTests.CreateValidator(),
+            invocationPort);
+
+        var result = await port.ExecuteAsync(BuildExecutionRequest());
+
+        result.ResultCase.Should().Be(WorkOrderExecutionResult.ResultOneofCase.Failed);
+        result.Failed.Failure.Code.Should().Be("WORK_ORDER_RUN_IDENTITY_MISMATCH");
+    }
+
     [Fact]
     public async Task ValidatedExecution_ShouldUseWorkOrderDeadlineForBothCompletionTargets()
     {
@@ -320,6 +343,42 @@ public sealed class ValidatedWorkOrderExecutionPortTests
         invocation.ServiceRunCompletionNotificationTarget.ExpiresAtUnixMs.Should().Be(deadline.ToUnixTimeMilliseconds());
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WithoutDeadline_ShouldUseNonExpiringWorkflowCompletionTarget()
+    {
+        var invocationPort = new RecordingInvocationPort();
+        var port = new ValidatedWorkOrderExecutionPort(
+            WorkOrderAssignmentValidatorTests.CreateValidator(),
+            invocationPort);
+        var request = BuildExecutionRequest();
+        request.DeadlineAtUtc = null;
+
+        await port.ExecuteAsync(request);
+
+        var invocation = invocationPort.Requests.Should().ContainSingle().Subject;
+        invocation.WorkflowCompletionNotificationTarget.ExpiresAtUnixMs.Should().Be(long.MaxValue);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithoutDeadline_ShouldUseNonExpiringServiceRunCompletionTarget()
+    {
+        var invocationPort = new RecordingInvocationPort();
+        var port = new ValidatedWorkOrderExecutionPort(
+            WorkOrderAssignmentValidatorTests.CreateValidator(
+                workflowId: null,
+                implementationKind: MemberImplementationKindNames.GAgent),
+            invocationPort);
+        var request = BuildExecutionRequest();
+        request.WorkflowId = string.Empty;
+        request.ImplementationKind = MemberImplementationKindNames.GAgent;
+        request.DeadlineAtUtc = null;
+
+        await port.ExecuteAsync(request);
+
+        var invocation = invocationPort.Requests.Should().ContainSingle().Subject;
+        invocation.ServiceRunCompletionNotificationTarget.ExpiresAtUnixMs.Should().Be(long.MaxValue);
+    }
+
     private static WorkOrderExecutionRequest BuildExecutionRequest() =>
         new()
         {
@@ -348,6 +407,9 @@ public sealed class ValidatedWorkOrderExecutionPortTests
         public List<ServiceInvocationRequest> Requests { get; } = [];
 
         public string ReceiptRunId { get; init; } = "run-1";
+        public string ReceiptCorrelationId { get; init; } = "command-1";
+        public string ReceiptTargetActorId { get; init; } = "workflow-run-actor-1";
+        public string ReceiptDeploymentId { get; init; } = "deployment-1";
 
         public Task<ServiceInvocationAcceptedReceipt> InvokeAsync(
             ServiceInvocationRequest request,
@@ -357,10 +419,10 @@ public sealed class ValidatedWorkOrderExecutionPortTests
             return Task.FromResult(new ServiceInvocationAcceptedReceipt
             {
                 RunId = ReceiptRunId,
-                TargetActorId = "workflow-run-actor-1",
+                TargetActorId = ReceiptTargetActorId,
                 CommandId = request.CommandId,
-                CorrelationId = request.CorrelationId,
-                DeploymentId = "deployment-1",
+                CorrelationId = ReceiptCorrelationId,
+                DeploymentId = ReceiptDeploymentId,
             });
         }
     }
@@ -630,7 +692,6 @@ public sealed class WorkOrderExecutionInfrastructureTests
             {
                 Chat = new WorkOrderChatInput { Prompt = "do the work" },
             },
-            PermissionPlan = new WorkOrderPermissionPlan(),
             RequestedAtUtc = Timestamp.FromDateTimeOffset(requestedAt),
             TimeoutAtUtc = Timestamp.FromDateTimeOffset(requestedAt.AddMinutes(1)),
         });

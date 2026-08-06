@@ -1,6 +1,10 @@
 using System.Reflection;
 using System.Security.Claims;
+using System.Text.Json;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Hosting.Endpoints;
@@ -19,9 +23,9 @@ namespace Aevatar.Studio.Tests;
 /// <list type="bullet">
 ///   <item>the scope-access guard short-circuits with 403 before the service is
 ///   touched (cross-scope / unauthenticated);</item>
-///   <item>a successful provision always returns 202 Accepted (the bind + run are
-///   asynchronous) carrying the schedule id + Observatory link, with the
-///   Location pointing at the created schedule;</item>
+///   <item>a successful provision always returns 202 Accepted (the bind, schedule,
+///   and run are asynchronous), with Location pointing at the member read model
+///   until the schedule identity becomes visible;</item>
 ///   <item>the caller NyxID subject reference is required and threaded into the
 ///   service as an input parameter; a missing subject maps to a stable 400;</item>
 ///   <item>domain validation failures map to a stable 400 code.</item>
@@ -59,6 +63,36 @@ public sealed class StudioProvisioningEndpointsTests
         accepted.Location.Should().Be($"/api/schedules/{ScheduleId}");
         service.ProvisionInvoked.Should().BeTrue();
         service.ProvisionScopeId.Should().Be(ScopeId);
+    }
+
+    [Fact]
+    public async Task HandleProvisionWorkflowAsync_WhenScheduleProvisioningIsPending_ShouldReturnMemberLocation()
+    {
+        var response = NewResponse() with
+        {
+            ScheduleId = null,
+            ScheduleProvisioningId = "schedule-provisioning-1",
+            ScheduleProvisioningStatus = StudioWorkflowScheduleProvisioningStatusNames.PendingBinding,
+        };
+        var service = new RecordingProvisioningService { Response = response };
+
+        var result = await InvokeHandle<IResult>(
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new ProvisionWorkflowRequest(
+                DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go", Caller: Caller)
+            {
+                TeamId = TeamId,
+            },
+            service,
+            CancellationToken.None);
+
+        var accepted = result.Should().BeOfType<Accepted<ProvisionWorkflowResponse>>().Subject;
+        accepted.Location.Should().Be($"/api/scopes/{ScopeId}/members/member-1");
+        accepted.Value!.ScheduleId.Should().BeNull();
+        accepted.Value.ScheduleProvisioningId.Should().Be("schedule-provisioning-1");
+        accepted.Value.ScheduleProvisioningStatus.Should().Be(
+            StudioWorkflowScheduleProvisioningStatusNames.PendingBinding);
     }
 
     [Fact]
@@ -108,9 +142,142 @@ public sealed class StudioProvisioningEndpointsTests
         var context = service.ProvisionRequest!.CapabilityAdmission;
         context.Should().NotBeNull();
         context!.CallerId.Should().Be("caller-alpha");
-        context.NyxIdCallerBearerToken.Should().Be("runtime-caller-credential");
+        context.NyxIdCallerCredential?.SourceReadableUserBearerToken
+            .Should().Be("runtime-caller-credential");
         context.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
         context.ToString().Should().NotContain("runtime-caller-credential");
+        service.ProvisionRequest.AuthenticatedOwner.Should().NotBeNull();
+        service.ProvisionRequest.AuthenticatedOwner!.SubjectExternalUserId.Should().Be("caller-alpha");
+        service.ProvisionRequest.AuthenticatedOwner.VerifiedBindingId.Should().Be("binding-alpha");
+        service.ProvisionRequest.ProvisioningBearerToken.Should().Be("runtime-caller-credential");
+    }
+
+    [Fact]
+    public async Task HandleProvisionWorkflowAsync_ShouldMapAndScrubExplicitRequestConfirmations()
+    {
+        var service = new RecordingProvisioningService { Response = NewResponse() };
+
+        await InvokeHandle<IResult>(
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new ProvisionWorkflowRequest("Monitor", "name: wf-alpha", Caller: Caller)
+            {
+                TeamId = TeamId,
+                ExplicitRequestConfirmations =
+                [
+                    new NyxIdExplicitRequestConfirmationInput(
+                        "wf-alpha/request-alpha",
+                        "digest-alpha",
+                        "read_only"),
+                ],
+            },
+            service,
+            CancellationToken.None);
+
+        service.ProvisionRequest.Should().NotBeNull();
+        service.ProvisionRequest!.ExplicitRequestConfirmations.Should().BeNull();
+        service.ProvisionRequest.CapabilityAdmission!.CallerId.Should().Be("caller-alpha");
+        service.ProvisionRequest.CapabilityAdmission.ExplicitRequestConfirmations
+            .Should().ContainSingle().Which.RequestContractDigest.Should().Be("digest-alpha");
+    }
+
+    [Fact]
+    public async Task HandleProvisionWorkflowAsync_WithNullExplicitRequestConfirmation_ShouldReturnTypedBadRequestWithoutDispatch()
+    {
+        var service = new RecordingProvisioningService();
+        var http = CreateAuthenticatedContext(ScopeId);
+        http.Response.Body = new MemoryStream();
+
+        var result = await InvokeHandle<IResult>(
+            http,
+            ScopeId,
+            new ProvisionWorkflowRequest("Monitor", "name: wf-alpha", Caller: Caller)
+            {
+                TeamId = TeamId,
+                ExplicitRequestConfirmations = [null!],
+            },
+            service,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var body = await JsonDocument.ParseAsync(http.Response.Body);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.RootElement.GetProperty("code").GetString().Should()
+            .Be("INVALID_EXPLICIT_REQUEST_CONFIRMATION");
+        service.ProvisionInvoked.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleProvisionWorkflowAsync_WithMultipleAuthorizationValues_ShouldRejectWithoutDispatch()
+    {
+        var service = new RecordingProvisioningService();
+        var http = CreateAuthenticatedContext(ScopeId);
+        http.Request.Headers.Authorization =
+            new Microsoft.Extensions.Primitives.StringValues(["Bearer first", "Bearer second"]);
+
+        var result = await InvokeHandle<IResult>(
+            http,
+            ScopeId,
+            new ProvisionWorkflowRequest(
+                DisplayName: "Monitor",
+                WorkflowYaml: "name: monitor\nsteps: []\n",
+                Caller: Caller)
+            {
+                TeamId = TeamId,
+            },
+            service,
+            CancellationToken.None);
+
+        AssertBadRequestResult(result, "INVALID_WORKFLOW_CALLER_CREDENTIAL");
+        service.ProvisionInvoked.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleProvisionWorkflowAsync_ShouldReturnConflict_WhenScheduleOwnerBindingMissing()
+    {
+        var service = new RecordingProvisioningService { Response = NewResponse() };
+
+        var result = await InvokeHandle<IResult>(
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor", Caller: Caller)
+            {
+                TeamId = TeamId,
+            },
+            service,
+            new RecordingIdentityBindingQueryPort { Binding = null },
+            CancellationToken.None);
+
+        service.ProvisionInvoked.Should().BeFalse();
+        AssertIsJsonStatus(result, StatusCodes.Status409Conflict);
+    }
+
+    [Fact]
+    public async Task HandleProvisionWorkflowAsync_ShouldUseCallerSubjectAsScheduleOwner_WhenAuthenticationDisabled()
+    {
+        var service = new RecordingProvisioningService { Response = NewResponse() };
+        var bindingQuery = new RecordingIdentityBindingQueryPort { Binding = null };
+
+        await InvokeHandle<IResult>(
+            CreateAuthDisabledContext(),
+            ScopeId,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor", Caller: Caller)
+            {
+                TeamId = TeamId,
+            },
+            service,
+            bindingQuery,
+            CancellationToken.None);
+
+        service.ProvisionInvoked.Should().BeTrue();
+        bindingQuery.Subject.Should().NotBeNull();
+        bindingQuery.Subject!.ExternalUserId.Should().Be("user-42");
+        service.ProvisionRequest!.AuthenticatedOwner.Should().NotBeNull();
+        service.ProvisionRequest.AuthenticatedOwner!.SubjectExternalUserId.Should().Be("user-42");
+        service.ProvisionRequest.AuthenticatedOwner.VerifiedBindingId.Should().Be("auth-disabled:user-42");
+        service.ProvisionRequest.ProvisioningBearerToken.Should().Be("user-42");
     }
 
     [Fact]
@@ -133,6 +300,30 @@ public sealed class StudioProvisioningEndpointsTests
             CancellationToken.None);
 
         service.ProvisionCaller!.Scope.Should().Be(ProvisionWorkflowCallerCredential.DefaultScope);
+    }
+
+    [Fact]
+    public void ProvisionWorkflowRequest_ShouldNotBindScheduleIdentityFromHttpJson()
+    {
+        var request = JsonSerializer.Deserialize<ProvisionWorkflowRequest>("""
+            {
+              "displayName": "Monitor",
+              "workflowYaml": "name: monitor",
+              "caller": {
+                "platform": "nyxid",
+                "externalUserId": "user-42",
+                "scope": "proxy"
+              },
+              "teamId": "team-alpha",
+              "scheduleOperationId": "caller-pinned-operation",
+              "scheduleIdempotencyKey": "caller-pinned-key"
+            }
+            """,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        request.Should().NotBeNull();
+        request!.ScheduleOperationId.Should().BeNull();
+        request.ScheduleIdempotencyKey.Should().BeNull();
     }
 
     [Fact]
@@ -195,6 +386,60 @@ public sealed class StudioProvisioningEndpointsTests
     }
 
     [Fact]
+    public async Task HandleProvisionWorkflowAsync_ShouldReturnTypedNotFound_WhenTeamDoesNotExist()
+    {
+        const string missingTeamId = "team-missing";
+        var service = new RecordingProvisioningService
+        {
+            ProvisionException = new StudioTeamNotFoundException(ScopeId, missingTeamId),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor", Caller: Caller)
+            {
+                TeamId = missingTeamId,
+            },
+            service,
+            CancellationToken.None);
+
+        AssertIsJsonStatus(result, StatusCodes.Status404NotFound);
+        var value = result.GetType().GetProperty("Value")?.GetValue(result);
+        value.Should().NotBeNull();
+        value!.GetType().GetProperty("code")?.GetValue(value)
+            .Should().Be("STUDIO_TEAM_NOT_FOUND");
+        service.ProvisionInvoked.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HandleProvisionWorkflowAsync_ShouldReturnRetryableProjectionPending()
+    {
+        var service = new RecordingProvisioningService
+        {
+            ProvisionException = new StudioMemberAutomationProjectionPendingException(23),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor", Caller: Caller)
+            {
+                TeamId = TeamId,
+            },
+            service,
+            CancellationToken.None);
+
+        AssertIsJsonStatus(result, StatusCodes.Status503ServiceUnavailable);
+        var value = result.GetType().GetProperty("Value")?.GetValue(result);
+        value.Should().NotBeNull();
+        value!.GetType().GetProperty("code")?.GetValue(value)
+            .Should().Be("PROVISION_WORKFLOW_AUTHORIZATION_PROJECTION_PENDING");
+        value.GetType().GetProperty("retryable")?.GetValue(value).Should().Be(true);
+        value.GetType().GetProperty("requiredStateVersion")?.GetValue(value).Should().Be(23L);
+    }
+
+    [Fact]
     public async Task HandleProvisionWorkflowAsync_ShouldReturnForbidden_WhenScopeAccessDenied()
     {
         var service = new RecordingProvisioningService();
@@ -238,7 +483,7 @@ public sealed class StudioProvisioningEndpointsTests
         ScopeId: ScopeId,
         TeamId: TeamId,
         BindingStatus: ProvisionWorkflowBindingStatusNames.Accepted,
-        ObservatoryUrl: "/workflow/observatory")
+        ObservatoryUrl: "/admin#/observatory")
     {
         BindingRunId = "bind-run-1",
         ScheduleId = ScheduleId,
@@ -249,18 +494,38 @@ public sealed class StudioProvisioningEndpointsTests
         var method = typeof(StudioProvisioningEndpoints)
             .GetMethod("HandleProvisionWorkflowAsync", BindingFlags.NonPublic | BindingFlags.Static)
             ?? throw new InvalidOperationException("Method HandleProvisionWorkflowAsync not found.");
+        if (args.Length == 5)
+        {
+            args =
+            [
+                args[0],
+                args[1],
+                args[2],
+                args[3],
+                new RecordingIdentityBindingQueryPort(),
+                args[4],
+            ];
+        }
+
         var task = (Task<IResult>)method.Invoke(null, args)!;
         return (TResult)(object)await task;
     }
 
     private static HttpContext CreateAuthenticatedContext(string claimedScopeId)
     {
-        var identity = new ClaimsIdentity([new Claim("scope_id", claimedScopeId)], "test");
-        return new DefaultHttpContext
+        var identity = new ClaimsIdentity(
+        [
+            new Claim("scope_id", claimedScopeId),
+            new Claim("sub", "caller-alpha"),
+        ],
+        "test");
+        var http = new DefaultHttpContext
         {
             User = new ClaimsPrincipal(identity),
             RequestServices = BuildAuthEnabledServices(),
         };
+        http.Request.Headers.Authorization = "Bearer runtime-caller-credential";
+        return http;
     }
 
     private static HttpContext CreateUnauthenticatedContext() =>
@@ -270,8 +535,20 @@ public sealed class StudioProvisioningEndpointsTests
             RequestServices = BuildAuthEnabledServices(),
         };
 
+    private static HttpContext CreateAuthDisabledContext()
+    {
+        var http = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity()),
+            RequestServices = BuildAuthDisabledServices(),
+        };
+        http.Request.Headers.Authorization = "Bearer runtime-caller-credential";
+        return http;
+    }
+
     private static IServiceProvider BuildAuthEnabledServices() =>
         new ServiceCollection()
+            .AddLogging()
             .AddSingleton<IConfiguration>(new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
@@ -279,6 +556,20 @@ public sealed class StudioProvisioningEndpointsTests
                 })
                 .Build())
             .AddSingleton<IHostEnvironment>(new TestHostEnvironment())
+            .BuildServiceProvider();
+
+    private static IServiceProvider BuildAuthDisabledServices() =>
+        new ServiceCollection()
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Aevatar:Authentication:Enabled"] = "false",
+                })
+                .Build())
+            .AddSingleton<IHostEnvironment>(new TestHostEnvironment
+            {
+                EnvironmentName = Environments.Development,
+            })
             .BuildServiceProvider();
 
     private static void AssertIsJsonStatus(IResult result, int expectedStatus)
@@ -321,6 +612,20 @@ public sealed class StudioProvisioningEndpointsTests
             ProvisionRequest = request;
             if (ProvisionException != null) throw ProvisionException;
             return Task.FromResult(Response!);
+        }
+    }
+
+    private sealed class RecordingIdentityBindingQueryPort : IExternalIdentityBindingQueryPort
+    {
+        public BindingId? Binding { get; init; } = new() { Value = "binding-alpha" };
+        public ExternalSubjectRef? Subject { get; private set; }
+
+        public Task<BindingId?> ResolveAsync(
+            ExternalSubjectRef externalSubject,
+            CancellationToken ct = default)
+        {
+            Subject = externalSubject.Clone();
+            return Task.FromResult(Binding);
         }
     }
 

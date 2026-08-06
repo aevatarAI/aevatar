@@ -504,7 +504,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 return;
             }
 
-            await DispatchStepAsync(next, evt.Output ?? string.Empty, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
+            await DispatchStepAsync(next, evt.Output ?? string.Empty, state.InputFileRefs, state, WorkflowStepDispatchKind.Forward, ctx, ct);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
@@ -1097,7 +1097,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     }
                     else
                     {
-                        await DispatchStepAsync(next, output, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
+                        await DispatchStepAsync(next, output, state.InputFileRefs, state, WorkflowStepDispatchKind.Forward, ctx, ct);
                     }
 
                     return true;
@@ -1118,7 +1118,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     var fallbackInput = string.IsNullOrWhiteSpace(evt.Output)
                         ? evt.Error ?? string.Empty
                         : evt.Output;
-                    await DispatchStepAsync(fallback, fallbackInput, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
+                    await DispatchStepAsync(fallback, fallbackInput, state.InputFileRefs, state, WorkflowStepDispatchKind.Forward, ctx, ct);
                     return true;
                 }
             default:
@@ -1151,6 +1151,17 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         try
         {
             var fileRefs = inputFileRefs.Select(static fileRef => fileRef.Clone()).ToArray();
+            var firstFileRef = fileRefs.FirstOrDefault();
+            ctx.Logger.LogWarning(
+                "Workflow step input file refs dispatching. runId={RunId} stepId={StepId} stepType={StepType} dispatchKind={DispatchKind} inputFileRefCount={InputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+                state.RunId,
+                step.Id,
+                WorkflowPrimitiveCatalog.ToCanonicalType(step.Type),
+                dispatchKind,
+                fileRefs.Length,
+                firstFileRef?.FileId ?? string.Empty,
+                firstFileRef?.ArtifactId ?? string.Empty,
+                firstFileRef?.MediaType ?? string.Empty);
             var request = BuildStepRequest(step, input, fileRefs, state, ctx);
             var idempotency = ResolveAndPersistStepIdempotency(step, state);
             request.IdempotencyKey = idempotency.IdempotencyKey;
@@ -1329,9 +1340,11 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         return resolved;
     }
 
-    private static bool ShouldDeferWhileParameterEvaluation(string canonicalStepType, string parameterKey) =>
-        string.Equals(canonicalStepType, "while", StringComparison.OrdinalIgnoreCase) &&
-        (string.Equals(parameterKey, "condition", StringComparison.OrdinalIgnoreCase) ||
+    private static bool ShouldDeferLoopParameterEvaluation(string canonicalStepType, string parameterKey) =>
+        (string.Equals(canonicalStepType, "while", StringComparison.OrdinalIgnoreCase) &&
+         string.Equals(parameterKey, "condition", StringComparison.OrdinalIgnoreCase)) ||
+        ((string.Equals(canonicalStepType, "foreach", StringComparison.OrdinalIgnoreCase) ||
+          string.Equals(canonicalStepType, "while", StringComparison.OrdinalIgnoreCase)) &&
          parameterKey.StartsWith("sub_param_", StringComparison.OrdinalIgnoreCase));
 
     private static bool IsTimeoutError(string? error) =>
@@ -1878,7 +1891,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.Variables["input"] = input;
         foreach (var (key, value) in step.Parameters)
         {
-            if (ShouldDeferWhileParameterEvaluation(canonicalStepType, key))
+            if (ShouldDeferLoopParameterEvaluation(canonicalStepType, key))
             {
                 request.Parameters[key] = value;
                 continue;
@@ -1909,6 +1922,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             ApplyAgentToolScope(request, roleScope: null, step.AgentToolScope);
         }
 
+        ApplyExternalInvocation(request, step);
         ApplyTransformOperation(request, step.TransformOperation, state);
         ApplyHumanApprovalOptions(request, step.HumanApprovalOptions);
         ApplyExternalApprovalOptions(request, step.ExternalApprovalOptions, state);
@@ -1916,6 +1930,27 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         ApplyInteractionPresentation(request, step.Presentation, state);
 
         return request;
+    }
+
+    // The call-site identity a step carries at runtime must be the one admission committed, so both
+    // sides derive it from the compiler. Looping primitives receive their synthesized sub-step
+    // call site here and copy it onto every item/iteration they dispatch.
+    private void ApplyExternalInvocation(StepRequestEvent request, StepDefinition step)
+    {
+        var workflowName = _workflow?.Name ?? string.Empty;
+        try
+        {
+            var invocation =
+                WorkflowAuthorizationDependencyEvaluator.TryCompileDirectInvocation(workflowName, step)
+                ?? WorkflowAuthorizationDependencyEvaluator.TryCompileSynthesizedSubStepInvocation(workflowName, step);
+            if (invocation is not null)
+                request.ExternalInvocation = invocation;
+        }
+        catch (WorkflowExternalCapabilityValidationException)
+        {
+            // A step that cannot be compiled into a call site stays unadmitted. Tools that require
+            // admission fail closed before dispatch instead of aborting the whole execution turn.
+        }
     }
 
     private void ApplyTransformOperation(
@@ -2041,9 +2076,15 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         if (effectiveScope == null)
             return;
 
-        var payload = (request.StepParameters ??= new WorkflowStepParameters()).AgentToolScope = new WorkflowAgentToolScope();
+        var payload = (request.StepParameters ??= new WorkflowStepParameters()).AgentToolScope = new WorkflowAgentToolScope
+        {
+            RestrictAllowedToolNames = effectiveScope.RestrictAllowedToolNames,
+            RestrictToolSets = effectiveScope.RestrictToolSets,
+        };
         foreach (var toolName in effectiveScope.AllowedToolNames)
             payload.AllowedToolNames.Add(toolName);
+        foreach (var toolSetRef in effectiveScope.ToolSetRefs)
+            payload.ToolSetRefs.Add(toolSetRef);
     }
 
     private static WorkflowAgentToolScopeDefinition? IntersectAgentToolScope(
@@ -2056,20 +2097,57 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         if (stepScope == null)
             return CloneAgentToolScope(roleScope);
 
-        var stepAllowed = new HashSet<string>(stepScope.AllowedToolNames, StringComparer.OrdinalIgnoreCase);
+        var roleRestrictsAllowed = RestrictsAllowedToolNames(roleScope);
+        var stepRestrictsAllowed = RestrictsAllowedToolNames(stepScope);
+        var roleRestrictsToolSets = RestrictsToolSets(roleScope);
+        var stepRestrictsToolSets = RestrictsToolSets(stepScope);
         return new WorkflowAgentToolScopeDefinition
         {
-            AllowedToolNames = roleScope.AllowedToolNames
-                .Where(stepAllowed.Contains)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList(),
+            RestrictAllowedToolNames = roleRestrictsAllowed || stepRestrictsAllowed,
+            RestrictToolSets = roleRestrictsToolSets || stepRestrictsToolSets,
+            AllowedToolNames = IntersectScopeDimension(
+                roleScope.AllowedToolNames,
+                roleRestrictsAllowed,
+                stepScope.AllowedToolNames,
+                stepRestrictsAllowed),
+            ToolSetRefs = IntersectScopeDimension(
+                roleScope.ToolSetRefs,
+                roleRestrictsToolSets,
+                stepScope.ToolSetRefs,
+                stepRestrictsToolSets),
         };
     }
+
+    private static List<string> IntersectScopeDimension(
+        IEnumerable<string> roleValues,
+        bool roleRestricts,
+        IEnumerable<string> stepValues,
+        bool stepRestricts)
+    {
+        if (!roleRestricts)
+            return stepValues.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (!stepRestricts)
+            return roleValues.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+        var stepSet = new HashSet<string>(stepValues, StringComparer.OrdinalIgnoreCase);
+        return roleValues.Where(stepSet.Contains).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static bool RestrictsAllowedToolNames(WorkflowAgentToolScopeDefinition scope) =>
+        scope.RestrictAllowedToolNames || scope.AllowedToolNames.Count > 0;
+
+    private static bool RestrictsToolSets(WorkflowAgentToolScopeDefinition scope) =>
+        scope.RestrictToolSets || scope.ToolSetRefs.Count > 0;
 
     private static WorkflowAgentToolScopeDefinition CloneAgentToolScope(WorkflowAgentToolScopeDefinition scope) =>
         new()
         {
+            RestrictAllowedToolNames = RestrictsAllowedToolNames(scope),
+            RestrictToolSets = RestrictsToolSets(scope),
             AllowedToolNames = scope.AllowedToolNames
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            ToolSetRefs = scope.ToolSetRefs
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList(),
         };

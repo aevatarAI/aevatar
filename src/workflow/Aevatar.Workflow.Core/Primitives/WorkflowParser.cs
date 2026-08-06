@@ -8,6 +8,7 @@ using YamlDotNet.Serialization.NamingConventions;
 using YamlDotNet.RepresentationModel;
 using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.Workflow.Abstractions.Workflows;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Agreement;
 using System.Collections;
 using System.Globalization;
@@ -85,6 +86,7 @@ public sealed class WorkflowParser
     /// <exception cref="InvalidOperationException">YAML 为空或缺少必填字段时抛出。</exception>
     public WorkflowDefinition Parse(string yaml)
     {
+        WorkflowYamlResourceGuard.Validate(yaml);
         ValidateRootSchema(yaml);
         var raw = D.Deserialize<Raw>(yaml) ?? throw new InvalidOperationException("YAML 为空");
         return new WorkflowDefinition
@@ -149,7 +151,7 @@ public sealed class WorkflowParser
             MaxHistoryMessages = role.MaxHistoryMessages,
             EventModules = eventModules,
             EventRoutes = eventRoutes,
-            AgentToolScope = MapAgentToolScope(role.AllowedTools),
+            AgentToolScope = MapAgentToolScope(role.AllowedTools, role.ToolSets),
             Connectors = role.Connectors?.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()).Distinct(StringComparer.Ordinal).ToList() ?? [],
         };
     }
@@ -175,7 +177,9 @@ public sealed class WorkflowParser
         var rawParameters = s.Parameters is null
             ? null
             : new Dictionary<string, object?>(s.Parameters, StringComparer.Ordinal);
-        var agentToolScope = MapAgentToolScope(ResolveStepAllowedTools(s, rawParameters));
+        var agentToolScope = MapAgentToolScope(
+            ResolveStepScopeSource(s.AllowedTools, rawParameters, "allowed_tools", "allowedTools"),
+            ResolveStepScopeSource(s.ToolSets, rawParameters, "tool_sets", "toolSets"));
         var presentation = MapPresentation(canonicalType, s, rawParameters);
         var parameters = NormalizeParameters(rawParameters);
 
@@ -189,6 +193,7 @@ public sealed class WorkflowParser
             Type = canonicalType,
             TargetRole = s.TargetRole ?? s.Role,
             Parameters = WorkflowPrimitiveCatalog.CanonicalizeStepTypeParameters(parameters),
+            Capability = MapCapability(s.Capability),
             TransformOperation = MapTransformOperation(canonicalType, parameters),
             Presentation = presentation,
             AgentToolScope = agentToolScope,
@@ -205,6 +210,92 @@ public sealed class WorkflowParser
             TimeoutMs = s.TimeoutMs,
         };
     }
+
+    private static ExternalWorkflowCapabilitySelector? MapCapability(RawStepCapability? capability)
+    {
+        if (capability is null)
+            return null;
+        if (capability.NyxIdOperation is not null && capability.NyxIdRequest is not null)
+            throw new InvalidOperationException("Step capability must contain exactly one NyxID capability selector.");
+
+        if (capability.NyxIdOperation is not null)
+        {
+            return new ExternalWorkflowCapabilitySelector
+            {
+                NyxIdOperation = new NyxIdOperationSelector
+                {
+                    UserServiceId = NormalizeText(capability.NyxIdOperation.UserServiceId) ?? string.Empty,
+                    EndpointId = NormalizeText(capability.NyxIdOperation.EndpointId) ?? string.Empty,
+                },
+            };
+        }
+
+        if (capability.NyxIdRequest is null)
+            return null;
+
+        var request = capability.NyxIdRequest;
+        var selector = new NyxIdRequestSelector
+        {
+            UserServiceId = NormalizeText(request.UserServiceId) ?? string.Empty,
+            Method = ParseNyxIdRequestMethod(request.Method),
+            PathTemplate = NormalizeText(request.PathTemplate) ?? string.Empty,
+            BodyMode = ParseNyxIdRequestBodyMode(request.BodyMode),
+            BodyRequired = request.BodyRequired,
+            ResponseMode = ParseNyxIdRequestResponseMode(request.ResponseMode),
+            Risk = ParseNyxIdOperationRisk(request.Risk),
+        };
+        selector.QueryParameters.Add(NormalizeNames(request.QueryParameters, StringComparer.Ordinal));
+        selector.HeaderParameters.Add(NormalizeNames(request.HeaderParameters, StringComparer.OrdinalIgnoreCase));
+        return new ExternalWorkflowCapabilitySelector { NyxIdRequest = selector };
+    }
+
+    private static IEnumerable<string> NormalizeNames(IEnumerable<string>? values, StringComparer comparer) =>
+        (values ?? [])
+        .Select(static value => value?.Trim() ?? string.Empty)
+        .OrderBy(static value => value, comparer);
+
+    private static NyxIdRequestMethod ParseNyxIdRequestMethod(string? value) =>
+        value?.Trim().ToUpperInvariant() switch
+        {
+            "GET" => NyxIdRequestMethod.Get,
+            "HEAD" => NyxIdRequestMethod.Head,
+            "OPTIONS" => NyxIdRequestMethod.Options,
+            "POST" => NyxIdRequestMethod.Post,
+            "PUT" => NyxIdRequestMethod.Put,
+            "PATCH" => NyxIdRequestMethod.Patch,
+            "DELETE" => NyxIdRequestMethod.Delete,
+            _ => NyxIdRequestMethod.Unspecified,
+        };
+
+    private static NyxIdOperationRisk ParseNyxIdOperationRisk(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return NyxIdOperationRisk.Unspecified;
+
+        return value.Trim().ToUpperInvariant() switch
+        {
+            "READ_ONLY" => NyxIdOperationRisk.ReadOnly,
+            "WRITE" => NyxIdOperationRisk.Write,
+            "DESTRUCTIVE" => NyxIdOperationRisk.Destructive,
+            _ => (NyxIdOperationRisk)(-1),
+        };
+    }
+
+    private static NyxIdRequestBodyMode ParseNyxIdRequestBodyMode(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "none" => NyxIdRequestBodyMode.None,
+            "json" => NyxIdRequestBodyMode.Json,
+            _ => NyxIdRequestBodyMode.Unspecified,
+        };
+
+    private static NyxIdRequestResponseMode ParseNyxIdRequestResponseMode(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "text" => NyxIdRequestResponseMode.Text,
+            "file_artifact" => NyxIdRequestResponseMode.FileArtifact,
+            _ => NyxIdRequestResponseMode.Unspecified,
+        };
 
     private static StepPresentation? MapPresentation(
         string canonicalStepType,
@@ -264,14 +355,15 @@ public sealed class WorkflowParser
         return null;
     }
 
-    private static object? ResolveStepAllowedTools(
-        RawStep step,
-        IDictionary<string, object?>? rawParameters)
+    private static object? ResolveStepScopeSource(
+        object? topLevelSource,
+        IDictionary<string, object?>? rawParameters,
+        params string[] keys)
     {
         object? parameterSource = null;
         if (rawParameters is not null)
         {
-            foreach (var key in new[] { "allowed_tools", "allowedTools" })
+            foreach (var key in keys)
             {
                 if (!rawParameters.TryGetValue(key, out var source))
                     continue;
@@ -281,20 +373,22 @@ public sealed class WorkflowParser
             }
         }
 
-        if (step.AllowedTools is not null)
-            return step.AllowedTools;
-
-        return parameterSource;
+        return topLevelSource ?? parameterSource;
     }
 
-    private static WorkflowAgentToolScopeDefinition? MapAgentToolScope(object? source)
+    private static WorkflowAgentToolScopeDefinition? MapAgentToolScope(
+        object? allowedToolsSource,
+        object? toolSetsSource)
     {
-        if (source is null)
+        if (allowedToolsSource is null && toolSetsSource is null)
             return null;
 
         return new WorkflowAgentToolScopeDefinition
         {
-            AllowedToolNames = NormalizeToolNames(source).ToList(),
+            RestrictAllowedToolNames = allowedToolsSource is not null,
+            RestrictToolSets = toolSetsSource is not null,
+            AllowedToolNames = NormalizeToolNames(allowedToolsSource).ToList(),
+            ToolSetRefs = NormalizeToolNames(toolSetsSource).ToList(),
         };
     }
 
@@ -969,6 +1063,7 @@ public sealed class WorkflowParser
         AddIfMissing(parameters, "value_field", s.ValueField);
         AddIfMissing(parameters, "field", s.Field);
         AddIfMissing(parameters, "aggregate", s.Aggregate);
+        AddIfMissing(parameters, "template", s.Template);
     }
 
     private static TransformOperationSpec? MapTransformOperation(
@@ -1000,6 +1095,7 @@ public sealed class WorkflowParser
         spec.Key = GetParameter(parameters, "key", "group_key", "group_by").Trim();
         spec.Value = GetParameter(parameters, "value", "value_field", "field").Trim();
         spec.Aggregate = ParseTransformAggregateKind(GetParameter(parameters, "aggregate", "agg").Trim());
+        spec.Template = GetParameter(parameters, "template");
         return spec;
     }
 
@@ -1111,6 +1207,7 @@ public sealed class WorkflowParser
             "min" => TransformOperationKind.Min,
             "max" => TransformOperationKind.Max,
             "groupby" => TransformOperationKind.GroupBy,
+            "template" => TransformOperationKind.Template,
             _ => TransformOperationKind.Unspecified,
         };
 
@@ -1331,6 +1428,7 @@ public sealed class WorkflowParser
         public string? EventModules { get; set; }
         public string? EventRoutes { get; set; }
         public object? AllowedTools { get; set; }
+        public object? ToolSets { get; set; }
         public RawRoleExtensions? Extensions { get; set; }
         public List<string>? Connectors { get; set; }
     }
@@ -1398,7 +1496,10 @@ public sealed class WorkflowParser
         public string? ValueField { get; set; }
         public string? Field { get; set; }
         public string? Aggregate { get; set; }
+        public string? Template { get; set; }
         public object? AllowedTools { get; set; }
+        public object? ToolSets { get; set; }
+        public RawStepCapability? Capability { get; set; }
         public object? InteractionSpec { get; set; }
         public object? InteractionTemplateSpec { get; set; }
         public string? DeliveryTargetId { get; set; }
@@ -1412,6 +1513,34 @@ public sealed class WorkflowParser
         public string? IdempotencyKey { get; set; }
         public RawOnError? OnError { get; set; }
         public int? TimeoutMs { get; set; }
+    }
+
+    private sealed class RawStepCapability
+    {
+        [YamlMember(Alias = "nyxid_operation")]
+        public RawNyxIdOperationSelector? NyxIdOperation { get; set; }
+
+        [YamlMember(Alias = "nyxid_request")]
+        public RawNyxIdRequestSelector? NyxIdRequest { get; set; }
+    }
+
+    private sealed class RawNyxIdOperationSelector
+    {
+        public string? UserServiceId { get; set; }
+        public string? EndpointId { get; set; }
+    }
+
+    private sealed class RawNyxIdRequestSelector
+    {
+        public string? UserServiceId { get; set; }
+        public string? Method { get; set; }
+        public string? PathTemplate { get; set; }
+        public List<string>? QueryParameters { get; set; }
+        public List<string>? HeaderParameters { get; set; }
+        public string? BodyMode { get; set; }
+        public bool BodyRequired { get; set; }
+        public string? ResponseMode { get; set; }
+        public string? Risk { get; set; }
     }
     private sealed class RawStepPresentation
     {

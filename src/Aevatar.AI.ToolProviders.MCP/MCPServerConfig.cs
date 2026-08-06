@@ -25,6 +25,9 @@ public sealed class MCPServerConfig
     /// <summary>远程 MCP 静态请求头。</summary>
     public Dictionary<string, string> AdditionalHeaders { get; init; } = [];
 
+    /// <summary>MCP 协议发现或旧版初始化握手的总超时。</summary>
+    public TimeSpan InitializationTimeout { get; init; } = TimeSpan.FromSeconds(30);
+
     /// <summary>可选的远程 MCP 专用 HttpClient。</summary>
     public HttpClient? HttpClient { get; init; }
 
@@ -42,6 +45,23 @@ public sealed class MCPToolsOptions
     public MCPToolsOptions AddServer(string name, string command, params string[] arguments)
     {
         Servers.Add(new MCPServerConfig { Name = name, Command = command, Arguments = arguments });
+        return this;
+    }
+
+    /// <summary>添加一个远程 Streamable HTTP MCP 服务器。</summary>
+    public MCPToolsOptions AddRemoteServer(
+        string name,
+        string url,
+        IReadOnlyDictionary<string, string>? additionalHeaders = null)
+    {
+        Servers.Add(new MCPServerConfig
+        {
+            Name = name,
+            Url = url,
+            AdditionalHeaders = additionalHeaders == null
+                ? []
+                : new Dictionary<string, string>(additionalHeaders, StringComparer.OrdinalIgnoreCase),
+        });
         return this;
     }
 }

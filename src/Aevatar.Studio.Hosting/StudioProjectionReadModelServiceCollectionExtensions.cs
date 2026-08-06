@@ -1,9 +1,11 @@
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
+using Aevatar.ContentArtifacts.Abstractions;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.ChatHistory;
+using Aevatar.GAgents.ContentArtifacts;
 using Aevatar.GAgents.ConnectorCatalog;
 using Aevatar.GAgents.Registry;
 using Aevatar.GAgents.RoleCatalog;
@@ -11,12 +13,15 @@ using Aevatar.GAgents.StudioMember;
 using Aevatar.GAgents.StudioTeam;
 using Aevatar.GAgents.WorkOrder;
 using Aevatar.Studio.Workspace;
+using Aevatar.Studio.Application.Studio.ProjectionRecovery;
+using Aevatar.Studio.Infrastructure.ProjectionRecovery;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.GAgents.UserMemory;
 using Aevatar.Studio.Projection.ReadModels;
 using Google.Protobuf.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aevatar.Studio.Hosting;
 
@@ -29,7 +34,7 @@ namespace Aevatar.Studio.Hosting;
 /// configuration. Required by the actor-backed stores
 /// (<c>IRoleCatalogQueryPort</c>, <c>IConnectorCatalogQueryPort</c>,
 /// <c>IChatHistoryQueryPort</c>, <c>IGAgentActorRegistryQueryPort</c>,
-/// <c>IUserMemoryStore</c>) that read
+/// <c>IUserMemoryQueryPort</c>) that read
 /// from these documents via <c>IProjectionDocumentReader</c>.
 /// </summary>
 internal static class StudioProjectionReadModelServiceCollectionExtensions
@@ -54,6 +59,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterElasticsearch<RoleCatalogCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<ConnectorCatalogCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<ChatConversationCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<NyxIdChatConversationCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<ChatHistoryCreateRecoveryCurrentStateDocument>(
                 services,
                 configuration,
@@ -65,6 +71,16 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterElasticsearch<StudioMemberBindingRunCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioTeamCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioWorkspaceCurrentStateDocument>(services, configuration);
+            services.AddElasticsearchDocumentProjectionRepairStore<
+                StudioWorkspaceCurrentStateDocument,
+                string>();
+            services.TryAddSingleton<
+                IStudioWorkspaceVersionRegressionStorePort,
+                ElasticsearchStudioWorkspaceVersionRegressionStorePort>();
+            services.TryAddSingleton<
+                IStudioWorkspaceVersionRegressionRepairService,
+                StudioWorkspaceVersionRegressionRepairService>();
+            RegisterElasticsearch<ContentArtifactCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<WorkOrderCurrentStateDocument>(services, configuration);
         }
         else
@@ -76,6 +92,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterInMemory<RoleCatalogCurrentStateDocument>(services);
             RegisterInMemory<ConnectorCatalogCurrentStateDocument>(services);
             RegisterInMemory<ChatConversationCurrentStateDocument>(services);
+            RegisterInMemory<NyxIdChatConversationCurrentStateDocument>(services);
             RegisterInMemory<ChatHistoryCreateRecoveryCurrentStateDocument>(
                 services,
                 static document => document.Id,
@@ -87,6 +104,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterInMemory<StudioMemberBindingRunCurrentStateDocument>(services);
             RegisterInMemory<StudioTeamCurrentStateDocument>(services);
             RegisterInMemory<StudioWorkspaceCurrentStateDocument>(services);
+            RegisterInMemory<ContentArtifactCurrentStateDocument>(services);
             RegisterInMemory<WorkOrderCurrentStateDocument>(services);
         }
 
@@ -156,6 +174,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                && HasDocumentReaderForProvider<RoleCatalogCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ConnectorCatalogCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ChatConversationCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<NyxIdChatConversationCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ChatHistoryCreateRecoveryCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<GAgentRegistryCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<UserMemoryCurrentStateDocument>(services, providerKind)
@@ -164,6 +183,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                && HasDocumentReaderForProvider<StudioMemberBindingRunCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioTeamCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioWorkspaceCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<ContentArtifactCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<WorkOrderCurrentStateDocument>(services, providerKind);
     }
 
@@ -214,6 +234,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             StudioMemberBindingRunState.Descriptor,
             StudioTeamState.Descriptor,
             StudioWorkspaceState.Descriptor,
+            ContentArtifactState.Descriptor,
             WorkOrderState.Descriptor);
     }
 

@@ -13,14 +13,17 @@ namespace Aevatar.AI.Tests;
 public sealed class NyxIdProxyToolExactIdentityTests
 {
     [Fact]
-    public void ParametersSchema_ShouldRequireAdmittedExactOperationTuple()
+    public void ParametersSchema_ShouldDescribeExactIdentityWithoutForcingItOnProofBoundCalls()
     {
         var tool = CreateTool(new CountingHandler());
 
         using var schema = JsonDocument.Parse(tool.ParametersSchema);
-        schema.RootElement.GetProperty("required").EnumerateArray()
-            .Select(static item => item.GetString())
-            .Should().BeEquivalentTo("service_id", "slug", "path");
+        var root = schema.RootElement;
+        var properties = root.GetProperty("properties");
+        properties.TryGetProperty("service_id", out _).Should().BeTrue();
+        properties.TryGetProperty("slug", out _).Should().BeTrue();
+        properties.TryGetProperty("path", out _).Should().BeTrue();
+        root.TryGetProperty("required", out _).Should().BeFalse();
     }
 
     [Fact]
@@ -71,7 +74,7 @@ public sealed class NyxIdProxyToolExactIdentityTests
     }
 
     [Fact]
-    public void CreateResultReceipt_WithValidExactIdentity_ShouldNotInferFailureFromDomainJson()
+    public void CreateResultReceipt_WithValidExactIdentity_ShouldKeepDomainJsonSuccessful()
     {
         var tool = CreateTool(new CountingHandler());
         const string arguments =
@@ -81,7 +84,10 @@ public sealed class NyxIdProxyToolExactIdentityTests
 
         var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, domainResult);
 
-        receipt.Should().BeNull();
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.ErrorCode.Should().BeEmpty();
+        receipt.SubjectId.Should().Be("us-home-alpha");
     }
 
     [Theory]
@@ -116,6 +122,46 @@ public sealed class NyxIdProxyToolExactIdentityTests
 
         receipt.Should().NotBeNull();
         receipt!.AuthorizationRequired.UserServiceId.Should().Be("us-home-alpha");
+        receipt.SubjectKind.Should().Be("nyxid.user-service");
+        receipt.SubjectId.Should().Be("us-home-alpha");
+    }
+
+    [Fact]
+    public void CreateResultReceipt_WithSuccess_ShouldTargetExactUserService()
+    {
+        var tool = CreateTool(new CountingHandler());
+
+        var receipt = tool.CreateResultReceipt(
+            "call-success",
+            tool.Name,
+            """{"service_id":"us-home-alpha","slug":"home-assistant","path":"/api/items"}""",
+            """{"items":[]}""");
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.SubjectKind.Should().Be("nyxid.user-service");
+        receipt.SubjectId.Should().Be("us-home-alpha");
+    }
+
+    [Fact]
+    public void CreateResultReceipt_WithHttpFailure_ShouldTargetExactUserService()
+    {
+        var tool = CreateTool(new CountingHandler());
+        const string result =
+            """{"error":true,"status":502,"body":"upstream bearer-secret"}""";
+
+        var receipt = tool.CreateResultReceipt(
+            "call-error",
+            tool.Name,
+            """{"service_id":"us-home-alpha","slug":"home-assistant","path":"/api/items?token=query-secret"}""",
+            result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("NYXID_PROXY_HTTP_502");
+        receipt.SubjectKind.Should().Be("nyxid.user-service");
+        receipt.SubjectId.Should().Be("us-home-alpha");
+        receipt.ToString().Should().NotContain("bearer-secret").And.NotContain("query-secret");
     }
 
     private static NyxIdProxyTool CreateTool(CountingHandler handler)

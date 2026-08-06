@@ -36,6 +36,10 @@ public static class WorkflowAuditTextSanitizer
         @"(?<prefix>\b(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|pwd|credential|signature|hmac[_-]?secret|client[_-]?secret)\b\s*[:=]\s*)(?:""[^""]*""|'[^']*'|[^,\s;}\]]+)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
+    private static readonly Regex EmailAddressPattern = new(
+        @"(?<![A-Za-z0-9.!#$%&'*+/=?^_`{|}~-])[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+(?![A-Za-z0-9-])",
+        RegexOptions.CultureInvariant);
+
     private static readonly Regex PrivateKeyPattern = new(
         @"-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -160,6 +164,7 @@ public static class WorkflowAuditTextSanitizer
         sanitized = UrlSecretQueryPattern.Replace(sanitized, match => match.Groups["prefix"].Value + RedactedValue);
         sanitized = HeaderSecretPattern.Replace(sanitized, match => match.Groups["prefix"].Value + RedactedValue);
         sanitized = AssignmentSecretPattern.Replace(sanitized, match => match.Groups["prefix"].Value + RedactedValue);
+        sanitized = EmailAddressPattern.Replace(sanitized, RedactedValue);
         return sanitized;
     }
 
@@ -192,6 +197,22 @@ public static class WorkflowAuditTextSanitizer
             "credentials" or
             "signature" or
             "privatekey" or
+            "email" or
+            "emails" or
+            "emailaddress" or
+            "emailaddresses" or
+            "userid" or
+            "userids" or
+            "openid" or
+            "openids" or
+            "unionid" or
+            "unionids" or
+            "externaluserid" or
+            "externaluserids" or
+            "mobile" or
+            "mobiles" or
+            "phonenumber" or
+            "phonenumbers" or
             "database64" or
             "rawbody" or
             "rawpayload" or

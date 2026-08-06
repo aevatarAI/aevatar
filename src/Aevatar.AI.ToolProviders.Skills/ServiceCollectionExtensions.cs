@@ -50,6 +50,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<SkillDiscovery>();
         services.TryAddSingleton<LocalSkillCatalog>();
         services.TryAddSingleton<ISkillWorkflowMountPort, NoOpSkillWorkflowMountPort>();
+        services.TryAddSingleton<ISkillWorkflowConfirmationPort, NoOpSkillWorkflowConfirmationPort>();
         services.TryAddSingleton<SkillsAgentToolSource>();
         services.TryAddAgentToolSourceAlias<SkillsAgentToolSource>(GetSkillsAgentToolSource);
         return services;

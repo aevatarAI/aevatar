@@ -19,7 +19,7 @@
 更准确地说：
 
 - `GAgentService` 是 `Studio` 在 workflow/script 发布、激活、查询、调用上的正式 capability 内核。
-- `Studio` 是面向 authoring、workspace、catalog、execution panel、settings、app-level BFF 的宿主子域。
+- `Studio` 是面向 authoring、workspace、catalog、execution panel、owner-scoped user preferences、app-level BFF 的宿主子域。
 - 两者应该保持"`Studio` 依赖 `GAgentService` 抽象端口"的单向关系，而不是把 `Studio` 反向吞进 `GAgentService`。
 
 可以收敛的是组合层与少量桥接层，不是把 `Aevatar.Studio.*` 四层整体并进 `Aevatar.GAgentService.*`。
@@ -104,7 +104,7 @@ script scope 能力也不是一个 IDE，而是正式 definition/catalog/promoti
 - graph/yaml/diff/normalize 这类 authoring 逻辑
 - 本地 workspace 与目录管理
 - 本地 execution panel 聚合态
-- Studio connectors / roles / settings
+- Studio connectors / roles / owner-scoped user preferences
 - OIDC claim/header/config 混合 scope 解析
 - `/api/auth/me`、`/api/app/context` 这类 app-level BFF 协议
 
@@ -163,26 +163,32 @@ script scope 能力也不是一个 IDE，而是正式 definition/catalog/promoti
 
 `ExecutionService` 不再持有本地 execution JSON / SSE frame shadow store；执行事实由 service-run / workflow actor 与其 readmodel 表达。
 
-#### 1.5.4 connectors / roles / settings 是 Studio authoring 配置
+#### 1.5.4 connectors / roles 与用户偏好属于不同配置边界
 
-`Studio` 管理：
+`Studio` 管理 authoring catalog：
 
 - connectors catalog
 - roles catalog
-- settings
 - 本地 draft
 - Chrono-storage 中的 studio catalog
+
+登录用户的 LLM 与 runtime 偏好通过 owner-scoped `/api/user-config/llm` 和
+`/api/user-config/runtime` 读取或管理。它们不是 host provider 配置，也不能读取或修改
+部署级 provider secret。Mainnet 的 host provider 只来自部署配置与只读
+`IAevatarSecretsStore` / `EnvironmentSecretsStore`，不提供 `/api/settings` 管理端点或文件影子存储。
 
 见：
 
 - `src/Aevatar.Studio.Application/Studio/Services/ConnectorService.cs`
 - `src/Aevatar.Studio.Application/Studio/Services/RoleCatalogService.cs`
-- `src/Aevatar.Studio.Application/Studio/Services/SettingsService.cs`
+- `src/Aevatar.Studio.Application/Studio/Services/UserConfigService.cs`
+- `src/Aevatar.Studio.Hosting/Controllers/UserConfigController.cs`
 - `src/Aevatar.Studio.Infrastructure/DependencyInjection/ServiceCollectionExtensions.cs`
 - `src/Aevatar.Studio.Infrastructure/Storage/ChronoStorageConnectorCatalogStore.cs`
 - `src/Aevatar.Studio.Infrastructure/Storage/ChronoStorageRoleCatalogStore.cs`
 
-这些配置是 Studio authoring 边界，不等于 runtime 内部 registry，也不等于 `GAgentService` 的 service definition。
+这些 authoring catalog 与 owner-scoped 用户偏好都不等于 runtime 内部 registry，也不等于
+`GAgentService` 的 service definition；部署级 provider secret 更不属于 Studio 用户配置面。
 
 #### 1.5.5 app-level BFF / auth / scope 解析
 
@@ -245,7 +251,7 @@ script scope 能力也不是一个 IDE，而是正式 definition/catalog/promoti
 
 如果整体合并，最终结果通常会变成：
 
-- `GAgentService` 反向承担 YAML 编辑、文件存储、settings、OIDC scope 解析、app endpoint
+- `GAgentService` 反向承担 YAML 编辑、文件存储、用户偏好、OIDC scope 解析、app endpoint
 
 这会把 `GAgentService` 从 capability 内核推成"平台能力 + authoring 产品 + 本地宿主"三合一模块。
 
@@ -301,7 +307,7 @@ script scope 能力也不是一个 IDE，而是正式 definition/catalog/promoti
 - graph/yaml contract
 - workspace 模型
 - execution panel 行为
-- settings/catalog/import/export
+- user preferences/catalog/import/export
 
 把两者绑成一个模块，会让任一侧的变更都扩大另一侧的回归面。
 
@@ -330,7 +336,7 @@ script scope 能力也不是一个 IDE，而是正式 definition/catalog/promoti
 - workflow editor domain
 - workspace/file store
 - execution panel local aggregation
-- connectors/roles/settings authoring store
+- connectors/roles authoring store 与 owner-scoped user preferences
 - `/api/app/*` BFF 协议
 - auth/session/scope 产品层逻辑
 
@@ -354,7 +360,7 @@ flowchart TB
   C --> C1["Workflow Editor / Graph / Normalize / Diff"]
   C --> C2["Workspace / Local Files / Layout"]
   C --> C3["Execution Panel / Local Aggregation"]
-  C --> C4["Connectors / Roles / Settings"]
+  C --> C4["Connectors / Roles / User Preferences"]
   C --> C5["Auth / Scope / App-level BFF"]
 
   C --> D["AppScopedWorkflowService / AppScopedScriptService"]
@@ -432,7 +438,7 @@ flowchart TB
 - `Studio` 已经不是 runtime 本体，而是 authoring/BFF 子域：
   - workflow 编辑
   - script 编辑
-  - workspace / execution panel / settings / connectors / roles
+  - workspace / execution panel / owner-scoped user preferences / connectors / roles
   - app-level `/api/auth/me` 与 `/api/app/context`
 - `NyxID` 现在已经能把用户身份水位映射到 `scope_id`
 - `scope workflow` 与 `scope script` 这两条"按 scope 发布能力"的路径已经打通
@@ -485,7 +491,7 @@ flowchart TB
 
 - workflow graph/yaml/normalize/validate
 - script 编辑与 draft run
-- workspace / execution panel / settings
+- workspace / execution panel / owner-scoped user preferences
 - connectors / roles catalog
 - app-level auth/context API
 
@@ -631,7 +637,7 @@ flowchart TD
 - workflow/script 编辑
 - draft
 - execution panel
-- connectors / roles / settings
+- connectors / roles / owner-scoped user preferences
 
 ### 2.6 三类资产的落位建议
 

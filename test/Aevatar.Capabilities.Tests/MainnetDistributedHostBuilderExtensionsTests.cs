@@ -31,6 +31,9 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         using var kafkaServers = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaBootstrapServers", "localhost:19092");
         using var topicName = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaTopicName", "mainnet-kafka-provider-events");
         using var consumerGroup = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaConsumerGroup", "mainnet-kafka-provider-group");
+        using var receiverCapacity = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaReceiverBufferCapacity", "96");
+        using var receiverHighWatermark = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaReceiverBufferHighWatermark", "72");
+        using var receiverLowWatermark = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaReceiverBufferLowWatermark", "36");
         using var queueCount = new EnvironmentVariableScope("AEVATAR_Orleans__QueueCount", "6");
         using var queueCacheSize = new EnvironmentVariableScope("AEVATAR_Orleans__QueueCacheSize", "512");
         using var keyringFile = TemporaryKeyringFile.Create();
@@ -52,6 +55,9 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         runtimeOptions.QueueCacheSize.Should().Be(512);
         transportOptions.TopicPartitionCount.Should().Be(6);
         transportOptions.TopicName.Should().Be("mainnet-kafka-provider-events");
+        transportOptions.ReceiverBufferCapacity.Should().Be(96);
+        transportOptions.ReceiverBufferHighWatermark.Should().Be(72);
+        transportOptions.ReceiverBufferLowWatermark.Should().Be(36);
         app.Services.GetRequiredService<IQueueAdapterFactory>().Should().BeOfType<KafkaProviderQueueAdapterFactory>();
         app.Services.GetRequiredService<KafkaProviderProducer>().Should().NotBeNull();
     }
@@ -155,6 +161,23 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         var endpointOptions = app.Services.GetRequiredService<IOptions<EndpointOptions>>().Value;
         endpointOptions.AdvertisedIPAddress.Should().NotBeNull(
             "with no SiloHost configured the silo must advertise an interface address peers can reach");
+    }
+
+    [Fact]
+    public void AddMainnetDistributedOrleansHost_DistributedProfile_ShouldReserveSharedKafkaBurstHeadroom()
+    {
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["ActorRuntime:Provider"] = "Orleans",
+        });
+
+        builder.AddAevatarDefaultHost(options => options.AllowLocalFileSecretsStore = false);
+        builder.AddMainnetDistributedOrleansHost();
+
+        using var app = builder.Build();
+
+        app.Services.GetRequiredService<AevatarOrleansRuntimeOptions>().QueueCacheSize
+            .Should().BeGreaterThanOrEqualTo(AevatarOrleansRuntimeOptions.DefaultQueueCacheSize);
     }
 
     private static WebApplicationBuilder CreateBuilder(Dictionary<string, string?> values)

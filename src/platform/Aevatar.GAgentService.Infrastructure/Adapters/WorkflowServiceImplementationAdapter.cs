@@ -32,6 +32,34 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
         if (string.IsNullOrWhiteSpace(spec.WorkflowYaml))
             throw new InvalidOperationException("workflow_yaml is required.");
 
+        var expectedExecutionMode = spec.CapabilityAdmissionPlan is null &&
+                                    spec.ExpectedExecutionMode == ExternalCapabilityExecutionMode.Unspecified
+            ? ExternalCapabilityExecutionMode.Interactive
+            : spec.ExpectedExecutionMode;
+        var preparationSpec = request.Spec.Clone();
+        preparationSpec.WorkflowSpec.ExpectedExecutionMode = expectedExecutionMode;
+        var capabilityAdmissionPlan = spec.CapabilityAdmissionPlan is { } persistedPlan
+            ? await _capabilityAdmissionService.RevalidatePersistedAsync(
+                new PersistedWorkflowCapabilityAdmissionRequest(
+                    persistedPlan,
+                    spec.WorkflowYaml,
+                    spec.InlineWorkflowYamls,
+                    "service_revision_prepare",
+                    expectedExecutionMode,
+                    spec.WorkflowId,
+                    request.Spec.RevisionId),
+                ct)
+            : await _capabilityAdmissionService.AdmitAsync(
+                new WorkflowExternalCapabilityAdmissionRequest(
+                    new ExternalWorkflowCapabilityAccessContext(
+                        request.Spec.Identity?.TenantId ?? string.Empty,
+                        string.Empty),
+                    spec.WorkflowYaml,
+                    spec.InlineWorkflowYamls,
+                    "service_revision_prepare",
+                    expectedExecutionMode),
+                ct);
+
         var parse = await _workflowDefinitionParser.ParseWorkflowYamlAsync(spec.WorkflowYaml, ct);
         if (!parse.Succeeded)
             throw new InvalidOperationException(parse.Error);
@@ -48,32 +76,9 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
 
         var authorizationDependencies = parse.AuthorizationDependencies
             ?? throw new InvalidOperationException("workflow authorization dependencies are required.");
-        var expectedExecutionMode = spec.CapabilityAdmissionPlan is null &&
-                                    spec.ExpectedExecutionMode == ExternalCapabilityExecutionMode.Unspecified
-            ? ExternalCapabilityExecutionMode.Interactive
-            : spec.ExpectedExecutionMode;
-        var capabilityAdmissionPlan = spec.CapabilityAdmissionPlan is { } persistedPlan
-            ? await _capabilityAdmissionService.RevalidatePersistedAsync(
-                new PersistedWorkflowCapabilityAdmissionRequest(
-                    persistedPlan,
-                    spec.WorkflowYaml,
-                    spec.InlineWorkflowYamls,
-                    "service_revision_prepare",
-                    expectedExecutionMode),
-                ct)
-            : await _capabilityAdmissionService.AdmitAsync(
-                new WorkflowExternalCapabilityAdmissionRequest(
-                    new ExternalWorkflowCapabilityAccessContext(
-                        request.Spec.Identity?.TenantId ?? string.Empty,
-                        string.Empty),
-                    spec.WorkflowYaml,
-                    spec.InlineWorkflowYamls,
-                    "service_revision_prepare",
-                    expectedExecutionMode),
-                ct);
 
         return WorkflowServiceRevisionArtifactBuilder.Build(
-            request.Spec,
+            preparationSpec,
             resolvedWorkflowName,
             authorizationDependencies,
             capabilityAdmissionPlan);

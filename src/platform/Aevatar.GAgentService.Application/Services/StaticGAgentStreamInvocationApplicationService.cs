@@ -153,6 +153,7 @@ public sealed class StaticGAgentStreamInvocationApplicationService : IStaticGAge
             GAgentDraftRunCompletionStatus.TextMessageCompleted => ServiceRunStatus.Completed,
             GAgentDraftRunCompletionStatus.RunFinished => ServiceRunStatus.Completed,
             GAgentDraftRunCompletionStatus.Failed => ServiceRunStatus.Failed,
+            GAgentDraftRunCompletionStatus.OutcomeUncertain => ServiceRunStatus.OutcomeUncertain,
             _ => ServiceRunStatus.Unspecified,
         };
         return status != ServiceRunStatus.Unspecified;

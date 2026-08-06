@@ -69,6 +69,8 @@ public sealed class ChannelIdentityCommittedStateProjectionActivationPlanProvide
         [
             new ManagedCodexCredentialProvisionedEvent(),
             new ManagedCodexCredentialRotatedEvent(),
+            new ManagedCodexCredentialPolicyReconciledEvent(),
+            new ManagedCodexCredentialReadinessConfirmedEvent(),
             new ManagedCodexCredentialRevokedEvent(),
             new ManagedCodexCredentialCleanupQueuedEvent(),
             new ManagedCodexCredentialCleanupTrackCompletedEvent(),

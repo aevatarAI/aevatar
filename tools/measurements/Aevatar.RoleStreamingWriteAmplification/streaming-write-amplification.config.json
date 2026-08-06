@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "warmupIterations": 2,
+  "measuredIterations": 12,
+  "snapshotInterval": 50,
+  "enableEventCompaction": true,
+  "retainedEventsAfterSnapshot": 5,
+  "crashAfterSuccessfulAppendFences": [4, 12, 24],
+  "workloads": [
+    {
+      "name": "short_text",
+      "kind": "text",
+      "textChunks": 4,
+      "chunkCharacters": 24
+    },
+    {
+      "name": "long_text_high_chunk",
+      "kind": "text",
+      "textChunks": 128,
+      "chunkCharacters": 32
+    },
+    {
+      "name": "reasoning_and_text",
+      "kind": "reasoning_text",
+      "reasoningChunks": 24,
+      "textChunks": 32,
+      "chunkCharacters": 24
+    },
+    {
+      "name": "single_tool_call",
+      "kind": "tool",
+      "toolCalls": 1,
+      "textChunks": 2,
+      "chunkCharacters": 24
+    },
+    {
+      "name": "multiple_tool_calls",
+      "kind": "tool",
+      "toolCalls": 3,
+      "textChunks": 4,
+      "chunkCharacters": 24
+    },
+    {
+      "name": "media_parts",
+      "kind": "media",
+      "mediaParts": 4
+    },
+    {
+      "name": "terminal_only_completion",
+      "kind": "terminal"
+    },
+    {
+      "name": "cancellation",
+      "kind": "cancellation",
+      "textChunks": 2,
+      "chunkCharacters": 24,
+      "timeoutMilliseconds": 15
+    },
+    {
+      "name": "provider_failure",
+      "kind": "provider_failure",
+      "textChunks": 3,
+      "chunkCharacters": 24
+    },
+    {
+      "name": "crash_recovery",
+      "kind": "crash_recovery",
+      "textChunks": 23,
+      "chunkCharacters": 24
+    }
+  ]
+}

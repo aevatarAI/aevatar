@@ -1,28 +1,62 @@
+using Aevatar.AI.Abstractions;
+
 namespace Aevatar.Studio.Application.Studio.Abstractions;
+
+public abstract record UserLlmPreferenceIntent;
+
+public sealed record ResetUserLlmPreferenceIntent : UserLlmPreferenceIntent;
+
+public sealed record SelectGatewayUserLlmPreferenceIntent(
+    LLMModelSelection ModelSelection) : UserLlmPreferenceIntent;
+
+public sealed record SelectUserServiceUserLlmPreferenceIntent(
+    string UserServiceId,
+    LLMModelSelection ModelSelection) : UserLlmPreferenceIntent;
+
+public sealed record ActivateUserLlmPresetIntent(
+    string PresetId) : UserLlmPreferenceIntent;
 
 /// <summary>
 /// Internal write-use-case command shared by Console Settings and channel /model selection.
 /// </summary>
 public sealed record SaveUserLlmPreferenceCommand(
-    string? ServiceId = null,
+    string? UserServiceId = null,
     string? RouteValue = null,
     string? Model = null,
     string? PresetId = null,
     bool? Reset = null);
 
 public sealed record UserLlmSettingsView(
-    string SavedRoute,
+    LLMSelection? SavedSelection,
     string SavedRouteLabel,
-    string EffectiveRoute,
-    string EffectiveRouteLabel,
-    bool RouteFallbackActive,
-    string? FallbackReason,
+    UserLlmSelectionStatus SelectionStatus,
+    LLMModelCatalogDiagnosticKind CatalogDiagnostic,
+    UserLlmRemediationKind Remediation,
     IReadOnlyList<UserLlmRouteOption> RouteOptions,
     IReadOnlyList<UserLlmModelGroup> ModelGroupsByRoute,
     string CatalogStatus,
     UserLlmSettingsCapabilities Capabilities,
-    string DefaultModel,
     UserLlmSetupHint? SetupHint);
+
+public enum UserLlmSelectionStatus
+{
+    Unspecified = 0,
+    SystemDefault = 1,
+    Ready = 2,
+    VerificationUnavailable = 3,
+    NeedsRepair = 4,
+    LegacyRepairRequired = 5,
+}
+
+public enum UserLlmRemediationKind
+{
+    Unspecified = 0,
+    None = 1,
+    RetryCatalog = 2,
+    ConnectProvider = 3,
+    ChooseReplacement = 4,
+    Reselect = 5,
+}
 
 public sealed record UserLlmRouteOption(
     string RouteValue,
@@ -31,8 +65,9 @@ public sealed record UserLlmRouteOption(
     string Status,
     bool Allowed,
     bool Ready,
-    string? ServiceId,
+    string? UserServiceId,
     string? ServiceSlug,
+    LLMModelCatalog ModelCatalog,
     string? Description);
 
 public sealed record UserLlmModelGroup(
@@ -57,12 +92,6 @@ public static class UserLlmCatalogStatus
     public const string Ready = "ready";
     public const string Empty = "empty";
     public const string Unavailable = "unavailable";
-}
-
-public static class UserLlmFallbackReason
-{
-    public const string CatalogUnavailable = "catalog_unavailable";
-    public const string SavedRouteUnavailable = "saved_route_unavailable";
 }
 
 public static class UserLlmRouteStatus
@@ -100,17 +129,26 @@ public sealed record UserLlmOptionsView(
 /// Routable LLM option used by channel selection flows and internal preference resolution,
 /// not by the Console Settings endpoint contract.
 /// </summary>
+public enum UserLlmIdentityAuthority
+{
+    Unspecified = 0,
+    NyxIdUserServicesInventory = 1,
+}
+
+public sealed record UserLlmServiceIdentity(
+    UserLlmIdentityAuthority Authority,
+    string NyxIdUserServiceId);
+
 public sealed record UserLlmOption(
-    string ServiceId,
     string ServiceSlug,
     string DisplayName,
     string RouteValue,
-    string? DefaultModel,
-    IReadOnlyList<string> AvailableModels,
+    LLMModelCatalog ModelCatalog,
     string Status,
     string Source,
     bool Allowed,
-    string? Description);
+    string? Description,
+    UserLlmServiceIdentity? Identity = null);
 
 public sealed record UserLlmSetupHint(
     string SetupUrl,
@@ -125,7 +163,7 @@ public sealed record UserLlmPreset(
 public abstract record UserLlmPresetActivation;
 
 public sealed record UseExistingService(
-    string ServiceId,
+    string UserServiceId,
     string RouteValue,
     string? DefaultModel)
     : UserLlmPresetActivation;
@@ -135,16 +173,16 @@ public sealed record ProvisionThenUse(
     : UserLlmPresetActivation;
 
 public sealed record NyxIdLlmService(
-    string UserServiceId,
+    string? CatalogEntryId,
     string ServiceSlug,
     string DisplayName,
     string RouteValue,
-    string? DefaultModel,
-    IReadOnlyList<string> Models,
+    LLMModelCatalog ModelCatalog,
     string Status,
     string Source,
     bool Allowed,
-    string? Description);
+    string? Description,
+    UserLlmServiceIdentity? Identity = null);
 
 public sealed record NyxIdLlmServicesResult(
     IReadOnlyList<NyxIdLlmService> Services,
@@ -161,6 +199,8 @@ public interface IUserLlmCatalogPort
 {
     Task<NyxIdLlmServicesResult> GetServicesAsync(string bearerToken, CancellationToken ct);
 
+    Task<NyxIdLlmServicesResult> GetFreshServicesAsync(string bearerToken, CancellationToken ct);
+
     Task<NyxIdLlmService> ProvisionAsync(string bearerToken, string provisionEndpointId, CancellationToken ct);
 }
 
@@ -172,15 +212,8 @@ public interface IUserLlmPreferenceService
 public interface IChannelUserLlmPreferencePort
 {
     Task<UserConfigSaveReceipt> SaveAsync(
-        string scopeId,
+        string bindingId,
         string? bearerToken,
-        SaveUserLlmPreferenceCommand command,
-        CancellationToken ct);
-
-    Task<UserConfigSaveReceipt> SaveSelectedOptionAsync(
-        string scopeId,
-        UserLlmOption option,
-        string? model,
-        bool preserveCurrentModelWhenMissing,
+        UserLlmPreferenceIntent intent,
         CancellationToken ct);
 }

@@ -61,6 +61,7 @@ public static class StudioMemberInvocationReadinessStatusNames
     public const string ServiceCatalogTargetMissing = "service_catalog_target_missing";
     public const string TrafficViewTargetMissing = "traffic_view_target_missing";
     public const string PreparedArtifactMissing = "prepared_artifact_missing";
+    public const string InvocationCatalogNotReady = "invocation_catalog_not_ready";
     public const string Unknown = "unknown";
 }
 
@@ -133,7 +134,21 @@ public sealed record StudioMemberDetailResponse(
     StudioMemberBindingContractResponse? LastBinding)
 {
     public StudioMemberBindingRunStatusResponse? CurrentBindingRun { get; init; }
+
+    public StudioMemberWorkflowScheduleProvisioningStatusResponse? ScheduleProvisioning { get; init; }
 }
+
+public sealed record StudioMemberWorkflowScheduleProvisioningStatusResponse(
+    string ProvisioningId,
+    string Status,
+    string RevisionId,
+    string? ScheduleId,
+    string? OperationId,
+    int AttemptCount,
+    long StateVersion,
+    string? FailureCode,
+    string? FailureMessage,
+    DateTimeOffset? UpdatedAt);
 
 public sealed record StudioMemberBindingContractResponse(
     string PublishedServiceId,
@@ -282,6 +297,8 @@ public sealed record UpdateStudioMemberBindingRequest(
     StudioMemberScriptBindingSpec? Script = null,
     StudioMemberGAgentBindingSpec? GAgent = null)
 {
+    public IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations { get; init; }
+
     [JsonIgnore]
     public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
 }

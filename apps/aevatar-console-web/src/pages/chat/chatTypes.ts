@@ -56,8 +56,6 @@ export type ChatStudioTarget = {
 export type LocalChatStatus =
   | "draft"
   | "streaming"
-  | "needs_confirmation"
-  | "creating"
   | "completed_text"
   | "completed_with_studio_target"
   | "error";
@@ -82,7 +80,7 @@ export type ServiceEndpoint = {
 export type ServiceOption = {
   id: string;
   label: string;
-  kind: "nyxid-chat" | "onboarding" | "service";
+  kind: "nyxid-chat" | "service";
   endpoints: ServiceEndpoint[];
   deploymentStatus?: string;
   primaryActorId?: string;
@@ -102,12 +100,6 @@ export type ConversationLlmPreferences = {
 export type ConversationSessionSnapshot = {
   preferences?: ConversationLlmPreferences;
   runtime?: ConversationRuntimeIdentity;
-};
-
-export type ChatHistoryContext = {
-  scopeId: string;
-  conversationId: string;
-  turnId: string;
 };
 
 export type ConversationMeta = {
@@ -142,16 +134,15 @@ export type StoredChatMessage = {
   thinking?: string | null;
 };
 
+export type ChatConversationDetail = {
+  messages: StoredChatMessage[];
+  stateVersion: number;
+  projectionStatus: "current" | "pending";
+};
+
 export type ChatHistoryIndex = {
   conversations: ConversationMeta[];
   nextCursor?: string | null;
-};
-
-export type ChatCreateRecovery = {
-  conversationId: string;
-  sourceVersion: number;
-  status: string;
-  turnId: string;
 };
 
 export type ChatSessionState = {

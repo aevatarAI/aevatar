@@ -36,7 +36,7 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
             return;
 
         if (State.LifecycleStatus == WorkOrderLifecycleStatus.DispatchPending &&
-            string.IsNullOrWhiteSpace(State.Execution?.RunId))
+            string.IsNullOrWhiteSpace(State.Run?.RunId))
         {
             await ScheduleExecutionAndWatchdogAsync(ct);
         }
@@ -56,15 +56,6 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
         }
 
         var now = command.RequestedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
-        var approvalRequired = RequiresApproval(command.PermissionPlan);
-        var approval = new WorkOrderApprovalState
-        {
-            ApprovalId = approvalRequired ? command.ApprovalId : string.Empty,
-            Status = approvalRequired
-                ? WorkOrderApprovalStatus.Pending
-                : WorkOrderApprovalStatus.NotRequired,
-        };
-
         await PersistDomainEventsAsync(
         [
             new WorkOrderCreatedEvent
@@ -72,13 +63,9 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
                 Request = command.Clone(),
                 CreatedAtUtc = now,
             },
-            new WorkOrderPlannedEvent
+            new WorkOrderReadyEvent
             {
-                LifecycleStatus = approvalRequired
-                    ? WorkOrderLifecycleStatus.WaitingApproval
-                    : WorkOrderLifecycleStatus.Ready,
-                Approval = approval,
-                PlannedAtUtc = now,
+                ReadyAtUtc = now,
             },
         ]);
 
@@ -92,18 +79,17 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
         EnsureInitialized(command.WorkOrderId);
         EnsureRequester(command.RequestedBy);
 
-        if (IsSameAssignment(State, command))
-            return;
-
         EnsureExpectedVersion(command.ExpectedLifecycleVersion);
         if (State.LifecycleStatus is not (
                 WorkOrderLifecycleStatus.Accepted or
-                WorkOrderLifecycleStatus.WaitingApproval or
                 WorkOrderLifecycleStatus.Ready))
         {
             throw new InvalidOperationException(
                 $"work order '{State.WorkOrderId}' cannot be reassigned from '{State.LifecycleStatus}'.");
         }
+
+        if (IsSameAssignment(State, command))
+            return;
 
         EnsureRequired(command.MemberId, nameof(command.MemberId));
         EnsureRequired(command.PublishedServiceId, nameof(command.PublishedServiceId));
@@ -122,28 +108,6 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
                 ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         });
     }
-
-    [EventHandler(EndpointName = "approveWorkOrder")]
-    public Task HandleApproveAsync(ApproveWorkOrder command) =>
-        HandleApprovalDecisionAsync(
-            command.WorkOrderId,
-            command.ExpectedLifecycleVersion,
-            command.DecisionId,
-            command.DecidedBy,
-            command.Reason,
-            command.DecidedAtUtc,
-            WorkOrderApprovalStatus.Approved);
-
-    [EventHandler(EndpointName = "denyWorkOrder")]
-    public Task HandleDenyAsync(DenyWorkOrder command) =>
-        HandleApprovalDecisionAsync(
-            command.WorkOrderId,
-            command.ExpectedLifecycleVersion,
-            command.DecisionId,
-            command.DecidedBy,
-            command.Reason,
-            command.DecidedAtUtc,
-            WorkOrderApprovalStatus.Denied);
 
     [EventHandler(EndpointName = "dispatchWorkOrder")]
     public async Task HandleDispatchAsync(DispatchWorkOrder command)
@@ -168,6 +132,8 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
             string.Equals(State.DispatchCommandId, command.DispatchCommandId, StringComparison.Ordinal) &&
             string.Equals(State.RequestedRunId, command.RequestedRunId, StringComparison.Ordinal) &&
             string.Equals(State.TerminalDeliveryId, command.TerminalDeliveryId, StringComparison.Ordinal);
+
+        EnsureExpectedVersion(command.ExpectedLifecycleVersion);
         if (sameDispatch && State.LifecycleStatus == WorkOrderLifecycleStatus.DispatchPending)
         {
             await SendExecutionRequestAsync();
@@ -176,7 +142,6 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
         if (sameDispatch && (State.LifecycleStatus == WorkOrderLifecycleStatus.Running || IsTerminal(State.LifecycleStatus)))
             return;
 
-        EnsureExpectedVersion(command.ExpectedLifecycleVersion);
         if (State.LifecycleStatus != WorkOrderLifecycleStatus.Ready)
         {
             throw new InvalidOperationException(
@@ -207,9 +172,10 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
             return;
         }
 
-        if (State.Execution != null && !string.IsNullOrWhiteSpace(State.Execution.RunId))
+        if (State.Run != null && !string.IsNullOrWhiteSpace(State.Run.RunId))
             return;
 
+        EnsureInboundPublisherMatches(Id, "WorkOrder execute signal");
         await ScheduleExecutionAndWatchdogAsync();
     }
 
@@ -222,6 +188,9 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
                 continuation.RequestedRunId))
             return;
 
+        EnsureInboundPublisherMatches(
+            WorkOrderConventions.ExecutionWorkerPublisherActorId,
+            "WorkOrder execution continuation");
         ValidateAcceptedExecution(continuation.Accepted);
         await PersistDomainEventAsync(new WorkOrderRunAcceptedEvent
         {
@@ -238,6 +207,9 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
                 continuation.RequestedRunId))
             return;
 
+        EnsureInboundPublisherMatches(
+            WorkOrderConventions.ExecutionWorkerPublisherActorId,
+            "WorkOrder execution continuation");
         await PersistDomainEventAsync(new WorkOrderDispatchFailedEvent
         {
             Failure = continuation.Failed?.Failure?.Clone() ?? new WorkOrderFailureReference
@@ -259,14 +231,15 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
         if (!MatchesPendingExecution(
                 evt.WorkOrderId,
                 evt.DispatchCommandId,
-                evt.RequestedRunId) ||
+            evt.RequestedRunId) ||
             evt.Attempt <= 0 ||
             evt.Attempt != State.ExecutionRetryAttempt ||
-            !string.IsNullOrWhiteSpace(State.Execution?.RunId))
+            !string.IsNullOrWhiteSpace(State.Run?.RunId))
         {
             return;
         }
 
+        EnsureInboundPublisherMatches(Id, "WorkOrder execution retry signal");
         await ScheduleExecutionAndWatchdogAsync();
     }
 
@@ -277,13 +250,12 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
         EnsureInitialized(command.WorkOrderId);
         EnsureRequester(command.RequestedBy);
 
+        EnsureExpectedVersion(command.ExpectedLifecycleVersion);
         if (State.LifecycleStatus == WorkOrderLifecycleStatus.Cancelled)
             return;
 
-        EnsureExpectedVersion(command.ExpectedLifecycleVersion);
         if (State.LifecycleStatus is not (
                 WorkOrderLifecycleStatus.Accepted or
-                WorkOrderLifecycleStatus.WaitingApproval or
                 WorkOrderLifecycleStatus.Ready))
         {
             throw new InvalidOperationException(
@@ -311,6 +283,7 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
             return;
         }
 
+        EnsureInboundPublisherMatches(Id, "WorkOrder timeout signal");
         var now = DateTimeOffset.UtcNow;
         var timeoutAt = State.TimeoutAtUtc.ToDateTimeOffset();
         if (now < timeoutAt)
@@ -330,7 +303,7 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
     public Task HandleWorkflowTerminalAsync(WorkflowRunTerminalNotification notification)
     {
         ArgumentNullException.ThrowIfNull(notification);
-        return RecordTerminalEvidenceAsync(new WorkOrderTerminalEvidence
+        return RecordRunOutcomeAsync(new WorkOrderRunOutcomeReference
         {
             DeliveryId = notification.DeliveryId,
             RunId = notification.WorkflowRunId,
@@ -344,10 +317,7 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
                 WorkflowRunTerminalStatus.Stopped => WorkOrderTerminalOutcome.Stopped,
                 _ => WorkOrderTerminalOutcome.Unspecified,
             },
-            Output = notification.Output,
-            Error = notification.Error,
             TerminalAtUtc = notification.TerminalAt?.Clone(),
-            ResultArtifacts = { CloneDeclaredResultArtifacts() },
         }, notification.WorkflowActorId);
     }
 
@@ -367,17 +337,10 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
         if (notification.StartedAt == null)
             throw new InvalidOperationException("workflow Run started notification requires started_at.");
 
-        if (State.Execution!.StartedAtUtc != null)
-        {
-            if (State.Execution.StartedAtUtc.Equals(notification.StartedAt))
-                return;
+        if (State.LifecycleStatus == WorkOrderLifecycleStatus.Running || IsTerminal(State.LifecycleStatus))
+            return;
 
-            throw new InvalidOperationException("conflicting workflow Run started evidence was received.");
-        }
-
-        if (State.LifecycleStatus != WorkOrderLifecycleStatus.DispatchPending &&
-            State.LifecycleStatus != WorkOrderLifecycleStatus.Running &&
-            !IsTerminal(State.LifecycleStatus))
+        if (State.LifecycleStatus != WorkOrderLifecycleStatus.DispatchPending)
         {
             throw new InvalidOperationException(
                 $"workflow Run started evidence cannot advance work order from '{State.LifecycleStatus}'.");
@@ -398,7 +361,7 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
     public Task HandleServiceRunTerminalAsync(ServiceRunTerminalNotification notification)
     {
         ArgumentNullException.ThrowIfNull(notification);
-        return RecordTerminalEvidenceAsync(new WorkOrderTerminalEvidence
+        return RecordRunOutcomeAsync(new WorkOrderRunOutcomeReference
         {
             DeliveryId = notification.DeliveryId,
             RunId = notification.RunId,
@@ -412,105 +375,65 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
                 ServiceRunStatus.Stopped => WorkOrderTerminalOutcome.Stopped,
                 _ => WorkOrderTerminalOutcome.Unspecified,
             },
-            Output = notification.Output,
-            Error = notification.Error,
             TerminalAtUtc = notification.TerminalAt?.Clone(),
-            ResultArtifacts = { CloneDeclaredResultArtifacts() },
         }, BuildExpectedServiceRunPublisherActorId());
     }
 
-    private async Task HandleApprovalDecisionAsync(
-        string workOrderId,
-        long expectedLifecycleVersion,
-        string decisionId,
-        WorkOrderPrincipal decidedBy,
-        string reason,
-        Timestamp? decidedAtUtc,
-        WorkOrderApprovalStatus decision)
-    {
-        EnsureInitialized(workOrderId);
-        EnsureRequired(decisionId, nameof(decisionId));
-        EnsureApprover(decidedBy);
-
-        if (State.Approval != null &&
-            State.Approval.Status == decision &&
-            string.Equals(State.Approval.DecisionId, decisionId, StringComparison.Ordinal) &&
-            PrincipalsEqual(State.Approval.DecidedBy, decidedBy))
-        {
-            return;
-        }
-
-        EnsureExpectedVersion(expectedLifecycleVersion);
-        if (State.LifecycleStatus != WorkOrderLifecycleStatus.WaitingApproval ||
-            State.Approval?.Status != WorkOrderApprovalStatus.Pending)
-        {
-            throw new InvalidOperationException(
-                $"work order '{State.WorkOrderId}' is not waiting for approval.");
-        }
-
-        await PersistDomainEventAsync(new WorkOrderApprovalDecidedEvent
-        {
-            DecisionId = decisionId.Trim(),
-            ApprovalStatus = decision,
-            DecidedBy = decidedBy.Clone(),
-            Reason = reason?.Trim() ?? string.Empty,
-            DecidedAtUtc = decidedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-        });
-    }
-
-    private async Task RecordTerminalEvidenceAsync(
-        WorkOrderTerminalEvidence evidence,
+    private async Task RecordRunOutcomeAsync(
+        WorkOrderRunOutcomeReference outcome,
         string expectedPublisherActorId)
     {
-        ArgumentNullException.ThrowIfNull(evidence);
-        if (evidence.Outcome == WorkOrderTerminalOutcome.Unspecified)
-            throw new InvalidOperationException("terminal evidence outcome is required.");
+        ArgumentNullException.ThrowIfNull(outcome);
+        if (outcome.Outcome == WorkOrderTerminalOutcome.Unspecified)
+            throw new InvalidOperationException("Run outcome is required.");
+        if (outcome.TerminalAtUtc == null)
+            throw new InvalidOperationException("Run outcome terminal_at_utc is required.");
         EnsureAcceptedRunIdentity(
-            evidence.DeliveryId,
-            evidence.RunId,
-            evidence.RunActorId,
-            evidence.CommandId,
-            evidence.CorrelationId);
-        EnsureInboundPublisherMatches(expectedPublisherActorId, "Run terminal evidence");
+            outcome.DeliveryId,
+            outcome.RunId,
+            outcome.RunActorId,
+            outcome.CommandId,
+            outcome.CorrelationId);
+        EnsureInboundPublisherMatches(expectedPublisherActorId, "Run outcome");
 
         if (State.LifecycleStatus == WorkOrderLifecycleStatus.TimedOut)
         {
-            if (EvidenceEqual(State.LateTerminalEvidence, evidence))
+            if (RunOutcomesEqual(State.LateRunOutcome, outcome))
                 return;
-            if (State.LateTerminalEvidence != null)
-                throw new InvalidOperationException("conflicting late terminal evidence was received.");
+            if (State.LateRunOutcome != null)
+                throw new InvalidOperationException("conflicting late Run outcome was received.");
 
-            await PersistDomainEventAsync(new WorkOrderLateTerminalEvidenceRecordedEvent
+            await PersistDomainEventAsync(new WorkOrderLateRunOutcomeObservedEvent
             {
-                Evidence = evidence.Clone(),
+                Outcome = outcome.Clone(),
             });
             return;
         }
 
         if (IsTerminal(State.LifecycleStatus))
         {
-            if (EvidenceEqual(State.TerminalEvidence, evidence))
+            if (RunOutcomesEqual(State.RunOutcome, outcome))
                 return;
-            throw new InvalidOperationException("conflicting terminal evidence was received.");
+            throw new InvalidOperationException("conflicting Run outcome was received.");
         }
 
         if (State.LifecycleStatus != WorkOrderLifecycleStatus.DispatchPending &&
             State.LifecycleStatus != WorkOrderLifecycleStatus.Running)
         {
             throw new InvalidOperationException(
-                $"terminal evidence cannot advance work order from '{State.LifecycleStatus}'.");
+                $"Run outcome cannot advance work order from '{State.LifecycleStatus}'.");
         }
 
-        await PersistDomainEventAsync(new WorkOrderTerminalEvidenceRecordedEvent
+        await PersistDomainEventAsync(new WorkOrderRunOutcomeObservedEvent
         {
-            LifecycleStatus = evidence.Outcome switch
+            LifecycleStatus = outcome.Outcome switch
             {
                 WorkOrderTerminalOutcome.Succeeded => WorkOrderLifecycleStatus.Completed,
                 WorkOrderTerminalOutcome.Failed => WorkOrderLifecycleStatus.Failed,
                 WorkOrderTerminalOutcome.Stopped => WorkOrderLifecycleStatus.Stopped,
                 _ => throw new InvalidOperationException("terminal outcome is unsupported."),
             },
-            Evidence = evidence.Clone(),
+            Outcome = outcome.Clone(),
         });
     }
 
@@ -565,33 +488,36 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
     private async Task ScheduleExecutionRetryAsync(CancellationToken ct)
     {
         if (State.LifecycleStatus != WorkOrderLifecycleStatus.DispatchPending ||
-            State.TimeoutAtUtc == null ||
-            !string.IsNullOrWhiteSpace(State.Execution?.RunId))
+            !string.IsNullOrWhiteSpace(State.Run?.RunId))
         {
             return;
         }
 
         var now = DateTimeOffset.UtcNow;
-        var remaining = State.TimeoutAtUtc.ToDateTimeOffset() - now;
-        if (remaining <= TimeSpan.Zero)
-        {
-            await SendToAsync(
-                Id,
-                new WorkOrderTimeoutFired
-                {
-                    WorkOrderId = State.WorkOrderId,
-                    TimeoutAtUtc = State.TimeoutAtUtc.Clone(),
-                },
-                ct);
-            return;
-        }
-
         var attempt = checked(State.ExecutionRetryAttempt + 1);
         var exponent = Math.Min(attempt - 1, 30);
         var exponentialDelay = ExecutionRetryInitialDelayMilliseconds * Math.Pow(2, exponent);
         var delayMilliseconds = Math.Min(ExecutionRetryMaxDelayMilliseconds, exponentialDelay);
         var backoff = TimeSpan.FromMilliseconds(delayMilliseconds);
-        var due = remaining < backoff ? remaining : backoff;
+        var due = backoff;
+        if (State.TimeoutAtUtc != null)
+        {
+            var remaining = State.TimeoutAtUtc.ToDateTimeOffset() - now;
+            if (remaining <= TimeSpan.Zero)
+            {
+                await SendToAsync(
+                    Id,
+                    new WorkOrderTimeoutFired
+                    {
+                        WorkOrderId = State.WorkOrderId,
+                        TimeoutAtUtc = State.TimeoutAtUtc.Clone(),
+                    },
+                    ct);
+                return;
+            }
+
+            due = remaining < backoff ? remaining : backoff;
+        }
         var retryAt = Timestamp.FromDateTimeOffset(now.Add(due));
         var callbackId = BuildExecutionRetryCallbackId(
             State.WorkOrderId,
@@ -659,16 +585,19 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
         if (!string.Equals(accepted.RunId, State.RequestedRunId, StringComparison.Ordinal) ||
             !string.Equals(accepted.CommandId, State.DispatchCommandId, StringComparison.Ordinal) ||
             !string.Equals(accepted.CorrelationId, State.DispatchCommandId, StringComparison.Ordinal) ||
-            string.IsNullOrWhiteSpace(accepted.RunActorId))
+            !string.Equals(accepted.RevisionId, State.ServiceRevisionId, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(accepted.RunActorId) ||
+            string.IsNullOrWhiteSpace(accepted.DeploymentId) ||
+            accepted.AcceptedAtUtc == null)
         {
             throw new InvalidOperationException(
-                "WorkOrder execution receipt does not match the authorized Run or command identity.");
+                "WorkOrder execution receipt does not match the authorized Run link.");
         }
     }
 
     private bool MatchesPendingExecution(string workOrderId, string dispatchCommandId, string requestedRunId) =>
         State.LifecycleStatus == WorkOrderLifecycleStatus.DispatchPending &&
-        string.IsNullOrWhiteSpace(State.Execution?.RunId) &&
+        string.IsNullOrWhiteSpace(State.Run?.RunId) &&
         string.Equals(State.WorkOrderId, workOrderId, StringComparison.Ordinal) &&
         string.Equals(State.DispatchCommandId, dispatchCommandId, StringComparison.Ordinal) &&
         string.Equals(State.RequestedRunId, requestedRunId, StringComparison.Ordinal);
@@ -680,13 +609,13 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
         string commandId,
         string correlationId)
     {
-        if (State.Execution == null || string.IsNullOrWhiteSpace(State.Execution.RunId))
+        if (State.Run == null || string.IsNullOrWhiteSpace(State.Run.RunId))
             throw new InvalidOperationException("Run evidence arrived before Run acceptance was recorded.");
         if (!string.Equals(State.TerminalDeliveryId, deliveryId, StringComparison.Ordinal) ||
-            !string.Equals(State.Execution.RunId, runId, StringComparison.Ordinal) ||
-            !string.Equals(State.Execution.RunActorId, runActorId, StringComparison.Ordinal) ||
-            !string.Equals(State.Execution.CommandId, commandId, StringComparison.Ordinal) ||
-            !string.Equals(State.Execution.CorrelationId, correlationId, StringComparison.Ordinal))
+            !string.Equals(State.Run.RunId, runId, StringComparison.Ordinal) ||
+            !string.Equals(State.Run.RunActorId, runActorId, StringComparison.Ordinal) ||
+            !string.Equals(State.Run.CommandId, commandId, StringComparison.Ordinal) ||
+            !string.Equals(State.Run.CorrelationId, correlationId, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
                 $"Run evidence does not match work order '{State.WorkOrderId}' Run identity.");
@@ -708,15 +637,12 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
 
     private string BuildExpectedServiceRunPublisherActorId()
     {
-        var runId = State.Execution?.RunId;
+        var runId = State.Run?.RunId;
         if (string.IsNullOrWhiteSpace(runId))
             return string.Empty;
 
         return ServiceRunIds.BuildActorId(State.ScopeId, State.PublishedServiceId, runId);
     }
-
-    private IEnumerable<WorkOrderArtifactReference> CloneDeclaredResultArtifacts() =>
-        State.Input?.DeclaredResultArtifacts.Select(static artifact => artifact.Clone()) ?? [];
 
     private void EnsureInitialized(string workOrderId)
     {
@@ -742,14 +668,6 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
             throw new InvalidOperationException("work order command principal is not the requester.");
     }
 
-    private void EnsureApprover(WorkOrderPrincipal principal)
-    {
-        ArgumentNullException.ThrowIfNull(principal);
-        EnsureRequired(principal.PrincipalId, "principalId");
-        if (State.PermissionPlan?.ApproverPrincipalIds.Contains(principal.PrincipalId) != true)
-            throw new InvalidOperationException("work order approval principal is not authorized by the permission plan.");
-    }
-
     private void ValidateCreate(CreateWorkOrder command)
     {
         if (command.ExpectedLifecycleVersion != 0)
@@ -768,11 +686,8 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
         EnsureRequired(command.Requester?.PrincipalKind, "requester.principal_kind");
         if (command.Input?.Chat == null)
             throw new InvalidOperationException("work order chat input is required.");
-        if (command.TimeoutAtUtc == null)
-            throw new InvalidOperationException("timeout_at_utc is required.");
-
         var requestedAt = command.RequestedAtUtc?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
-        if (command.TimeoutAtUtc.ToDateTimeOffset() <= requestedAt)
+        if (command.TimeoutAtUtc != null && command.TimeoutAtUtc.ToDateTimeOffset() <= requestedAt)
         {
             throw new InvalidOperationException(
                 "timeout_at_utc must be later than requested_at_utc.");
@@ -792,16 +707,6 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
                 $"work order actor '{Id}' does not match canonical identity '{canonicalActorId}'.");
         }
 
-        if (RequiresApproval(command.PermissionPlan))
-        {
-            EnsureRequired(command.ApprovalId, nameof(command.ApprovalId));
-            EnsureCanonicalIdentity(
-                "approval_id",
-                command.ApprovalId,
-                WorkOrderConventions.BuildApprovalId(canonicalWorkOrderId));
-            if (command.PermissionPlan.ApproverPrincipalIds.Count == 0)
-                throw new InvalidOperationException("an approval-requiring permission plan must name an approver principal.");
-        }
     }
 
     private static void EnsureCanonicalIdentity(string fieldName, string? actual, string expected)
@@ -810,9 +715,6 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
         if (!string.Equals(actual!.Trim(), expected, StringComparison.Ordinal))
             throw new InvalidOperationException($"{fieldName} must use canonical identity '{expected}'.");
     }
-
-    private static bool RequiresApproval(WorkOrderPermissionPlan? plan) =>
-        plan?.Requirements.Any(static requirement => requirement.RequiresApproval) == true;
 
     private static void EnsureSameCreate(WorkOrderState state, CreateWorkOrder command)
     {
@@ -844,14 +746,13 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
         string.Equals(left.PrincipalId, right.PrincipalId, StringComparison.Ordinal) &&
         string.Equals(left.PrincipalKind, right.PrincipalKind, StringComparison.Ordinal);
 
-    private static bool EvidenceEqual(WorkOrderTerminalEvidence? left, WorkOrderTerminalEvidence right) =>
+    private static bool RunOutcomesEqual(WorkOrderRunOutcomeReference? left, WorkOrderRunOutcomeReference right) =>
         left != null && left.Equals(right);
 
     private static bool IsTerminal(WorkOrderLifecycleStatus status) =>
         status is WorkOrderLifecycleStatus.Completed or
             WorkOrderLifecycleStatus.Failed or
             WorkOrderLifecycleStatus.Stopped or
-            WorkOrderLifecycleStatus.Denied or
             WorkOrderLifecycleStatus.Cancelled or
             WorkOrderLifecycleStatus.TimedOut;
 

@@ -1,6 +1,10 @@
+using System.Buffers.Binary;
 using System.Collections.Frozen;
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Microsoft.Extensions.Logging;
@@ -15,13 +19,15 @@ namespace Aevatar.AI.ToolProviders.MCP;
 public sealed class MCPConnector : IConnector, IAsyncDisposable
 {
     private readonly IMCPToolDiscoveryPort _clientManager;
+    private readonly IAgentToolExecutionPort _toolExecutionPort;
     private readonly MCPServerConfig _serverConfig;
     private readonly string? _defaultTool;
     private readonly HashSet<string> _allowedTools;
     private readonly HashSet<string> _allowedInputKeys;
     private readonly CancellationTokenSource _disposeCts = new();
-    private volatile Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? _tools;
+    private volatile Lazy<Task<CachedToolIndex>>? _tools;
     private readonly ILogger _logger;
+    private readonly TimeProvider _timeProvider;
     private readonly bool _ownsClientManager;
     private int _disposed;
 
@@ -32,7 +38,9 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         IEnumerable<string>? allowedTools = null,
         IEnumerable<string>? allowedInputKeys = null,
         IMCPToolDiscoveryPort? clientManager = null,
-        ILogger? logger = null)
+        IAgentToolExecutionPort? toolExecutionPort = null,
+        ILogger? logger = null,
+        TimeProvider? timeProvider = null)
     {
         if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("name is required", nameof(name));
         Name = name;
@@ -41,8 +49,11 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         _allowedTools = new HashSet<string>(allowedTools ?? [], StringComparer.OrdinalIgnoreCase);
         _allowedInputKeys = new HashSet<string>(allowedInputKeys ?? [], StringComparer.OrdinalIgnoreCase);
         _clientManager = clientManager ?? new MCPClientManager(logger);
+        _toolExecutionPort = toolExecutionPort
+            ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         _ownsClientManager = clientManager == null;
         _logger = logger ?? NullLogger.Instance;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <inheritdoc />
@@ -54,10 +65,20 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
     /// <inheritdoc />
     public async Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(request);
         var sw = Stopwatch.StartNew();
         try
         {
-            var tools = await GetOrConnectAsync(ct);
+            if (!TryCreateRequestIdentity(request, out var requestIdentity))
+            {
+                return new ConnectorResponse
+                {
+                    Success = false,
+                    Error = "mcp connector requires stable run, step, idempotency, and issued-time identities",
+                };
+            }
+
+            var tools = (await GetOrConnectAsync(ct)).Tools;
 
             var toolName = ResolveToolName(request);
             if (string.IsNullOrWhiteSpace(toolName))
@@ -96,12 +117,46 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
                 };
             }
 
-            var result = await tool.ExecuteAsync(request.Payload ?? "", ct);
+            var outcome = await _toolExecutionPort.ExecuteAsync(
+                new AgentToolExecutionRequest(
+                    tool,
+                    request.Payload ?? string.Empty,
+                    AgentToolExecutionContext.Empty with
+                    {
+                        Request = requestIdentity,
+                        ExecutionOwner = AgentToolExecutionOwners.Connector(Name),
+                    },
+                    AgentToolApprovalContinuationMode.None,
+                    null),
+                ct).ConfigureAwait(false);
+            if (outcome.Kind is not (AgentToolExecutionOutcomeKind.Executed or
+                    AgentToolExecutionOutcomeKind.ExecutedAuditIncomplete) ||
+                outcome.Receipt.Status != AgentToolReceiptStatus.Success)
+            {
+                sw.Stop();
+                return new ConnectorResponse
+                {
+                    Success = false,
+                    Error = ResolveFailureMessage(outcome),
+                    TerminalInvoked = outcome.TerminalInvoked,
+                    Retryable = outcome.Retryable,
+                    Metadata = new Dictionary<string, string>
+                    {
+                        ["connector.mcp.server"] = _serverConfig.Name,
+                        ["connector.mcp.tool"] = toolName,
+                        ["connector.mcp.duration_ms"] = sw.Elapsed.TotalMilliseconds.ToString("F2"),
+                    },
+                };
+            }
+
+            var result = outcome.ResultJson;
             sw.Stop();
             return new ConnectorResponse
             {
                 Success = true,
                 Output = result,
+                TerminalInvoked = outcome.TerminalInvoked,
+                Retryable = outcome.Retryable,
                 Metadata = new Dictionary<string, string>
                 {
                     ["connector.mcp.server"] = _serverConfig.Name,
@@ -118,6 +173,8 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
             {
                 Success = false,
                 Error = ex.Message,
+                TerminalInvoked = false,
+                Retryable = true,
                 Metadata = new Dictionary<string, string>
                 {
                     ["connector.mcp.server"] = _serverConfig.Name,
@@ -125,6 +182,20 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
                 },
             };
         }
+    }
+
+    private static string ResolveFailureMessage(AgentToolExecutionOutcome outcome)
+    {
+        if (!string.IsNullOrWhiteSpace(outcome.SafeMessage))
+            return outcome.SafeMessage;
+        if (!string.IsNullOrWhiteSpace(outcome.Receipt.ErrorMessage))
+            return outcome.Receipt.ErrorMessage;
+        if (!string.IsNullOrWhiteSpace(outcome.FailureCode))
+            return outcome.FailureCode;
+        if (!string.IsNullOrWhiteSpace(outcome.Receipt.ErrorCode))
+            return outcome.Receipt.ErrorCode;
+
+        return "The MCP tool did not report a verified success.";
     }
 
     private string ResolveToolName(ConnectorRequest request)
@@ -136,7 +207,47 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         return _defaultTool ?? "";
     }
 
-    private Task<IReadOnlyDictionary<string, IAgentTool>> GetOrConnectAsync(CancellationToken ct)
+    private static bool TryCreateRequestIdentity(
+        ConnectorRequest request,
+        out AgentToolRequestIdentity identity)
+    {
+        var runId = Normalize(request.RunId);
+        var stepId = Normalize(request.StepId);
+        var idempotencyKey = Normalize(request.IdempotencyKey);
+        if (runId is null || stepId is null || idempotencyKey is null || request.IssuedAtUnixMs <= 0)
+        {
+            identity = AgentToolRequestIdentity.Empty;
+            return false;
+        }
+
+        identity = new AgentToolRequestIdentity(
+            "workflow-connector:v1:" + HashLengthPrefixed(runId, stepId),
+            idempotencyKey,
+            idempotencyKey,
+            request.IssuedAtUnixMs);
+        return true;
+    }
+
+    private static string HashLengthPrefixed(params string[] values)
+    {
+        using var stream = new MemoryStream();
+        Span<byte> length = stackalloc byte[sizeof(uint)];
+        foreach (var value in values)
+        {
+            var bytes = Encoding.UTF8.GetBytes(value);
+            BinaryPrimitives.WriteUInt32BigEndian(length, checked((uint)bytes.Length));
+            stream.Write(length);
+            stream.Write(bytes);
+        }
+
+        return Convert.ToHexStringLower(
+            SHA256.HashData(stream.GetBuffer().AsSpan(0, checked((int)stream.Length))));
+    }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private Task<CachedToolIndex> GetOrConnectAsync(CancellationToken ct)
     {
         while (true)
         {
@@ -151,7 +262,7 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
             // could still open external MCP clients.
             // New: publish a non-started Lazy<Task<T>> first; ExecutionAndPublication lets only the
             // winning Lazy start discovery, while losing Lazy instances are never evaluated.
-            var candidate = new Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>(
+            var candidate = new Lazy<Task<CachedToolIndex>>(
                 () => ConnectAndIndexToolsAsync(ct, _disposeCts.Token),
                 LazyThreadSafetyMode.ExecutionAndPublication);
             var winner = Interlocked.CompareExchange(ref _tools, candidate, current);
@@ -160,9 +271,9 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         }
     }
 
-    private static bool TryGetReusableTask(
-        Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? current,
-        out Task<IReadOnlyDictionary<string, IAgentTool>> task)
+    private bool TryGetReusableTask(
+        Lazy<Task<CachedToolIndex>>? current,
+        out Task<CachedToolIndex> task)
     {
         task = null!;
         if (current == null)
@@ -175,21 +286,38 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         }
 
         var existing = current.Value;
-        if (existing.IsFaulted || existing.IsCanceled)
+        if (!existing.IsCompletedSuccessfully)
+        {
+            if (!existing.IsCompleted)
+            {
+                task = existing;
+                return true;
+            }
+
+            return false;
+        }
+
+        var snapshot = existing.Result;
+        if (snapshot.TimeToLive.HasValue &&
+            (snapshot.TimeToLive <= TimeSpan.Zero ||
+             _timeProvider.GetElapsedTime(snapshot.DiscoveredAtTimestamp) >= snapshot.TimeToLive))
             return false;
 
         task = existing;
         return true;
     }
 
-    private async Task<IReadOnlyDictionary<string, IAgentTool>> ConnectAndIndexToolsAsync(
+    private async Task<CachedToolIndex> ConnectAndIndexToolsAsync(
         CancellationToken requestCt,
         CancellationToken disposeCt)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(requestCt, disposeCt);
         var ct = linkedCts.Token;
         var discovered = await _clientManager.ConnectAndDiscoverAsync(_serverConfig, ct);
-        return discovered.ToFrozenDictionary(t => t.Name, t => t, StringComparer.OrdinalIgnoreCase);
+        return new CachedToolIndex(
+            discovered.Tools.ToFrozenDictionary(t => t.Name, t => t, StringComparer.OrdinalIgnoreCase),
+            _timeProvider.GetTimestamp(),
+            discovered.TimeToLive);
     }
 
     /// <inheritdoc />
@@ -206,9 +334,9 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
             {
                 await toolsTask;
             }
-            catch
+            catch (Exception ex)
             {
-                // Discovery may be canceled or faulted while shutdown is releasing the transport.
+                _logger.LogWarning(ex, "MCP discovery ended with an error while connector {ConnectorName} was shutting down", Name);
             }
         }
 
@@ -224,11 +352,16 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         _disposeCts.Dispose();
     }
 
-    private static Task<IReadOnlyDictionary<string, IAgentTool>>? TryGetCreatedToolsTask(
-        Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? current)
+    private static Task<CachedToolIndex>? TryGetCreatedToolsTask(
+        Lazy<Task<CachedToolIndex>>? current)
     {
         return current is { IsValueCreated: true } ? current.Value : null;
     }
+
+    private sealed record CachedToolIndex(
+        IReadOnlyDictionary<string, IAgentTool> Tools,
+        long DiscoveredAtTimestamp,
+        TimeSpan? TimeToLive);
 
     private static bool TryValidatePayloadKeys(string payload, HashSet<string> allowedKeys, out string error)
     {

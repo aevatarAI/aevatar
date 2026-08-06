@@ -1,4 +1,5 @@
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -13,6 +14,8 @@ using Aevatar.GAgentService.Projection.Projectors;
 using Aevatar.GAgentService.Projection.Queries;
 using Aevatar.GAgentService.Projection.ReadModels;
 using Aevatar.Studio.Hosting;
+using Aevatar.Studio.Application.Studio.ProjectionRecovery;
+using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -81,6 +84,17 @@ public sealed class StudioHostingNyxIdAuthorizationCatalogCompositionTests
         services.Should().ContainSingle(static descriptor =>
             descriptor.ServiceType == typeof(IExternalWorkflowCapabilitySource) &&
             descriptor.ImplementationType == typeof(NyxIdExternalWorkflowCapabilitySource));
+        services.Should().ContainSingle(static descriptor =>
+            descriptor.ServiceType == typeof(IStudioWorkspaceProjectionRepublishPort));
+        services.Should().NotContain(static descriptor =>
+            descriptor.ServiceType == typeof(IStudioWorkspaceVersionRegressionStorePort));
+        services.Should().NotContain(static descriptor =>
+            descriptor.ServiceType == typeof(IStudioWorkspaceVersionRegressionRepairService));
+        services.Should().NotContain(static descriptor =>
+            descriptor.ServiceType == typeof(
+                IElasticsearchProjectionDocumentRepairStore<
+                    StudioWorkspaceCurrentStateDocument,
+                    string>));
 
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<INyxIdAuthorizationCatalogCommandPort>()
@@ -107,5 +121,47 @@ public sealed class StudioHostingNyxIdAuthorizationCatalogCompositionTests
         registry.TryGetKindForAgentType(typeof(NyxIdAuthorizationCatalogGAgent), out var kind)
             .Should().BeTrue();
         kind.Should().Be("gagent.service.nyxid-authorization-catalog");
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WithElasticsearch_ShouldComposeWorkspaceRepairOnlyForWorkspaceDocument()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+                ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] =
+                    "http://localhost:9200",
+                ["Projection:Document:Providers:InMemory:Enabled"] = "false",
+            })
+            .Build();
+        services.AddAevatarRuntime();
+
+        services.AddStudioHostingCore(configuration);
+
+        services.Should().ContainSingle(static descriptor =>
+            descriptor.ServiceType == typeof(
+                IElasticsearchProjectionDocumentRepairStore<
+                    StudioWorkspaceCurrentStateDocument,
+                    string>));
+        services.Should().NotContain(static descriptor =>
+            descriptor.ServiceType == typeof(
+                IElasticsearchProjectionDocumentRepairStore<
+                    StudioTeamCurrentStateDocument,
+                    string>));
+        services.Should().ContainSingle(static descriptor =>
+            descriptor.ServiceType == typeof(IStudioWorkspaceVersionRegressionStorePort));
+        services.Should().ContainSingle(static descriptor =>
+            descriptor.ServiceType == typeof(IStudioWorkspaceVersionRegressionRepairService));
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IStudioWorkspaceVersionRegressionRepairService>()
+            .Should().BeOfType<StudioWorkspaceVersionRegressionRepairService>();
+        provider.GetRequiredService<
+                IElasticsearchProjectionDocumentRepairStore<
+                    StudioWorkspaceCurrentStateDocument,
+                    string>>()
+            .Should().NotBeNull();
     }
 }

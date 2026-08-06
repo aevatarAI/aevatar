@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "warmupIterations": 2,
+  "measuredIterations": 12,
+  "snapshotInterval": 1000,
+  "enableEventCompaction": false,
+  "retainedEventsAfterSnapshot": 0,
+  "providers": [
+    "meai",
+    "nyxid",
+    "tornado"
+  ]
+}

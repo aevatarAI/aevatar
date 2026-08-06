@@ -251,6 +251,7 @@ public sealed class WorkflowChatConversationContinuationCrossLayerTests : Workfl
             new WorkflowChatRunRequest(
                 prompt,
                 WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: scopeId,
                 ChatConversation: WorkflowChatConversationIntent.Continue(
                     conversationId,
@@ -274,7 +275,7 @@ public sealed class WorkflowChatConversationContinuationCrossLayerTests : Workfl
         var runtime = new RecordingActorRuntime();
         var agent = CreateRunAgent(runtime: runtime);
         agent.EventPublisher = publisher;
-        await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
             "definition-render",
             BuildValidWorkflowYaml("role_a", "RoleA"),
             "wf_valid",
@@ -301,7 +302,7 @@ public sealed class WorkflowChatConversationContinuationCrossLayerTests : Workfl
         };
 
     private sealed record ContinuationExecution(
-        CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus> Result,
+        WorkflowChatRunInteractionResult Result,
         WorkflowChatRunRequest? DispatchedRequest);
 
     private sealed class DocumentStoreWriteDispatcher(

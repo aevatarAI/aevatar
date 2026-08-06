@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -68,26 +70,62 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         if (command.ExpectedLifecycleFence < 0)
             throw new InvalidOperationException("Catalog refresh lifecycle fence is invalid.");
 
-        var refreshId = command.RefreshId.Trim();
-        if (command.ExpectedLifecycleFence != State.LifecycleFence)
+        await BeginRefreshCoreAsync(
+            command.Owner,
+            command.RefreshId,
+            command.StartedAt,
+            command.ExpectedLifecycleFence);
+    }
+
+    [EventHandler(EndpointName = "beginCatalogRepairRefresh")]
+    public async Task HandleBeginRepairRefreshAsync(
+        BeginNyxIdAuthorizationCatalogRepairRefreshCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ValidateOwner(command.Owner);
+        EnsureCurrentOwner(command.Owner);
+        if (string.IsNullOrWhiteSpace(command.RefreshId) || command.StartedAt == null)
+            throw new InvalidOperationException("Catalog refresh identity and start time are required.");
+        if (string.IsNullOrWhiteSpace(command.RepairRequestId))
+            throw new InvalidOperationException("Catalog repair refresh identity is required.");
+        if (command.MinimumSourceStateVersion <= 0)
+            throw new InvalidOperationException("Catalog repair minimum source version is invalid.");
+        if (CurrentStateVersion() < command.MinimumSourceStateVersion)
+            throw new InvalidOperationException("NyxID authorization catalog repair source version changed.");
+
+        await BeginRefreshCoreAsync(
+            command.Owner,
+            command.RefreshId,
+            command.StartedAt,
+            State.LifecycleFence);
+    }
+
+    private async Task BeginRefreshCoreAsync(
+        AuthorizationOwnerIdentity owner,
+        string refreshIdentity,
+        Google.Protobuf.WellKnownTypes.Timestamp startedAt,
+        long expectedLifecycleFence)
+    {
+        var refreshId = refreshIdentity.Trim();
+        if (expectedLifecycleFence != State.LifecycleFence)
         {
             await PersistRefreshOutcomeAsync(
                 refreshId,
                 NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded,
-                command.StartedAt,
+                startedAt,
                 RefreshSupersededFailureCode);
             return;
         }
 
         if (string.Equals(State.ActiveRefreshId, refreshId, StringComparison.Ordinal))
         {
-            if (State.ActiveRefreshStartedAt?.Equals(command.StartedAt) != true)
+            if (State.ActiveRefreshStartedAt?.Equals(startedAt) != true)
                 throw new InvalidOperationException("A catalog refresh identity cannot change its start time.");
 
             await PersistRefreshOutcomeAsync(
                 refreshId,
                 NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Started,
-                command.StartedAt,
+                startedAt,
                 string.Empty);
             return;
         }
@@ -95,7 +133,7 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         if (!string.IsNullOrEmpty(State.ActiveRefreshId) &&
             State.ActiveRefreshStartedAt != null &&
             CompareRefreshOrder(
-                command.StartedAt,
+                startedAt,
                 refreshId,
                 State.ActiveRefreshStartedAt,
                 State.ActiveRefreshId) < 0)
@@ -103,7 +141,7 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             await PersistRefreshOutcomeAsync(
                 refreshId,
                 NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded,
-                command.StartedAt,
+                startedAt,
                 RefreshSupersededFailureCode);
             return;
         }
@@ -113,8 +151,8 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         {
             transitionEvents.Add(new NyxIdAuthorizationCatalogActivatedEvent
             {
-                Owner = command.Owner.Clone(),
-                ActivatedAt = command.StartedAt.Clone(),
+                Owner = owner.Clone(),
+                ActivatedAt = startedAt.Clone(),
                 LifecycleFence = State.LifecycleFence,
                 LifecycleFenceSemanticsVersion = CurrentLifecycleFenceSemanticsVersion,
             });
@@ -122,9 +160,9 @@ public sealed class NyxIdAuthorizationCatalogGAgent
 
         transitionEvents.Add(new NyxIdAuthorizationCatalogRefreshBeganEvent
         {
-            Owner = command.Owner.Clone(),
+            Owner = owner.Clone(),
             RefreshId = refreshId,
-            StartedAt = command.StartedAt.Clone(),
+            StartedAt = startedAt.Clone(),
         });
         var mutationStateVersion = checked(CurrentStateVersion() + transitionEvents.Count);
         if (!string.IsNullOrEmpty(State.ActiveRefreshId))
@@ -133,14 +171,14 @@ public sealed class NyxIdAuthorizationCatalogGAgent
                 State.ActiveRefreshId,
                 NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded,
                 mutationStateVersion,
-                command.StartedAt,
+                startedAt,
                 RefreshSupersededFailureCode));
         }
         transitionEvents.Add(BuildRefreshOutcome(
             refreshId,
             NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Started,
             mutationStateVersion,
-            command.StartedAt,
+            startedAt,
             string.Empty));
         await PersistDomainEventsAsync(transitionEvents);
     }
@@ -166,6 +204,13 @@ public sealed class NyxIdAuthorizationCatalogGAgent
 
         ValidateObservation(command);
 
+        var coverageKind = ResolveObservationCoverageKind(command.CoverageKind);
+        var contentDigest = coverageKind == NyxIdAuthorizationCatalogObservationCoverageKind.RequiredServiceSubset
+            ? NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+                command.Owner,
+                MergeServices(State.Services, command.Services),
+                command.GatewayLlmTarget ?? State.GatewayLlmTarget)
+            : command.ContentDigest.Trim();
         var observed = new NyxIdAuthorizationCatalogObservedEvent
         {
             Owner = command.Owner.Clone(),
@@ -175,11 +220,15 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             ContractVersion = command.ContractVersion.Trim(),
             PolicyVersion = command.PolicyVersion.Trim(),
             EvaluatedAt = command.EvaluatedAt.Clone(),
-            ContentDigest = command.ContentDigest.Trim(),
+            ContentDigest = contentDigest,
             LifecycleFence = checked(State.LifecycleFence + 1),
             LifecycleFenceSemanticsVersion = CurrentLifecycleFenceSemanticsVersion,
+            CoverageKind = coverageKind,
         };
         observed.Services.Add(command.Services.Select(static service => service.Clone()));
+        if (command.GatewayLlmTarget != null)
+            observed.GatewayLlmTarget = command.GatewayLlmTarget.Clone();
+        observed.CoveredUserServiceIds.Add(command.CoveredUserServiceIds);
         await PersistRefreshTransitionAsync(
             observed,
             refreshId,
@@ -195,6 +244,7 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         EnsureCurrentOwner(command.Owner);
         if (command.FailedAt == null || string.IsNullOrWhiteSpace(command.FailureCode))
             throw new InvalidOperationException("Refresh failure time and code are required.");
+        var outcomeStatus = ResolveRefreshFailureOutcomeStatus(command.OutcomeStatus);
         var refreshId = NormalizeRefreshIdentity(command.RefreshId);
         if (!IsActiveRefresh(refreshId))
         {
@@ -217,7 +267,7 @@ public sealed class NyxIdAuthorizationCatalogGAgent
                 LifecycleFenceSemanticsVersion = CurrentLifecycleFenceSemanticsVersion,
             },
             refreshId,
-            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Failed,
+            outcomeStatus,
             command.FailedAt,
             command.FailureCode.Trim());
     }
@@ -364,30 +414,55 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         NyxIdAuthorizationCatalogState state,
         NyxIdAuthorizationCatalogObservedEvent evt)
     {
-        var next = new NyxIdAuthorizationCatalogState
-        {
-            Owner = evt.Owner.Clone(),
-            ObservedAt = evt.ObservedAt.Clone(),
-            FreshUntil = evt.FreshUntil.Clone(),
-            ContractVersion = evt.ContractVersion,
-            PolicyVersion = evt.PolicyVersion,
-            EvaluatedAt = evt.EvaluatedAt.Clone(),
-            ContentDigest = evt.ContentDigest,
-            Invalidated = false,
-            InvalidationReason = string.Empty,
-            LastRefreshFailedAt = state.LastRefreshFailedAt?.Clone(),
-            LastRefreshFailureCode = state.LastRefreshFailureCode,
-            LifecycleFence = AdvanceTerminalLifecycleFence(state.LifecycleFence, evt.LifecycleFence),
-            LifecycleFenceSemanticsVersion = LatestLifecycleFenceSemanticsVersion(
-                state.LifecycleFenceSemanticsVersion,
-                evt.LifecycleFenceSemanticsVersion),
-            Activated = true,
-            ActivatedAt = state.ActivatedAt?.Clone() ?? evt.ObservedAt.Clone(),
-            Cleaned = false,
-            CleanupReason = string.Empty,
-        };
-        next.Services.Add(evt.Services.Select(static service => service.Clone()));
+        var coverageKind = ResolveObservationCoverageKind(evt.CoverageKind);
+        var next = coverageKind == NyxIdAuthorizationCatalogObservationCoverageKind.RequiredServiceSubset
+            ? state.Clone()
+            : new NyxIdAuthorizationCatalogState();
+        var updatesOwnerCatalogStamp = coverageKind == NyxIdAuthorizationCatalogObservationCoverageKind.FullOwner ||
+                                       !state.Activated;
+        next.Owner = evt.Owner.Clone();
+        next.ObservedAt = updatesOwnerCatalogStamp ? evt.ObservedAt.Clone() : state.ObservedAt?.Clone();
+        next.FreshUntil = updatesOwnerCatalogStamp ? evt.FreshUntil.Clone() : state.FreshUntil?.Clone();
+        next.ContractVersion = updatesOwnerCatalogStamp ? evt.ContractVersion : state.ContractVersion;
+        next.PolicyVersion = updatesOwnerCatalogStamp ? evt.PolicyVersion : state.PolicyVersion;
+        next.EvaluatedAt = updatesOwnerCatalogStamp ? evt.EvaluatedAt.Clone() : state.EvaluatedAt?.Clone();
+        next.ContentDigest = evt.ContentDigest;
+        next.Invalidated = false;
+        next.InvalidationReason = string.Empty;
+        next.LastRefreshFailedAt = state.LastRefreshFailedAt?.Clone();
+        next.LastRefreshFailureCode = state.LastRefreshFailureCode;
+        next.LifecycleFence = AdvanceTerminalLifecycleFence(state.LifecycleFence, evt.LifecycleFence);
+        next.LifecycleFenceSemanticsVersion = LatestLifecycleFenceSemanticsVersion(
+            state.LifecycleFenceSemanticsVersion,
+            evt.LifecycleFenceSemanticsVersion);
+        next.Activated = true;
+        next.ActivatedAt = state.ActivatedAt?.Clone() ?? evt.ObservedAt.Clone();
+        next.Cleaned = false;
+        next.CleanupReason = string.Empty;
+        next.ActiveRefreshId = string.Empty;
+        next.ActiveRefreshStartedAt = null;
+        next.Services.Clear();
+        next.Services.Add(coverageKind == NyxIdAuthorizationCatalogObservationCoverageKind.RequiredServiceSubset
+            ? MergeServices(state.Services, evt.Services)
+            : evt.Services.Select(static service => service.Clone()));
+        next.GatewayLlmTarget = coverageKind == NyxIdAuthorizationCatalogObservationCoverageKind.RequiredServiceSubset
+            ? evt.GatewayLlmTarget?.Clone() ?? state.GatewayLlmTarget?.Clone()
+            : evt.GatewayLlmTarget?.Clone();
         return next;
+    }
+
+    private static IReadOnlyList<NyxIdAuthorizationServiceEvidence> MergeServices(
+        IEnumerable<NyxIdAuthorizationServiceEvidence> existingServices,
+        IEnumerable<NyxIdAuthorizationServiceEvidence> observedServices)
+    {
+        var services = existingServices
+            .Select(static service => service.Clone())
+            .ToDictionary(static service => service.UserServiceId.Trim(), StringComparer.Ordinal);
+        foreach (var service in observedServices)
+            services[service.UserServiceId.Trim()] = service.Clone();
+        return services.Values
+            .OrderBy(static service => service.UserServiceId, StringComparer.Ordinal)
+            .ToArray();
     }
 
     private static NyxIdAuthorizationCatalogState ApplyRefreshFailed(
@@ -563,6 +638,24 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         ObservedAtUtc = observedAt.Clone(),
     };
 
+    private static NyxIdAuthorizationCatalogRefreshOutcomeStatusState ResolveRefreshFailureOutcomeStatus(
+        NyxIdAuthorizationCatalogRefreshOutcomeStatusState outcomeStatus) => outcomeStatus switch
+    {
+        NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Unspecified =>
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Failed,
+        NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Failed =>
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Failed,
+        NyxIdAuthorizationCatalogRefreshOutcomeStatusState.CatalogUnstable =>
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.CatalogUnstable,
+        _ => throw new InvalidOperationException("Refresh failure outcome status is invalid."),
+    };
+
+    private static NyxIdAuthorizationCatalogObservationCoverageKind ResolveObservationCoverageKind(
+        NyxIdAuthorizationCatalogObservationCoverageKind coverageKind) =>
+        coverageKind == NyxIdAuthorizationCatalogObservationCoverageKind.Unspecified
+            ? NyxIdAuthorizationCatalogObservationCoverageKind.FullOwner
+            : coverageKind;
+
     private static void ValidateObservation(ObserveNyxIdAuthorizationCatalogCommand command)
     {
         if (command.ObservedAt == null ||
@@ -579,14 +672,36 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         {
             throw new InvalidOperationException("Catalog provider contract evidence is incomplete.");
         }
-        if (string.IsNullOrWhiteSpace(command.ContentDigest))
-            throw new InvalidOperationException("Catalog content digest is required.");
-        if (!string.Equals(
-                command.ContentDigest.Trim(),
-                NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(command.Owner, command.Services),
-                StringComparison.Ordinal))
+        var coverageKind = ResolveObservationCoverageKind(command.CoverageKind);
+        if (coverageKind == NyxIdAuthorizationCatalogObservationCoverageKind.FullOwner)
         {
-            throw new InvalidOperationException("Catalog content digest does not match the typed authorization evidence.");
+            if (command.CoveredUserServiceIds.Count != 0)
+                throw new InvalidOperationException("Full catalog observations cannot carry a covered service subset.");
+            if (string.IsNullOrWhiteSpace(command.ContentDigest))
+                throw new InvalidOperationException("Catalog content digest is required.");
+            if (!string.Equals(
+                    command.ContentDigest.Trim(),
+                    NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+                        command.Owner,
+                        command.Services,
+                        command.GatewayLlmTarget),
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Catalog content digest does not match the typed authorization evidence.");
+            }
+        }
+        else
+        {
+            if (command.CoveredUserServiceIds.Count == 0 && command.Services.Count == 0)
+            {
+                if (command.GatewayLlmTarget == null)
+                    throw new InvalidOperationException(
+                        "Targeted catalog observations require service or Gateway LLM evidence.");
+            }
+            else
+            {
+                ValidateCoveredServiceIds(command.CoveredUserServiceIds, command.Services);
+            }
         }
 
         string? previousServiceId = null;
@@ -604,6 +719,36 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             }
             previousServiceId = serviceId;
         }
+        if (command.GatewayLlmTarget != null)
+            ValidateLLMTarget(command.GatewayLlmTarget, null);
+    }
+
+    private static void ValidateCoveredServiceIds(
+        IEnumerable<string> coveredUserServiceIds,
+        IEnumerable<NyxIdAuthorizationServiceEvidence> services)
+    {
+        var covered = coveredUserServiceIds.ToArray();
+        if (covered.Length == 0)
+            throw new InvalidOperationException("Targeted catalog observations require covered service identities.");
+        string? previousCoveredServiceId = null;
+        foreach (var serviceId in covered)
+        {
+            if (string.IsNullOrWhiteSpace(serviceId) ||
+                !string.Equals(serviceId, serviceId.Trim(), StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Covered catalog service identities must be normalized.");
+            }
+            if (previousCoveredServiceId != null &&
+                string.CompareOrdinal(previousCoveredServiceId, serviceId) >= 0)
+            {
+                throw new InvalidOperationException("Covered catalog service identities must be ordinal-sorted and unique.");
+            }
+            previousCoveredServiceId = serviceId;
+        }
+
+        var observed = services.Select(static service => service.UserServiceId).ToArray();
+        if (!covered.SequenceEqual(observed, StringComparer.Ordinal))
+            throw new InvalidOperationException("Targeted catalog observations must cover exactly the observed services.");
     }
 
     private static void ValidateService(NyxIdAuthorizationServiceEvidence service)
@@ -667,6 +812,71 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             service.NodeIds.Count != 0)
         {
             throw new InvalidOperationException("Direct catalog services cannot carry node authorization evidence.");
+        }
+
+        if (service.LlmTarget != null)
+            ValidateLLMTarget(service.LlmTarget, service);
+    }
+
+    private static void ValidateLLMTarget(
+        NyxIdAuthorizationLLMTargetEvidence target,
+        NyxIdAuthorizationServiceEvidence? parentService)
+    {
+        if (target.ModelCatalog == null)
+            throw new InvalidOperationException("LLM target model catalog is required.");
+        LLMSelectionPolicy.ValidateCatalog(target.ModelCatalog);
+
+        if (target.ObservedAt == null ||
+            target.FreshUntil == null ||
+            target.FreshUntil.CompareTo(target.ObservedAt) <= 0 ||
+            target.EvaluatedAt == null ||
+            string.IsNullOrWhiteSpace(target.AuthorityContractVersion) ||
+            !string.Equals(
+                target.AuthorityContractVersion,
+                target.AuthorityContractVersion.Trim(),
+                StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(target.AuthorityPolicyVersion) ||
+            !string.Equals(
+                target.AuthorityPolicyVersion,
+                target.AuthorityPolicyVersion.Trim(),
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("LLM target authority evidence is incomplete.");
+        }
+
+        switch (target.RouteKind)
+        {
+            case LLMRouteKind.Gateway when parentService == null:
+                if (!string.Equals(
+                        target.RouteValue,
+                        LLMSelectionPolicy.GatewayRoute,
+                        StringComparison.Ordinal) ||
+                    target.NyxIdUserServiceId.Length != 0 ||
+                    target.ServiceSlugSnapshot.Length != 0)
+                {
+                    throw new InvalidOperationException("Gateway LLM target identity is invalid.");
+                }
+                return;
+            case LLMRouteKind.NyxIdUserService when parentService != null:
+                if (!string.Equals(
+                        target.NyxIdUserServiceId,
+                        parentService.UserServiceId,
+                        StringComparison.Ordinal) ||
+                    !string.Equals(
+                        target.ServiceSlugSnapshot,
+                        parentService.ServiceSlug,
+                        StringComparison.Ordinal) ||
+                    !string.Equals(
+                        target.RouteValue,
+                        $"/api/v1/proxy/s/{parentService.ServiceSlug}",
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        "Service LLM target identity does not match its parent service.");
+                }
+                return;
+            default:
+                throw new InvalidOperationException("LLM target route kind is invalid for its catalog owner.");
         }
     }
 

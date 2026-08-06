@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 
 namespace Aevatar.GAgentService.Abstractions.Schedules;
 
@@ -24,7 +25,62 @@ public enum ScheduledDispatchScheduleMode
 
 public sealed record TeamMemberAutomationOwner(
     string ScopeId,
-    string MemberId);
+    string MemberId,
+    string TeamId = "");
+
+public static class ScheduledDispatchOwnerKinds
+{
+    public const string StudioMemberAutomation = "studio_member_automation";
+}
+
+public sealed record ScheduledDispatchOwner(
+    string Kind,
+    string ScopeId,
+    string TeamId,
+    string MemberId)
+{
+    public TeamMemberAutomationOwner ToTeamMemberAutomationOwner()
+    {
+        if (!string.Equals(Kind, ScheduledDispatchOwnerKinds.StudioMemberAutomation, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Unsupported scheduled dispatch owner kind '{Kind}'.",
+                nameof(Kind));
+        }
+
+        if (string.IsNullOrWhiteSpace(ScopeId))
+            throw new ArgumentException("Owner scopeId is required.", nameof(ScopeId));
+        if (string.IsNullOrWhiteSpace(TeamId))
+            throw new ArgumentException("Owner teamId is required.", nameof(TeamId));
+        if (string.IsNullOrWhiteSpace(MemberId))
+            throw new ArgumentException("Owner memberId is required.", nameof(MemberId));
+
+        return new TeamMemberAutomationOwner(
+            ScopeId.Trim(),
+            MemberId.Trim(),
+            TeamId.Trim());
+    }
+}
+
+public sealed record TeamAutomationActivationDecision(
+    string ScheduleId,
+    string DisplayName,
+    TeamMemberAutomationOwner Owner,
+    ServiceIdentity ServiceIdentity,
+    string EndpointId,
+    Google.Protobuf.WellKnownTypes.Any Payload,
+    ScheduledCallerNyxIdAuthority CallerAuthority,
+    ScheduledInvocationAuthorizationFact AuthorizationFact,
+    string CronExpression,
+    string Timezone,
+    bool Enabled,
+    ScheduledDispatchScheduleKind ScheduleKind,
+    IReadOnlyDictionary<string, string> Headers,
+    ScheduledDispatchScheduleMode ScheduleMode,
+    DateTimeOffset? OneShotFireAt,
+    ScheduledDispatchCredentialRequirementTargetKind CredentialRequirementTargetKind,
+    string RevisionId,
+    ServiceInvocationCaller? Caller);
 
 public enum TeamAutomationLifecycleStatus
 {
@@ -54,6 +110,7 @@ public sealed record TeamAutomationCredentialOperation(
     string PolicyVersion,
     TeamAutomationOperationKind Kind,
     ScheduledCredentialEffectLocator CredentialEffectLocator,
+    TeamAutomationActivationDecision ActivationDecision,
     string MutationDigest);
 
 public sealed record ScheduledCredentialEffectLocator(
@@ -87,7 +144,8 @@ public sealed record ScheduledInvocationAuthorizationFact(
     DateTimeOffset ExpiresAt,
     bool ServiceGrantsNotRequired,
     ScheduledInvocationAuthorizationDisclosure Disclosure,
-    ScheduledInvocationAuthorizationAuthority Authority);
+    ScheduledInvocationAuthorizationAuthority Authority,
+    ScheduledInvocationOwnerLLMSelection? OwnerLLMSelection = null);
 
 public sealed record ScheduledInvocationAuthorizationOwner(
     string Authority,
@@ -188,6 +246,8 @@ public sealed record ScheduledServiceInvocationAuth
     }
 
     public ScheduledServiceInvocationCredentialSource? Source { get; init; }
+
+    public ScheduledCallerNyxIdAuthority? CallerAuthority { get; init; }
 
     public ScheduledServiceInvocationNyxIdCredentialSource? NyxId =>
         Source as ScheduledServiceInvocationNyxIdCredentialSource;
@@ -327,6 +387,7 @@ public sealed record ScheduledDispatchSummary(
     string LastCommandId,
     string LastCorrelationId,
     string LastError,
+    string LastErrorCode,
     int FireCount,
     int FailureCount,
     IReadOnlyDictionary<string, string> Headers,
@@ -346,6 +407,7 @@ public sealed record ScheduledDispatchSummary(
     bool TeamOwned = false,
     string TeamOwnerScopeId = "",
     string TeamOwnerMemberId = "",
+    string TeamId = "",
     TeamAutomationLifecycleStatus TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatus.Unspecified,
     DateTimeOffset? CredentialExpiresAt = null,
     string TeamAutomationOperationId = "",
@@ -358,7 +420,24 @@ public sealed record ScheduledDispatchSummary(
     string TeamAutomationIdempotencyKey = "",
     string CredentialOwnerAuthority = "",
     string CredentialOwnerKind = "",
-    string CredentialOwnerSubject = "");
+    string CredentialOwnerSubject = "")
+{
+    public string OwnerLLMRouteKind { get; init; } = "unspecified";
+
+    public string OwnerLLMRoute { get; init; } = string.Empty;
+
+    public string OwnerLLMUserServiceId { get; init; } = string.Empty;
+
+    public string OwnerLLMServiceSlug { get; init; } = string.Empty;
+
+    public string OwnerLLMModel { get; init; } = string.Empty;
+
+    public string ServiceRevisionId { get; init; } = string.Empty;
+
+    public string NyxIdRevocationStatus { get; init; } = string.Empty;
+
+    public string VaultRevocationStatus { get; init; } = string.Empty;
+}
 
 public sealed record ScheduledDispatchFireRecord(
     DateTimeOffset ScheduledFireAt,
@@ -368,6 +447,7 @@ public sealed record ScheduledDispatchFireRecord(
     string CommandId,
     string CorrelationId,
     string Error,
+    string ErrorCode,
     bool Manual);
 
 public sealed record ScheduledDispatchDetail(
@@ -416,6 +496,9 @@ public sealed record ScheduledDispatchListQuery(
     string? ServiceEndpointId = null,
     ScheduledDispatchScheduleKind? ScheduleKind = null,
     TeamMemberAutomationOwner? TeamAutomationOwner = null,
+    string? TeamAutomationScopeId = null,
+    string? TeamAutomationTeamId = null,
+    string? TeamAutomationMemberId = null,
     bool ExcludeTeamOwned = false,
     bool IncludeDeleted = false,
     bool ExcludeCompletedTeamAutomationDeletions = false);
@@ -471,6 +554,15 @@ public interface IScheduledDispatchActorPort
         CancellationToken ct = default) =>
         throw new NotSupportedException();
 
+    Task<DispatchAdmission> DispatchRetryTeamAutomationCredentialOperationAsync(
+        string actorId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
+        string observationRequestId,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
     Task<DispatchAdmission> DispatchRecordTeamAutomationCredentialCandidateAsync(
         string actorId,
         TeamMemberAutomationOwner owner,
@@ -515,6 +607,13 @@ public interface IScheduledDispatchActorPort
         throw new NotSupportedException();
 
     Task<DispatchAdmission> DispatchDisableTeamAutomationAsync(
+        string actorId,
+        TeamMemberAutomationOwner owner,
+        string reason,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    Task<DispatchAdmission> DispatchDeleteTeamAutomationAsync(
         string actorId,
         TeamMemberAutomationOwner owner,
         string reason,
@@ -610,6 +709,28 @@ public interface IScheduledServiceInvocationDispatchPort
         CancellationToken ct = default);
 }
 
+public sealed class ScheduledWorkflowAdmissionException : InvalidOperationException
+{
+    public ScheduledWorkflowAdmissionException(string stableCode, string safeMessage)
+        : base(string.IsNullOrWhiteSpace(safeMessage)
+            ? "Workflow admission was rejected."
+            : safeMessage.Trim())
+    {
+        StableCode = stableCode?.Trim() switch
+        {
+            "WORKFLOW_DEFINITION_INVALID" => "WORKFLOW_DEFINITION_INVALID",
+            "NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED" =>
+                "NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED",
+            "CAPABILITY_ADMISSION_REBIND_REQUIRED" => "CAPABILITY_ADMISSION_REBIND_REQUIRED",
+            _ => "WORKFLOW_ADMISSION_REJECTED",
+        };
+        SafeMessage = Message;
+    }
+
+    public string StableCode { get; }
+    public string SafeMessage { get; }
+}
+
 public interface IScheduledServiceInvocationCredentialExchangePort
 {
     Task<ScheduledServiceInvocationCredentialExchangeResult> IssueNyxIdAsync(
@@ -650,6 +771,13 @@ public interface IScheduledDispatchApplicationService
         string reason,
         CancellationToken ct = default);
 
+    Task<ScheduledDispatchMutationReceipt> DeleteTeamAutomationAsync(
+        string scheduleId,
+        TeamMemberAutomationOwner owner,
+        string reason,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
     Task<ScheduledDispatchDetail?> GetAsync(
         string scheduleId,
         CancellationToken ct = default);
@@ -677,6 +805,14 @@ public interface IScheduledDispatchApplicationService
 
     Task<TeamAutomationCommittedMutationReceipt> BeginTeamAutomationCredentialOperationAsync(
         TeamAutomationCredentialOperation operation,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    Task<TeamAutomationCommittedMutationReceipt> RetryTeamAutomationCredentialOperationAsync(
+        string scheduleId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
         CancellationToken ct = default) =>
         throw new NotSupportedException();
 
@@ -739,8 +875,6 @@ public interface IScheduledDispatchApplicationService
     Task<TeamAutomationCommittedMutationReceipt> RetryTeamAutomationRevocationAsync(
         string scheduleId,
         TeamMemberAutomationOwner owner,
-        string operationId,
-        string idempotencyKey,
         ScheduledInvocationAuthorizationOwner authenticatedCredentialOwner,
         CancellationToken ct = default) =>
         throw new NotSupportedException();
@@ -760,8 +894,22 @@ public interface IScheduledDispatchApplicationService
     Task<ScheduledDispatchRunNowReceipt> RunTeamAutomationNowAsync(
         string scheduleId,
         TeamMemberAutomationOwner owner,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    Task<ScheduledDispatchRunNowReceipt> RunTeamAutomationNowAsync(
+        string scheduleId,
+        TeamMemberAutomationOwner owner,
         string operationId,
         string idempotencyKey,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    Task<ScheduledDispatchDetail?> GetTeamScheduleAsync(
+        string scheduleId,
+        string scopeId,
+        string? teamId = null,
+        string? memberId = null,
         CancellationToken ct = default) =>
         throw new NotSupportedException();
 

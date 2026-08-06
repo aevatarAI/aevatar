@@ -45,6 +45,7 @@ public sealed record AuditTrailRecordResponse(
     AuditFailureResponse? Failure,
     AuditExecutionProvenanceResponse? Provenance,
     AuditRedactionResponse? Redaction,
+    AuditToolExecutionResponse? ToolExecution,
     AuditCommittedFactReferenceResponse? CommittedFact,
     string? RequestSummary,
     string? ResultSummary);
@@ -83,12 +84,26 @@ public sealed record AuditExecutionProvenanceResponse(
     string? CorrelationId,
     string? ActorId,
     long? ActorStateVersion,
-    string? ActorEventId);
+    string? ActorEventId,
+    AuditChatProvenanceResponse? Chat = null);
+
+public sealed record AuditChatProvenanceResponse(
+    string Surface,
+    string? ConversationId,
+    string? TurnId,
+    string? TaskId,
+    string? StepId,
+    string? ActionRequestId);
 
 public sealed record AuditRedactionResponse(
     string Policy,
     IReadOnlyList<string> OmittedFields,
     bool ValuesSanitized);
+
+public sealed record AuditToolExecutionResponse(
+    string ArgumentsSha256,
+    string ExecutionPhase,
+    bool IsMutation);
 
 public sealed record AuditCommittedFactReferenceResponse(
     string? CommittedEventId,

@@ -10,6 +10,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Expressions;
 using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
@@ -26,6 +27,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
 {
     private const string ModuleStateKey = "foreach";
     private const string InputFileRefsItemsSource = "input_file_refs";
+    private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
 
     /// <summary>Module name.</summary>
     public string Name => "foreach";
@@ -104,21 +106,28 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             var bpApplied = false;
             for (var i = 0; i < items.Length; i++)
             {
+                var itemInput = items[i].Trim();
+                var itemVariables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["input"] = itemInput,
+                    ["output"] = itemInput,
+                };
                 var subParams = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var (key, value) in evt.Parameters)
                 {
-                    if (key.StartsWith("sub_param_"))
-                        subParams[key["sub_param_".Length..]] = value;
+                    if (key.StartsWith("sub_param_", StringComparison.OrdinalIgnoreCase))
+                        subParams[key["sub_param_".Length..]] = _expressionEvaluator.Evaluate(value, itemVariables);
                 }
 
                 var entry = BackpressureHelper.ToQueueEntry(
                     $"{evt.StepId}_item_{i}",
                     subStepType,
                     runId,
-                    items[i].Trim(),
+                    itemInput,
                     subTargetRole ?? "",
                     subParams,
-                    useInputFileRefs ? [fileItems[i]] : null);
+                    useInputFileRefs ? [fileItems[i]] : null,
+                    evt.ExternalInvocation);
 
                 if (BackpressureHelper.TryAdmit(state.Backpressure, entry))
                 {

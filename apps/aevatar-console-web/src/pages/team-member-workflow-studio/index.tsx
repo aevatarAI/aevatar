@@ -1,14 +1,14 @@
 import { Alert, Spin } from "antd";
 import React from "react";
+import { t } from "@/shared/i18n/messages";
 import WorkflowStudioCanvas from "./components/WorkflowStudioCanvas";
+import WorkflowStudioDraftRunPanel from "./components/WorkflowStudioDraftRunPanel";
 import WorkflowStudioExecutionPanel from "./components/WorkflowStudioExecutionPanel";
 import WorkflowStudioHeader from "./components/WorkflowStudioHeader";
 import WorkflowStudioNodeDetailPanel from "./components/WorkflowStudioNodeDetailPanel";
 import WorkflowStudioNodeLibrary from "./components/WorkflowStudioNodeLibrary";
-import WorkflowStudioDraftRunPanel from "./components/WorkflowStudioDraftRunPanel";
 import WorkflowStudioYamlPanel from "./components/WorkflowStudioYamlPanel";
 import { useTeamMemberWorkflowStudio } from "./hooks/useTeamMemberWorkflowStudio";
-import { t } from "@/shared/i18n/messages";
 
 const SIDE_PANEL_DEFAULT_WIDTH = 420;
 const SIDE_PANEL_MIN_WIDTH = 320;
@@ -279,11 +279,19 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
             "teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title",
             "No workflow draft is linked to this member yet.",
           )}
-          description={t(
-            "teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description",
-            "You can build or edit the workflow YAML here. Saving creates a reusable workflow draft until the member link is materialized.",
-          )}
+          description={studio.linkedWorkflowMissingDescription}
           type="warning"
+        />
+      ) : null}
+      {studio.linkedWorkflowLoadFailed ? (
+        <Alert
+          banner
+          message={t(
+            "teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.title",
+            "Workflow draft could not be loaded.",
+          )}
+          description={studio.linkedWorkflowLoadFailureDescription}
+          type="error"
         />
       ) : null}
       <section
@@ -445,11 +453,13 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
       ) : null}
       <WorkflowStudioExecutionPanel
         activeLogIndex={studio.activeExecutionLogIndex}
+        clearDisabled={studio.currentDraftRunPending}
         detail={studio.executionDetail}
         error={studio.executionError}
         height={executionPanelHeight}
         onClear={studio.clearExecutionLogs}
         onSelectLog={studio.selectExecutionLog}
+        workflowNodes={studio.executionWorkflowNodes}
       />
     </main>
   );

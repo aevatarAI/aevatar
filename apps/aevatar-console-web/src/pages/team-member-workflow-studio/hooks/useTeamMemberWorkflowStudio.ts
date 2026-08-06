@@ -15,6 +15,10 @@ import {
 } from "@/shared/navigation/history";
 import { t } from "@/shared/i18n/messages";
 import {
+  confirmInteractiveExplicitRequestPreview,
+  createWorkflowRevisionIdentityCandidate,
+} from "@/shared/studio/explicitRequestConfirmation";
+import {
   buildTeamDetailHref,
   buildTeamMemberAutomationsHref,
   buildTeamMemberInvokeHref,
@@ -33,11 +37,13 @@ import {
 } from "@/shared/studio/document";
 import {
   buildExecutionTrace,
+  buildWorkflowExecutionNodeSnapshots,
   createStudioExecutionFrame,
   decorateEdgesForExecution,
   decorateNodesForExecution,
   findExecutionLogIndexForStep,
   type ExecutionTrace,
+  type WorkflowExecutionNodeSnapshot,
 } from "@/shared/studio/execution";
 import {
   buildStudioGraphElements,
@@ -45,6 +51,10 @@ import {
   STUDIO_GRAPH_CATEGORIES,
 } from "@/shared/studio/graph";
 import { isStudioApiStatus, studioApi } from "@/shared/studio/api";
+import {
+  isStudioWorkflowDraftIdentity,
+  resolveStudioMemberDraftWorkflowId,
+} from "@/shared/studio/memberWorkflowIdentity";
 import { normalizeStudioMemberLifecycleStage } from "@/shared/studio/models";
 import type {
   StudioExecutionDetail,
@@ -206,6 +216,7 @@ type TeamMemberWorkflowStudioState = {
   readonly currentDraftRunPlaceholderReason: string;
   readonly executionDetail: StudioExecutionDetail | null;
   readonly executionError: string;
+  readonly executionWorkflowNodes: readonly WorkflowExecutionNodeSnapshot[];
   readonly draftRunFiles: readonly File[];
   readonly executionRunMessage: string;
   readonly executionStatus: WorkflowExecutionStatus;
@@ -215,7 +226,10 @@ type TeamMemberWorkflowStudioState = {
   readonly removeDraftRunFile: (index: number) => void;
   readonly graph: ReturnType<typeof buildStudioGraphElements>;
   readonly insertNode: (stepType: string) => void;
+  readonly linkedWorkflowLoadFailed: boolean;
+  readonly linkedWorkflowLoadFailureDescription: string;
   readonly linkedWorkflowMissing: boolean;
+  readonly linkedWorkflowMissingDescription: string;
   readonly loading: boolean;
   readonly moveNodes: (nodes: ReturnType<typeof buildStudioGraphElements>["nodes"]) => void;
   readonly mode: TeamMemberWorkflowStudioMode;
@@ -458,10 +472,6 @@ function resolveNewWorkflowDirectoryId(input: {
   );
 }
 
-function isWorkflowDraftRouteId(value: string): boolean {
-  return Boolean(value && !/\s/.test(value));
-}
-
 function readWorkflowSourceSignature(
   workflow: StudioWorkflowFile | null | undefined,
 ): WorkflowSourceSignature | null {
@@ -596,6 +606,12 @@ function waitForSaveAndBindWorkflowMaterializationTick(): Promise<void> {
 
 function workflowYamlMatches(left: string | null | undefined, right: string): boolean {
   return String(left || "").trim() === right.trim();
+}
+
+function describeWorkflowDraftLoadError(error: unknown): string {
+  return error instanceof Error && error.message.trim()
+    ? error.message.trim()
+    : "Unknown error";
 }
 
 async function waitForSaveAndBindWorkflowMaterialized(input: {
@@ -1007,6 +1023,25 @@ async function saveAndBindPublishedWorkflowDraft(input: {
     availableStepTypes: AVAILABLE_STEP_TYPES,
   });
   assertNoBlockingFindings(serialized.findings);
+  const workflowYamlForPublication = serialized.yaml;
+  const revisionIdentityCandidate = createWorkflowRevisionIdentityCandidate();
+  const explicitRequestPreview = await studioApi.previewExplicitRequests({
+    scopeId: routeScopeId,
+    workflowId,
+    workflowYaml: workflowYamlForPublication,
+    executionMode: "interactive",
+    inlineWorkflowYamls: {},
+    revisionId: revisionIdentityCandidate,
+  });
+  const explicitRequestConfirmations = await confirmInteractiveExplicitRequestPreview(
+    explicitRequestPreview,
+  );
+  if (explicitRequestConfirmations === null) {
+    throw new PublishWorkflowStatusError(
+      "Explicit request confirmation was cancelled.",
+      false,
+    );
+  }
   const savedDocument =
     cloneWorkflowDocument(serialized.document) ?? documentWithTitle;
   const graphForLayout = buildStudioGraphElements(savedDocument, layout);
@@ -1018,17 +1053,21 @@ async function saveAndBindPublishedWorkflowDraft(input: {
   const result = await studioApi.saveAndBindWorkflow({
     scopeId: routeScopeId,
     workflowId,
-    workflowYaml: serialized.yaml,
+    revisionId: explicitRequestPreview.revisionId,
+    workflowYaml: workflowYamlForPublication,
     workflowName: normalizedTitle,
     displayName: normalizedTitle,
     inlineWorkflowYamls: {},
     appId: "studio",
     serviceId,
     exposureDesired: true,
+    ...(explicitRequestConfirmations.length > 0
+      ? { explicitRequestConfirmations }
+      : {}),
   });
   const resultWorkflowId = trimOptional(result.workflowId) || workflowId;
   const materializedWorkflow = await waitForSaveAndBindWorkflowMaterialized({
-    expectedYaml: serialized.yaml,
+    expectedYaml: workflowYamlForPublication,
     scopeId: routeScopeId,
     workflowId: resultWorkflowId,
   });
@@ -1043,7 +1082,7 @@ async function saveAndBindPublishedWorkflowDraft(input: {
         ...workflow,
         workflowId: resultWorkflowId,
         name: normalizedTitle,
-        yaml: serialized.yaml,
+        yaml: workflowYamlForPublication,
         layout: nextLayout,
         document: savedDocument,
         findings: [],
@@ -1082,6 +1121,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const [executionDetail, setExecutionDetail] =
     React.useState<StudioExecutionDetail | null>(null);
   const [executionError, setExecutionError] = React.useState("");
+  const [executionWorkflowNodes, setExecutionWorkflowNodes] = React.useState<
+    WorkflowExecutionNodeSnapshot[]
+  >([]);
   const [activeExecutionLogIndex, setActiveExecutionLogIndex] =
     React.useState<number | null>(null);
   const [executionRunMessage, setExecutionRunMessage] = React.useState("");
@@ -1262,20 +1304,26 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   });
   const routeDraftWorkflowId =
     route.mode === "existing" &&
-    isWorkflowDraftRouteId(trimOptional(route.workflowId))
+    isStudioWorkflowDraftIdentity(trimOptional(route.workflowId))
       ? trimOptional(route.workflowId)
       : "";
+  const memberDraftWorkflowId =
+    route.mode === "existing"
+      ? resolveStudioMemberDraftWorkflowId(memberQuery.data)
+      : "";
+  const activeRouteDraftWorkflowId =
+    routeDraftWorkflowId || memberDraftWorkflowId;
   const shouldLoadPublishedWorkflow =
     route.mode === "existing" && route.workflowSource === "published";
   const workflowQueryKey = getTeamMemberWorkflowStudioWorkflowQueryKey(
     route.scopeId,
-    routeDraftWorkflowId,
+    activeRouteDraftWorkflowId,
     shouldLoadPublishedWorkflow ? "published" : "draft",
   );
   const workflowQuery = useQuery({
     enabled: Boolean(
       route.scopeId &&
-        routeDraftWorkflowId &&
+        activeRouteDraftWorkflowId &&
         !memberQuery.isLoading,
     ),
     queryKey: workflowQueryKey,
@@ -1283,16 +1331,16 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       shouldLoadPublishedWorkflow
         ? loadPublishedWorkflowWithDraftFallback({
             scopeId: route.scopeId,
-            workflowId: routeDraftWorkflowId,
+            workflowId: activeRouteDraftWorkflowId,
           })
-        : studioApi.getWorkflow(routeDraftWorkflowId, route.scopeId),
+        : studioApi.getWorkflow(activeRouteDraftWorkflowId, route.scopeId),
     staleTime: SAVED_WORKFLOW_QUERY_STALE_MS,
     retry: false,
   });
   const activeDraftWorkflowId =
     trimOptional(workflowQuery.data?.workflowId) ||
-    (route.mode === "existing" && routeDraftWorkflowId
-      ? routeDraftWorkflowId
+    (route.mode === "existing" && activeRouteDraftWorkflowId
+      ? activeRouteDraftWorkflowId
       : "");
   const teamMembersReturnHref = buildTeamDetailHref({
     memberId: route.memberId || undefined,
@@ -1318,7 +1366,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       "team-member-workflow-studio",
       "parse-yaml",
       route.scopeId,
-      workflowQuery.data?.workflowId ?? routeDraftWorkflowId,
+      workflowQuery.data?.workflowId ?? activeRouteDraftWorkflowId,
       workflowQuery.data?.yaml,
     ],
     queryFn: () =>
@@ -1347,11 +1395,47 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     routeFallbackTitle;
   const teamName =
     trimOptional(teamQuery.data?.displayName) || route.teamId || "Current team";
+  const memberHasCompletedBinding = hasCurrentCompletedMemberBinding(
+    memberQuery.data,
+  );
   const linkedWorkflowMissing =
     route.mode === "existing" &&
     !memberQuery.isLoading &&
-    (!routeDraftWorkflowId || workflowQuery.isError) &&
+    !activeRouteDraftWorkflowId &&
     Boolean(memberQuery.data);
+  const linkedWorkflowLoadFailed =
+    route.mode === "existing" &&
+    !memberQuery.isLoading &&
+    Boolean(activeRouteDraftWorkflowId) &&
+    workflowQuery.isError &&
+    Boolean(memberQuery.data);
+  const linkedWorkflowMissingDescription =
+    linkedWorkflowMissing && memberHasCompletedBinding
+      ? t(
+          "teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.publishedDescription",
+          "This published member has no materialized draft workflow link. Refresh after the member read model exposes its draft workflow id.",
+        )
+      : t(
+          "teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description",
+          "You can build or edit the workflow YAML here. Saving creates a reusable workflow draft until the member link is materialized.",
+        );
+  const linkedWorkflowLoadFailureDescription = linkedWorkflowLoadFailed
+    ? t(
+        "teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.description",
+        "Studio resolved draft workflow {workflowId}, but loading it failed: {reason}",
+        {
+          reason: describeWorkflowDraftLoadError(workflowQuery.error),
+          workflowId: activeRouteDraftWorkflowId,
+        },
+      )
+    : "";
+  const canCreateDraftForUnlinkedMember = Boolean(
+    linkedWorkflowMissing && !memberHasCompletedBinding,
+  );
+  const workflowDraftEditingBlocked = Boolean(
+    linkedWorkflowLoadFailed ||
+      (linkedWorkflowMissing && memberHasCompletedBinding),
+  );
   const sourceDocument =
     route.mode === "new"
       ? buildBlankWorkflowDocument("Untitled member")
@@ -1656,11 +1740,13 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       return savedAndBound;
     },
     onError: (error) => {
-      void message.error(
-        error instanceof Error
-          ? error.message
-          : "Failed to save and publish workflow.",
-      );
+      if (!(error instanceof PublishWorkflowStatusError && !error.showAsError)) {
+        void message.error(
+          error instanceof Error
+            ? error.message
+            : "Failed to save and publish workflow.",
+        );
+      }
     },
     onSuccess: ({ materializedWorkflow, savedDraft }, variables) => {
       markSavedDraft(savedDraft, ["published"], variables.draftRevision);
@@ -2289,8 +2375,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           : "Failed to run workflow draft.",
       );
     },
-    onMutate: () => {
+    onMutate: ({ document }: RunCurrentDraftVariables) => {
+      setExecutionDetail(null);
       setExecutionError("");
+      setActiveExecutionLogIndex(null);
+      setExecutionWorkflowNodes(buildWorkflowExecutionNodeSnapshots(document));
     },
     onSuccess: (detail) => {
       setExecutionDetail(detail);
@@ -2362,13 +2451,36 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         availableStepTypes: AVAILABLE_STEP_TYPES,
       });
       assertNoBlockingFindings(serialized.findings);
+      const workflowYamlForPublication = serialized.yaml;
+      const revisionIdentityCandidate = createWorkflowRevisionIdentityCandidate();
+      const explicitRequestPreview = await studioApi.previewExplicitRequests({
+        scopeId: route.scopeId,
+        workflowId: workflowIdForPublish,
+        workflowYaml: workflowYamlForPublication,
+        executionMode: "interactive",
+        inlineWorkflowYamls: {},
+        revisionId: revisionIdentityCandidate,
+      });
+      const explicitRequestConfirmations = await confirmInteractiveExplicitRequestPreview(
+        explicitRequestPreview,
+      );
+      if (explicitRequestConfirmations === null) {
+        throw new PublishWorkflowStatusError(
+          "Explicit request confirmation was cancelled.",
+          false,
+        );
+      }
       await renameExistingMemberFromTitle(titleForPublish);
       const receipt = await studioApi.bindMemberWorkflow({
         scopeId: route.scopeId,
         memberId: route.memberId,
         displayName: titleForPublish,
         workflowId: workflowIdForPublish,
-        workflowYamls: [serialized.yaml],
+        revisionId: explicitRequestPreview.revisionId,
+        workflowYamls: [workflowYamlForPublication],
+        ...(explicitRequestConfirmations.length > 0
+          ? { explicitRequestConfirmations }
+          : {}),
       });
 
       let lastRun: StudioMemberBindingRunStatusResponse | null = null;
@@ -2403,9 +2515,13 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       };
     },
     onError: (error) => {
-      setPublishErrorVisible(
-        !(error instanceof PublishWorkflowStatusError && !error.showAsError),
-      );
+      if (error instanceof PublishWorkflowStatusError && !error.showAsError) {
+        setPublishError("");
+        setPublishErrorVisible(false);
+        return;
+      }
+
+      setPublishErrorVisible(true);
       setPublishError(
         error instanceof Error ? error.message : "Failed to publish workflow member.",
       );
@@ -2436,7 +2552,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const workflowLoading =
     route.mode === "existing" &&
     (memberQuery.isLoading ||
-      (routeDraftWorkflowId &&
+      (activeRouteDraftWorkflowId &&
         (workflowQuery.isLoading || parseQuery.isLoading)));
   const workflowHasSteps = Boolean(editableDocument?.steps?.length);
   const canCreateUnlinkedMemberDraft = Boolean(
@@ -2445,8 +2561,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       route.scopeId &&
       route.teamId &&
       route.memberId &&
-      !routeDraftWorkflowId &&
+      !activeRouteDraftWorkflowId &&
       editableDocument &&
+      canCreateDraftForUnlinkedMember &&
       dirty &&
       workflowHasSteps &&
       !selectedStepConfigurationError &&
@@ -2659,7 +2776,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     }
 
     const memberResult = await memberQuery.refetch();
-    if (routeDraftWorkflowId) {
+    if (activeRouteDraftWorkflowId) {
       await workflowQuery.refetch();
     }
 
@@ -2716,7 +2833,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     }
 
     void message.info("No published member status is visible yet.");
-  }, [memberQuery, route.memberId, route.mode, route.scopeId, routeDraftWorkflowId, workflowQuery]);
+  }, [activeRouteDraftWorkflowId, memberQuery, route.memberId, route.mode, route.scopeId, workflowQuery]);
   const executionStatus = currentDraftRunMutation.isPending
     ? "running"
     : resolveWorkflowExecutionStatus(executionDetail);
@@ -2725,12 +2842,14 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       editableDocument &&
       workflowHasSteps &&
       !selectedStepConfigurationError &&
+      !workflowDraftEditingBlocked &&
       !currentDraftRunMutation.isPending,
   );
   const canOpenDraftRunPanel = Boolean(
     route.scopeId &&
       editableDocument &&
       !selectedStepConfigurationError &&
+      !workflowDraftEditingBlocked &&
       !workflowLoading,
   );
   const currentDraftRunPlaceholderReason =
@@ -2744,8 +2863,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
             ? selectedStepConfigurationError
           : !workflowHasSteps
             ? "Add at least one step before running this workflow draft."
-            : linkedWorkflowMissing
+            : canCreateDraftForUnlinkedMember
               ? "Run the local draft sketch. Saving remains limited until a stable workflow draft is linked."
+              : workflowDraftEditingBlocked
+                ? "Resolve the linked workflow draft before running it."
               : route.mode === "new"
                 ? "Run the current unsaved workflow draft."
                 : "Run the current workflow draft.";
@@ -2764,12 +2885,14 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           ? "No changes to save."
         : selectedStepConfigurationError
           ? selectedStepConfigurationError
-        : linkedWorkflowMissing
+        : canCreateDraftForUnlinkedMember
           ? !workflowHasSteps
             ? "Add at least one step before saving a workflow draft."
-            : routeDraftWorkflowId
+            : activeRouteDraftWorkflowId
               ? "Load the workflow draft before saving."
               : "Save creates a reusable workflow draft for this editor."
+        : workflowDraftEditingBlocked
+          ? "Resolve the linked workflow draft before saving."
         : !workflowQuery.data
           ? "Load a workflow member before saving."
           : memberPublished
@@ -2837,6 +2960,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   }, [markDraftDirty]);
   const insertNode = React.useCallback(
     (stepType: string) => {
+      if (workflowDraftEditingBlocked) {
+        return;
+      }
+
       if (!closeYamlPanelWithConfirmation()) {
         return;
       }
@@ -2880,6 +3007,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       graph.roles,
       routeFallbackTitle,
       selectedNodeId,
+      workflowDraftEditingBlocked,
       workflowTitle,
     ],
   );
@@ -3088,7 +3216,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     canOpenDraftRunPanel,
     canRunCurrentDraft,
     canSave,
-    canEditYaml: Boolean(editableDocument && !workflowLoading),
+    canEditYaml: Boolean(
+      editableDocument && !workflowLoading && !workflowDraftEditingBlocked,
+    ),
     closeNodeLibrary: () => setNodeLibraryOpen(false),
     closeYamlPanel: () => {
       closeYamlPanelWithConfirmation();
@@ -3100,8 +3230,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     emptyDescription:
       route.mode === "new"
         ? "Build the draft locally first, then save it as a linked Team workflow member."
-        : linkedWorkflowMissing
+        : canCreateDraftForUnlinkedMember
           ? "No workflow draft is linked to this member yet. Build or edit YAML, then save to create a reusable draft."
+          : workflowDraftEditingBlocked
+            ? "Resolve the linked workflow draft before editing this workflow."
           : "Start this workflow by adding the first step.",
     runCurrentDraft: () => {
       if (
@@ -3109,6 +3241,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         !editableDocument ||
         !workflowHasSteps ||
         selectedStepConfigurationError ||
+        workflowDraftEditingBlocked ||
         currentDraftRunMutation.isPending
       ) {
         return;
@@ -3141,6 +3274,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     currentDraftRunPlaceholderReason,
     executionDetail,
     executionError,
+    executionWorkflowNodes,
     draftRunFiles,
     executionRunMessage,
     executionStatus,
@@ -3148,6 +3282,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     clearExecutionLogs: () => {
       setExecutionDetail(null);
       setExecutionError("");
+      setExecutionWorkflowNodes([]);
       setActiveExecutionLogIndex(null);
     },
     addDraftRunFiles: (files: readonly File[]) => {
@@ -3162,7 +3297,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     },
     graph: graphWithExecution,
     insertNode,
+    linkedWorkflowLoadFailed,
+    linkedWorkflowLoadFailureDescription,
     linkedWorkflowMissing,
+    linkedWorkflowMissingDescription,
     loading: Boolean(workflowLoading),
     mode: route.mode,
     moveNodes,
@@ -3176,6 +3314,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     },
     nodeLibraryOpen,
     openNodeLibrary: () => {
+      if (workflowDraftEditingBlocked) {
+        return;
+      }
+
       if (closeYamlPanelWithConfirmation()) {
         setNodeLibraryOpen(true);
       }
@@ -3210,7 +3352,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         return;
       }
 
-      if (linkedWorkflowMissing && editableDocument && !routeDraftWorkflowId) {
+      if (
+        canCreateDraftForUnlinkedMember &&
+        editableDocument &&
+        !activeRouteDraftWorkflowId
+      ) {
         createUnlinkedMemberDraftMutation.mutate({
           document: editableDocument,
           draftRevision: draftRevisionRef.current,

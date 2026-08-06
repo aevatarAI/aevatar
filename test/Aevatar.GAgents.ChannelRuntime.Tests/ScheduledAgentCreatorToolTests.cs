@@ -8,6 +8,7 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
+using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Application.Schedules.Authorization;
 using Aevatar.GAgents.Channel.Runtime;
@@ -337,16 +338,16 @@ public sealed class ScheduledAgentCreatorToolTests
         var harness = CreateHarness(authorizationSnapshot: CreateSnapshot(
             ServiceEvidence("svc-ornn", "ornn-api"),
             ServiceEvidence("svc-lark", "api-lark-bot"),
-            ServiceEvidence("svc-llm", "chrono-llm-public")));
+            ServiceEvidence("svc-llm", "chrono-llm-public", "gpt-5.5")));
 
         await WithToolContext(async () =>
         {
             var result = await harness.Tool.ExecuteAsync(BaseArgs);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("ServiceNotFound");
+            document.RootElement.GetProperty("error").GetString().Should().Be("SnapshotStale");
             document.RootElement.GetProperty("detail").GetString()
-                .Should().Be("nyxid_service_not_found:svc-lark-failure");
+                .Should().Be("nyxid_catalog_snapshot_stale");
             harness.Handler.Requests.Should().BeEmpty();
         });
     }
@@ -359,16 +360,16 @@ public sealed class ScheduledAgentCreatorToolTests
             ServiceEvidence("svc-ornn-2", "ornn-api"),
             ServiceEvidence("svc-lark", "api-lark-bot"),
             ServiceEvidence("svc-lark-failure", "api-lark-bot-inbound"),
-            ServiceEvidence("svc-llm", "chrono-llm-public")));
+            ServiceEvidence("svc-llm", "chrono-llm-public", "gpt-5.5")));
 
         await WithToolContext(async () =>
         {
             var result = await harness.Tool.ExecuteAsync(BaseArgs);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("ServiceNotFound");
+            document.RootElement.GetProperty("error").GetString().Should().Be("SnapshotStale");
             document.RootElement.GetProperty("detail").GetString()
-                .Should().Be("nyxid_service_not_found:svc-ornn");
+                .Should().Be("nyxid_catalog_snapshot_stale");
             harness.Handler.Requests.Should().BeEmpty();
         });
     }
@@ -430,15 +431,20 @@ public sealed class ScheduledAgentCreatorToolTests
         var ownerLLMQueryPort = new RecordingOwnerLLMEvidenceQueryPort(
             new ScheduledInvocationOwnerLLMEvidence(
                 17,
-                "svc-chrono",
-                "chrono-llm",
-                AuthorizationGrantRequirement.Required));
+                new ScheduledInvocationOwnerLLMSelection
+                {
+                    RouteKind = LLMRouteKind.NyxIdUserService,
+                    RouteValue = "/api/v1/proxy/s/chrono-llm",
+                    NyxIdUserServiceId = "svc-chrono",
+                    ServiceSlugSnapshot = "chrono-llm",
+                    Model = "gpt-5.5",
+                }));
         var harness = CreateHarness(
             handler: handler,
             authorizationSnapshot: CreateSnapshot(
                 DefaultAuthorizationServices
                     .Where(static service => service.ServiceSlug != "chrono-llm-public")
-                    .Append(ServiceEvidence("svc-chrono", "chrono-llm"))
+                    .Append(ServiceEvidence("svc-chrono", "chrono-llm", "gpt-5.5"))
                     .ToArray()),
             ownerLLMQueryPort: ownerLLMQueryPort);
 
@@ -464,16 +470,22 @@ public sealed class ScheduledAgentCreatorToolTests
     public async Task ExecuteAsync_WhenOwnerUsesGatewayRoute_ShouldNotWidenScopedKeyAllowlist()
     {
         // The shared gateway route uses the bearer token directly and needs no per-service grant,
-        // so a gateway/empty PreferredLlmRoute must leave the scoped allowlist unchanged.
+        // so an explicit typed Gateway selection must leave the scoped allowlist unchanged.
         var handler = CreateSuccessHandler();
         var harness = CreateHarness(
             handler: handler,
+            authorizationSnapshot: WithGatewayLLMTarget(
+                CreateSnapshot(DefaultAuthorizationServices),
+                GatewayLLMTarget("gpt-5.5")),
             ownerLLMQueryPort: new RecordingOwnerLLMEvidenceQueryPort(
                 new ScheduledInvocationOwnerLLMEvidence(
                     18,
-                    string.Empty,
-                    string.Empty,
-                    AuthorizationGrantRequirement.NotRequired)));
+                    new ScheduledInvocationOwnerLLMSelection
+                    {
+                        RouteKind = LLMRouteKind.Gateway,
+                        RouteValue = ScheduledInvocationOwnerLLMSelectionPolicy.GatewayRoute,
+                        Model = "gpt-5.5",
+                    })));
 
         await WithToolContext(async () =>
         {
@@ -491,7 +503,7 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenOwnerLlmEvidenceMissing_ShouldFailBeforeKeyCreation()
+    public async Task ExecuteAsync_WhenOwnerLlmEvidenceMissing_ShouldNotInventLlmGrant()
     {
         var handler = CreateSuccessHandler();
         var harness = CreateHarness(
@@ -503,10 +515,14 @@ public sealed class ScheduledAgentCreatorToolTests
             var result = await harness.Tool.ExecuteAsync(BaseArgs);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("SnapshotNotFound");
-            document.RootElement.GetProperty("detail").GetString()
-                .Should().Be("owner_llm_authorization_evidence_not_found");
-            handler.Requests.Should().BeEmpty();
+            document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            var createRequest = handler.Requests.Single(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
+            using var createBody = JsonDocument.Parse(createRequest.Body!);
+            createBody.RootElement.GetProperty("allowed_service_ids")
+                .EnumerateArray()
+                .Select(static value => value.GetString())
+                .Should().BeEquivalentTo("svc-ornn", "svc-lark", "svc-lark-failure");
         });
     }
 
@@ -533,9 +549,9 @@ public sealed class ScheduledAgentCreatorToolTests
                 """);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("ServiceNotFound");
+            document.RootElement.GetProperty("error").GetString().Should().Be("SnapshotStale");
             document.RootElement.GetProperty("detail").GetString()
-                .Should().Be("nyxid_service_not_found:svc-tavily");
+                .Should().Be("nyxid_catalog_snapshot_stale");
             handler.Requests.Should().BeEmpty();
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Post);
         });
@@ -621,7 +637,7 @@ public sealed class ScheduledAgentCreatorToolTests
             ServiceEvidence("svc-ornn", "ornn-api"),
             viewOnly,
             ServiceEvidence("svc-lark-failure", "api-lark-bot-inbound"),
-            ServiceEvidence("svc-llm", "chrono-llm-public")));
+            ServiceEvidence("svc-llm", "chrono-llm-public", "gpt-5.5")));
 
         await WithToolContext(async () =>
         {
@@ -783,7 +799,7 @@ public sealed class ScheduledAgentCreatorToolTests
                 ServiceEvidence("svc-ornn", "ornn-api"),
                 ServiceEvidence("svc-scheduled-lark", "api-lark-bot-scheduled"),
                 ServiceEvidence("svc-lark-failure", "api-lark-bot-inbound"),
-                ServiceEvidence("svc-llm", "chrono-llm-public")));
+                ServiceEvidence("svc-llm", "chrono-llm-public", "gpt-5.5")));
         ScheduledWorkflowAgentCreateRequest? captured = null;
         harness.CreationPort.CreateAsync(
                 Arg.Do<ScheduledWorkflowAgentCreateRequest>(value => captured = value),
@@ -1037,7 +1053,7 @@ public sealed class ScheduledAgentCreatorToolTests
             authorizationSnapshot: CreateSnapshot(
                 ServiceEvidence("svc-lark-2", "api-lark-bot-2"),
                 ServiceEvidence("svc-lark-failure", "api-lark-bot-inbound"),
-                ServiceEvidence("svc-llm", "chrono-llm-public")));
+                ServiceEvidence("svc-llm", "chrono-llm-public", "gpt-5.5")));
         ScheduledWorkflowAgentCreateRequest? captured = null;
         harness.CreationPort.CreateAsync(
                 Arg.Do<ScheduledWorkflowAgentCreateRequest>(value => captured = value),
@@ -1094,7 +1110,7 @@ public sealed class ScheduledAgentCreatorToolTests
             authorizationSnapshot: CreateSnapshot(
                 ServiceEvidence("svc-lark-2", "api-lark-bot-2"),
                 ServiceEvidence("svc-lark-failure", "api-lark-bot-inbound"),
-                ServiceEvidence("svc-llm", "chrono-llm-public")));
+                ServiceEvidence("svc-llm", "chrono-llm-public", "gpt-5.5")));
 
         await WithToolContext(async () =>
         {
@@ -1112,9 +1128,9 @@ public sealed class ScheduledAgentCreatorToolTests
                 """);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("ServiceNotFound");
+            document.RootElement.GetProperty("error").GetString().Should().Be("SnapshotStale");
             document.RootElement.GetProperty("detail").GetString()
-                .Should().Be("nyxid_service_not_found:svc-lark");
+                .Should().Be("nyxid_catalog_snapshot_stale");
             handler.Requests.Should().BeEmpty();
         });
     }
@@ -1248,9 +1264,14 @@ public sealed class ScheduledAgentCreatorToolTests
             ownerLLMQueryPort: ownerLLMQueryPort ?? new RecordingOwnerLLMEvidenceQueryPort(
                 new ScheduledInvocationOwnerLLMEvidence(
                     29,
-                    "svc-llm",
-                    "chrono-llm-public",
-                    AuthorizationGrantRequirement.Required)));
+                    new ScheduledInvocationOwnerLLMSelection
+                    {
+                        RouteKind = LLMRouteKind.NyxIdUserService,
+                        RouteValue = "/api/v1/proxy/s/chrono-llm-public",
+                        NyxIdUserServiceId = "svc-llm",
+                        ServiceSlugSnapshot = "chrono-llm-public",
+                        Model = "gpt-5.5",
+                    })));
         var tool = new ScheduledAgentCreatorTool(
             provider.GetRequiredService<IScheduledWorkflowAgentCreationPort>(),
             provider.GetRequiredService<ICallerScopeResolver>(),
@@ -1269,7 +1290,7 @@ public sealed class ScheduledAgentCreatorToolTests
         ServiceEvidence("svc-ornn", "ornn-api"),
         ServiceEvidence("svc-lark", "api-lark-bot"),
         ServiceEvidence("svc-lark-failure", "api-lark-bot-inbound"),
-        ServiceEvidence("svc-llm", "chrono-llm-public"),
+        ServiceEvidence("svc-llm", "chrono-llm-public", "gpt-5.5"),
     ];
 
     private static RoutingJsonHandler CreateSuccessHandler(
@@ -1417,20 +1438,93 @@ public sealed class ScheduledAgentCreatorToolTests
             Activated: true);
     }
 
-    private static NyxIdAuthorizationServiceEvidence ServiceEvidence(string id, string slug) => new()
+    private static NyxIdAuthorizationServiceEvidence ServiceEvidence(
+        string id,
+        string slug,
+        params string[] modelIds)
     {
-        UserServiceId = id,
-        ServiceSlug = slug,
-        DisplayName = slug,
-        Access = NyxIdAuthorizationAccess.Permitted,
-        NodeGrantRequirement = AuthorizationGrantRequirement.NotRequired,
-        ResourceOwner = new AuthorizationOwnerIdentity
+        var now = DateTimeOffset.UtcNow;
+        return new NyxIdAuthorizationServiceEvidence
         {
-            Authority = NyxIdAuthorizationAuthorities.NyxId,
-            OwnerKind = AuthorizationOwnerKind.Personal,
-            OwnerSubject = "nyx-user-1",
-        },
-    };
+            UserServiceId = id,
+            ServiceSlug = slug,
+            DisplayName = slug,
+            Access = NyxIdAuthorizationAccess.Permitted,
+            NodeGrantRequirement = AuthorizationGrantRequirement.NotRequired,
+            ResourceOwner = new AuthorizationOwnerIdentity
+            {
+                Authority = NyxIdAuthorizationAuthorities.NyxId,
+                OwnerKind = AuthorizationOwnerKind.Personal,
+                OwnerSubject = "nyx-user-1",
+            },
+            ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now.AddMinutes(-1)),
+            FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now.AddMinutes(10)),
+            EvaluatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now.AddMinutes(-2)),
+            AuthorityContractVersion = "1",
+            AuthorityPolicyVersion = "api-key-scope-v1",
+            LlmTarget = modelIds.Length == 0 ? null : ServiceLLMTarget(id, slug, modelIds),
+        };
+    }
+
+    private static NyxIdAuthorizationCatalogSnapshot WithGatewayLLMTarget(
+        NyxIdAuthorizationCatalogSnapshot snapshot,
+        NyxIdAuthorizationLLMTargetEvidence target) =>
+        snapshot with
+        {
+            ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+                snapshot.Owner,
+                snapshot.Services,
+                target),
+            GatewayLLMTarget = target,
+        };
+
+    private static NyxIdAuthorizationLLMTargetEvidence GatewayLLMTarget(params string[] modelIds) =>
+        LLMTarget(
+            LLMRouteKind.Gateway,
+            ScheduledInvocationOwnerLLMSelectionPolicy.GatewayRoute,
+            string.Empty,
+            string.Empty,
+            modelIds);
+
+    private static NyxIdAuthorizationLLMTargetEvidence ServiceLLMTarget(
+        string serviceId,
+        string serviceSlug,
+        params string[] modelIds) =>
+        LLMTarget(
+            LLMRouteKind.NyxIdUserService,
+            $"{ScheduledInvocationOwnerLLMSelectionPolicy.NyxIdProxyRoutePrefix}{serviceSlug}",
+            serviceId,
+            serviceSlug,
+            modelIds);
+
+    private static NyxIdAuthorizationLLMTargetEvidence LLMTarget(
+        LLMRouteKind routeKind,
+        string routeValue,
+        string serviceId,
+        string serviceSlug,
+        params string[] modelIds)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var target = new NyxIdAuthorizationLLMTargetEvidence
+        {
+            RouteKind = routeKind,
+            RouteValue = routeValue,
+            NyxIdUserServiceId = serviceId,
+            ServiceSlugSnapshot = serviceSlug,
+            ModelCatalog = new LLMModelCatalog
+            {
+                Certainty = LLMModelCatalogCertainty.Enumerated,
+                DefaultModelId = modelIds.FirstOrDefault() ?? string.Empty,
+            },
+            ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now.AddMinutes(-1)),
+            FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now.AddMinutes(10)),
+            EvaluatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now.AddMinutes(-2)),
+            AuthorityContractVersion = "openai-models/v1",
+            AuthorityPolicyVersion = "nyxid-exact-route-models/v1",
+        };
+        target.ModelCatalog.ModelIds.Add(modelIds.Order(StringComparer.Ordinal));
+        return target;
+    }
 
     private sealed record CreatorHarness(
         ScheduledAgentCreatorTool Tool,
@@ -1525,7 +1619,6 @@ public sealed class ScheduledAgentCreatorToolTests
 
         public Task<ScheduledInvocationOwnerLLMEvidence?> GetAsync(
             string scopeId,
-            AuthenticatedAuthorizationOwnerContext? ownerContext = null,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();

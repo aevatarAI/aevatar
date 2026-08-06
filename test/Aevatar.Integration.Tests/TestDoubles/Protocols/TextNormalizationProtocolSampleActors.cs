@@ -148,11 +148,13 @@ public sealed class TextNormalizationWorkflowProtocolGAgent : GAgentBase<TextNor
         var runAgent = (WorkflowRunGAgent)runActor.Agent;
         var definitionAgent = (WorkflowGAgent)definitionActor.Agent;
 
-        await definitionAgent.BindWorkflowDefinitionAsync(
+        await WorkflowGAgentTestBase.BindInteractiveWorkflowDefinitionAsync(
+            definitionAgent,
             WorkflowYaml,
             WorkflowName,
             ct: CancellationToken.None);
-        await runAgent.BindWorkflowRunDefinitionAsync(
+        await WorkflowGAgentTestBase.BindInteractiveWorkflowRunDefinitionAsync(
+            runAgent,
             definitionActor.Id,
             WorkflowYaml,
             WorkflowName,

@@ -39,12 +39,12 @@ public sealed class WorkOrderCommandServiceTests
         dispatchPort.Envelopes.Select(static envelope => envelope.Id).Should().OnlyContain(
             commandId => commandId == first.CommandId);
         dispatchPort.Envelopes.Select(static envelope =>
-                envelope.EnsureRuntime().EnsureDeduplication().OperationId)
+                envelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId)
             .Should().OnlyContain(operationId => operationId == first.CommandId);
     }
 
     [Fact]
-    public async Task MateriallyDifferentCreateRequests_ShouldNotShareRuntimeDedupIdentity()
+    public async Task MateriallyDifferentCreateRequests_ShouldNotShareRuntimeDeliveryIdentity()
     {
         var dispatchPort = new RecordingDispatchPort();
         var service = new ActorDispatchWorkOrderCommandService(
@@ -61,7 +61,7 @@ public sealed class WorkOrderCommandServiceTests
         dispatchPort.Envelopes.Select(static envelope => envelope.Id)
             .Should().OnlyHaveUniqueItems();
         dispatchPort.Envelopes.Select(static envelope =>
-                envelope.EnsureRuntime().EnsureDeduplication().OperationId)
+                envelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId)
             .Should().OnlyHaveUniqueItems();
     }
 
@@ -91,7 +91,7 @@ public sealed class WorkOrderCommandServiceTests
     }
 
     [Fact]
-    public async Task CreateAsync_WhenDeadlineMissing_ShouldRejectBeforeActorDispatch()
+    public async Task CreateAsync_WhenDeadlineMissing_ShouldDispatchWithoutInventingOne()
     {
         var bootstrap = new RecordingBootstrap();
         var dispatchPort = new RecordingDispatchPort();
@@ -99,16 +99,16 @@ public sealed class WorkOrderCommandServiceTests
             bootstrap,
             CreateCommandDispatch(dispatchPort));
 
-        var create = () => service.CreateAsync(
+        await service.CreateAsync(
             ScopeId,
             CreateRequest() with { TimeoutAtUtc = null },
             new WorkOrderPrincipalContract("requester-1", "user"),
             CreateAssignment());
 
-        await create.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*deadline*required*");
-        bootstrap.ActorIds.Should().BeEmpty();
-        dispatchPort.Envelopes.Should().BeEmpty();
+        bootstrap.ActorIds.Should().ContainSingle();
+        var command = dispatchPort.Envelopes.Should().ContainSingle().Subject.Payload!
+            .Unpack<CreateWorkOrder>();
+        command.TimeoutAtUtc.Should().BeNull();
     }
 
     [Fact]

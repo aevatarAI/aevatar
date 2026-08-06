@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Hooks;
+using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.Tools;
 
 namespace Aevatar.AI.Core.Chat;
@@ -16,6 +17,7 @@ public sealed class ChatRuntimeStepExecutor
     private readonly Func<AgentProfileTurnCatalog?, LLMRequest> _requestBuilder;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
     private readonly TokenBudgetTracker _budgetTracker;
+    private readonly IChatToolCheckpointPort _toolCheckpointPort;
     private readonly AgentProfileTurnCatalog? _turnCatalog;
 
     internal ChatRuntimeStepExecutor(
@@ -25,6 +27,7 @@ public sealed class ChatRuntimeStepExecutor
         Func<AgentProfileTurnCatalog?, LLMRequest> requestBuilder,
         IReadOnlyList<ILLMCallMiddleware> llmMiddlewares,
         TokenBudgetTracker budgetTracker,
+        IChatToolCheckpointPort toolCheckpointPort,
         AgentProfileTurnCatalog? turnCatalog)
     {
         _providerFactory = providerFactory;
@@ -33,6 +36,7 @@ public sealed class ChatRuntimeStepExecutor
         _requestBuilder = requestBuilder;
         _llmMiddlewares = llmMiddlewares;
         _budgetTracker = budgetTracker;
+        _toolCheckpointPort = toolCheckpointPort;
         _turnCatalog = turnCatalog;
     }
 
@@ -57,12 +61,13 @@ public sealed class ChatRuntimeStepExecutor
         LLMControlContext? llmControl,
         int round,
         bool finalNoTools,
-        IReadOnlyList<AgentToolReceipt>? toolReceipts = null)
+        IReadOnlyList<AgentToolReceipt>? toolReceipts = null,
+        bool? allowMultipleToolCalls = null)
     {
         var baseRequest = BuildBaseRequest(requestId, metadata, toolContext, llmControl);
         return new LLMRequest
         {
-            Messages = BuildStepMessages(messages, finalNoTools, toolReceipts),
+            Messages = BuildStepMessages(messages, round, finalNoTools, toolReceipts),
             RequestId = baseRequest.RequestId,
             Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(baseRequest.Metadata),
             CallerContext = baseRequest.CallerContext,
@@ -77,11 +82,64 @@ public sealed class ChatRuntimeStepExecutor
             Model = baseRequest.Model,
             Temperature = baseRequest.Temperature,
             MaxTokens = baseRequest.MaxTokens,
+            AllowMultipleToolCalls = allowMultipleToolCalls ?? baseRequest.AllowMultipleToolCalls,
             ResponseFormat = baseRequest.ResponseFormat,
         };
     }
 
     public ILLMProvider ResolveProvider() => _providerFactory();
+
+    public async Task<ChatRuntimeStepRecoveryToolCall?> TryPlanSkillRecoveryToolCallAsync(
+        LLMRequest request,
+        IReadOnlyList<ChatMessage> recoveryMessages,
+        string? finalContent,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(recoveryMessages);
+        if (!TryPlanSkillRecoveryToolCall(request, recoveryMessages, finalContent, out _))
+            return null;
+
+        var authorizationFence = ChatRuntimeRequestBuilder.CaptureAuthorizationFence(request);
+        var context = new LLMCallContext
+        {
+            Request = authorizationFence.Apply(request, forceCopy: _llmMiddlewares.Count > 0),
+            Provider = ResolveProvider(),
+            CancellationToken = ct,
+            IsStreaming = true,
+        };
+        var reachedCore = false;
+        await MiddlewarePipeline.RunLLMCallAsync(
+                _llmMiddlewares,
+                context,
+                () =>
+                {
+                    reachedCore = true;
+                    return Task.CompletedTask;
+                })
+            .ConfigureAwait(false);
+        if (!reachedCore || context.Terminate)
+            return null;
+
+        var authorizedRequest = authorizationFence.Apply(context.Request);
+        if (!TryPlanSkillRecoveryToolCall(
+                authorizedRequest,
+                recoveryMessages,
+                finalContent,
+                out var toolCall))
+            return null;
+
+        var authorizedTools = authorizedRequest.Tools?
+            .Where(tool => string.Equals(tool.Name, toolCall.Name, StringComparison.Ordinal))
+            .ToArray() ?? [];
+        if (authorizedTools.Length != 1)
+            return null;
+
+        return new ChatRuntimeStepRecoveryToolCall(
+            toolCall,
+            authorizedTools,
+            AgentToolExecutionContextMapper.FromRequest(authorizedRequest));
+    }
 
     public Task<ChatRuntimeStepLlmResult> ExecuteLlmStepAsync(
         ILLMProvider provider,
@@ -104,7 +162,8 @@ public sealed class ChatRuntimeStepExecutor
             _toolLoop,
             _hooks,
             _ => catalogBoundRequest,
-            llmMiddlewares: _llmMiddlewares);
+            llmMiddlewares: _llmMiddlewares,
+            toolCheckpointPort: _toolCheckpointPort);
         return ExecuteAsync(runtime, provider, catalogBoundRequest, onChunkAsync, ct);
 
         static async Task<ChatRuntimeStepLlmResult> ExecuteAsync(
@@ -132,7 +191,8 @@ public sealed class ChatRuntimeStepExecutor
         IReadOnlyList<ToolCall> toolCalls,
         IReadOnlyList<IAgentTool> authorizedTools,
         AgentToolExecutionContext authorizedToolContext,
-        CancellationToken ct)
+        CancellationToken ct,
+        AgentToolApprovalGrant? approvalGrant = null)
     {
         var runtime = new ChatRuntime(
             _providerFactory,
@@ -140,12 +200,14 @@ public sealed class ChatRuntimeStepExecutor
             _toolLoop,
             _hooks,
             _requestBuilder,
-            llmMiddlewares: _llmMiddlewares);
+            llmMiddlewares: _llmMiddlewares,
+            toolCheckpointPort: _toolCheckpointPort);
         return await runtime.ExecuteSingleToolStepAsync(
                 toolCalls,
                 authorizedTools,
                 authorizedToolContext,
-                ct)
+                ct,
+                approvalGrant)
             .ConfigureAwait(false);
     }
 
@@ -166,7 +228,8 @@ public sealed class ChatRuntimeStepExecutor
             _toolLoop,
             _hooks,
             _requestBuilder,
-            llmMiddlewares: _llmMiddlewares);
+            llmMiddlewares: _llmMiddlewares,
+            toolCheckpointPort: _toolCheckpointPort);
         var executionToolContext = _turnCatalog is null
             ? toolContext
             : baseRequest.ToolContext;
@@ -178,19 +241,51 @@ public sealed class ChatRuntimeStepExecutor
 
     public void RecordUsage(TokenUsage? usage) => _budgetTracker.RecordUsage(usage);
 
+    private static bool TryPlanSkillRecoveryToolCall(
+        LLMRequest request,
+        IReadOnlyList<ChatMessage> recoveryMessages,
+        string? finalContent,
+        out ToolCall toolCall)
+    {
+        toolCall = default!;
+        var recovery = request.ToolContext?.SkillRecovery ?? AgentSkillRecoveryContext.Empty;
+        var searchAttempts = recoveryMessages.Sum(message =>
+            message.ToolCalls?.Count(call => string.Equals(
+                call.Name,
+                "ornn_search_skills",
+                StringComparison.Ordinal)) ?? 0);
+        if (!SkillRecoveryPlanner.TryPlanNextDirective(
+                recovery,
+                recoveryMessages,
+                finalContent,
+                searchAttempts,
+                request.ToolContext?.Request.CallId ?? request.RequestId,
+                primarySkillAttempted: SkillRecoveryPlanner.HasPrimarySkillAttempt(
+                    recoveryMessages,
+                    recovery.PrimarySkillName),
+                out var directive) ||
+            directive.ToolCall is null)
+        {
+            return false;
+        }
+
+        toolCall = directive.ToolCall;
+        return true;
+    }
+
     private static List<ChatMessage> BuildStepMessages(
         IReadOnlyList<ChatMessage> messages,
+        int round,
         bool finalNoTools,
         IReadOnlyList<AgentToolReceipt>? toolReceipts)
     {
-        if (!finalNoTools)
-            return [..messages];
-
-        var constraints = ToolOutcomeReplyConstraintBuilder.BuildFinalNoToolsConstraints(toolOutcomes: null, toolReceipts);
-        if (constraints.Count == 0)
-            return [..messages];
-
-        return [..messages, ..constraints];
+        var constraints = ToolOutcomeReplyConstraintBuilder.BuildMutationClaimConstraints(
+            toolOutcomes: null,
+            toolReceipts);
+        return ToolOutcomeReplyConstraintBuilder.ApplyConstraints(
+            messages,
+            constraints,
+            mergeIntoExistingSystem: round == 0 && !finalNoTools);
     }
 }
 
@@ -201,5 +296,10 @@ public sealed record ChatRuntimeStepLlmResult(
     bool Terminated,
     string? FinishReason,
     TokenUsage? Usage,
+    IReadOnlyList<IAgentTool> AuthorizedTools,
+    AgentToolExecutionContext AuthorizedToolContext);
+
+public sealed record ChatRuntimeStepRecoveryToolCall(
+    ToolCall ToolCall,
     IReadOnlyList<IAgentTool> AuthorizedTools,
     AgentToolExecutionContext AuthorizedToolContext);

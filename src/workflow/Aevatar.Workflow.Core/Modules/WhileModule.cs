@@ -63,6 +63,7 @@ public sealed class WhileModule : IEventModule<IWorkflowExecutionContext>
                 Iteration = 0,
                 MaxIterations = maxIterations,
                 ConditionExpression = condition,
+                SubExternalInvocation = request.ExternalInvocation?.Clone(),
             };
             foreach (var (key, value) in subParameters)
                 state.SubParameters[key] = value;
@@ -178,12 +179,15 @@ public sealed class WhileModule : IEventModule<IWorkflowExecutionContext>
             RunId = state.RunId,
             Input = input,
             TargetRole = state.SubTargetRole,
+            ExternalInvocation = state.SubExternalInvocation?.Clone(),
         };
         var vars = BuildIterationVariables(input, state.Iteration, state.MaxIterations);
         foreach (var (key, value) in state.SubParameters)
             request.Parameters[key] = _expressionEvaluator.Evaluate(value, vars);
 
-        await ctx.PublishAsync(request, TopologyAudience.Children, ct);
+        // 迭代子步骤由本 run 的模块管线消费（与 foreach / map_reduce 一致）。
+        // 投递到 Children 时没有子 actor 承接，while 步骤会永远挂起。
+        await ctx.PublishAsync(request, TopologyAudience.Self, ct);
     }
 
     private static Dictionary<string, string> BuildIterationVariables(string input, int iteration, int maxIterations) =>

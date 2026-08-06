@@ -10,6 +10,47 @@ namespace Aevatar.AI.Tests;
 
 public sealed class AIAbstractionsProtoCoverageTests
 {
+    [Theory]
+    [InlineData(AgentToolInvocationSurface.Unspecified)]
+    [InlineData(AgentToolInvocationSurface.HumanSession)]
+    [InlineData(AgentToolInvocationSurface.WorkflowToolCall)]
+    [InlineData(AgentToolInvocationSurface.WorkflowLlmToolLoop)]
+    public void AgentToolExecutionContext_ShouldRoundTripInvocationSurface(
+        AgentToolInvocationSurface invocationSurface)
+    {
+        var payload = (AgentToolExecutionContext.Empty with
+        {
+            InvocationSurface = invocationSurface,
+        }).ToPayload();
+
+        var copy = AgentToolExecutionContextMapper.FromPayload(
+            AgentToolExecutionContextPayload.Parser.ParseFrom(payload.ToByteArray()));
+
+        copy.InvocationSurface.Should().Be(invocationSurface);
+    }
+
+    [Fact]
+    public void AgentToolExecutionContext_ShouldRoundTripDedicatedSourceReadableCredential()
+    {
+        var payload = (AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "delegation-alpha",
+                "org-alpha",
+                "sender-alpha",
+                AgentToolNyxIdCredentialKind.ProxyDelegation,
+                "source-alpha"),
+        }).ToPayload();
+
+        var copy = AgentToolExecutionContextMapper.FromPayload(
+            AgentToolExecutionContextPayload.Parser.ParseFrom(payload.ToByteArray()));
+
+        copy.Credentials.NyxIdAccessToken.Should().Be("delegation-alpha");
+        copy.Credentials.NyxIdOrgToken.Should().Be("org-alpha");
+        copy.Credentials.SenderNyxIdAccessToken.Should().Be("sender-alpha");
+        copy.Credentials.SourceReadableNyxIdAccessToken.Should().Be("source-alpha");
+    }
+
     [Fact]
     public void LLMControlContext_ShouldMergeIntoTypedContexts_AndRoundTripPayload()
     {
@@ -80,6 +121,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         LLMControlContextMapper.FromPayload(null).Should().Be(LLMControlContext.Empty);
         control.ToPayload().HasMaxToolRoundsOverride.Should().BeFalse();
     }
+
     [Fact]
     public void ProtoMessages_ShouldRoundTripAndClone()
     {
@@ -91,6 +133,7 @@ public sealed class AIAbstractionsProtoCoverageTests
             ApprovalMode = AgentToolReceiptApprovalMode.AlwaysRequire,
             IsDestructive = false,
             SideEffectKind = "ornn.publish.skill",
+            Effect = AgentToolReceiptEffect.Mutating,
             SubjectKind = "ornn.skill",
             SubjectId = "skill-1",
             SubjectVersion = "1.0",
@@ -111,6 +154,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         var receiptRoundTrip = RoundTrip(receipt, AgentToolReceipt.Parser);
         receiptRoundTrip.SubjectId.Should().Be("skill-1");
         receiptRoundTrip.SubjectHash.Should().Be("hash-1");
+        receiptRoundTrip.Effect.Should().Be(AgentToolReceiptEffect.Mutating);
         receiptRoundTrip.ManagedWorkflowHandoff.InvocationId.Should().Be("invoke-1");
         var request = RoundTrip(new ChatRequestEvent
         {
@@ -120,6 +164,8 @@ public sealed class AIAbstractionsProtoCoverageTests
             TimeoutMs = 2500,
             ScopeId = "scope-1",
             ConnectorHttpAuthorization = "Bearer connector-token",
+            CallerNyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+            CallerSourceReadableNyxIdBearerToken = "source-readable-token",
             LlmControl = new LLMControlContextPayload
             {
                 NyxIdAccessToken = "access-token",
@@ -145,6 +191,9 @@ public sealed class AIAbstractionsProtoCoverageTests
         request.TimeoutMs.Should().Be(2500);
         request.ScopeId.Should().Be("scope-1");
         request.ConnectorHttpAuthorization.Should().Be("Bearer connector-token");
+        request.CallerNyxIdCredentialKind.Should().Be(
+            AgentToolNyxIdCredentialKindPayload.ProxyDelegation);
+        request.CallerSourceReadableNyxIdBearerToken.Should().Be("source-readable-token");
         request.LlmControl.ModelOverride.Should().Be("model-a");
         request.LlmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/llm");
         request.LlmControl.MaxToolRoundsOverride.Should().Be(7);
@@ -682,4 +731,5 @@ public sealed class AIAbstractionsProtoCoverageTests
         merged.Should().Be(message);
         return parsed;
     }
+
 }

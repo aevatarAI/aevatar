@@ -9,6 +9,17 @@ namespace Aevatar.Foundation.Abstractions.Tests;
 public class EventEnvelopeTests
 {
     [Fact]
+    public void DeliveryIdentity_ShouldPreserveEnvelopeRuntimeWireFieldNumber()
+    {
+        var field = EnvelopeRuntime.Descriptor.FindFieldByName("delivery_identity");
+
+        field.ShouldNotBeNull();
+        field.FieldNumber.ShouldBe(3);
+        field.MessageType.Name.ShouldBe(nameof(DeliveryIdentity));
+        DeliveryIdentity.Descriptor.FindFieldByName("operation_id")!.FieldNumber.ShouldBe(1);
+    }
+
+    [Fact]
     public void Roundtrip_SerializeDeserialize()
     {
         var original = new EventEnvelope

@@ -24,6 +24,7 @@
     <ProjectReference Include="..\..\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.Audit.Hosting\Aevatar.Audit.Hosting.csproj" />
     <ProjectReference Include="..\..\Aevatar.BackendConsole.Hosting\Aevatar.BackendConsole.Hosting.csproj" />
+    <ProjectReference Include="..\..\..\agents\Aevatar.GAgents.Channel.Identity.Abstractions\Aevatar.GAgents.Channel.Identity.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
@@ -33,7 +34,15 @@
     <PackageReference Include="UglyToad.PdfPig" />
   </ItemGroup>
   <ItemGroup>
-    <EmbeddedResource Include="CapabilityApi\workflow-observatory.html" />
+    <EmbeddedResource Include="CapabilityApi\admin-workflow-observatory.html" />
     <EmbeddedResource Include="CapabilityApi\workflow-studio.html" />
+    <EmbeddedResource Include="CapabilityApi\studio-assistant.html" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\actor-state.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\app.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\blocks.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\protocol.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\readiness.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\styles.css" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\transport.js" />
   </ItemGroup>
 </Project>

@@ -4,6 +4,7 @@ package aevatar.gagentservice.schedules.authorization;
 option csharp_namespace = "Aevatar.GAgentService.Abstractions.Schedules.Authorization";
 
 import "google/protobuf/timestamp.proto";
+import "llm_selection.proto";
 import "scheduled_invocation_authorization_evidence.proto";
 
 enum NyxIdCredentialScope {
@@ -51,6 +52,15 @@ enum ScheduledInvocationAuthorizationFailureCode {
   SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_AUTHORIZATION_PLAN_CHANGED = 12;
   SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_DURABLE_AUTHORIZATION_UNAVAILABLE = 13;
   SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_CATALOG_PROJECTION_PENDING = 14;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_OWNER_LLM_ROUTE_UNAVAILABLE = 15;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_OWNER_LLM_MODEL_NOT_VERIFIABLE = 16;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_OWNER_LLM_MODEL_UNAVAILABLE = 17;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_DURABLE_ADMISSION_REQUIRED = 18;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_DURABLE_REQUEST_GRANT_MISMATCH = 19;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_NYX_ID_OPERATION_GRANT_REQUIRED = 20;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_NYX_ID_OPERATION_APPROVAL_REQUIRED = 21;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_NYX_ID_OPERATION_DENIED = 22;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_NYX_ID_OPERATION_AUTHORITY_CONTRACT_UNAVAILABLE = 23;
 }
 
 message StudioMemberInvocationTarget {
@@ -120,6 +130,14 @@ message ScheduledInvocationCredentialPolicy {
   string policy_version = 7;
 }
 
+message ScheduledInvocationOwnerLLMSelection {
+  aevatar.ai.LLMRouteKind route_kind = 1;
+  string route_value = 2;
+  string nyx_id_user_service_id = 3;
+  string service_slug_snapshot = 4;
+  string model = 5;
+}
+
 message ScheduledInvocationAuthorizationPlan {
   reserved 5;
   reserved "nyx_id_node_grants";
@@ -134,6 +152,7 @@ message ScheduledInvocationAuthorizationPlan {
   repeated ScheduledInvocationDisclosure disclosures = 9;
   string permission_digest = 10;
   AuthorizationOwnerIdentity authenticated_actor = 11;
+  ScheduledInvocationOwnerLLMSelection owner_llm_selection = 12;
 }
 
 message ScheduledInvocationAuthorizationConfirmation {

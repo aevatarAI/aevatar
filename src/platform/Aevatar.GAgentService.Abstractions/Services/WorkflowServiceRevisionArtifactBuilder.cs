@@ -26,17 +26,51 @@ public static class WorkflowServiceRevisionArtifactBuilder
             throw new InvalidOperationException("workflow authorization dependencies are required.");
         }
 
+        if (capabilityAdmissionPlan.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
+            !Enum.IsDefined(capabilityAdmissionPlan.ExecutionMode))
+        {
+            throw new InvalidOperationException("workflow capability admission execution mode is required.");
+        }
+
+        if (workflowSpec.ExpectedExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
+            !Enum.IsDefined(workflowSpec.ExpectedExecutionMode) ||
+            workflowSpec.ExpectedExecutionMode != capabilityAdmissionPlan.ExecutionMode)
+        {
+            throw new InvalidOperationException(
+                "workflow expected execution mode must match the capability admission plan.");
+        }
+
+        var admittedCapabilities =
+            WorkflowCapabilityAdmissionPlanIntegrity.DistinctCapabilities(capabilityAdmissionPlan);
         var authorizationEvidence = new WorkflowRevisionAuthorizationEvidence
         {
             OwnerLlmRouteRequired = authorizationDependencies.OwnerLlmRouteRequired,
-            ServiceGrantRequirement = capabilityAdmissionPlan.ExternalCapabilities.Any(static capability =>
-                capability.CapabilityCase ==
-                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService)
-                ? AuthorizationGrantRequirement.Required
-                : AuthorizationGrantRequirement.NotRequired,
+            ServiceGrantRequirement = WorkflowServiceGrantRequirementClassifier.Classify(admittedCapabilities),
         };
-        authorizationEvidence.ExternalCapabilities.Add(
-            capabilityAdmissionPlan.ExternalCapabilities.Select(static capability => capability.Clone()));
+        authorizationEvidence.ExternalCapabilities.Add(admittedCapabilities);
+
+        var bindingIdentity = WorkflowCapabilityAdmissionPlanIntegrity
+            .RequiresExplicitRequestBindingIdentity(capabilityAdmissionPlan)
+            ? WorkflowServiceDeploymentPlanIntegrity.RequireExplicitBindingIdentity(
+                workflowSpec.WorkflowId,
+                revisionSpec.RevisionId)
+            : (WorkflowServiceBindingIdentity?)null;
+
+        var workflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = resolvedWorkflowName,
+            WorkflowYaml = workflowSpec.WorkflowYaml,
+            DefinitionActorId = workflowSpec.DefinitionActorId ?? string.Empty,
+            AuthorizationEvidence = authorizationEvidence,
+            CapabilityAdmissionPlan = capabilityAdmissionPlan.Clone(),
+            ExecutionMode = capabilityAdmissionPlan.ExecutionMode,
+        };
+        workflowPlan.InlineWorkflowYamls.Add(workflowSpec.InlineWorkflowYamls);
+        if (bindingIdentity is { } explicitBindingIdentity)
+        {
+            workflowPlan.WorkflowId = explicitBindingIdentity.WorkflowId;
+            workflowPlan.RevisionId = explicitBindingIdentity.RevisionId;
+        }
 
         return new PreparedServiceRevisionArtifact
         {
@@ -57,15 +91,7 @@ public static class WorkflowServiceRevisionArtifactBuilder
             },
             DeploymentPlan = new ServiceDeploymentPlan
             {
-                WorkflowPlan = new WorkflowServiceDeploymentPlan
-                {
-                    WorkflowName = resolvedWorkflowName,
-                    WorkflowYaml = workflowSpec.WorkflowYaml,
-                    DefinitionActorId = workflowSpec.DefinitionActorId ?? string.Empty,
-                    InlineWorkflowYamls = { workflowSpec.InlineWorkflowYamls },
-                    AuthorizationEvidence = authorizationEvidence,
-                    CapabilityAdmissionPlan = capabilityAdmissionPlan.Clone(),
-                },
+                WorkflowPlan = workflowPlan,
             },
         };
     }

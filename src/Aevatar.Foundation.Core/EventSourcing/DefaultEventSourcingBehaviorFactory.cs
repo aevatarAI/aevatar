@@ -14,20 +14,20 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
     private readonly IEventStore _eventStore;
     private readonly EventSourcingRuntimeOptions _options;
     private readonly IEventSourcingSnapshotStore<TState>? _snapshotStore;
-    private readonly IEventStoreCompactionScheduler? _compactionScheduler;
+    private readonly ICommittedStatePublicationStateStore? _publicationStateStore;
     private readonly ILogger<EventSourcingBehavior<TState>>? _logger;
 
     public DefaultEventSourcingBehaviorFactory(
         IEventStore eventStore,
         EventSourcingRuntimeOptions? options = null,
         IEventSourcingSnapshotStore<TState>? snapshotStore = null,
-        IEventStoreCompactionScheduler? compactionScheduler = null,
+        ICommittedStatePublicationStateStore? publicationStateStore = null,
         ILogger<EventSourcingBehavior<TState>>? logger = null)
     {
         _eventStore = eventStore;
         _options = options ?? new EventSourcingRuntimeOptions();
         _snapshotStore = snapshotStore;
-        _compactionScheduler = compactionScheduler;
+        _publicationStateStore = publicationStateStore;
         _logger = logger;
     }
 
@@ -59,8 +59,8 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
             _logger,
             _options.EnableEventCompaction,
             _options.RetainedEventsAfterSnapshot,
-            _compactionScheduler,
-            recoverFromVersionDrift);
+            recoverFromVersionDrift,
+            _publicationStateStore);
     }
 
     private sealed class DelegatingEventSourcingBehavior : EventSourcingBehavior<TState>
@@ -76,8 +76,8 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
             ILogger<EventSourcingBehavior<TState>>? logger,
             bool enableEventCompaction,
             int retainedEventsAfterSnapshot,
-            IEventStoreCompactionScheduler? compactionScheduler,
-            bool recoverFromVersionDriftOnReplay)
+            bool recoverFromVersionDriftOnReplay,
+            ICommittedStatePublicationStateStore? publicationStateStore)
             : base(
                 eventStore,
                 agentId,
@@ -86,8 +86,8 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
                 logger,
                 enableEventCompaction,
                 retainedEventsAfterSnapshot,
-                compactionScheduler,
-                recoverFromVersionDriftOnReplay)
+                recoverFromVersionDriftOnReplay,
+                publicationStateStore)
         {
             _transitionState = transitionState;
         }

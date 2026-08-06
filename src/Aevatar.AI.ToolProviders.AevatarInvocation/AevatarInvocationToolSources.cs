@@ -32,6 +32,19 @@ public sealed class InvokeTeamToolSource : IAgentToolSource
         Task.FromResult<IReadOnlyList<IAgentTool>>([new InvokeTeamTool(_dispatcher)]);
 }
 
+public sealed class InvokeMemberToolSource : IAgentToolSource
+{
+    private readonly AevatarInvocationDispatcher _dispatcher;
+
+    public InvokeMemberToolSource(AevatarInvocationDispatcher dispatcher)
+    {
+        _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
+    }
+
+    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<IAgentTool>>([new InvokeMemberTool(_dispatcher)]);
+}
+
 public sealed class StartWorkflowToolSource : IAgentToolSource
 {
     private readonly AevatarInvocationDispatcher _dispatcher;
@@ -115,6 +128,34 @@ internal sealed class InvokeTeamTool : IAevatarInvocationTool
         _dispatcher.InvokeTeamAsync(argumentsJson, ct);
 }
 
+internal sealed class InvokeMemberTool : IAevatarInvocationTool
+{
+    private readonly AevatarInvocationDispatcher _dispatcher;
+
+    public InvokeMemberTool(AevatarInvocationDispatcher dispatcher)
+    {
+        _dispatcher = dispatcher;
+    }
+
+    public string Name => "aevatar_invoke_member";
+
+    public string Description =>
+        "Dispatch one Studio member run by member_id with a typed chat payload. " +
+        "The result confirms dispatch acceptance only; it does not contain the member run's terminal result. " +
+        "After an accepted or streaming result, do not call this tool again in the same turn. " +
+        "Use aevatar_observe_run with service_run.service_id and service_run.run_id from the receipt to read progress or completion. " +
+        "wait supports ack or stream, not complete. endpoint_id is optional and defaults to chat; pass it only when a different published endpoint is explicitly known.";
+
+    public string ParametersSchema => AevatarInvocationToolSchemas.InvokeMember;
+
+    public string SideEffectKind => "studio.member.run-dispatch";
+
+    public AgentToolTurnReusePolicy TurnReusePolicy => AgentToolTurnReusePolicy.RetireAfterSuccess;
+
+    public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+        _dispatcher.InvokeMemberAsync(argumentsJson, ct);
+}
+
 internal sealed class StartWorkflowTool : IAevatarInvocationTool
 {
     private readonly AevatarInvocationDispatcher _dispatcher;
@@ -128,6 +169,7 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
 
     public string Description =>
         "Start a mounted/imported Aevatar Scope Workflow by workflow_id with typed inputs. " +
+        "The returned run_id is the workflow run actor id; command_id is the start command/tool-call id. " +
         "Use inline workflow_yamls only as an explicit fallback when Scope Workflow mounting/import is unavailable; Ornn workflow YAMLs from use_skill are templates/import sources, not page-visible runnable workflow authority by themselves. " +
         "Use wait=stream only when the current surface can deliver or observe the workflow terminal result; channel bots without workflow result delivery should not start background-only runs.";
 
@@ -152,6 +194,8 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
             Status = AgentToolReceiptStatus.Success,
             ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
             SideEffectKind = SideEffectKind,
+            SubjectKind = AevatarInvocationReceiptJson.InvocationRunSubjectKind,
+            SubjectId = invocation.RunId,
             ResultJson = resultJson ?? string.Empty,
         };
         if (workflowRuntime.HasManagedParent && IsAcceptedManagedWorkflowStart(invocation))
@@ -248,7 +292,7 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
         WorkflowRunBackgroundDeliveryReceipt? WorkflowRunDelivery);
 }
 
-internal sealed class ObserveRunTool : IAevatarInvocationTool
+internal sealed class ObserveRunTool : IAevatarInvocationReadOnlyTool
 {
     private readonly AevatarInvocationDispatcher _dispatcher;
 
@@ -260,17 +304,26 @@ internal sealed class ObserveRunTool : IAevatarInvocationTool
     public string Name => "aevatar_observe_run";
 
     public string Description =>
-        "Observe a previously accepted Aevatar run through one explicitly selected readmodel target.";
+        "Observe an already accepted Aevatar run through one explicitly selected readmodel target. " +
+        "This does not start or execute workflows; for execution requests, call aevatar_start_workflow first and observe only after a run id or command id is known.";
 
     public string ParametersSchema => AevatarInvocationToolSchemas.ObserveRun;
 
     public bool IsReadOnly => true;
 
+    public string ReadOnlySubjectIdPropertyName => "run_id";
+
+    public IReadOnlyList<AevatarInvocationReceiptJson.ResultPropertyRequirement> ReadOnlyResultRequirements { get; } = new[]
+    {
+        AevatarInvocationReceiptJson.StringProperty("run_id"),
+        AevatarInvocationReceiptJson.StringProperty("status"),
+    };
+
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.ObserveRunAsync(argumentsJson, ct);
 }
 
-internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
+internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationReadOnlyTool
 {
     private const int DefaultTimelineTake = 50;
     private const int DefaultGraphTake = 200;
@@ -300,7 +353,8 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
 
     public string Description =>
         "Read a workflow run's projected artifact/export by workflow_run_id. " +
-        "Use this after aevatar_start_workflow returns a run_id; long workflow actor IDs are also accepted. " +
+        "Use this after aevatar_start_workflow returns a run_id and actor_id; always pass both as workflow_run_id and actor_id so artifact reads do not depend on eventual run-binding lookup. " +
+        "Long workflow actor IDs are also accepted as workflow_run_id for callers that do not have a separate run ID. " +
         "For report reads, the tool waits briefly for projection materialization and returns pending if the artifact is not visible yet; do not infer the final workflow output from a pending result. " +
         "This tool reads workflow-run report/timeline/graph artifacts only and does not inspect live actor state.";
 
@@ -312,6 +366,10 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
             "workflow_run_id": {
               "type": "string",
               "description": "Workflow run ID returned by aevatar_start_workflow"
+            },
+            "actor_id": {
+              "type": "string",
+              "description": "Workflow actor ID returned by the same aevatar_start_workflow call. Always pass it when available to avoid eventual run-binding lookup."
             },
             "view": {
               "type": "string",
@@ -342,6 +400,14 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
 
     public bool IsReadOnly => true;
 
+    public string ReadOnlySubjectIdPropertyName => "workflow_run_id";
+
+    public IReadOnlyList<AevatarInvocationReceiptJson.ResultPropertyRequirement> ReadOnlyResultRequirements { get; } = new[]
+    {
+        AevatarInvocationReceiptJson.StringProperty("workflow_run_id"),
+        AevatarInvocationReceiptJson.StringProperty("artifact"),
+    };
+
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         WorkflowRunArtifactArguments args;
@@ -366,9 +432,9 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
 
         return args.View switch
         {
-            "timeline" => await ReadTimelineAsync(args, await ResolveArtifactTargetAsync(args.WorkflowRunId, ct), ct),
-            "graph_edges" => await ReadGraphEdgesAsync(args, await ResolveArtifactTargetAsync(args.WorkflowRunId, ct), ct),
-            "graph_subgraph" => await ReadGraphSubgraphAsync(args, await ResolveArtifactTargetAsync(args.WorkflowRunId, ct), ct),
+            "timeline" => await ReadTimelineAsync(args, await ResolveArtifactTargetAsync(args.WorkflowRunId, args.ActorId, ct), ct),
+            "graph_edges" => await ReadGraphEdgesAsync(args, await ResolveArtifactTargetAsync(args.WorkflowRunId, args.ActorId, ct), ct),
+            "graph_subgraph" => await ReadGraphSubgraphAsync(args, await ResolveArtifactTargetAsync(args.WorkflowRunId, args.ActorId, ct), ct),
             _ => await ReadReportAsync(args, ct),
         };
     }
@@ -380,6 +446,7 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
         var waitMs = Math.Clamp(args.WaitMs ?? DefaultReportWaitMs, 0, MaxReportWaitMs);
         var (report, artifactTarget) = await ReadReportForRunAsync(
             args.WorkflowRunId,
+            args.ActorId,
             TimeSpan.FromMilliseconds(waitMs),
             ct);
         if (report == null)
@@ -546,6 +613,7 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
 
     private async Task<(WorkflowRunReport? Report, WorkflowRunArtifactTarget Target)> ReadReportForRunAsync(
         string workflowRunId,
+        string actorId,
         TimeSpan wait,
         CancellationToken ct)
     {
@@ -554,7 +622,7 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
 
         while (true)
         {
-            artifactTarget = await ResolveArtifactTargetAsync(workflowRunId, ct);
+            artifactTarget = await ResolveArtifactTargetAsync(workflowRunId, actorId, ct);
             var report = await TryReadReportForTargetOnceAsync(artifactTarget, ct);
             if (report != null || wait <= TimeSpan.Zero)
                 return (report, artifactTarget);
@@ -585,9 +653,14 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
 
     private async Task<WorkflowRunArtifactTarget> ResolveArtifactTargetAsync(
         string workflowRunId,
+        string actorId,
         CancellationToken ct)
     {
         var normalized = workflowRunId.Trim();
+        var normalizedActorId = actorId.Trim();
+        if (!string.IsNullOrWhiteSpace(normalizedActorId))
+            return new WorkflowRunArtifactTarget(normalized, normalizedActorId);
+
         IReadOnlyList<WorkflowActorBinding> bindings;
         try
         {
@@ -598,14 +671,14 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
             bindings = [];
         }
 
-        var actorId = bindings
+        var resolvedActorId = bindings
             .Where(static binding => binding.ActorKind == WorkflowActorKind.Run)
             .Select(static binding => binding.ActorId?.Trim() ?? string.Empty)
             .FirstOrDefault(static value => value.Length > 0);
 
         return new WorkflowRunArtifactTarget(
             normalized,
-            string.IsNullOrWhiteSpace(actorId) ? normalized : actorId);
+            string.IsNullOrWhiteSpace(resolvedActorId) ? normalized : resolvedActorId);
     }
 
     private static WorkflowRunGraphExportQueryOptions? BuildGraphOptions(WorkflowRunArtifactArguments args) =>
@@ -648,6 +721,7 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
 
     private sealed record WorkflowRunArtifactArguments(
         string WorkflowRunId,
+        string ActorId,
         string View,
         int? Take,
         int? GraphDepth,
@@ -657,7 +731,7 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
         public static WorkflowRunArtifactArguments Parse(string? argumentsJson)
         {
             if (string.IsNullOrWhiteSpace(argumentsJson))
-                return new WorkflowRunArtifactArguments(string.Empty, "report", null, null, null, []);
+                return new WorkflowRunArtifactArguments(string.Empty, string.Empty, "report", null, null, null, []);
 
             using var document = JsonDocument.Parse(argumentsJson);
             if (document.RootElement.ValueKind != JsonValueKind.Object)
@@ -671,6 +745,7 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
 
             return new WorkflowRunArtifactArguments(
                 workflowRunId.Trim(),
+                ReadString(root, "actor_id").Trim(),
                 NormalizeView(view),
                 ReadInt(root, "take"),
                 ReadInt(root, "graph_depth"),

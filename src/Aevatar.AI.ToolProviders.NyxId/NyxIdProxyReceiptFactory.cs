@@ -5,6 +5,8 @@ namespace Aevatar.AI.ToolProviders.NyxId;
 
 internal static class NyxIdProxyReceiptFactory
 {
+    private const string UserServiceSubjectKind = "nyxid.user-service";
+
     public static AgentToolReceipt? TryCreate(
         string callId,
         string toolName,
@@ -14,8 +16,9 @@ internal static class NyxIdProxyReceiptFactory
         string? resourceUri,
         string resultJson)
     {
+        var normalizedUserServiceId = NormalizeUserServiceId(userServiceId);
         if (!NyxIdApiClient.TryParseProxyError(resultJson, out var error) || error is null)
-            return null;
+            return CreateSuccess(callId, toolName, normalizedUserServiceId, resultJson);
 
         var normalizedSlug = NormalizeSlug(serviceSlug);
         if (error.IsAuthorizationRequired)
@@ -23,29 +26,76 @@ internal static class NyxIdProxyReceiptFactory
                 callId,
                 toolName,
                 normalizedSlug,
-                userServiceId,
+                normalizedUserServiceId,
                 serviceLabel,
                 resourceUri);
 
+        var isServiceScopeForbidden = error.HttpStatus == 403 &&
+                                      string.Equals(
+                                          error.ErrorKey,
+                                          "api_key_scope_forbidden",
+                                          StringComparison.OrdinalIgnoreCase);
         var errorCode = error.HttpStatus switch
         {
             401 => "NYXID_PROXY_UNAUTHORIZED",
+            403 when isServiceScopeForbidden => "NYXID_PROXY_SERVICE_SCOPE_FORBIDDEN",
             403 => "NYXID_PROXY_FORBIDDEN",
             _ => $"NYXID_PROXY_HTTP_{error.HttpStatus}",
         };
-        var safeMessage = error.HttpStatus == 403
-            ? "The service request was denied."
-            : "The service request failed.";
+        var safeMessage = isServiceScopeForbidden
+            ? "The NyxID caller credential is not authorized for this service."
+            : error.HttpStatus == 403
+                ? "The service request was denied."
+                : "The service request failed.";
 
-        return new AgentToolReceipt
+        return CreateError(
+            callId,
+            toolName,
+            normalizedUserServiceId,
+            errorCode,
+            safeMessage,
+            BuildSafeResult(errorCode, safeMessage));
+    }
+
+    public static AgentToolReceipt? CreateSuccess(
+        string callId,
+        string toolName,
+        string? userServiceId,
+        string resultJson)
+    {
+        var normalizedUserServiceId = NormalizeUserServiceId(userServiceId);
+        return normalizedUserServiceId == null
+            ? null
+            : new AgentToolReceipt
+            {
+                CallId = callId ?? string.Empty,
+                ToolName = toolName ?? string.Empty,
+                Status = AgentToolReceiptStatus.Success,
+                SubjectKind = UserServiceSubjectKind,
+                SubjectId = normalizedUserServiceId,
+                ResultJson = resultJson ?? string.Empty,
+            };
+    }
+
+    public static AgentToolReceipt CreateError(
+        string callId,
+        string toolName,
+        string? userServiceId,
+        string errorCode,
+        string errorMessage,
+        string resultJson)
+    {
+        var receipt = new AgentToolReceipt
         {
             CallId = callId ?? string.Empty,
             ToolName = toolName ?? string.Empty,
             Status = AgentToolReceiptStatus.Error,
-            ErrorCode = errorCode,
-            ErrorMessage = safeMessage,
-            ResultJson = BuildSafeResult(errorCode, safeMessage),
+            ErrorCode = errorCode ?? string.Empty,
+            ErrorMessage = errorMessage ?? string.Empty,
+            ResultJson = resultJson ?? string.Empty,
         };
+        AttachUserServiceSubject(receipt, NormalizeUserServiceId(userServiceId));
+        return receipt;
     }
 
     private static AgentToolReceipt CreateAuthorizationRequired(
@@ -64,16 +114,15 @@ internal static class NyxIdProxyReceiptFactory
             ReasonCode = reasonCode,
             SafeMessage = safeMessage,
         };
-        var normalizedUserServiceId = NormalizeUserServiceId(userServiceId);
-        if (normalizedUserServiceId != null)
-            authorizationRequired.UserServiceId = normalizedUserServiceId;
+        if (userServiceId != null)
+            authorizationRequired.UserServiceId = userServiceId;
         if (!string.IsNullOrWhiteSpace(serviceLabel))
             authorizationRequired.ServiceLabel = serviceLabel.Trim();
         var safeResourceUri = NormalizeResourceUri(resourceUri);
         if (safeResourceUri != null)
             authorizationRequired.ResourceUri = safeResourceUri;
 
-        return new AgentToolReceipt
+        var receipt = new AgentToolReceipt
         {
             CallId = callId ?? string.Empty,
             ToolName = toolName ?? string.Empty,
@@ -83,6 +132,8 @@ internal static class NyxIdProxyReceiptFactory
             ResultJson = BuildSafeResult(reasonCode, safeMessage),
             AuthorizationRequired = authorizationRequired,
         };
+        AttachUserServiceSubject(receipt, userServiceId);
+        return receipt;
     }
 
     private static string NormalizeSlug(string? serviceSlug)
@@ -104,6 +155,17 @@ internal static class NyxIdProxyReceiptFactory
                normalized.All(static character => !char.IsControl(character))
             ? normalized
             : null;
+    }
+
+    private static void AttachUserServiceSubject(
+        AgentToolReceipt receipt,
+        string? normalizedUserServiceId)
+    {
+        if (normalizedUserServiceId == null)
+            return;
+
+        receipt.SubjectKind = UserServiceSubjectKind;
+        receipt.SubjectId = normalizedUserServiceId;
     }
 
     private static string BuildSafeResult(string errorCode, string safeMessage) =>

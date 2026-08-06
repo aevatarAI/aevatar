@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Core;
@@ -15,24 +16,53 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public class WorkflowDefinitionCatalogTests
 {
+    private static readonly string[] StudioManagedRuntimeAevatarInvocationToolNames =
+    [
+        "aevatar_invoke_gagent",
+        "aevatar_invoke_team",
+        "aevatar_invoke_member",
+        "aevatar_observe_run",
+        "aevatar_read_workflow_run_artifact",
+    ];
+
     [Fact]
     public void Register_And_GetYaml()
     {
         var registry = new WorkflowDefinitionCatalog();
-        registry.Register("test", "name: test\nsteps: []");
+        registry.Register(
+            "test",
+            "name: test\nsteps: []",
+            ExternalCapabilityExecutionMode.Interactive);
 
         registry.GetYaml("test").Should().Contain("name: test");
         registry.GetYaml("TEST").Should().NotBeNull(); // Case-insensitive lookup.
         registry.GetYaml("nonexistent").Should().BeNull();
         registry.GetDefinition("test")!.DefinitionActorId.Should().Be(WorkflowDefinitionActorId.Format("test"));
+        registry.GetDefinition("test")!.ExpectedExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Interactive);
+    }
+
+    [Fact]
+    public void Register_WithUnspecifiedMode_ShouldReject()
+    {
+        var registry = new WorkflowDefinitionCatalog();
+
+        var act = () => registry.Register(
+            "test",
+            "name: test\nsteps: []",
+            ExternalCapabilityExecutionMode.Unspecified);
+
+        act.Should().Throw<ArgumentOutOfRangeException>()
+            .WithMessage("*execution mode is required*");
+        registry.GetNames().Should().BeEmpty();
     }
 
     [Fact]
     public void GetNames_ReturnsAll()
     {
         var registry = new WorkflowDefinitionCatalog();
-        registry.Register("alpha", "a");
-        registry.Register("beta", "b");
+        registry.Register("alpha", "a", ExternalCapabilityExecutionMode.Interactive);
+        registry.Register("beta", "b", ExternalCapabilityExecutionMode.Interactive);
 
         registry.GetNames().Should().HaveCount(2);
     }
@@ -112,7 +142,10 @@ public class WorkflowDefinitionCatalogTests
             File.WriteAllText(Path.Combine(tmpDir, "direct.yaml"), "name: direct\nsteps:\n  - id: from_file\n");
 
             var registry = new WorkflowDefinitionCatalog();
-            registry.Register("direct", "name: direct\nsteps:\n  - id: built_in\n");
+            registry.Register(
+                "direct",
+                "name: direct\nsteps:\n  - id: built_in\n",
+                ExternalCapabilityExecutionMode.Interactive);
             var loader = new WorkflowDefinitionFileLoader();
 
             var count = loader.LoadInto(
@@ -216,16 +249,25 @@ public class WorkflowDefinitionCatalogTests
         role.SystemPrompt.Should().Contain("aevatar_create_team");
         role.SystemPrompt.Should().Contain("aevatar_list_teams");
         role.SystemPrompt.Should().Contain("aevatar_create_member");
+        role.SystemPrompt.Should().Contain("aevatar_create_member_workflow_draft");
         role.SystemPrompt.Should().Contain("aevatar_bind_member_workflow");
         role.SystemPrompt.Should().Contain("aevatar_schedule_member_workflow");
         role.SystemPrompt.Should().Contain("aevatar_provision_workflow_schedule");
+        role.SystemPrompt.Should().Contain(
+            "Without a template qualifier, workflow means a Team-owned workflow member in the current workspace");
+        role.SystemPrompt.Should().Contain("follow `next_page_token`");
+        role.SystemPrompt.Should().Contain("public templates, examples, or the template library");
+        role.SystemPrompt.Should().Contain("`member_id`, `workflow_id`, and `published_service_id`");
         role.SystemPrompt.Should().Contain("NOT create a separate `wf-...` member");
         role.SystemPrompt.Should().Contain("Do not call `aevatar_provision_workflow_schedule` until a Team has been selected or created");
         role.SystemPrompt.Should().Contain("pass that confirmed `team_id`");
-        role.SystemPrompt.Should().Contain("/workflow/observatory");
+        role.SystemPrompt.Should().Contain("/admin#/observatory");
         role.SystemPrompt.Should().Contain("Do NOT");
         // Honesty: the receipt is Accepted (async), not a success claim.
         role.SystemPrompt.Should().Contain("Accepted");
+        role.SystemPrompt.Should().Contain("`aevatar_invoke_member` dispatches exactly one member run");
+        role.SystemPrompt.Should().Contain("Never pass `wait: \"complete\"`");
+        role.SystemPrompt.Should().Contain("A pending observation is not permission to dispatch another member run");
         // Schema teaching: without it the model falls back to foreign workflow
         // dialects (GitHub-Actions-style version:/inputs:) that the strict parser
         // rejects. Pin the load-bearing pieces: the closed top-level key list,
@@ -235,6 +277,9 @@ public class WorkflowDefinitionCatalogTests
         role.SystemPrompt.Should().Contain(
             $"no {WorkflowYamlRootSchema.FormatUnsupportedDialectRootFields()}");
         role.SystemPrompt.Should().Contain("name: daily_digest");
+        role.SystemPrompt.Should().Contain("`${json(...)}` escapes characters only; it does not add surrounding quotes.");
+        role.SystemPrompt.Should().Contain("When embedding dynamic text as a JSON string value, write `\"${json(...)}\"`.");
+        role.SystemPrompt.Should().Contain("If a tool argument field itself contains JSON encoded as a string");
         // Retry semantics: same display_name converges on the same resources;
         // reusing it for a different automation replaces the previous one.
         role.SystemPrompt.Should().Contain("SAME `display_name`");
@@ -243,25 +288,30 @@ public class WorkflowDefinitionCatalogTests
         role.SystemPrompt.Should().NotContain("workflow_create_def");
         role.SystemPrompt.Should().NotContain("aevatar_start_workflow");
 
-        // The allowlist is the lever that keeps both the Lark scheduler and the hanging loose-definition
-        // tools out of the studio surface, and brings the channel-free provision tool in.
+        // The allowlist is the lever that keeps hanging loose-definition and unmanaged workflow-start
+        // tools out of the studio surface, while admitting the direct invocation tools that are safe
+        // under the Studio managed workflow runtime.
         role.AgentToolScope.Should().NotBeNull();
         var allowed = role.AgentToolScope!.AllowedToolNames;
         allowed.Should().Contain("aevatar_list_teams");
         allowed.Should().Contain("aevatar_create_team");
         allowed.Should().Contain("aevatar_get_team");
         allowed.Should().Contain("aevatar_create_member");
+        allowed.Should().Contain("aevatar_create_member_workflow_draft");
         allowed.Should().Contain("aevatar_list_members");
         allowed.Should().Contain("aevatar_get_member");
         allowed.Should().Contain("aevatar_list_schedules");
         allowed.Should().Contain("aevatar_get_schedule");
         allowed.Should().Contain("aevatar_list_workflows");
-        allowed.Should().Contain("aevatar_get_workflow");
+        allowed.Should().Contain("aevatar_list_workflow_templates");
+        allowed.Should().Contain("aevatar_get_workflow_template");
+        allowed.Should().NotContain("aevatar_get_workflow");
         allowed.Should().Contain("aevatar_bind_member_workflow");
         allowed.Should().Contain("aevatar_schedule_member_workflow");
         allowed.Should().Contain("aevatar_provision_workflow_schedule");
-        allowed.Should().Contain("aevatar_observe_run");
-        allowed.Should().Contain("aevatar_read_workflow_run_artifact");
+        allowed.Should().Contain(StudioManagedRuntimeAevatarInvocationToolNames);
+        allowed.Should().Contain("web_search");
+        allowed.Should().Contain("web_fetch");
         // The loose-definition path (file-only create + run-by-name) hangs 30s on an unprovisioned
         // definition actor — it must be absent from the studio surface.
         allowed.Should().NotContain("workflow_create_def");
@@ -280,11 +330,256 @@ public class WorkflowDefinitionCatalogTests
     }
 
     [Fact]
+    public void BuiltInStudioYaml_ShouldExposeNyxIdCapabilityToolsWithoutCollapsingServiceSemantics()
+    {
+        var workflow = new WorkflowParser().Parse(WorkflowDefinitionCatalog.BuiltInStudioYaml);
+        var role = workflow.Roles.Should().ContainSingle().Subject;
+
+        role.SystemPrompt.Should().Contain("NyxID is a separate caller-account capability domain");
+        role.SystemPrompt.Should().Contain("The word \"service\" is ambiguous");
+        role.SystemPrompt.Should().Contain("我的 nyxId service 有哪些");
+        role.SystemPrompt.Should().Contain("call `nyxid_services` with `action: \"list\"`");
+        role.SystemPrompt.Should().Contain("Do not treat unqualified \"services\" as NyxID services");
+        role.SystemPrompt.Should().Contain("Studio published workflow service");
+        role.SystemPrompt.Should().Contain("NyxID connected service");
+        role.SystemPrompt.Should().Contain("Do NOT use `aevatar_list_workflows`");
+        role.SystemPrompt.Should().Contain("The user does not need to say NyxID for an external capability request");
+        role.SystemPrompt.Should().Contain("first look for a matching NyxID connected service");
+        role.SystemPrompt.Should().Contain("Treat connected-service visibility as a branch point");
+        role.SystemPrompt.Should().Contain("If a caller-visible matching NyxID UserService is found");
+        role.SystemPrompt.Should().Contain("execute through the connected-service operation path");
+        role.SystemPrompt.Should().Contain("If no caller-visible matching NyxID UserService is found");
+        role.SystemPrompt.Should().Contain("immediately resolve the named external service through `nyxid_catalog`");
+        role.SystemPrompt.Should().Contain("then call `nyxid_require_service`");
+        role.SystemPrompt.Should().Contain("Do not stop after `nyxid_services`");
+        role.SystemPrompt.Should().Contain("For every connect, add, or authorize request");
+        role.SystemPrompt.Should().Contain("`nyxid_catalog` is mandatory discovery");
+        role.SystemPrompt.Should().Contain("Natural-language service or provider names are not exact NyxID catalog slugs");
+        role.SystemPrompt.Should().Contain("Do not pass a display name, provider name, brand name, or ordinary service word as `nyxid_catalog.slug`");
+        role.SystemPrompt.Should().Contain("If the exact catalog slug is not already verified in the current turn");
+        role.SystemPrompt.Should().Contain("call `nyxid_catalog` without `slug`");
+        role.SystemPrompt.Should().Contain("If a `nyxid_catalog` slug lookup returns 404 or `not_found`");
+        role.SystemPrompt.Should().Contain("treat only that candidate slug as unverified");
+        role.SystemPrompt.Should().Contain("recover by calling `nyxid_catalog` without `slug`");
+        role.SystemPrompt.Should().Contain("Do not let a catalog 404 replace `nyxid_require_service`");
+        role.SystemPrompt.Should().Contain("`catalogIdentityCandidate`");
+        role.SystemPrompt.Should().Contain("only the exact returned `slug` may enter");
+        role.SystemPrompt.Should().Contain("Never pass a provider slug, display name");
+        role.SystemPrompt.Should().Contain("guessed").And.Contain("value");
+        role.SystemPrompt.Should().Contain("For a bare source-code-hosting connection");
+        role.SystemPrompt.Should().Contain("repository");
+        role.SystemPrompt.Should().Contain("access scope instead of omitting scopes");
+        role.SystemPrompt.Should().Contain("Then always call `nyxid_require_service`");
+        role.SystemPrompt.Should().Contain("Never end the turn after catalog discovery");
+        role.SystemPrompt.Should().Contain("the authority for the interactive");
+        role.SystemPrompt.Should().Contain("`service.connect` handoff");
+        role.SystemPrompt.Should().Contain("prose and catalog results are not substitutes");
+        role.SystemPrompt.Should().Contain("use the admitted per-operation connected-service tool");
+        role.SystemPrompt.Should().Contain("Do not call a provider-specific chat tool first");
+        role.SystemPrompt.Should().Contain("`list_external_workflow_capabilities`");
+        role.SystemPrompt.Should().Contain("copy that descriptor's exact `selector` object");
+        role.SystemPrompt.Should().Contain("as the step-level `capability` value");
+        role.SystemPrompt.Should().Contain("The list tool's `selector` uses workflow YAML field names");
+        role.SystemPrompt.Should().Contain("Do not author protobuf JSON spellings `nyx_id_operation` or `nyx_id_request` in workflow YAML");
+        role.SystemPrompt.Should().Contain("step-level `capability.nyxid_operation`");
+        role.SystemPrompt.Should().Contain("`path_params`, `query`");
+        role.SystemPrompt.Should().Contain("`headers`, `body`, and `response_mode`");
+        role.SystemPrompt.Should().NotContain("exact static `service_id`, `slug`, `operation_id`, `method`, `path`, and `contract_digest`");
+        role.SystemPrompt.Should().Contain("Do not generate or guess selector identities or server-owned proof fields");
+        role.SystemPrompt.Should().NotContain("contract_digest");
+        role.SystemPrompt.Should().Contain("Specialized provider or skill-discovery tools are not the default path");
+        role.SystemPrompt.Should().Contain("Do not create a provider-specific prompt rule or runtime-tool mapping for one named service");
+        role.SystemPrompt.Should().Contain("service-specific behavior must come from discovered connected-service/catalog/host connector/runtime tool schemas");
+        role.SystemPrompt.Should().NotContain("Use NyxID tools only when the user explicitly mentions");
+        role.SystemPrompt.Should().NotContain("You may use `ornn_search_skills` and `use_skill` to discover and load skills for genuinely");
+        role.SystemPrompt.Should().NotContain("Use specialized provider tools only when the user explicitly asks for that provider capability");
+
+        role.AgentToolScope.Should().NotBeNull();
+        var allowed = role.AgentToolScope!.AllowedToolNames;
+        allowed.Should().Contain("nyxid_status");
+        allowed.Should().Contain("nyxid_account");
+        allowed.Should().Contain("nyxid_catalog");
+        allowed.Should().Contain("nyxid_llm_status");
+        allowed.Should().Contain("nyxid_services");
+        allowed.Should().NotContain("nyxid_proxy");
+        role.AgentToolScope.ToolSetRefs.Should().Equal("nyxid.connected_services");
+        allowed.Should().Contain("nyxid_require_service");
+        allowed.Should().Contain("list_external_workflow_capabilities");
+        allowed.Should().Contain("inspect_external_workflow_capability_readiness");
+        allowed.Should().Contain("preview_workflow_explicit_requests");
+
+        allowed.Should().NotContain("nyxid_api_keys");
+        allowed.Should().NotContain("nyxid_nodes");
+        allowed.Should().NotContain("nyxid_approvals");
+        allowed.Should().NotContain("nyxid_providers");
+        allowed.Should().NotContain("nyxid_notifications");
+        allowed.Should().NotContain("nyxid_mfa");
+        allowed.Should().NotContain("nyxid_profile");
+        allowed.Should().NotContain("nyxid_endpoints");
+        allowed.Should().NotContain("nyxid_external_keys");
+        allowed.Should().NotContain("nyxid_channel_bots");
+        allowed.Should().NotContain("nyxid_orgs");
+        allowed.Should().NotContain("nyxid_admin");
+        allowed.Should().NotContain("ssh_exec");
+        allowed.Should().NotContain("codex_exec");
+        allowed.Should().NotContain("code_execute");
+    }
+
+    [Fact]
+    public void BuiltInStudioYaml_ShouldAuthorNyxIdRequestWhenExactDescriptorIsUnavailable()
+    {
+        var workflow = new WorkflowParser().Parse(WorkflowDefinitionCatalog.BuiltInStudioYaml);
+        var prompt = workflow.Roles.Should().ContainSingle().Subject.SystemPrompt;
+
+        var discover = prompt.IndexOf("call `list_external_workflow_capabilities`", StringComparison.Ordinal);
+        var selectService = prompt.IndexOf(
+            "`nyxid_services` with `action: \"list\"`",
+            discover + 1,
+            StringComparison.Ordinal);
+        var inspectService = prompt.IndexOf(
+            "`nyxid_services` with `action: \"show\"`",
+            selectService + 1,
+            StringComparison.Ordinal);
+        var search = prompt.IndexOf("call `web_search`", inspectService + 1, StringComparison.Ordinal);
+        var fetch = prompt.IndexOf("call `web_fetch`", search + 1, StringComparison.Ordinal);
+        var author = prompt.IndexOf(
+            "`capability.nyxid_request` with the exact",
+            fetch + 1,
+            StringComparison.Ordinal);
+        var saveDraft = prompt.IndexOf(
+            "`aevatar_create_member_workflow_draft`",
+            author + 1,
+            StringComparison.Ordinal);
+        var preview = prompt.IndexOf("`preview_workflow_explicit_requests`", saveDraft + 1, StringComparison.Ordinal);
+        var bind = prompt.IndexOf("`aevatar_bind_member_workflow`", preview + 1, StringComparison.Ordinal);
+
+        discover.Should().BeGreaterThanOrEqualTo(0);
+        selectService.Should().BeGreaterThan(discover);
+        inspectService.Should().BeGreaterThan(selectService);
+        search.Should().BeGreaterThan(inspectService);
+        fetch.Should().BeGreaterThan(search);
+        author.Should().BeGreaterThan(fetch);
+        saveDraft.Should().BeGreaterThan(author);
+        preview.Should().BeGreaterThan(saveDraft);
+        bind.Should().BeGreaterThan(preview);
+        prompt.Should().Contain("No matching exact descriptor is a fallback trigger, not a blocker.");
+        prompt.Should().Contain(
+            "Only after `descriptor_discovery` returns no matching exact descriptor may the workflow enter the `nyxid_request` fallback branch.");
+        prompt.Should().Contain("The next tool call MUST be");
+        prompt.Should().Contain("Before capability resolution reaches");
+        prompt.Should().Contain("`exact_operation_resolved`, `fallback_request_resolved`, or `fallback_exhausted`");
+        prompt.Should().Contain("member, or workflow draft, and do not produce a final answer.");
+        prompt.Should().Contain("Only these outcomes set `fallback_exhausted`");
+        prompt.Should().Contain("official documentation");
+        prompt.Should().Contain("exact `user_service_id`");
+        prompt.Should().Contain("method, path_template");
+        prompt.Should().Contain(
+            "query_parameters, header_parameters, body_mode, body_required, and response_mode");
+        prompt.Should().Contain("`tool_call` to `nyxid_proxy`");
+        prompt.Should().Contain(
+            "Only the descriptor-miss fallback may author `capability.nyxid_request` plus `nyxid_proxy` as the workflow-callable service path.");
+        prompt.Should().Contain("either an exact descriptor or a descriptor-miss fallback request");
+        prompt.Should().Contain("Only when no matching connected UserService exists or official documentation cannot establish");
+        prompt.Should().Contain("`runnable=false`");
+        prompt.Should().Contain("NYXID_OPERATION_SELECTION_REQUIRED");
+        prompt.Should().Contain("Do not invent selector identities, operation proof, credentials, or server-owned proof fields");
+        prompt.Should().NotContain("When the exact UserService and official HTTP contract are established");
+        prompt.Should().NotContain("A canonical `capability.nyxid_request` plus `nyxid_proxy` is a workflow-callable");
+        prompt.Should().NotContain("infer the minimal authoring shape");
+        prompt.Should().NotContain("omit step-level `capability` when no exact selector exists");
+        prompt.Should().NotContain("It is runnable only when every external invocation has an exact descriptor");
+        prompt.Should().NotContain(
+            "If no exact descriptor is available, report the typed readiness blocker instead of inventing");
+        prompt.Should().NotContain("never to a chat or bot");
+        prompt.Should().NotContain("Never deliver results to Lark/Telegram or any chat/bot");
+        prompt.Should().Contain("workflow run records remain visible in the Observatory");
+        prompt.Should().Contain("This does not prohibit authoring a workflow step that");
+        prompt.Should().Contain(
+            "calls Lark, Telegram, or another external messaging API requested by the user.");
+    }
+
+    [Fact]
+    public void BuiltInStudioYaml_ShouldSplitExactOperationAndFallbackRequestBindingFlows()
+    {
+        var workflow = new WorkflowParser().Parse(WorkflowDefinitionCatalog.BuiltInStudioYaml);
+        var prompt = workflow.Roles.Should().ContainSingle().Subject.SystemPrompt;
+
+        var exactBranch = prompt.IndexOf(
+            "Exact `capability.nyxid_operation` branch",
+            StringComparison.Ordinal);
+        var exactCreateDraft = prompt.IndexOf(
+            "`aevatar_create_member_workflow_draft`",
+            exactBranch + 1,
+            StringComparison.Ordinal);
+        var exactBind = prompt.IndexOf(
+            "`aevatar_bind_member_workflow`",
+            exactCreateDraft + 1,
+            StringComparison.Ordinal);
+        var exactNoPreview = prompt.IndexOf(
+            "Do not call `preview_workflow_explicit_requests` for this exact-operation branch",
+            exactBranch + 1,
+            StringComparison.Ordinal);
+
+        var fallbackBranch = prompt.IndexOf(
+            "Fallback `capability.nyxid_request` branch",
+            StringComparison.Ordinal);
+        var fallbackCreateDraft = prompt.IndexOf(
+            "`aevatar_create_member_workflow_draft`",
+            fallbackBranch + 1,
+            StringComparison.Ordinal);
+        var fallbackPreview = prompt.IndexOf(
+            "`preview_workflow_explicit_requests`",
+            fallbackCreateDraft + 1,
+            StringComparison.Ordinal);
+        var fallbackBind = prompt.IndexOf(
+            "`aevatar_bind_member_workflow`",
+            fallbackPreview + 1,
+            StringComparison.Ordinal);
+
+        exactBranch.Should().BeGreaterThanOrEqualTo(0);
+        exactCreateDraft.Should().BeGreaterThan(exactBranch);
+        exactBind.Should().BeGreaterThan(exactCreateDraft);
+        exactNoPreview.Should().BeGreaterThan(exactBind);
+        fallbackBranch.Should().BeGreaterThan(exactNoPreview);
+        fallbackCreateDraft.Should().BeGreaterThan(fallbackBranch);
+        fallbackPreview.Should().BeGreaterThan(fallbackCreateDraft);
+        fallbackBind.Should().BeGreaterThan(fallbackPreview);
+        prompt.Should().Contain(
+            "Only the descriptor-miss fallback branch calls `preview_workflow_explicit_requests`.");
+    }
+
+    [Fact]
+    public void BuiltInStudioYaml_ShouldTeachGenericRuntimeToolCallSchemaForWorkflowAuthoring()
+    {
+        var workflow = new WorkflowParser().Parse(WorkflowDefinitionCatalog.BuiltInStudioYaml);
+        var role = workflow.Roles.Should().ContainSingle().Subject;
+
+        role.SystemPrompt.Should().Contain("For workflow runtime tool steps, use `type: tool_call`");
+        role.SystemPrompt.Should().Contain("parameters.tool");
+        role.SystemPrompt.Should().Contain("parameters.arguments");
+        role.SystemPrompt.Should().Contain("Do not use `tool_name`");
+        role.SystemPrompt.Should().Contain("`${steps.<step_id>.output}`");
+        role.SystemPrompt.Should().Contain("When a workflow step needs an external service or available runtime tool");
+        role.SystemPrompt.Should().Contain("use the exact registered runtime tool name");
+        role.SystemPrompt.Should().Contain("build `parameters.arguments` from that tool's declared schema");
+        role.SystemPrompt.Should().Contain("Do not add a provider-specific prompt rule for a single service");
+        role.SystemPrompt.Should().NotContain("Ornn skill search example");
+        role.SystemPrompt.Should().NotContain("When the user explicitly asks a workflow to query or search Ornn skills");
+        role.SystemPrompt.Should().NotContain("tool: \"ornn_search_skills\"");
+    }
+
+    [Fact]
     public void Catalog_ShouldRegisterStudioWorkflowAlongsideDirect()
     {
         var registry = new WorkflowDefinitionCatalog();
-        registry.Register("direct", WorkflowDefinitionCatalog.BuiltInDirectYaml);
-        registry.Register("studio", WorkflowDefinitionCatalog.BuiltInStudioYaml);
+        registry.Register(
+            "direct",
+            WorkflowDefinitionCatalog.BuiltInDirectYaml,
+            ExternalCapabilityExecutionMode.Interactive);
+        registry.Register(
+            "studio",
+            WorkflowDefinitionCatalog.BuiltInStudioYaml,
+            ExternalCapabilityExecutionMode.Interactive);
 
         registry.GetYaml("studio").Should().Contain("name: studio");
         registry.GetDefinition("studio")!.DefinitionActorId

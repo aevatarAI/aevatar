@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Tests.TestSupport;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 
@@ -113,6 +114,7 @@ public sealed class ServiceInvocationResolutionServiceTests
     [InlineData(ServiceInvokeUnavailableReason.ServingTargetMissing)]
     [InlineData(ServiceInvokeUnavailableReason.RevisionNotPrepared)]
     [InlineData(ServiceInvokeUnavailableReason.PreparedArtifactMissing)]
+    [InlineData(ServiceInvokeUnavailableReason.PreparedArtifactIncompatible)]
     public async Task ResolveAsync_ShouldRejectUnavailableReadiness_WithCanonicalReason(ServiceInvokeUnavailableReason reason)
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
@@ -200,6 +202,47 @@ public sealed class ServiceInvocationResolutionServiceTests
         var ex = await act.Should().ThrowAsync<ServiceInvokeReadinessException>();
         ex.Which.Snapshot.ReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unavailable);
         ex.Which.Snapshot.UnavailableReason.Should().Be(ServiceInvokeUnavailableReason.PreparedArtifactMissing);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_ShouldRejectReadyReadModel_WhenWorkflowArtifactRequiresCapabilityAdmissionRebind()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
+            ServiceKeys.Build(identity),
+            "r1",
+            PreparedWorkflowArtifact(identity, "r1", WorkflowCapabilityAdmissionPlanIntegrity.LegacySchemaVersion));
+        var service = CreateService(
+            identity,
+            revisionCatalog,
+            readiness: Ready(identity, "chat", "r1", "dep-1", "actor-1"));
+
+        var act = () => service.ResolveAsync(NewRequest(identity, "chat"));
+
+        var ex = await act.Should().ThrowAsync<ServiceInvokeReadinessException>();
+        ex.Which.Snapshot.ReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unavailable);
+        ex.Which.Snapshot.UnavailableReason.Should().Be(ServiceInvokeUnavailableReason.PreparedArtifactIncompatible);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_ShouldRejectReadyReadModel_WhenWorkflowExecutionModeIsMissing()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        var artifact = PreparedWorkflowArtifact(identity, "r1", WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion);
+        artifact.DeploymentPlan.WorkflowPlan.ExecutionMode = ExternalCapabilityExecutionMode.Unspecified;
+        await revisionCatalog.UpsertRevisionAsync(ServiceKeys.Build(identity), "r1", artifact);
+        var service = CreateService(
+            identity,
+            revisionCatalog,
+            readiness: Ready(identity, "chat", "r1", "dep-1", "actor-1"));
+
+        var act = () => service.ResolveAsync(NewRequest(identity, "chat"));
+
+        var ex = await act.Should().ThrowAsync<ServiceInvokeReadinessException>();
+        ex.Which.Snapshot.ReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unavailable);
+        ex.Which.Snapshot.UnavailableReason.Should().Be(ServiceInvokeUnavailableReason.PreparedArtifactIncompatible);
     }
 
     private static ServiceInvocationRequest NewRequest(ServiceIdentity identity, string endpointId) =>
@@ -313,6 +356,35 @@ public sealed class ServiceInvocationResolutionServiceTests
             [],
             policyIds ?? [],
             DateTimeOffset.UtcNow);
+
+    private static PreparedServiceRevisionArtifact PreparedWorkflowArtifact(
+        ServiceIdentity identity,
+        string revisionId,
+        string schemaVersion)
+    {
+        var artifact = new PreparedServiceRevisionArtifact
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+            ImplementationKind = ServiceImplementationKind.Workflow,
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                WorkflowPlan = new WorkflowServiceDeploymentPlan
+                {
+                    WorkflowName = "invoice_file_extract",
+                    WorkflowYaml = "name: invoice_file_extract\nsteps: []",
+                    ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                    CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+                    {
+                        SchemaVersion = schemaVersion,
+                        ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                    },
+                },
+            },
+        };
+        artifact.Endpoints.Add(GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat"));
+        return artifact;
+    }
 
     private sealed class RecordingCatalogQueryReader : IServiceCatalogQueryReader
     {

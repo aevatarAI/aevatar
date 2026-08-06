@@ -11,8 +11,8 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 /// <summary>
 /// Actor-backed implementation of chat history query and command ports.
 /// Reads from the projection document store (CQRS read model).
-/// Writes send commands only to <see cref="ChatConversationGAgent"/>
-/// through CQRS Core dispatch.
+/// Writes send commands to the authoritative conversation and turn-delivery
+/// actors through CQRS Core dispatch.
 /// </summary>
 internal sealed class ActorBackedChatHistoryStore :
     IChatHistoryQueryPort,
@@ -97,20 +97,30 @@ internal sealed class ActorBackedChatHistoryStore :
     public async Task<ChatHistoryConversationMessagesResult> GetMessagesAsync(
         string scopeId, string conversationId, CancellationToken ct = default)
     {
-        var resolved = await ResolveConversationDocumentAsync(scopeId, conversationId, ct);
-        if (resolved is null)
-            return ChatHistoryConversationMessagesResult.NotFound();
+        var lookup = await LookupConversationDocumentAsync(scopeId, conversationId, ct);
+        if (lookup.Resolved is null)
+        {
+            if (lookup.Deleted)
+                return ChatHistoryConversationMessagesResult.NotFound();
 
-        if (resolved.Value.Document.Turns.Count == 0)
-            return ChatHistoryConversationMessagesResult.Found([], resolved.Value.Document.StateVersion);
+            return await HasPendingCreateReservationAsync(scopeId, conversationId, ct)
+                .ConfigureAwait(false)
+                ? ChatHistoryConversationMessagesResult.Pending()
+                : ChatHistoryConversationMessagesResult.NotFound();
+        }
+
+        var resolved = lookup.Resolved.Value;
+
+        if (resolved.Document.Turns.Count == 0)
+            return ChatHistoryConversationMessagesResult.Found([], resolved.Document.StateVersion);
 
         return ChatHistoryConversationMessagesResult.Found(
-            resolved.Value.Document.Turns
+            resolved.Document.Turns
                 .OrderBy(static turn => turn.Sequence)
                 .SelectMany(ToStoredChatMessages)
                 .ToList()
                 .AsReadOnly(),
-            resolved.Value.Document.StateVersion);
+            resolved.Document.StateVersion);
     }
 
     public async Task SaveMessagesAsync(
@@ -128,20 +138,90 @@ internal sealed class ActorBackedChatHistoryStore :
             await _commandDispatch.DispatchAsync(conversationActor, turn, PublisherId, ct);
     }
 
+    public async Task InitializeConversationAsync(
+        ChatHistoryConversationInitialization request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var operationId = NormalizeRequired(request.OperationId, nameof(request.OperationId));
+        var scopeId = NormalizeRequired(request.ScopeId, nameof(request.ScopeId));
+        var conversationId = NormalizeRequired(request.ConversationId, nameof(request.ConversationId));
+        var serviceId = NormalizeRequired(request.ServiceId, nameof(request.ServiceId));
+        var serviceKind = NormalizeRequired(request.ServiceKind, nameof(request.ServiceKind));
+        var conversationActor = await EnsureConversationActorAsync(scopeId, conversationId, ct);
+        var command = new InitializeChatConversationCommand
+        {
+            OperationId = operationId,
+            ScopeId = scopeId,
+            ConversationId = conversationId,
+            ServiceId = serviceId,
+            ServiceKind = serviceKind,
+            CreatedAt = Timestamp.FromDateTimeOffset(request.CreatedAt),
+            InitialTitle = NormalizeOptional(request.InitialTitle) ?? string.Empty,
+        };
+        await _commandDispatch.DispatchAsync(conversationActor, command, PublisherId, ct);
+    }
+
+    public async Task ReserveTurnDeliveryAsync(
+        ChatHistoryTurnDeliveryReservation request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var deliveryId = NormalizeRequired(request.DeliveryId, nameof(request.DeliveryId));
+        var deliveryActor = await EnsureDeliveryActorAsync(deliveryId, ct);
+        var command = new ChatTurnHistoryDeliveryReserveRequested
+        {
+            DeliveryId = deliveryId,
+            ScopeId = NormalizeRequired(request.ScopeId, nameof(request.ScopeId)),
+            ConversationId = NormalizeRequired(request.ConversationId, nameof(request.ConversationId)),
+            TurnId = NormalizeRequired(request.TurnId, nameof(request.TurnId)),
+            UserText = NormalizeRequired(request.UserText, nameof(request.UserText)),
+            SourceActorId = NormalizeRequired(request.SourceActorId, nameof(request.SourceActorId)),
+            SourceCommandId = NormalizeRequired(request.SourceCommandId, nameof(request.SourceCommandId)),
+            SourceCorrelationId = NormalizeOptional(request.SourceCorrelationId) ?? string.Empty,
+            RequestFingerprint = NormalizeOptional(request.RequestFingerprint) ?? string.Empty,
+            CreateConversationIfMissing = request.CreateConversationIfMissing,
+            ExposeCreateRecovery = request.ExposeCreateRecovery,
+        };
+        await _commandDispatch.DispatchAsync(deliveryActor, command, PublisherId, ct);
+    }
+
+    public async Task NotifyTurnTerminalAsync(
+        ChatHistoryTurnTerminalNotification notification,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(notification);
+        var deliveryId = NormalizeRequired(notification.DeliveryId, nameof(notification.DeliveryId));
+        var sourceActorId = NormalizeRequired(notification.SourceActorId, nameof(notification.SourceActorId));
+        var deliveryActor = await EnsureDeliveryActorAsync(deliveryId, ct);
+        var command = new ChatTurnHistorySourceTerminalNotified
+        {
+            DeliveryId = deliveryId,
+            SourceActorId = sourceActorId,
+            SourceCommandId = NormalizeRequired(notification.SourceCommandId, nameof(notification.SourceCommandId)),
+            Status = ToTerminalStatus(notification.Status),
+            Text = NormalizeOptional(notification.Text) ?? string.Empty,
+            ErrorCode = NormalizeOptional(notification.ErrorCode) ?? string.Empty,
+            ObservedAtUnixMs = notification.ObservedAt.ToUnixTimeMilliseconds(),
+        };
+        await _commandDispatch.DispatchAsync(deliveryActor, command, sourceActorId, ct);
+    }
+
     public async Task<ChatHistoryDeleteResult> DeleteConversationAsync(
         string scopeId, string conversationId, CancellationToken ct = default)
     {
-        var resolved = await ResolveConversationDocumentAsync(scopeId, conversationId, ct);
-        if (resolved is null)
+        var lookup = await LookupConversationDocumentAsync(scopeId, conversationId, ct);
+        if (lookup.Resolved is null)
             return ChatHistoryDeleteResult.NotFound();
 
-        var conversationActor = await EnsureConversationActorAsync(resolved.Value.ActorId, ct);
-        var deleteEvt = new ConversationDeletedEvent
+        var resolved = lookup.Resolved.Value;
+        var conversationActor = await EnsureConversationActorAsync(resolved.ActorId, ct);
+        var command = new DeleteConversationCommand
         {
-            ConversationId = resolved.Value.Document.ConversationId,
-            ScopeId = resolved.Value.Document.ScopeId,
+            ConversationId = resolved.Document.ConversationId,
+            ScopeId = resolved.Document.ScopeId,
         };
-        await _commandDispatch.DispatchAsync(conversationActor, deleteEvt, PublisherId, ct);
+        await _commandDispatch.DispatchAsync(conversationActor, command, PublisherId, ct);
         return ChatHistoryDeleteResult.Accepted();
     }
 
@@ -201,6 +281,30 @@ internal sealed class ActorBackedChatHistoryStore :
             result.UpdatedAt);
     }
 
+    public async Task<WorkflowChatHistoryCreateRecovery?> GetByConversationAsync(
+        string scopeId,
+        string conversationId,
+        CancellationToken ct = default)
+    {
+        var document = await FindAcknowledgedCreateReservationAsync(scopeId, conversationId, ct)
+            .ConfigureAwait(false);
+        if (document is null)
+            return null;
+
+        return new WorkflowChatHistoryCreateRecovery(
+            ToWorkflowCreateRecoveryStatus(ToCreateRecoveryStatus(document.Status)),
+            document.ScopeId,
+            document.WorkflowCommandId,
+            EmptyToNull(document.ConversationId),
+            EmptyToNull(document.TurnId),
+            EmptyToNull(document.WorkflowActorId),
+            EmptyToNull(document.WorkflowCommandId),
+            EmptyToNull(document.WorkflowCorrelationId),
+            EmptyToNull(document.RequestFingerprint),
+            document.StateVersion,
+            document.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.UnixEpoch);
+    }
+
     // ── Actor resolution ───────────────────────────────────────
 
     private async Task<IActor> EnsureConversationActorAsync(
@@ -210,6 +314,12 @@ internal sealed class ActorBackedChatHistoryStore :
             ChatHistoryActorIds.Conversation(scopeId, conversationId), ct);
     }
 
+    private async Task<IActor> EnsureDeliveryActorAsync(string deliveryId, CancellationToken ct)
+    {
+        return await _bootstrap.EnsureAsync<ChatTurnHistoryDeliveryGAgent>(
+            ChatTurnHistoryDeliveryActorIds.FromDeliveryId(deliveryId), ct);
+    }
+
     private async Task<IActor> EnsureConversationActorAsync(
         string actorId,
         CancellationToken ct)
@@ -217,7 +327,7 @@ internal sealed class ActorBackedChatHistoryStore :
         return await _bootstrap.EnsureAsync<ChatConversationGAgent>(actorId, ct);
     }
 
-    private async Task<ResolvedConversationDocument?> ResolveConversationDocumentAsync(
+    private async Task<ConversationDocumentLookup> LookupConversationDocumentAsync(
         string scopeId,
         string conversationId,
         CancellationToken ct)
@@ -225,7 +335,7 @@ internal sealed class ActorBackedChatHistoryStore :
         var normalizedScopeId = NormalizeOptional(scopeId);
         var normalizedConversationId = NormalizeOptional(conversationId);
         if (normalizedScopeId == null || normalizedConversationId == null)
-            return null;
+            return ConversationDocumentLookup.Missing;
 
         var actorIds = new[]
         {
@@ -237,20 +347,69 @@ internal sealed class ActorBackedChatHistoryStore :
         {
             var document = await _conversationDocumentReader.GetAsync(actorId, ct).ConfigureAwait(false);
             if (document is null ||
-                document.Deleted ||
                 !string.Equals(document.ScopeId, normalizedScopeId, StringComparison.Ordinal) ||
                 !string.Equals(document.ConversationId, normalizedConversationId, StringComparison.Ordinal))
             {
                 continue;
             }
 
+            if (document.Deleted)
+                return ConversationDocumentLookup.DeletedConversation;
+
             var dispatchActorId = string.IsNullOrWhiteSpace(document.ActorId)
                 ? actorId
                 : document.ActorId.Trim();
-            return new ResolvedConversationDocument(dispatchActorId, document);
+            return ConversationDocumentLookup.Found(
+                new ResolvedConversationDocument(dispatchActorId, document));
         }
 
-        return null;
+        return ConversationDocumentLookup.Missing;
+    }
+
+    private async Task<bool> HasPendingCreateReservationAsync(
+        string scopeId,
+        string conversationId,
+        CancellationToken ct) =>
+        await FindAcknowledgedCreateReservationAsync(scopeId, conversationId, ct)
+            .ConfigureAwait(false) is not null;
+
+    private async Task<ChatHistoryCreateRecoveryCurrentStateDocument?> FindAcknowledgedCreateReservationAsync(
+        string scopeId,
+        string conversationId,
+        CancellationToken ct)
+    {
+        var normalizedScopeId = NormalizeOptional(scopeId);
+        var normalizedConversationId = NormalizeOptional(conversationId);
+        if (normalizedScopeId == null || normalizedConversationId == null)
+            return null;
+
+        var reservations = await _createRecoveryDocumentReader.QueryAsync(new ProjectionDocumentQuery
+        {
+            Filters =
+            [
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(ChatHistoryCreateRecoveryCurrentStateDocument.ScopeId),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString(normalizedScopeId),
+                },
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(ChatHistoryCreateRecoveryCurrentStateDocument.ConversationId),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString(normalizedConversationId),
+                },
+            ],
+            Take = 1,
+        }, ct).ConfigureAwait(false);
+
+        return reservations.Items.FirstOrDefault(reservation =>
+            reservation.StateVersion > 0 &&
+            string.Equals(reservation.ScopeId, normalizedScopeId, StringComparison.Ordinal) &&
+            string.Equals(reservation.ConversationId, normalizedConversationId, StringComparison.Ordinal) &&
+            ToCreateRecoveryStatus(reservation.Status) is not (
+                ChatHistoryCreateRecoveryStatus.NotFound or
+                ChatHistoryCreateRecoveryStatus.Abandoned));
     }
 
     // ── Mapping helpers ────────────────────────────────────────
@@ -286,6 +445,7 @@ internal sealed class ActorBackedChatHistoryStore :
             {
                 "error" => "error",
                 "blocked" => "blocked",
+                "outcome_uncertain" => "outcome_uncertain",
                 _ => "complete",
             },
             Error: string.IsNullOrEmpty(turn.SanitizedError) ? null : turn.SanitizedError,
@@ -323,6 +483,7 @@ internal sealed class ActorBackedChatHistoryStore :
                 {
                     "error" => ChatTurnTerminalStatus.Failed,
                     "blocked" => ChatTurnTerminalStatus.Blocked,
+                    "outcome_uncertain" => ChatTurnTerminalStatus.OutcomeUncertain,
                     _ => ChatTurnTerminalStatus.Completed,
                 },
                 SanitizedError = assistant.Error ?? string.Empty,
@@ -348,6 +509,20 @@ internal sealed class ActorBackedChatHistoryStore :
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    private static string NormalizeRequired(string? value, string parameterName) =>
+        NormalizeOptional(value) ?? throw new ArgumentException("Value is required.", parameterName);
+
+    private static ChatTurnTerminalStatus ToTerminalStatus(ChatHistoryTurnTerminalStatus status) =>
+        status switch
+        {
+            ChatHistoryTurnTerminalStatus.Completed => ChatTurnTerminalStatus.Completed,
+            ChatHistoryTurnTerminalStatus.Failed => ChatTurnTerminalStatus.Failed,
+            ChatHistoryTurnTerminalStatus.Stopped => ChatTurnTerminalStatus.Stopped,
+            ChatHistoryTurnTerminalStatus.Blocked => ChatTurnTerminalStatus.Blocked,
+            ChatHistoryTurnTerminalStatus.OutcomeUncertain => ChatTurnTerminalStatus.OutcomeUncertain,
+            _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Terminal status must be closed."),
+        };
+
     private static string? EmptyToNull(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
@@ -361,6 +536,7 @@ internal sealed class ActorBackedChatHistoryStore :
             "failed" => ChatHistoryCreateRecoveryStatus.Failed,
             "append_committed" => ChatHistoryCreateRecoveryStatus.AppendCommitted,
             "append_rejected" => ChatHistoryCreateRecoveryStatus.AppendRejected,
+            "terminal_reconciliation_prepared" => ChatHistoryCreateRecoveryStatus.TerminalReconciliationPrepared,
             _ => ChatHistoryCreateRecoveryStatus.NotFound,
         };
 
@@ -375,10 +551,24 @@ internal sealed class ActorBackedChatHistoryStore :
             ChatHistoryCreateRecoveryStatus.Failed => WorkflowChatHistoryCreateRecoveryStatus.Failed,
             ChatHistoryCreateRecoveryStatus.AppendCommitted => WorkflowChatHistoryCreateRecoveryStatus.AppendCommitted,
             ChatHistoryCreateRecoveryStatus.AppendRejected => WorkflowChatHistoryCreateRecoveryStatus.AppendRejected,
+            ChatHistoryCreateRecoveryStatus.TerminalReconciliationPrepared =>
+                WorkflowChatHistoryCreateRecoveryStatus.TerminalReconciliationPrepared,
             _ => WorkflowChatHistoryCreateRecoveryStatus.NotFound,
         };
 
     private readonly record struct ResolvedConversationDocument(
         string ActorId,
         ChatConversationCurrentStateDocument Document);
+
+    private readonly record struct ConversationDocumentLookup(
+        ResolvedConversationDocument? Resolved,
+        bool Deleted)
+    {
+        public static ConversationDocumentLookup Missing { get; } = new(null, false);
+
+        public static ConversationDocumentLookup DeletedConversation { get; } = new(null, true);
+
+        public static ConversationDocumentLookup Found(ResolvedConversationDocument resolved) =>
+            new(resolved, false);
+    }
 }

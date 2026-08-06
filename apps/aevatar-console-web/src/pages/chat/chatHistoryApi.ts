@@ -1,7 +1,7 @@
 import { readResponseErrorDetails } from "@/shared/api/http/error";
 import { authFetch } from "@/shared/auth/fetch";
 import type {
-  ChatCreateRecovery,
+  ChatConversationDetail,
   ChatHistoryIndex,
   ConversationMeta,
   StoredChatMessage,
@@ -9,9 +9,7 @@ import type {
 
 type JsonRecord = Record<string, unknown>;
 
-const JSON_HEADERS = {
-  Accept: "application/json",
-};
+const JSON_HEADERS = { Accept: "application/json" };
 
 export class ChatHistoryApiError extends Error {
   readonly code?: string;
@@ -44,26 +42,36 @@ function asRecord(value: unknown, path: string): JsonRecord {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return failContract(path, "an object");
   }
-
   return value as JsonRecord;
 }
 
 function readString(record: JsonRecord, key: string, path: string): string {
   const value = record[key];
-  if (typeof value !== "string") {
-    return failContract(`${path}.${key}`, "a string");
-  }
-
-  return value;
+  return typeof value === "string"
+    ? value
+    : failContract(`${path}.${key}`, "a string");
 }
 
 function readNumber(record: JsonRecord, key: string, path: string): number {
   const value = record[key];
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return failContract(`${path}.${key}`, "a finite number");
-  }
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : failContract(`${path}.${key}`, "a finite number");
+}
 
-  return value;
+function readOptional<T>(
+  record: JsonRecord,
+  key: string,
+  path: string,
+  read: (value: unknown) => T | undefined,
+  expectation: string
+): T | undefined {
+  const value = record[key];
+  if (value === undefined) return undefined;
+  const decoded = read(value);
+  return decoded === undefined
+    ? failContract(`${path}.${key}`, expectation)
+    : decoded;
 }
 
 function readOptionalString(
@@ -71,15 +79,13 @@ function readOptionalString(
   key: string,
   path: string
 ): string | undefined {
-  const value = record[key];
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  if (typeof value !== "string") {
-    return failContract(`${path}.${key}`, "a string, null, or omission");
-  }
-
-  return value;
+  return readOptional(
+    record,
+    key,
+    path,
+    (value) => (typeof value === "string" ? value : undefined),
+    "a string or omission"
+  );
 }
 
 function readOptionalNullableString(
@@ -87,26 +93,38 @@ function readOptionalNullableString(
   key: string,
   path: string
 ): string | null | undefined {
-  if (!(key in record) || record[key] === undefined) {
-    return undefined;
-  }
-
+  if (!(key in record) || record[key] === undefined) return undefined;
   const value = record[key];
-  if (value === null || typeof value === "string") {
-    return value;
-  }
-
-  return failContract(`${path}.${key}`, "a string, null, or omission");
+  return value === null || typeof value === "string"
+    ? value
+    : failContract(`${path}.${key}`, "a string, null, or omission");
 }
 
-function withOptionalField(
-  value: Record<string, unknown>,
+function readOptionalNonNegativeInteger(
+  record: JsonRecord,
   key: string,
-  field: unknown
+  path: string
+): number | undefined {
+  return readOptional(
+    record,
+    key,
+    path,
+    (value) =>
+      typeof value === "number" &&
+      Number.isSafeInteger(value) &&
+      value >= 0
+        ? value
+        : undefined,
+    "a non-negative safe integer or omission"
+  );
+}
+
+function assignOptional(
+  target: Record<string, unknown>,
+  key: string,
+  value: unknown
 ): void {
-  if (field !== undefined) {
-    value[key] = field;
-  }
+  if (value !== undefined) target[key] = value;
 }
 
 function decodeConversationMeta(value: unknown, path: string): ConversationMeta {
@@ -124,23 +142,31 @@ function decodeConversationMeta(value: unknown, path: string): ConversationMeta 
     updatedAt: readString(record, "updatedAt", path),
   } as ConversationMeta & Record<string, unknown>;
 
-  withOptionalField(meta, "serviceId", readOptionalString(record, "serviceId", path));
-  withOptionalField(
-    meta,
+  for (const key of [
+    "activeStepSummary",
+    "attentionKind",
+    "attentionSince",
+    "serviceId",
     "serviceKind",
-    readOptionalString(record, "serviceKind", path)
-  );
-  withOptionalField(
+    "taskStatus",
+  ] as const) {
+    assignOptional(meta, key, readOptionalString(record, key, path));
+  }
+  assignOptional(
     meta,
     "llmRoute",
     readOptionalNullableString(record, "llmRoute", path)
   );
-  withOptionalField(
+  assignOptional(
     meta,
     "llmModel",
     readOptionalNullableString(record, "llmModel", path)
   );
-
+  assignOptional(
+    meta,
+    "stateVersion",
+    readOptionalNonNegativeInteger(record, "stateVersion", path)
+  );
   return meta;
 }
 
@@ -164,13 +190,12 @@ function decodeStoredChatMessage(
     "authorName",
     "turnId",
   ] as const) {
-    withOptionalField(
+    assignOptional(
       message,
       key,
       readOptionalNullableString(record, key, path)
     );
   }
-
   return message;
 }
 
@@ -179,7 +204,6 @@ export function decodeChatHistoryIndex(value: unknown): ChatHistoryIndex {
   if (!Array.isArray(record.conversations)) {
     return failContract("$index.conversations", "an array");
   }
-
   const nextCursor = readOptionalNullableString(record, "nextCursor", "$index");
   return {
     conversations: record.conversations.map((conversation, index) =>
@@ -189,57 +213,46 @@ export function decodeChatHistoryIndex(value: unknown): ChatHistoryIndex {
   };
 }
 
-export function decodeChatCreateRecovery(value: unknown): ChatCreateRecovery {
-  const record = asRecord(value, "$recovery");
-  const sourceVersion = readNumber(record, "sourceVersion", "$recovery");
-  if (!Number.isInteger(sourceVersion) || sourceVersion < 0) {
-    return failContract("$recovery.sourceVersion", "a non-negative integer");
-  }
-
-  return {
-    conversationId: readString(record, "conversationId", "$recovery"),
-    sourceVersion,
-    status: readString(record, "status", "$recovery"),
-    turnId: readString(record, "turnId", "$recovery"),
-  };
-}
-
-export function decodeStoredChatMessages(value: unknown): StoredChatMessage[] {
-  if (!Array.isArray(value)) {
-    return failContract("$messages", "an array");
-  }
-
-  return value.map((message, index) =>
-    decodeStoredChatMessage(message, `$messages[${index}]`)
+export function decodeChatConversationDetail(
+  value: unknown
+): ChatConversationDetail {
+  const record = asRecord(value, "$conversation");
+  const projectionStatus = readString(
+    record,
+    "projectionStatus",
+    "$conversation"
   );
+  if (projectionStatus !== "current" && projectionStatus !== "pending") {
+    return failContract(
+      "$conversation.projectionStatus",
+      '"current" or "pending"'
+    );
+  }
+  const stateVersion = readNumber(record, "stateVersion", "$conversation");
+  if (!Number.isSafeInteger(stateVersion) || stateVersion < 0) {
+    return failContract(
+      "$conversation.stateVersion",
+      "a non-negative safe integer"
+    );
+  }
+  if (!Array.isArray(record.messages)) {
+    return failContract("$conversation.messages", "an array");
+  }
+  return {
+    messages: record.messages.map((message, index) =>
+      decodeStoredChatMessage(message, `$conversation.messages[${index}]`)
+    ),
+    projectionStatus,
+    stateVersion,
+  };
 }
 
 function encodeSegment(value: string): string {
   return encodeURIComponent(value.trim());
 }
 
-function buildHistoryPath(scopeId: string): string {
-  return `/api/scopes/${encodeSegment(scopeId)}/chat-history`;
-}
-
-function buildConversationPath(scopeId: string, conversationId: string): string {
-  return `${buildHistoryPath(scopeId)}/conversations/${encodeSegment(
-    conversationId
-  )}`;
-}
-
-function buildCreateRecoveryPath(
-  scopeId: string,
-  createIdempotencyKey: string
-): string {
-  return `${buildHistoryPath(scopeId)}/create-recoveries/${encodeSegment(
-    createIdempotencyKey
-  )}`;
-}
-
-function buildIndexPagePath(scopeId: string, cursor?: string): string {
-  const path = buildHistoryPath(scopeId);
-  return cursor ? `${path}?cursor=${encodeURIComponent(cursor)}` : path;
+function conversationPath(conversationId: string): string {
+  return `/api/chat/conversations/${encodeSegment(conversationId)}`;
 }
 
 async function createApiError(response: Response): Promise<ChatHistoryApiError> {
@@ -249,85 +262,100 @@ async function createApiError(response: Response): Promise<ChatHistoryApiError> 
 
 async function requestJson<T>(
   path: string,
-  decoder: (value: unknown) => T
+  decoder: (value: unknown) => T,
+  signal?: AbortSignal,
+  acceptNotFound = false
 ): Promise<T> {
   const response = await authFetch(path, {
     headers: JSON_HEADERS,
     method: "GET",
+    ...(signal ? { signal } : {}),
   });
-  if (!response.ok) {
+  if (!response.ok && !(acceptNotFound && response.status === 404)) {
     throw await createApiError(response);
   }
-
-  let payload: unknown;
   try {
-    payload = await response.json();
-  } catch {
+    return decoder(await response.json());
+  } catch (error) {
+    if (error instanceof ChatHistoryContractError) throw error;
     throw new ChatHistoryContractError("$response", "valid JSON");
   }
-
-  return decoder(payload);
 }
 
+export type ChatStateCursor = {
+  afterStateVersion?: number;
+  turnId?: string;
+};
+
 export const chatHistoryApi = {
-  async listConversationMetas(scopeId: string): Promise<ConversationMeta[]> {
+  async listConversationMetas(signal?: AbortSignal): Promise<ConversationMeta[]> {
     const conversations: ConversationMeta[] = [];
     const seenCursors = new Set<string>();
     let cursor: string | undefined;
     do {
-      const index = await requestJson(
-        buildIndexPagePath(scopeId, cursor),
-        decodeChatHistoryIndex
-      );
-      conversations.push(...index.conversations);
-      const nextCursor = index.nextCursor?.trim() || undefined;
-      if (nextCursor && seenCursors.has(nextCursor)) {
+      const path = `/api/chat/conversations${
+        cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""
+      }`;
+      const page = await requestJson(path, decodeChatHistoryIndex, signal);
+      conversations.push(...page.conversations);
+      const next = page.nextCursor?.trim() || undefined;
+      if (next && seenCursors.has(next)) {
         throw new ChatHistoryContractError(
           "$index.nextCursor",
           "a cursor that advances to the next page"
         );
       }
-      if (nextCursor) {
-        seenCursors.add(nextCursor);
-      }
-      cursor = nextCursor;
+      if (next) seenCursors.add(next);
+      cursor = next;
     } while (cursor);
     return conversations;
   },
 
-  async recoverCreate(
-    scopeId: string,
-    createIdempotencyKey: string
-  ): Promise<ChatCreateRecovery> {
-    return requestJson(
-      buildCreateRecoveryPath(scopeId, createIdempotencyKey),
-      decodeChatCreateRecovery
-    );
-  },
-
   async loadConversation(
-    scopeId: string,
-    conversationId: string
-  ): Promise<StoredChatMessage[]> {
+    conversationId: string,
+    signal?: AbortSignal
+  ): Promise<ChatConversationDetail> {
     return requestJson(
-      buildConversationPath(scopeId, conversationId),
-      decodeStoredChatMessages
+      conversationPath(conversationId),
+      decodeChatConversationDetail,
+      signal
     );
   },
 
-  async deleteConversation(
-    scopeId: string,
-    conversationId: string
-  ): Promise<void> {
-    const response = await authFetch(
-      buildConversationPath(scopeId, conversationId),
-      {
-        headers: JSON_HEADERS,
-        method: "DELETE",
+  async loadConversationState(
+    conversationId: string,
+    cursor: ChatStateCursor = {},
+    signal?: AbortSignal
+  ): Promise<unknown> {
+    const query = new URLSearchParams();
+    if (cursor.afterStateVersion !== undefined) {
+      if (
+        !Number.isSafeInteger(cursor.afterStateVersion) ||
+        cursor.afterStateVersion < 0
+      ) {
+        throw new ChatHistoryContractError(
+          "$cursor.afterStateVersion",
+          "a non-negative safe integer"
+        );
       }
-    );
-    if (!response.ok) {
-      throw await createApiError(response);
+      query.set("afterStateVersion", String(cursor.afterStateVersion));
     }
+    if (cursor.turnId?.trim()) query.set("turnId", cursor.turnId.trim());
+    const queryString = query.toString();
+    const suffix = queryString ? `?${queryString}` : "";
+    return requestJson(
+      `${conversationPath(conversationId)}/state${suffix}`,
+      (value) => value,
+      signal,
+      true
+    );
+  },
+
+  async deleteConversation(conversationId: string): Promise<void> {
+    const response = await authFetch(conversationPath(conversationId), {
+      headers: JSON_HEADERS,
+      method: "DELETE",
+    });
+    if (!response.ok) throw await createApiError(response);
   },
 };

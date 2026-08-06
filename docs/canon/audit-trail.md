@@ -128,11 +128,120 @@ Allowed endpoint summaries are intentionally narrow: route template, safe route
 ids, status/outcome class, trace/request correlation, and sanitized target
 identity. Token-shaped or secret-key-shaped values are redacted before append.
 
-### 3.2 Tool-Execution Middleware
+### 3.2 Admitted Tool Execution
 
-Tool-execution middleware records tool-plane facts around tool invocation. It
-captures the tool identity, execution phase, safe caller and scope identity,
-safe resource target, timing, result class, and redacted diagnostic summary.
+Tool-plane audit is part of the canonical admitted execution boundary, not an
+optional middleware around individual callers. Every server-owned `IAgentTool`
+call enters `IAgentToolExecutionPort`; only `AdmittedAgentToolExecutor` may call
+the raw `IAgentTool.ExecuteAsync` terminal.
+
+The executor freezes the final argument string after caller-owned hooks, derives
+its SHA-256 digest, and calls `GetCallSafety` once. Credential policy,
+actor-owned approval, audit artifacts, receipt construction, and terminal
+execution all use that exact payload and classification.
+
+Execution admission and audit observation have separate fact owners.
+`IAgentToolAdmissionLedger` is the authoritative start-once ledger. It atomically
+creates a strongly typed `AgentToolAdmissionFact` containing the authoritative typed
+execution owner plus the stable admission, request, call, tool, and argument-digest
+identities and the request's immutable issued time. The owner is supplied at the actor, workflow-run, channel-registration,
+connector, or host-service boundary; request and call ids remain correlation identities
+and never stand in for ownership. Only `Started` permits entry to the raw terminal.
+`Duplicate` and `Conflict` fail closed without replay;
+invalid or expired replay lifetimes also fail closed without invoking the terminal, while
+`StoreUnavailable` fails closed before invocation and may be retried. Every host that enables
+server-owned tools must replace the unavailable default ledger. Development and Testing may use
+the in-memory implementation; other environments require a durable compare-and-set implementation.
+
+Each enabled host owns its tool-admission retention and key namespace through
+`AgentToolAdmission:MaximumRequestLifetime`,
+`AgentToolAdmission:MaximumFutureClockSkew`, and `AgentToolAdmission:KeyPrefix`. Mainnet defaults
+to `aevatar:mainnet:agent-tool-admission:v1:`; Workflow defaults to
+`aevatar:workflow:agent-tool-admission:v1:` and requires
+`AgentToolAdmission:RedisConnectionString` outside Development and Testing. The lifetime defaults
+are 24 hours and 5 minutes, and the request lifetime is capped at 30 days. The request-issued time
+is a typed protobuf field preserved across actor continuation. The ledger validates that immutable
+time before admission and gives each distributed compare-and-set key a TTL equal to the remaining
+legal replay window. Redis/Garnet expiration is the cleanup mechanism. Deleting the key does not
+renew authority: replaying the original fact after its deadline is rejected as expired before
+another atomic insert can occur.
+
+Audit append status never grants execution. The audit phases are observational:
+
+| Phase | Meaning | Audit rule |
+|---|---|---|
+| `WAITING_APPROVAL` | The owning actor must persist and later reconcile an exact pending call. | Append the sanitized waiting fact. Append failure changes only `AuditCompleted`; actor-owned approval state remains authoritative. |
+| `RUNNING` | The admission ledger already accepted the exact call for start-once execution. | Append the sanitized start observation before invoking the raw terminal. `Appended`, `Duplicate`, `Conflict`, or store availability never changes the ledger decision. |
+| `TERMINAL` | The actual executed, denied, or failed outcome. | `Appended` or same-fact `Duplicate` completes audit. Failure after terminal invocation preserves the actual result and never makes the tool retryable. |
+
+A required approval is valid only in `ActorOwned` continuation mode and only
+when its durable grant matches `ExecutionOwner`, `ApprovalRequestId`, `RequestId`,
+`ToolName`, `ToolCallId`, and `ArgumentsSha256`. Approval, admission, running-audit,
+and terminal-audit ids all include the owner kind and owner id, so identical correlation
+ids in two owner namespaces cannot collide. Credential policy runs before grant
+validation. An unavailable admission ledger is retryable because the terminal
+was not invoked; a successful execution whose running or terminal audit is
+incomplete returns `ExecutedAuditIncomplete` with its real result and
+`Retryable=false`.
+
+Tool audit captures the tool identity, execution phase, lifecycle phase,
+argument digest, safe
+caller and scope identity, safe resource target, credential source, timing,
+result class, and redacted diagnostic summary. Business lifecycle uses the typed
+`AuditLifecyclePhase`; the observation phase, argument digest, and mutation
+semantics use the typed `AuditToolExecution` submessage and
+`AuditToolExecutionPhase`. These platform semantics must not be written
+to `Annotations`. It must not store full prompts,
+full tool arguments, full tool results, raw model responses, bearer tokens,
+OAuth codes, API keys, cookies, headers, or connector credential material. If a
+tool result needs later inspection, the tool must produce a separate safe
+artifact reference and record only that reference in the audit artifact.
+
+Client-forwarded tools are outside the local terminal boundary. They are
+recorded as forwarded continuation state and do not enter
+`IAgentToolExecutionPort`.
+
+`AgentToolReceipt` is the single execution-outcome fact shared by audit,
+workflow artifacts, streaming results, and user-visible completion. A tool that
+returns without throwing but does not provide a receipt has an unverified
+outcome: the admitted executor records an `Unspecified` receipt, audit keeps the
+business outcome running and nonterminal, and consumers must not upgrade it to
+success. Providers must emit typed receipts for outcomes they can classify,
+including HTTP/authentication failures, DNS or TLS failures, and timeouts. Only
+an explicit `Success` receipt confirms completed execution; approval-required
+receipts remain waiting and `Unspecified` receipts remain unknown.
+
+Receipt mutation semantics are also typed. The admitted executor derives
+`AgentToolReceipt.effect` for the concrete invocation from
+`GetCallSafety(argumentsJson)` together with the tool's `SideEffectKind`, and
+freezes it as `ReadOnly` or `Mutating`. `Unspecified` is compatibility-only and
+must never be treated as positive mutation evidence. A user-visible claim that
+an external mutation succeeded additionally requires the same turn's receipt
+to match the exact `call_id`, tool, side effect, and typed subject; a probe,
+workflow run, read, or unrelated successful receipt is not evidence for that
+action. Approval policy is a separate axis: requiring approval does not by
+itself turn a read-only call into a mutation. A receipt written to the recovery
+checkpoint and the receipt yielded to the conversation must be the same
+canonical result; normalization after checkpoint commit is forbidden.
+
+Provider receipts must use the same stable resource target for successful and
+failed calls. Invocation ids are correlation identifiers only and must not
+stand in for the downstream resource. NyxID proxy receipts identify an admitted
+exact UserService as `nyxid.user-service/<user_service_id>`; they do not derive
+identity from service slugs, request paths, call ids, or response content.
+When outcome classification depends on execution-only facts such as HTTP status
+or completed file ingress, the provider returns that receipt with the execution
+result. Post-result `CreateResultReceipt` remains the compatibility path for
+tools whose result and arguments retain sufficient evidence. Both paths pass
+through the same canonical receipt finalizer before audit, workflow, or
+streaming consumption; response JSON shape alone never proves success or
+failure.
+
+NyxID proxy failure classification is limited to exact
+`NYXID_PROXY_UNAUTHORIZED`, exact `NYXID_PROXY_FORBIDDEN`, and the full-value
+form `NYXID_PROXY_HTTP_[1-5][0-9][0-9]`. Other provider strings remain the
+generic `tool_error` classification. Raw messages, arguments, results, paths,
+headers, and credentials remain excluded from audit artifacts.
 
 It must not store full prompts, full tool arguments, full tool results, raw
 model responses, bearer tokens, OAuth codes, API keys, cookies, headers, or
@@ -240,6 +349,10 @@ Do not implement platform audit trail as:
    headers, cookies, tokens, OAuth codes, API keys, credential material,
    `sender_binding_id`, raw token-minting subject ids, or full tool results.
 7. A governance decision source for command execution.
+8. Per-caller tool middleware, wrappers, receipt finalizers, or optional audit
+   wiring that can reach a raw `IAgentTool` terminal.
+9. Replaying a tool after the admission ledger returned `Duplicate` or
+   `Conflict`, or after the raw terminal ran but terminal audit append failed.
 
 ## 7. Query Semantics
 
@@ -266,6 +379,7 @@ readers, actor state, or event stores directly. Audit artifacts are queried thro
 | `/api/audit/trail` | `GET` | Authenticated caller; platform admin only when `scope` targets another scope | Query materialized audit artifacts. Missing `scope` means caller scope. |
 | `/api/audit/trail/cloudevents` | `GET` | Same as `/api/audit/trail` | Export the selected page as a CloudEvents 1.0 JSON batch. |
 | `/api/audit/actor-resolutions` | `POST` | Platform admin | Resolve an external actor identity to `auditActorId`. |
+| `/api/audit/chat-activity` | `GET` | Authenticated caller; platform admin only for explicit `scope=__all__` | Query only typed chat tool/action artifacts. The default remains the caller's own scope and HMAC identities. |
 
 The resolver accepts raw external identity only in the JSON request body. It must never
 put that identity in path or query parameters, must not log it, and must not return it.
@@ -282,6 +396,13 @@ If `IAuditTrailQueryPort` is not configured, `/api/audit/trail` returns
 state reads, query-time replay, or event-store reconstruction. If platform-admin
 authorization is unavailable for an admin-only path, the endpoint returns
 `503 AUDIT_ADMIN_AUTH_UNAVAILABLE`.
+
+`/api/audit/chat-activity` resolves one unambiguous authenticated scope and subject, derives
+every current/retained HMAC actor identity, requires typed `provenance.chat`, and applies
+surface/conversation/outcome filters before cursor pagination. Ordinary callers cannot select
+`scope`, `auditActorId`, or `identityKeyId`. Platform admins remain personal by default and
+enter a cross-user query only by explicitly requesting `scope=__all__`. The response never
+enriches from chat history, transcript, actor state, or an event replay.
 
 If the configured query store rejects or cannot execute the query, the endpoint returns
 `503 AUDIT_QUERY_UNAVAILABLE` with a stable generic message. The response and server log may
@@ -387,6 +508,18 @@ Operational requirements:
 5. Index lifecycle migration copies forward and retains legacy/previous physical indices;
    operators may remove them only through an approved retention action after independent backup
    and count verification.
+6. Chat Activity uses a scoped 30-day operation over the active alias: both
+   `artifact.recorded_at < now-30d/d` and existence of
+   `artifact.record.provenance.chat.surface` are required. This TTL cannot delete unrelated
+   Audit Trail records. Retained HMAC identity keys must remain queryable for the full unexpired
+   window.
+
+The governed procedure is
+[Chat Activity Audit Retention](../operations/chat-activity-audit-retention.md). It defaults to a
+count-only dry run; execution and previous-physical-index cleanup require separate approval.
+7. Agent-tool admission keys are a separate authorization ledger, not audit artifacts. Every
+   enabled host owns its bounded replay-window configuration and distinct key prefix; Redis/Garnet
+   TTL expiration performs compaction only after the immutable request deadline has elapsed.
 
 ## 9. Validation
 
@@ -402,10 +535,22 @@ Changes to audit trail contracts or implementation must verify:
    subjects.
 6. HTTP query endpoints authorize cross-scope reads and resolver calls before
    invoking `IAuditTrailQueryPort` or `IAuditActorIdentityHasher`.
+7. Solution-graph checks find exactly one raw `IAgentTool.ExecuteAsync` caller,
+   and every known server-owned execution surface invokes
+   `IAgentToolExecutionPort`.
+8. Credential or approval denial, admission-ledger duplicate/conflict, and
+   invalid closed NyxID actions produce zero downstream side effects.
+9. Terminal audit failure preserves the actual terminal result and cannot make
+   the tool call retryable.
+10. Two distinct execution owners using identical request, call, tool, and argument
+    values produce distinct admission and audit identities.
+11. Real Redis/Garnet adapter tests prove binary round-trip, atomic duplicate/conflict behavior,
+    cancellation, bounded TTL, and rejection of a stale fact after retention cleanup.
 
 Related references:
 
 - [ADR-0039: Platform Audit Trail](../adr/0039-platform-audit-trail.md)
+- [ADR-0046: Admitted Agent Tool Execution](../adr/0046-admitted-agent-tool-execution.md)
 - [CQRS Projection](cqrs-projection.md)
 - [Event Sourcing](event-sourcing.md)
 - [Observability](observability.md)

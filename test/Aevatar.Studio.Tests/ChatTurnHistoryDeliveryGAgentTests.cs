@@ -9,6 +9,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Studio.Tests;
 
@@ -18,6 +19,169 @@ public sealed class ChatTurnHistoryDeliveryGAgentTests
     private const string DeliveryId = "chat-history-delivery-business-alpha";
     private const string WorkflowActorId = "workflow-actor";
     private const string WorkflowCommandId = "workflow-command";
+    private const string SourceActorId = "source-actor";
+    private const string SourceCommandId = "source-command";
+
+    [Fact]
+    public void SourceIdentityFields_ShouldRetainWireNumbersAndMessageTypeUrls()
+    {
+        var bytes = HandcraftedSourceIdentityBytes();
+
+        var state = ChatTurnHistoryDeliveryState.Parser.ParseFrom(bytes);
+        var reserve = ChatTurnHistoryDeliveryReserveRequested.Parser.ParseFrom(bytes);
+        var reserved = ChatTurnHistoryDeliveryReservedEvent.Parser.ParseFrom(bytes);
+
+        state.SourceActorId.Should().Be(SourceActorId);
+        state.SourceCommandId.Should().Be(SourceCommandId);
+        state.SourceCorrelationId.Should().Be("source-correlation");
+        reserve.SourceActorId.Should().Be(SourceActorId);
+        reserve.SourceCommandId.Should().Be(SourceCommandId);
+        reserve.SourceCorrelationId.Should().Be("source-correlation");
+        reserved.SourceActorId.Should().Be(SourceActorId);
+        reserved.SourceCommandId.Should().Be(SourceCommandId);
+        reserved.SourceCorrelationId.Should().Be("source-correlation");
+        ChatTurnHistoryDeliveryState.Descriptor.FindFieldByName("source_actor_id").FieldNumber.Should().Be(6);
+        ChatTurnHistoryDeliveryState.Descriptor.FindFieldByName("source_command_id").FieldNumber.Should().Be(7);
+        ChatTurnHistoryDeliveryState.Descriptor.FindFieldByName("source_correlation_id").FieldNumber.Should().Be(8);
+        Any.Pack(state).TypeUrl.Should().Be(
+            "type.googleapis.com/aevatar.gagents.chathistory.ChatTurnHistoryDeliveryState");
+        Any.Pack(reserve).TypeUrl.Should().Be(
+            "type.googleapis.com/aevatar.gagents.chathistory.ChatTurnHistoryDeliveryReserveRequested");
+    }
+
+    [Theory]
+    [InlineData(ChatTurnTerminalStatus.Completed, "safe terminal text", "", "safe terminal text", "")]
+    [InlineData(ChatTurnTerminalStatus.Failed, "safe terminal text", "source_failed", "", "source_failed: safe terminal text")]
+    [InlineData(ChatTurnTerminalStatus.Stopped, "safe terminal text", "source_stopped", "", "source_stopped")]
+    [InlineData(ChatTurnTerminalStatus.Blocked, "Connect a private source to continue.", "source_blocked", "Connect a private source to continue.", "")]
+    [InlineData(ChatTurnTerminalStatus.OutcomeUncertain, "The outcome could not be confirmed.", "SESSION_OUTCOME_UNCERTAIN", "The outcome could not be confirmed.", "SESSION_OUTCOME_UNCERTAIN: The outcome could not be confirmed.")]
+    public async Task SourceTerminalNotification_ShouldMapClosedStatusToExactAppend(
+        ChatTurnTerminalStatus status,
+        string text,
+        string errorCode,
+        string expectedAssistantText,
+        string expectedSanitizedError)
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = await CreateAgentAsync(runtime, dispatch);
+        await agent.HandleEventAsync(Envelope(SourceReserve(), "chat-history-command-port"));
+
+        await agent.HandleEventAsync(Envelope(
+            SourceTerminal(status, text, errorCode),
+            SourceActorId));
+
+        var append = dispatch.Calls.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<AppendChatTurnCommand>();
+        append.Turn.TerminalStatus.Should().Be(status);
+        append.Turn.AssistantText.Should().Be(expectedAssistantText);
+        append.Turn.SanitizedError.Should().Be(expectedSanitizedError);
+    }
+
+    [Fact]
+    public async Task Reserve_WhenExactlyRetried_ShouldNoOp_ButConflictShouldFailClosed()
+    {
+        var agent = await CreateAgentAsync(new RecordingActorRuntime(), new RecordingActorDispatchPort());
+        var reserve = SourceReserve();
+        await agent.HandleEventAsync(Envelope(reserve, "chat-history-command-port"));
+
+        await agent.HandleEventAsync(Envelope(reserve.Clone(), "chat-history-command-port"));
+        var conflict = reserve.Clone();
+        conflict.RequestFingerprint = "changed-fingerprint";
+        var act = () => agent.HandleEventAsync(Envelope(conflict, "chat-history-command-port"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*reservation conflicts*");
+        agent.State.RequestFingerprint.Should().Be("fingerprint-original");
+        agent.State.Status.Should().Be(ChatTurnHistoryDeliveryStatus.Reserved);
+    }
+
+    [Fact]
+    public async Task Reserve_WhenCommittedReservationIsReusedWithMalformedPayload_ShouldPreserveCommittedState()
+    {
+        var agent = await CreateAgentAsync(new RecordingActorRuntime(), new RecordingActorDispatchPort());
+        var reserve = SourceReserve();
+        await agent.HandleEventAsync(Envelope(reserve, "chat-history-command-port"));
+
+        var malformed = reserve.Clone();
+        malformed.UserText = string.Empty;
+        var act = () => agent.HandleEventAsync(Envelope(malformed, "chat-history-command-port"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*reservation conflicts*");
+        agent.State.Status.Should().Be(ChatTurnHistoryDeliveryStatus.Reserved);
+        agent.State.RequestFingerprint.Should().Be("fingerprint-original");
+        agent.State.ErrorCode.Should().BeEmpty();
+        agent.State.ErrorSummary.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SourceTerminal_WhenExactlyRetried_ShouldNoOp_ButConflictShouldFailClosed()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = await CreateAgentAsync(new RecordingActorRuntime(), dispatch);
+        await agent.HandleEventAsync(Envelope(SourceReserve(), "chat-history-command-port"));
+        var terminal = SourceTerminal(
+            ChatTurnTerminalStatus.Completed,
+            "safe terminal text",
+            string.Empty);
+        await agent.HandleEventAsync(Envelope(terminal, SourceActorId));
+
+        await agent.HandleEventAsync(Envelope(terminal.Clone(), SourceActorId));
+        var conflict = terminal.Clone();
+        conflict.Text = "different terminal text";
+        var act = () => agent.HandleEventAsync(Envelope(conflict, SourceActorId));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*terminal conflicts*");
+        dispatch.Calls.Should().ContainSingle();
+    }
+
+    [Theory]
+    [InlineData(ChatTurnTerminalStatus.Completed)]
+    [InlineData(ChatTurnTerminalStatus.Failed)]
+    public async Task SourceTerminal_ShouldRedispatchStableDeliveryForAllowedUncertainReconciliation(
+        ChatTurnTerminalStatus reconciledStatus)
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = await CreateAgentAsync(new RecordingActorRuntime(), dispatch);
+        await agent.HandleEventAsync(Envelope(SourceReserve(), "chat-history-command-port"));
+        await agent.HandleEventAsync(Envelope(SourceTerminal(
+            ChatTurnTerminalStatus.OutcomeUncertain,
+            "The outcome could not be confirmed.",
+            "SESSION_OUTCOME_UNCERTAIN"), SourceActorId));
+        await agent.HandleEventAsync(Envelope(AppendResult(true), "chat-conversation"));
+        var reconciled = SourceTerminal(
+            reconciledStatus,
+            reconciledStatus == ChatTurnTerminalStatus.Completed ? "confirmed result" : "confirmed failure",
+            reconciledStatus == ChatTurnTerminalStatus.Failed ? "CONFIRMED_FAILURE" : string.Empty);
+        reconciled.ObservedAtUnixMs++;
+
+        await agent.HandleEventAsync(Envelope(reconciled, SourceActorId));
+
+        dispatch.Calls.Should().HaveCount(2);
+        var first = dispatch.Calls[0].Envelope;
+        var second = dispatch.Calls[1].Envelope;
+        first.Payload.Unpack<AppendChatTurnCommand>().Turn.TerminalStatus.Should()
+            .Be(ChatTurnTerminalStatus.OutcomeUncertain);
+        second.Payload.Unpack<AppendChatTurnCommand>().Turn.TerminalStatus.Should().Be(reconciledStatus);
+        first.EnsureRuntime().EnsureDeliveryIdentity().OperationId.Should()
+            .Be($"chat-history-append:{DeliveryId}:1");
+        second.EnsureRuntime().EnsureDeliveryIdentity().OperationId.Should()
+            .Be($"chat-history-append:{DeliveryId}:2");
+        agent.State.DeliveryId.Should().Be(DeliveryId);
+        agent.State.AppendAttempt.Should().Be(2);
+        agent.State.Status.Should().Be(ChatTurnHistoryDeliveryStatus.AppendDispatched);
+        agent.State.TerminalStatus.Should().Be(reconciledStatus);
+    }
+
+    [Fact]
+    public async Task DeliveryAgent_ShouldExposeCommittedStateProjectionContract()
+    {
+        var agent = await CreateAgentAsync(new RecordingActorRuntime(), new RecordingActorDispatchPort());
+
+        typeof(IProjectedActor).IsAssignableFrom(agent.GetType()).Should().BeTrue();
+    }
 
     [Fact]
     public async Task TerminalNotification_ShouldAppendFromWorkflowOutboxWithoutProjectionAttachment()
@@ -76,15 +240,18 @@ public sealed class ChatTurnHistoryDeliveryGAgentTests
 
         agent.State.Status.Should().Be(expectedStatus);
 
-        await agent.HandleEventAsync(Envelope(
+        var act = () => agent.HandleEventAsync(Envelope(
             Reserve(
                 createConversationIfMissing: true,
                 workflowActorId: "workflow-actor-retry",
                 requestFingerprint: "fingerprint-retry"),
             "chat-history-terminal-delivery-port"));
 
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*reservation conflicts*");
+
         agent.State.Status.Should().Be(expectedStatus);
-        agent.State.WorkflowActorId.Should().Be(WorkflowActorId);
+        agent.State.SourceActorId.Should().Be(WorkflowActorId);
         agent.State.RequestFingerprint.Should().Be("fingerprint-original");
     }
 
@@ -98,19 +265,65 @@ public sealed class ChatTurnHistoryDeliveryGAgentTests
         ConversationId = "conversation-a",
         TurnId = "turn-a",
         UserText = "original user text",
-        WorkflowActorId = workflowActorId,
-        WorkflowCommandId = WorkflowCommandId,
-        WorkflowCorrelationId = "workflow-correlation",
+        SourceActorId = workflowActorId,
+        SourceCommandId = WorkflowCommandId,
+        SourceCorrelationId = "workflow-correlation",
         CreateConversationIfMissing = createConversationIfMissing,
         RequestFingerprint = requestFingerprint,
     };
 
+    private static ChatTurnHistoryDeliveryReserveRequested SourceReserve() => new()
+    {
+        DeliveryId = DeliveryId,
+        ScopeId = "scope-a",
+        ConversationId = "conversation-a",
+        TurnId = "turn-a",
+        UserText = "original user text",
+        SourceActorId = SourceActorId,
+        SourceCommandId = SourceCommandId,
+        SourceCorrelationId = "source-correlation",
+        CreateConversationIfMissing = true,
+        RequestFingerprint = "fingerprint-original",
+    };
+
+    private static ChatTurnHistorySourceTerminalNotified SourceTerminal(
+        ChatTurnTerminalStatus status,
+        string text,
+        string errorCode) => new()
+        {
+            DeliveryId = DeliveryId,
+            SourceActorId = SourceActorId,
+            SourceCommandId = SourceCommandId,
+            Status = status,
+            Text = text,
+            ErrorCode = errorCode,
+            ObservedAtUnixMs = DateTimeOffset.Parse("2026-07-16T00:00:00Z")
+                .ToUnixTimeMilliseconds(),
+        };
+
+    private static byte[] HandcraftedSourceIdentityBytes()
+    {
+        using var stream = new MemoryStream();
+        WriteLengthDelimited(stream, 50, SourceActorId);
+        WriteLengthDelimited(stream, 58, SourceCommandId);
+        WriteLengthDelimited(stream, 66, "source-correlation");
+        return stream.ToArray();
+    }
+
+    private static void WriteLengthDelimited(Stream stream, byte tag, string value)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(value);
+        stream.WriteByte(tag);
+        stream.WriteByte(checked((byte)bytes.Length));
+        stream.Write(bytes);
+    }
+
     private static ChatTurnHistoryDeliveryAcceptedBound Bind() => new()
     {
         DeliveryId = DeliveryId,
-        WorkflowActorId = WorkflowActorId,
-        WorkflowCommandId = WorkflowCommandId,
-        WorkflowCorrelationId = "workflow-correlation",
+        SourceActorId = WorkflowActorId,
+        SourceCommandId = WorkflowCommandId,
+        SourceCorrelationId = "workflow-correlation",
     };
 
     private static WorkflowRunTerminalNotification Terminal() => new()
@@ -159,7 +372,8 @@ public sealed class ChatTurnHistoryDeliveryGAgentTests
 
         var agent = new ChatTurnHistoryDeliveryGAgent(
             runtime,
-            dispatch)
+            dispatch,
+            NullLogger<ChatTurnHistoryDeliveryGAgent>.Instance)
         {
             Services = services,
             EventSourcingBehaviorFactory =

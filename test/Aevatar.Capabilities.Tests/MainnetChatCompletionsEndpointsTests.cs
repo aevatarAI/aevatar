@@ -394,6 +394,7 @@ public sealed class MainnetChatCompletionsEndpointsTests
         });
         builder.WebHost.UseTestServer();
         builder.Configuration["Aevatar:Authentication:Authority"] = "https://invalid.example";
+        builder.Configuration["Aevatar:Authentication:Audience"] = "aevatar-api";
         builder.AddAevatarAuthentication();
 
         builder.Services.AddSingleton<ILLMProviderFactory>(provider);

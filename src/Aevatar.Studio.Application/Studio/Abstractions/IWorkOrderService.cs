@@ -27,20 +27,6 @@ public interface IWorkOrderService
         WorkOrderPrincipalContract requester,
         CancellationToken ct = default);
 
-    Task<WorkOrderAcceptedReceipt> ApproveAsync(
-        string scopeId,
-        string workOrderId,
-        DecideWorkOrderApprovalRequest request,
-        WorkOrderPrincipalContract approver,
-        CancellationToken ct = default);
-
-    Task<WorkOrderAcceptedReceipt> DenyAsync(
-        string scopeId,
-        string workOrderId,
-        DecideWorkOrderApprovalRequest request,
-        WorkOrderPrincipalContract approver,
-        CancellationToken ct = default);
-
     Task<WorkOrderAcceptedReceipt> DispatchAsync(
         string scopeId,
         string workOrderId,

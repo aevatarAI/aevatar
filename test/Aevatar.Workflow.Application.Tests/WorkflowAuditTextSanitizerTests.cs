@@ -41,4 +41,42 @@ public sealed class WorkflowAuditTextSanitizerTests
         sanitized["token"].Should().Be(WorkflowAuditTextSanitizer.RedactedValue);
         sanitized["summary"].Should().NotContain(Sentinel);
     }
+
+    [Fact]
+    public void Sanitize_ShouldRedactContactIdentifiersFromNestedJsonAndFreeText()
+    {
+        const string email = "synthetic.contact@example.test";
+        const string userId = "synthetic-user-identifier";
+        const string openId = "ou_synthetic_open_identifier";
+        var raw = $$"""
+        {
+          "request": {
+            "emails": ["{{email}}"]
+          },
+          "response": {
+            "user_id": "{{userId}}",
+            "open_id": "{{openId}}"
+          },
+          "note": "resolved {{email}}"
+        }
+        """;
+
+        var sanitized = WorkflowAuditTextSanitizer.Sanitize(raw);
+
+        sanitized.Should().NotContain(email);
+        sanitized.Should().NotContain(userId);
+        sanitized.Should().NotContain(openId);
+        sanitized.Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+    }
+
+    [Fact]
+    public void Sanitize_ShouldRedactEmailAddressFromNonJsonText()
+    {
+        const string email = "synthetic.contact@example.test";
+
+        var sanitized = WorkflowAuditTextSanitizer.Sanitize($"resolved contact {email}");
+
+        sanitized.Should().NotContain(email);
+        sanitized.Should().Be($"resolved contact {WorkflowAuditTextSanitizer.RedactedValue}");
+    }
 }

@@ -150,7 +150,28 @@ public sealed class ObservatoryStepDetail
 
     public string BranchKey { get; init; } = string.Empty;
 
+    public string SuspensionType { get; init; } = string.Empty;
+
+    public string SuspensionPrompt { get; init; } = string.Empty;
+
+    public string SuspensionContent { get; init; } = string.Empty;
+
+    public int? SuspensionTimeoutSeconds { get; init; }
+
+    public ObservatoryToolApprovalDetail? ToolApproval { get; init; }
+
     public ObservatoryUsageTotals Usage { get; init; } = new();
+}
+
+public sealed class ObservatoryToolApprovalDetail
+{
+    public string ExecutionId { get; init; } = string.Empty;
+
+    public string ToolName { get; init; } = string.Empty;
+
+    public string ToolCallId { get; init; } = string.Empty;
+
+    public string ApprovalRequestId { get; init; } = string.Empty;
 }
 
 // 06-26 detail enrichment: run-level rollup statistics from the committed run-report artifact.

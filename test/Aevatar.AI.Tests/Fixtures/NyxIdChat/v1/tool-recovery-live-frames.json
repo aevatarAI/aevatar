@@ -1,0 +1,72 @@
+[
+  {
+    "scenario": "failed",
+    "type": "CUSTOM",
+    "sequence": 41,
+    "custom": {
+      "name": "nyxid.task.step.changed",
+      "payload": {
+        "stepId": "step-tool-failed",
+        "order": 2,
+        "kind": "tool",
+        "status": "failed",
+        "required": true,
+        "description": "Read repository state.",
+        "source": {
+          "tool": {
+            "toolName": "repository_read",
+            "serviceSlug": "service-slug-alpha",
+            "serviceId": "connected-service-alpha",
+            "readinessCapabilityId": "readiness-capability-alpha"
+          }
+        },
+        "mayChangeExternalState": false,
+        "externalEffect": "not_applied",
+        "failureCode": "NYXID_CONNECTION_UNAVAILABLE",
+        "safeMessage": "The connected service is unavailable.",
+        "safeToSkip": false,
+        "availableActions": {
+          "retry": true,
+          "skip": false,
+          "stop": false
+        },
+        "updatedAt": "2026-08-05T09:00:00Z"
+      }
+    }
+  },
+  {
+    "scenario": "uncertain",
+    "type": "CUSTOM",
+    "sequence": 52,
+    "custom": {
+      "name": "nyxid.task.step.changed",
+      "payload": {
+        "stepId": "step-tool-uncertain",
+        "order": 2,
+        "kind": "tool",
+        "status": "uncertain",
+        "required": true,
+        "description": "Update repository state.",
+        "source": {
+          "tool": {
+            "toolName": "repository_update",
+            "serviceSlug": "service-slug-beta",
+            "serviceId": "connected-service-beta",
+            "readinessCapabilityId": "readiness-capability-beta"
+          }
+        },
+        "mayChangeExternalState": true,
+        "externalEffect": "may_have_changed",
+        "failureCode": "TOOL_OUTCOME_UNKNOWN",
+        "safeMessage": "The external outcome could not be confirmed.",
+        "safeToSkip": false,
+        "availableActions": {
+          "retry": false,
+          "skip": false,
+          "stop": false
+        },
+        "updatedAt": "2026-08-05T09:05:00Z"
+      }
+    }
+  }
+]

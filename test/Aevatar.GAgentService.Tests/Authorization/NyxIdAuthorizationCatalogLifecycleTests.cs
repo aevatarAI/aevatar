@@ -1,4 +1,6 @@
 using System.Reflection;
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -96,6 +98,37 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         agent.State.CleanupReason.Should().Be("owner_unbound");
         agent.State.Activated.Should().BeFalse();
         agent.State.LifecycleFence.Should().Be(7);
+    }
+
+    [Fact]
+    public async Task CatalogUnstableRefreshFailure_ShouldNotInvalidateOwnerCatalog()
+    {
+        var owner = Owner();
+        var agent = CreateAgent(owner);
+
+        await BeginRefreshAsync(agent, owner, "refresh-1", ObservedAt.AddSeconds(1));
+        await agent.HandleObserveAsync(ObservationCommand(owner, "refresh-1", ObservedAt.AddMinutes(1)));
+
+        await BeginRefreshAsync(
+            agent,
+            owner,
+            "refresh-scoped-miss",
+            ObservedAt.AddMinutes(2),
+            agent.State.LifecycleFence);
+        await agent.HandleRefreshFailureAsync(new RecordNyxIdAuthorizationCatalogRefreshFailureCommand
+        {
+            Owner = owner.Clone(),
+            RefreshId = "refresh-scoped-miss",
+            FailedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(2)),
+            FailureCode = "nyxid_required_service_not_found:svc-missing",
+            OutcomeStatus = NyxIdAuthorizationCatalogRefreshOutcomeStatusState.CatalogUnstable,
+        });
+
+        agent.State.Invalidated.Should().BeFalse();
+        agent.State.InvalidationReason.Should().BeEmpty();
+        agent.State.ActiveRefreshId.Should().BeEmpty();
+        agent.State.LastRefreshFailureCode.Should().Be("nyxid_required_service_not_found:svc-missing");
+        agent.State.Services.Select(static service => service.UserServiceId).Should().Equal("svc-alpha");
     }
 
     [Fact]
@@ -210,6 +243,87 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
                 outcome.RefreshId == "refresh-new" &&
                 outcome.Status == NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Started);
         agent.State.ActiveRefreshId.Should().Be("refresh-new");
+    }
+
+    [Fact]
+    public async Task RepairRefreshAcquire_WhenActorIsNewerThanMinimum_ShouldUseActorOwnedLifecycleFence()
+    {
+        var owner = Owner();
+        var eventStore = new InMemoryEventStore();
+        var agent = CreateAgent(owner, eventStore);
+        await BeginRefreshAsync(agent, owner, "refresh-existing", ObservedAt);
+        await agent.HandleObserveAsync(
+            ObservationCommand(owner, "refresh-existing", ObservedAt.AddSeconds(1)));
+        var currentVersion = await eventStore.GetVersionAsync(agent.Id);
+        agent.State.LifecycleFence.Should().BeGreaterThan(0);
+        currentVersion.Should().BeGreaterThan(1);
+
+        await agent.HandleBeginRepairRefreshAsync(
+            new BeginNyxIdAuthorizationCatalogRepairRefreshCommand
+            {
+                Owner = owner.Clone(),
+                RefreshId = "refresh-repair",
+                StartedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddSeconds(2)),
+                MinimumSourceStateVersion = 1,
+                RepairRequestId = "repair-alpha",
+            });
+
+        agent.State.ActiveRefreshId.Should().Be("refresh-repair");
+        await AssertLastRefreshOutcomeAsync(
+            eventStore,
+            agent.Id,
+            "refresh-repair",
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Started);
+    }
+
+    [Fact]
+    public async Task RepairRefreshAcquire_WhenMinimumExceedsCurrentVersion_ShouldReject()
+    {
+        var owner = Owner();
+        var eventStore = new InMemoryEventStore();
+        var agent = CreateAgent(owner, eventStore);
+        await BeginRefreshAsync(agent, owner, "refresh-existing", ObservedAt);
+        await agent.HandleObserveAsync(
+            ObservationCommand(owner, "refresh-existing", ObservedAt.AddSeconds(1)));
+        var currentVersion = await eventStore.GetVersionAsync(agent.Id);
+
+        var act = () => agent.HandleBeginRepairRefreshAsync(
+            new BeginNyxIdAuthorizationCatalogRepairRefreshCommand
+            {
+                Owner = owner.Clone(),
+                RefreshId = "refresh-repair",
+                StartedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddSeconds(2)),
+                MinimumSourceStateVersion = currentVersion + 1,
+                RepairRequestId = "repair-alpha",
+            });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("NyxID authorization catalog repair source version changed.");
+        agent.State.ActiveRefreshId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RepairRefreshAcquire_WhenRepairRequestIdentityIsMissing_ShouldReject()
+    {
+        var owner = Owner();
+        var eventStore = new InMemoryEventStore();
+        var agent = CreateAgent(owner, eventStore);
+        await BeginRefreshAsync(agent, owner, "refresh-existing", ObservedAt);
+        await agent.HandleObserveAsync(
+            ObservationCommand(owner, "refresh-existing", ObservedAt.AddSeconds(1)));
+
+        var act = () => agent.HandleBeginRepairRefreshAsync(
+            new BeginNyxIdAuthorizationCatalogRepairRefreshCommand
+            {
+                Owner = owner.Clone(),
+                RefreshId = "refresh-repair",
+                StartedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddSeconds(2)),
+                MinimumSourceStateVersion = 1,
+                RepairRequestId = " ",
+            });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Catalog repair refresh identity is required.");
     }
 
     [Theory]
@@ -1074,6 +1188,130 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
     }
 
     [Fact]
+    public void ComputeContentDigest_ShouldBindGatewayAndExactServiceModelEvidence()
+    {
+        var service = ServiceEvidence("us-alpha", "chrono-llm-public");
+        service.LlmTarget = ServiceTarget("us-alpha", "chrono-llm-public", "gpt-5.5");
+        var gateway = GatewayTarget("gateway-model-a");
+        var first = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+            Owner(),
+            [service],
+            gateway);
+
+        var changedGateway = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+            Owner(),
+            [service],
+            GatewayTarget("gateway-model-b"));
+        var changedService = service.Clone();
+        changedService.LlmTarget = ServiceTarget("us-alpha", "chrono-llm-public", "gpt-5.6");
+
+        changedGateway.Should().NotBe(first);
+        NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+                Owner(),
+                [changedService],
+                gateway)
+            .Should().NotBe(first);
+    }
+
+    [Fact]
+    public async Task ObserveHandler_ShouldRoundTripGatewayAndServiceLLMEvidence()
+    {
+        var owner = Owner();
+        var agent = CreateAgent(owner);
+        await BeginRefreshAsync(agent, owner, "refresh-llm", ObservedAt.AddSeconds(1));
+        var command = ObservationCommand(owner, "refresh-llm", ObservedAt.AddMinutes(1));
+        command.Services[0].LlmTarget = ServiceTarget("svc-alpha", "calendar", "gpt-5.5");
+        command.GatewayLlmTarget = GatewayTarget("gateway-model-a");
+        command.ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+            owner,
+            command.Services,
+            command.GatewayLlmTarget);
+
+        await agent.HandleObserveAsync(command);
+
+        agent.State.Services.Should().ContainSingle();
+        agent.State.Services[0].LlmTarget.Should().BeEquivalentTo(command.Services[0].LlmTarget);
+        agent.State.Services[0].LlmTarget.Should().NotBeSameAs(command.Services[0].LlmTarget);
+        agent.State.GatewayLlmTarget.Should().BeEquivalentTo(command.GatewayLlmTarget);
+        agent.State.GatewayLlmTarget.Should().NotBeSameAs(command.GatewayLlmTarget);
+    }
+
+    [Theory]
+    [InlineData("enumerated_empty", "*bounded non-empty model list*")]
+    [InlineData("non_enumerated_models", "*non-enumerated catalog cannot expose selectable model IDs*")]
+    [InlineData("duplicate_models", "*ordinal-sorted and distinct*")]
+    [InlineData("unsorted_models", "*ordinal-sorted and distinct*")]
+    [InlineData("service_id_mismatch", "*does not match its parent service*")]
+    [InlineData("service_slug_mismatch", "*does not match its parent service*")]
+    [InlineData("service_route_mismatch", "*does not match its parent service*")]
+    [InlineData("gateway_service_identity", "*Gateway LLM target identity is invalid*")]
+    public async Task ObserveHandler_ShouldRejectInvalidLLMEvidence(
+        string scenario,
+        string expectedMessage)
+    {
+        var owner = Owner();
+        var eventStore = new InMemoryEventStore();
+        var agent = CreateAgent(owner, eventStore);
+        await BeginRefreshAsync(agent, owner, "refresh-invalid-llm", ObservedAt.AddSeconds(1));
+        var command = ObservationCommand(owner, "refresh-invalid-llm", ObservedAt.AddMinutes(1));
+        command.Services[0].LlmTarget = ServiceTarget("svc-alpha", "calendar", "gpt-5.5");
+
+        switch (scenario)
+        {
+            case "enumerated_empty":
+                command.Services[0].LlmTarget.ModelCatalog = new LLMModelCatalog
+                {
+                    Certainty = LLMModelCatalogCertainty.Enumerated,
+                };
+                break;
+            case "non_enumerated_models":
+                command.Services[0].LlmTarget.ModelCatalog = new LLMModelCatalog
+                {
+                    Certainty = LLMModelCatalogCertainty.NotVerifiable,
+                    DiagnosticKind = LLMModelCatalogDiagnosticKind.NotPublished,
+                    ModelIds = { "gpt-5.5" },
+                };
+                break;
+            case "duplicate_models":
+                command.Services[0].LlmTarget.ModelCatalog.ModelIds.Add("gpt-5.5");
+                break;
+            case "unsorted_models":
+                command.Services[0].LlmTarget.ModelCatalog.ModelIds.Clear();
+                command.Services[0].LlmTarget.ModelCatalog.ModelIds.Add("gpt-z");
+                command.Services[0].LlmTarget.ModelCatalog.ModelIds.Add("gpt-a");
+                command.Services[0].LlmTarget.ModelCatalog.DefaultModelId = "gpt-a";
+                break;
+            case "service_id_mismatch":
+                command.Services[0].LlmTarget.NyxIdUserServiceId = "us-other";
+                break;
+            case "service_slug_mismatch":
+                command.Services[0].LlmTarget.ServiceSlugSnapshot = "other-service";
+                break;
+            case "service_route_mismatch":
+                command.Services[0].LlmTarget.RouteValue = "/api/v1/proxy/s/other-service";
+                break;
+            case "gateway_service_identity":
+                command.Services[0].LlmTarget = null;
+                command.GatewayLlmTarget = GatewayTarget("gateway-model-a");
+                command.GatewayLlmTarget.NyxIdUserServiceId = "us-alpha";
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
+        }
+        command.ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+            owner,
+            command.Services,
+            command.GatewayLlmTarget);
+        var versionBefore = await eventStore.GetVersionAsync(agent.Id);
+
+        var act = () => agent.HandleObserveAsync(command);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage(expectedMessage);
+        (await eventStore.GetVersionAsync(agent.Id)).Should().Be(versionBefore);
+    }
+
+    [Fact]
     public void StateTransition_ShouldPreserveCatalogFactsAndClearInvalidationOnNewObservation()
     {
         var agent = new NyxIdAuthorizationCatalogGAgent();
@@ -1221,6 +1459,7 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         {
             NyxIdAuthorizationCatalogState.Descriptor,
             BeginNyxIdAuthorizationCatalogRefreshCommand.Descriptor,
+            BeginNyxIdAuthorizationCatalogRepairRefreshCommand.Descriptor,
             ObserveNyxIdAuthorizationCatalogCommand.Descriptor,
             RecordNyxIdAuthorizationCatalogRefreshFailureCommand.Descriptor,
             InvalidateNyxIdAuthorizationCatalogCommand.Descriptor,
@@ -1248,7 +1487,7 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
     public void AuthorizationContracts_ShouldPublishPermissionSetsAndReserveRemovedTopologyFields()
     {
         ScheduledInvocationAuthorizationContractVersions.Schema.Should()
-            .Be("scheduled-invocation-authorization/v2");
+            .Be("scheduled-invocation-authorization/v3");
         ScheduledInvocationAuthorizationContractVersions.CredentialPolicy.Should()
             .Be("nyxid-api-key/scheduled-invocation/v2");
 
@@ -1294,6 +1533,8 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         state.ToProto().ReservedRange.Should().Contain(static range => range.Start == 23 && range.End == 25);
         state.DescriptorForType("BeginNyxIdAuthorizationCatalogRefreshCommand")!
             .FindFieldByName("expected_lifecycle_fence").Should().NotBeNull();
+        state.DescriptorForType("BeginNyxIdAuthorizationCatalogRepairRefreshCommand")!
+            .FindFieldByName("minimum_source_state_version").Should().NotBeNull();
         state.DescriptorForType("NyxIdAuthorizationCatalogRefreshBeganEvent").Should().NotBeNull();
         state.DescriptorForType("NyxIdAuthorizationCatalogRefreshFailedEvent")!
             .FindFieldByName("lifecycle_fence").Should().NotBeNull();
@@ -1314,10 +1555,13 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         var projector = new NyxIdAuthorizationCatalogCurrentStateProjector(
             store,
             new FixedProjectionClock(ObservedAt.AddMinutes(3)));
+        var observed = Observed(owner, "digest-19");
+        observed.Services[0].LlmTarget = ServiceTarget("svc-alpha", "calendar", "gpt-5.5");
+        observed.GatewayLlmTarget = GatewayTarget("gateway-model-a");
         var state = Transition(
             new NyxIdAuthorizationCatalogGAgent(),
             new NyxIdAuthorizationCatalogState(),
-            Observed(owner, "digest-19"));
+            observed);
 
         await projector.ProjectAsync(
             new NyxIdAuthorizationCatalogProjectionContext
@@ -1339,6 +1583,69 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         service.UserServiceId.Should().Be("svc-alpha");
         service.ResourceOwner.Should().BeEquivalentTo(ResourceOwner());
         service.NodeIds.Should().Equal("node-a", "node-z");
+        service.LlmTarget.Should().BeEquivalentTo(observed.Services[0].LlmTarget);
+        service.LlmTarget.Should().NotBeSameAs(observed.Services[0].LlmTarget);
+        snapshot.GatewayLLMTarget.Should().BeEquivalentTo(observed.GatewayLlmTarget);
+        snapshot.GatewayLLMTarget.Should().NotBeSameAs(observed.GatewayLlmTarget);
+    }
+
+    [Fact]
+    public async Task RequiredServiceSubsetObservation_ShouldMergeIntoOwnerCatalogWithoutDroppingOtherServices()
+    {
+        var owner = Owner();
+        var eventStore = new InMemoryEventStore();
+        var agent = CreateAgent(owner, eventStore);
+        await BeginRefreshAsync(agent, owner, "refresh-full", ObservedAt.AddSeconds(1));
+        var fullObservation = ObservationCommand(owner, "refresh-full", ObservedAt.AddMinutes(1));
+        fullObservation.Services.Add(ServiceEvidence("svc-beta", "mail"));
+        fullObservation.ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+            fullObservation.Owner,
+            fullObservation.Services);
+        await agent.HandleObserveAsync(fullObservation);
+
+        await BeginRefreshAsync(
+            agent,
+            owner,
+            "refresh-subset",
+            ObservedAt.AddMinutes(2),
+            agent.State.LifecycleFence);
+        var subsetObservation = ObservationCommand(owner, "refresh-subset", ObservedAt.AddMinutes(3));
+        subsetObservation.CoverageKind =
+            NyxIdAuthorizationCatalogObservationCoverageKind.RequiredServiceSubset;
+        subsetObservation.CoveredUserServiceIds.Add("svc-alpha");
+        subsetObservation.ContentDigest = string.Empty;
+        subsetObservation.Services[0].DisplayName = "Calendar Updated";
+        await agent.HandleObserveAsync(subsetObservation);
+
+        agent.State.Services.Select(static service => service.UserServiceId)
+            .Should().Equal("svc-alpha", "svc-beta");
+        agent.State.Services.Single(static service => service.UserServiceId == "svc-alpha")
+            .DisplayName.Should().Be("Calendar Updated");
+        agent.State.Services.Single(static service => service.UserServiceId == "svc-beta")
+            .DisplayName.Should().Be("Mail");
+        agent.State.ObservedAt.Should().Be(Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(1)));
+        agent.State.FreshUntil.Should().Be(Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(16)));
+        agent.State.ContentDigest.Should().Be(
+            NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(owner, agent.State.Services));
+
+        var actorId = NyxIdAuthorizationCatalogActorIds.Build(owner);
+        var store = new RecordingDocumentStore<NyxIdAuthorizationCatalogDocument>(static document => document.Id);
+        var projector = new NyxIdAuthorizationCatalogCurrentStateProjector(
+            store,
+            new FixedProjectionClock(ObservedAt.AddMinutes(4)));
+        await projector.ProjectAsync(
+            new NyxIdAuthorizationCatalogProjectionContext
+            {
+                RootActorId = actorId,
+                ProjectionKind = NyxIdAuthorizationCatalogGAgent.ProjectionKind,
+            },
+            CommittedEnvelope(agent.State, await eventStore.GetVersionAsync(actorId), "evt-subset"));
+        var snapshot = await new ProjectionNyxIdAuthorizationCatalogQueryPort(store).GetAsync(owner);
+
+        snapshot.Should().NotBeNull();
+        snapshot!.Services.Select(static service => service.UserServiceId)
+            .Should().Equal("svc-alpha", "svc-beta");
+        snapshot.ContentDigest.Should().Be(agent.State.ContentDigest);
     }
 
     private static AuthorizationOwnerIdentity Owner() => new()
@@ -1435,13 +1742,15 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         return observed;
     }
 
-    private static NyxIdAuthorizationServiceEvidence ServiceEvidence()
+    private static NyxIdAuthorizationServiceEvidence ServiceEvidence(
+        string userServiceId = "svc-alpha",
+        string serviceSlug = "calendar")
     {
         var service = new NyxIdAuthorizationServiceEvidence
         {
-            UserServiceId = "svc-alpha",
-            ServiceSlug = "calendar",
-            DisplayName = "Calendar",
+            UserServiceId = userServiceId,
+            ServiceSlug = serviceSlug,
+            DisplayName = ToDisplayName(serviceSlug),
             Access = NyxIdAuthorizationAccess.Permitted,
             NodeGrantRequirement = AuthorizationGrantRequirement.Required,
             ResourceOwner = ResourceOwner(),
@@ -1450,6 +1759,49 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         service.NodeIds.Add("node-z");
         return service;
     }
+
+    private static NyxIdAuthorizationLLMTargetEvidence ServiceTarget(
+        string userServiceId,
+        string serviceSlug,
+        string modelId) => new()
+        {
+            RouteKind = LLMRouteKind.NyxIdUserService,
+            RouteValue = $"/api/v1/proxy/s/{serviceSlug}",
+            NyxIdUserServiceId = userServiceId,
+            ServiceSlugSnapshot = serviceSlug,
+            ModelCatalog = EnumeratedCatalog(modelId),
+            ObservedAt = Timestamp.FromDateTimeOffset(ObservedAt),
+            FreshUntil = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(15)),
+            EvaluatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(-1)),
+            AuthorityContractVersion = "1",
+            AuthorityPolicyVersion = "llm-model-catalog-v1",
+        };
+
+    private static NyxIdAuthorizationLLMTargetEvidence GatewayTarget(string modelId) => new()
+    {
+        RouteKind = LLMRouteKind.Gateway,
+        RouteValue = LLMSelectionPolicy.GatewayRoute,
+        ModelCatalog = EnumeratedCatalog(modelId),
+        ObservedAt = Timestamp.FromDateTimeOffset(ObservedAt),
+        FreshUntil = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(15)),
+        EvaluatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(-1)),
+        AuthorityContractVersion = "1",
+        AuthorityPolicyVersion = "llm-model-catalog-v1",
+    };
+
+    private static LLMModelCatalog EnumeratedCatalog(string modelId) => new()
+    {
+        Certainty = LLMModelCatalogCertainty.Enumerated,
+        ModelIds = { modelId },
+        DefaultModelId = modelId,
+    };
+
+    private static string ToDisplayName(string serviceSlug) => serviceSlug switch
+    {
+        "calendar" => "Calendar",
+        "mail" => "Mail",
+        _ => serviceSlug,
+    };
 
     private static async Task BeginRefreshAsync(
         NyxIdAuthorizationCatalogGAgent agent,

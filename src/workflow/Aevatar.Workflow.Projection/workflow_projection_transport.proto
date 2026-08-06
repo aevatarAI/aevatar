@@ -6,6 +6,7 @@ import "google/protobuf/timestamp.proto";
 import "google/protobuf/wrappers.proto";
 import "workflow_execution_messages.proto";
 import "workflow_external_action.proto";
+import "workflow_capability_admission.proto";
 
 message WorkflowRunInsightReportDocument {
   string id = 1;
@@ -73,6 +74,8 @@ message WorkflowExecutionCurrentStateDocument {
   // dimension for "this schedule's runs"; empty for non-scheduled/legacy runs.
   string schedule_id = 32;
   repeated aevatar.workflow.WorkflowExternalActionApprovalSnapshot connector_approval_entries = 33;
+  aevatar.workflow.WorkflowCapabilityAdmissionPlan capability_admission_plan = 34;
+  aevatar.workflow.ExternalCapabilityExecutionMode expected_execution_mode = 35;
 }
 
 message WorkflowExternalApprovalContinuationDocument {
@@ -141,6 +144,15 @@ message WorkflowExecutionStepTrace {
   int32 suspension_timeout_seconds_value = 18;
   string requested_variable_name = 19;
   WorkflowUsageMetricsReadModel usage_value = 20;
+  string suspension_content = 21;
+  WorkflowToolApprovalReadModel tool_approval_value = 22;
+}
+
+message WorkflowToolApprovalReadModel {
+  string execution_id = 1;
+  string tool_name = 2;
+  string tool_call_id = 3;
+  string approval_request_id = 4;
 }
 
 message WorkflowUsageMetricsReadModel {

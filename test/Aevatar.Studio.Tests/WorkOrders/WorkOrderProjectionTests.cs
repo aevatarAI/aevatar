@@ -69,10 +69,94 @@ public sealed class WorkOrderProjectionTests
         document.WorkflowId.Should().Be("workflow-1");
         document.PublishedServiceId.Should().Be("service-1");
         document.RunId.Should().Be("run-1");
-        document.RunStartedAtUnixMs.Should().Be(workOrderUpdatedAt.AddMinutes(-2).ToUnixTimeMilliseconds());
-        document.TerminalEvidence!.CorrelationId.Should().Be("correlation-1");
+        document.RunAcceptedAtUnixMs.Should().Be(workOrderUpdatedAt.AddMinutes(-1).ToUnixTimeMilliseconds());
+        document.RunOutcome!.CorrelationId.Should().Be("correlation-1");
+        document.AvailableActions.Should().BeEquivalentTo(new WorkOrderAvailableActionsDocument
+        {
+            CanReassign = false,
+            CanDispatch = false,
+            CanCancel = false,
+        });
         document.UpdatedAt!.ToDateTimeOffset().Should().Be(projectionObservedAt);
         document.WorkOrderUpdatedAtUtc!.ToDateTimeOffset().Should().Be(workOrderUpdatedAt);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldNotInventRunOrDeadlineForPreDispatchWorkOrder()
+    {
+        var projectionObservedAt = DateTimeOffset.Parse("2026-07-17T10:00:00Z");
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new WorkOrderCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(projectionObservedAt));
+        var state = BuildState(projectionObservedAt);
+        state.LifecycleStatus = WorkOrderLifecycleStatus.Ready;
+        state.Run = null;
+        state.RunOutcome = null;
+        state.LateRunOutcome = null;
+        state.TimeoutAtUtc = null;
+        state.AvailableActions = new WorkOrderAvailableActions
+        {
+            CanReassign = true,
+            CanDispatch = true,
+            CanCancel = true,
+        };
+
+        await projector.ProjectAsync(
+            new StudioMaterializationContext
+            {
+                RootActorId = ActorId,
+                ProjectionKind = WorkOrderGAgent.ProjectionKind,
+            },
+            WrapCommitted(state, projectionObservedAt));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.LifecycleStatus.Should().Be(WorkOrderLifecycleStatusNames.Ready);
+        document.RunId.Should().BeEmpty();
+        document.RunActorId.Should().BeEmpty();
+        document.RunCommandId.Should().BeEmpty();
+        document.RunCorrelationId.Should().BeEmpty();
+        document.RunRevisionId.Should().BeEmpty();
+        document.RunDeploymentId.Should().BeEmpty();
+        document.RunAcceptedAtUnixMs.Should().Be(0);
+        document.RunOutcome.Should().BeNull();
+        document.LateRunOutcome.Should().BeNull();
+        document.TimeoutAtUnixMs.Should().Be(0);
+        document.AvailableActions.Should().BeEquivalentTo(new WorkOrderAvailableActionsDocument
+        {
+            CanReassign = true,
+            CanDispatch = true,
+            CanCancel = true,
+        });
+    }
+
+    [Theory]
+    [InlineData(WorkOrderTerminalOutcome.Succeeded, "succeeded")]
+    [InlineData(WorkOrderTerminalOutcome.Failed, "failed")]
+    [InlineData(WorkOrderTerminalOutcome.Stopped, "stopped")]
+    [InlineData(WorkOrderTerminalOutcome.Unspecified, "")]
+    public async Task ProjectAsync_ShouldMapRunOutcomeToWireName(
+        WorkOrderTerminalOutcome outcome,
+        string expectedWireName)
+    {
+        var projectionObservedAt = DateTimeOffset.Parse("2026-07-17T10:00:00Z");
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new WorkOrderCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(projectionObservedAt));
+        var state = BuildState(projectionObservedAt);
+        state.RunOutcome!.Outcome = outcome;
+
+        await projector.ProjectAsync(
+            new StudioMaterializationContext
+            {
+                RootActorId = ActorId,
+                ProjectionKind = WorkOrderGAgent.ProjectionKind,
+            },
+            WrapCommitted(state, projectionObservedAt));
+
+        dispatcher.Upserts.Should().ContainSingle().Subject.RunOutcome!.Outcome
+            .Should().Be(expectedWireName);
     }
 
     [Fact]
@@ -100,10 +184,15 @@ public sealed class WorkOrderProjectionTests
             EndpointId = "chat",
             Intent = "Produce the report",
             DedupKey = "dedup-1",
-            LifecycleStatus = WorkOrderLifecycleStatusNames.Running,
+            LifecycleStatus = WorkOrderLifecycleStatusNames.Completed,
             LifecycleVersion = 5,
+            AvailableActions = new WorkOrderAvailableActionsDocument
+            {
+                CanReassign = false,
+                CanDispatch = false,
+                CanCancel = false,
+            },
             CreatedAtUnixMs = workOrderUpdatedAt.AddHours(-1).ToUnixTimeMilliseconds(),
-            ApprovalStatus = WorkOrderApprovalStatusNames.NotRequired,
             RunId = "run-1",
             RunActorId = "run-1",
             RunCommandId = "command-1",
@@ -111,8 +200,7 @@ public sealed class WorkOrderProjectionTests
             RunRevisionId = "revision-1",
             RunDeploymentId = "deployment-1",
             RunAcceptedAtUnixMs = workOrderUpdatedAt.AddMinutes(-1).ToUnixTimeMilliseconds(),
-            RunStartedAtUnixMs = workOrderUpdatedAt.ToUnixTimeMilliseconds(),
-            TerminalEvidence = new WorkOrderTerminalEvidenceDocument
+            RunOutcome = new WorkOrderRunOutcomeReferenceDocument
             {
                 DeliveryId = "delivery-1",
                 RunId = "run-1",
@@ -130,7 +218,7 @@ public sealed class WorkOrderProjectionTests
             ScopeId,
             new WorkOrderQueryRequest(
                 PageSize: 25,
-                Status: WorkOrderLifecycleStatusNames.Running,
+                Status: WorkOrderLifecycleStatusNames.Completed,
                 RequesterPrincipalId: "requester-1",
                 TeamId: "team-1",
                 MemberId: "member-1",
@@ -147,9 +235,12 @@ public sealed class WorkOrderProjectionTests
         response.MemberId.Should().Be("member-1");
         response.WorkflowId.Should().Be("workflow-1");
         response.PublishedServiceId.Should().Be("service-1");
-        response.Execution!.RunId.Should().Be("run-1");
-        response.Execution.StartedAtUtc.Should().Be(workOrderUpdatedAt);
-        response.TerminalEvidence!.CorrelationId.Should().Be("correlation-1");
+        response.Run!.RunId.Should().Be("run-1");
+        response.RunOutcome!.CorrelationId.Should().Be("correlation-1");
+        response.AvailableActions.Should().Be(new WorkOrderAvailableActionsResponse(
+            CanReassign: false,
+            CanDispatch: false,
+            CanCancel: false));
         reader.LastQuery!.Take.Should().Be(25);
         reader.LastQuery.Filters.Select(static filter => filter.FieldPath).Should().BeEquivalentTo(
             "scope_id",
@@ -187,16 +278,17 @@ public sealed class WorkOrderProjectionTests
             {
                 Chat = new WorkOrderChatInput { Prompt = "Create it" },
             },
-            PermissionPlan = new WorkOrderPermissionPlan(),
-            Approval = new WorkOrderApprovalState
-            {
-                Status = WorkOrderApprovalStatus.NotRequired,
-            },
-            LifecycleStatus = WorkOrderLifecycleStatus.Running,
+            LifecycleStatus = WorkOrderLifecycleStatus.Completed,
             LifecycleVersion = 5,
+            AvailableActions = new WorkOrderAvailableActions
+            {
+                CanReassign = false,
+                CanDispatch = false,
+                CanCancel = false,
+            },
             CreatedAtUtc = Timestamp.FromDateTimeOffset(updatedAt.AddHours(-1)),
             UpdatedAtUtc = Timestamp.FromDateTimeOffset(updatedAt),
-            Execution = new WorkOrderExecutionProvenance
+            Run = new WorkOrderRunLink
             {
                 RunId = "run-1",
                 RunActorId = "run-1",
@@ -205,9 +297,8 @@ public sealed class WorkOrderProjectionTests
                 RevisionId = "revision-1",
                 DeploymentId = "deployment-1",
                 AcceptedAtUtc = Timestamp.FromDateTimeOffset(updatedAt.AddMinutes(-1)),
-                StartedAtUtc = Timestamp.FromDateTimeOffset(updatedAt.AddMinutes(-2)),
             },
-            TerminalEvidence = new WorkOrderTerminalEvidence
+            RunOutcome = new WorkOrderRunOutcomeReference
             {
                 DeliveryId = "delivery-1",
                 RunId = "run-1",

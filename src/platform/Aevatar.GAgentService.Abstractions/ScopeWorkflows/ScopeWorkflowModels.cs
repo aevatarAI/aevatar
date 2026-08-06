@@ -1,5 +1,5 @@
-using Aevatar.GAgentService.Abstractions.Commands;
 using System.Text.Json.Serialization;
+using Aevatar.GAgentService.Abstractions.Commands;
 
 namespace Aevatar.GAgentService.Abstractions;
 
@@ -25,7 +25,8 @@ public sealed record ScopeWorkflowSaveAndBindRequest(
     IReadOnlyDictionary<string, string>? InlineWorkflowYamls = null,
     string? AppId = null,
     string? ServiceId = null,
-    bool? ExposureDesired = null)
+    bool? ExposureDesired = null,
+    string? RevisionId = null)
 {
     [JsonIgnore]
     public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
@@ -49,6 +50,22 @@ public sealed record ScopeWorkflowSummary(
     string ActiveRevisionId,
     string DeploymentId,
     string DeploymentStatus,
+    DateTimeOffset UpdatedAt)
+{
+    public string ServiceAppId { get; init; } = string.Empty;
+
+    public string ServiceNamespace { get; init; } = string.Empty;
+
+    public string PublishedServiceId { get; init; } = string.Empty;
+}
+
+public sealed record ScopeWorkflowPublishedServiceDescriptor(
+    string ScopeId,
+    string WorkflowId,
+    string ServiceAppId,
+    string ServiceNamespace,
+    string PublishedServiceId,
+    string DisplayName,
     DateTimeOffset UpdatedAt);
 
 public sealed record ScopeWorkflowLookupResult(

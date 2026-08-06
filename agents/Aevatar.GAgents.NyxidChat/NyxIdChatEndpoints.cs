@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Audit;
 using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -31,8 +32,10 @@ public static partial class NyxIdChatEndpoints
         group.MapPost("/{scopeId}/nyxid-chat/conversations", HandleCreateConversationAsync);
         group.MapGet("/{scopeId}/nyxid-chat/conversations", HandleListConversationsAsync);
         group.MapPost("/{scopeId}/nyxid-chat/conversations/{actorId}:stream", HandleStreamMessageAsync);
+        group.MapGet("/{scopeId}/nyxid-chat/conversations/{actorId}/state", HandleGetStateAsync);
         group.MapDelete("/{scopeId}/nyxid-chat/conversations/{actorId}", HandleDeleteConversationAsync);
         group.MapPost("/{scopeId}/nyxid-chat/conversations/{actorId}:approve", HandleApproveAsync);
+        MapControlEndpoints(group);
 
         // NyxID Channel Bot Relay webhook — receives forwarded platform messages. NyxID drives
         // this callback and authenticates it with the dedicated X-NyxID-Callback-Token JWT, so
@@ -280,24 +283,15 @@ public static partial class NyxIdChatEndpoints
                 // Studio chat endpoint always uses the ambient (bot owner) scope —
                 // the channel inbound path passes the sender binding-id explicitly.
                 var preferences = await preferencesStore.GetOwnerAsync(ct);
+                control = preferences.ApplyTo(control);
                 logger?.LogInformation(
-                    "User config loaded: model={Model}, route={Route}, maxToolRounds={MaxToolRounds}",
-                    preferences.DefaultModel ?? "<empty>",
-                    preferences.PreferredRoute ?? "<empty>",
+                    "User LLM selection loaded: status={Status}, maxToolRounds={MaxToolRounds}",
+                    preferences.Status,
                     preferences.MaxToolRounds);
-
-                control = control with
-                {
-                    ModelOverride = string.IsNullOrWhiteSpace(preferences.DefaultModel)
-                        ? control.ModelOverride
-                        : preferences.DefaultModel.Trim(),
-                    NyxIdRoutePreference = string.IsNullOrWhiteSpace(preferences.PreferredRoute)
-                        ? control.NyxIdRoutePreference
-                        : preferences.PreferredRoute.Trim(),
-                    MaxToolRoundsOverride = preferences.MaxToolRounds > 0
-                        ? preferences.MaxToolRounds
-                        : control.MaxToolRoundsOverride,
-                };
+            }
+            catch (LLMSelectionRepairRequiredException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -305,29 +299,44 @@ public static partial class NyxIdChatEndpoints
             }
         }
 
-        var memoryStore = http.RequestServices.GetService<IUserMemoryStore>();
-        if (memoryStore == null)
+        var promptContextProvider = http.RequestServices.GetService<IUserMemoryPromptContextProvider>();
+        if (promptContextProvider == null)
             return control;
 
-        var memoryLogger = http.RequestServices.GetService<ILoggerFactory>()
-            ?.CreateLogger("Aevatar.NyxId.Chat.UserMemory");
-
-        try
-        {
-            var section = await memoryStore.BuildPromptSectionAsync(2000, ct);
-            if (!string.IsNullOrWhiteSpace(section))
-                control = control with { UserMemoryPrompt = section };
-        }
-        catch (Exception ex)
-        {
-            memoryLogger?.LogWarning(ex, "Failed to load user memory from chrono-storage — continuing without memory context");
-        }
+        var section = await promptContextProvider.BuildAsync(2000, ct);
+        if (!string.IsNullOrWhiteSpace(section))
+            control = control with { UserMemoryPrompt = section };
 
         return control;
     }
 
-    private static string? ExtractNyxIdAccessToken(HttpContext http)
+    private static string? ExtractNyxIdAccessToken(HttpContext http) =>
+        ExtractNyxIdCredentials(http)?.NyxIdAccessToken;
+
+    private static AgentToolCredentials? ExtractNyxIdCredentials(HttpContext http)
     {
+        if (http.Request.Headers.TryGetValue("Authorization", out var authorizationValues))
+        {
+            if (authorizationValues.Count != 1)
+                return null;
+
+            var authorization = authorizationValues[0]?.Trim();
+            if (string.IsNullOrWhiteSpace(authorization) ||
+                !authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            var bearerToken = authorization["Bearer ".Length..].Trim();
+            return string.IsNullOrWhiteSpace(bearerToken) || bearerToken.Any(char.IsWhiteSpace)
+                ? null
+                : new AgentToolCredentials(
+                    bearerToken,
+                    null,
+                    null,
+                    AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
+        }
+
         if (http.Request.Headers.TryGetValue(NyxIdDelegationTokenHeader, out var delegationValues))
         {
             if (delegationValues.Count != 1)
@@ -336,15 +345,12 @@ public static partial class NyxIdChatEndpoints
             var delegationToken = delegationValues[0]?.Trim();
             return string.IsNullOrWhiteSpace(delegationToken) || delegationToken.Any(char.IsWhiteSpace)
                 ? null
-                : delegationToken;
+                : new AgentToolCredentials(
+                    delegationToken,
+                    null,
+                    null,
+                    AgentToolNyxIdCredentialKind.ProxyDelegation);
         }
-
-        var authHeader = http.Request.Headers.Authorization.FirstOrDefault();
-        if (string.IsNullOrWhiteSpace(authHeader))
-            return null;
-
-        if (authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            return authHeader["Bearer ".Length..].Trim();
 
         return null;
     }

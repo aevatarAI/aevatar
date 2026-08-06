@@ -1,8 +1,13 @@
 using System.Runtime.CompilerServices;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions.Tools;
 using FluentAssertions;
 
@@ -20,11 +25,17 @@ public sealed class ChatRuntimeToolProgressTests
         var runtime = new ChatRuntime(
             providerFactory: () => provider,
             history: new ChatHistory(),
-            toolLoop: new ToolCallLoop(tools),
+            toolLoop: CreateToolCallLoop(tools),
             hooks: null,
-            requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() });
+            requestBuilder: _ => new LLMRequest
+            {
+                Messages = [],
+                Tools = tools.GetAll(),
+                ToolContext = TestToolContext,
+            });
         var toolContext = AgentToolExecutionContext.Empty with
         {
+            ExecutionOwner = AgentToolExecutionOwners.HostService(nameof(ChatRuntimeToolProgressTests)),
             SkillRecovery = new AgentSkillRecoveryContext(
                 RequireInitialOrnnSearch: true,
                 RequireOrnnSearchOnBlocker: false,
@@ -52,23 +63,24 @@ public sealed class ChatRuntimeToolProgressTests
                 "the recovery tool must not execute until its start carrier is consumed");
             (await firstMove).Should().BeTrue();
             stream.Current.ToolCallStarted.Should().NotBeNull();
-            stream.Current.ToolCallStarted!.ToolCall.Name.Should().Be("use_skill");
-            stream.Current.ToolCallStarted.Presentation.Kind.Should().Be(ToolPresentationKind.Skill);
-            stream.Current.ToolCallStarted.Presentation.Skill.SkillName.Should().Be("project-summary");
+            stream.Current.ToolCallStarted!.ToolCall.Name.Should().Be("ornn_search_skills");
+            stream.Current.ToolCallStarted.Presentation.Kind.Should().Be(ToolPresentationKind.Generic);
             tool.Started.Task.IsCompleted.Should().BeFalse();
 
             var resume = stream.MoveNextAsync().AsTask();
-            await tool.Started.Task;
+            var executionSignal = await Task.WhenAny(tool.Started.Task, resume);
+            executionSignal.Should().BeSameAs(tool.Started.Task,
+                "the admitted terminal must invoke the recovery tool before publishing its result");
             resume.IsCompleted.Should().BeFalse();
-            tool.Release("{\"loaded\":true}");
+            tool.Release("{\"status\":\"no_match\",\"matches\":[]}");
             (await resume).Should().BeTrue();
             stream.Current.ToolCallCompleted.Should().NotBeNull();
-            stream.Current.ToolCallCompleted!.ToolName.Should().Be("use_skill");
-            stream.Current.ToolCallCompleted.ResultJson.Should().Be("{\"loaded\":true}");
+            stream.Current.ToolCallCompleted!.ToolName.Should().Be("ornn_search_skills");
+            stream.Current.ToolCallCompleted.ResultJson.Should().Be("{\"status\":\"no_match\",\"matches\":[]}");
         }
         finally
         {
-            tool.Release("{\"loaded\":true}");
+            tool.Release("{\"status\":\"no_match\",\"matches\":[]}");
             if (!firstMove.IsCompleted)
                 await firstMove;
         }
@@ -84,11 +96,20 @@ public sealed class ChatRuntimeToolProgressTests
         var runtime = new ChatRuntime(
             providerFactory: () => provider,
             history: new ChatHistory(),
-            toolLoop: new ToolCallLoop(tools),
+            toolLoop: CreateToolCallLoop(tools),
             hooks: null,
-            requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() });
+            requestBuilder: _ => new LLMRequest
+            {
+                Messages = [],
+                Tools = tools.GetAll(),
+                ToolContext = TestToolContext,
+            });
 
-        await using var stream = runtime.ChatStreamAsync("hello", maxToolRounds: 2, turnCatalog: null)
+        await using var stream = runtime.ChatStreamAsync(
+                "hello",
+                maxToolRounds: 2,
+                requestId: "tool-progress-request",
+                turnCatalog: null)
             .GetAsyncEnumerator();
         LLMStreamChunk? started = null;
         while (await stream.MoveNextAsync())
@@ -108,7 +129,9 @@ public sealed class ChatRuntimeToolProgressTests
             "the caller must commit TOOL_CALL_START before advancing the iterator into execution");
 
         var resume = stream.MoveNextAsync().AsTask();
-        await tool.Started.Task;
+        var executionSignal = await Task.WhenAny(tool.Started.Task, resume);
+        executionSignal.Should().BeSameAs(tool.Started.Task,
+            "the admitted terminal must invoke the tool before publishing its result");
         resume.IsCompleted.Should().BeFalse("the stream is waiting for controlled tool completion");
         tool.Release("{\"ok\":true}");
         (await resume).Should().BeTrue();
@@ -140,11 +163,20 @@ public sealed class ChatRuntimeToolProgressTests
         var runtime = new ChatRuntime(
             providerFactory: () => provider,
             history: new ChatHistory(),
-            toolLoop: new ToolCallLoop(tools),
+            toolLoop: CreateToolCallLoop(tools),
             hooks: null,
-            requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() });
+            requestBuilder: _ => new LLMRequest
+            {
+                Messages = [],
+                Tools = tools.GetAll(),
+                ToolContext = TestToolContext,
+            });
 
-        await using var stream = runtime.ChatStreamAsync("hello", maxToolRounds: 2, turnCatalog: null)
+        await using var stream = runtime.ChatStreamAsync(
+                "hello",
+                maxToolRounds: 2,
+                requestId: "text-tool-progress-request",
+                turnCatalog: null)
             .GetAsyncEnumerator();
         while (await stream.MoveNextAsync() && stream.Current.ToolCallStarted == null)
         {
@@ -155,7 +187,9 @@ public sealed class ChatRuntimeToolProgressTests
         tool.Started.Task.IsCompleted.Should().BeFalse();
 
         var resume = stream.MoveNextAsync().AsTask();
-        await tool.Started.Task;
+        var executionSignal = await Task.WhenAny(tool.Started.Task, resume);
+        executionSignal.Should().BeSameAs(tool.Started.Task,
+            "the admitted terminal must invoke the tool before publishing its result");
         resume.IsCompleted.Should().BeFalse();
         tool.Release("{\"source\":\"text\"}");
         (await resume).Should().BeTrue();
@@ -167,6 +201,35 @@ public sealed class ChatRuntimeToolProgressTests
         stream.Current.ToolCallCompleted.Should().NotBeNull();
         stream.Current.ToolCallCompleted!.ToolName.Should().Be("controlled_tool");
         stream.Current.ToolCallCompleted.ResultJson.Should().Be("{\"source\":\"text\"}");
+    }
+
+    private static ToolCallLoop CreateToolCallLoop(ToolManager tools) =>
+        new(
+            tools,
+            toolExecutionPort: new AdmittedAgentToolExecutor(
+                AlwaysStartingAgentToolAdmissionLedger.Instance,
+                new AppendedAuditTrail(),
+                new StableIdentityHasher()));
+
+    private static AgentToolExecutionContext TestToolContext =>
+        AgentToolExecutionContext.Empty with
+        {
+            ExecutionOwner = AgentToolExecutionOwners.HostService(nameof(ChatRuntimeToolProgressTests)),
+        };
+
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
     }
 
     private sealed class ControlledTool : IAgentTool
@@ -181,6 +244,17 @@ public sealed class ChatRuntimeToolProgressTests
         public string Description => "A controlled test tool.";
         public string ParametersSchema => "{}";
         public bool IsReadOnly => true;
+        public AgentToolReceipt? CreateSuccessReceipt(
+            string callId,
+            string toolName,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Success,
+                ResultJson = resultJson,
+            };
 
         public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
@@ -199,22 +273,23 @@ public sealed class ChatRuntimeToolProgressTests
         public TaskCompletionSource Started { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public string Name => "use_skill";
-        public string Description => "Loads one recovery skill.";
+        public string Name => "ornn_search_skills";
+        public string Description => "Searches for recovery skills.";
         public string ParametersSchema => "{}";
         public bool IsReadOnly => true;
+        public AgentToolReceipt? CreateSuccessReceipt(
+            string callId,
+            string toolName,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Success,
+                ResultJson = resultJson,
+            };
         public ToolPresentationDescriptor Presentation =>
-            ToolPresentationDescriptors.Skill(Name, "Use skill", Description, string.Empty, "test");
-
-        public ToolPresentationDescriptor ResolvePresentation(string argumentsJson) =>
-            ToolPresentationDescriptors.Skill(
-                Name,
-                "project-summary",
-                Description,
-                argumentsJson.Contains("project-summary", StringComparison.Ordinal)
-                    ? "project-summary"
-                    : string.Empty,
-                "test");
+            ToolPresentationDescriptors.Generic(Name, Description);
 
         public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {

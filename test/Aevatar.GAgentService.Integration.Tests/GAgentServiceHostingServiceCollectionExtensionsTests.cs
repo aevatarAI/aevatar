@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -33,8 +34,10 @@ using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
+using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Core.Models;
@@ -66,6 +69,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x => x.ServiceType == typeof(IScopeBindingReadinessQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceInvocationPort));
         services.Should().Contain(x => x.ServiceType == typeof(ISkillWorkflowMountPort));
+        services.Should().Contain(x => x.ServiceType == typeof(ISkillWorkflowConfirmationPort));
         services.Should().Contain(x => x.ServiceType == typeof(IStaticGAgentStreamInvocationPort<AGUIEvent>));
         services.Should().NotContain(x => x.ServiceType == typeof(ITeamEntryMemberResolver));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceGovernanceCommandPort));
@@ -125,13 +129,27 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>())
             .Build();
+        services.AddAevatarRuntime();
+        services.AddWorkflowProjectionReadModelProviders(configuration);
         services.AddSkills(_ => { });
 
         services.AddGAgentServiceCapability(configuration);
 
         services.Where(descriptor => descriptor.ServiceType == typeof(ISkillWorkflowMountPort))
             .Should().ContainSingle()
-            .Which.ImplementationType.Should().Be(typeof(SkillWorkflowMountAdapter));
+            .Which.Lifetime.Should().Be(ServiceLifetime.Singleton);
+        services.Where(descriptor => descriptor.ServiceType == typeof(ISkillWorkflowConfirmationPort))
+            .Should().ContainSingle()
+            .Which.Lifetime.Should().Be(ServiceLifetime.Singleton);
+        services.Where(descriptor =>
+                descriptor.ServiceType == typeof(IWorkflowExplicitRequestPreviewService))
+            .Should().ContainSingle()
+            .Which.Lifetime.Should().Be(ServiceLifetime.Singleton);
+
+        using var provider = services.BuildServiceProvider();
+        var adapter = provider.GetRequiredService<SkillWorkflowMountAdapter>();
+        provider.GetRequiredService<ISkillWorkflowMountPort>().Should().BeSameAs(adapter);
+        provider.GetRequiredService<ISkillWorkflowConfirmationPort>().Should().BeSameAs(adapter);
     }
 
     [Fact]
@@ -142,6 +160,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             .AddInMemoryCollection(new Dictionary<string, string?>())
             .Build();
         services.AddSingleton<ILLMProviderFactory>(new ThrowingLlmProviderFactory());
+        services.AddSingleton<IAgentToolExecutionPort, UnusedAgentToolExecutionPort>();
 
         services.AddGAgentServiceCapability(configuration);
 
@@ -387,6 +406,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         endpoints.Should().Contain("/api/services/{serviceId}/policies");
         endpoints.Should().Contain("/api/scopes/{scopeId}/binding");
         endpoints.Should().Contain("/api/scopes/{scopeId}/workflows:save-and-bind");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/workflows:explicit-request-preview");
         endpoints.Should().Contain("/api/scopes/{scopeId}/binding/revisions/{revisionId}:activate");
         endpoints.Should().Contain("/api/scopes/{scopeId}/revisions");
         endpoints.Should().Contain("/api/scopes/{scopeId}/revisions/{revisionId}");
@@ -445,7 +465,9 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             options.AutoMapCapabilities = false;
         });
         builder.Services.AddSingleton<ILLMProviderFactory, UnusedLlmProviderFactory>();
+        builder.Services.AddSingleton<IAgentToolExecutionPort, UnusedAgentToolExecutionPort>();
         builder.AddGAgentServiceCapabilityBundle();
+        UseRepositoryWorkflowDefinitions(builder.Services);
 
         await using var app = builder.Build();
         app.MapAevatarCapabilities();
@@ -453,6 +475,9 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         await app.StartAsync();
 
         app.Services.GetRequiredService<IProjectionWriteDispatcher<WorkflowCatalogCurrentStateDocument>>()
+            .Should()
+            .NotBeNull();
+        app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowActorBindingDocument, string>>()
             .Should()
             .NotBeNull();
         AssertNoWorkflowCapabilitiesStartupArtifactServices(builder.Services);
@@ -497,7 +522,9 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             options.EnableScriptingCapability = false;
         });
         builder.Services.AddSingleton<ILLMProviderFactory, UnusedLlmProviderFactory>();
+        builder.Services.AddSingleton<IAgentToolExecutionPort, UnusedAgentToolExecutionPort>();
         builder.AddGAgentServiceCapabilityBundle();
+        UseRepositoryWorkflowDefinitions(builder.Services);
 
         await using var app = builder.Build();
         app.MapAevatarCapabilities();
@@ -588,6 +615,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         provider.GetRequiredService<IProjectionDocumentReader<ServiceRolloutCommandObservationReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<UserConfigCurrentStateDocument, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<WorkflowActorBindingDocument, string>>().Should().NotBeNull();
         AssertNoWorkflowCapabilitiesStartupArtifactServices(services);
         services.Count(x => x.ServiceType == typeof(IProjectionDocumentReader<ServiceCatalogReadModel, string>)).Should().Be(1);
     }
@@ -641,6 +669,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         provider.GetRequiredService<IProjectionDocumentReader<GAgentRunTerminalReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowCatalogCurrentStateDocument>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<WorkflowActorBindingDocument, string>>().Should().NotBeNull();
         AssertNoWorkflowCapabilitiesStartupArtifactServices(services);
     }
 
@@ -780,6 +809,15 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
                    argument.Name.Contains(typeName, StringComparison.Ordinal));
     }
 
+    private static void UseRepositoryWorkflowDefinitions(IServiceCollection services)
+    {
+        services.Configure<WorkflowDefinitionFileSourceOptions>(options =>
+        {
+            options.WorkflowDirectories.Clear();
+            options.WorkflowDirectories.Add(Path.Combine(Directory.GetCurrentDirectory(), "workflows"));
+        });
+    }
+
     private static void AssertNoWorkflowCapabilitiesStartupArtifactServices(IServiceCollection services)
     {
         // Refactor (iter161-cluster-001 #1257-first):
@@ -809,6 +847,14 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             throw new InvalidOperationException("The hosting startup test must not execute LLM requests.");
 
         public IReadOnlyList<string> GetAvailableProviders() => [];
+    }
+
+    private sealed class UnusedAgentToolExecutionPort : IAgentToolExecutionPort
+    {
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("The hosting composition test must not execute agent tools.");
     }
 
     private sealed class UnusedExternalIdentityBindingQueryPort : IExternalIdentityBindingQueryPort

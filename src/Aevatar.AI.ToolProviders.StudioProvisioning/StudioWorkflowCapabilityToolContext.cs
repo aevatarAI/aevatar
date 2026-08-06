@@ -6,18 +6,21 @@ namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 
 internal static class StudioWorkflowCapabilityToolContext
 {
-    public static WorkflowCapabilityAdmissionContext Create(
-        ExternalCapabilityExecutionMode executionMode)
+    public static WorkflowCapabilityAdmissionContext? Resolve(
+        ExternalCapabilityExecutionMode executionMode,
+        IEnumerable<NyxIdExplicitRequestConfirmation>? explicitRequestConfirmations = null)
     {
         var authority = AgentToolRequestContext.NyxIdAuthority;
-        var callerId = authority.IsComplete
-            ? authority.ExternalUserId
-            : AgentToolRequestContext.OwnerSubject
-              ?? AgentToolRequestContext.SenderNyxUserId;
+        if (!authority.IsComplete)
+            return null;
+
         return new WorkflowCapabilityAdmissionContext(
-            callerId ?? string.Empty,
-            AgentToolRequestContext.NyxIdAccessToken,
+            authority.ExternalUserId!,
+            NyxIdCallerCredentialSelection.SourceReadableUserBearerOrNull(
+                AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
+                    AgentToolRequestContext.Current?.Credentials)),
             AgentToolRequestContext.NyxIdOrgToken,
-            executionMode);
+            executionMode,
+            explicitRequestConfirmations: explicitRequestConfirmations);
     }
 }

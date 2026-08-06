@@ -51,9 +51,7 @@ public sealed class WorkOrderCurrentStateProjector
 
         AddArtifacts(document.InputArtifacts, state.Input?.InputArtifacts);
         AddArtifacts(document.DeclaredResultArtifacts, state.Input?.DeclaredResultArtifacts);
-        AddPermissionPlan(document, state.PermissionPlan);
-        ApplyApproval(document, state.Approval);
-        ApplyExecution(document, state.Execution);
+        ApplyRun(document, state.Run);
         ApplyTerminalState(document, state);
         await _writeDispatcher.UpsertAsync(document, ct);
     }
@@ -89,73 +87,38 @@ public sealed class WorkOrderCurrentStateProjector
             CreatedAtUnixMs = ToUnixTimeMilliseconds(state.CreatedAtUtc),
             TimeoutAtUnixMs = ToUnixTimeMilliseconds(state.TimeoutAtUtc),
             InputPrompt = state.Input?.Chat?.Prompt ?? string.Empty,
+            AvailableActions = new WorkOrderAvailableActionsDocument
+            {
+                CanReassign = state.AvailableActions?.CanReassign ?? false,
+                CanDispatch = state.AvailableActions?.CanDispatch ?? false,
+                CanCancel = state.AvailableActions?.CanCancel ?? false,
+            },
         };
 
-    private static void ApplyApproval(
+    private static void ApplyRun(
         WorkOrderCurrentStateDocument document,
-        WorkOrderApprovalState? approval)
+        WorkOrderRunLink? run)
     {
-        document.ApprovalId = approval?.ApprovalId ?? string.Empty;
-        document.ApprovalStatus = ToWireName(
-            approval?.Status ?? WorkOrderApprovalStatus.Unspecified);
-        document.ApprovalDecisionId = approval?.DecisionId ?? string.Empty;
-        document.ApprovalDecidedById = approval?.DecidedBy?.PrincipalId ?? string.Empty;
-        document.ApprovalDecidedByKind = approval?.DecidedBy?.PrincipalKind ?? string.Empty;
-        document.ApprovalReason = approval?.Reason ?? string.Empty;
-        document.ApprovalDecidedAtUnixMs = ToUnixTimeMilliseconds(approval?.DecidedAtUtc);
-    }
-
-    private static void ApplyExecution(
-        WorkOrderCurrentStateDocument document,
-        WorkOrderExecutionProvenance? execution)
-    {
-        document.RunId = execution?.RunId ?? string.Empty;
-        document.RunActorId = execution?.RunActorId ?? string.Empty;
-        document.RunCommandId = execution?.CommandId ?? string.Empty;
-        document.RunCorrelationId = execution?.CorrelationId ?? string.Empty;
-        document.RunRevisionId = execution?.RevisionId ?? string.Empty;
-        document.RunDeploymentId = execution?.DeploymentId ?? string.Empty;
-        document.RunAcceptedAtUnixMs = ToUnixTimeMilliseconds(execution?.AcceptedAtUtc);
-        document.RunStartedAtUnixMs = ToUnixTimeMilliseconds(execution?.StartedAtUtc);
+        document.RunId = run?.RunId ?? string.Empty;
+        document.RunActorId = run?.RunActorId ?? string.Empty;
+        document.RunCommandId = run?.CommandId ?? string.Empty;
+        document.RunCorrelationId = run?.CorrelationId ?? string.Empty;
+        document.RunRevisionId = run?.RevisionId ?? string.Empty;
+        document.RunDeploymentId = run?.DeploymentId ?? string.Empty;
+        document.RunAcceptedAtUnixMs = ToUnixTimeMilliseconds(run?.AcceptedAtUtc);
     }
 
     private static void ApplyTerminalState(
         WorkOrderCurrentStateDocument document,
         WorkOrderState state)
     {
-        document.TerminalEvidence = ToTerminalEvidence(state.TerminalEvidence);
-        document.LateTerminalEvidence = ToTerminalEvidence(state.LateTerminalEvidence);
+        document.RunOutcome = ToRunOutcome(state.RunOutcome);
+        document.LateRunOutcome = ToRunOutcome(state.LateRunOutcome);
         document.FailureCode = state.Failure?.Code ?? string.Empty;
         document.FailureMessage = state.Failure?.Message ?? string.Empty;
         document.FailureSource = state.Failure?.Source ?? string.Empty;
         document.FailureReferenceId = state.Failure?.ReferenceId ?? string.Empty;
         document.TerminalReason = state.TerminalReason;
-    }
-
-    private static void AddPermissionPlan(
-        WorkOrderCurrentStateDocument document,
-        WorkOrderPermissionPlan? plan)
-    {
-        if (plan == null)
-            return;
-
-        document.ExternalActions.Add(plan.ExternalActions.Select(action =>
-            new WorkOrderExternalActionReferenceDocument
-            {
-                ActionId = action.ActionId,
-                System = action.System,
-                Action = action.Action,
-                ResourceId = action.ResourceId,
-            }));
-        document.PermissionRequirements.Add(plan.Requirements.Select(requirement =>
-            new WorkOrderPermissionRequirementDocument
-            {
-                PermissionId = requirement.PermissionId,
-                ActionId = requirement.ActionId,
-                Capability = requirement.Capability,
-                RequiresApproval = requirement.RequiresApproval,
-            }));
-        document.ApproverPrincipalIds.Add(plan.ApproverPrincipalIds);
     }
 
     private static void AddArtifacts(
@@ -177,56 +140,41 @@ public sealed class WorkOrderCurrentStateProjector
             RevisionId = artifact.RevisionId,
         };
 
-    private static WorkOrderTerminalEvidenceDocument? ToTerminalEvidence(
-        WorkOrderTerminalEvidence? evidence)
+    private static WorkOrderRunOutcomeReferenceDocument? ToRunOutcome(
+        WorkOrderRunOutcomeReference? outcome)
     {
-        if (evidence == null || string.IsNullOrWhiteSpace(evidence.DeliveryId))
+        if (outcome == null || string.IsNullOrWhiteSpace(outcome.DeliveryId))
             return null;
 
-        var document = new WorkOrderTerminalEvidenceDocument
+        return new WorkOrderRunOutcomeReferenceDocument
         {
-            DeliveryId = evidence.DeliveryId,
-            RunId = evidence.RunId,
-            RunActorId = evidence.RunActorId,
-            CommandId = evidence.CommandId,
-            CorrelationId = evidence.CorrelationId,
-            Outcome = evidence.Outcome switch
+            DeliveryId = outcome.DeliveryId,
+            RunId = outcome.RunId,
+            RunActorId = outcome.RunActorId,
+            CommandId = outcome.CommandId,
+            CorrelationId = outcome.CorrelationId,
+            Outcome = outcome.Outcome switch
             {
                 WorkOrderTerminalOutcome.Succeeded => "succeeded",
                 WorkOrderTerminalOutcome.Failed => "failed",
                 WorkOrderTerminalOutcome.Stopped => "stopped",
                 _ => string.Empty,
             },
-            Output = evidence.Output,
-            Error = evidence.Error,
-            TerminalAtUnixMs = ToUnixTimeMilliseconds(evidence.TerminalAtUtc),
+            TerminalAtUnixMs = ToUnixTimeMilliseconds(outcome.TerminalAtUtc),
         };
-        document.ResultArtifacts.Add(evidence.ResultArtifacts.Select(ToArtifact));
-        return document;
     }
 
     private static string ToWireName(WorkOrderLifecycleStatus status) => status switch
     {
         WorkOrderLifecycleStatus.Accepted => WorkOrderLifecycleStatusNames.Accepted,
-        WorkOrderLifecycleStatus.WaitingApproval => WorkOrderLifecycleStatusNames.WaitingApproval,
         WorkOrderLifecycleStatus.Ready => WorkOrderLifecycleStatusNames.Ready,
         WorkOrderLifecycleStatus.DispatchPending => WorkOrderLifecycleStatusNames.DispatchPending,
         WorkOrderLifecycleStatus.Running => WorkOrderLifecycleStatusNames.Running,
         WorkOrderLifecycleStatus.Completed => WorkOrderLifecycleStatusNames.Completed,
         WorkOrderLifecycleStatus.Failed => WorkOrderLifecycleStatusNames.Failed,
         WorkOrderLifecycleStatus.Stopped => WorkOrderLifecycleStatusNames.Stopped,
-        WorkOrderLifecycleStatus.Denied => WorkOrderLifecycleStatusNames.Denied,
         WorkOrderLifecycleStatus.Cancelled => WorkOrderLifecycleStatusNames.Cancelled,
         WorkOrderLifecycleStatus.TimedOut => WorkOrderLifecycleStatusNames.TimedOut,
-        _ => string.Empty,
-    };
-
-    private static string ToWireName(WorkOrderApprovalStatus status) => status switch
-    {
-        WorkOrderApprovalStatus.NotRequired => WorkOrderApprovalStatusNames.NotRequired,
-        WorkOrderApprovalStatus.Pending => WorkOrderApprovalStatusNames.Pending,
-        WorkOrderApprovalStatus.Approved => WorkOrderApprovalStatusNames.Approved,
-        WorkOrderApprovalStatus.Denied => WorkOrderApprovalStatusNames.Denied,
         _ => string.Empty,
     };
 

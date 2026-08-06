@@ -41,9 +41,10 @@ const WorkflowStudioCanvas: React.FC<WorkflowStudioCanvasProps> = ({
   <div
     data-testid="workflow-studio-canvas"
     style={{
-      background: "#fbfbfc",
+      background: "#eef3f8",
       flex: 1,
       minHeight: 0,
+      padding: 10,
       position: "relative",
     }}
   >

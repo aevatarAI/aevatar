@@ -32,6 +32,13 @@ message NyxIdAuthorizationCatalogState {
   string active_refresh_id = 21;
   google.protobuf.Timestamp active_refresh_started_at = 22;
   NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion lifecycle_fence_semantics_version = 25;
+  aevatar.gagentservice.schedules.authorization.NyxIdAuthorizationLLMTargetEvidence gateway_llm_target = 26;
+}
+
+enum NyxIdAuthorizationCatalogObservationCoverageKind {
+  NYX_ID_AUTHORIZATION_CATALOG_OBSERVATION_COVERAGE_KIND_UNSPECIFIED = 0;
+  NYX_ID_AUTHORIZATION_CATALOG_OBSERVATION_COVERAGE_KIND_FULL_OWNER = 1;
+  NYX_ID_AUTHORIZATION_CATALOG_OBSERVATION_COVERAGE_KIND_REQUIRED_SERVICE_SUBSET = 2;
 }
 
 message ObserveNyxIdAuthorizationCatalogCommand {
@@ -47,6 +54,9 @@ message ObserveNyxIdAuthorizationCatalogCommand {
   string policy_version = 9;
   google.protobuf.Timestamp evaluated_at = 10;
   string refresh_id = 11;
+  NyxIdAuthorizationCatalogObservationCoverageKind coverage_kind = 12;
+  repeated string covered_user_service_ids = 13;
+  aevatar.gagentservice.schedules.authorization.NyxIdAuthorizationLLMTargetEvidence gateway_llm_target = 14;
 }
 
 message BeginNyxIdAuthorizationCatalogRefreshCommand {
@@ -56,11 +66,20 @@ message BeginNyxIdAuthorizationCatalogRefreshCommand {
   int64 expected_lifecycle_fence = 4;
 }
 
+message BeginNyxIdAuthorizationCatalogRepairRefreshCommand {
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
+  string refresh_id = 2;
+  google.protobuf.Timestamp started_at = 3;
+  int64 minimum_source_state_version = 4;
+  string repair_request_id = 5;
+}
+
 message RecordNyxIdAuthorizationCatalogRefreshFailureCommand {
   aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
   google.protobuf.Timestamp failed_at = 2;
   string failure_code = 3;
   string refresh_id = 4;
+  NyxIdAuthorizationCatalogRefreshOutcomeStatusState outcome_status = 5;
 }
 
 message InvalidateNyxIdAuthorizationCatalogCommand {
@@ -105,6 +124,9 @@ message NyxIdAuthorizationCatalogObservedEvent {
   google.protobuf.Timestamp evaluated_at = 10;
   string refresh_id = 11;
   NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion lifecycle_fence_semantics_version = 12;
+  NyxIdAuthorizationCatalogObservationCoverageKind coverage_kind = 13;
+  repeated string covered_user_service_ids = 14;
+  aevatar.gagentservice.schedules.authorization.NyxIdAuthorizationLLMTargetEvidence gateway_llm_target = 15;
 }
 
 message NyxIdAuthorizationCatalogRefreshFailedEvent {

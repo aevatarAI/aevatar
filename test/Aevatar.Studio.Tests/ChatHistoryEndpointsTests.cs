@@ -92,12 +92,37 @@ public sealed class ChatHistoryEndpointsTests
         using var body = await JsonDocument.ParseAsync(http.Response.Body);
 
         body.RootElement.GetProperty("stateVersion").GetInt64().Should().Be(7);
+        body.RootElement.GetProperty("projectionStatus").GetString().Should().Be("current");
         body.RootElement.GetProperty("messages").EnumerateArray()
             .Should()
             .ContainSingle()
             .Which.GetProperty("content").GetString()
             .Should()
             .Be("Choose a Team: team01 or team02.");
+    }
+
+    [Fact]
+    public async Task HandleGetConversation_ShouldSerializeAcknowledgedPendingConversation()
+    {
+        var port = new RecordingChatHistoryPort
+        {
+            ConversationResult = ChatHistoryConversationMessagesResult.Pending(),
+        };
+        var http = CreateAuthenticatedContext(RequestedScopeId);
+        http.Response.Body = new MemoryStream();
+
+        var result = await InvokeHandlerAsync(
+            "HandleGetConversation",
+            http,
+            port);
+
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var body = await JsonDocument.ParseAsync(http.Response.Body);
+
+        body.RootElement.GetProperty("projectionStatus").GetString().Should().Be("pending");
+        body.RootElement.GetProperty("stateVersion").GetInt64().Should().Be(0);
+        body.RootElement.GetProperty("messages").GetArrayLength().Should().Be(0);
     }
 
     private static async Task<IResult> InvokeHandlerAsync(
@@ -151,6 +176,35 @@ public sealed class ChatHistoryEndpointsTests
     {
         public List<string> Calls { get; } = [];
 
+        public ChatHistoryConversationMessagesResult ConversationResult { get; init; } =
+            ChatHistoryConversationMessagesResult.Found(
+                [
+                    new StoredChatMessage(
+                        "turn-1:assistant",
+                        "assistant",
+                        "Choose a Team: team01 or team02.",
+                        1784700000000,
+                        "complete",
+                        TurnId: "turn-1"),
+                ],
+                7);
+
+        public Task InitializeConversationAsync(
+            ChatHistoryConversationInitialization request,
+            CancellationToken ct = default)
+        {
+            Calls.Add($"HandleInitializeConversation:{request.ScopeId}:{request.ConversationId}");
+            return Task.CompletedTask;
+        }
+
+        public Task ReserveTurnDeliveryAsync(
+            ChatHistoryTurnDeliveryReservation request,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task NotifyTurnTerminalAsync(
+            ChatHistoryTurnTerminalNotification notification,
+            CancellationToken ct = default) => Task.CompletedTask;
+
         public Task<ChatHistoryIndexPage> GetIndexAsync(
             ChatHistoryIndexPageRequest request,
             CancellationToken ct = default)
@@ -165,17 +219,7 @@ public sealed class ChatHistoryEndpointsTests
             CancellationToken ct = default)
         {
             Calls.Add($"HandleGetConversation:{scopeId}:{conversationId}");
-            return Task.FromResult(ChatHistoryConversationMessagesResult.Found(
-                [
-                    new StoredChatMessage(
-                        "turn-1:assistant",
-                        "assistant",
-                        "Choose a Team: team01 or team02.",
-                        1784700000000,
-                        "complete",
-                        TurnId: "turn-1"),
-                ],
-                7));
+            return Task.FromResult(ConversationResult);
         }
 
         public Task<ChatHistoryCreateRecoveryResult> GetCreateRecoveryAsync(

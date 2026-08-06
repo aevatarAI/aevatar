@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using Aevatar.Foundation.Abstractions;
@@ -34,7 +35,7 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
     private const string SenderBindingId = "bnd_sender_x";
 
     [Fact]
-    public async Task BuildInitialStepState_WithSenderBinding_ReMintsSenderTokenIntoToolCredentials()
+    public async Task BuildInitialStepState_WithTypedNyxIdAuthority_ReMintsForExactAuthorityInsteadOfChannelIdentity()
     {
         var broker = Substitute.For<INyxIdCapabilityBroker>();
         broker
@@ -49,7 +50,15 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         var executor = CreateExecutor(generator, broker, reconciler);
 
         var state = await executor.BuildInitialStepStateAsync(
-            BuildRequest(senderBindingId: SenderBindingId, senderTenant: "ou_tenant_x"),
+            BuildRequest(
+                senderBindingId: SenderBindingId,
+                senderTenant: "legacy-channel-tenant",
+                platform: "legacy-channel-platform",
+                senderId: "legacy-channel-user",
+                nyxIdAuthority: new AgentToolNyxIdAuthorityContext(
+                    "LARK",
+                    "tenant-authority-alpha",
+                    "ou-authority-alpha")),
             CancellationToken.None);
 
         // The control passed to the generator (== BuildGenerationContext output)
@@ -62,15 +71,15 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         var toolContext = AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
         toolContext.Credentials.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
 
-        // The subject rebuilt from the tool context must match the bound sender
-        // (platform lowercased, tenant carried as identity fact, sender id).
+        // The subject must come exclusively from the exact typed NyxID authority,
+        // never from the independently-scoped channel routing identity.
         var subject = broker.ReceivedCalls()
             .Single(call => call.GetMethodInfo().Name == nameof(INyxIdCapabilityBroker.IssueShortLivedByBindingIdAsync))
             .GetArguments()[0] as ExternalSubjectRef;
         subject.Should().NotBeNull();
         subject!.Platform.Should().Be("lark");
-        subject.Tenant.Should().Be("ou_tenant_x");
-        subject.ExternalUserId.Should().Be("ou_user_y");
+        subject.Tenant.Should().Be("tenant-authority-alpha");
+        subject.ExternalUserId.Should().Be("ou-authority-alpha");
 
         await reconciler.DidNotReceiveWithAnyArgs()
             .ReconcileRevokedAsync(default!, default!, default);
@@ -194,7 +203,7 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
     }
 
     [Fact]
-    public async Task BuildInitialStepState_WhenSenderSubjectCannotBeRebuilt_DoesNotCallBroker()
+    public async Task BuildInitialStepState_WhenTypedNyxIdAuthorityIsMissing_DoesNotGuessFromCompleteChannelIdentity()
     {
         var broker = Substitute.For<INyxIdCapabilityBroker>();
         var generator = new EchoStepPlanReplyGenerator();
@@ -204,8 +213,9 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             BuildRequest(
                 senderBindingId: SenderBindingId,
                 senderTenant: "ou_tenant_x",
-                platform: null,
-                senderId: "ou_user_y"),
+                platform: "lark",
+                senderId: "ou-channel-alpha",
+                nyxIdAuthority: AgentToolNyxIdAuthorityContext.Empty),
             CancellationToken.None);
 
         generator.CapturedLlmControl.Should().NotBeNull();
@@ -252,11 +262,25 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         scopeResolver.ResolveScopeIdByApiKeyAsync("api-key-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<string?>("owner-scope-1"));
         var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
-        userConfigQueryPort.GetAsync("owner-scope-1", Arg.Any<CancellationToken>())
+        userConfigQueryPort.GetAsync(
+                UserConfigResourceKey.ForOwnerScope("owner-scope-1"),
+                Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new StudioConfig(
                 DefaultModel: " owner-model ",
                 PreferredLlmRoute: " /api/v1/proxy/s/owner ",
-                MaxToolRounds: 7)));
+                MaxToolRounds: 7,
+                LlmSelection: new LLMSelection
+                {
+                    RouteKind = LLMRouteKind.NyxIdUserService,
+                    RouteValue = "/api/v1/proxy/s/owner",
+                    NyxIdUserServiceId = "us-owner",
+                    ServiceSlugSnapshot = "owner",
+                    ModelSelection = new LLMModelSelection
+                    {
+                        Kind = LLMModelSelectionKind.ExplicitModel,
+                        ModelId = "owner-model",
+                    },
+                })));
         var generator = new EchoStepPlanReplyGenerator();
         var executor = CreateExecutor(
             generator,
@@ -314,7 +338,9 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         generator.CapturedLlmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/incoming");
         generator.CapturedLlmControl.MaxToolRoundsOverride.Should().Be(3);
         AgentRunReplyStepMappers.LlmControlFromProto(state).Should().Be(generator.CapturedLlmControl);
-        await userConfigQueryPort.DidNotReceiveWithAnyArgs().GetAsync(default!, default);
+        await userConfigQueryPort.DidNotReceive().GetAsync(
+            Arg.Any<UserConfigResourceKey>(),
+            Arg.Any<CancellationToken>());
     }
 
     private static AgentRunReplyGenerationExecutor CreateExecutor(
@@ -341,7 +367,8 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         string? platform = "lark",
         string? senderId = "ou_user_y",
         string botId = "reg-1",
-        LLMControlContext? llmControl = null)
+        LLMControlContext? llmControl = null,
+        AgentToolNyxIdAuthorityContext? nyxIdAuthority = null)
     {
         var toolContext = AgentToolExecutionContext.Empty with
         {
@@ -354,6 +381,9 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             SenderBinding = senderBindingId is null
                 ? AgentToolSenderBindingContext.Empty
                 : new AgentToolSenderBindingContext(senderBindingId, NyxUserId: null, SenderTenant: senderTenant),
+            NyxIdAuthority = nyxIdAuthority ?? (senderBindingId is null
+                ? AgentToolNyxIdAuthorityContext.Empty
+                : new AgentToolNyxIdAuthorityContext(platform, senderTenant, senderId)),
         };
 
         var evt = new NeedsLlmReplyEvent
@@ -394,7 +424,8 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             IReadOnlyList<ConversationHistoryEntry>? priorHistory,
             ChatAttachmentInputContext? attachmentContext,
             bool forceDisableTools,
-            CancellationToken ct)
+            CancellationToken ct,
+            AgentProfileTurnCatalog? turnCatalog = null)
         {
             CapturedLlmControl = llmControl;
             CapturedToolContext = toolContext;

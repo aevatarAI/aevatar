@@ -37,6 +37,8 @@ public class ToolProviderServiceCollectionExtensionsTests
         sources.OfType<SkillsAgentToolSource>().Should().ContainSingle()
             .Which.Should().BeSameAs(provider.GetRequiredService<SkillsAgentToolSource>());
         provider.GetRequiredService<ISkillWorkflowMountPort>().Should().BeOfType<NoOpSkillWorkflowMountPort>();
+        provider.GetRequiredService<ISkillWorkflowConfirmationPort>()
+            .Should().BeOfType<NoOpSkillWorkflowConfirmationPort>();
     }
 
     [Fact]

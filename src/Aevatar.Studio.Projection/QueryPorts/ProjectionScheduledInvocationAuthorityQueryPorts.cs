@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -5,9 +7,9 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgents.ConnectorCatalog;
+using Aevatar.GAgents.UserConfig;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Abstractions;
-using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Projection.QueryPorts;
 
@@ -49,20 +51,73 @@ public sealed class ProjectionScheduledInvocationWorkflowQueryPort(
             ServiceId = publishedServiceId.Trim(),
         };
         var catalog = await revisionCatalogReader.GetAsync(identity, ct);
+        var normalizedRevisionId = workflowRevisionId.Trim();
         if (catalog == null ||
-            !catalog.TryGetPreparedArtifact(workflowRevisionId.Trim(), out var artifact) ||
+            !catalog.TryGetPreparedArtifact(normalizedRevisionId, out var artifact) ||
             artifact.ImplementationKind != ServiceImplementationKind.Workflow ||
-            artifact.DeploymentPlan?.WorkflowPlan?.AuthorizationEvidence == null)
+            !string.Equals(artifact.RevisionId, normalizedRevisionId, StringComparison.Ordinal) ||
+            artifact.DeploymentPlan?.WorkflowPlan is not { } workflowPlan ||
+            workflowPlan.AuthorizationEvidence == null ||
+            workflowPlan.CapabilityAdmissionPlan == null ||
+            !HasMatchingAdmissionEvidence(workflowPlan, normalizedRevisionId))
         {
             return null;
         }
 
-        var evidence = artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence;
+        var evidence = workflowPlan.AuthorizationEvidence;
         return new ScheduledInvocationWorkflowEvidence(
             catalog.StateVersion,
             evidence.ExternalCapabilities.Select(static capability => capability.Clone()).ToArray(),
             evidence.OwnerLlmRouteRequired,
-            evidence.ServiceGrantRequirement);
+            evidence.ServiceGrantRequirement,
+            workflowPlan.CapabilityAdmissionPlan.Clone());
+    }
+
+    private static bool HasMatchingAdmissionEvidence(
+        WorkflowServiceDeploymentPlan workflowPlan,
+        string revisionId)
+    {
+        var plan = workflowPlan.CapabilityAdmissionPlan;
+        var evidence = workflowPlan.AuthorizationEvidence;
+        try
+        {
+            if (!string.Equals(
+                    plan.AdmissionDigest,
+                    WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(plan),
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var admittedCapabilities = WorkflowCapabilityAdmissionPlanIntegrity
+                .DistinctCapabilities(plan);
+            if (!admittedCapabilities
+                    .Select(WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey)
+                    .SequenceEqual(
+                        evidence.ExternalCapabilities
+                            .Select(WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey)
+                            .Order(StringComparer.Ordinal),
+                        StringComparer.Ordinal) ||
+                evidence.ServiceGrantRequirement !=
+                WorkflowServiceGrantRequirementClassifier.Classify(admittedCapabilities))
+            {
+                return false;
+            }
+
+            if (!WorkflowCapabilityAdmissionPlanIntegrity
+                    .RequiresExplicitRequestBindingIdentity(plan))
+            {
+                return true;
+            }
+
+            var bindingIdentity = WorkflowServiceDeploymentPlanIntegrity
+                .RequireExplicitBindingIdentity(workflowPlan.WorkflowId, workflowPlan.RevisionId);
+            return string.Equals(bindingIdentity.RevisionId, revisionId, StringComparison.Ordinal);
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 }
 
@@ -88,83 +143,58 @@ public sealed class ProjectionScheduledInvocationConnectorQueryPort(
     }
 }
 
-public sealed class ProjectionScheduledInvocationOwnerLLMQueryPort
+public sealed class ProjectionScheduledInvocationOwnerLLMQueryPort(
+    IProjectionDocumentReader<UserConfigCurrentStateDocument, string> reader)
     : IScheduledInvocationOwnerLLMEvidenceQueryPort
 {
-    private const string NyxIdProxyRoutePrefix = "/api/v1/proxy/s/";
-    private const string NyxIdGatewayRoute = "/api/v1/llm/gateway/v1";
-    private readonly IProjectionDocumentReader<UserConfigCurrentStateDocument, string> _reader;
-    private readonly string _defaultRoutePreference;
-
-    public ProjectionScheduledInvocationOwnerLLMQueryPort(
-        IProjectionDocumentReader<UserConfigCurrentStateDocument, string> reader,
-        IOptions<ScheduledInvocationOwnerLLMRouteOptions>? options = null)
-    {
-        _reader = reader ?? throw new ArgumentNullException(nameof(reader));
-        _defaultRoutePreference = options?.Value.DefaultRoutePreference?.Trim() ?? string.Empty;
-    }
-
     public async Task<ScheduledInvocationOwnerLLMEvidence?> GetAsync(
         string scopeId,
-        AuthenticatedAuthorizationOwnerContext? ownerContext = null,
         CancellationToken ct = default)
     {
-        var document = await _reader.GetAsync($"user-config-{scopeId.Trim()}", ct);
-        var stateVersion = document?.StateVersion ?? 0;
-        var route = NormalizeRoutePreference(document?.PreferredLlmRoute);
-        if (route.Length == 0)
-            route = NormalizeRoutePreference(_defaultRoutePreference);
+        var document = await reader.GetAsync($"user-config-{scopeId.Trim()}", ct);
+        if (document == null)
+            return null;
 
-        if (route.Length == 0 ||
-            string.Equals(route.TrimEnd('/'), NyxIdGatewayRoute, StringComparison.OrdinalIgnoreCase))
-        {
-            return new ScheduledInvocationOwnerLLMEvidence(
-                stateVersion,
-                string.Empty,
-                string.Empty,
-                AuthorizationGrantRequirement.NotRequired);
-        }
-
-        var serviceSlug = ResolveServiceSlug(route);
-        if (serviceSlug.Length == 0 || serviceSlug.Contains('/'))
-        {
-            return new ScheduledInvocationOwnerLLMEvidence(
-                stateVersion,
-                string.Empty,
-                string.Empty,
-                AuthorizationGrantRequirement.Unspecified);
-        }
-
-        return new ScheduledInvocationOwnerLLMEvidence(
-            stateVersion,
-            string.Empty,
-            serviceSlug,
-            AuthorizationGrantRequirement.Required,
-            route);
+        return document.LlmSelection == null
+            ? Unspecified(document.StateVersion)
+            : MapTypedEvidence(document.StateVersion, document.LlmSelection);
     }
 
-    private static string ResolveServiceSlug(string route) =>
-        route.StartsWith(NyxIdProxyRoutePrefix, StringComparison.Ordinal)
-            ? route[NyxIdProxyRoutePrefix.Length..].Trim('/')
-            : route.Trim('/');
-
-    private static string NormalizeRoutePreference(string? value)
+    private static ScheduledInvocationOwnerLLMEvidence MapTypedEvidence(
+        long stateVersion,
+        LLMSelection selection)
     {
-        var normalized = value?.Trim() ?? string.Empty;
-        if (normalized.Length == 0 ||
-            string.Equals(normalized, "auto", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(normalized, "gateway", StringComparison.OrdinalIgnoreCase) ||
-            normalized.StartsWith("//", StringComparison.Ordinal) ||
-            normalized.Contains("://", StringComparison.Ordinal))
+        try
         {
-            return string.Empty;
+            LLMSelectionPolicy.ValidateSelection(selection);
+        }
+        catch (InvalidOperationException)
+        {
+            return Unspecified(stateVersion);
         }
 
-        return normalized.StartsWith("/", StringComparison.Ordinal)
-            ? normalized
-            : $"{NyxIdProxyRoutePrefix}{normalized.Trim('/')}";
+        if (selection.ModelSelection.Kind != LLMModelSelectionKind.ExplicitModel)
+            return Unspecified(stateVersion);
+
+        var mapped = new ScheduledInvocationOwnerLLMSelection
+        {
+            RouteKind = selection.RouteKind switch
+            {
+                LLMRouteKind.Gateway => LLMRouteKind.Gateway,
+                LLMRouteKind.NyxIdUserService => LLMRouteKind.NyxIdUserService,
+                _ => LLMRouteKind.Unspecified,
+            },
+            RouteValue = selection.RouteValue,
+            NyxIdUserServiceId = selection.NyxIdUserServiceId,
+            ServiceSlugSnapshot = selection.ServiceSlugSnapshot,
+            Model = selection.ModelSelection.ModelId,
+        };
+
+        return ScheduledInvocationOwnerLLMSelectionPolicy.IsDurableSelectionValid(mapped)
+            ? new ScheduledInvocationOwnerLLMEvidence(stateVersion, mapped)
+            : Unspecified(stateVersion);
     }
 
-    private static string? NormalizeOptional(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static ScheduledInvocationOwnerLLMEvidence Unspecified(long stateVersion) =>
+        new(stateVersion, new ScheduledInvocationOwnerLLMSelection());
 }

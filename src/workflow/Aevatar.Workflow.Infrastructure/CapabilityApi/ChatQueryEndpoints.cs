@@ -129,10 +129,14 @@ public static class ChatQueryEndpoints
     //   New principle: HTTP query exposes /workflow-actors/{actorId}/current-state as a readmodel resource.
     internal static async Task<IResult> GetWorkflowActorCurrentState(
         string actorId,
-        IWorkflowExecutionQueryApplicationService queryService,
+        HttpContext http,
+        IWorkflowExecutionScopeQueryApplicationService queryService,
         CancellationToken ct = default)
     {
-        var currentState = await queryService.GetWorkflowActorCurrentStateAsync(actorId, ct);
+        if (!Aevatar.Capabilities.AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var scopeId))
+            return Results.Unauthorized();
+
+        var currentState = await queryService.GetWorkflowActorCurrentStateAsync(scopeId, actorId, ct);
         return currentState == null ? Results.NotFound() : Results.Ok(MapCurrentState(currentState));
     }
 
@@ -142,52 +146,97 @@ public static class ChatQueryEndpoints
     //   New pattern: workflow history/report/graph are artifacts or aggregate-owned views, not current-state readmodels.
     internal static async Task<IResult> ListWorkflowRunTimelineExport(
         string workflowRunId,
-        IWorkflowExecutionQueryApplicationService queryService,
+        HttpContext http,
+        IWorkflowExecutionScopeQueryApplicationService queryService,
         int take = 200,
         CancellationToken ct = default)
     {
-        var timeline = await queryService.ListWorkflowRunTimelineExportAsync(workflowRunId, take, ct);
+        if (!Aevatar.Capabilities.AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var scopeId))
+            return Results.Unauthorized();
+
+        var timeline = await queryService.ListWorkflowRunTimelineExportAsync(scopeId, workflowRunId, take, ct);
+        if (timeline == null)
+            return Results.NotFound();
+
         return Results.Ok(timeline.Select(MapTimelineItem));
     }
 
     internal static async Task<IResult> ListWorkflowRunGraphExportEdges(
         string workflowRunId,
-        IWorkflowExecutionQueryApplicationService queryService,
+        HttpContext http,
+        IWorkflowExecutionScopeQueryApplicationService queryService,
         int take = 200,
         string? direction = null,
         string[]? edgeTypes = null,
         CancellationToken ct = default)
     {
+        if (!Aevatar.Capabilities.AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var scopeId))
+            return Results.Unauthorized();
+
         var graphOptions = BuildGraphQueryOptions(direction, edgeTypes);
-        var edges = await queryService.ListWorkflowRunGraphExportEdgesAsync(workflowRunId, take, graphOptions, ct);
+        var edges = await queryService.ListWorkflowRunGraphExportEdgesAsync(
+            scopeId,
+            workflowRunId,
+            take,
+            graphOptions,
+            ct);
+        if (edges == null)
+            return Results.NotFound();
+
         return Results.Ok(edges.Select(MapGraphEdge));
     }
 
     internal static async Task<IResult> GetWorkflowRunGraphExportEnriched(
         string workflowRunId,
-        IWorkflowExecutionQueryApplicationService queryService,
+        HttpContext http,
+        IWorkflowExecutionScopeQueryApplicationService queryService,
         int depth = 2,
         int take = 200,
         string? direction = null,
         string[]? edgeTypes = null,
         CancellationToken ct = default)
     {
+        if (!Aevatar.Capabilities.AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var scopeId))
+            return Results.Unauthorized();
+
         var graphOptions = BuildGraphQueryOptions(direction, edgeTypes);
-        var subgraph = await queryService.GetWorkflowRunGraphExportSubgraphAsync(workflowRunId, depth, take, graphOptions, ct);
+        var subgraph = await queryService.GetWorkflowRunGraphExportSubgraphAsync(
+            scopeId,
+            workflowRunId,
+            depth,
+            take,
+            graphOptions,
+            ct);
+        if (subgraph == null)
+            return Results.NotFound();
+
         return Results.Ok(MapGraphSubgraph(subgraph));
     }
 
     internal static async Task<IResult> GetWorkflowRunGraphExportSubgraph(
         string workflowRunId,
-        IWorkflowExecutionQueryApplicationService queryService,
+        HttpContext http,
+        IWorkflowExecutionScopeQueryApplicationService queryService,
         int depth = 2,
         int take = 200,
         string? direction = null,
         string[]? edgeTypes = null,
         CancellationToken ct = default)
     {
+        if (!Aevatar.Capabilities.AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var scopeId))
+            return Results.Unauthorized();
+
         var graphOptions = BuildGraphQueryOptions(direction, edgeTypes);
-        var subgraph = await queryService.GetWorkflowRunGraphExportSubgraphAsync(workflowRunId, depth, take, graphOptions, ct);
+        var subgraph = await queryService.GetWorkflowRunGraphExportSubgraphAsync(
+            scopeId,
+            workflowRunId,
+            depth,
+            take,
+            graphOptions,
+            ct);
+        if (subgraph == null)
+            return Results.NotFound();
+
         return Results.Ok(MapGraphSubgraph(subgraph));
     }
 

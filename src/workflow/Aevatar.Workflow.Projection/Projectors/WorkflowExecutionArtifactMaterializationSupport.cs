@@ -44,6 +44,12 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
                     payload.TypeUrl ?? string.Empty,
                     payload.Unpack<WorkflowSuspendedEvent>(),
                     observedAt),
+            [BuildTypeUrl(WorkflowToolApprovalResumeRejectedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+                ApplyWorkflowToolApprovalResumeRejected(
+                    readModel,
+                    payload.TypeUrl ?? string.Empty,
+                    payload.Unpack<WorkflowToolApprovalResumeRejectedEvent>(),
+                    observedAt),
             [BuildTypeUrl(WaitingForSignalEvent.Descriptor)] = static (readModel, payload, observedAt) =>
                 ApplyWaitingForSignal(
                     readModel,
@@ -276,8 +282,20 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         var step = GetOrCreateStep(readModel.Steps, evt.StepId);
         step.SuspensionType = evt.SuspensionType ?? string.Empty;
         step.SuspensionPrompt = SanitizeAuditText(evt.Prompt);
+        step.SuspensionContent = evt.Secure
+            ? string.Empty
+            : SanitizeAuditText(evt.Content);
         step.SuspensionTimeoutSeconds = evt.TimeoutSeconds == 0 ? null : evt.TimeoutSeconds;
         step.RequestedVariableName = evt.VariableName ?? string.Empty;
+        step.ToolApprovalValue = evt.ToolApproval == null
+            ? null
+            : new WorkflowToolApprovalReadModel
+            {
+                ExecutionId = evt.ToolApproval.ExecutionId,
+                ToolName = evt.ToolApproval.ToolName,
+                ToolCallId = evt.ToolApproval.ToolCallId,
+                ApprovalRequestId = evt.ToolApproval.ApprovalRequestId,
+            };
         readModel.CompletionStatus = WorkflowExecutionCompletionStatus.WaitingForSignal;
         // Refactor (iter163/cluster-003-workflow-suspension-legacy-metadata):
         //   Old pattern: WorkflowSuspendedEvent.Metadata fallback for variable/secure/redacted_output reserved keys.
@@ -310,6 +328,32 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             metadata["redacted_output"] = redactedOutput;
 
         return metadata;
+    }
+
+    private static void ApplyWorkflowToolApprovalResumeRejected(
+        WorkflowRunInsightReportDocument readModel,
+        string eventType,
+        WorkflowToolApprovalResumeRejectedEvent evt,
+        DateTimeOffset observedAt)
+    {
+        var submitted = evt.SubmittedApproval;
+        var data = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["reason"] = evt.Reason.ToString(),
+            ["execution_id"] = submitted?.ExecutionId ?? string.Empty,
+            ["tool_call_id"] = submitted?.ToolCallId ?? string.Empty,
+            ["approval_request_id"] = submitted?.ApprovalRequestId ?? string.Empty,
+        };
+        AddTimeline(
+            readModel.Timeline,
+            observedAt,
+            "tool_approval.resume_rejected",
+            "Tool approval resume did not match the actor-owned pending approval.",
+            readModel.RootActorId,
+            evt.StepId,
+            "tool_call",
+            eventType,
+            data);
     }
 
     private static Dictionary<string, string> FilterOpenExtensionMetadata(IDictionary<string, string> metadata)
@@ -627,8 +671,10 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             AssignedValue = source.AssignedValue,
             SuspensionType = source.SuspensionType,
             SuspensionPrompt = source.SuspensionPrompt,
+            SuspensionContent = source.SuspensionContent,
             SuspensionTimeoutSeconds = source.SuspensionTimeoutSeconds,
             RequestedVariableName = source.RequestedVariableName,
+            ToolApprovalValue = source.ToolApprovalValue?.Clone(),
             Usage = CloneUsage(source.Usage),
         };
     }

@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 
 namespace Aevatar.Studio.Application.Provisioning;
@@ -34,6 +36,23 @@ public sealed record StudioMemberWorkflowScheduleRequest(
     public string? ProvisioningBearerToken { get; init; }
 
     public bool Enabled { get; init; } = true;
+
+    public ScheduledDispatchScheduleMode ScheduleMode { get; init; } = ScheduledDispatchScheduleMode.RecurringCron;
+
+    public DateTimeOffset? OneShotFireAt { get; init; }
+
+    [JsonIgnore]
+    public StudioMemberWorkflowAcceptedBindingContext? AcceptedBinding { get; init; }
+}
+
+public sealed record StudioMemberWorkflowAcceptedBindingContext(
+    string TeamId,
+    string PublishedServiceId,
+    string WorkflowId,
+    string? WorkflowRevisionId)
+{
+    [JsonIgnore]
+    public ScheduledInvocationWorkflowEvidence? WorkflowEvidence { get; init; }
 }
 
 public sealed class StudioMemberWorkflowSchedulePolicy
@@ -70,6 +89,8 @@ public sealed record StudioMemberWorkflowScheduleResult(
     public string OperationId { get; init; } = string.Empty;
 
     public string CommandId { get; init; } = string.Empty;
+
+    public bool NewOperationCommitted { get; init; }
 }
 
 public sealed record StudioMemberAutomationUpdateCommand(
@@ -98,6 +119,19 @@ public sealed record StudioMemberAutomationActionCommand(
     string ScheduleId,
     string OperationId,
     string IdempotencyKey)
+{
+    public string? Reason { get; init; }
+
+    public string? ProvisioningBearerToken { get; init; }
+
+    public AuthenticatedAuthorizationOwnerContext? AuthenticatedOwner { get; init; }
+}
+
+public sealed record StudioMemberAutomationRetryRevocationCommand(
+    string ScopeId,
+    string TeamId,
+    string MemberId,
+    string ScheduleId)
 {
     public string? ProvisioningBearerToken { get; init; }
 
@@ -128,6 +162,22 @@ public sealed record StudioMemberAutomationView(
     public string CredentialSourceKind { get; init; } = "scheduled_invocation_agent_key";
 
     public DateTimeOffset UpdatedAt { get; init; }
+
+    public string OwnerLLMRouteKind { get; init; } = "unspecified";
+
+    public string OwnerLLMRoute { get; init; } = string.Empty;
+
+    public string OwnerLLMUserServiceId { get; init; } = string.Empty;
+
+    public string OwnerLLMServiceSlug { get; init; } = string.Empty;
+
+    public string OwnerLLMModel { get; init; } = string.Empty;
+
+    public string TargetRevisionId { get; init; } = string.Empty;
+
+    public string NyxIdRevocationStatus { get; init; } = string.Empty;
+
+    public string VaultRevocationStatus { get; init; } = string.Empty;
 }
 
 public sealed record StudioMemberAutomationListResponse(
@@ -152,13 +202,20 @@ public sealed class StudioMemberAutomationNotFoundException : Exception
 
 public sealed class StudioMemberAutomationPlanConflictException : Exception
 {
-    public StudioMemberAutomationPlanConflictException(string code, string message)
+    public StudioMemberAutomationPlanConflictException(
+        string code,
+        string message,
+        ScheduledAuthorizationPlanMismatchReason authorizationPlanMismatchReason =
+            ScheduledAuthorizationPlanMismatchReason.Unspecified)
         : base(message)
     {
         Code = string.IsNullOrWhiteSpace(code) ? "authorization_plan_changed" : code.Trim();
+        AuthorizationPlanMismatchReason = authorizationPlanMismatchReason;
     }
 
     public string Code { get; }
+
+    public ScheduledAuthorizationPlanMismatchReason AuthorizationPlanMismatchReason { get; }
 }
 
 public sealed class StudioMemberAutomationProjectionPendingException : Exception

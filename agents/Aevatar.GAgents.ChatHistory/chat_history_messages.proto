@@ -35,11 +35,13 @@ enum ChatTurnTerminalStatus {
   CHAT_TURN_TERMINAL_STATUS_FAILED = 2;
   CHAT_TURN_TERMINAL_STATUS_STOPPED = 3;
   CHAT_TURN_TERMINAL_STATUS_BLOCKED = 4;
+  CHAT_TURN_TERMINAL_STATUS_OUTCOME_UNCERTAIN = 5;
 }
 
 enum ChatTurnAppendRejectionReason {
   CHAT_TURN_APPEND_REJECTION_REASON_UNSPECIFIED = 0;
   CHAT_TURN_APPEND_REJECTION_REASON_CONFLICT = 1;
+  // Historical committed fact. New appends no longer enforce a turn limit.
   CHAT_TURN_APPEND_REJECTION_REASON_MAX_TURNS_EXCEEDED = 2;
   CHAT_TURN_APPEND_REJECTION_REASON_INVALID = 3;
 }
@@ -62,6 +64,16 @@ message ChatTurnAppendRejection {
   google.protobuf.Timestamp rejected_at = 3;
 }
 
+message ChatConversationInitialization {
+  string operation_id = 1;
+  string scope_id = 2;
+  string conversation_id = 3;
+  string service_id = 4;
+  string service_kind = 5;
+  google.protobuf.Timestamp created_at = 6;
+  string initial_title = 7;
+}
+
 // ─── ChatConversationGAgent State ───
 
 message ChatConversationState {
@@ -77,9 +89,31 @@ message ChatConversationState {
   repeated ChatTurn turns = 10;
   bool deleted = 11;
   ChatTurnAppendRejection last_rejected_append = 12;
+  ChatConversationInitialization initialization = 13;
+  int32 next_turn_sequence = 14;
 }
 
 // ─── ChatConversationGAgent Events ───
+
+message InitializeChatConversationCommand {
+  string operation_id = 1;
+  string scope_id = 2;
+  string conversation_id = 3;
+  string service_id = 4;
+  string service_kind = 5;
+  google.protobuf.Timestamp created_at = 6;
+  string initial_title = 7;
+}
+
+message ChatConversationInitializedEvent {
+  string operation_id = 1;
+  string scope_id = 2;
+  string conversation_id = 3;
+  string service_id = 4;
+  string service_kind = 5;
+  google.protobuf.Timestamp created_at = 6;
+  string initial_title = 7;
+}
 
 message AppendChatTurnCommand {
   string scope_id = 1;
@@ -100,6 +134,13 @@ message ChatTurnAppendedEvent {
   ChatTurn turn = 6;
 }
 
+message ChatTurnTerminalReconciledEvent {
+  string scope_id = 1;
+  string conversation_id = 2;
+  ChatTurnTerminalStatus previous_status = 3;
+  ChatTurn turn = 4;
+}
+
 message ChatTurnAppendRejectedEvent {
   string scope_id = 1;
   string conversation_id = 2;
@@ -108,9 +149,15 @@ message ChatTurnAppendRejectedEvent {
   google.protobuf.Timestamp rejected_at = 5;
 }
 
+message DeleteConversationCommand {
+  string conversation_id = 1;
+  string scope_id = 2;
+}
+
 message ConversationDeletedEvent {
   string conversation_id = 1;
   string scope_id = 2;
+  google.protobuf.Timestamp deleted_at = 3;
 }
 
 // ─── ChatTurnHistoryDeliveryGAgent State ───
@@ -124,6 +171,7 @@ enum ChatTurnHistoryDeliveryStatus {
   CHAT_TURN_HISTORY_DELIVERY_STATUS_FAILED = 5;
   CHAT_TURN_HISTORY_DELIVERY_STATUS_APPEND_COMMITTED = 6;
   CHAT_TURN_HISTORY_DELIVERY_STATUS_APPEND_REJECTED = 7;
+  CHAT_TURN_HISTORY_DELIVERY_STATUS_TERMINAL_RECONCILIATION_PREPARED = 8;
 }
 
 message ChatTurnHistoryDeliveryState {
@@ -132,9 +180,9 @@ message ChatTurnHistoryDeliveryState {
   string conversation_id = 3;
   string turn_id = 4;
   string user_text = 5;
-  string workflow_actor_id = 6;
-  string workflow_command_id = 7;
-  string workflow_correlation_id = 8;
+  string source_actor_id = 6;
+  string source_command_id = 7;
+  string source_correlation_id = 8;
   ChatTurnHistoryDeliveryStatus status = 9;
   int64 reserved_at_unix_ms = 10;
   int64 bound_at_unix_ms = 11;
@@ -149,6 +197,7 @@ message ChatTurnHistoryDeliveryState {
   ChatTurnAppendRejectionReason append_rejection_reason = 20;
   bool create_conversation_if_missing = 21;
   string request_fingerprint = 22;
+  bool expose_create_recovery = 23;
 }
 
 message ChatTurnHistoryDeliveryReserveRequested {
@@ -157,11 +206,12 @@ message ChatTurnHistoryDeliveryReserveRequested {
   string conversation_id = 3;
   string turn_id = 4;
   string user_text = 5;
-  string workflow_actor_id = 6;
-  string workflow_command_id = 7;
-  string workflow_correlation_id = 8;
+  string source_actor_id = 6;
+  string source_command_id = 7;
+  string source_correlation_id = 8;
   bool create_conversation_if_missing = 9;
   string request_fingerprint = 10;
+  bool expose_create_recovery = 11;
 }
 
 message ChatTurnHistoryDeliveryReservedEvent {
@@ -170,43 +220,55 @@ message ChatTurnHistoryDeliveryReservedEvent {
   string conversation_id = 3;
   string turn_id = 4;
   string user_text = 5;
-  string workflow_actor_id = 6;
-  string workflow_command_id = 7;
-  string workflow_correlation_id = 8;
+  string source_actor_id = 6;
+  string source_command_id = 7;
+  string source_correlation_id = 8;
   int64 reserved_at_unix_ms = 9;
   bool create_conversation_if_missing = 10;
   string request_fingerprint = 11;
+  bool expose_create_recovery = 12;
 }
 
 message ChatTurnHistoryDeliveryAcceptedBound {
   string delivery_id = 1;
-  string workflow_actor_id = 2;
-  string workflow_command_id = 3;
-  string workflow_correlation_id = 4;
+  string source_actor_id = 2;
+  string source_command_id = 3;
+  string source_correlation_id = 4;
 }
 
 message ChatTurnHistoryDeliveryBoundEvent {
   string delivery_id = 1;
-  string workflow_actor_id = 2;
-  string workflow_command_id = 3;
-  string workflow_correlation_id = 4;
+  string source_actor_id = 2;
+  string source_command_id = 3;
+  string source_correlation_id = 4;
   int64 bound_at_unix_ms = 5;
 }
 
 message ChatTurnHistoryDeliveryTerminalFrameObserved {
   string delivery_id = 1;
-  string workflow_actor_id = 2;
-  string workflow_command_id = 3;
+  string source_actor_id = 2;
+  string source_command_id = 3;
   ChatTurnTerminalStatus status = 4;
   string text = 5;
   string error_code = 6;
   int64 observed_at_unix_ms = 7;
 }
 
+message ChatTurnHistoryDeliveryTerminalReconciledEvent {
+  string delivery_id = 1;
+  string source_actor_id = 2;
+  string source_command_id = 3;
+  ChatTurnTerminalStatus previous_status = 4;
+  ChatTurnTerminalStatus status = 5;
+  string text = 6;
+  string error_code = 7;
+  int64 observed_at_unix_ms = 8;
+}
+
 message ChatTurnHistoryDeliveryAppendDispatchedEvent {
   string delivery_id = 1;
-  string workflow_actor_id = 2;
-  string workflow_command_id = 3;
+  string source_actor_id = 2;
+  string source_command_id = 3;
   int32 append_attempt = 4;
   ChatTurnTerminalStatus terminal_status = 5;
   string terminal_text = 6;
@@ -241,9 +303,19 @@ message ChatTurnHistoryDeliveryAbandonedEvent {
 
 message ChatTurnHistoryDeliveryFailedEvent {
   string delivery_id = 1;
-  string workflow_actor_id = 2;
-  string workflow_command_id = 3;
+  string source_actor_id = 2;
+  string source_command_id = 3;
   string error_code = 4;
   string error_summary = 5;
   int64 failed_at_unix_ms = 6;
+}
+
+message ChatTurnHistorySourceTerminalNotified {
+  string delivery_id = 1;
+  string source_actor_id = 2;
+  string source_command_id = 3;
+  ChatTurnTerminalStatus status = 4;
+  string text = 5;
+  string error_code = 6;
+  int64 observed_at_unix_ms = 7;
 }

@@ -95,6 +95,12 @@ public sealed class OrleansRuntimeServiceCollectionExtensionsTests
         var descriptor = services.LastOrDefault(x => x.ServiceType == typeof(IStateStore<>));
         descriptor.Should().NotBeNull();
         descriptor!.ImplementationType.Should().Be(typeof(RuntimeActorGrainStateStore<>));
+
+        var publicationDescriptor = services.LastOrDefault(
+            x => x.ServiceType == typeof(ICommittedStatePublicationStateStore));
+        publicationDescriptor.Should().NotBeNull();
+        publicationDescriptor!.ImplementationType.Should().Be(
+            typeof(RuntimeActorGrainCommittedStatePublicationStateStore));
     }
 
     [Fact]

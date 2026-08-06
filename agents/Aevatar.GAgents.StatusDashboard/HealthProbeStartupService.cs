@@ -8,29 +8,36 @@ using Microsoft.Extensions.Options;
 namespace Aevatar.GAgents.StatusDashboard;
 
 /// <summary>
-/// Dispatches one probe-target actor configuration command per manifest entry
-/// at host startup. Once active, each actor self-reschedules its probe tick
-/// from inside its own event loop — the startup service does not own the
-/// ongoing schedule or projection lifecycle.
+/// Reconciles one probe-target actor configuration command per manifest entry
+/// at host startup and once per minute so rolling deployments reactivate actors
+/// whose process-local tick was lost. Once active, each actor self-reschedules
+/// its probe tick from inside its own event loop. The service does not own
+/// projection activation, the ongoing schedule, or long-lived projection state.
 ///
 /// Failures here only affect the affected target's first activation; the host
 /// continues to start so unrelated services are not blocked by a single bad
 /// manifest entry.
 /// </summary>
-public sealed class HealthProbeStartupService : IHostedService
+public sealed class HealthProbeStartupService : IHostedService, IDisposable
 {
+    private static readonly TimeSpan ReconcileInterval = TimeSpan.FromMinutes(1);
+
     private readonly StatusDashboardManifest _manifest;
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IHealthProbeExecutorRegistry _executorRegistry;
     private readonly ILogger<HealthProbeStartupService> _logger;
+    private readonly TimeProvider _timeProvider;
+    private CancellationTokenSource? _stopping;
+    private Task? _reconcileLoop;
 
     public HealthProbeStartupService(
         IOptions<StatusDashboardOptions> options,
         IActorRuntime actorRuntime,
         IActorDispatchPort dispatchPort,
         IHealthProbeExecutorRegistry executorRegistry,
-        ILogger<HealthProbeStartupService> logger)
+        ILogger<HealthProbeStartupService> logger,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         _manifest = StatusDashboardManifest.FromOptions(options.Value ?? new StatusDashboardOptions());
@@ -38,6 +45,7 @@ public sealed class HealthProbeStartupService : IHostedService
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _executorRegistry = executorRegistry ?? throw new ArgumentNullException(nameof(executorRegistry));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task StartAsync(CancellationToken ct)
@@ -76,6 +84,14 @@ public sealed class HealthProbeStartupService : IHostedService
                 continue;
 
             await RetireProbeIfExistsAsync(retiredSlug, ct);
+        }
+
+        if (!ct.IsCancellationRequested && _manifest.Descriptors.Any(descriptor =>
+                !RetiredStatusProbeTargets.Contains(descriptor.Slug) &&
+                _executorRegistry.Resolve(descriptor.ProbeKind) != null))
+        {
+            _stopping = new CancellationTokenSource();
+            _reconcileLoop = RunPeriodicReconcileAsync(_stopping.Token);
         }
     }
 
@@ -125,5 +141,46 @@ public sealed class HealthProbeStartupService : IHostedService
         }
     }
 
-    public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
+    private async Task RunPeriodicReconcileAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(ReconcileInterval, _timeProvider);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                foreach (var descriptor in _manifest.Descriptors)
+                {
+                    if (!RetiredStatusProbeTargets.Contains(descriptor.Slug) &&
+                        _executorRegistry.Resolve(descriptor.ProbeKind) != null)
+                    {
+                        await EnsureProbeAsync(descriptor, ct);
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+    }
+
+    public async Task StopAsync(CancellationToken ct)
+    {
+        if (_stopping == null || _reconcileLoop == null)
+            return;
+
+        await _stopping.CancelAsync();
+        try
+        {
+            await _reconcileLoop.WaitAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+    }
+
+    public void Dispose()
+    {
+        _stopping?.Cancel();
+        _stopping?.Dispose();
+    }
 }

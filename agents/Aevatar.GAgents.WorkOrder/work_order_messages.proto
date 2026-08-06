@@ -8,24 +8,16 @@ import "google/protobuf/timestamp.proto";
 enum WorkOrderLifecycleStatus {
   WORK_ORDER_LIFECYCLE_STATUS_UNSPECIFIED = 0;
   WORK_ORDER_LIFECYCLE_STATUS_ACCEPTED = 1;
-  WORK_ORDER_LIFECYCLE_STATUS_WAITING_APPROVAL = 2;
+  reserved 2;
   WORK_ORDER_LIFECYCLE_STATUS_READY = 3;
   WORK_ORDER_LIFECYCLE_STATUS_DISPATCH_PENDING = 4;
   WORK_ORDER_LIFECYCLE_STATUS_RUNNING = 5;
   WORK_ORDER_LIFECYCLE_STATUS_COMPLETED = 6;
   WORK_ORDER_LIFECYCLE_STATUS_FAILED = 7;
   WORK_ORDER_LIFECYCLE_STATUS_STOPPED = 8;
-  WORK_ORDER_LIFECYCLE_STATUS_DENIED = 9;
+  reserved 9;
   WORK_ORDER_LIFECYCLE_STATUS_CANCELLED = 10;
   WORK_ORDER_LIFECYCLE_STATUS_TIMED_OUT = 11;
-}
-
-enum WorkOrderApprovalStatus {
-  WORK_ORDER_APPROVAL_STATUS_UNSPECIFIED = 0;
-  WORK_ORDER_APPROVAL_STATUS_NOT_REQUIRED = 1;
-  WORK_ORDER_APPROVAL_STATUS_PENDING = 2;
-  WORK_ORDER_APPROVAL_STATUS_APPROVED = 3;
-  WORK_ORDER_APPROVAL_STATUS_DENIED = 4;
 }
 
 enum WorkOrderTerminalOutcome {
@@ -47,26 +39,6 @@ message WorkOrderArtifactReference {
   string revision_id = 4;
 }
 
-message WorkOrderExternalActionReference {
-  string action_id = 1;
-  string system = 2;
-  string action = 3;
-  string resource_id = 4;
-}
-
-message WorkOrderPermissionRequirement {
-  string permission_id = 1;
-  string action_id = 2;
-  string capability = 3;
-  bool requires_approval = 4;
-}
-
-message WorkOrderPermissionPlan {
-  repeated WorkOrderExternalActionReference external_actions = 1;
-  repeated WorkOrderPermissionRequirement requirements = 2;
-  repeated string approver_principal_ids = 3;
-}
-
 message WorkOrderChatInput {
   string prompt = 1;
 }
@@ -77,16 +49,7 @@ message WorkOrderServiceInput {
   repeated WorkOrderArtifactReference declared_result_artifacts = 3;
 }
 
-message WorkOrderApprovalState {
-  string approval_id = 1;
-  WorkOrderApprovalStatus status = 2;
-  string decision_id = 3;
-  WorkOrderPrincipal decided_by = 4;
-  string reason = 5;
-  google.protobuf.Timestamp decided_at_utc = 6;
-}
-
-message WorkOrderExecutionProvenance {
+message WorkOrderRunLink {
   string run_id = 1;
   string run_actor_id = 2;
   string command_id = 3;
@@ -94,7 +57,6 @@ message WorkOrderExecutionProvenance {
   string revision_id = 5;
   string deployment_id = 6;
   google.protobuf.Timestamp accepted_at_utc = 7;
-  google.protobuf.Timestamp started_at_utc = 8;
 }
 
 message WorkOrderFailureReference {
@@ -104,17 +66,20 @@ message WorkOrderFailureReference {
   string reference_id = 4;
 }
 
-message WorkOrderTerminalEvidence {
+message WorkOrderRunOutcomeReference {
   string delivery_id = 1;
   string run_id = 2;
   string run_actor_id = 3;
   string command_id = 4;
-  WorkOrderTerminalOutcome outcome = 5;
-  string output = 6;
-  string error = 7;
-  google.protobuf.Timestamp terminal_at_utc = 8;
-  repeated WorkOrderArtifactReference result_artifacts = 9;
-  string correlation_id = 10;
+  string correlation_id = 5;
+  WorkOrderTerminalOutcome outcome = 6;
+  google.protobuf.Timestamp terminal_at_utc = 7;
+}
+
+message WorkOrderAvailableActions {
+  bool can_reassign = 1;
+  bool can_dispatch = 2;
+  bool can_cancel = 3;
 }
 
 message WorkOrderState {
@@ -131,8 +96,7 @@ message WorkOrderState {
   string endpoint_id = 11;
   string intent = 12;
   WorkOrderServiceInput input = 13;
-  WorkOrderPermissionPlan permission_plan = 14;
-  WorkOrderApprovalState approval = 15;
+  reserved 14, 15;
   WorkOrderLifecycleStatus lifecycle_status = 16;
   int64 lifecycle_version = 17;
   google.protobuf.Timestamp created_at_utc = 18;
@@ -141,15 +105,16 @@ message WorkOrderState {
   string dispatch_command_id = 21;
   string requested_run_id = 22;
   string terminal_delivery_id = 23;
-  WorkOrderExecutionProvenance execution = 24;
-  WorkOrderTerminalEvidence terminal_evidence = 25;
-  WorkOrderTerminalEvidence late_terminal_evidence = 26;
+  WorkOrderRunLink run = 24;
+  WorkOrderRunOutcomeReference run_outcome = 25;
+  WorkOrderRunOutcomeReference late_run_outcome = 26;
   WorkOrderFailureReference failure = 27;
   string terminal_reason = 28;
   CreateWorkOrder creation_request = 29;
   int32 execution_retry_attempt = 30;
   string execution_retry_callback_id = 31;
   google.protobuf.Timestamp execution_retry_at_utc = 32;
+  WorkOrderAvailableActions available_actions = 33;
 }
 
 message CreateWorkOrder {
@@ -166,8 +131,7 @@ message CreateWorkOrder {
   string endpoint_id = 11;
   string intent = 12;
   WorkOrderServiceInput input = 13;
-  WorkOrderPermissionPlan permission_plan = 14;
-  string approval_id = 15;
+  reserved 14, 15;
   google.protobuf.Timestamp requested_at_utc = 16;
   google.protobuf.Timestamp timeout_at_utc = 17;
   int64 expected_lifecycle_version = 18;
@@ -178,10 +142,8 @@ message WorkOrderCreatedEvent {
   google.protobuf.Timestamp created_at_utc = 2;
 }
 
-message WorkOrderPlannedEvent {
-  WorkOrderLifecycleStatus lifecycle_status = 1;
-  WorkOrderApprovalState approval = 2;
-  google.protobuf.Timestamp planned_at_utc = 3;
+message WorkOrderReadyEvent {
+  google.protobuf.Timestamp ready_at_utc = 1;
 }
 
 message ReassignWorkOrder {
@@ -204,32 +166,6 @@ message WorkOrderReassignedEvent {
   string implementation_kind = 5;
   WorkOrderPrincipal reassigned_by = 6;
   google.protobuf.Timestamp reassigned_at_utc = 7;
-}
-
-message ApproveWorkOrder {
-  string work_order_id = 1;
-  int64 expected_lifecycle_version = 2;
-  string decision_id = 3;
-  WorkOrderPrincipal decided_by = 4;
-  string reason = 5;
-  google.protobuf.Timestamp decided_at_utc = 6;
-}
-
-message DenyWorkOrder {
-  string work_order_id = 1;
-  int64 expected_lifecycle_version = 2;
-  string decision_id = 3;
-  WorkOrderPrincipal decided_by = 4;
-  string reason = 5;
-  google.protobuf.Timestamp decided_at_utc = 6;
-}
-
-message WorkOrderApprovalDecidedEvent {
-  string decision_id = 1;
-  WorkOrderApprovalStatus approval_status = 2;
-  WorkOrderPrincipal decided_by = 3;
-  string reason = 4;
-  google.protobuf.Timestamp decided_at_utc = 5;
 }
 
 message DispatchWorkOrder {
@@ -367,11 +303,11 @@ message WorkOrderTimedOutEvent {
   google.protobuf.Timestamp timed_out_at_utc = 2;
 }
 
-message WorkOrderTerminalEvidenceRecordedEvent {
+message WorkOrderRunOutcomeObservedEvent {
   WorkOrderLifecycleStatus lifecycle_status = 1;
-  WorkOrderTerminalEvidence evidence = 2;
+  WorkOrderRunOutcomeReference outcome = 2;
 }
 
-message WorkOrderLateTerminalEvidenceRecordedEvent {
-  WorkOrderTerminalEvidence evidence = 1;
+message WorkOrderLateRunOutcomeObservedEvent {
+  WorkOrderRunOutcomeReference outcome = 1;
 }

@@ -270,6 +270,11 @@ GUID and literal version with the authenticated owner authority, then verifies:
 - when the Profile uses an explicit allowlist, declared tool dependencies do
   not exceed that allowlist.
 
+`literalVersion` follows the current Ornn package contract exactly:
+`<major>.<minor>` with non-negative decimal components and no `latest`, range,
+prefix, or semantic-version patch component. For example, `1.4` is valid and
+`1.4.0` is not.
+
 If the current Ornn endpoint cannot fetch a literal version or cannot return a
 stable publisher identity, it is not an exact source and cannot be used by this
 publish path. The Ornn adapter contract must be extended first. Name-based
@@ -391,8 +396,9 @@ but no caller parses a partition key or Actor address.
 Profile creation is an Actor continuation protocol rather than a synchronous
 cross-Actor transaction:
 
-1. The Application layer allocates an opaque `profileId` and stable command IDs
-   before dispatch, so the accepted receipt can contain the final identity.
+1. The Application layer allocates an opaque `profileId` and stable operation
+   identity before dispatch, so the accepted receipt can contain the final
+   resource identity.
 2. The Namespace Actor validates the handle/slug claim and commits a
    `PROVISIONING` mapping with the requested Profile identity.
 3. It sends a typed initialization request to the Profile Actor and ends its
@@ -585,7 +591,7 @@ The skill binding `PUT` accepts exactly:
   "activationMode": "ROUTED",
   "skill": {
     "skillGuid": "2d05bf2e-88ee-4f76-9998-728ba2f9db10",
-    "literalVersion": "1.4.0",
+    "literalVersion": "1.4",
     "expectedName": "xiaomi-home-control",
     "expectedPublisherId": "publisher-123"
   }
@@ -606,6 +612,11 @@ opaque Profile identities before dispatch. Other mutations accept an optional
 `Idempotency-Key`; without one they are new commands. Reusing a key with
 identical deterministic normalized Protobuf input is idempotent. Reusing it with
 different input is `IDEMPOTENCY_PAYLOAD_CONFLICT`.
+
+`operationId` is the stable semantic idempotency identity. `commandId` and
+`correlationId` identify and trace one dispatch attempt. A retry may therefore
+have a new `commandId` while retaining the same `operationId`; transport-level
+deduplication cannot replace the Actor's operation digest comparison.
 
 `POST ...:validate` is non-mutating and returns `200` with a typed report tied
 to `draftRevision` and `draftDigest`. `POST ...:publish` is a mutation and
@@ -665,6 +676,7 @@ Except for non-mutating `:validate`, Profile and binding mutations return
 {
   "accepted": true,
   "ackStage": "accepted",
+  "operationId": "...",
   "commandId": "...",
   "correlationId": "...",
   "actorId": "...",

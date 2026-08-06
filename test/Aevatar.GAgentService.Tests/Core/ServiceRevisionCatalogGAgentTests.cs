@@ -1,4 +1,6 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -15,8 +17,10 @@ using Aevatar.GAgentService.Projection.Queries;
 using Aevatar.GAgentService.Projection.ReadModels;
 using Aevatar.GAgentService.Tests.Projection;
 using Aevatar.GAgentService.Tests.TestSupport;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgentService.Tests.Core;
 
@@ -77,6 +81,228 @@ public sealed class ServiceRevisionCatalogGAgentTests
         var replayed = CreateAgent(eventStore, adapter, actorId);
         await replayed.ActivateAsync();
         replayed.State.Revisions["r1"].Status.Should().Be(ServiceRevisionStatus.Published);
+    }
+
+    [Fact]
+    public async Task PrepareAndPublish_ShouldReusePublishedRevision_AndRefreshInvocationObservation()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity("svc-published");
+        const string revisionId = "rev-published";
+        var prepareCalls = 0;
+        var adapter = new RecordingAdapter(_ =>
+        {
+            prepareCalls++;
+            if (prepareCalls > 2)
+                throw new InvalidOperationException("persisted admission evidence is stale");
+
+            return Task.FromResult(
+                GAgentServiceTestKit.CreatePreparedStaticArtifact(
+                    identity,
+                    revisionId,
+                    GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat-readonly")));
+        });
+        var dispatchPort = new RecordingActorDispatchPort();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            adapter,
+            ServiceActorIds.RevisionCatalog(identity),
+            dispatchPort);
+
+        await agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, revisionId),
+        });
+        await agent.HandlePrepareRevisionAsync(new PrepareServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+        });
+        await agent.HandlePublishRevisionAsync(new PublishServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+        });
+
+        await agent.HandlePrepareRevisionAsync(new PrepareServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+        });
+        await agent.HandlePublishRevisionAsync(new PublishServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+        });
+
+        prepareCalls.Should().Be(2);
+        agent.State.Revisions[revisionId].Status.Should().Be(ServiceRevisionStatus.Published);
+        dispatchPort.Calls.Should().HaveCount(5);
+        var replayObservation = dispatchPort.Calls[^1].Envelope.Payload.Unpack<ObserveServiceInvocationRevisionsCommand>();
+        replayObservation.SourceRevisionVersion.Should().Be(3);
+        replayObservation.Revisions[revisionId].Status.Should().Be(ServiceRevisionStatus.Published);
+    }
+
+    [Fact]
+    public async Task PreparePublishedWorkflowRevision_ShouldRepairLegacyArtifact_AndPreservePublishedState()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity("svc-legacy-workflow");
+        const string revisionId = "rev-legacy-workflow";
+        var actorId = ServiceActorIds.RevisionCatalog(identity);
+        var repairedArtifact = CreateWorkflowArtifact(
+            identity,
+            revisionId,
+            ExternalCapabilityExecutionMode.Interactive);
+        var legacyArtifact = repairedArtifact.Clone();
+        legacyArtifact.DeploymentPlan.WorkflowPlan.ExecutionMode =
+            ExternalCapabilityExecutionMode.Unspecified;
+        legacyArtifact = new PreparedServiceRevisionArtifactAssembler().Assemble(legacyArtifact);
+        repairedArtifact = new PreparedServiceRevisionArtifactAssembler().Assemble(repairedArtifact);
+        var publishedAt = Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-5));
+        var adapter = new RecordingAdapter(
+            _ => Task.FromResult(repairedArtifact.Clone()),
+            ServiceImplementationKind.Workflow);
+
+        var seed = CreateAgent(eventStore, adapter, actorId);
+        await seed.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
+        {
+            Spec = CreateWorkflowRevisionSpec(identity, revisionId),
+        });
+        await eventStore.AppendAsync(
+            actorId,
+            [
+                new StateEvent
+                {
+                    EventId = "legacy-prepared",
+                    Version = 2,
+                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-6)),
+                    EventData = Any.Pack(new ServiceRevisionPreparedEvent
+                    {
+                        Identity = identity.Clone(),
+                        RevisionId = revisionId,
+                        ImplementationKind = ServiceImplementationKind.Workflow,
+                        ArtifactHash = legacyArtifact.ArtifactHash,
+                        Endpoints = { legacyArtifact.Endpoints.Select(x => x.Clone()) },
+                        PreparedAt = Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-6)),
+                        PreparedArtifact = legacyArtifact.Clone(),
+                    }),
+                },
+                new StateEvent
+                {
+                    EventId = "legacy-published",
+                    Version = 3,
+                    Timestamp = publishedAt.Clone(),
+                    EventData = Any.Pack(new ServiceRevisionPublishedEvent
+                    {
+                        Identity = identity.Clone(),
+                        RevisionId = revisionId,
+                        PublishedAt = publishedAt.Clone(),
+                    }),
+                },
+            ],
+            expectedVersion: 1);
+
+        var dispatchPort = new RecordingActorDispatchPort();
+        var agent = CreateAgent(eventStore, adapter, actorId, dispatchPort);
+        await agent.ActivateAsync();
+
+        await agent.HandlePrepareRevisionAsync(new PrepareServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+        });
+
+        var record = agent.State.Revisions[revisionId];
+        record.Status.Should().Be(ServiceRevisionStatus.Published);
+        record.PublishedAt.Should().Be(publishedAt);
+        record.ArtifactHash.Should().Be(repairedArtifact.ArtifactHash);
+        record.ArtifactHash.Should().NotBe(legacyArtifact.ArtifactHash);
+        record.PreparedArtifact.DeploymentPlan.WorkflowPlan.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Interactive);
+        record.PreparedArtifact.DeploymentPlan.WorkflowPlan.DefinitionActorId.Should()
+            .Be("workflow-definition-legacy");
+        WorkflowServiceDeploymentPlanIntegrity.IsCompatible(
+            record.PreparedArtifact,
+            revisionId).Should().BeTrue();
+        adapter.PrepareCalls.Should().Be(1);
+        dispatchPort.Calls.Should().ContainSingle();
+        var observation = dispatchPort.Calls[0].Envelope.Payload
+            .Unpack<ObserveServiceInvocationRevisionsCommand>();
+        observation.SourceRevisionVersion.Should().Be(4);
+        observation.Revisions[revisionId].Status.Should().Be(ServiceRevisionStatus.Published);
+
+        var committedEvents = await eventStore.GetEventsAsync(actorId);
+        committedEvents.Should().HaveCount(4);
+        var repairedEvent = committedEvents[^1].EventData
+            .Unpack<ServiceRevisionPreparedArtifactRepairedEvent>();
+        repairedEvent.PreviousArtifactHash.Should().Be(legacyArtifact.ArtifactHash);
+        repairedEvent.ArtifactHash.Should().Be(repairedArtifact.ArtifactHash);
+        repairedEvent.RepairReason.Should().Be(
+            ServiceRevisionPreparedArtifactRepairReason.WorkflowDeploymentPlanIncompatible);
+
+        await agent.HandlePrepareRevisionAsync(new PrepareServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+        });
+
+        adapter.PrepareCalls.Should().Be(1);
+        (await eventStore.GetEventsAsync(actorId)).Should().HaveCount(4);
+
+        var replayed = CreateAgent(eventStore, adapter, actorId);
+        await replayed.ActivateAsync();
+        replayed.State.Revisions[revisionId].Status.Should().Be(ServiceRevisionStatus.Published);
+        replayed.State.Revisions[revisionId].ArtifactHash.Should().Be(repairedArtifact.ArtifactHash);
+    }
+
+    [Fact]
+    public async Task Replay_ShouldPreservePublishedRevision_WhenLegacyDuplicatePrepareRecordedFailure()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity("svc-legacy-replay");
+        const string revisionId = "rev-legacy-replay";
+        var actorId = ServiceActorIds.RevisionCatalog(identity);
+        var adapter = new RecordingAdapter(_ => Task.FromResult(
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, revisionId)));
+        var agent = CreateAgent(eventStore, adapter, actorId);
+
+        await agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, revisionId),
+        });
+        await agent.HandlePrepareRevisionAsync(new PrepareServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+        });
+        await agent.HandlePublishRevisionAsync(new PublishServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+        });
+        await eventStore.AppendAsync(
+            actorId,
+            [new StateEvent
+            {
+                EventId = "legacy-duplicate-prepare-failed",
+                Version = 4,
+                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                EventData = Any.Pack(new ServiceRevisionPreparationFailedEvent
+                {
+                    Identity = identity.Clone(),
+                    RevisionId = revisionId,
+                    FailureReason = "persisted admission evidence is stale",
+                    OccurredAt = Timestamp.FromDateTime(DateTime.UtcNow),
+                }),
+            }],
+            expectedVersion: 3);
+
+        var replayed = CreateAgent(eventStore, adapter, actorId);
+        await replayed.ActivateAsync();
+
+        replayed.State.Revisions[revisionId].Status.Should().Be(ServiceRevisionStatus.Published);
+        replayed.State.Revisions[revisionId].FailureReason.Should().BeEmpty();
+        replayed.State.LastAppliedEventVersion.Should().Be(4);
     }
 
     [Fact]
@@ -190,6 +416,38 @@ public sealed class ServiceRevisionCatalogGAgentTests
     }
 
     [Fact]
+    public async Task HandlePrepareRevisionAsync_ShouldNotCommitFailure_WhenPreparedFactPublicationFails()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity("svc-publication-failure");
+        const string revisionId = "rev-publication-failure";
+        var agent = CreateAgent(
+            eventStore,
+            new RecordingAdapter(_ => Task.FromResult(
+                GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, revisionId))),
+            ServiceActorIds.RevisionCatalog(identity),
+            configureServices: services =>
+                services.AddSingleton<ICommittedStatePublicationHook>(new RejectPreparedPublicationHook()));
+
+        await agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, revisionId),
+        });
+
+        var act = () => agent.HandlePrepareRevisionAsync(new PrepareServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+        });
+
+        await act.Should().ThrowAsync<CommittedStatePublicationException>();
+        agent.State.Revisions[revisionId].Status.Should().Be(ServiceRevisionStatus.Prepared);
+        var committedEvents = await eventStore.GetEventsAsync(ServiceActorIds.RevisionCatalog(identity));
+        committedEvents.Should().HaveCount(2);
+        committedEvents[^1].EventData.Is(ServiceRevisionPreparedEvent.Descriptor).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task HandlePublishRevisionAsync_ShouldRequirePreparedRevision()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
@@ -297,7 +555,7 @@ public sealed class ServiceRevisionCatalogGAgentTests
     }
 
     [Fact]
-    public async Task HandleCreateRevisionAsync_ShouldRejectDuplicateRevision()
+    public async Task HandleCreateRevisionAsync_ShouldBeIdempotentForEquivalentRevision()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var agent = CreateAgent(
@@ -309,14 +567,40 @@ public sealed class ServiceRevisionCatalogGAgentTests
         {
             Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
         });
+        var committedVersion = agent.State.LastAppliedEventVersion;
 
-        var act = () => agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
+        await agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
         {
             Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
         });
 
+        agent.State.LastAppliedEventVersion.Should().Be(committedVersion);
+        agent.State.Revisions.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleCreateRevisionAsync_ShouldRejectConflictingDuplicateRevision()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            new RecordingAdapter(_ => Task.FromResult(GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"))),
+            ServiceActorIds.RevisionCatalog(identity));
+
+        await agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
+        });
+        var conflictingSpec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1");
+        conflictingSpec.StaticSpec.AgentKind = "tests.conflicting-agent";
+
+        var act = () => agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
+        {
+            Spec = conflictingSpec,
+        });
+
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*already exists*");
+            .WithMessage("*conflicting spec*");
     }
 
     [Fact]
@@ -423,7 +707,8 @@ public sealed class ServiceRevisionCatalogGAgentTests
         InMemoryEventStore eventStore,
         IServiceImplementationAdapter adapter,
         string actorId,
-        IActorDispatchPort? dispatchPort = null)
+        IActorDispatchPort? dispatchPort = null,
+        Action<IServiceCollection>? configureServices = null)
     {
         return GAgentServiceTestKit.CreateStatefulAgent<ServiceRevisionCatalogGAgent, ServiceRevisionCatalogState>(
             eventStore,
@@ -431,8 +716,59 @@ public sealed class ServiceRevisionCatalogGAgentTests
             () => new ServiceRevisionCatalogGAgent(
                 dispatchPort ?? GAgentServiceTestKit.NoOpDispatchPort,
                 [adapter],
-                new PreparedServiceRevisionArtifactAssembler()));
+                new PreparedServiceRevisionArtifactAssembler()),
+            configureServices);
     }
+
+    private static ServiceRevisionSpec CreateWorkflowRevisionSpec(
+        ServiceIdentity identity,
+        string revisionId) =>
+        new()
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+            ImplementationKind = ServiceImplementationKind.Workflow,
+            WorkflowSpec = new WorkflowServiceRevisionSpec
+            {
+                WorkflowName = "legacy-workflow",
+                WorkflowYaml = "name: legacy-workflow\nsteps: []",
+                DefinitionActorId = "workflow-definition-legacy",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+                {
+                    ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                },
+            },
+        };
+
+    private static PreparedServiceRevisionArtifact CreateWorkflowArtifact(
+        ServiceIdentity identity,
+        string revisionId,
+        ExternalCapabilityExecutionMode executionMode) =>
+        new()
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+            ImplementationKind = ServiceImplementationKind.Workflow,
+            Endpoints =
+            {
+                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat"),
+            },
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                WorkflowPlan = new WorkflowServiceDeploymentPlan
+                {
+                    WorkflowName = "legacy-workflow",
+                    WorkflowYaml = "name: legacy-workflow\nsteps: []",
+                    DefinitionActorId = "workflow-definition-legacy",
+                    ExecutionMode = executionMode,
+                    CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+                    {
+                        ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                    },
+                },
+            },
+        };
 
     private static ServiceDeploymentManagerGAgent CreateDeploymentAgent(
         IServiceRevisionCatalogQueryReader revisionCatalogQueryReader,
@@ -514,17 +850,38 @@ public sealed class ServiceRevisionCatalogGAgentTests
     private sealed class RecordingAdapter : IServiceImplementationAdapter
     {
         private readonly Func<PrepareServiceRevisionRequest, Task<PreparedServiceRevisionArtifact>> _prepare;
+        private readonly ServiceImplementationKind _implementationKind;
 
-        public RecordingAdapter(Func<PrepareServiceRevisionRequest, Task<PreparedServiceRevisionArtifact>> prepare)
+        public RecordingAdapter(
+            Func<PrepareServiceRevisionRequest, Task<PreparedServiceRevisionArtifact>> prepare,
+            ServiceImplementationKind implementationKind = ServiceImplementationKind.Static)
         {
             _prepare = prepare;
+            _implementationKind = implementationKind;
         }
 
-        public ServiceImplementationKind ImplementationKind => ServiceImplementationKind.Static;
+        public int PrepareCalls { get; private set; }
+
+        public ServiceImplementationKind ImplementationKind => _implementationKind;
 
         public Task<PreparedServiceRevisionArtifact> PrepareRevisionAsync(
             PrepareServiceRevisionRequest request,
-            CancellationToken ct = default) =>
-            _prepare(request);
+            CancellationToken ct = default)
+        {
+            PrepareCalls++;
+            return _prepare(request);
+        }
+    }
+
+    private sealed class RejectPreparedPublicationHook : ICommittedStatePublicationHook
+    {
+        public Task BeforePublishAsync(CommittedStatePublicationContext context, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (context.Published.StateEvent?.EventData?.Is(ServiceRevisionPreparedEvent.Descriptor) == true)
+                throw new InvalidOperationException("prepared fact projection unavailable");
+
+            return Task.CompletedTask;
+        }
     }
 }

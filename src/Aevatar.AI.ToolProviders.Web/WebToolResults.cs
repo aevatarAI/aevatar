@@ -24,7 +24,8 @@ public sealed record WebFetchResult(
     string ContentType,
     string? Body,
     string? RedirectUrl,
-    string OriginalUrl);
+    string OriginalUrl,
+    WebToolError? Error = null);
 
 public sealed record WebFetchToolResult(
     string Url,
@@ -75,20 +76,61 @@ public static class WebToolResultBoundaryJson
                 new WebToolError(code, message));
         }
 
+        if (TryReadBoundarySearchResults(root, out var boundaryResults))
+            return new WebSearchResult(boundaryResults);
+
+        if (TryReadFirecrawlWebResults(root, out var firecrawlResults))
+            return new WebSearchResult(firecrawlResults);
+
+        return WebSearchResult.Empty;
+    }
+
+    private static bool TryReadBoundarySearchResults(
+        JsonElement root,
+        out WebSearchResultItem[] searchResults)
+    {
+        searchResults = Array.Empty<WebSearchResultItem>();
+
         if (!root.TryGetProperty("results", out var results) ||
             results.ValueKind != JsonValueKind.Array)
         {
-            return WebSearchResult.Empty;
+            return false;
         }
 
-        return new WebSearchResult(results
+        searchResults = results
             .EnumerateArray()
             .Where(static item => item.ValueKind == JsonValueKind.Object)
             .Select(static item => new WebSearchResultItem(
                 ReadPropertyString(item, "title"),
                 ReadPropertyString(item, "url"),
                 ReadPropertyString(item, "snippet")))
-            .ToArray());
+            .ToArray();
+        return true;
+    }
+
+    private static bool TryReadFirecrawlWebResults(
+        JsonElement root,
+        out WebSearchResultItem[] searchResults)
+    {
+        searchResults = Array.Empty<WebSearchResultItem>();
+
+        if (!root.TryGetProperty("data", out var data) ||
+            data.ValueKind != JsonValueKind.Object ||
+            !data.TryGetProperty("web", out var web) ||
+            web.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        searchResults = web
+            .EnumerateArray()
+            .Where(static item => item.ValueKind == JsonValueKind.Object)
+            .Select(static item => new WebSearchResultItem(
+                ReadPropertyString(item, "title"),
+                ReadPropertyString(item, "url"),
+                ReadFirstPropertyString(item, "snippet", "description")))
+            .ToArray();
+        return true;
     }
 
     public static string ToBoundaryJson(WebSearchResult? result)
@@ -109,6 +151,9 @@ public static class WebToolResultBoundaryJson
 
     public static string ToBoundaryJson(WebFetchResult result)
     {
+        if (result.Error != null)
+            return ToBoundaryJson(result.Error);
+
         var body = result.Body ?? string.Empty;
         var fields = new Dictionary<string, object?>
         {
@@ -142,7 +187,22 @@ public static class WebToolResultBoundaryJson
             ReadPropertyString(root, "content_type"),
             ReadPropertyString(root, "content"),
             ReadOptionalPropertyString(root, "redirect_url"),
-            ReadPropertyString(root, "url"));
+            ReadPropertyString(root, "url"),
+            TryReadError(root));
+    }
+
+    public static bool TryReadError(string? payload, out WebToolError? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(payload))
+            return false;
+
+        using var document = TryParseDocument(payload);
+        if (document == null || document.RootElement.ValueKind != JsonValueKind.Object)
+            return false;
+
+        error = TryReadError(document.RootElement);
+        return error != null;
     }
 
     public static string ToBoundaryJson(WebFetchToolResult result) =>
@@ -188,6 +248,18 @@ public static class WebToolResultBoundaryJson
             ? ReadString(value)
             : string.Empty;
 
+    private static string ReadFirstPropertyString(JsonElement item, params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            var value = ReadPropertyString(item, propertyName);
+            if (!string.IsNullOrWhiteSpace(value))
+                return value;
+        }
+
+        return string.Empty;
+    }
+
     private static string? ReadOptionalPropertyString(JsonElement item, string propertyName) =>
         item.TryGetProperty(propertyName, out var value) && value.ValueKind != JsonValueKind.Null
             ? ReadString(value)
@@ -208,6 +280,21 @@ public static class WebToolResultBoundaryJson
         value.ValueKind == JsonValueKind.String
             ? value.GetString() ?? string.Empty
             : value.ToString();
+
+    private static WebToolError? TryReadError(JsonElement root)
+    {
+        if (!root.TryGetProperty("error", out var errorValue))
+            return null;
+
+        var code = ReadString(errorValue);
+        if (string.IsNullOrWhiteSpace(code))
+            return null;
+
+        var message = root.TryGetProperty("message", out var messageValue)
+            ? ReadString(messageValue)
+            : code;
+        return new WebToolError(code, message);
+    }
 
     private static WebFetchResult EmptyFetchResult() =>
         new(0, string.Empty, string.Empty, null, string.Empty);

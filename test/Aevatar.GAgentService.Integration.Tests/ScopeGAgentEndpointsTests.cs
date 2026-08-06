@@ -5,6 +5,7 @@ using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
@@ -725,6 +726,100 @@ public sealed class ScopeGAgentEndpointsTests
         context.Response.StatusCode.Should().Be((int)HttpStatusCode.OK);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HandleDraftRunAsync_WithoutTypedSelection_ShouldIgnoreCompatibilityRoute(
+        bool useUnspecifiedSelection)
+    {
+        const string prefixedModel = "chrono-llm/gpt-5.5";
+        var selection = useUnspecifiedSelection
+            ? new LLMSelection
+            {
+                RouteKind = LLMRouteKind.Unspecified,
+                RouteValue = "/api/v1/proxy/s/typed-but-ignored",
+                NyxIdUserServiceId = "us-ignored",
+                ServiceSlugSnapshot = "ignored",
+                ModelSelection = new LLMModelSelection { Kind = LLMModelSelectionKind.Unspecified },
+            }
+            : null;
+        var interactionPort = new FakeGAgentDraftRunInteractionPort();
+        var context = CreateDraftRunContext(
+            userConfigQueryPort: new StubUserConfigStore(new UserConfig(
+                DefaultModel: prefixedModel,
+                PreferredLlmRoute: "/api/v1/proxy/s/legacy",
+                LlmSelection: selection)));
+
+        await InvokeHandleDraftRunAsync(
+            context,
+            "scope-a",
+            new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest("tests.fake-agent", "hello"),
+            interactionPort,
+            LoggerFactory.Create(_ => { }),
+            CancellationToken.None);
+
+        var request = interactionPort.Requests.Should().ContainSingle().Which;
+        request.ModelOverride.Should().Be(prefixedModel);
+        request.PreferredLlmRoute.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleDraftRunAsync_WithTypedGateway_ShouldUseCanonicalGateway()
+    {
+        var interactionPort = new FakeGAgentDraftRunInteractionPort();
+        var context = CreateDraftRunContext(
+            userConfigQueryPort: new StubUserConfigStore(new UserConfig(
+                DefaultModel: "gpt-5.5",
+                PreferredLlmRoute: "/api/v1/proxy/s/legacy",
+                LlmSelection: new LLMSelection
+                {
+                    RouteKind = LLMRouteKind.Gateway,
+                    RouteValue = "/api/v1/proxy/s/typed-but-ignored",
+                    NyxIdUserServiceId = "us-ignored",
+                    ServiceSlugSnapshot = "ignored",
+                    ModelSelection = new LLMModelSelection { Kind = LLMModelSelectionKind.ProviderDefault },
+                })));
+
+        await InvokeHandleDraftRunAsync(
+            context,
+            "scope-a",
+            new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest("tests.fake-agent", "hello"),
+            interactionPort,
+            LoggerFactory.Create(_ => { }),
+            CancellationToken.None);
+
+        interactionPort.Requests.Should().ContainSingle().Which.PreferredLlmRoute.Should()
+            .Be(UserConfigLlmRouteDefaults.Gateway);
+    }
+
+    [Fact]
+    public async Task HandleDraftRunAsync_WithTypedService_ShouldUseExactTypedRoute()
+    {
+        var interactionPort = new FakeGAgentDraftRunInteractionPort();
+        var context = CreateDraftRunContext(
+            userConfigQueryPort: new StubUserConfigStore(new UserConfig(
+                DefaultModel: "gpt-5.5",
+                PreferredLlmRoute: "/api/v1/proxy/s/legacy",
+                LlmSelection: new LLMSelection
+                {
+                    RouteKind = LLMRouteKind.NyxIdUserService,
+                    RouteValue = " route-alpha ",
+                    NyxIdUserServiceId = "us-alpha",
+                    ServiceSlugSnapshot = "service-alpha",
+                    ModelSelection = new LLMModelSelection { Kind = LLMModelSelectionKind.ProviderDefault },
+                })));
+
+        await InvokeHandleDraftRunAsync(
+            context,
+            "scope-a",
+            new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest("tests.fake-agent", "hello"),
+            interactionPort,
+            LoggerFactory.Create(_ => { }),
+            CancellationToken.None);
+
+        interactionPort.Requests.Should().ContainSingle().Which.PreferredLlmRoute.Should().Be("route-alpha");
+    }
+
     [Fact]
     public async Task HandleDraftRunAsync_ShouldMapInteractionExceptionBeforeResponseStarts()
     {
@@ -1384,9 +1479,12 @@ public sealed class ScopeGAgentEndpointsTests
             })!;
     }
 
-    private static HttpContext CreateDraftRunContext(string? authorization = null, string claimedScopeId = "scope-a")
+    private static HttpContext CreateDraftRunContext(
+        string? authorization = null,
+        string claimedScopeId = "scope-a",
+        IUserConfigQueryPort? userConfigQueryPort = null)
     {
-        var context = CreateScopedHttpContext(claimedScopeId);
+        var context = CreateScopedHttpContext(claimedScopeId, userConfigQueryPort);
         context.Response.Body = new MemoryStream();
         if (!string.IsNullOrWhiteSpace(authorization))
         {
@@ -1403,15 +1501,19 @@ public sealed class ScopeGAgentEndpointsTests
         return context;
     }
 
-    private static HttpContext CreateScopedHttpContext(string claimedScopeId)
+    private static HttpContext CreateScopedHttpContext(
+        string claimedScopeId,
+        IUserConfigQueryPort? userConfigQueryPort = null)
     {
         var services = new ServiceCollection()
             .AddSingleton<IConfiguration>(new ConfigurationBuilder().Build())
-            .AddSingleton<IHostEnvironment>(new TestHostEnvironment())
-            .BuildServiceProvider();
+            .AddSingleton<IHostEnvironment>(new TestHostEnvironment());
+        if (userConfigQueryPort != null)
+            services.AddSingleton(userConfigQueryPort);
+
         return new DefaultHttpContext
         {
-            RequestServices = services,
+            RequestServices = services.BuildServiceProvider(),
             User = new ClaimsPrincipal(new ClaimsIdentity(
             [
                 new Claim("scope_id", claimedScopeId),
@@ -1824,6 +1926,15 @@ public sealed class ScopeGAgentEndpointsTests
 
             return ResultFactory(request, emitAsync, onAcceptedAsync, ct);
         }
+    }
+
+    private sealed class StubUserConfigStore(UserConfig config) : IUserConfigQueryPort
+    {
+        public Task<UserConfig> GetAsync(CancellationToken ct = default) => Task.FromResult(config);
+
+        public Task<UserConfig> GetAsync(
+            UserConfigResourceKey resource,
+            CancellationToken ct = default) => GetAsync(ct);
     }
 
     private sealed class RecordingGAgentActorStore :

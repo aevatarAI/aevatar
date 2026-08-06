@@ -4,7 +4,6 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions.Context;
-using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.Configurations;
@@ -30,7 +29,7 @@ namespace Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 /// <summary>Service registration extension methods.</summary>
 public static class ServiceCollectionExtensions
 {
-    /// <summary>Registers full local actor runtime (stream + actor + persistence + deduplication).</summary>
+    /// <summary>Registers full local actor runtime (stream + actor + persistence).</summary>
     /// <param name="services">Service collection.</param>
     /// <param name="configureStreams">Optional stream buffering configuration.</param>
     /// <returns>Service collection for fluent chaining.</returns>
@@ -77,17 +76,13 @@ public static class ServiceCollectionExtensions
 
         services.TryAddSingleton(typeof(IStateStore<>), typeof(InMemoryStateStore<>));
         services.TryAddSingleton(typeof(IEventSourcingSnapshotStore<>), typeof(InMemoryEventSourcingSnapshotStore<>));
+        services.TryAddSingleton<ICommittedStatePublicationStateStore, InMemoryCommittedStatePublicationStateStore>();
         services.TryAddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         services.TryAddSingleton<IEventStore, InMemoryEventStore>();
         services.TryAddSingleton<IEventStoreMaintenance>(sp =>
             (IEventStoreMaintenance)sp.GetRequiredService<IEventStore>());
-        services.TryAddSingleton<IEventStoreCompactionScheduler, DeferredEventStoreCompactionScheduler>();
-        services.TryAddSingleton<IActorDeactivationHook, EventStoreCompactionDeactivationHook>();
         services.TryAddSingleton<IActorDeactivationHookDispatcher, ActorDeactivationHookDispatcher>();
         services.TryAddSingleton<ILocalActivationIndexStore, InMemoryLocalActivationIndexStore>();
-
-        // Deduplication
-        services.TryAddSingleton<IEventDeduplicator, MemoryCacheDeduplicator>();
 
         // Context
         services.TryAddSingleton<IAgentContextAccessor, AsyncLocalAgentContextAccessor>();
@@ -121,6 +116,7 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton<IEventStoreMaintenance>(sp =>
             (IEventStoreMaintenance)sp.GetRequiredService<IEventStore>()));
         services.Replace(ServiceDescriptor.Singleton(typeof(IEventSourcingSnapshotStore<>), typeof(FileEventSourcingSnapshotStore<>)));
+        services.Replace(ServiceDescriptor.Singleton<ICommittedStatePublicationStateStore, FileCommittedStatePublicationStateStore>());
         return services;
     }
 }

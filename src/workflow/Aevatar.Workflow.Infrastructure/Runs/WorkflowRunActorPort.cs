@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Google.Protobuf.WellKnownTypes;
@@ -25,6 +26,7 @@ internal sealed class WorkflowRunActorPort :
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IWorkflowActorBindingReader _bindingReader;
+    private readonly IWorkflowArtifactCompatibilityPreflight _artifactPreflight;
     private readonly WorkflowDefinitionParser _definitionParser;
     private readonly ILogger<WorkflowRunActorPort> _logger;
 
@@ -32,6 +34,7 @@ internal sealed class WorkflowRunActorPort :
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort,
         IWorkflowActorBindingReader bindingReader,
+        IWorkflowArtifactCompatibilityPreflight artifactPreflight,
         IEnumerable<IWorkflowModulePack> modulePacks,
         IAgentKindRegistry? agentKindRegistry = null,
         ILogger<WorkflowRunActorPort>? logger = null)
@@ -39,6 +42,7 @@ internal sealed class WorkflowRunActorPort :
         _runtime = runtime;
         _dispatchPort = dispatchPort;
         _bindingReader = bindingReader;
+        _artifactPreflight = artifactPreflight ?? throw new ArgumentNullException(nameof(artifactPreflight));
         _logger = logger ?? NullLogger<WorkflowRunActorPort>.Instance;
         _definitionParser = new WorkflowDefinitionParser(modulePacks, agentKindRegistry);
     }
@@ -51,6 +55,11 @@ internal sealed class WorkflowRunActorPort :
         ArgumentNullException.ThrowIfNull(definition);
         var requestedDefinitionActorId = NormalizeActorId(preferredActorId)
                                          ?? NormalizeActorId(definition.DefinitionActorId);
+        await ValidateDefinitionArtifactAsync(
+            definition,
+            requestedDefinitionActorId,
+            preflightRequestedWhenDifferent: true,
+            ct);
         var definitionResolution = requestedDefinitionActorId == null
             ? await CreateBoundDefinitionActorAsync(definition, preferredActorId: null, ct)
             : await EnsureDefinitionActorAsync(definition, requestedDefinitionActorId, ct);
@@ -63,6 +72,11 @@ internal sealed class WorkflowRunActorPort :
     public async Task<WorkflowRunCreationReceipt> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(definition);
+        await ValidateDefinitionArtifactAsync(
+            definition,
+            NormalizeActorId(definition.DefinitionActorId),
+            preflightRequestedWhenDifferent: false,
+            ct);
         if (string.IsNullOrWhiteSpace(definition.WorkflowYaml) ||
             string.IsNullOrWhiteSpace(definition.WorkflowName))
         {
@@ -75,7 +89,7 @@ internal sealed class WorkflowRunActorPort :
         var createdActorIds = new List<string>(2);
         try
         {
-            definitionResolution = await EnsureDefinitionActorAsync(definition, NormalizeActorId(definition.DefinitionActorId), ct);
+            definitionResolution = await ResolveDefinitionActorForRunAsync(definition, ct);
             if (definitionResolution.CreatedNow && !string.IsNullOrWhiteSpace(definitionResolution.ActorId))
                 createdActorIds.Add(definitionResolution.ActorId);
 
@@ -99,7 +113,9 @@ internal sealed class WorkflowRunActorPort :
                     definition.InlineWorkflowYamls,
                     definition.ScopeId,
                     definition.RunOrigin,
-                    definition.ScheduleId),
+                    definition.ScheduleId,
+                    definition.ExpectedExecutionMode,
+                    definitionResolution.CapabilityAdmissionPlan),
                 ct);
 
             return new WorkflowRunCreationReceipt(
@@ -155,6 +171,11 @@ internal sealed class WorkflowRunActorPort :
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(definition);
+        await ValidateDefinitionArtifactAsync(
+            definition,
+            NormalizeActorId(definition.DefinitionActorId),
+            preflightRequestedWhenDifferent: false,
+            ct);
         var normalizedRunId = NormalizeActorId(requestedRunId)
             ?? throw new ArgumentException("Requested Run id is required.", nameof(requestedRunId));
         if (string.IsNullOrWhiteSpace(definition.WorkflowYaml) ||
@@ -168,10 +189,7 @@ internal sealed class WorkflowRunActorPort :
         var createdActorIds = new List<string>(1);
         try
         {
-            definitionResolution = await EnsureDefinitionActorAsync(
-                definition,
-                NormalizeActorId(definition.DefinitionActorId),
-                ct);
+            definitionResolution = await ResolveDefinitionActorForRunAsync(definition, ct);
             if (definitionResolution.CreatedNow && !string.IsNullOrWhiteSpace(definitionResolution.ActorId))
                 createdActorIds.Add(definitionResolution.ActorId);
 
@@ -188,6 +206,8 @@ internal sealed class WorkflowRunActorPort :
                     definition.ScopeId,
                     definition.RunOrigin,
                     definition.ScheduleId,
+                    definition.ExpectedExecutionMode,
+                    definitionResolution.CapabilityAdmissionPlan,
                     executionRequest,
                     commandId,
                     correlationId),
@@ -224,25 +244,63 @@ internal sealed class WorkflowRunActorPort :
         string actorId,
         string workflowYaml,
         string workflowName,
-        IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
-        string? scopeId = null,
-        string? sourceKind = null,
-        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+        string? scopeId,
+        string? sourceKind,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+        string? workflowId,
+        string? revisionId,
+        ExternalCapabilityExecutionMode expectedExecutionMode,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(actorId))
             throw new ArgumentException("Actor id is required.", nameof(actorId));
 
-        // Refactor (iter18/cluster-006):
-        //   Old pattern: command-path projection activation facade with new actor/lifecycle phase
-        //   New principle: committed-state publication hook activates existing projection scopes; no new actor/lifecycle phase
+        await ValidateArtifactAsync(
+            workflowYaml,
+            inlineWorkflowYamls,
+            capabilityAdmissionPlan,
+            expectedExecutionMode,
+            workflowId,
+            revisionId,
+            ct);
+        await DispatchWorkflowDefinitionBindAsync(
+            actorId,
+            workflowYaml,
+            workflowName,
+            inlineWorkflowYamls,
+            scopeId,
+            sourceKind,
+            capabilityAdmissionPlan,
+            workflowId,
+            revisionId,
+            expectedExecutionMode,
+            ct);
+    }
+
+    private async Task DispatchWorkflowDefinitionBindAsync(
+        string actorId,
+        string workflowYaml,
+        string workflowName,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+        string? scopeId,
+        string? sourceKind,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+        string? workflowId,
+        string? revisionId,
+        ExternalCapabilityExecutionMode expectedExecutionMode,
+        CancellationToken ct)
+    {
         var envelope = CreateWorkflowDefinitionBindEnvelope(
             workflowYaml,
             workflowName,
             inlineWorkflowYamls,
             scopeId,
             sourceKind,
-            capabilityAdmissionPlan);
+            capabilityAdmissionPlan,
+            workflowId,
+            revisionId,
+            expectedExecutionMode);
         await _dispatchPort.DispatchAsync(actorId, envelope, ct);
     }
 
@@ -266,6 +324,122 @@ internal sealed class WorkflowRunActorPort :
         CancellationToken ct = default) =>
         _definitionParser.ParseWorkflowYamlAsync(workflowYaml, ct);
 
+    private async Task ValidateDefinitionArtifactAsync(
+        WorkflowDefinitionBinding definition,
+        string? requestedDefinitionActorId,
+        bool preflightRequestedWhenDifferent,
+        CancellationToken ct)
+    {
+        if (requestedDefinitionActorId != null)
+        {
+            var existingActor = await _runtime.GetAsync(requestedDefinitionActorId);
+            if (existingActor != null)
+            {
+                var binding = await _bindingReader.GetAsync(existingActor.Id, ct);
+                if (binding is { ActorKind: WorkflowActorKind.Definition } && binding.HasDefinitionPayload)
+                {
+                    EnsureExpectedExecutionModeCompatibility(existingActor.Id, binding, definition);
+                    var sameRequestedArtifact = IsSameDefinition(binding, definition) &&
+                        string.Equals(binding.WorkflowId, definition.WorkflowId, StringComparison.Ordinal) &&
+                        string.Equals(binding.RevisionId, definition.RevisionId, StringComparison.Ordinal);
+                    if (!preflightRequestedWhenDifferent || sameRequestedArtifact)
+                    {
+                        await ValidateArtifactAsync(
+                            binding.WorkflowYaml,
+                            binding.InlineWorkflowYamls,
+                            binding.CapabilityAdmissionPlan,
+                            binding.ExpectedExecutionMode,
+                            binding.WorkflowId,
+                            binding.RevisionId,
+                            ct);
+                        return;
+                    }
+                }
+            }
+        }
+
+        await ValidateArtifactAsync(
+            definition.WorkflowYaml,
+            definition.InlineWorkflowYamls,
+            definition.CapabilityAdmissionPlan,
+            definition.ExpectedExecutionMode,
+            definition.WorkflowId,
+            definition.RevisionId,
+            ct);
+    }
+
+    private Task ValidateArtifactAsync(
+        string workflowYaml,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+        ExternalCapabilityExecutionMode expectedExecutionMode,
+        string? workflowId,
+        string? revisionId,
+        CancellationToken ct) =>
+        _artifactPreflight.ValidateAsync(
+            new WorkflowArtifactCompatibilityRequest(
+                workflowYaml ?? string.Empty,
+                inlineWorkflowYamls ?? new Dictionary<string, string>(StringComparer.Ordinal),
+                capabilityAdmissionPlan?.Clone(),
+                expectedExecutionMode,
+                workflowId ?? string.Empty,
+                revisionId ?? string.Empty),
+            ct);
+
+    private async Task<DefinitionActorResolutionResult> ResolveDefinitionActorForRunAsync(
+        WorkflowDefinitionBinding definition,
+        CancellationToken ct)
+    {
+        var requestedDefinitionActorId = NormalizeActorId(definition.DefinitionActorId);
+        if (requestedDefinitionActorId == null)
+            return await CreateBoundDefinitionActorAsync(definition, preferredActorId: null, ct);
+
+        var existingActor = await _runtime.GetAsync(requestedDefinitionActorId);
+        if (existingActor == null)
+        {
+            throw new InvalidOperationException(
+                $"Workflow definition actor '{requestedDefinitionActorId}' does not exist. Provision the Definition before creating a Run.");
+        }
+
+        var binding = await _bindingReader.GetAsync(existingActor.Id, ct);
+        if (binding == null)
+        {
+            throw new InvalidOperationException(
+                $"Workflow definition actor '{existingActor.Id}' does not have an available Definition binding read model.");
+        }
+
+        if (binding.ActorKind != WorkflowActorKind.Definition)
+        {
+            throw new InvalidOperationException(
+                $"Actor '{existingActor.Id}' is not a workflow definition actor and cannot be reused as a definition source.");
+        }
+
+        EnsureExpectedExecutionModeCompatibility(existingActor.Id, binding, definition);
+        EnsureScopeCompatibility(existingActor.Id, binding, definition);
+        EnsureWorkflowNameCompatibility(existingActor.Id, binding, definition);
+        EnsureDefinitionIdentityCompatibility(
+            existingActor.Id,
+            binding,
+            definition,
+            allowExplicitIdentityEstablishment: false);
+        if (!binding.HasDefinitionPayload)
+        {
+            throw new InvalidOperationException(
+                $"Workflow definition actor '{existingActor.Id}' does not have a materialized definition payload.");
+        }
+
+        if (!IsSameDefinitionPayload(binding, definition))
+        {
+            throw new InvalidOperationException(
+                $"Workflow definition actor '{existingActor.Id}' payload does not match the requested Run definition.");
+        }
+
+        return new DefinitionActorResolutionResult(
+            existingActor.Id,
+            CreatedNow: false,
+            binding.CapabilityAdmissionPlan?.Clone());
+    }
+
     private async Task<DefinitionActorResolutionResult> EnsureDefinitionActorAsync(
         WorkflowDefinitionBinding definition,
         string? requestedDefinitionActorId,
@@ -280,18 +454,14 @@ internal sealed class WorkflowRunActorPort :
             var binding = await _bindingReader.GetAsync(existingActor.Id, ct);
             if (binding == null || binding.ActorKind != WorkflowActorKind.Definition)
             {
-                // A missing binding doc, or one frozen to the Run kind, is the signature of a definition
-                // _id whose binding read-model was clobbered by a relayed run-bind (the studio failure).
-                // When the caller supplies the definition payload (built-in/catalog-resolved definitions
-                // always do), re-bind from that payload instead of failing the run; the binding heal
-                // write dispatcher (Definition supersedes a Run-kind slot) lets the re-bind win, so the
-                // actor self-heals back to a Definition document. A genuinely unsupported actor (not a
-                // workflow definition) still fails fast — re-binding onto it would be wrong.
+                // Explicit Definition provisioning may repair a missing or Run-kind binding document
+                // from its authoritative payload. Run provisioning uses ResolveDefinitionActorForRunAsync
+                // and never enters this write-capable repair path.
                 var isClobberedDefinitionSlot =
                     binding == null || binding.ActorKind == WorkflowActorKind.Run;
                 if (isClobberedDefinitionSlot && HasDefinitionPayload(definition))
                 {
-                    await BindWorkflowDefinitionAsync(
+                    await DispatchWorkflowDefinitionBindAsync(
                         existingActor.Id,
                         definition.WorkflowYaml,
                         definition.WorkflowName,
@@ -299,8 +469,14 @@ internal sealed class WorkflowRunActorPort :
                         definition.ScopeId,
                         definition.SourceKind,
                         definition.CapabilityAdmissionPlan,
+                        definition.WorkflowId,
+                        definition.RevisionId,
+                        definition.ExpectedExecutionMode,
                         ct);
-                    return new DefinitionActorResolutionResult(existingActor.Id, CreatedNow: false);
+                    return new DefinitionActorResolutionResult(
+                        existingActor.Id,
+                        CreatedNow: false,
+                        definition.CapabilityAdmissionPlan?.Clone());
                 }
 
                 throw new InvalidOperationException(
@@ -308,11 +484,17 @@ internal sealed class WorkflowRunActorPort :
             }
 
             EnsureScopeCompatibility(existingActor.Id, binding, definition);
+            EnsureExpectedExecutionModeCompatibility(existingActor.Id, binding, definition);
             EnsureWorkflowNameCompatibility(existingActor.Id, binding, definition);
+            EnsureDefinitionIdentityCompatibility(
+                existingActor.Id,
+                binding,
+                definition,
+                allowExplicitIdentityEstablishment: true);
 
             if (!binding.HasDefinitionPayload || !IsSameDefinition(binding, definition))
             {
-                await BindWorkflowDefinitionAsync(
+                await DispatchWorkflowDefinitionBindAsync(
                     existingActor.Id,
                     definition.WorkflowYaml,
                     definition.WorkflowName,
@@ -320,10 +502,16 @@ internal sealed class WorkflowRunActorPort :
                     definition.ScopeId,
                     definition.SourceKind,
                     definition.CapabilityAdmissionPlan,
+                    definition.WorkflowId,
+                    definition.RevisionId,
+                    definition.ExpectedExecutionMode,
                     ct);
             }
 
-            return new DefinitionActorResolutionResult(existingActor.Id, CreatedNow: false);
+            return new DefinitionActorResolutionResult(
+                existingActor.Id,
+                CreatedNow: false,
+                definition.CapabilityAdmissionPlan?.Clone() ?? binding.CapabilityAdmissionPlan?.Clone());
         }
 
         return await CreateBoundDefinitionActorAsync(definition, preferredActorId: null, ct);
@@ -343,14 +531,19 @@ internal sealed class WorkflowRunActorPort :
         {
             var racedActor = await TryResolveRacedDefinitionActorAsync(definition, preferredActorId!, ct);
             if (racedActor != null)
-                return new DefinitionActorResolutionResult(racedActor.Id, CreatedNow: false);
+            {
+                return new DefinitionActorResolutionResult(
+                    racedActor.Id,
+                    CreatedNow: false,
+                    definition.CapabilityAdmissionPlan?.Clone());
+            }
 
             throw;
         }
 
         try
         {
-            await BindWorkflowDefinitionAsync(
+            await DispatchWorkflowDefinitionBindAsync(
                 definitionActor.Id,
                 definition.WorkflowYaml,
                 definition.WorkflowName,
@@ -358,8 +551,14 @@ internal sealed class WorkflowRunActorPort :
                 definition.ScopeId,
                 definition.SourceKind,
                 definition.CapabilityAdmissionPlan,
+                definition.WorkflowId,
+                definition.RevisionId,
+                definition.ExpectedExecutionMode,
                 ct);
-            return new DefinitionActorResolutionResult(definitionActor.Id, CreatedNow: true);
+            return new DefinitionActorResolutionResult(
+                definitionActor.Id,
+                CreatedNow: true,
+                definition.CapabilityAdmissionPlan?.Clone());
         }
         catch
         {
@@ -382,10 +581,16 @@ internal sealed class WorkflowRunActorPort :
             return null;
 
         EnsureWorkflowNameCompatibility(existingActor.Id, binding, definition);
+        EnsureExpectedExecutionModeCompatibility(existingActor.Id, binding, definition);
         EnsureScopeCompatibility(existingActor.Id, binding, definition);
+        EnsureDefinitionIdentityCompatibility(
+            existingActor.Id,
+            binding,
+            definition,
+            allowExplicitIdentityEstablishment: true);
         if (!binding.HasDefinitionPayload || !IsSameDefinition(binding, definition))
         {
-            await BindWorkflowDefinitionAsync(
+            await DispatchWorkflowDefinitionBindAsync(
                 existingActor.Id,
                 definition.WorkflowYaml,
                 definition.WorkflowName,
@@ -393,6 +598,9 @@ internal sealed class WorkflowRunActorPort :
                 definition.ScopeId,
                 definition.SourceKind,
                 definition.CapabilityAdmissionPlan,
+                definition.WorkflowId,
+                definition.RevisionId,
+                definition.ExpectedExecutionMode,
                 ct);
         }
 
@@ -430,7 +638,67 @@ internal sealed class WorkflowRunActorPort :
         !string.IsNullOrWhiteSpace(definition.WorkflowYaml) ||
         definition.InlineWorkflowYamls.Count > 0;
 
+    private static void EnsureDefinitionIdentityCompatibility(
+        string actorId,
+        WorkflowActorBinding binding,
+        WorkflowDefinitionBinding definition,
+        bool allowExplicitIdentityEstablishment)
+    {
+        var boundRequiresIdentity = WorkflowCapabilityAdmissionPlanIntegrity
+            .RequiresExplicitRequestBindingIdentity(binding.CapabilityAdmissionPlan);
+        var requestedRequiresIdentity = WorkflowCapabilityAdmissionPlanIntegrity
+            .RequiresExplicitRequestBindingIdentity(definition.CapabilityAdmissionPlan);
+        var boundHasWorkflowId = !string.IsNullOrWhiteSpace(binding.WorkflowId);
+        var boundHasRevisionId = !string.IsNullOrWhiteSpace(binding.RevisionId);
+
+        if (boundHasWorkflowId)
+        {
+            if (!boundHasRevisionId)
+                throw new WorkflowCapabilityAdmissionRebindRequiredException();
+
+            if (!requestedRequiresIdentity ||
+                !string.Equals(binding.WorkflowId, definition.WorkflowId, StringComparison.Ordinal) ||
+                !string.Equals(binding.RevisionId, definition.RevisionId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Workflow definition actor '{actorId}' workflow revision identity does not match the requested definition.");
+            }
+
+            return;
+        }
+
+        if (boundRequiresIdentity)
+            throw new WorkflowCapabilityAdmissionRebindRequiredException();
+
+        if (boundHasRevisionId &&
+            !string.Equals(binding.RevisionId, definition.RevisionId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Workflow definition actor '{actorId}' workflow revision identity does not match the requested definition.");
+        }
+
+        if (requestedRequiresIdentity && !allowExplicitIdentityEstablishment)
+        {
+            throw new InvalidOperationException(
+                $"Workflow definition actor '{actorId}' does not own the requested workflow revision identity.");
+        }
+    }
+
     private static bool IsSameDefinition(
+        WorkflowActorBinding binding,
+        WorkflowDefinitionBinding definition)
+    {
+        if (!IsSameDefinitionPayload(binding, definition) ||
+            binding.ExpectedExecutionMode != definition.ExpectedExecutionMode)
+            return false;
+
+        return string.Equals(
+            binding.CapabilityAdmissionPlan?.AdmissionDigest ?? string.Empty,
+            definition.CapabilityAdmissionPlan?.AdmissionDigest ?? string.Empty,
+            StringComparison.Ordinal);
+    }
+
+    private static bool IsSameDefinitionPayload(
         WorkflowActorBinding binding,
         WorkflowDefinitionBinding definition)
     {
@@ -462,14 +730,6 @@ internal sealed class WorkflowRunActorPort :
             }
         }
 
-        if (!string.Equals(
-                binding.CapabilityAdmissionPlan?.AdmissionDigest ?? string.Empty,
-                definition.CapabilityAdmissionPlan?.AdmissionDigest ?? string.Empty,
-                StringComparison.Ordinal))
-        {
-            return false;
-        }
-
         return true;
     }
 
@@ -489,6 +749,23 @@ internal sealed class WorkflowRunActorPort :
 
         throw new InvalidOperationException(
             $"Workflow definition actor '{actorId}' is already bound to workflow '{binding.WorkflowName}' and cannot switch to '{definition.WorkflowName}'.");
+    }
+
+    private static void EnsureExpectedExecutionModeCompatibility(
+        string actorId,
+        WorkflowActorBinding binding,
+        WorkflowDefinitionBinding definition)
+    {
+        if (binding.ExpectedExecutionMode == definition.ExpectedExecutionMode &&
+            binding.ExpectedExecutionMode != ExternalCapabilityExecutionMode.Unspecified)
+        {
+            return;
+        }
+
+        throw new WorkflowExpectedExecutionModeCompatibilityException(
+            actorId,
+            binding.ExpectedExecutionMode,
+            definition.ExpectedExecutionMode);
     }
 
     private static void EnsureScopeCompatibility(
@@ -515,7 +792,10 @@ internal sealed class WorkflowRunActorPort :
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
         string? scopeId,
         string? sourceKind,
-        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan) =>
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+        string? workflowId,
+        string? revisionId,
+        ExternalCapabilityExecutionMode expectedExecutionMode) =>
         new()
         {
             Id = Guid.NewGuid().ToString("N"),
@@ -526,7 +806,10 @@ internal sealed class WorkflowRunActorPort :
                 inlineWorkflowYamls,
                 scopeId,
                 sourceKind,
-                capabilityAdmissionPlan)),
+                capabilityAdmissionPlan,
+                workflowId,
+                revisionId,
+                expectedExecutionMode)),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(WorkflowRunActorPortPublisherId, TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
@@ -542,12 +825,24 @@ internal sealed class WorkflowRunActorPort :
         IReadOnlyDictionary<string, string> inlineWorkflowYamls,
         string? scopeId,
         string? runOrigin,
-        string? scheduleId) =>
+        string? scheduleId,
+        ExternalCapabilityExecutionMode expectedExecutionMode,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan) =>
         new()
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(BuildBindWorkflowRunDefinitionEvent(definitionActorId, runId, workflowYaml, workflowName, inlineWorkflowYamls, scopeId, runOrigin, scheduleId)),
+            Payload = Any.Pack(BuildBindWorkflowRunDefinitionEvent(
+                definitionActorId,
+                runId,
+                workflowYaml,
+                workflowName,
+                inlineWorkflowYamls,
+                scopeId,
+                runOrigin,
+                scheduleId,
+                expectedExecutionMode,
+                capabilityAdmissionPlan)),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(WorkflowRunActorPortPublisherId, TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
@@ -564,6 +859,8 @@ internal sealed class WorkflowRunActorPort :
         string? scopeId,
         string? runOrigin,
         string? scheduleId,
+        ExternalCapabilityExecutionMode expectedExecutionMode,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
         WorkflowChatRequestEvent? executionRequest = null,
         string? commandId = null,
         string? correlationId = null)
@@ -581,7 +878,9 @@ internal sealed class WorkflowRunActorPort :
                 inlineWorkflowYamls,
                 scopeId,
                 runOrigin,
-                scheduleId),
+                scheduleId,
+                expectedExecutionMode,
+                capabilityAdmissionPlan),
         };
         if (executionRequest != null)
             ensure.ExecutionRequest = executionRequest.Clone();
@@ -630,16 +929,23 @@ internal sealed class WorkflowRunActorPort :
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
         string? scopeId,
         string? sourceKind,
-        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan)
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+        string? workflowId,
+        string? revisionId,
+        ExternalCapabilityExecutionMode expectedExecutionMode)
     {
         var bind = new BindWorkflowDefinitionEvent
         {
             WorkflowYaml = workflowYaml ?? string.Empty,
             WorkflowName = workflowName ?? string.Empty,
-            ScopeId = scopeId?.Trim() ?? string.Empty,
             SourceKind = sourceKind?.Trim() ?? string.Empty,
             CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
+            WorkflowId = workflowId ?? string.Empty,
+            RevisionId = revisionId ?? string.Empty,
+            ExpectedExecutionMode = expectedExecutionMode,
         };
+        if (scopeId is not null)
+            bind.ScopeId = scopeId.Trim();
 
         if (inlineWorkflowYamls != null)
         {
@@ -658,7 +964,9 @@ internal sealed class WorkflowRunActorPort :
         IReadOnlyDictionary<string, string> inlineWorkflowYamls,
         string? scopeId,
         string? runOrigin,
-        string? scheduleId)
+        string? scheduleId,
+        ExternalCapabilityExecutionMode expectedExecutionMode,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan)
     {
         var bind = new BindWorkflowRunDefinitionEvent
         {
@@ -669,6 +977,8 @@ internal sealed class WorkflowRunActorPort :
             ScopeId = scopeId?.Trim() ?? string.Empty,
             RunOrigin = runOrigin?.Trim() ?? string.Empty,
             ScheduleId = scheduleId?.Trim() ?? string.Empty,
+            CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
+            ExpectedExecutionMode = expectedExecutionMode,
         };
 
         foreach (var (key, value) in inlineWorkflowYamls)
@@ -687,5 +997,6 @@ internal sealed class WorkflowRunActorPort :
 
     private readonly record struct DefinitionActorResolutionResult(
         string ActorId,
-        bool CreatedNow);
+        bool CreatedNow,
+        WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null);
 }

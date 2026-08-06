@@ -52,7 +52,7 @@ public class SelfEventEnvelopeFactoryTests
                 },
                 Delivery = new EventEnvelopeDeliveryOptions
                 {
-                    DeduplicationOperationId = "op-1",
+                    OperationId = "op-1",
                 },
             });
 
@@ -64,7 +64,7 @@ public class SelfEventEnvelopeFactoryTests
         envelope.Propagation.Trace.TraceId.Should().Be("trace-override");
         envelope.Propagation.Baggage["existing"].Should().Be("value");
         envelope.Propagation.Baggage["mode"].Should().Be("override");
-        envelope.Runtime.Deduplication.OperationId.Should().Be("op-1");
+        envelope.Runtime.DeliveryIdentity.OperationId.Should().Be("op-1");
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public class SelfEventEnvelopeFactoryTests
                 Propagation = new EventEnvelopePropagationOverrides(),
                 Delivery = new EventEnvelopeDeliveryOptions
                 {
-                    DeduplicationOperationId = " ",
+                    OperationId = " ",
                 },
             });
 

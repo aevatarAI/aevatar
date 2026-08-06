@@ -71,6 +71,7 @@ public sealed class ToolCallStartedChunk
 {
     public required ToolCall ToolCall { get; init; }
     public required ToolPresentationDescriptor Presentation { get; init; }
+    public string OperationId { get; init; } = string.Empty;
 }
 
 public sealed class ToolCallCompletedChunk
@@ -81,6 +82,7 @@ public sealed class ToolCallCompletedChunk
     public bool Success { get; init; }
     public string Error { get; init; } = string.Empty;
     public AgentToolReceipt? Receipt { get; init; }
+    public string OperationId { get; init; } = string.Empty;
 }
 
 /// <summary>Token 用量统计。</summary>

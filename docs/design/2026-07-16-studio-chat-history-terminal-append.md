@@ -10,7 +10,7 @@ This follows the repository CQRS/event-sourced actor framing:
 - read path: typed read model query, never actor state unpacking or event replay
 - list path: query `ChatConversationCurrentStateDocument` by `scope_id`, not a second index actor
 
-## Archive Contract
+## Transcript Contract
 
 `AppendChatTurnCommand` carries only V1 archive facts:
 
@@ -27,18 +27,22 @@ This follows the repository CQRS/event-sourced actor framing:
 
 It does not carry workflow `run_id`, workflow `command_id`, thinking, reasoning, tool calls, steps, runtime events, approval/intervention state, or browser lifecycle details.
 
+Every committed terminal turn remains part of the user-queryable transcript until the user explicitly deletes the entire conversation. The current contract has no per-turn TTL, rolling eviction, segment/archive tier, or background transcript cleanup. `ChatConversationGAgent` owns both the committed turns and the deletion fact; `ConversationDeletedEvent` makes the whole conversation unavailable through the official query surface but does not silently prune individual turns.
+
+The transcript is not an LLM prompt window. Continuation admission reads the already-materialized transcript and deterministically selects at most the latest 24 nonblank user/assistant messages for execution context. That selection is ephemeral application input: it does not mutate actor state, remove projected turns, or change what `GET /api/chat/conversations/{conversationId}` returns.
+
 ## Actor Invariants
 
 `ChatConversationGAgent` enforces:
 
-- monotonic `sequence` beginning at `1`
-- `MaxTurns = 250`
+- actor-owned, persisted `next_turn_sequence` beginning at `1`
+- strictly monotonic turn `sequence` that is never derived from the current turn count
 - duplicate `turn_id` with identical payload is idempotent
 - duplicate `turn_id` with different payload records `Conflict`
-- the 251st non-duplicate turn records `MaxTurnsExceeded`
-- existing turns are not trimmed when quota is exceeded
+- append remains available after 250 turns
+- committed turns are never trimmed as a prompt-window implementation detail
 
-Quota rejection is an archive boundary: an already accepted/completed workflow run whose terminal append is rejected by `MaxTurns` is not represented as an archived ChatHistory turn.
+Snapshots created before `next_turn_sequence` existed recover the initial waterline from already committed turn sequence identities once. Every subsequent append advances the persisted waterline atomically with `ChatTurnAppendedEvent`, so passivation, command replay, and projection replay cannot reuse a turn sequence.
 
 ## Workflow Terminal Delivery
 
@@ -73,7 +77,19 @@ Create versus continue is explicit in the delivery reservation. A create reserva
 - `deleted`
 - `turns`
 
-Query paths consume this document directly. They do not unpack `state_root`, read actor internals, replay events, or prime projection during query execution.
+Query paths consume this document directly. The detail query returns the complete committed transcript while the conversation is active; prompt-window selection is a separate continuation-admission concern. Queries do not unpack `state_root`, read actor internals, replay events, or prime projection during query execution.
+
+An acknowledged create reservation remains readable while its conversation current-state document is not yet materialized. The detail query uses the scope-bound `ChatHistoryCreateRecoveryCurrentStateDocument` as read-only reservation evidence and returns:
+
+```json
+{
+  "messages": [],
+  "stateVersion": 0,
+  "projectionStatus": "pending"
+}
+```
+
+`stateVersion` stays `0` in this pending response because the recovery document belongs to the delivery actor and its version must not impersonate the conversation actor's authoritative version. Once `ChatConversationCurrentStateDocument` is visible, the same query returns `projectionStatus: "current"`, the conversation actor's source version, and its committed terminal turns. A missing conversation document without matching scope-bound create-reservation evidence remains `404`; query handling never creates actors, replays events, or primes projection.
 
 ## Actor Identity And Ownership
 
@@ -98,7 +114,7 @@ Callers must never parse actor IDs or infer ownership from an actor ID string.
 GET /api/scopes/scope-1/chat-history?pageSize=50&cursor=opaque-cursor
 ```
 
-The response contains `conversations` and `nextCursor`. `pageSize` defaults to `50` and is capped at `200`; it is independent from `ChatConversationGAgent.MaxTurns`, which remains only the per-conversation turn quota. The index query keeps the existing `scope_id` filter, excludes `deleted` conversations, orders by `updated_at_ms` descending, and uses `conversation_id` ascending as the stable tie-breaker. Clients pass `nextCursor` back as `cursor` to load the next page.
+The response contains `conversations` and `nextCursor`. `pageSize` defaults to `50` and is capped at `200`; it controls conversation-index pagination only and does not limit turns within a transcript. The index query keeps the existing `scope_id` filter, excludes `deleted` conversations, orders by `updated_at_ms` descending, and uses `conversation_id` ascending as the stable tie-breaker. Clients pass `nextCursor` back as `cursor` to load the next page.
 
 The cursor is opaque. Clients must not parse it or derive conversation identity from it.
 
@@ -173,6 +189,6 @@ To continue an existing Conversation under the authenticated scope, the client s
 
 Chat History integration owns the canonical `conversationId` for create and owns every persistent `turnId`. A blank `conversation.conversationId` is invalid. A nonblank `conversation.conversationId` that is absent, deleted, or outside the trusted scope returns `CONVERSATION_NOT_FOUND`; it must not fall back to create.
 
-When a persisted `/api/chat` request is accepted, the SSE stream first emits `aevatar.chat.context` with `WorkflowChatContextPayload(scope_id, conversation_id, turn_id)`, then emits the existing `aevatar.run.context` frame. `aevatar.chat.context` means the identities were allocated and the terminal delivery reservation was established; it does not mean the Conversation read model is already visible or that the terminal turn has committed.
+When a persisted `/api/chat` request is accepted, the SSE stream first emits `aevatar.chat.context` with `WorkflowChatContextPayload(scope_id, conversation_id, turn_id)`, then emits the existing `aevatar.run.context` frame. Before workflow dispatch and acknowledgement, the create path waits for the scope-bound reservation read model to be observable through the same conversation lookup used by Chat History. If it does not become visible within the bounded observation window, the reservation is abandoned and the run is not dispatched. `aevatar.chat.context` therefore means the identities were allocated, the terminal delivery reservation was established, and the acknowledged `conversation_id` is already a readable resource: before the Conversation read model is visible, its detail endpoint returns an empty transcript with `projectionStatus: "pending"`; after terminal materialization it returns `projectionStatus: "current"` with the committed turn.
 
 `prompt` remains the workflow execution prompt and is the archived user text for backend terminal append. `sessionId` remains runtime correlation only and is never used as Conversation identity.

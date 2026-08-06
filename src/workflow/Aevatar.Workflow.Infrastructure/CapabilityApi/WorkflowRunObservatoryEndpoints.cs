@@ -26,14 +26,13 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 //     lives here in the endpoint layer, never in the query service.
 public static class WorkflowRunObservatoryEndpoints
 {
-    private const string PageRoute = "/workflow/observatory";
-    private const string CallbackRoute = "/workflow/observatory/callback";
+    private const string AdminFrameRoute = "/admin/workflow-observatory";
     private const string DataRoutePrefix = "/api/workflow/observatory";
 
     private static readonly BackendConsoleAsset PageAsset = new(
-        LogicalName: "workflow-observatory",
+        LogicalName: "admin-workflow-observatory",
         Assembly: typeof(WorkflowRunObservatoryEndpoints).Assembly,
-        ResourceSuffix: "CapabilityApi.workflow-observatory.html",
+        ResourceSuffix: "CapabilityApi.admin-workflow-observatory.html",
         ContentType: "text/html",
         InjectHostConfiguration: true);
 
@@ -44,16 +43,10 @@ public static class WorkflowRunObservatoryEndpoints
     {
         ArgumentNullException.ThrowIfNull(app);
 
-        app.MapGet(PageRoute, GetObservatoryPage)
+        app.MapGet(AdminFrameRoute, GetAdminObservatoryFrame)
             .WithTags("WorkflowObservatory")
-            .WithName("GetWorkflowObservatoryPage")
-            .WithSummary("Read-only workflow run observatory served from an embedded static asset.")
-            .AllowAnonymous();
-
-        app.MapGet(CallbackRoute, GetObservatoryPage)
-            .WithTags("WorkflowObservatory")
-            .WithName("GetWorkflowObservatoryCallback")
-            .WithSummary("OIDC PKCE redirect target consumed by the observatory page JS.")
+            .WithName("GetAdminWorkflowObservatoryFrame")
+            .WithSummary("Admin-console workflow observatory renderer served for the same-origin embedded frame.")
             .AllowAnonymous();
 
         var data = app.MapGroup(DataRoutePrefix).WithTags("WorkflowObservatory");
@@ -137,7 +130,7 @@ public static class WorkflowRunObservatoryEndpoints
         return app;
     }
 
-    internal static IResult GetObservatoryPage(
+    internal static IResult GetAdminObservatoryFrame(
         HttpContext http,
         [FromServices] IBackendConsoleAssetService assets)
     {

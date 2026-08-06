@@ -1,10 +1,13 @@
 using System.Runtime.CompilerServices;
+using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Projection.Configuration;
+using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.Orchestration;
+using Aevatar.GAgentService.Projection.Projectors;
 using Aevatar.AGUI.Contracts;
 using FluentAssertions;
 using Google.Protobuf;
@@ -44,6 +47,152 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
         codec.Deserialize(codec.GetEventType(evt), ByteString.Empty).Should().BeNull();
         codec.Deserialize(codec.GetEventType(evt), ByteString.CopyFromUtf8("not-a-proto")).Should().BeNull();
         codec.GetEventType(new AGUIEvent()).Should().Be(AGUIEvent.Descriptor.FullName);
+    }
+
+    [Fact]
+    public async Task SessionEventProjector_ShouldPublishOutcomeUncertainRunError_FromCommittedCompletion()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(hub);
+        var observedAt = DateTimeOffset.Parse("2026-08-02T00:00:00+00:00");
+        var envelope = new EventEnvelope
+        {
+            Id = "outer-evt-uncertain",
+            Timestamp = Timestamp.FromDateTimeOffset(observedAt),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication("actor-1"),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "session-1",
+            },
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = "evt-uncertain",
+                    Version = 4,
+                    Timestamp = Timestamp.FromDateTimeOffset(observedAt),
+                    EventData = Any.Pack(new RoleChatSessionCompletedEvent
+                    {
+                        SessionId = "session-1",
+                        Outcome = RoleChatSessionOutcome.OutcomeUncertain,
+                        FailureCode = " ",
+                        SafeMessage = "The interrupted session may have produced side effects.",
+                    }),
+                },
+                StateRoot = Any.Pack(new RoleGAgentState()),
+            }),
+        };
+
+        await projector.ProjectAsync(
+            new GAgentDraftRunProjectionContext
+            {
+                RootActorId = "actor-1",
+                ProjectionKind = "service-draft-run-session",
+                SessionId = "session-1",
+            },
+            envelope,
+            CancellationToken.None);
+
+        hub.PublishedEvents.Should().ContainSingle();
+        var published = hub.PublishedEvents[0];
+        published.RootActorId.Should().Be("actor-1");
+        published.SessionId.Should().Be("session-1");
+        published.Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.RunError);
+        published.Event.RunError.Code.Should().Be("SESSION_OUTCOME_UNCERTAIN");
+        published.Event.RunError.Message.Should().Be("The interrupted session may have produced side effects.");
+    }
+
+    [Fact]
+    public async Task SessionEventProjector_ShouldPublishCapacityRunError_FromCommittedRejection()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(hub);
+        var rejection = new RoleChatCommandAttemptRejectedEvent
+        {
+            RequestedSessionId = "turn-alpha",
+            CommandAttemptId = "cmd-alpha",
+            Reason = RoleChatCommandAttemptRejectionReason.CapacityExhausted,
+            SafeMessage = "The role is at capacity. Please retry later.",
+        };
+
+        await projector.ProjectAsync(
+            new GAgentDraftRunProjectionContext
+            {
+                RootActorId = "actor-1",
+                ProjectionKind = "service-draft-run-session",
+                SessionId = "cmd-alpha",
+            },
+            CreateSessionEnvelope(rejection, committed: true, correlationId: "corr-alpha"),
+            CancellationToken.None);
+
+        var published = hub.PublishedEvents.Should().ContainSingle().Which;
+        published.RootActorId.Should().Be("actor-1");
+        published.SessionId.Should().Be("cmd-alpha");
+        published.Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.RunError);
+        published.Event.RunError.Code.Should().Be("CAPACITY_EXHAUSTED");
+        published.Event.RunError.Message.Should().Be("The role is at capacity. Please retry later.");
+        published.Event.RunError.RunId.Should().Be("cmd-alpha");
+    }
+
+    [Fact]
+    public async Task SessionEventProjector_ShouldIgnoreCapacityRejection_ForAnotherCommandAttempt()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(hub);
+        var rejection = new RoleChatCommandAttemptRejectedEvent
+        {
+            RequestedSessionId = "turn-alpha",
+            CommandAttemptId = "cmd-other",
+            Reason = RoleChatCommandAttemptRejectionReason.CapacityExhausted,
+        };
+
+        await projector.ProjectAsync(
+            new GAgentDraftRunProjectionContext
+            {
+                RootActorId = "actor-1",
+                ProjectionKind = "service-draft-run-session",
+                SessionId = "cmd-alpha",
+            },
+            CreateSessionEnvelope(rejection, committed: true, correlationId: "corr-alpha"),
+            CancellationToken.None);
+
+        hub.PublishedEvents.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SessionEventProjector_ShouldIgnoreRawCapacityRejection()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(hub);
+        var rejection = new RoleChatCommandAttemptRejectedEvent
+        {
+            RequestedSessionId = "session-1",
+            Reason = RoleChatCommandAttemptRejectionReason.CapacityExhausted,
+            SafeMessage = "The role is at capacity. Please retry later.",
+        };
+
+        await projector.ProjectAsync(CreateProjectionContext(),
+            CreateSessionEnvelope(rejection, committed: false), CancellationToken.None);
+
+        hub.PublishedEvents.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SessionEventProjector_ShouldIgnoreCommittedNonCapacityRejection()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(hub);
+        var rejection = new RoleChatCommandAttemptRejectedEvent
+        {
+            RequestedSessionId = "session-1",
+            Reason = RoleChatCommandAttemptRejectionReason.PromptMismatch,
+            SafeMessage = "The prompt does not match the existing session.",
+        };
+
+        await projector.ProjectAsync(CreateProjectionContext(),
+            CreateSessionEnvelope(rejection, committed: true), CancellationToken.None);
+
+        hub.PublishedEvents.Should().BeEmpty();
     }
 
     [Fact]
@@ -189,6 +338,48 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
             },
             static (_, context) => new GAgentDraftRunRuntimeLease(context));
 
+    private static GAgentDraftRunProjectionContext CreateProjectionContext() =>
+        new()
+        {
+            RootActorId = "actor-1",
+            ProjectionKind = "service-draft-run-session",
+            SessionId = "session-1",
+        };
+
+    private static EventEnvelope CreateSessionEnvelope(
+        IMessage payload,
+        bool committed,
+        string correlationId = "session-1")
+    {
+        var observedAt = DateTimeOffset.Parse("2026-08-02T00:00:00+00:00");
+        var envelope = new EventEnvelope
+        {
+            Id = committed ? "outer-committed-event" : "raw-event",
+            Timestamp = Timestamp.FromDateTimeOffset(observedAt),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication("actor-1"),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = correlationId,
+            },
+            Payload = Any.Pack(payload),
+        };
+        if (!committed)
+            return envelope;
+
+        envelope.Payload = Any.Pack(new CommittedStateEventPublished
+        {
+            StateEvent = new StateEvent
+            {
+                EventId = "committed-event",
+                Version = 5,
+                Timestamp = Timestamp.FromDateTimeOffset(observedAt),
+                EventData = Any.Pack(payload),
+            },
+            StateRoot = Any.Pack(new RoleGAgentState()),
+        });
+        return envelope;
+    }
+
     private sealed class RecordingReleaseService : IProjectionScopeReleaseService<GAgentDraftRunRuntimeLease>
     {
         public List<GAgentDraftRunRuntimeLease> Leases { get; } = [];
@@ -206,12 +397,11 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
         public string? LastRootActorId { get; private set; }
         public string? LastSessionId { get; private set; }
         public Func<AGUIEvent, ValueTask>? Handler { get; private set; }
+        public List<(string RootActorId, string SessionId, AGUIEvent Event)> PublishedEvents { get; } = [];
 
         public Task PublishAsync(string rootActorId, string sessionId, AGUIEvent evt, CancellationToken ct = default)
         {
-            _ = rootActorId;
-            _ = sessionId;
-            _ = evt;
+            PublishedEvents.Add((rootActorId, sessionId, evt.Clone()));
             return Task.CompletedTask;
         }
 

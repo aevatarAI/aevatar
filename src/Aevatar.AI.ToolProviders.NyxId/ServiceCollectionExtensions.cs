@@ -33,6 +33,9 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Transient<
             IExternalWorkflowCapabilitySource,
             NyxIdExternalWorkflowCapabilitySource>());
+        services.TryAddEnumerable(ServiceDescriptor.Transient<
+            IExternalWorkflowCapabilitySource,
+            NyxIdExplicitWorkflowCapabilitySource>());
         services.Replace(ServiceDescriptor.Singleton<
             IWorkflowFileMultipartUploadPort,
             NyxIdWorkflowFileMultipartUploadPort>());
@@ -45,6 +48,7 @@ public static class ServiceCollectionExtensions
 
         services.TryAddEnumerable(
             ServiceDescriptor.Transient<IAgentToolSource, NyxIdAgentToolSource>());
+        services.TryAddTransient<NyxIdConnectedServiceInventoryToolSource>();
 
         // Refactor (iter23/cluster-001-nyxid-tool-approval-polling):
         //   Old pattern: NyxID was registered as a generic local approval handler that blocked while polling.
@@ -103,7 +107,16 @@ public static class ServiceCollectionExtensions
         if (!services.Any(static descriptor =>
                 descriptor.ServiceType == typeof(NyxIdApiAccessRegistrationMarker)))
         {
-            services.AddHttpClient<NyxIdApiClient>();
+            // Without an explicit Timeout the typed client inherits HttpClient's 100s default,
+            // which aborts long codex_exec runs (managed 180s, private SSH 300s) before their
+            // own deadline can report an honest failure.
+            // Resolve the options from the provider rather than closing over the local: a later
+            // AddNyxIdApiAccess skips this block (the marker below is already registered) but can
+            // still register a different NyxIdToolOptions instance, and the client must follow
+            // whichever instance DI actually resolves.
+            services.AddHttpClient<NyxIdApiClient>((provider, client) =>
+                client.Timeout = (provider.GetService<NyxIdToolOptions>() ?? new NyxIdToolOptions())
+                    .EffectiveMaxRequestDuration);
             services.AddSingleton<NyxIdApiAccessRegistrationMarker>();
         }
         services.TryAddSingleton<INyxIdApiClientFactory, HttpClientFactoryNyxIdApiClientFactory>();

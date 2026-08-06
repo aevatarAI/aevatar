@@ -11,6 +11,7 @@ public sealed class AuditActorIdentityHasher : IAuditActorIdentityHasher
     private const string AuditActorIdPrefix = "audit_actor:hmac-sha256:";
     private readonly IReadOnlyDictionary<string, byte[]> _keys;
     private readonly string _activeKeyId;
+    private readonly string[] _orderedKeyIds;
 
     public AuditActorIdentityHasher(IOptions<AuditActorIdentityHasherOptions> options)
     {
@@ -32,6 +33,13 @@ public sealed class AuditActorIdentityHasher : IAuditActorIdentityHasher
             static key => key.KeyId!.Trim(),
             static key => AuditActorIdentityHasherKeyMaterial.Resolve(key),
             StringComparer.Ordinal);
+        _orderedKeyIds =
+        [
+            _activeKeyId,
+            .. _keys.Keys
+                .Where(keyId => !string.Equals(keyId, _activeKeyId, StringComparison.Ordinal))
+                .Order(StringComparer.Ordinal),
+        ];
     }
 
     public AuditActorIdentity Hash(string canonicalActorKey)
@@ -40,6 +48,14 @@ public sealed class AuditActorIdentityHasher : IAuditActorIdentityHasher
         var auditActorId = BuildAuditActorId(canonicalKey, _activeKeyId);
 
         return new AuditActorIdentity(auditActorId, _activeKeyId);
+    }
+
+    public IReadOnlyList<AuditActorIdentity> HashAll(string canonicalActorKey)
+    {
+        var canonicalKey = NormalizeCanonicalActorKey(canonicalActorKey);
+        return _orderedKeyIds
+            .Select(keyId => new AuditActorIdentity(BuildAuditActorId(canonicalKey, keyId), keyId))
+            .ToArray();
     }
 
     public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId)

@@ -9,11 +9,13 @@ using Aevatar.Studio.Hosting.Endpoints;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Studio.Tests;
 
@@ -43,16 +45,55 @@ public sealed class StudioMemberAutomationEndpointsTests
 
         const string canonicalBase =
             "/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations";
-        routes.Should().HaveCount(11);
-        routes.Should().OnlyContain(route => route != null && route.StartsWith(canonicalBase, StringComparison.Ordinal));
-        routes.Should().Contain(canonicalBase);
-        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}");
-        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/reauthorize");
-        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/retry-revocation");
-        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/pause");
-        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/resume");
-        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/run-now");
+        routes.Should().ContainSingle(route => route == $"{canonicalBase}/preflight");
+        routes.Count(route => route == canonicalBase).Should().Be(2);
+        routes.Count(route => route == $"{canonicalBase}/{{scheduleId}}").Should().Be(3);
+        routes.Should().ContainSingle(route => route == $"{canonicalBase}/{{scheduleId}}/reauthorize");
+        routes.Should().ContainSingle(route => route == $"{canonicalBase}/{{scheduleId}}/retry-revocation");
+        routes.Should().ContainSingle(route => route == $"{canonicalBase}/{{scheduleId}}/pause");
+        routes.Should().ContainSingle(route => route == $"{canonicalBase}/{{scheduleId}}/resume");
+        routes.Should().ContainSingle(route => route == $"{canonicalBase}/{{scheduleId}}/run-now");
         routes.Should().NotContain(route => route != null && route.StartsWith("/api/teams/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RetryRevocation_ShouldNotAcceptBrowserOwnedOperationIdentity()
+    {
+        var method = typeof(StudioMemberAutomationEndpoints)
+            .GetMethod("HandleRetryRevocationAsync", System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic);
+
+        method.Should().NotBeNull();
+        method!.GetParameters()
+            .Should().NotContain(parameter =>
+                parameter.ParameterType == typeof(StudioMemberAutomationActionRequest));
+    }
+
+    [Fact]
+    public async Task Preflight_WhenNyxIdBindingIsMissing_ShouldReturnRecoverableTypedConflict()
+    {
+        var result = await StudioMemberAutomationEndpoints.HandlePreflightAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            new StudioMemberAutomationPreflightRequest(
+                "0 9 * * *",
+                "UTC",
+                "run daily digest",
+                "Daily digest",
+                true),
+            new StubSchedules(),
+            new StubBindingQuery { Binding = null },
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status409Conflict);
+        var value = Value(result);
+        StringProperty(value, "code")
+            .Should().Be("TEAM_AUTOMATION_AUTHORIZATION_BINDING_REQUIRED");
+        StringProperty(value, "message")
+            .Should().Be("Reconnect NyxID to authorize this automation.");
     }
 
     [Fact]
@@ -117,15 +158,224 @@ public sealed class StudioMemberAutomationEndpointsTests
                 true),
             schedules,
             new StubBindingQuery(),
+            NullLoggerFactory.Instance,
             CancellationToken.None);
 
         StatusCode(result).Should().Be(StatusCodes.Status200OK);
+        schedules.WritePreflightCalls.Should().Be(1);
         schedules.LastPreflight.Should().NotBeNull();
         schedules.LastPreflight!.ScopeId.Should().Be(ScopeId);
         schedules.LastPreflight.TeamId.Should().Be(TeamId);
         schedules.LastPreflight.MemberId.Should().Be(MemberId);
         schedules.LastPreflight.ProvisioningBearerToken.Should().Be("fresh-owner-bearer");
         schedules.LastPreflight.AuthenticatedOwner.Owner.OwnerSubject.Should().Be("nyx-owner-alpha");
+    }
+
+    [Fact]
+    public async Task Preflight_WhenPlannerDeniesService_ShouldReturnSanitizedTypedForbidden()
+    {
+        var schedules = new StubSchedules
+        {
+            PreflightResult = new StudioMemberWorkflowAuthorizationResult(
+                false,
+                null,
+                ScheduledInvocationAuthorizationFailureCode.ServiceAccessDenied,
+                "private-service-id"),
+        };
+
+        var result = await StudioMemberAutomationEndpoints.HandlePreflightAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            new StudioMemberAutomationPreflightRequest(
+                "0 9 * * *",
+                "UTC",
+                "run daily digest",
+                "Daily digest",
+                true),
+            schedules,
+            new StubBindingQuery(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status403Forbidden);
+        var value = Value(result);
+        StringProperty(value, "code").Should().Be(
+            "TEAM_AUTOMATION_AUTHORIZATION_SERVICE_ACCESS_DENIED");
+        StringProperty(value, "message").Should().Be(
+            "This automation is not authorized to use one or more required services.");
+        value.GetType().GetProperty("retryable")?.GetValue(value).Should().Be(false);
+        JsonSerializer.Serialize(value).Should().NotContain("private-service-id");
+        AssertNoCredentialMaterial(value);
+    }
+
+    [Fact]
+    public async Task Preflight_WhenPlannerAuthorizationIsUnavailable_ShouldReturnRetryableTypedUnavailable()
+    {
+        var schedules = new StubSchedules
+        {
+            PreflightResult = new StudioMemberWorkflowAuthorizationResult(
+                false,
+                null,
+                ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable,
+                "private-catalog-detail"),
+        };
+
+        var result = await StudioMemberAutomationEndpoints.HandlePreflightAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            new StudioMemberAutomationPreflightRequest(
+                "0 9 * * *",
+                "UTC",
+                "run daily digest",
+                "Daily digest",
+                true),
+            schedules,
+            new StubBindingQuery(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status503ServiceUnavailable);
+        var value = Value(result);
+        StringProperty(value, "code").Should().Be(
+            "TEAM_AUTOMATION_AUTHORIZATION_DURABLE_AUTHORIZATION_UNAVAILABLE");
+        StringProperty(value, "message").Should().Be(
+            "Authorization is temporarily unavailable. Retry this request.");
+        value.GetType().GetProperty("retryable")?.GetValue(value).Should().Be(true);
+        JsonSerializer.Serialize(value).Should().NotContain("private-catalog-detail");
+        AssertNoCredentialMaterial(value);
+    }
+
+    [Theory]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.NyxIdOperationGrantRequired,
+        StatusCodes.Status409Conflict,
+        "TEAM_AUTOMATION_NYXID_OPERATION_GRANT_REQUIRED",
+        "NyxID requires an operation-scoped approval grant before this automation can be scheduled.",
+        false)]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.NyxIdOperationApprovalRequired,
+        StatusCodes.Status409Conflict,
+        "TEAM_AUTOMATION_NYXID_OPERATION_APPROVAL_REQUIRED",
+        "NyxID requires per-request approval before this operation can run on a schedule.",
+        false)]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.NyxIdOperationDenied,
+        StatusCodes.Status403Forbidden,
+        "TEAM_AUTOMATION_NYXID_OPERATION_DENIED",
+        "NyxID policy denies this scheduled operation.",
+        false)]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.NyxIdOperationAuthorityContractUnavailable,
+        StatusCodes.Status503ServiceUnavailable,
+        "TEAM_AUTOMATION_NYXID_OPERATION_AUTHORITY_CONTRACT_UNAVAILABLE",
+        "NyxID operation authorization cannot be previewed without executing the external request.",
+        false)]
+    public async Task Preflight_WhenNyxIdOperationPolicyBlocks_ShouldReturnSanitizedTypedResult(
+        ScheduledInvocationAuthorizationFailureCode failureCode,
+        int expectedStatusCode,
+        string expectedCode,
+        string expectedMessage,
+        bool expectedRetryable)
+    {
+        var schedules = new StubSchedules
+        {
+            PreflightResult = new StudioMemberWorkflowAuthorizationResult(
+                false,
+                null,
+                failureCode,
+                "private-operation-authorization-detail"),
+        };
+
+        var result = await StudioMemberAutomationEndpoints.HandlePreflightAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            new StudioMemberAutomationPreflightRequest(
+                "0 9 * * *",
+                "UTC",
+                "run daily digest",
+                "Daily digest",
+                true),
+            schedules,
+            new StubBindingQuery(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(expectedStatusCode);
+        var value = Value(result);
+        StringProperty(value, "code").Should().Be(expectedCode);
+        StringProperty(value, "message").Should().Be(expectedMessage);
+        value.GetType().GetProperty("retryable")?.GetValue(value).Should().Be(expectedRetryable);
+        JsonSerializer.Serialize(value).Should().NotContain("private-operation-authorization-detail");
+        AssertNoCredentialMaterial(value);
+    }
+
+    [Fact]
+    public async Task Preflight_WhenNyxIdBindingIsMissing_ShouldReturnTypedConflictWithoutSecrets()
+    {
+        var schedules = new StubSchedules();
+        var result = await StudioMemberAutomationEndpoints.HandlePreflightAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            new StudioMemberAutomationPreflightRequest(
+                "0 9 * * *",
+                "UTC",
+                "run daily digest",
+                "Daily digest",
+                true),
+            schedules,
+            new StubBindingQuery { Binding = null },
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status409Conflict);
+        StringProperty(Value(result), "code").Should().Be(
+            "TEAM_AUTOMATION_AUTHORIZATION_BINDING_REQUIRED");
+        schedules.LastPreflight.Should().BeNull();
+        var json = JsonSerializer.Serialize(Value(result));
+        json.Should().NotContain("binding-alpha");
+        json.Should().NotContain("nyx-owner-alpha");
+        json.Should().NotContain("fresh-owner-bearer");
+    }
+
+    [Fact]
+    public async Task Preflight_WhenBearerIsMalformed_ShouldReturnUnauthorizedWithoutEchoingHeader()
+    {
+        var schedules = new StubSchedules();
+        var context = CreateContext(ScopeId);
+        context.Request.Headers.Authorization =
+            "Bearer secret-one, secret-two";
+
+        var result = await StudioMemberAutomationEndpoints.HandlePreflightAsync(
+            context,
+            ScopeId,
+            TeamId,
+            MemberId,
+            new StudioMemberAutomationPreflightRequest(
+                "0 9 * * *",
+                "UTC",
+                "run daily digest",
+                "Daily digest",
+                true),
+            schedules,
+            new StubBindingQuery(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status401Unauthorized);
+        StringProperty(Value(result), "code").Should().Be(
+            "TEAM_AUTOMATION_UNAUTHORIZED");
+        schedules.LastPreflight.Should().BeNull();
+        var json = JsonSerializer.Serialize(Value(result));
+        json.Should().NotContain("secret-one");
+        json.Should().NotContain("secret-two");
     }
 
     [Fact]
@@ -151,6 +401,7 @@ public sealed class StudioMemberAutomationEndpointsTests
                 "idem-create"),
             schedules,
             new StubBindingQuery(),
+            NullLoggerFactory.Instance,
             CancellationToken.None);
 
         StatusCode(result).Should().Be(StatusCodes.Status202Accepted);
@@ -176,6 +427,47 @@ public sealed class StudioMemberAutomationEndpointsTests
     }
 
     [Fact]
+    public async Task Create_WhenScopePlanIsDenied_ShouldReturnTypedForbidden()
+    {
+        var schedules = new StubSchedules
+        {
+            Exception = new StudioScheduledCredentialMaterializationException(
+                "api_key_scope_plan_denied",
+                effectsCleaned: true,
+                new InvalidOperationException("api_key_scope_plan_denied"),
+                failureCode: "api_key_scope_plan_denied"),
+        };
+
+        var result = await StudioMemberAutomationEndpoints.HandleCreateAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            new StudioMemberAutomationMutationRequest(
+                "0 9 * * *",
+                "UTC",
+                "run daily digest",
+                "Daily digest",
+                true,
+                "permission-digest-alpha",
+                "scheduled-invocation-auth/v1",
+                "dedicated_scheduled_invocation_agent_key",
+                "op-create",
+                "idem-create"),
+            schedules,
+            new StubBindingQuery(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status403Forbidden);
+        var response = Value(result);
+        StringProperty(response, "code").Should().Be("api_key_scope_plan_denied");
+        StringProperty(response, "message").Should()
+            .Be("NyxID denied the requested Agent Key scope for this caller.");
+        AssertNoCredentialMaterial(response);
+    }
+
+    [Fact]
     public async Task ReadResponses_ShouldExposeCanonicalIdentityWithoutCredentialMaterial()
     {
         var view = new StudioMemberAutomationView(
@@ -198,6 +490,8 @@ public sealed class StudioMemberAutomationEndpointsTests
             DateTimeOffset.Parse("2026-07-17T09:00:00Z"),
             DateTimeOffset.Parse("2026-07-16T09:00:00Z"),
             17);
+        SetRequiredStringProperty(view, "NyxIdRevocationStatus", "nyx-track-terminal");
+        SetRequiredStringProperty(view, "VaultRevocationStatus", "vault-track-terminal");
         var schedules = new StubSchedules { View = view };
 
         var getResult = await StudioMemberAutomationEndpoints.HandleGetAsync(
@@ -224,6 +518,15 @@ public sealed class StudioMemberAutomationEndpointsTests
         getResponse.TeamId.Should().Be(TeamId);
         getResponse.MemberId.Should().Be(MemberId);
         getResponse.ScheduleId.Should().Be(ScheduleId);
+        using (var json = JsonDocument.Parse(JsonSerializer.Serialize(
+                   getResponse,
+                   new JsonSerializerOptions(JsonSerializerDefaults.Web))))
+        {
+            json.RootElement.GetProperty("nyxIdRevocationStatus").GetString()
+                .Should().Be("nyx-track-terminal");
+            json.RootElement.GetProperty("vaultRevocationStatus").GetString()
+                .Should().Be("vault-track-terminal");
+        }
         AssertNoCredentialMaterial(getResponse);
 
         StatusCode(listResult).Should().Be(StatusCodes.Status200OK);
@@ -235,17 +538,28 @@ public sealed class StudioMemberAutomationEndpointsTests
     }
 
     [Theory]
-    [InlineData("authorization_plan_changed", "TEAM_AUTOMATION_AUTHORIZATION_PLAN_CHANGED")]
-    [InlineData("reauthorization_required", "TEAM_AUTOMATION_REAUTHORIZATION_REQUIRED")]
+    [InlineData(
+        "authorization_plan_changed",
+        "TEAM_AUTOMATION_AUTHORIZATION_PLAN_CHANGED",
+        ScheduledAuthorizationPlanMismatchReason.AllowedNodeIdsMismatch,
+        "allowed_node_ids_mismatch")]
+    [InlineData(
+        "reauthorization_required",
+        "TEAM_AUTOMATION_REAUTHORIZATION_REQUIRED",
+        ScheduledAuthorizationPlanMismatchReason.Unspecified,
+        null)]
     public async Task Update_ShouldReturnTypedConflictWithCanonicalPreflightLocator(
         string conflictCode,
-        string expectedWireCode)
+        string expectedWireCode,
+        ScheduledAuthorizationPlanMismatchReason mismatchReason,
+        string? expectedMismatchReason)
     {
         var schedules = new StubSchedules
         {
             Exception = new StudioMemberAutomationPlanConflictException(
                 conflictCode,
-                "sensitive backend detail must not cross the boundary"),
+                "sensitive backend detail must not cross the boundary",
+                mismatchReason),
         };
 
         var result = await StudioMemberAutomationEndpoints.HandleUpdateAsync(
@@ -271,7 +585,13 @@ public sealed class StudioMemberAutomationEndpointsTests
         StringProperty(value, "code").Should().Be(expectedWireCode);
         StringProperty(value, "preflightLocator").Should().Be(
             $"/api/scopes/{ScopeId}/teams/{TeamId}/members/{MemberId}/automations/preflight");
-        JsonSerializer.Serialize(value).Should().NotContain("sensitive backend detail");
+        StringProperty(value, "authorizationPlanMismatchReason").Should().Be(expectedMismatchReason);
+        var serialized = JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        serialized.Should().NotContain("sensitive backend detail");
+        if (expectedMismatchReason is null)
+            serialized.Should().NotContain("authorizationPlanMismatchReason");
+        else
+            serialized.Should().Contain(expectedMismatchReason);
         AssertNoCredentialMaterial(value);
         schedules.LastUpdate.Should().NotBeNull();
         schedules.LastUpdate!.ScopeId.Should().Be(ScopeId);
@@ -517,7 +837,7 @@ public sealed class StudioMemberAutomationEndpointsTests
     }
 
     [Fact]
-    public async Task RetryRevocation_ShouldPassStableIdentityAndFreshOwnerCredentialOnlyToApplicationBoundary()
+    public async Task RetryRevocation_ShouldPassOnlyCanonicalIdentityAndFreshOwnerCredentialToApplicationBoundary()
     {
         var schedules = new StubSchedules();
 
@@ -527,7 +847,6 @@ public sealed class StudioMemberAutomationEndpointsTests
             TeamId,
             MemberId,
             ScheduleId,
-            new StudioMemberAutomationActionRequest("op-cleanup", "idem-cleanup"),
             schedules,
             new StubBindingQuery(),
             CancellationToken.None);
@@ -535,12 +854,10 @@ public sealed class StudioMemberAutomationEndpointsTests
         StatusCode(result).Should().Be(StatusCodes.Status202Accepted);
         var response = Value(result).Should().BeOfType<StudioMemberAutomationMutationReceipt>().Subject;
         response.Status.Should().Be("pending");
-        response.OperationId.Should().Be("op-cleanup");
+        response.OperationId.Should().Be("op-delete-committed");
         AssertNoCredentialMaterial(response);
         schedules.LastRetryRevocation.Should().NotBeNull();
-        schedules.LastRetryRevocation!.OperationId.Should().Be("op-cleanup");
-        schedules.LastRetryRevocation.IdempotencyKey.Should().Be("idem-cleanup");
-        schedules.LastRetryRevocation.AuthenticatedOwner!.Owner.OwnerSubject.Should().Be("nyx-owner-alpha");
+        schedules.LastRetryRevocation!.AuthenticatedOwner!.Owner.OwnerSubject.Should().Be("nyx-owner-alpha");
         schedules.LastRetryRevocation.ProvisioningBearerToken.Should().Be("fresh-owner-bearer");
         schedules.LastRetryRevocation.ScopeId.Should().Be(ScopeId);
         schedules.LastRetryRevocation.TeamId.Should().Be(TeamId);
@@ -641,6 +958,13 @@ public sealed class StudioMemberAutomationEndpointsTests
     private static string? StringProperty(object value, string propertyName) =>
         value.GetType().GetProperty(propertyName)?.GetValue(value) as string;
 
+    private static void SetRequiredStringProperty(object target, string propertyName, string value)
+    {
+        var property = target.GetType().GetProperty(propertyName);
+        property.Should().NotBeNull($"{propertyName} is part of the public revocation evidence contract");
+        property!.SetValue(target, value);
+    }
+
     private static void AssertNoCredentialMaterial(object response)
     {
         var serialized = JsonSerializer.Serialize(
@@ -652,33 +976,50 @@ public sealed class StudioMemberAutomationEndpointsTests
         normalized.Should().NotContain("secretreference");
         normalized.Should().NotContain("apikeyid");
         normalized.Should().NotContain("credentialid");
+        normalized.Should().NotContain("callerauthority");
+        normalized.Should().NotContain("verifiedbindingid");
+        normalized.Should().NotContain("vaultref");
+        normalized.Should().NotContain("ciphertext");
+        normalized.Should().NotContain("refreshtoken");
+        normalized.Should().NotContain("fullkey");
         normalized.Should().NotContain("binding-alpha");
         normalized.Should().NotContain("nyx-owner-alpha");
     }
 
     private sealed class StubBindingQuery : IExternalIdentityBindingQueryPort
     {
+        public BindingId? Binding { get; init; } = new BindingId { Value = "binding-alpha" };
+
         public Task<BindingId?> ResolveAsync(
             ExternalSubjectRef externalSubject,
             CancellationToken ct = default) =>
-            Task.FromResult<BindingId?>(new BindingId { Value = "binding-alpha" });
+            Task.FromResult(Binding);
     }
 
     private sealed class StubSchedules : IStudioMemberWorkflowSchedulePort
     {
         public Exception? Exception { get; init; }
+        public StudioMemberWorkflowAuthorizationResult PreflightResult { get; init; } =
+            new(
+                true,
+                new ScheduledInvocationAuthorizationPlan(),
+                ScheduledInvocationAuthorizationFailureCode.Unspecified,
+                string.Empty);
         public int ListCalls { get; private set; }
         public int ScheduleMutationCalls { get; private set; }
+        public int WritePreflightCalls { get; private set; }
         public StudioMemberAutomationView? View { get; init; }
         public StudioMemberWorkflowScheduleRequest? LastPreflight { get; private set; }
         public StudioMemberWorkflowScheduleRequest? LastCreate { get; private set; }
+        public StudioMemberWorkflowScheduleResult? CreateResult { get; init; }
+        public Queue<StudioMemberWorkflowScheduleResult> CreateResults { get; } = [];
         public string? LastConfirmedPermissionDigest { get; private set; }
         public StudioMemberAutomationUpdateCommand? LastUpdate { get; private set; }
         public StudioMemberAutomationActionCommand? LastAction { get; private set; }
         public string? LastActionName { get; private set; }
         public StudioMemberAutomationActionCommand? LastDelete { get; private set; }
-        public StudioMemberAutomationActionCommand? LastRetryRevocation { get; private set; }
-        public (string ScopeId, string TeamId, string MemberId, int Take, string? Cursor)? LastList { get; private set; }
+        public StudioMemberAutomationRetryRevocationCommand? LastRetryRevocation { get; private set; }
+        public (string ScopeId, string TeamId, string? MemberId, int Take, string? Cursor)? LastList { get; private set; }
         public (string ScopeId, string TeamId, string MemberId, string ScheduleId)? LastGet { get; private set; }
 
         public Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync(
@@ -686,11 +1027,15 @@ public sealed class StudioMemberAutomationEndpointsTests
             CancellationToken ct = default)
         {
             LastPreflight = request;
-            return Result(new StudioMemberWorkflowAuthorizationResult(
-                false,
-                null,
-                ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
-                "not_configured"));
+            return Result(PreflightResult);
+        }
+
+        public Task<StudioMemberWorkflowAuthorizationResult> PreflightForWriteAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            CancellationToken ct = default)
+        {
+            WritePreflightCalls++;
+            return PreflightAsync(request, ct);
         }
 
         public Task<StudioMemberWorkflowScheduleResult> CreateAsync(
@@ -704,17 +1049,20 @@ public sealed class StudioMemberAutomationEndpointsTests
                 request.ScopeId,
                 request.TeamId,
                 request.MemberId,
-                new StudioMemberWorkflowScheduleResult(
+                CreateResults.Count > 0
+                    ? CreateResults.Dequeue()
+                    : CreateResult ?? new StudioMemberWorkflowScheduleResult(
                     true,
                     request.ScopeId,
                     request.MemberId,
                     ScheduleId,
                     "svc-alpha",
-                    "/workflow/observatory",
+                    "/admin#/observatory",
                     "pending")
                 {
                     OperationId = request.OperationId ?? "op-alpha",
                     CommandId = "cmd-alpha",
+                    NewOperationCommitted = true,
                 });
         }
 
@@ -724,10 +1072,16 @@ public sealed class StudioMemberAutomationEndpointsTests
             CancellationToken ct = default) =>
             CreateAsync(request, confirmedPermissionDigest, ct);
 
+        public Task<StudioMemberWorkflowScheduleResult> ReplaceAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest,
+            CancellationToken ct = default) =>
+            CreateAsync(request, confirmedPermissionDigest, ct);
+
         public Task<StudioMemberAutomationListResponse> ListAsync(
             string scopeId,
             string teamId,
-            string memberId,
+            string? memberId,
             int take = 50,
             string? cursor = null,
             bool includeTotalCount = false,
@@ -792,7 +1146,7 @@ public sealed class StudioMemberAutomationEndpointsTests
         }
 
         public Task<StudioMemberAutomationMutationReceipt> RetryRevocationAsync(
-            StudioMemberAutomationActionCommand command,
+            StudioMemberAutomationRetryRevocationCommand command,
             CancellationToken ct = default)
         {
             LastRetryRevocation = command;
@@ -800,7 +1154,7 @@ public sealed class StudioMemberAutomationEndpointsTests
                 command.ScopeId,
                 command.TeamId,
                 command.MemberId,
-                Receipt(command.OperationId, "pending"));
+                Receipt("op-delete-committed", "pending"));
         }
 
         private Task<StudioMemberAutomationMutationReceipt> ActionResult(

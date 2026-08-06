@@ -1,4 +1,5 @@
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Services;
 
 namespace Aevatar.GAgentService.Core.Services;
 
@@ -50,6 +51,18 @@ public sealed class ServiceInvokeReadinessEvaluator
             return Unavailable(
                 endpointId,
                 ServiceInvokeUnavailableReason.PreparedArtifactMissing,
+                selectedTarget);
+        }
+
+        if (revision.Spec?.ImplementationKind == ServiceImplementationKind.Workflow &&
+            (!WorkflowServiceDeploymentPlanIntegrity.IsCompatible(
+                 artifact,
+                 selectedTarget.RevisionId) ||
+             WorkflowServiceArtifactReadiness.RequiresCapabilityAdmissionRebind(artifact)))
+        {
+            return Unavailable(
+                endpointId,
+                ServiceInvokeUnavailableReason.PreparedArtifactIncompatible,
                 selectedTarget);
         }
 

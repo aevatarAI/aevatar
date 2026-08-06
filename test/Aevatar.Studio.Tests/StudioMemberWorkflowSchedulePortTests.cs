@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
@@ -10,6 +11,7 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Credentials;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Studio.Tests;
 
@@ -40,7 +42,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         result.MemberId.Should().Be("member-1");
         result.ScheduleId.Should().Be(scheduleService.Configuration!.ScheduleId);
         result.PublishedServiceId.Should().Be("published-member-1");
-        result.ObservatoryUrl.Should().Be("/workflow/observatory");
+        result.ObservatoryUrl.Should().Be("/admin#/observatory");
 
         memberService.GetScopeId.Should().Be("scope-1");
         memberService.GetMemberId.Should().Be("member-1");
@@ -64,9 +66,12 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         var chat = invocation.Payload.Unpack<ChatRequestEvent>();
         chat.Prompt.Should().Be("run digest");
         chat.ScopeId.Should().Be("scope-1");
+        chat.LlmControl.ModelOverride.Should().Be("gpt-5.5");
+        chat.LlmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm-public");
         invocation.AuthorizationFact.Should().NotBeNull();
         var fact = invocation.AuthorizationFact!;
         fact.PermissionDigest.Should().Be(RecordingAuthorizationPlanner.Digest);
+        fact.OwnerLLMSelection.Should().BeEquivalentTo(planner.Result.Plan!.OwnerLlmSelection);
         fact.Owner.OwnerSubject.Should().Be("nyx-owner-alpha");
         fact.ServiceGrants.Should().ContainSingle().Which.Should().BeEquivalentTo(
             new ScheduledInvocationAuthorizationServiceGrant("nyx-service-alpha", ["nyx-node-alpha"], false));
@@ -78,6 +83,146 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             "scope-plan-contract/v1",
             "scope-plan-policy/v1",
             DateTimeOffset.Parse("2026-07-01T00:00:00Z")));
+        configuration.CredentialRequirementTargetKind.Should()
+            .Be(ScheduledDispatchCredentialRequirementTargetKind.WorkflowService);
+        var decision = scheduleService.BeginOperation!.ActivationDecision;
+        decision.ScheduleId.Should().Be(configuration.ScheduleId);
+        decision.DisplayName.Should().Be(configuration.DisplayName);
+        decision.Owner.Should().Be(configuration.TeamAutomationOwner);
+        decision.ServiceIdentity.Should().BeEquivalentTo(invocation.Identity);
+        decision.ServiceIdentity.Should().NotBeSameAs(invocation.Identity);
+        decision.EndpointId.Should().Be(invocation.EndpointId);
+        decision.Payload.Should().Be(invocation.Payload);
+        decision.Payload.Should().NotBeSameAs(invocation.Payload);
+        decision.CallerAuthority.Should().BeEquivalentTo(invocation.Auth!.CallerAuthority);
+        decision.CallerAuthority.Should().NotBeSameAs(invocation.Auth.CallerAuthority);
+        decision.AuthorizationFact.Should().BeEquivalentTo(fact);
+        decision.AuthorizationFact.Should().NotBeSameAs(fact);
+        decision.AuthorizationFact.OwnerLLMSelection.Should().NotBeSameAs(fact.OwnerLLMSelection);
+        decision.CronExpression.Should().Be(configuration.CronExpression);
+        decision.Timezone.Should().Be(configuration.Timezone);
+        decision.Enabled.Should().Be(configuration.Enabled);
+        decision.ScheduleKind.Should().Be(configuration.ScheduleKind);
+        decision.Headers.Should().Equal(configuration.Headers);
+        decision.Headers.Should().NotBeSameAs(configuration.Headers);
+        decision.ScheduleMode.Should().Be(configuration.ScheduleMode);
+        decision.OneShotFireAt.Should().Be(configuration.OneShotFireAt);
+        decision.CredentialRequirementTargetKind.Should()
+            .Be(configuration.CredentialRequirementTargetKind);
+        scheduleService.BeginOperation.PermissionDigest.Should().Be(decision.AuthorizationFact.PermissionDigest);
+        scheduleService.BeginOperation.PolicyVersion.Should().Be(decision.AuthorizationFact.PolicyVersion);
+    }
+
+    [Fact]
+    public async Task EnsureAsync_WhenDifferentPendingOperationLeaseExpired_ShouldSupersedeBeforeCreate()
+    {
+        var calls = new List<string>();
+        var current = CreateTeamAutomationDetail(
+            RecordingAuthorizationPlanner.Digest,
+            RecordingAuthorizationPlanner.PolicyVersion);
+        var scheduleService = new RecordingScheduleService
+        {
+            Calls = calls,
+            TeamAutomationDetail = current with
+            {
+                Schedule = current.Schedule with
+                {
+                    ScheduleId = "provision-published-member-1",
+                    TargetKind = ScheduledDispatchTargetKind.Envelope,
+                    TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatus.ProvisioningPending,
+                    TeamAutomationOperationId = "operation-stale",
+                    TeamAutomationIdempotencyKey = "idempotency-stale",
+                },
+            },
+        };
+        var sut = NewPort(scheduleService);
+
+        var result = await ScheduleAsync(sut, Request("scope-1", "member-1"));
+
+        result.Success.Should().BeTrue();
+        scheduleService.RetryCredentialOperationCallCount.Should().Be(1);
+        scheduleService.FailCallCount.Should().Be(1);
+        scheduleService.BeginCallCount.Should().Be(1);
+        scheduleService.EnsureCallCount.Should().Be(1);
+        calls.Should().Equal("retry_credential", "fail", "begin", "complete");
+    }
+
+    [Fact]
+    public async Task EnsureAsync_WhenDifferentPendingOperationLeaseActive_ShouldReturnConflictWithoutSuperseding()
+    {
+        var calls = new List<string>();
+        var current = CreateTeamAutomationDetail(
+            RecordingAuthorizationPlanner.Digest,
+            RecordingAuthorizationPlanner.PolicyVersion);
+        var scheduleService = new RecordingScheduleService
+        {
+            Calls = calls,
+            RetryOwnsEffectAttempt = false,
+            TeamAutomationDetail = current with
+            {
+                Schedule = current.Schedule with
+                {
+                    ScheduleId = "provision-published-member-1",
+                    TargetKind = ScheduledDispatchTargetKind.Envelope,
+                    TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatus.ProvisioningPending,
+                    TeamAutomationOperationId = "operation-active",
+                    TeamAutomationIdempotencyKey = "idempotency-active",
+                },
+            },
+        };
+        var sut = NewPort(scheduleService);
+
+        var act = () => ScheduleAsync(sut, Request("scope-1", "member-1"));
+
+        await act.Should().ThrowAsync<ScheduledDispatchConflictException>()
+            .WithMessage("team_automation_operation_in_progress");
+        scheduleService.RetryCredentialOperationCallCount.Should().Be(1);
+        scheduleService.FailCallCount.Should().Be(0);
+        scheduleService.BeginCallCount.Should().Be(0);
+        calls.Should().Equal("retry_credential");
+    }
+
+    [Fact]
+    public async Task EnsureAsync_WhenSupersededOperationHasCandidate_ShouldRevokeBeforeCreate()
+    {
+        var calls = new List<string>();
+        var current = CreateTeamAutomationDetail(
+            RecordingAuthorizationPlanner.Digest,
+            RecordingAuthorizationPlanner.PolicyVersion);
+        var scheduleService = new RecordingScheduleService
+        {
+            Calls = calls,
+            FailureReturnsPendingRevocation = true,
+            TeamAutomationDetail = current with
+            {
+                Schedule = current.Schedule with
+                {
+                    ScheduleId = "provision-published-member-1",
+                    TargetKind = ScheduledDispatchTargetKind.Envelope,
+                    TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatus.ProvisioningPending,
+                    TeamAutomationOperationId = "operation-stale",
+                    TeamAutomationIdempotencyKey = "idempotency-stale",
+                },
+            },
+        };
+        var materializer = new RecordingCredentialMaterializer();
+        var sut = NewPort(scheduleService, materializer: materializer);
+
+        var result = await ScheduleAsync(sut, Request("scope-1", "member-1"));
+
+        result.Success.Should().BeTrue();
+        materializer.RevokeCallCount.Should().Be(1);
+        materializer.RevocationCalls.Should().ContainSingle()
+            .Which.Should().Match<(string BearerToken, bool RevokeNyxId, bool RevokeVault)>(
+                call => call.RevokeNyxId && call.RevokeVault);
+        scheduleService.CompleteRevocationCallCount.Should().Be(1);
+        scheduleService.BeginCallCount.Should().Be(1);
+        calls.Should().Equal(
+            "retry_credential",
+            "fail",
+            "complete_revocation",
+            "begin",
+            "complete");
     }
 
     [Fact]
@@ -88,8 +233,19 @@ public sealed class StudioMemberWorkflowSchedulePortTests
 
         await ScheduleAsync(sut, Request("scope-1", "member-1") with
         {
-            CallerSubjectPlatform = " Lark ",
-            CallerSubjectTenant = " tenant-1 ",
+            CallerSubjectPlatform = " unverified-platform ",
+            CallerSubjectTenant = " unverified-tenant ",
+            AuthenticatedOwner = new AuthenticatedAuthorizationOwnerContext(
+                new AuthorizationOwnerIdentity
+                {
+                    Authority = NyxIdAuthorizationAuthorities.NyxId,
+                    OwnerKind = AuthorizationOwnerKind.Personal,
+                    OwnerSubject = "nyx-owner-alpha",
+                },
+                " lark ",
+                " tenant-alpha ",
+                " sender-alpha ",
+                " bnd-owner-alpha "),
         });
 
         var auth = scheduleService.Configuration!.Target.ServiceInvocation!.Auth;
@@ -102,8 +258,189 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         auth.SenderNyxId.Should().BeNull();
         auth.Durable.Should().BeNull();
         auth.ScopeOwnerNyxId.Should().BeNull();
+        auth.CallerAuthority.Should().BeEquivalentTo(new ScheduledCallerNyxIdAuthority
+        {
+            Platform = "lark",
+            Tenant = "tenant-alpha",
+            ExternalUserId = "sender-alpha",
+            Scope = "proxy",
+            BindingId = "bnd-owner-alpha",
+        });
         scheduleService.Configuration.TeamAutomationOwner.Should()
-            .Be(new TeamMemberAutomationOwner("scope-1", "member-1"));
+            .Be(new TeamMemberAutomationOwner("scope-1", "member-1", "team-1"));
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldExposeOwnerLLMRuntimeEvidenceFromScheduleReadModel()
+    {
+        var detail = CreateTeamAutomationDetail(
+            RecordingAuthorizationPlanner.Digest,
+            RecordingAuthorizationPlanner.PolicyVersion);
+        SetRequiredStringProperty(detail.Schedule, "OwnerLLMRouteKind", "nyx_id_user_service");
+        SetRequiredStringProperty(
+            detail.Schedule,
+            "OwnerLLMRoute",
+            "/api/v1/proxy/s/chrono-llm-public");
+        SetRequiredStringProperty(detail.Schedule, "OwnerLLMUserServiceId", "us-chrono");
+        SetRequiredStringProperty(detail.Schedule, "OwnerLLMServiceSlug", "chrono-llm-public");
+        SetRequiredStringProperty(detail.Schedule, "OwnerLLMModel", "gpt-5.5");
+        var scheduleService = new RecordingScheduleService
+        {
+            TeamAutomationDetail = detail,
+        };
+        var port = NewPort(scheduleService);
+
+        var result = await port.GetAsync("scope-1", "team-1", "member-1", "schedule-1");
+
+        result.Should().NotBeNull();
+        ReadRequiredStringProperty(result!, "OwnerLLMRouteKind").Should().Be("nyx_id_user_service");
+        ReadRequiredStringProperty(result, "OwnerLLMRoute").Should()
+            .Be("/api/v1/proxy/s/chrono-llm-public");
+        ReadRequiredStringProperty(result, "OwnerLLMUserServiceId").Should().Be("us-chrono");
+        ReadRequiredStringProperty(result, "OwnerLLMServiceSlug").Should().Be("chrono-llm-public");
+        ReadRequiredStringProperty(result, "OwnerLLMModel").Should().Be("gpt-5.5");
+        ReadRequiredStringProperty(result, "NyxIdRevocationStatus").Should().BeEmpty();
+        ReadRequiredStringProperty(result, "VaultRevocationStatus").Should().BeEmpty();
+        result.StateVersion.Should().Be(detail.Schedule.StateVersion);
+    }
+
+    [Fact]
+    public async Task ListAsync_WithMemberId_ShouldResolveMemberAndUseExactTeamAutomationOwner()
+    {
+        var scheduleService = new RecordingScheduleService
+        {
+            TeamAutomationList = new ScheduledDispatchListResult(
+                [CreateTeamAutomationDetail(
+                    RecordingAuthorizationPlanner.Digest,
+                    RecordingAuthorizationPlanner.PolicyVersion).Schedule],
+                "next-member",
+                1),
+        };
+        var memberService = new RecordingMemberService
+        {
+            Detail = CreateWorkflowMemberDetail(teamId: "team-1"),
+        };
+        var port = NewPort(scheduleService, memberService);
+
+        var result = await port.ListAsync(
+            "scope-1",
+            "team-1",
+            "member-1",
+            take: 25,
+            cursor: "cursor-1",
+            includeTotalCount: true);
+
+        memberService.GetMemberId.Should().Be("member-1");
+        scheduleService.LastTeamAutomationListOwner.Should()
+            .Be(new TeamMemberAutomationOwner("scope-1", "member-1", "team-1"));
+        scheduleService.LastTeamAutomationListTake.Should().Be(25);
+        scheduleService.LastTeamAutomationListCursor.Should().Be("cursor-1");
+        scheduleService.LastTeamAutomationListIncludeTotalCount.Should().BeTrue();
+        scheduleService.LastListQuery.Should().BeNull();
+        result.Items.Should().ContainSingle().Which.MemberId.Should().Be("member-1");
+    }
+
+    [Fact]
+    public async Task ListAsync_WithoutMemberId_ShouldUseTeamWideScheduleReadModelQuery()
+    {
+        var summary = CreateTeamAutomationDetail(
+            RecordingAuthorizationPlanner.Digest,
+            RecordingAuthorizationPlanner.PolicyVersion).Schedule with
+        {
+            TeamOwnerScopeId = "scope-1",
+            TeamId = "team-1",
+            TeamOwnerMemberId = "member-2",
+            ServiceId = "published-member-2",
+        };
+        var scheduleService = new RecordingScheduleService
+        {
+            ListResult = new ScheduledDispatchListResult([summary], "next-team", 1),
+        };
+        var memberService = new RecordingMemberService
+        {
+            Detail = CreateWorkflowMemberDetail(teamId: "team-1"),
+        };
+        var port = NewPort(scheduleService, memberService);
+
+        var result = await port.ListAsync(
+            " scope-1 ",
+            " team-1 ",
+            memberId: null,
+            take: 25,
+            cursor: "cursor-1",
+            includeTotalCount: true);
+
+        memberService.GetMemberId.Should().BeNull();
+        scheduleService.LastListQuery.Should().Be(new ScheduledDispatchListQuery(
+            Take: 25,
+            Cursor: "cursor-1",
+            IncludeTotalCount: true,
+            TeamAutomationScopeId: "scope-1",
+            TeamAutomationTeamId: "team-1",
+            TeamAutomationMemberId: null,
+            ExcludeCompletedTeamAutomationDeletions: true));
+        scheduleService.LastTeamAutomationListOwner.Should().BeNull();
+        var item = result.Items.Should().ContainSingle().Subject;
+        item.ScopeId.Should().Be("scope-1");
+        item.TeamId.Should().Be("team-1");
+        item.MemberId.Should().Be("member-2");
+        item.PublishedServiceId.Should().Be("published-member-2");
+        result.NextCursor.Should().Be("next-team");
+        result.TotalCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldPreserveDistinctRevocationTrackStatusesFromScheduleReadModel()
+    {
+        var detail = CreateTeamAutomationDetail(
+            RecordingAuthorizationPlanner.Digest,
+            RecordingAuthorizationPlanner.PolicyVersion);
+        SetRequiredStringProperty(detail.Schedule, "NyxIdRevocationStatus", "nyx-track-terminal");
+        SetRequiredStringProperty(detail.Schedule, "VaultRevocationStatus", "vault-track-terminal");
+        var scheduleService = new RecordingScheduleService
+        {
+            TeamAutomationDetail = detail,
+        };
+        var port = NewPort(scheduleService);
+
+        var result = await port.GetAsync("scope-1", "team-1", "member-1", "schedule-1");
+
+        result.Should().NotBeNull();
+        ReadRequiredStringProperty(result!, "NyxIdRevocationStatus").Should().Be("nyx-track-terminal");
+        ReadRequiredStringProperty(result, "VaultRevocationStatus").Should().Be("vault-track-terminal");
+        result.RevocationPending.Should().Be(detail.Schedule.RevocationPending);
+    }
+
+    [Fact]
+    public async Task EnsureAsync_WhenVerifiedOwnerBindingMissing_ShouldFailClosed()
+    {
+        var scheduleService = new RecordingScheduleService();
+        var materializer = new RecordingCredentialMaterializer();
+        var sut = NewPort(scheduleService, materializer: materializer);
+        var request = Request("scope-1", "member-1") with
+        {
+            AuthenticatedOwner = new AuthenticatedAuthorizationOwnerContext(
+                new AuthorizationOwnerIdentity
+                {
+                    Authority = NyxIdAuthorizationAuthorities.NyxId,
+                    OwnerKind = AuthorizationOwnerKind.Personal,
+                    OwnerSubject = "nyx-owner-alpha",
+                },
+                "lark",
+                "tenant-alpha",
+                "sender-alpha",
+                " "),
+        };
+
+        var act = () => ScheduleAsync(sut, request);
+
+        await act.Should().ThrowAsync<UnauthorizedAccessException>()
+            .WithMessage("authenticated_authorization_owner_binding_missing");
+        materializer.MaterializeCallCount.Should().Be(0);
+        materializer.RevokeCallCount.Should().Be(0);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.CandidateCallCount.Should().Be(0);
+        scheduleService.Configurations.Should().BeEmpty();
     }
 
     [Fact]
@@ -119,6 +456,67 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         planner.Requests.Should().ContainSingle();
         planner.Requests[0].InvocationTarget.StudioMember.MemberId.Should().Be("member-1");
         planner.Requests[0].InvocationTarget.StudioMember.PublishedServiceId.Should().Be("published-member-1");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldPinBackendResolvedServingRevision()
+    {
+        var memberService = new RecordingMemberService
+        {
+            Detail = CreateWorkflowMemberDetail(),
+            EndpointContract = CreateEndpointContract(
+                publishedServiceId: "published-member-1",
+                revisionId: "rev-serving-alpha"),
+        };
+        var scheduleService = new RecordingScheduleService();
+        var planner = new RecordingAuthorizationPlanner();
+        var port = NewPort(scheduleService, memberService, planner);
+        var request = Request("scope-1", "member-1");
+
+        var result = await ScheduleAsync(port, request);
+
+        result.Success.Should().BeTrue();
+        memberService.EndpointContractQueryCount.Should().Be(2);
+        planner.Requests.Should().HaveCount(2);
+        planner.Requests.Should().OnlyContain(request =>
+            request.InvocationTarget.StudioMember.PublishedServiceId == "published-member-1" &&
+            request.InvocationTarget.StudioMember.WorkflowRevisionId == "rev-serving-alpha");
+        var invocation = scheduleService.Configuration!.Target.ServiceInvocation!;
+        invocation.Identity.ServiceId.Should().Be("published-member-1");
+        invocation.RevisionId.Should().Be("rev-serving-alpha");
+        scheduleService.BeginOperation!.ActivationDecision.RevisionId.Should().Be("rev-serving-alpha");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenServingRevisionIsNotInvokeReady_ShouldHaveNoAuthorizationOrCredentialSideEffects()
+    {
+        var memberService = new RecordingMemberService
+        {
+            Detail = CreateWorkflowMemberDetail(),
+            EndpointContract = CreateEndpointContract(
+                publishedServiceId: "published-member-1",
+                revisionId: "rev-serving-alpha",
+                canInvoke: false),
+        };
+        var scheduleService = new RecordingScheduleService();
+        var planner = new RecordingAuthorizationPlanner();
+        var materializer = new RecordingCredentialMaterializer();
+        var port = NewPort(
+            scheduleService,
+            memberService: memberService,
+            planner: planner,
+            materializer: materializer);
+
+        var action = () => port.CreateAsync(
+            Request("scope-1", "member-1"),
+            RecordingAuthorizationPlanner.Digest);
+
+        var conflict = await action.Should().ThrowAsync<StudioMemberAutomationPlanConflictException>();
+        conflict.Which.Code.Should().Be("serving_revision_not_ready");
+        planner.Requests.Should().BeEmpty();
+        materializer.MaterializeCallCount.Should().Be(0);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.Configurations.Should().BeEmpty();
     }
 
     [Fact]
@@ -159,13 +557,24 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         exception.Message.Should().Be("The authorization catalog could not be refreshed. Retry this request.");
     }
 
-    [Fact]
-    public async Task PreflightAsync_WhenCatalogSnapshotMissingAndBearerAvailable_ShouldReturnPlannerResultWithoutSideEffects()
+    [Theory]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+        "nyxid_catalog_snapshot_not_found")]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+        "nyxid_catalog_snapshot_invalidated")]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.SnapshotStale,
+        "nyxid_catalog_snapshot_stale")]
+    public async Task PreflightAsync_WhenCatalogSnapshotUnavailableAndBearerAvailable_ShouldReturnPlannerResultWithoutSideEffects(
+        ScheduledInvocationAuthorizationFailureCode failureCode,
+        string detail)
     {
         var planner = new RecordingAuthorizationPlanner();
         planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
-            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
-            "nyxid_catalog_snapshot_not_found"));
+            failureCode,
+            detail));
         planner.Results.Enqueue(RecordingAuthorizationPlanner.SuccessResult());
         var refresh = new RecordingCatalogRefreshPort();
         var request = Request("scope-1", "member-1");
@@ -177,8 +586,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         var result = await port.PreflightAsync(request);
 
         result.Success.Should().BeFalse();
-        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound);
-        result.Detail.Should().Be("nyxid_catalog_snapshot_not_found");
+        result.FailureCode.Should().Be(failureCode);
+        result.Detail.Should().Be(detail);
         planner.Requests.Should().ContainSingle();
         refresh.RefreshCallCount.Should().Be(0);
     }
@@ -217,6 +626,284 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     [InlineData(
         ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
         "nyxid_catalog_snapshot_not_found")]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+        "nyxid_catalog_snapshot_invalidated")]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.SnapshotStale,
+        "nyxid_catalog_snapshot_stale")]
+    public async Task PreflightForWriteAsync_WhenCatalogSnapshotUnavailableAndBearerAvailable_ShouldRefreshAndRetryPlanner(
+        ScheduledInvocationAuthorizationFailureCode failureCode,
+        string detail)
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            failureCode,
+            detail,
+            requiredNyxIdServices: [new NyxIdUserServiceCapabilityRef { UserServiceId = "nyx-service-alpha" }]));
+        planner.Results.Enqueue(RecordingAuthorizationPlanner.SuccessResult());
+        var refresh = new RecordingCatalogRefreshPort();
+        var materializer = new RecordingCredentialMaterializer();
+        var scheduleService = new RecordingScheduleService();
+        var request = Request("scope-1", "member-1");
+        var port = NewPort(
+            scheduleService,
+            planner: planner,
+            materializer: materializer,
+            catalogRefresh: refresh);
+
+        var result = await port.PreflightForWriteAsync(request);
+
+        result.Success.Should().BeTrue();
+        result.Plan!.PermissionDigest.Should().Be(RecordingAuthorizationPlanner.Digest);
+        planner.Requests.Should().HaveCount(2);
+        refresh.RefreshCallCount.Should().Be(1);
+        refresh.LastOwner.Should().BeEquivalentTo(request.AuthenticatedOwner.Owner);
+        refresh.LastBearerToken.Should().Be("bearer-alpha");
+        refresh.LastRequiredServices.Select(static service => service.UserServiceId)
+            .Should().Equal("nyx-service-alpha");
+        materializer.MaterializeCallCount.Should().Be(0);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenCatalogRefreshIsUnstable_ShouldThrowTypedRefreshUnavailable()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_invalidated",
+            requiredNyxIdServices: [new NyxIdUserServiceCapabilityRef { UserServiceId = "nyx-service-alpha" }]));
+        var refresh = new RecordingCatalogRefreshPort
+        {
+            Result = new NyxIdAuthorizationCatalogRefreshResult(
+                NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable,
+                "api_key_scope_plan_route_unresolved"),
+        };
+        var materializer = new RecordingCredentialMaterializer();
+        var scheduleService = new RecordingScheduleService();
+        var port = NewPort(
+            scheduleService,
+            planner: planner,
+            materializer: materializer,
+            catalogRefresh: refresh);
+
+        var act = () => port.PreflightForWriteAsync(Request("scope-1", "member-1"));
+
+        await act.Should().ThrowAsync<StudioMemberAutomationCatalogRefreshUnavailableException>()
+            .WithMessage("The authorization catalog could not be refreshed. Retry this request.");
+        planner.Requests.Should().ContainSingle();
+        refresh.RefreshCallCount.Should().Be(1);
+        materializer.MaterializeCallCount.Should().Be(0);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenCatalogSnapshotUnavailableWithoutRequiredServices_ShouldNotRefresh()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_not_found",
+            requiredNyxIdServices: []));
+        planner.Results.Enqueue(RecordingAuthorizationPlanner.SuccessResult());
+        var refresh = new RecordingCatalogRefreshPort();
+        var tokenProvider = new RecordingWorkflowCallerAccessTokenProvider();
+        var request = Request("scope-1", "member-1") with
+        {
+            ProvisioningBearerToken = null,
+        };
+        var port = NewPort(
+            new RecordingScheduleService(),
+            planner: planner,
+            catalogRefresh: refresh,
+            callerAccessTokenProvider: tokenProvider);
+
+        var result = await port.PreflightForWriteAsync(request);
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound);
+        result.Detail.Should().Be("nyxid_catalog_refresh_required_services_unavailable:nyxid_catalog_snapshot_not_found");
+        planner.Requests.Should().ContainSingle();
+        refresh.RefreshCallCount.Should().Be(0);
+        tokenProvider.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenRetryReturnsNonCatalogFailureWithoutCatalogObservation_ShouldReturnPlannerFailure()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_invalidated",
+            observedCatalogStateVersion: 22));
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable,
+            "owner_llm_exact_service_identity_unavailable"));
+        var refresh = new RecordingCatalogRefreshPort
+        {
+            Result = NyxIdAuthorizationCatalogRefreshResult.ObservedAt(23),
+        };
+        var materializer = new RecordingCredentialMaterializer();
+        var scheduleService = new RecordingScheduleService();
+        var port = NewPort(
+            scheduleService,
+            planner: planner,
+            materializer: materializer,
+            catalogRefresh: refresh);
+
+        var result = await port.PreflightForWriteAsync(Request("scope-1", "member-1"));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable);
+        result.Detail.Should().Be("owner_llm_exact_service_identity_unavailable");
+        planner.Requests.Should().HaveCount(2);
+        refresh.RefreshCallCount.Should().Be(1);
+        materializer.MaterializeCallCount.Should().Be(0);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenRetryReturnsNonCatalogFailureFromStaleCatalogObservation_ShouldThrowProjectionPending()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_invalidated",
+            observedCatalogStateVersion: 22));
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable,
+            "owner_llm_exact_service_identity_unavailable",
+            observedCatalogStateVersion: 22));
+        var refresh = new RecordingCatalogRefreshPort
+        {
+            Result = NyxIdAuthorizationCatalogRefreshResult.ObservedAt(23),
+        };
+        var materializer = new RecordingCredentialMaterializer();
+        var scheduleService = new RecordingScheduleService();
+        var port = NewPort(
+            scheduleService,
+            planner: planner,
+            materializer: materializer,
+            catalogRefresh: refresh);
+
+        var act = () => port.PreflightForWriteAsync(Request("scope-1", "member-1"));
+
+        var pending = await act.Should().ThrowAsync<StudioMemberAutomationProjectionPendingException>();
+        pending.Which.RequiredStateVersion.Should().Be(23);
+        planner.Requests.Should().HaveCount(2);
+        refresh.RefreshCallCount.Should().Be(1);
+        materializer.MaterializeCallCount.Should().Be(0);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenBearerMissingButTypedAuthorityAvailable_ShouldIssueFreshTokenAndRefresh()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_invalidated"));
+        planner.Results.Enqueue(RecordingAuthorizationPlanner.SuccessResult());
+        var refresh = new RecordingCatalogRefreshPort();
+        var tokenProvider = new RecordingWorkflowCallerAccessTokenProvider();
+        var port = NewPort(
+            new RecordingScheduleService(),
+            planner: planner,
+            catalogRefresh: refresh,
+            callerAccessTokenProvider: tokenProvider);
+
+        var result = await port.PreflightForWriteAsync(Request("scope-1", "member-1") with
+        {
+            ProvisioningBearerToken = null,
+        });
+
+        result.Success.Should().BeTrue();
+        refresh.LastBearerToken.Should().Be("issued-bearer-alpha");
+        tokenProvider.Requests.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new WorkflowCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-alpha",
+                ExternalUserId = "sender-alpha",
+                Scope = "proxy",
+                BindingId = "bnd-owner-alpha",
+            });
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenCommittedRefreshVersionIsNotYetVisible_ShouldThrowProjectionPending()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_invalidated",
+            observedCatalogStateVersion: 22));
+        var stalePlan = RecordingAuthorizationPlanner.SuccessResult().Plan!.Clone();
+        stalePlan.CatalogAuthority.ActorStateVersion = 22;
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Succeeded(stalePlan));
+        var refresh = new RecordingCatalogRefreshPort
+        {
+            Result = NyxIdAuthorizationCatalogRefreshResult.ObservedAt(23),
+        };
+        var scheduleService = new RecordingScheduleService();
+        var port = NewPort(
+            scheduleService,
+            planner: planner,
+            catalogRefresh: refresh);
+
+        var act = () => port.PreflightForWriteAsync(Request("scope-1", "member-1"));
+
+        var pending = await act.Should().ThrowAsync<StudioMemberAutomationProjectionPendingException>();
+        pending.Which.RequiredStateVersion.Should().Be(23);
+        planner.Requests.Should().HaveCount(2);
+        refresh.RefreshCallCount.Should().Be(1);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenSupersededRefreshVersionIsAheadOfObservedSnapshot_ShouldThrowProjectionPending()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_invalidated",
+            observedCatalogStateVersion: 22));
+        var refresh = new RecordingCatalogRefreshPort
+        {
+            Result = new NyxIdAuthorizationCatalogRefreshResult(
+                NyxIdAuthorizationCatalogRefreshStatus.Superseded,
+                "nyxid_catalog_refresh_superseded",
+                StateVersion: 23),
+        };
+        var scheduleService = new RecordingScheduleService();
+        var port = NewPort(
+            scheduleService,
+            planner: planner,
+            catalogRefresh: refresh);
+
+        var act = () => port.PreflightForWriteAsync(Request("scope-1", "member-1"));
+
+        var pending = await act.Should().ThrowAsync<StudioMemberAutomationProjectionPendingException>();
+        pending.Which.RequiredStateVersion.Should().Be(23);
+        planner.Requests.Should().ContainSingle();
+        refresh.RefreshCallCount.Should().Be(1);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+        "nyxid_catalog_snapshot_not_found")]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+        "nyxid_catalog_snapshot_invalidated")]
     [InlineData(
         ScheduledInvocationAuthorizationFailureCode.SnapshotStale,
         "nyxid_catalog_snapshot_stale")]
@@ -292,7 +979,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 Tenant = "tenant-alpha",
                 ExternalUserId = "sender-alpha",
                 Scope = "proxy",
-                BindingId = "binding-alpha",
+                BindingId = "bnd-owner-alpha",
             });
         materializer.BearerToken.Should().Be("issued-bearer-alpha");
         var auth = scheduleService.Configuration!.Target.ServiceInvocation!.Auth;
@@ -328,6 +1015,193 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             .WithMessage("The requested Team automation was not found.");
     }
 
+    [Theory]
+    [InlineData("scope-other", "member-1")]
+    [InlineData("scope-1", "member-other")]
+    public async Task PreflightAsync_WhenMemberReadModelIdentityDiffers_ShouldReturnGenericNotFound(
+        string resolvedScopeId,
+        string resolvedMemberId)
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        var port = NewPort(
+            new RecordingScheduleService(),
+            new RecordingMemberService
+            {
+                Detail = CreateWorkflowMemberDetail(
+                    scopeId: resolvedScopeId,
+                    memberId: resolvedMemberId),
+            },
+            planner);
+
+        var action = () => port.PreflightAsync(Request("scope-1", "member-1"));
+
+        await action.Should().ThrowAsync<StudioMemberAutomationNotFoundException>()
+            .WithMessage("The requested Team automation was not found.");
+        planner.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenMemberReadModelMissingButAcceptedBindingProvided_ShouldRejectBindReceiptAsReadiness()
+    {
+        var memberService = new RecordingMemberService { Detail = null };
+        var planner = new RecordingAuthorizationPlanner();
+        var port = NewPort(
+            new RecordingScheduleService(),
+            memberService,
+            planner);
+        var request = Request("scope-1", "member-1") with
+        {
+            AcceptedBinding = new StudioMemberWorkflowAcceptedBindingContext(
+                "team-1",
+                "published-member-accepted",
+                "workflow-accepted",
+                "rev-accepted")
+            {
+                WorkflowEvidence = new ScheduledInvocationWorkflowEvidence(
+                    StateVersion: 0,
+                    ExternalCapabilities: [],
+                    OwnerLLMRouteRequired: false,
+                    ServiceGrantRequirement: AuthorizationGrantRequirement.NotRequired),
+            },
+        };
+
+        var action = () => port.PreflightForWriteAsync(request);
+
+        await action.Should().ThrowAsync<StudioMemberAutomationNotFoundException>()
+            .WithMessage("The requested Team automation was not found.");
+        memberService.GetScopeId.Should().Be("scope-1");
+        memberService.GetMemberId.Should().Be("member-1");
+        planner.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenAcceptedBindingProvidedForExistingMember_ShouldIgnoreCallerTrustedEvidence()
+    {
+        var memberService = new RecordingMemberService
+        {
+            Detail = CreateWorkflowMemberDetail(),
+            EndpointContract = CreateEndpointContract("published-member-1", "rev-1"),
+        };
+        var planner = new RecordingAuthorizationPlanner();
+        var port = NewPort(
+            new RecordingScheduleService(),
+            memberService,
+            planner);
+        var request = Request("scope-1", "member-1") with
+        {
+            AcceptedBinding = new StudioMemberWorkflowAcceptedBindingContext(
+                "team-1",
+                "published-member-1",
+                "workflow-1",
+                "rev-1")
+            {
+                WorkflowEvidence = new ScheduledInvocationWorkflowEvidence(
+                    StateVersion: 0,
+                    ExternalCapabilities: [],
+                    OwnerLLMRouteRequired: false,
+                    ServiceGrantRequirement: AuthorizationGrantRequirement.NotRequired),
+            },
+        };
+
+        var result = await port.PreflightForWriteAsync(request);
+
+        result.Success.Should().BeTrue();
+        planner.Requests.Should().ContainSingle();
+        var target = planner.Requests[0].InvocationTarget.StudioMember;
+        target.TeamId.Should().Be("team-1");
+        target.MemberId.Should().Be("member-1");
+        target.PublishedServiceId.Should().Be("published-member-1");
+        target.DraftWorkflowId.Should().Be("workflow-1");
+        target.WorkflowRevisionId.Should().Be("rev-1");
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenServingEndpointHasOlderRevision_ShouldUseAcceptedBindingContext()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        var memberService = new RecordingMemberService
+        {
+            Detail = CreateWorkflowMemberDetail(),
+            EndpointContract = CreateEndpointContract("published-member-1", "rev-serving-old"),
+        };
+        var port = NewPort(
+            new RecordingScheduleService(),
+            memberService: memberService,
+            planner: planner);
+        var workflowEvidence = new ScheduledInvocationWorkflowEvidence(
+            StateVersion: 0,
+            ExternalCapabilities: [],
+            OwnerLLMRouteRequired: false,
+            ServiceGrantRequirement: AuthorizationGrantRequirement.NotRequired);
+        var request = Request("scope-1", "member-1") with
+        {
+            AcceptedBinding = new StudioMemberWorkflowAcceptedBindingContext(
+                "team-1",
+                "published-member-1",
+                "workflow-accepted",
+                "rev-accepted")
+            {
+                WorkflowEvidence = workflowEvidence,
+            },
+        };
+
+        var result = await port.PreflightForWriteAsync(request);
+
+        result.Success.Should().BeTrue();
+        memberService.EndpointContractQueryCount.Should().Be(0);
+        planner.Requests.Should().ContainSingle();
+        var authorizationRequest = planner.Requests[0];
+        authorizationRequest.InvocationTarget.StudioMember.Should().BeEquivalentTo(
+            new StudioMemberInvocationTarget
+            {
+                ScopeId = "scope-1",
+                TeamId = "team-1",
+                MemberId = "member-1",
+                PublishedServiceId = "published-member-1",
+                DraftWorkflowId = "workflow-accepted",
+                WorkflowRevisionId = "rev-accepted",
+            });
+        authorizationRequest.SourceStamps.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenAcceptedBindingPublishedServiceDiffersFromMember_ShouldReturnGenericNotFound()
+    {
+        var port = NewPort(new RecordingScheduleService());
+        var request = Request("scope-1", "member-1") with
+        {
+            AcceptedBinding = new StudioMemberWorkflowAcceptedBindingContext(
+                "team-1",
+                "published-member-other",
+                "workflow-accepted",
+                "rev-accepted"),
+        };
+
+        var action = () => port.PreflightForWriteAsync(request);
+
+        await action.Should().ThrowAsync<StudioMemberAutomationNotFoundException>()
+            .WithMessage("The requested Team automation was not found.");
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenAcceptedBindingTeamDiffersFromMember_ShouldReturnGenericNotFound()
+    {
+        var port = NewPort(new RecordingScheduleService());
+        var request = Request("scope-1", "member-1") with
+        {
+            AcceptedBinding = new StudioMemberWorkflowAcceptedBindingContext(
+                "team-other",
+                "published-member-1",
+                "workflow-accepted",
+                "rev-accepted"),
+        };
+
+        var action = () => port.PreflightForWriteAsync(request);
+
+        await action.Should().ThrowAsync<StudioMemberAutomationNotFoundException>()
+            .WithMessage("The requested Team automation was not found.");
+    }
+
     [Fact]
     public void ToScheduleAuthorizationFact_ShouldMapMixedDirectAndNodeBackedServicesPerService()
     {
@@ -347,6 +1221,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         fact.ServiceGrants[1].ServiceId.Should().Be("nyx-service-direct");
         fact.ServiceGrants[1].NodeIds.Should().BeEmpty();
         fact.ServiceGrants[1].NodeGrantsNotRequired.Should().BeTrue();
+        fact.OwnerLLMSelection.Should().BeEquivalentTo(plan.OwnerLlmSelection);
+        fact.OwnerLLMSelection.Should().NotBeSameAs(plan.OwnerLlmSelection);
         fact.GetType().GetProperties().Should()
             .NotContain(property => property.Name == "NodeGrants");
     }
@@ -649,18 +1525,77 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
+    public async Task CreateAsync_WhenBeginCommitsNewOperation_ShouldReportNewOperationCommitted()
+    {
+        var materializer = new RecordingCredentialMaterializer();
+        var result = await ScheduleAsync(
+            NewPort(new RecordingScheduleService(), materializer: materializer),
+            Request("scope-1", "member-1"));
+
+        result.NewOperationCommitted.Should().BeTrue();
+        materializer.MaterializationMode.Should()
+            .Be(StudioScheduledCredentialMaterializationMode.Initial);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenNewOperationUsesLaterScheduleAttemptGeneration_ShouldStillMaterializeAsInitial()
+    {
+        var scheduleService = new RecordingScheduleService
+        {
+            BeginEffectAttemptGeneration = 4,
+            BeginNewOperationCommitted = true,
+        };
+        var materializer = new RecordingCredentialMaterializer();
+
+        var result = await ScheduleAsync(
+            NewPort(scheduleService, materializer: materializer),
+            Request("scope-1", "member-1"));
+
+        result.Success.Should().BeTrue();
+        materializer.MaterializationMode.Should()
+            .Be(StudioScheduledCredentialMaterializationMode.Initial);
+    }
+
+    [Fact]
     public async Task CreateAsync_WhenBeginReplayDoesNotOwnEffect_ShouldNotMaterializeCredential()
     {
-        var scheduleService = new RecordingScheduleService { BeginOwnsEffectAttempt = false };
+        var scheduleService = new RecordingScheduleService
+        {
+            BeginOwnsEffectAttempt = false,
+            BeginNewOperationCommitted = false,
+        };
         var materializer = new RecordingCredentialMaterializer();
         var port = NewPort(scheduleService, materializer: materializer);
 
         var result = await ScheduleAsync(port, Request("scope-1", "member-1"));
 
         result.Status.Should().Be("pending");
+        result.NewOperationCommitted.Should().BeFalse();
         scheduleService.BeginCallCount.Should().Be(1);
         scheduleService.EnsureCallCount.Should().Be(0);
         materializer.MaterializeCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenExpiredBeginReplayOwnsEffect_ShouldNotReportNewOperationCommitted()
+    {
+        var scheduleService = new RecordingScheduleService
+        {
+            BeginOwnsEffectAttempt = true,
+            BeginNewOperationCommitted = false,
+        };
+        var materializer = new RecordingCredentialMaterializer();
+
+        var result = await ScheduleAsync(
+            NewPort(scheduleService, materializer: materializer),
+            Request("scope-1", "member-1"));
+
+        result.Success.Should().BeTrue();
+        result.NewOperationCommitted.Should().BeFalse();
+        scheduleService.BeginCallCount.Should().Be(1);
+        materializer.MaterializeCallCount.Should().Be(1);
+        materializer.MaterializationMode.Should()
+            .Be(StudioScheduledCredentialMaterializationMode.Recovery);
     }
 
     [Fact]
@@ -750,19 +1685,133 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
-    public async Task RetryRevocationAsync_ShouldUseIdentityOnlyCommandAndExecuteCommittedEffects()
+    public async Task DeleteAsync_ShouldUseRichDeleteAndPropagateReasonAndFreshAuthority()
     {
-        var scheduleService = new RecordingScheduleService { ReturnPendingRevocationOnRetry = true };
+        var scheduleService = new RecordingScheduleService();
+        scheduleService.DeleteAttempts.Enqueue(new DeleteAttempt(
+            OwnsEffectAttempt: true,
+            NyxIdPending: true,
+            VaultPending: true));
         var materializer = new RecordingCredentialMaterializer();
         var port = NewPort(scheduleService, materializer: materializer);
-        var request = Request("scope-1", "member-1");
-        var command = new StudioMemberAutomationActionCommand(
+        var owner = Request("scope-1", "member-1").AuthenticatedOwner;
+
+        var result = await port.DeleteAsync(
+            new StudioMemberAutomationActionCommand(
+                "scope-1",
+                "team-1",
+                "member-1",
+                "schedule-1",
+                "operation-delete",
+                "idempotency-delete")
+            {
+                Reason = " scheduled_agent_key_canary_cleanup ",
+                AuthenticatedOwner = owner,
+                ProvisioningBearerToken = "fresh-bearer-sensitive",
+            });
+
+        result.Accepted.Should().BeTrue();
+        result.Status.Should().Be("pending");
+        var call = scheduleService.RichDeleteCalls
+            .Should().ContainSingle().Subject;
+        call.Owner.Should().Be(new TeamMemberAutomationOwner(
+            "scope-1",
+            "member-1",
+            "team-1"));
+        call.Reason.Should().Be("scheduled_agent_key_canary_cleanup");
+        materializer.RevocationCalls.Should().ContainSingle().Which.Should().Be(
+            ("fresh-bearer-sensitive", true, true));
+        scheduleService.CompleteRevocationCallCount.Should().Be(1);
+
+        var serialized = JsonSerializer.Serialize(
+            result,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        foreach (var forbidden in new[]
+                 {
+                     "fresh-bearer-sensitive",
+                     "nyx-owner-alpha",
+                     "binding-alpha",
+                     "key-alpha",
+                     "secret-alpha",
+                     "ApiKeyId",
+                     "SecretReference",
+                     "VaultReference",
+                     "CallerAuthority",
+                     "VerifiedBindingId",
+                 })
+        {
+            serialized.Should().NotContain(forbidden);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ExactReplay_ShouldContinueOnlyPendingRevocationWithFreshBearer()
+    {
+        var scheduleService = new RecordingScheduleService();
+        scheduleService.DeleteAttempts.Enqueue(new DeleteAttempt(
+            OwnsEffectAttempt: true,
+            NyxIdPending: true,
+            VaultPending: true));
+        scheduleService.DeleteAttempts.Enqueue(new DeleteAttempt(
+            OwnsEffectAttempt: true,
+            NyxIdPending: false,
+            VaultPending: true));
+        var materializer = new RecordingCredentialMaterializer();
+        materializer.RevocationResults.Enqueue(
+            new StudioScheduledCredentialRevocationResult(
+                NyxIdRevoked: true,
+                VaultRevoked: false,
+                ErrorCode: "credential_revocation_transient"));
+        materializer.RevocationResults.Enqueue(
+            new StudioScheduledCredentialRevocationResult(
+                NyxIdRevoked: true,
+                VaultRevoked: true,
+                ErrorCode: string.Empty));
+        var port = NewPort(scheduleService, materializer: materializer);
+        var owner = Request("scope-1", "member-1").AuthenticatedOwner;
+        var first = new StudioMemberAutomationActionCommand(
             "scope-1",
             "team-1",
             "member-1",
             "schedule-1",
             "operation-delete",
             "idempotency-delete")
+        {
+            Reason = "scheduled_agent_key_canary_cleanup",
+            AuthenticatedOwner = owner,
+            ProvisioningBearerToken = "fresh-bearer-1",
+        };
+
+        await port.DeleteAsync(first);
+        await port.DeleteAsync(first with
+        {
+            ProvisioningBearerToken = "fresh-bearer-2",
+        });
+
+        scheduleService.RichDeleteCalls.Should().HaveCount(2);
+        scheduleService.RichDeleteCalls.Should().OnlyContain(call =>
+            call.ScheduleId == "schedule-1" &&
+            call.OperationId == "operation-delete" &&
+            call.IdempotencyKey == "idempotency-delete" &&
+            call.Reason == "scheduled_agent_key_canary_cleanup");
+        materializer.RevocationCalls.Should().Equal(
+            ("fresh-bearer-1", true, true),
+            ("fresh-bearer-2", false, true));
+        scheduleService.RetryRevocationCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task RetryRevocationAsync_ShouldUseIdentityOnlyCommandAndExecuteCommittedEffects()
+    {
+        var scheduleService = new RecordingScheduleService { ReturnPendingRevocationOnRetry = true };
+        var materializer = new RecordingCredentialMaterializer();
+        var port = NewPort(scheduleService, materializer: materializer);
+        var request = Request("scope-1", "member-1");
+        var command = new StudioMemberAutomationRetryRevocationCommand(
+            "scope-1",
+            "team-1",
+            "member-1",
+            "schedule-1")
         {
             AuthenticatedOwner = request.AuthenticatedOwner,
             ProvisioningBearerToken = "fresh-bearer",
@@ -779,16 +1828,294 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
+    public async Task RetryRevocationAsync_WhenBothTracksCommit_ShouldEmitAllowlistedCompletionEvidenceOnce()
+    {
+        var scheduleService = new RecordingScheduleService { ReturnPendingRevocationOnRetry = true };
+        var materializer = new RecordingCredentialMaterializer();
+        var logs = new RecordingLoggerProvider();
+        using var loggerFactory = LoggerFactory.Create(builder => builder.AddProvider(logs));
+        var port = NewPort(
+            scheduleService,
+            materializer: materializer,
+            logger: loggerFactory.CreateLogger<StudioMemberWorkflowSchedulePort>(),
+            auditLoggerFactory: loggerFactory);
+        var request = Request("scope-1", "member-1");
+        var command = new StudioMemberAutomationRetryRevocationCommand(
+            "scope-1",
+            "team-1",
+            "member-1",
+            "schedule-1")
+        {
+            AuthenticatedOwner = request.AuthenticatedOwner,
+            ProvisioningBearerToken = "fresh-bearer-sensitive",
+        };
+
+        await port.RetryRevocationAsync(command);
+
+        var entry = logs.Entries
+            .Where(static candidate => candidate.EventId.Name ==
+                "StudioMemberAutomationRevocationCompleted")
+            .Should().ContainSingle().Subject;
+        entry.Category.Should().Be("Aevatar.Studio.MemberAutomation");
+        entry.LogLevel.Should().Be(LogLevel.Information);
+        entry.EventId.Id.Should().Be(6202);
+        entry.Exception.Should().BeNull();
+
+        var properties = entry.State
+            .Where(static item => item.Key != "{OriginalFormat}")
+            .ToDictionary(static item => item.Key, static item => item.Value);
+        properties.Should().HaveCount(9);
+        properties.Keys.Should().BeEquivalentTo(
+        [
+            "ScopeId",
+            "TeamId",
+            "MemberId",
+            "ScheduleId",
+            "OperationId",
+            "NyxIdRevocationStatus",
+            "VaultRevocationStatus",
+            "StateVersion",
+            "ObservedAtUtc",
+        ]);
+        properties["ScopeId"].Should().Be("scope-1");
+        properties["TeamId"].Should().Be("team-1");
+        properties["MemberId"].Should().Be("member-1");
+        properties["ScheduleId"].Should().Be("schedule-1");
+        properties["OperationId"].Should().Be("operation-delete");
+        properties["NyxIdRevocationStatus"].Should().Be("Completed");
+        properties["VaultRevocationStatus"].Should().Be("Completed");
+        properties["StateVersion"].Should().Be(1L);
+        properties["ObservedAtUtc"].Should().Be(TestNow);
+
+        var capturedContent = string.Join(
+            '\n',
+            entry.State.Select(static item => $"{item.Key}={item.Value}").Append(entry.Message));
+        foreach (var forbidden in new[]
+                 {
+                     "fresh-bearer-sensitive",
+                     "key-alpha",
+                     "secret-alpha",
+                     "idempotency-delete",
+                     "nyx-owner-alpha",
+                     "PermissionDigest",
+                     "ApiKey",
+                     "SecretReference",
+                     "VaultReference",
+                     "CallerAuthority",
+                 })
+        {
+            capturedContent.Should().NotContain(forbidden);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false, true, true)]
+    [InlineData(true, false, true, true)]
+    [InlineData(true, true, true, false)]
+    [InlineData(true, true, false, true)]
+    public async Task RetryRevocationAsync_WhenCompletionIsNotOwnedAndSuccessful_ShouldNotEmitCompletionEvidence(
+        bool pending,
+        bool ownsEffectAttempt,
+        bool nyxIdRevoked,
+        bool vaultRevoked)
+    {
+        var scheduleService = new RecordingScheduleService
+        {
+            ReturnPendingRevocationOnRetry = pending,
+            RetryOwnsEffectAttempt = ownsEffectAttempt,
+        };
+        var materializer = new RecordingCredentialMaterializer
+        {
+            NyxIdRevoked = nyxIdRevoked,
+            VaultRevoked = vaultRevoked,
+        };
+        var logs = new RecordingLoggerProvider();
+        using var loggerFactory = LoggerFactory.Create(builder => builder.AddProvider(logs));
+        var port = NewPort(
+            scheduleService,
+            materializer: materializer,
+            logger: loggerFactory.CreateLogger<StudioMemberWorkflowSchedulePort>(),
+            auditLoggerFactory: loggerFactory);
+        var request = Request("scope-1", "member-1");
+
+        await port.RetryRevocationAsync(new StudioMemberAutomationRetryRevocationCommand(
+            "scope-1",
+            "team-1",
+            "member-1",
+            "schedule-1")
+        {
+            AuthenticatedOwner = request.AuthenticatedOwner,
+            ProvisioningBearerToken = "fresh-bearer-sensitive",
+        });
+
+        logs.Entries.Should().NotContain(static candidate =>
+            candidate.EventId.Name == "StudioMemberAutomationRevocationCompleted");
+    }
+
+    [Fact]
     public async Task ReauthorizeAsync_WhenPermissionDigestChanged_ShouldNotDispatch()
     {
-        var scheduleService = new RecordingScheduleService();
+        var scheduleService = new RecordingScheduleService
+        {
+            TeamAutomationDetail = CreateTeamAutomationDetail(
+                RecordingAuthorizationPlanner.Digest,
+                RecordingAuthorizationPlanner.PolicyVersion),
+        };
         var port = NewPort(scheduleService);
+        var request = Request("scope-1", "member-1") with
+        {
+            ScheduleId = "schedule-1",
+            OperationId = "operation-reauthorize",
+            IdempotencyKey = "idempotency-reauthorize",
+        };
 
-        var action = () => port.ReauthorizeAsync(Request("scope-1", "member-1"), "stale-digest");
+        var action = () => port.ReauthorizeAsync(request, "stale-digest");
 
         await action.Should().ThrowAsync<StudioMemberAutomationPlanConflictException>()
             .WithMessage("authorization_plan_changed");
         scheduleService.EnsureCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ReauthorizeAsync_WhenAuthorized_ShouldCarryFreshOwnerLLMSelection()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        var scheduleService = new RecordingScheduleService
+        {
+            TeamAutomationDetail = CreateTeamAutomationDetail(
+                RecordingAuthorizationPlanner.Digest,
+                RecordingAuthorizationPlanner.PolicyVersion),
+        };
+        var port = NewPort(scheduleService, planner: planner);
+        var request = Request("scope-1", "member-1") with
+        {
+            ScheduleId = "schedule-1",
+            OperationId = "operation-reauthorize",
+            IdempotencyKey = "idempotency-reauthorize",
+        };
+
+        var result = await port.ReauthorizeAsync(request, RecordingAuthorizationPlanner.Digest);
+
+        result.Success.Should().BeTrue();
+        var configuration = scheduleService.Configuration!;
+        configuration.Target.ServiceInvocation!.AuthorizationFact!.OwnerLLMSelection
+            .Should().BeEquivalentTo(planner.Result.Plan!.OwnerLlmSelection);
+        var chat = configuration.Target.ServiceInvocation.Payload.Unpack<ChatRequestEvent>();
+        chat.LlmControl.ModelOverride.Should().Be("gpt-5.5");
+        chat.LlmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm-public");
+    }
+
+    [Fact]
+    public async Task ReauthorizeAsync_WhenServingRevisionAdvanced_ShouldPreserveStoredRevisionPin()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        var memberService = new RecordingMemberService
+        {
+            Detail = CreateWorkflowMemberDetail(),
+            EndpointContract = CreateEndpointContract("published-member-1", "rev-current"),
+        };
+        var scheduleService = new RecordingScheduleService
+        {
+            TeamAutomationDetail = CreateTeamAutomationDetail(
+                RecordingAuthorizationPlanner.Digest,
+                RecordingAuthorizationPlanner.PolicyVersion,
+                serviceRevisionId: "rev-pinned"),
+        };
+        var port = NewPort(scheduleService, memberService, planner);
+        var request = Request("scope-1", "member-1") with
+        {
+            ScheduleId = "schedule-1",
+            OperationId = "operation-reauthorize",
+            IdempotencyKey = "idempotency-reauthorize",
+        };
+
+        await port.ReauthorizeAsync(request, RecordingAuthorizationPlanner.Digest);
+
+        memberService.EndpointContractQueryCount.Should().Be(1);
+        planner.Requests.Should().ContainSingle();
+        planner.Requests[0].InvocationTarget.StudioMember.WorkflowRevisionId.Should().Be("rev-pinned");
+        scheduleService.Configuration!.Target.ServiceInvocation!.RevisionId.Should().Be("rev-pinned");
+        scheduleService.BeginOperation!.ActivationDecision.RevisionId.Should().Be("rev-pinned");
+    }
+
+    [Fact]
+    public async Task ReplaceAsync_WhenServingRevisionAdvanced_ShouldUseCurrentRevision()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        var memberService = new RecordingMemberService
+        {
+            Detail = CreateWorkflowMemberDetail(),
+            EndpointContract = CreateEndpointContract("published-member-1", "rev-current"),
+        };
+        var scheduleService = new RecordingScheduleService
+        {
+            TeamAutomationDetail = CreateTeamAutomationDetail(
+                RecordingAuthorizationPlanner.Digest,
+                RecordingAuthorizationPlanner.PolicyVersion,
+                serviceRevisionId: "rev-pinned"),
+        };
+        var port = NewPort(scheduleService, memberService, planner);
+        var request = Request("scope-1", "member-1") with
+        {
+            ScheduleId = "schedule-1",
+            OperationId = "operation-replace",
+            IdempotencyKey = "idempotency-replace",
+        };
+
+        await port.ReplaceAsync(request, RecordingAuthorizationPlanner.Digest);
+
+        memberService.EndpointContractQueryCount.Should().Be(1);
+        planner.Requests.Should().ContainSingle();
+        planner.Requests[0].InvocationTarget.StudioMember.WorkflowRevisionId.Should().Be("rev-current");
+        scheduleService.Configuration!.Target.ServiceInvocation!.RevisionId.Should().Be("rev-current");
+        scheduleService.BeginOperation!.ActivationDecision.RevisionId.Should().Be("rev-current");
+    }
+
+    [Fact]
+    public async Task ReplaceAsync_WhenAcceptedRevisionIsNotServingAndStoredPinMissing_ShouldUseAcceptedRevision()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        var memberService = new RecordingMemberService
+        {
+            Detail = CreateWorkflowMemberDetail(),
+            EndpointContract = CreateEndpointContract("published-member-1", "rev-serving-old"),
+        };
+        var scheduleService = new RecordingScheduleService
+        {
+            TeamAutomationDetail = CreateTeamAutomationDetail(
+                RecordingAuthorizationPlanner.Digest,
+                RecordingAuthorizationPlanner.PolicyVersion,
+                serviceRevisionId: string.Empty),
+        };
+        var port = NewPort(scheduleService, memberService, planner);
+        var request = Request("scope-1", "member-1") with
+        {
+            ScheduleId = "schedule-1",
+            OperationId = "operation-replace",
+            IdempotencyKey = "idempotency-replace",
+            AcceptedBinding = new StudioMemberWorkflowAcceptedBindingContext(
+                "team-1",
+                "published-member-1",
+                "workflow-accepted",
+                "rev-accepted"),
+        };
+
+        await port.ReplaceAsync(request, RecordingAuthorizationPlanner.Digest);
+
+        memberService.EndpointContractQueryCount.Should().Be(0);
+        planner.Requests.Should().ContainSingle();
+        planner.Requests[0].InvocationTarget.StudioMember.Should().BeEquivalentTo(
+            new StudioMemberInvocationTarget
+            {
+                ScopeId = "scope-1",
+                TeamId = "team-1",
+                MemberId = "member-1",
+                PublishedServiceId = "published-member-1",
+                DraftWorkflowId = "workflow-accepted",
+                WorkflowRevisionId = "rev-accepted",
+            });
+        scheduleService.Configuration!.Target.ServiceInvocation!.RevisionId.Should().Be("rev-accepted");
+        scheduleService.BeginOperation!.ActivationDecision.RevisionId.Should().Be("rev-accepted");
     }
 
     [Theory]
@@ -919,7 +2246,82 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         revalidator.Requests.Should().HaveCount(2);
         revalidator.Requests[1].ExpiresAtUtc.Should().Be(existingCredentialExpiry);
         scheduleService.UpdateCallCount.Should().Be(1);
+        var configuration = scheduleService.Configuration!;
+        configuration.Target.ServiceInvocation!.AuthorizationFact!.OwnerLLMSelection
+            .Should().BeEquivalentTo(RecordingAuthorizationPlanner.SuccessResult().Plan!.OwnerLlmSelection);
+        var chat = configuration.Target.ServiceInvocation.Payload.Unpack<ChatRequestEvent>();
+        chat.LlmControl.ModelOverride.Should().Be("gpt-5.5");
+        chat.LlmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm-public");
         calls.Should().Equal("revalidate", "refresh", "revalidate");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_WhenServingRevisionAdvanced_ShouldPreserveStoredRevisionPin()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        var memberService = new RecordingMemberService
+        {
+            Detail = CreateWorkflowMemberDetail(),
+            EndpointContract = CreateEndpointContract("published-member-1", "rev-current"),
+        };
+        var scheduleService = new RecordingScheduleService
+        {
+            TeamAutomationDetail = CreateTeamAutomationDetail(
+                RecordingAuthorizationPlanner.Digest,
+                RecordingAuthorizationPlanner.PolicyVersion,
+                serviceRevisionId: "rev-pinned"),
+        };
+        var port = NewPort(scheduleService, memberService, planner);
+        var request = Request("scope-1", "member-1");
+
+        await port.UpdateAsync(new StudioMemberAutomationUpdateCommand(
+            "scope-1",
+            "team-1",
+            "member-1",
+            "schedule-1",
+            "0 10 * * *",
+            "UTC",
+            true,
+            "operation-update",
+            "idempotency-update",
+            request.AuthenticatedOwner));
+
+        memberService.EndpointContractQueryCount.Should().Be(1);
+        planner.Requests.Should().ContainSingle();
+        planner.Requests[0].InvocationTarget.StudioMember.WorkflowRevisionId.Should().Be("rev-pinned");
+        scheduleService.Configuration!.Target.ServiceInvocation!.RevisionId.Should().Be("rev-pinned");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_WhenStoredScheduleRevisionUnavailable_ShouldFailClosed()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        var scheduleService = new RecordingScheduleService
+        {
+            TeamAutomationDetail = CreateTeamAutomationDetail(
+                RecordingAuthorizationPlanner.Digest,
+                RecordingAuthorizationPlanner.PolicyVersion,
+                serviceRevisionId: string.Empty),
+        };
+        var port = NewPort(scheduleService, planner: planner);
+        var request = Request("scope-1", "member-1");
+
+        var action = () => port.UpdateAsync(new StudioMemberAutomationUpdateCommand(
+            "scope-1",
+            "team-1",
+            "member-1",
+            "schedule-1",
+            "0 10 * * *",
+            "UTC",
+            true,
+            "operation-update",
+            "idempotency-update",
+            request.AuthenticatedOwner));
+
+        var conflict = await action.Should().ThrowAsync<StudioMemberAutomationPlanConflictException>();
+        conflict.Which.Code.Should().Be("schedule_target_revision_unavailable");
+        planner.Requests.Should().BeEmpty();
+        scheduleService.UpdateCallCount.Should().Be(0);
     }
 
     [Fact]
@@ -1081,8 +2483,22 @@ public sealed class StudioMemberWorkflowSchedulePortTests
 
         await ScheduleAsync(NewPort(first), Request("scope-1", "member-1"));
         await ScheduleAsync(NewPort(second), Request("scope-1", "member-1"));
-        await ScheduleAsync(NewPort(otherScope), Request("scope-2", "member-1"));
-        await ScheduleAsync(NewPort(otherMember), Request("scope-1", "member-2"));
+        await ScheduleAsync(
+            NewPort(
+                otherScope,
+                new RecordingMemberService
+                {
+                    Detail = CreateWorkflowMemberDetail(scopeId: "scope-2"),
+                }),
+            Request("scope-2", "member-1"));
+        await ScheduleAsync(
+            NewPort(
+                otherMember,
+                new RecordingMemberService
+                {
+                    Detail = CreateWorkflowMemberDetail(memberId: "member-2"),
+                }),
+            Request("scope-1", "member-2"));
 
         var scheduleId = first.Configuration!.ScheduleId;
         second.Configuration!.ScheduleId.Should().Be(scheduleId);
@@ -1101,11 +2517,12 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldDigestNormalizedSemanticMutationWithoutCredentialMaterial()
+    public async Task CreateAsync_ShouldDigestNormalizedSemanticMutationIncludingTeamAssignmentWithoutCredentialMaterial()
     {
         var first = new RecordingScheduleService();
         var replay = new RecordingScheduleService();
         var drifted = new RecordingScheduleService();
+        var otherTeam = new RecordingScheduleService();
         var request = Request("scope-1", "member-1") with
         {
             DisplayName = " Daily digest ",
@@ -1115,12 +2532,41 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         await ScheduleAsync(NewPort(first), request);
         await ScheduleAsync(NewPort(replay), request);
         await ScheduleAsync(NewPort(drifted), request with { Prompt = "summarize something else" });
+        await ScheduleAsync(
+            NewPort(
+                otherTeam,
+                new RecordingMemberService { Detail = CreateWorkflowMemberDetail(teamId: "team-2") }),
+            request with { TeamId = "team-2" });
 
         first.BeginOperation!.MutationDigest.Should().MatchRegex("^[a-f0-9]{64}$");
         replay.BeginOperation!.MutationDigest.Should().Be(first.BeginOperation.MutationDigest);
         drifted.BeginOperation!.MutationDigest.Should().NotBe(first.BeginOperation.MutationDigest);
+        otherTeam.BeginOperation!.MutationDigest.Should().NotBe(first.BeginOperation.MutationDigest);
         first.BeginOperation.CredentialEffectLocator.CredentialOwner.Should().Be(
             new ScheduledInvocationAuthorizationOwner("nyxid", "Personal", "nyx-owner-alpha"));
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenVerifiedBindingDriftsUnderSameMutationKey_ShouldRejectBeforeSecondCredentialEffect()
+    {
+        var scheduleService = new RecordingScheduleService { RejectMutationDigestDrift = true };
+        var materializer = new RecordingCredentialMaterializer();
+        var port = NewPort(scheduleService, materializer: materializer);
+        var request = Request("scope-1", "member-1");
+        await ScheduleAsync(port, request);
+        var driftedOwner = request.AuthenticatedOwner with
+        {
+            VerifiedBindingId = "bnd-owner-beta",
+        };
+
+        var act = () => ScheduleAsync(port, request with { AuthenticatedOwner = driftedOwner });
+
+        await act.Should().ThrowAsync<ScheduledDispatchConflictException>()
+            .WithMessage("team_automation_mutation_conflict");
+        scheduleService.BeginCallCount.Should().Be(2);
+        materializer.MaterializeCallCount.Should().Be(1);
+        scheduleService.CandidateCallCount.Should().Be(1);
+        scheduleService.Configurations.Should().ContainSingle();
     }
 
     private static StudioMemberWorkflowScheduleRequest Request(string scopeId, string memberId) => new(
@@ -1138,7 +2584,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 "lark",
                 "tenant-alpha",
                 "sender-alpha",
-                "binding-alpha"))
+                "bnd-owner-alpha"))
         {
             TeamId = "team-1",
             OperationId = "operation-alpha",
@@ -1148,6 +2594,20 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             ConfirmedPolicyVersion = RecordingAuthorizationPlanner.PolicyVersion,
         };
 
+    private static void SetRequiredStringProperty(object target, string propertyName, string value)
+    {
+        var property = target.GetType().GetProperty(propertyName);
+        property.Should().NotBeNull($"{propertyName} is part of the runtime evidence contract");
+        property!.SetValue(target, value);
+    }
+
+    private static string ReadRequiredStringProperty(object value, string propertyName)
+    {
+        var property = value.GetType().GetProperty(propertyName);
+        property.Should().NotBeNull($"{propertyName} is part of the runtime evidence contract");
+        return property!.GetValue(value).Should().BeOfType<string>().Which;
+    }
+
     private static StudioMemberWorkflowSchedulePort NewPort(
         RecordingScheduleService schedule,
         RecordingMemberService? memberService = null,
@@ -1156,6 +2616,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         IStudioScheduledCredentialMaterializer? materializer = null,
         INyxIdAuthorizationCatalogRefreshPort? catalogRefresh = null,
         TimeProvider? timeProvider = null,
+        ILogger<StudioMemberWorkflowSchedulePort>? logger = null,
+        ILoggerFactory? auditLoggerFactory = null,
         IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
     {
         var resolvedPlanner = planner ?? new RecordingAuthorizationPlanner();
@@ -1167,6 +2629,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             materializer ?? new RecordingCredentialMaterializer(),
             timeProvider ?? new FixedTimeProvider(TestNow),
             catalogRefresh,
+            logger,
+            auditLoggerFactory,
             callerAccessTokenProvider: callerAccessTokenProvider);
     }
 
@@ -1194,9 +2658,10 @@ public sealed class StudioMemberWorkflowSchedulePortTests
 
     private static ScheduledDispatchDetail CreateTeamAutomationDetail(
         string permissionDigest,
-        string policyVersion) =>
-        new(
-            new ScheduledDispatchSummary(
+        string policyVersion,
+        string serviceRevisionId = "rev-1")
+    {
+        var schedule = new ScheduledDispatchSummary(
                 "schedule-1",
                 "Daily digest",
                 ScheduledDispatchTargetKind.ServiceInvocation,
@@ -1216,6 +2681,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 string.Empty,
                 string.Empty,
                 string.Empty,
+                string.Empty,
                 0,
                 0,
                 new Dictionary<string, string>(),
@@ -1230,18 +2696,22 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 PolicyVersion: policyVersion,
                 CredentialOwnerAuthority: "nyxid",
                 CredentialOwnerKind: "Personal",
-                CredentialOwnerSubject: "nyx-owner-alpha"),
-            []);
+                CredentialOwnerSubject: "nyx-owner-alpha");
+        SetRequiredStringProperty(schedule, "ServiceRevisionId", serviceRevisionId);
+        return new ScheduledDispatchDetail(schedule, []);
+    }
 
     private static StudioMemberDetailResponse CreateWorkflowMemberDetail(
         string implementationKind = MemberImplementationKindNames.Workflow,
         bool hasBinding = true,
         string? currentBindingRunStatus = null,
-        string teamId = "team-1") =>
+        string teamId = "team-1",
+        string scopeId = "scope-1",
+        string memberId = "member-1") =>
         new(
             Summary: new StudioMemberSummaryResponse(
-                MemberId: "member-1",
-                ScopeId: "scope-1",
+                MemberId: memberId,
+                ScopeId: scopeId,
                 DisplayName: "Member",
                 Description: string.Empty,
                 ImplementationKind: implementationKind,
@@ -1269,18 +2739,56 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 ? null
                 : new StudioMemberBindingRunStatusResponse(
                     BindingRunId: "bind-1",
-                    ScopeId: "scope-1",
-                    MemberId: "member-1",
+                    ScopeId: scopeId,
+                    MemberId: memberId,
                     Status: currentBindingRunStatus,
                     StateVersion: 1,
                     UpdatedAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z")),
         };
 
+    private static StudioMemberEndpointContractResponse CreateEndpointContract(
+        string publishedServiceId,
+        string revisionId,
+        bool canInvoke = true,
+        string scopeId = "scope-1",
+        string memberId = "member-1") =>
+        new(
+            ScopeId: scopeId,
+            MemberId: memberId,
+            PublishedServiceId: publishedServiceId,
+            EndpointId: "chat",
+            InvokePath: $"/api/scopes/{scopeId}/members/{memberId}/invoke/chat",
+            Method: "POST",
+            RequestContentType: "application/json",
+            ResponseContentType: "text/event-stream",
+            RequestTypeUrl: ChatRequestEvent.Descriptor.FullName,
+            ResponseTypeUrl: string.Empty,
+            SupportsSse: true,
+            SupportsWebSocket: false,
+            SupportsAguiFrames: true,
+            StreamFrameFormat: "agui",
+            SmokeTestSupported: true,
+            DefaultSmokeInputMode: "prompt",
+            DefaultSmokePrompt: "test",
+            SampleRequestJson: null,
+            DeploymentStatus: canInvoke ? "active" : "pending",
+            RevisionId: revisionId,
+            InvocationReadiness: new StudioMemberInvocationReadinessResponse(
+                canInvoke,
+                canInvoke
+                    ? StudioMemberInvocationReadinessStatusNames.Ready
+                    : StudioMemberInvocationReadinessStatusNames.EligibleServingTargetMissing,
+                canInvoke ? string.Empty : "serving_revision_not_ready",
+                canInvoke ? "Ready." : "Serving revision is not ready.",
+                revisionId));
+
     private sealed class RecordingMemberService : IStudioMemberService
     {
         public StudioMemberDetailResponse? Detail { get; init; }
+        public StudioMemberEndpointContractResponse? EndpointContract { get; init; }
         public string? GetScopeId { get; private set; }
         public string? GetMemberId { get; private set; }
+        public int EndpointContractQueryCount { get; private set; }
         public int CreateCallCount { get; private set; }
         public int BindCallCount { get; private set; }
 
@@ -1315,8 +2823,16 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             throw new NotSupportedException();
 
         public Task<StudioMemberEndpointContractResponse?> GetEndpointContractAsync(
-            string scopeId, string memberId, string endpointId, CancellationToken ct = default) =>
-            throw new NotSupportedException();
+            string scopeId, string memberId, string endpointId, CancellationToken ct = default)
+        {
+            EndpointContractQueryCount++;
+            return Task.FromResult<StudioMemberEndpointContractResponse?>(
+                EndpointContract ?? CreateEndpointContract(
+                    "published-member-1",
+                    "rev-1",
+                    scopeId: scopeId,
+                    memberId: memberId));
+        }
 
         public Task<StudioMemberBindingRunStatusResponse> GetBindingRunAsync(
             string scopeId, string memberId, string bindingRunId, CancellationToken ct = default) =>
@@ -1380,6 +2896,14 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                     PolicyVersion = "scope-plan-policy/v1",
                     EvaluatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-01T00:00:00Z")),
                 },
+                OwnerLlmSelection = new ScheduledInvocationOwnerLLMSelection
+                {
+                    RouteKind = LLMRouteKind.NyxIdUserService,
+                    RouteValue = "/api/v1/proxy/s/chrono-llm-public",
+                    NyxIdUserServiceId = "nyx-llm-service-alpha",
+                    ServiceSlugSnapshot = "chrono-llm-public",
+                    Model = "gpt-5.5",
+                },
             };
             plan.NyxIdServiceGrants.Add(new NyxIdServiceGrant
             {
@@ -1439,6 +2963,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public int RefreshCallCount { get; private set; }
         public AuthorizationOwnerIdentity? LastOwner { get; private set; }
         public string? LastBearerToken { get; private set; }
+        public IReadOnlyList<NyxIdUserServiceCapabilityRef> LastRequiredServices { get; private set; } = [];
+        public ScheduledInvocationLLMRefreshRequirement? LastLLMTarget { get; private set; }
         public List<string>? Calls { get; init; }
         public Exception? Exception { get; init; }
         public NyxIdAuthorizationCatalogRefreshResult Result { get; init; } =
@@ -1447,12 +2973,30 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
             AuthorizationOwnerIdentity owner,
             string bearerToken,
-            CancellationToken ct = default)
+            CancellationToken ct = default) =>
+            RecordRefreshAsync(
+                owner,
+                bearerToken,
+                new NyxIdAuthorizationCatalogRefreshRequest([], LLMTarget: null));
+
+        public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
+            AuthorizationOwnerIdentity owner,
+            string bearerToken,
+            NyxIdAuthorizationCatalogRefreshRequest request,
+            CancellationToken ct = default) =>
+            RecordRefreshAsync(owner, bearerToken, request);
+
+        private Task<NyxIdAuthorizationCatalogRefreshResult> RecordRefreshAsync(
+            AuthorizationOwnerIdentity owner,
+            string bearerToken,
+            NyxIdAuthorizationCatalogRefreshRequest request)
         {
             RefreshCallCount++;
             Calls?.Add("refresh");
             LastOwner = owner.Clone();
             LastBearerToken = bearerToken;
+            LastRequiredServices = request.RequiredServices.Select(static service => service.Clone()).ToArray();
+            LastLLMTarget = request.LLMTarget;
             return Exception == null
                 ? Task.FromResult(Result)
                 : Task.FromException<NyxIdAuthorizationCatalogRefreshResult>(Exception);
@@ -1551,6 +3095,19 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         }
     }
 
+    private sealed record DeleteAttempt(
+        bool OwnsEffectAttempt,
+        bool NyxIdPending,
+        bool VaultPending);
+
+    private sealed record RichDeleteCall(
+        string ScheduleId,
+        TeamMemberAutomationOwner Owner,
+        string OperationId,
+        string IdempotencyKey,
+        string Reason,
+        ScheduledInvocationAuthorizationOwner AuthenticatedCredentialOwner);
+
     private sealed class RecordingCredentialMaterializer : IStudioScheduledCredentialMaterializer
     {
         public int MaterializeCallCount { get; private set; }
@@ -1559,8 +3116,15 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public ScheduledInvocationAuthorizationPlan? Plan { get; private set; }
         public Aevatar.Foundation.Abstractions.OwnerScope? OwnerScope { get; private set; }
         public ScheduledCredentialEffectLocator? EffectLocator { get; private set; }
+        public StudioScheduledCredentialMaterializationMode? MaterializationMode { get; private set; }
         public StudioScheduledCredential? Credential { get; init; }
         public Exception? MaterializeException { get; init; }
+        public bool NyxIdRevoked { get; init; } = true;
+        public bool VaultRevoked { get; init; } = true;
+        public List<(string BearerToken, bool RevokeNyxId, bool RevokeVault)>
+            RevocationCalls { get; } = [];
+        public Queue<StudioScheduledCredentialRevocationResult>
+            RevocationResults { get; } = [];
 
         public ScheduledCredentialEffectLocator CreateEffectLocator(
             string scheduleId,
@@ -1579,7 +3143,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             string scheduleId,
             string operationId,
             ScheduledCredentialEffectLocator effectLocator,
-            long effectAttemptGeneration,
+            StudioScheduledCredentialMaterializationMode mode,
             Aevatar.Foundation.Abstractions.OwnerScope ownerScope,
             CancellationToken ct = default)
         {
@@ -1588,6 +3152,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             Plan = validatedPlan.Plan;
             OwnerScope = ownerScope;
             EffectLocator = effectLocator;
+            MaterializationMode = mode;
             if (MaterializeException != null)
                 return Task.FromException<StudioScheduledCredential>(MaterializeException);
             return Task.FromResult(Credential ?? CreateCredential(
@@ -1604,10 +3169,13 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             CancellationToken ct = default)
         {
             RevokeCallCount++;
+            RevocationCalls.Add((bearerToken, revokeNyxId, revokeVault));
+            if (RevocationResults.Count > 0)
+                return Task.FromResult(RevocationResults.Dequeue());
             return Task.FromResult(new StudioScheduledCredentialRevocationResult(
-                NyxIdRevoked: true,
-                VaultRevoked: true,
-                ErrorCode: string.Empty));
+                NyxIdRevoked,
+                VaultRevoked,
+                ErrorCode: NyxIdRevoked && VaultRevoked ? string.Empty : "revocation_failed"));
         }
     }
 
@@ -1632,25 +3200,41 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     {
         public int EnsureCallCount { get; private set; }
         public int BeginCallCount { get; private set; }
+        public int RetryCredentialOperationCallCount { get; private set; }
         public int CandidateCallCount { get; private set; }
         public int FailCallCount { get; private set; }
         public int TombstonedAttempts { get; init; }
         public Exception? EnsureException { get; init; }
         public bool BeginOwnsEffectAttempt { get; init; } = true;
+        public bool BeginNewOperationCommitted { get; init; } = true;
+        public long BeginEffectAttemptGeneration { get; init; } = 1;
         public Exception? CandidateException { get; init; }
         public bool CommitCandidateBeforeException { get; init; }
         public bool ReturnPendingRevocationOnRetry { get; init; }
+        public bool FailureReturnsPendingRevocation { get; init; }
+        public bool RetryOwnsEffectAttempt { get; init; } = true;
+        public bool RejectMutationDigestDrift { get; init; }
         public ScheduledDispatchConfiguration? Configuration { get; private set; }
         public List<ScheduledDispatchConfiguration> Configurations { get; } = [];
         public ScheduledDispatchDetail? TeamAutomationDetail { get; init; }
+        public ScheduledDispatchListQuery? LastListQuery { get; private set; }
+        public ScheduledDispatchListResult ListResult { get; init; } = new([], null, null);
+        public TeamMemberAutomationOwner? LastTeamAutomationListOwner { get; private set; }
+        public int? LastTeamAutomationListTake { get; private set; }
+        public string? LastTeamAutomationListCursor { get; private set; }
+        public bool? LastTeamAutomationListIncludeTotalCount { get; private set; }
+        public ScheduledDispatchListResult TeamAutomationList { get; init; } = new([], null, null);
         public int UpdateCallCount { get; private set; }
         public int RetryRevocationCallCount { get; private set; }
         public int CompleteRevocationCallCount { get; private set; }
         public TeamAutomationCredentialOperation? BeginOperation { get; private set; }
         public List<string>? Calls { get; init; }
+        public List<RichDeleteCall> RichDeleteCalls { get; } = [];
+        public Queue<DeleteAttempt> DeleteAttempts { get; } = [];
         private ScheduledInvocationAgentKeyCredentialReference? _candidateCredential;
         private ScheduledInvocationAuthorizationOwner? _candidateOwner;
         private bool _candidateExceptionThrown;
+        private string? _acceptedMutationDigest;
 
         public Task<TeamAutomationCommittedMutationReceipt> BeginTeamAutomationCredentialOperationAsync(
             TeamAutomationCredentialOperation operation,
@@ -1659,6 +3243,15 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             BeginCallCount++;
             Calls?.Add("begin");
             BeginOperation = operation;
+            if (RejectMutationDigestDrift &&
+                _acceptedMutationDigest != null &&
+                !string.Equals(_acceptedMutationDigest, operation.MutationDigest, StringComparison.Ordinal))
+            {
+                throw new ScheduledDispatchConflictException(
+                    operation.ScheduleId,
+                    "team_automation_mutation_conflict");
+            }
+            _acceptedMutationDigest ??= operation.MutationDigest;
             return Task.FromResult(Committed(
                 operation.ScheduleId,
                 operation.OperationId,
@@ -1669,7 +3262,28 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 effectAttemptId: BeginOwnsEffectAttempt ? "attempt-alpha" : string.Empty,
                 candidateCredential: _candidateCredential,
                 candidateOwner: _candidateOwner,
-                credentialEffectLocator: operation.CredentialEffectLocator));
+                credentialEffectLocator: operation.CredentialEffectLocator,
+                newOperationCommitted: BeginNewOperationCommitted,
+                effectAttemptGeneration: BeginEffectAttemptGeneration));
+        }
+
+        public Task<TeamAutomationCommittedMutationReceipt> RetryTeamAutomationCredentialOperationAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            string operationId,
+            string idempotencyKey,
+            CancellationToken ct = default)
+        {
+            RetryCredentialOperationCallCount++;
+            Calls?.Add("retry_credential");
+            return Task.FromResult(Committed(
+                scheduleId,
+                operationId,
+                idempotencyKey,
+                TeamAutomationOperationObservationStages.Begin,
+                ownsEffectAttempt: RetryOwnsEffectAttempt,
+                "cmd-retry-credential",
+                effectAttemptId: RetryOwnsEffectAttempt ? "attempt-retry-credential" : string.Empty));
         }
 
         public Task<TeamAutomationCommittedMutationReceipt> RecordTeamAutomationCredentialCandidateAsync(
@@ -1744,21 +3358,73 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             CancellationToken ct = default)
         {
             FailCallCount++;
+            Calls?.Add("fail");
+            var credential = CreateCredential(
+                TestNow.AddHours(20),
+                CredentialSecretPurposes.ScheduledInvocationAgentKey);
             return Task.FromResult(Committed(
                 scheduleId,
                 operationId,
                 idempotencyKey,
                 TeamAutomationOperationObservationStages.Fail,
-                ownsEffectAttempt: false,
+                ownsEffectAttempt: FailureReturnsPendingRevocation,
                 "cmd-fail",
-                errorCode));
+                errorCode,
+                effectAttemptId: FailureReturnsPendingRevocation ? "attempt-fail-revocation" : string.Empty,
+                pendingRevocationCredential: FailureReturnsPendingRevocation
+                    ? new ScheduledInvocationAgentKeyCredentialReference(
+                        credential.SecretReference,
+                        credential.ApiKeyId,
+                        credential.ExpiresAtUtc.ToUnixTimeMilliseconds())
+                    : null,
+                pendingRevocationOwner: FailureReturnsPendingRevocation ? credential.Owner : null,
+                nyxIdRevocationPending: FailureReturnsPendingRevocation,
+                vaultRevocationPending: FailureReturnsPendingRevocation));
+        }
+
+        public Task<TeamAutomationCommittedMutationReceipt> DeleteTeamAutomationAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            string operationId,
+            string idempotencyKey,
+            string reason,
+            ScheduledInvocationAuthorizationOwner authenticatedCredentialOwner,
+            CancellationToken ct = default)
+        {
+            RichDeleteCalls.Add(new RichDeleteCall(
+                scheduleId,
+                owner,
+                operationId,
+                idempotencyKey,
+                reason,
+                authenticatedCredentialOwner));
+            var attempt = DeleteAttempts.Dequeue();
+            var credential = CreateCredential(
+                TestNow.AddHours(20),
+                CredentialSecretPurposes.ScheduledInvocationAgentKey);
+            var hasPendingRevocation = attempt.NyxIdPending || attempt.VaultPending;
+            return Task.FromResult(Committed(
+                scheduleId,
+                operationId,
+                idempotencyKey,
+                TeamAutomationOperationObservationStages.Delete,
+                attempt.OwnsEffectAttempt,
+                "cmd-delete",
+                effectAttemptId: attempt.OwnsEffectAttempt ? "attempt-delete" : string.Empty,
+                pendingRevocationCredential: hasPendingRevocation
+                    ? new ScheduledInvocationAgentKeyCredentialReference(
+                        credential.SecretReference,
+                        credential.ApiKeyId,
+                        credential.ExpiresAtUtc.ToUnixTimeMilliseconds())
+                    : null,
+                pendingRevocationOwner: hasPendingRevocation ? credential.Owner : null,
+                nyxIdRevocationPending: attempt.NyxIdPending,
+                vaultRevocationPending: attempt.VaultPending));
         }
 
         public Task<TeamAutomationCommittedMutationReceipt> RetryTeamAutomationRevocationAsync(
             string scheduleId,
             TeamMemberAutomationOwner owner,
-            string operationId,
-            string idempotencyKey,
             ScheduledInvocationAuthorizationOwner authenticatedCredentialOwner,
             CancellationToken ct = default)
         {
@@ -1768,12 +3434,14 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 CredentialSecretPurposes.ScheduledInvocationAgentKey);
             return Task.FromResult(Committed(
                 scheduleId,
-                operationId,
-                idempotencyKey,
+                "operation-delete",
+                "idempotency-delete",
                 TeamAutomationOperationObservationStages.Delete,
-                ownsEffectAttempt: ReturnPendingRevocationOnRetry,
+                ownsEffectAttempt: ReturnPendingRevocationOnRetry && RetryOwnsEffectAttempt,
                 "cmd-retry-revocation",
-                effectAttemptId: ReturnPendingRevocationOnRetry ? "attempt-revocation" : string.Empty,
+                effectAttemptId: ReturnPendingRevocationOnRetry && RetryOwnsEffectAttempt
+                    ? "attempt-revocation"
+                    : string.Empty,
                 pendingRevocationCredential: ReturnPendingRevocationOnRetry
                     ? new ScheduledInvocationAgentKeyCredentialReference(
                         credential.SecretReference,
@@ -1797,13 +3465,17 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             CancellationToken ct = default)
         {
             CompleteRevocationCallCount++;
+            Calls?.Add("complete_revocation");
             return Task.FromResult(Committed(
                 scheduleId,
                 operationId,
                 "idempotency-delete",
                 TeamAutomationOperationObservationStages.Revocation,
                 ownsEffectAttempt: false,
-                "cmd-complete-revocation"));
+                "cmd-complete-revocation",
+                errorCode,
+                nyxIdRevocationPending: !nyxIdRevoked,
+                vaultRevocationPending: !vaultRevoked));
         }
 
         public Task<ScheduledDispatchMutationReceipt> EnsureAsync(
@@ -1821,6 +3493,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             CancellationToken ct = default)
         {
             UpdateCallCount++;
+            Configuration = configuration;
+            Configurations.Add(configuration);
             return Task.FromResult(Accepted(scheduleId, "cmd-update"));
         }
 
@@ -1845,8 +3519,25 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchListResult> ListAsync(
-            ScheduledDispatchListQuery query, CancellationToken ct = default) =>
-            throw new NotSupportedException();
+            ScheduledDispatchListQuery query, CancellationToken ct = default)
+        {
+            LastListQuery = query;
+            return Task.FromResult(ListResult);
+        }
+
+        public Task<ScheduledDispatchListResult> ListTeamAutomationsAsync(
+            TeamMemberAutomationOwner owner,
+            int take = 50,
+            string? cursor = null,
+            bool includeTotalCount = false,
+            CancellationToken ct = default)
+        {
+            LastTeamAutomationListOwner = owner;
+            LastTeamAutomationListTake = take;
+            LastTeamAutomationListCursor = cursor;
+            LastTeamAutomationListIncludeTotalCount = includeTotalCount;
+            return Task.FromResult(TeamAutomationList);
+        }
 
         public Task<ScheduledDispatchPreview> PreviewAsync(
             string cronExpression, string? timezone, int count, DateTimeOffset? fromUtc = null, CancellationToken ct = default) =>
@@ -1855,6 +3546,21 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public Task<ScheduledDispatchRunNowReceipt> RunNowAsync(
             string scheduleId, CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public Task<ScheduledDispatchRunNowReceipt> RunTeamAutomationNowAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            CancellationToken ct = default) =>
+            Task.FromResult(new ScheduledDispatchRunNowReceipt(
+                scheduleId,
+                $"scheduled-dispatch:{scheduleId}",
+                TestNow,
+                "backend-run-now-idempotency",
+                Accepted: true,
+                CommandId: "cmd-run-now",
+                CorrelationId: "corr-run-now",
+                AckedAt: TestNow,
+                AckStage: "accepted"));
 
         public Task<ScheduledDispatchDetail?> GetTeamAutomationAsync(
             string scheduleId,
@@ -1887,7 +3593,9 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             ScheduledInvocationAgentKeyCredentialReference? pendingRevocationCredential = null,
             ScheduledInvocationAuthorizationOwner? pendingRevocationOwner = null,
             bool nyxIdRevocationPending = false,
-            bool vaultRevocationPending = false) =>
+            bool vaultRevocationPending = false,
+            bool newOperationCommitted = false,
+            long effectAttemptGeneration = 1) =>
             new(
                 Accepted(scheduleId, commandId),
                 new TeamAutomationOperationCommittedOutcome(
@@ -1905,10 +3613,58 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                     NyxIdRevocationPending: nyxIdRevocationPending,
                     VaultRevocationPending: vaultRevocationPending,
                     EffectAttemptId: effectAttemptId,
-                    EffectAttemptGeneration: ownsEffectAttempt ? 1 : 0,
+                    EffectAttemptGeneration: ownsEffectAttempt ? effectAttemptGeneration : 0,
                     EffectAttemptExpiresAtUtc: ownsEffectAttempt ? TestNow.AddMinutes(5) : null,
                     CandidateCredential: candidateCredential,
                     CandidateOwner: candidateOwner,
-                    CredentialEffectLocator: credentialEffectLocator));
+                    CredentialEffectLocator: credentialEffectLocator,
+                    NewOperationCommitted: newOperationCommitted));
     }
+
+    private sealed class RecordingLoggerProvider : ILoggerProvider
+    {
+        private readonly List<RecordedLogEntry> _entries = [];
+
+        public IReadOnlyList<RecordedLogEntry> Entries => _entries;
+
+        public ILogger CreateLogger(string categoryName) => new RecordingLogger(categoryName, _entries);
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class RecordingLogger(
+            string category,
+            List<RecordedLogEntry> entries) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                var structuredState = state as IEnumerable<KeyValuePair<string, object?>>;
+                entries.Add(new RecordedLogEntry(
+                    category,
+                    logLevel,
+                    eventId,
+                    structuredState?.ToArray() ?? [],
+                    formatter(state, exception),
+                    exception));
+            }
+        }
+    }
+
+    private sealed record RecordedLogEntry(
+        string Category,
+        LogLevel LogLevel,
+        EventId EventId,
+        IReadOnlyList<KeyValuePair<string, object?>> State,
+        string Message,
+        Exception? Exception);
 }
