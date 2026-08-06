@@ -743,6 +743,79 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
         }
 
         [Fact]
+        public async Task CacheModule_OnMiss_ShouldForwardCallSiteAndEchoParentExecutionIdOnCompletion()
+        {
+            var module = new CacheModule();
+            var ctx = CreateContext();
+
+            await module.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    StepId = "cache-parent-call-site",
+                    StepType = "cache",
+                    RunId = "run-cache-call-site",
+                    Input = "input-call-site",
+                    ExecutionId = "exec-parent-1",
+                    ExternalInvocation = new ExternalToolInvocationSpec
+                    {
+                        CallSiteId = "call-site-1",
+                        ToolName = "nyxid_proxy",
+                    },
+                    Parameters =
+                    {
+                        ["cache_key"] = "key-call-site",
+                        ["child_step_type"] = "tool_call",
+                    },
+                }),
+                ctx,
+                CancellationToken.None);
+
+            var childRequest = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+            childRequest.StepType.Should().Be("tool_call");
+            childRequest.ExternalInvocation.Should().NotBeNull();
+            childRequest.ExternalInvocation!.CallSiteId.Should().Be("call-site-1");
+            childRequest.ExternalInvocation.ToolName.Should().Be("nyxid_proxy");
+
+            ctx.Published.Clear();
+
+            await module.HandleAsync(
+                Envelope(new StepCompletedEvent
+                {
+                    StepId = childRequest.StepId,
+                    RunId = "run-cache-call-site",
+                    Success = true,
+                    Output = "call-site-output",
+                }),
+                ctx,
+                CancellationToken.None);
+
+            var completion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+            completion.StepId.Should().Be("cache-parent-call-site");
+            completion.ExecutionId.Should().Be("exec-parent-1");
+            completion.Output.Should().Be("call-site-output");
+        }
+
+        [Fact]
+        public async Task CacheModule_WhenChildMappingIsLost_ShouldNotCompleteAnyParent()
+        {
+            var module = new CacheModule();
+            var ctx = CreateContext();
+
+            await module.HandleAsync(
+                Envelope(new StepCompletedEvent
+                {
+                    StepId = "cache-parent-orphan_cached_deadbeef",
+                    RunId = "run-cache-orphan",
+                    Success = true,
+                    Output = "orphan-output",
+                }),
+                ctx,
+                CancellationToken.None);
+
+            ctx.Published.Should().BeEmpty();
+        }
+
+        [Fact]
         public async Task CacheModule_WhenSecondCallerJoinsPending_ShouldFanOutCompletionAndNotCacheFailures()
         {
             var module = new CacheModule();

@@ -758,6 +758,10 @@ message CacheWaiterState
 {
   string run_id = 1;
   string parent_step_id = 2;
+  // Execution id assigned by the kernel when it dispatched the parent cache step.
+  // Echoed back on the synthesized parent completion so the kernel's stale-execution
+  // guard can reject completions belonging to a superseded dispatch.
+  string execution_id = 3;
 }
 
 message PendingCacheCallState

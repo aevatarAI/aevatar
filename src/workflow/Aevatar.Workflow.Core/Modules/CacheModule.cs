@@ -15,6 +15,9 @@ public sealed class CacheModule : IEventModule<IWorkflowExecutionContext>
 {
     private const string ModuleStateKey = "cache";
 
+    /// <summary>Marker embedded in dispatched child step ids so orphaned completions stay attributable.</summary>
+    private const string ChildStepMarker = "_cached_";
+
     public string Name => "cache";
     public int Priority => 3;
 
@@ -41,7 +44,12 @@ public sealed class CacheModule : IEventModule<IWorkflowExecutionContext>
             var cacheKey = request.Parameters.GetValueOrDefault("cache_key", request.Input ?? "");
             var ttlSeconds = int.TryParse(request.Parameters.GetValueOrDefault("ttl_seconds", "3600"), out var t) ? t : 3600;
             ttlSeconds = Math.Clamp(ttlSeconds, 1, 86_400);
-            var waiter = new CacheWaiterState { ParentStepId = request.StepId, RunId = runId };
+            var waiter = new CacheWaiterState
+            {
+                ParentStepId = request.StepId,
+                RunId = runId,
+                ExecutionId = request.ExecutionId ?? string.Empty,
+            };
 
             if (state.CacheEntries.TryGetValue(cacheKey, out var existingCache) &&
                 WorkflowTimestampCodec.ToDateTimeOffset(existingCache.ExpiresAt) <= now)
@@ -82,7 +90,7 @@ public sealed class CacheModule : IEventModule<IWorkflowExecutionContext>
             var childType = WorkflowPrimitiveCatalog.ToCanonicalType(
                 request.Parameters.GetValueOrDefault("child_step_type", "llm_call"));
             var childRole = request.Parameters.GetValueOrDefault("child_target_role", request.TargetRole);
-            var childStepId = $"{request.StepId}_cached_{Guid.NewGuid():N}";
+            var childStepId = $"{request.StepId}{ChildStepMarker}{Guid.NewGuid():N}";
 
             var pendingCall = new PendingCacheCallState
             {
@@ -93,14 +101,21 @@ public sealed class CacheModule : IEventModule<IWorkflowExecutionContext>
             state.ChildStepToCacheKey[BuildChildKey(runId, childStepId)] = cacheKey;
             await SaveStateAsync(state, ctx, ct);
 
-            await ctx.PublishAsync(new StepRequestEvent
+            var childRequest = new StepRequestEvent
             {
                 StepId = childStepId,
                 StepType = childType,
                 RunId = runId,
                 Input = request.Input ?? "",
                 TargetRole = childRole ?? "",
-            }, TopologyAudience.Self, ct);
+            };
+            // The kernel synthesizes the sub-step call site on the cache step itself and expects
+            // primitives that dispatch sub-steps to copy it onto every child they publish; without
+            // it an external child (tool_call/connector_call) loses its admission identity.
+            if (request.ExternalInvocation != null)
+                childRequest.ExternalInvocation = request.ExternalInvocation.Clone();
+
+            await ctx.PublishAsync(childRequest, TopologyAudience.Self, ct);
         }
         else if (payload.Is(StepCompletedEvent.Descriptor))
         {
@@ -109,9 +124,31 @@ public sealed class CacheModule : IEventModule<IWorkflowExecutionContext>
             var state = WorkflowExecutionStateAccess.Load<CacheModuleState>(ctx, ModuleStateKey);
             var childKey = BuildChildKey(runId, evt.StepId);
             if (!state.ChildStepToCacheKey.Remove(childKey, out var cacheKey))
+            {
+                // Not a cache child (the vast majority of completions) — stay quiet. Only warn when
+                // the step id carries the cache child marker, which means the parent↔child mapping
+                // was lost and every waiter on it is now stranded with no other recovery path.
+                if (evt.StepId.Contains(ChildStepMarker, StringComparison.Ordinal))
+                {
+                    ctx.Logger.LogWarning(
+                        "Cache {StepId}: orphan child completion, no parent mapping. run={RunId} success={Success}",
+                        evt.StepId,
+                        runId,
+                        evt.Success);
+                }
+
                 return;
+            }
+
             if (!state.PendingByCacheKey.Remove(cacheKey, out var pending))
+            {
+                ctx.Logger.LogWarning(
+                    "Cache {StepId}: child mapped to key={Key} but no pending call remains; waiters stranded. run={RunId}",
+                    evt.StepId,
+                    ShortenKey(cacheKey),
+                    runId);
                 return;
+            }
 
             if (evt.Success)
             {
@@ -123,12 +160,23 @@ public sealed class CacheModule : IEventModule<IWorkflowExecutionContext>
             }
             await SaveStateAsync(state, ctx, ct);
 
+            ctx.Logger.LogInformation(
+                "Cache {StepId}: child completed key={Key} success={Success}, releasing waiters={Waiters}",
+                evt.StepId,
+                ShortenKey(cacheKey),
+                evt.Success,
+                pending.Waiters.Count);
+
             foreach (var waiter in pending.Waiters)
             {
                 var completed = new StepCompletedEvent
                 {
                     StepId = waiter.ParentStepId,
                     RunId = waiter.RunId,
+                    // Carry the dispatch identity the kernel assigned to the parent step so a
+                    // completion synthesized for a superseded dispatch is rejected instead of
+                    // silently advancing the run.
+                    ExecutionId = waiter.ExecutionId ?? string.Empty,
                     Success = evt.Success,
                     Output = evt.Output,
                     Error = evt.Error,
