@@ -222,7 +222,16 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         var skillRecoveryMessages = BuildSkillRecoveryMessages(workItem.StepState);
         var deferSkillRecoveryText = !workItem.StepState.FinalNoToolsStep &&
                                      llmRequest.ToolContext?.SkillRecovery.RequireOrnnSearchOnBlocker == true;
-        List<LLMStreamChunk>? deferredLlmChunks = deferSkillRecoveryText ? [] : null;
+        // A relay reply token can create exactly one visible reply. Buffer text while an
+        // approval-capable tool is in play so a model preamble cannot consume the token
+        // before the actor sends the approval card. CardKit uses its own Lark transport.
+        var deferApprovalCapableToolText = streamingState is not null &&
+                                          _relayOptions?.StreamingCardKitEnabled != true &&
+                                          llmRequest.Tools?.Any(static tool =>
+                                              tool.ApprovalMode != ToolApprovalMode.NeverRequire) == true;
+        List<LLMStreamChunk>? deferredLlmChunks = deferSkillRecoveryText || deferApprovalCapableToolText
+            ? []
+            : null;
 
         async Task DeliverLlmChunkAsync(LLMStreamChunk chunk, CancellationToken token)
         {
@@ -308,12 +317,16 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             }
         }
 
-        if (deferredLlmChunks is not null)
+        var approvalRequired = HasApprovalRequiredToolCall(
+            effectiveToolCalls,
+            llmResult.AuthorizedTools,
+            llmResult.AuthorizedToolContext);
+        if (deferredLlmChunks is not null && !approvalRequired)
         {
             foreach (var chunk in deferredLlmChunks)
                 await DeliverLlmChunkAsync(chunk, ct).ConfigureAwait(false);
         }
-        if (streamingState is not null)
+        if (streamingState is not null && !approvalRequired)
             await streamingState.FinalizeAsync(output.ToString(), ct).ConfigureAwait(false);
 
         var result = new AgentRunLlmStepResult
@@ -322,7 +335,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             Content = effectiveContent ?? string.Empty,
             ReasoningContent = llmResult.ReasoningContent ?? string.Empty,
             FinishReason = llmResult.FinishReason ?? string.Empty,
-            HasStreamedTextContent = !string.IsNullOrEmpty(llmResult.Content),
+            HasStreamedTextContent = !approvalRequired && !string.IsNullOrEmpty(llmResult.Content),
         };
         if (AgentRunReplyStepMappers.ToProto(llmResult.Usage) is { } usage)
             result.Usage = usage;
@@ -452,6 +465,36 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         }
 
         return snapshots;
+    }
+
+    private static bool HasApprovalRequiredToolCall(
+        IReadOnlyList<ToolCall>? toolCalls,
+        IReadOnlyList<IAgentTool> authorizedTools,
+        AgentToolExecutionContext authorizedToolContext)
+    {
+        if (toolCalls is not { Count: > 0 })
+            return false;
+
+        using var toolContextScope = AgentToolContextScope.Push(authorizedToolContext);
+        foreach (var call in toolCalls)
+        {
+            var tool = authorizedTools.FirstOrDefault(candidate =>
+                string.Equals(candidate.Name, call.Name, StringComparison.OrdinalIgnoreCase));
+            if (tool is null)
+                continue;
+
+            var safety = tool.GetCallSafety(call.ArgumentsJson ?? string.Empty);
+            if (tool.ApprovalMode == ToolApprovalMode.NeverRequire)
+                continue;
+            if (safety.RequiresApproval ??
+                (tool.ApprovalMode == ToolApprovalMode.AlwaysRequire ||
+                 (!safety.IsReadOnly && safety.IsDestructive)))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static AgentRunPendingToolAuthorization BuildPendingToolAuthorization(

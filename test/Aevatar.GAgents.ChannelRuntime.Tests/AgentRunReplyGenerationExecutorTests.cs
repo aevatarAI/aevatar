@@ -83,6 +83,43 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task BuildLlmStepContinuation_WhenNonCardTurnNeedsToolApproval_ShouldPreserveRelayReplyTokenForApprovalCard()
+    {
+        var tool = new ApprovalRequiredTool("use_skill");
+        var provider = new TextThenToolCallProvider(tool.Name, "Preparing the workflow.");
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
+        var executor = CreateToolEnabledExecutor(
+            tool,
+            provider,
+            actorDispatchPort: dispatchPort,
+            relayOptions: new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                StreamingRepliesEnabled = true,
+                StreamingCardKitEnabled = false,
+            });
+        var workItem = BuildToolEnabledWorkItem();
+        workItem.Request.Activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "relay-message-1",
+            CorrelationId = "corr-1",
+        };
+        workItem.Request.ReplyToken = "single-use-relay-token";
+        workItem.Request.ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds();
+
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        await dispatchPort.DidNotReceiveWithAnyArgs()
+            .DispatchAsync(default!, default!, default);
+        execution.Continuation.LlmStepResult.AccumulatedText.Should().BeEmpty();
+        execution.Continuation.LlmStepResult.HasStreamedTextContent.Should().BeFalse();
+        execution.Continuation.LlmStepResult.ToolCalls.Should().ContainSingle()
+            .Which.Name.Should().Be(tool.Name);
+        execution.AuthorizedToolCallSafeties.Should().ContainSingle()
+            .Which.CallSafety.RequiresApproval.Should().BeTrue();
+        execution.AuthorizedToolStep.Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task BuildLlmStepContinuation_WhenToolEnabledFirstRoundHasSuccessfulMutatingReceipt_ShouldKeepGroundingConstraint()
     {
         var provider = new RecordingProvider();
@@ -1612,6 +1649,28 @@ public sealed class AgentRunReplyGenerationExecutorTests
         }
     }
 
+    private sealed class TextThenToolCallProvider(string toolName, string content) : ILLMProvider
+    {
+        public string Name => "text-then-tool-call-provider";
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            yield return new LLMStreamChunk { DeltaContent = content };
+            yield return new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-approval-1",
+                    Name = toolName,
+                    ArgumentsJson = "{}",
+                },
+            };
+            await Task.Yield();
+        }
+    }
+
     private sealed class RemoveToolsMiddleware : ILLMCallMiddleware
     {
         public Task InvokeAsync(LLMCallContext context, Func<Task> next)
@@ -1648,6 +1707,21 @@ public sealed class AgentRunReplyGenerationExecutorTests
             ExecuteCount++;
             return Task.FromResult("{}");
         }
+    }
+
+    private sealed class ApprovalRequiredTool(string name) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => name;
+        public string ParametersSchema => "{}";
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+        public AgentToolCallSafety GetCallSafety(string argumentsJson) => new(
+            RequiresApproval: true,
+            IsReadOnly: false,
+            IsDestructive: false);
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
     }
 
     public enum DefinitionDrift

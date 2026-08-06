@@ -1582,6 +1582,9 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         string errorCode,
         string errorSummary)
     {
+        _logger.LogWarning(
+            "AgentRun tool approval continuation failed: errorCode={ErrorCode}",
+            errorCode);
         ApplyTargetRefOverrides(request);
         request.RunId = State.RunId;
         request.CorrelationId = State.CorrelationId;
