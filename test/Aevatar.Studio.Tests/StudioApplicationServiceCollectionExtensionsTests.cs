@@ -1,8 +1,8 @@
 using System.Reflection;
+using Aevatar.GAgents.WorkOrder;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
-using Aevatar.GAgents.WorkOrder;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
@@ -84,6 +84,10 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
         services.Should().ContainSingle(x => x.ServiceType == typeof(IWorkflowBoardClock));
         services.Should().ContainSingle(x => x.ServiceType == typeof(IUserConfigService))
             .Which.ImplementationType.Should().Be(typeof(UserConfigService));
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(IScopeWorkflowPublishedServiceDescriptorSource) &&
+            x.ImplementationType == typeof(StudioMemberScopeWorkflowDescriptorSource) &&
+            x.Lifetime == ServiceLifetime.Singleton);
     }
 
     [Fact]

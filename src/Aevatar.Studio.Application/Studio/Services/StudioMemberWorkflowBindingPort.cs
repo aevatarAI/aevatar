@@ -5,8 +5,8 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
-using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
@@ -153,7 +153,7 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
                 WorkflowName: null,
                 DisplayName: member.Summary.DisplayName,
                 InlineWorkflowYamls: null,
-                AppId: "studio",
+                AppId: StudioMemberPublishedServiceIdentity.AppId,
                 ServiceId: publishedServiceId,
                 ExposureDesired: true,
                 RevisionId: NormalizeOptional(request.RevisionId))

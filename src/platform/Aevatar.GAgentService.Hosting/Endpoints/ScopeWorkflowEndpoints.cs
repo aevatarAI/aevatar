@@ -1,4 +1,6 @@
+using Aevatar.AGUI.Contracts;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Capabilities;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
@@ -6,8 +8,6 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Workflows;
-using Aevatar.Capabilities;
-using Aevatar.AGUI.Contracts;
 using Aevatar.GAgentService.Hosting.Sse;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Abstractions;
@@ -371,7 +371,7 @@ public static class ScopeWorkflowEndpoints
 
             var details = new List<ScopeWorkflowDetail>(workflows.Count);
             foreach (var workflow in workflows)
-                details.Add(await BuildWorkflowDetailAsync(workflow, workflowActorBindingReader, revisionCatalogReader, options.Value, ct));
+                details.Add(await BuildWorkflowDetailAsync(workflow, workflowActorBindingReader, revisionCatalogReader, ct));
 
             return Results.Ok(details);
         }
@@ -413,7 +413,7 @@ public static class ScopeWorkflowEndpoints
                     statusCode: statusCode);
             }
 
-            return Results.Json(await BuildWorkflowDetailAsync(lookup.Workflow!, workflowActorBindingReader, revisionCatalogReader, options.Value, ct));
+            return Results.Json(await BuildWorkflowDetailAsync(lookup.Workflow!, workflowActorBindingReader, revisionCatalogReader, ct));
         }
         catch (InvalidOperationException ex)
         {
@@ -707,7 +707,6 @@ public static class ScopeWorkflowEndpoints
         ScopeWorkflowSummary workflow,
         IWorkflowActorBindingReader workflowActorBindingReader,
         IServiceRevisionCatalogQueryReader revisionCatalogReader,
-        ScopeWorkflowCapabilityOptions options,
         CancellationToken ct)
     {
         PreparedServiceRevisionArtifact? artifact = null;
@@ -718,7 +717,7 @@ public static class ScopeWorkflowEndpoints
         if (!string.IsNullOrWhiteSpace(workflow.ServiceKey) &&
             !string.IsNullOrWhiteSpace(workflow.ActiveRevisionId))
         {
-            var revisionCatalog = await revisionCatalogReader.GetAsync(BuildWorkflowServiceIdentity(workflow, options), ct);
+            var revisionCatalog = await revisionCatalogReader.GetAsync(BuildWorkflowServiceIdentity(workflow), ct);
             artifact = revisionCatalog?.Revisions
                 .FirstOrDefault(x => string.Equals(x.RevisionId, workflow.ActiveRevisionId, StringComparison.Ordinal))
                 ?.PreparedArtifact
@@ -728,15 +727,13 @@ public static class ScopeWorkflowEndpoints
         return BuildWorkflowDetailPayload(workflow, binding, artifact);
     }
 
-    private static ServiceIdentity BuildWorkflowServiceIdentity(
-        ScopeWorkflowSummary workflow,
-        ScopeWorkflowCapabilityOptions options) =>
+    private static ServiceIdentity BuildWorkflowServiceIdentity(ScopeWorkflowSummary workflow) =>
         new()
         {
             TenantId = ScopeWorkflowCapabilityOptions.NormalizeRequired(workflow.ScopeId, nameof(workflow.ScopeId)),
-            AppId = options.ServiceAppId,
-            Namespace = options.ServiceNamespace,
-            ServiceId = ScopeWorkflowCapabilityOptions.NormalizeRequired(workflow.WorkflowId, nameof(workflow.WorkflowId)),
+            AppId = ScopeWorkflowCapabilityOptions.NormalizeRequired(workflow.ServiceAppId, nameof(workflow.ServiceAppId)),
+            Namespace = ScopeWorkflowCapabilityOptions.NormalizeRequired(workflow.ServiceNamespace, nameof(workflow.ServiceNamespace)),
+            ServiceId = ScopeWorkflowCapabilityOptions.NormalizeRequired(workflow.PublishedServiceId, nameof(workflow.PublishedServiceId)),
         };
 
     private static ScopeWorkflowDetail BuildWorkflowDetailPayload(

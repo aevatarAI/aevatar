@@ -11,17 +11,20 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
 {
     private readonly IServiceLifecycleQueryPort _serviceLifecycleQueryPort;
     private readonly IWorkflowActorBindingReader _workflowActorBindingReader;
+    private readonly IReadOnlyList<IScopeWorkflowPublishedServiceDescriptorSource> _descriptorSources;
     private readonly ScopeWorkflowCapabilityOptions _options;
 
     public ScopeWorkflowQueryApplicationService(
         IServiceLifecycleQueryPort serviceLifecycleQueryPort,
         IWorkflowActorBindingReader workflowActorBindingReader,
-        IOptions<ScopeWorkflowCapabilityOptions> options)
+        IOptions<ScopeWorkflowCapabilityOptions> options,
+        IEnumerable<IScopeWorkflowPublishedServiceDescriptorSource>? descriptorSources = null)
     {
         _serviceLifecycleQueryPort = serviceLifecycleQueryPort ?? throw new ArgumentNullException(nameof(serviceLifecycleQueryPort));
         _workflowActorBindingReader = workflowActorBindingReader ?? throw new ArgumentNullException(nameof(workflowActorBindingReader));
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new InvalidOperationException("User workflow capability options are required.");
+        _descriptorSources = descriptorSources?.ToArray() ?? [];
     }
 
     public async Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(
@@ -56,7 +59,45 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
                 ct));
         }
 
-        return summaries;
+        foreach (var source in _descriptorSources)
+        {
+            var descriptors = await source.ListAsync(normalizedScopeId, _options.ListTake, ct);
+            foreach (var descriptor in descriptors)
+            {
+                var normalizedDescriptor = NormalizeDescriptor(normalizedScopeId, descriptor);
+                var identity = BuildIdentity(normalizedDescriptor);
+                var service = await GetExistingServiceAsync(identity, ct);
+                if (service == null)
+                    continue;
+
+                var deploymentCatalog = await _serviceLifecycleQueryPort.GetServiceDeploymentsAsync(identity, ct);
+                var activeDeployment = ResolveActiveDeployment(service, deploymentCatalog);
+                summaries.Add(await BuildWorkflowSummaryAsync(
+                    normalizedScopeId,
+                    service,
+                    identity,
+                    normalizedDescriptor.WorkflowId,
+                    normalizedDescriptor.DisplayName,
+                    fallbackWorkflowName: null,
+                    fallbackActiveRevisionId: activeDeployment?.RevisionId ?? service.ActiveServingRevisionId,
+                    fallbackDeploymentId: activeDeployment?.DeploymentId ?? service.DeploymentId,
+                    fallbackActorId: activeDeployment?.PrimaryActorId ?? service.PrimaryActorId,
+                    fallbackDeploymentStatus: activeDeployment?.Status ?? service.DeploymentStatus,
+                    ct));
+            }
+        }
+
+        return summaries
+            .GroupBy(static workflow => workflow.WorkflowId, StringComparer.Ordinal)
+            .Where(static group => group
+                .Select(workflow => workflow.ServiceKey)
+                .Distinct(StringComparer.Ordinal)
+                .Take(2)
+                .Count() == 1)
+            .Select(static group => group.OrderByDescending(workflow => workflow.UpdatedAt).First())
+            .OrderByDescending(static workflow => workflow.UpdatedAt)
+            .Take(_options.ListTake)
+            .ToArray();
     }
 
     public async Task<ScopeWorkflowLookupResult> LookupByWorkflowIdAsync(
@@ -66,8 +107,48 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
     {
         var normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(scopeId, nameof(scopeId));
         var normalizedWorkflowId = ScopeWorkflowCapabilityConventions.NormalizeWorkflowId(workflowId);
-        var identity = BuildIdentity(normalizedScopeId, normalizedWorkflowId);
-        var serviceSnapshot = await GetExistingServiceAsync(identity, ct);
+        var descriptors = new List<ScopeWorkflowPublishedServiceDescriptor>();
+        foreach (var source in _descriptorSources)
+        {
+            var matches = await source.FindByWorkflowIdAsync(normalizedScopeId, normalizedWorkflowId, ct);
+            descriptors.AddRange(matches.Select(descriptor => NormalizeDescriptor(normalizedScopeId, descriptor)));
+        }
+
+        var distinctDescriptors = descriptors
+            .Where(descriptor => string.Equals(descriptor.WorkflowId, normalizedWorkflowId, StringComparison.Ordinal))
+            .GroupBy(static descriptor =>
+                (descriptor.ServiceAppId, descriptor.ServiceNamespace, descriptor.PublishedServiceId))
+            .Select(static group => group.OrderByDescending(descriptor => descriptor.UpdatedAt).First())
+            .ToArray();
+        if (distinctDescriptors.Length > 1)
+        {
+            return new ScopeWorkflowLookupResult(
+                ScopeWorkflowLookupStatus.Stale,
+                Workflow: null,
+                Reason: "published_service_descriptor_ambiguous");
+        }
+
+        var conventionalIdentity = BuildIdentity(normalizedScopeId, normalizedWorkflowId);
+        var conventionalService = await GetExistingServiceAsync(conventionalIdentity, ct);
+        var identity = conventionalIdentity;
+        var serviceSnapshot = conventionalService;
+        if (distinctDescriptors.Length == 1)
+        {
+            var explicitIdentity = BuildIdentity(distinctDescriptors[0]);
+            if (conventionalService != null && !HasSameIdentity(conventionalIdentity, explicitIdentity))
+            {
+                return new ScopeWorkflowLookupResult(
+                    ScopeWorkflowLookupStatus.Stale,
+                    Workflow: null,
+                    Reason: "published_service_descriptor_conflicts_with_conventional_identity");
+            }
+
+            identity = explicitIdentity;
+            serviceSnapshot = HasSameIdentity(conventionalIdentity, explicitIdentity)
+                ? conventionalService
+                : await GetExistingServiceAsync(explicitIdentity, ct);
+        }
+
         if (serviceSnapshot == null)
         {
             return new ScopeWorkflowLookupResult(
@@ -119,6 +200,15 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
                 ScopeWorkflowLookupStatus.Stale,
                 Workflow: null,
                 Reason: "workflow_actor_binding_mismatched");
+        }
+
+        if (!string.IsNullOrWhiteSpace(binding.WorkflowId) &&
+            !string.Equals(binding.WorkflowId.Trim(), normalizedWorkflowId, StringComparison.Ordinal))
+        {
+            return new ScopeWorkflowLookupResult(
+                ScopeWorkflowLookupStatus.Stale,
+                Workflow: null,
+                Reason: "workflow_actor_binding_workflow_mismatched");
         }
 
         var summary = BuildWorkflowSummary(
@@ -175,6 +265,41 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
 
     internal ServiceIdentity BuildIdentity(string scopeId, string workflowId) =>
         ScopeWorkflowCapabilityConventions.BuildIdentity(_options, scopeId, workflowId);
+
+    private static ServiceIdentity BuildIdentity(ScopeWorkflowPublishedServiceDescriptor descriptor) =>
+        new()
+        {
+            TenantId = descriptor.ScopeId,
+            AppId = descriptor.ServiceAppId,
+            Namespace = descriptor.ServiceNamespace,
+            ServiceId = descriptor.PublishedServiceId,
+        };
+
+    private static bool HasSameIdentity(ServiceIdentity left, ServiceIdentity right) =>
+        string.Equals(left.TenantId, right.TenantId, StringComparison.Ordinal) &&
+        string.Equals(left.AppId, right.AppId, StringComparison.Ordinal) &&
+        string.Equals(left.Namespace, right.Namespace, StringComparison.Ordinal) &&
+        string.Equals(left.ServiceId, right.ServiceId, StringComparison.Ordinal);
+
+    private static ScopeWorkflowPublishedServiceDescriptor NormalizeDescriptor(
+        string expectedScopeId,
+        ScopeWorkflowPublishedServiceDescriptor descriptor)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        var scopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(descriptor.ScopeId, nameof(descriptor.ScopeId));
+        if (!string.Equals(scopeId, expectedScopeId, StringComparison.Ordinal))
+            throw new InvalidOperationException("Scope workflow descriptor source returned a descriptor for another scope.");
+
+        return descriptor with
+        {
+            ScopeId = scopeId,
+            WorkflowId = ScopeWorkflowCapabilityConventions.NormalizeWorkflowId(descriptor.WorkflowId),
+            ServiceAppId = ScopeWorkflowCapabilityOptions.NormalizeRequired(descriptor.ServiceAppId, nameof(descriptor.ServiceAppId)),
+            ServiceNamespace = ScopeWorkflowCapabilityOptions.NormalizeRequired(descriptor.ServiceNamespace, nameof(descriptor.ServiceNamespace)),
+            PublishedServiceId = ScopeWorkflowCapabilityOptions.NormalizeRequired(descriptor.PublishedServiceId, nameof(descriptor.PublishedServiceId)),
+            DisplayName = ScopeWorkflowCapabilityConventions.ResolveDisplayName(descriptor.DisplayName, descriptor.WorkflowId),
+        };
+    }
 
     private async Task<ScopeWorkflowSummary> BuildWorkflowSummaryAsync(
         string scopeId,
@@ -236,7 +361,12 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
             activeRevisionId,
             deploymentId,
             deploymentStatus.Trim() is { Length: > 0 } resolvedDeploymentStatus ? resolvedDeploymentStatus : ServiceDeploymentStatus.Unspecified.ToString(),
-            serviceSnapshot.UpdatedAt);
+            serviceSnapshot.UpdatedAt)
+        {
+            ServiceAppId = identity.AppId,
+            ServiceNamespace = identity.Namespace,
+            PublishedServiceId = identity.ServiceId,
+        };
     }
 
     private static ServiceDeploymentSnapshot? ResolveActiveDeployment(

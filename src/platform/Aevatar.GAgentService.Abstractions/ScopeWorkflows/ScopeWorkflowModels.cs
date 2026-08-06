@@ -1,5 +1,5 @@
-using Aevatar.GAgentService.Abstractions.Commands;
 using System.Text.Json.Serialization;
+using Aevatar.GAgentService.Abstractions.Commands;
 
 namespace Aevatar.GAgentService.Abstractions;
 
@@ -50,6 +50,22 @@ public sealed record ScopeWorkflowSummary(
     string ActiveRevisionId,
     string DeploymentId,
     string DeploymentStatus,
+    DateTimeOffset UpdatedAt)
+{
+    public string ServiceAppId { get; init; } = string.Empty;
+
+    public string ServiceNamespace { get; init; } = string.Empty;
+
+    public string PublishedServiceId { get; init; } = string.Empty;
+}
+
+public sealed record ScopeWorkflowPublishedServiceDescriptor(
+    string ScopeId,
+    string WorkflowId,
+    string ServiceAppId,
+    string ServiceNamespace,
+    string PublishedServiceId,
+    string DisplayName,
     DateTimeOffset UpdatedAt);
 
 public sealed record ScopeWorkflowLookupResult(
