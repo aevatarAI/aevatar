@@ -53,7 +53,7 @@ describe('observeDraftMaterialization', () => {
 
   it('keeps observing an existing draft until the expected update is visible', async () => {
     const read = jest
-      .fn()
+      .fn<Promise<{ workflowId: string; name: string }>, [workflowId: string]>()
       .mockResolvedValueOnce({ workflowId: 'wf-alpha', name: 'Old name' })
       .mockResolvedValueOnce({ workflowId: 'wf-alpha', name: 'New name' });
 
