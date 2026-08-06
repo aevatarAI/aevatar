@@ -112,68 +112,38 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.editor.waitForPublishedRun':
       '请等待已发布版本可用。',
     'workflowActivityVNext.publish.accepted': '发布请求已接受',
-    'workflowActivityVNext.publish.approvalNotRequired': '此请求无需额外审批。',
-    'workflowActivityVNext.publish.approvalRequired': '此请求运行前需要审批。',
     'workflowActivityVNext.publish.addExecutableStep':
       '发布前请至少添加一个可执行步骤。',
     'workflowActivityVNext.publish.applyNodeChanges':
       '发布前请应用或放弃节点配置更改。',
-    'workflowActivityVNext.publish.backToService': '返回',
     'workflowActivityVNext.publish.blocked': '发布受阻 · {count} 个问题',
     'workflowActivityVNext.publish.blockedOne': '发布受阻 · 1 个问题',
     'workflowActivityVNext.publish.checkAgain': '再次检查',
     'workflowActivityVNext.publish.delayed': '发布状态显示所需时间较长',
     'workflowActivityVNext.publish.delayedDescription':
       '请再次检查最新发布状态。',
-    'workflowActivityVNext.publish.destinationDescription':
-      '选择要使用 {workflowName} 的服务。',
     'workflowActivityVNext.publish.failed': '无法确认发布状态',
     'workflowActivityVNext.publish.failedDescription':
-      '请检查工作流或再次尝试发布。',
+      '请处理错误或再次尝试发布。',
     'workflowActivityVNext.publish.forbiddenDescription':
       '你无权查看此发布状态。',
-    'workflowActivityVNext.publish.loadingServices': '正在加载服务…',
-    'workflowActivityVNext.publish.noExternalRequests':
-      '没有需要审核的外部请求。',
-    'workflowActivityVNext.publish.noServices': '此工作区暂无可用服务',
     'workflowActivityVNext.publish.observed': '工作流已发布',
-    'workflowActivityVNext.publish.observedDescription':
-      '所选服务现在正在使用此工作流。',
+    'workflowActivityVNext.publish.observedDescription': '工作流现已发布。',
     'workflowActivityVNext.publish.observingDescription':
-      '正在检查所选服务是否已准备就绪。',
+      '正在检查已发布版本是否就绪。',
     'workflowActivityVNext.publish.published': '已发布',
     'workflowActivityVNext.publish.publishedServiceId': '已发布服务 ID',
     'workflowActivityVNext.publish.publishing': '正在发布',
-    'workflowActivityVNext.publish.publishingTo': '正在发布到 {service}',
     'workflowActivityVNext.publish.revisionId': '版本 ID',
-    'workflowActivityVNext.publish.reviewAgain': '再次审核',
-    'workflowActivityVNext.publish.reviewAndPublish': '审核并发布',
-    'workflowActivityVNext.publish.reviewDescription':
-      '查看此工作流运行时可能执行的操作。',
-    'workflowActivityVNext.publish.reviewing': '正在准备审核…',
-    'workflowActivityVNext.publish.reviewingDescription':
-      '正在准备此工作流以供审核。',
-    'workflowActivityVNext.publish.reviewUnavailable':
-      '暂时无法准备此工作流以供发布。',
     'workflowActivityVNext.publish.readinessIssues': '发布就绪问题',
     'workflowActivityVNext.publish.resolvePublication':
       '再次发布前请先处理当前发布状态。',
-    'workflowActivityVNext.publish.risk': '影响',
-    'workflowActivityVNext.publish.risk.destructive':
-      '可能删除数据或造成永久性更改',
-    'workflowActivityVNext.publish.risk.readOnly': '只读',
-    'workflowActivityVNext.publish.risk.write': '可进行更改',
     'workflowActivityVNext.publish.saveBeforePublishing':
       '请先保存此工作流，再发布。',
     'workflowActivityVNext.publish.saveChangesBeforePublishing':
       '请先保存更改，再发布。',
-    'workflowActivityVNext.publish.selectService': '选择服务',
-    'workflowActivityVNext.publish.service': '服务',
-    'workflowActivityVNext.publish.servicesUnavailable': '服务暂不可用',
     'workflowActivityVNext.publish.submitting': '正在提交发布…',
-    'workflowActivityVNext.publish.submittingDescription':
-      '正在将此工作流发送到所选服务。',
-    'workflowActivityVNext.publish.title': '发布工作流',
+    'workflowActivityVNext.publish.submittingDescription': '正在发布此工作流。',
     'workflowActivityVNext.publish.waitForPublication':
       '请等待当前发布流程完成。',
     'workflowActivityVNext.publish.waitForEditorUpdate':
