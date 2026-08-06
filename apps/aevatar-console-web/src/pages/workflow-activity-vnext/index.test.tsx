@@ -4302,11 +4302,13 @@ describe('Workflow Activity vNext editor', () => {
     await waitFor(() =>
       expect(mockStudioApi.serializeYaml).toHaveBeenCalledTimes(1),
     );
-    expect(mockStudioApi.serializeYaml.mock.calls[0][0].document.steps).toEqual([
-      expect.objectContaining({ id: 'draft_step', next: 'review_step' }),
-      expect.objectContaining({ id: 'review_step', next: 'assign_step' }),
-      expect.objectContaining({ id: 'assign_step', next: null }),
-    ]);
+    expect(mockStudioApi.serializeYaml.mock.calls[0][0].document.steps).toEqual(
+      [
+        expect.objectContaining({ id: 'draft_step', next: 'review_step' }),
+        expect.objectContaining({ id: 'review_step', next: 'assign_step' }),
+        expect.objectContaining({ id: 'assign_step', next: null }),
+      ],
+    );
   });
 
   it('inserts a node after the selected middle step and preserves its successor', async () => {
@@ -4368,12 +4370,14 @@ describe('Workflow Activity vNext editor', () => {
     await waitFor(() =>
       expect(mockStudioApi.serializeYaml).toHaveBeenCalledTimes(1),
     );
-    expect(mockStudioApi.serializeYaml.mock.calls[0][0].document.steps).toEqual([
-      expect.objectContaining({ id: 'draft_step', next: 'review_step' }),
-      expect.objectContaining({ id: 'review_step', next: 'assign_step' }),
-      expect.objectContaining({ id: 'assign_step', next: 'publish_step' }),
-      expect.objectContaining({ id: 'publish_step', next: null }),
-    ]);
+    expect(mockStudioApi.serializeYaml.mock.calls[0][0].document.steps).toEqual(
+      [
+        expect.objectContaining({ id: 'draft_step', next: 'review_step' }),
+        expect.objectContaining({ id: 'review_step', next: 'assign_step' }),
+        expect.objectContaining({ id: 'assign_step', next: 'publish_step' }),
+        expect.objectContaining({ id: 'publish_step', next: null }),
+      ],
+    );
   });
 
   it('locks structural editing while a save is still in flight', async () => {
@@ -4451,12 +4455,12 @@ describe('Workflow Activity vNext editor', () => {
       expect(mockConsoleToast.error).toHaveBeenCalledTimes(1),
     );
     expect(screen.queryByText("Couldn't add node")).not.toBeInTheDocument();
-    expect(screen.queryByText(serializeFailure.message)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(serializeFailure.message),
+    ).not.toBeInTheDocument();
     const [content] = mockConsoleToast.error.mock.calls[0];
     const toastContent = render(content).container;
-    expect(
-      within(toastContent).getByText("Couldn't add node"),
-    ).toBeVisible();
+    expect(within(toastContent).getByText("Couldn't add node")).toBeVisible();
     const retryButton = within(toastContent).getByRole('button', {
       name: 'Retry',
     });
@@ -5028,6 +5032,124 @@ describe('Workflow Activity vNext editor', () => {
         within(inspector).getByRole('button', { name: 'Apply changes' }),
       ).toBeDisabled(),
     );
+  });
+
+  it('keeps unapplied node configuration when the selected node is clicked again', async () => {
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Select step:step-root' }),
+    );
+    const inspector = await screen.findByRole('complementary', {
+      name: 'Configure step-root',
+    });
+    fireEvent.change(within(inspector).getByLabelText('Instruction'), {
+      target: { value: 'Updated prompt' },
+    });
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Select step:step-root' }),
+    );
+
+    expect(
+      screen.queryByRole('dialog', { name: 'Discard node changes?' }),
+    ).not.toBeInTheDocument();
+    expect(within(inspector).getByLabelText('Instruction')).toHaveValue(
+      'Updated prompt',
+    );
+  });
+
+  it('asks before switching from a node with unapplied configuration', async () => {
+    mockStudioApi.getWorkflow.mockResolvedValue({
+      workflowId: 'wf-committed-source',
+      name: 'Committed source',
+      fileName: 'committed-source.yaml',
+      filePath: '',
+      directoryId: '',
+      directoryLabel: '',
+      yaml: [
+        'name: committed_source',
+        'roles: []',
+        'steps:',
+        '  - id: step-root',
+        '    type: llm_call',
+        '    parameters:',
+        '      prompt_prefix: Original prompt',
+        '  - id: step-second',
+        '    type: transform',
+        '    parameters:',
+        '      operation: trim',
+        '',
+      ].join('\n'),
+      updatedAtUtc: '2026-08-04T10:00:00Z',
+      document: {
+        name: 'committed_source',
+        roles: [],
+        steps: [
+          {
+            id: 'step-root',
+            type: 'llm_call',
+            parameters: { prompt_prefix: 'Original prompt' },
+          },
+          {
+            id: 'step-second',
+            type: 'transform',
+            parameters: { operation: 'trim' },
+          },
+        ],
+      },
+      draftExists: false,
+      findings: [],
+    });
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Select step:step-root' }),
+    );
+    const rootInspector = await screen.findByRole('complementary', {
+      name: 'Configure step-root',
+    });
+    fireEvent.change(within(rootInspector).getByLabelText('Instruction'), {
+      target: { value: 'Updated prompt' },
+    });
+    const secondNode = await screen.findByRole('button', {
+      name: 'Select step:step-second',
+    });
+
+    fireEvent.click(secondNode);
+
+    const discardDialog = await screen.findByRole('dialog', {
+      name: 'Discard node changes?',
+    });
+    expect(within(rootInspector).getByLabelText('Instruction')).toHaveValue(
+      'Updated prompt',
+    );
+    fireEvent.click(
+      within(discardDialog).getByRole('button', { name: 'Cancel' }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('dialog', { name: 'Discard node changes?' }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(within(rootInspector).getByLabelText('Instruction')).toHaveValue(
+      'Updated prompt',
+    );
+
+    fireEvent.click(secondNode);
+    fireEvent.click(
+      within(
+        await screen.findByRole('dialog', {
+          name: 'Discard node changes?',
+        }),
+      ).getByRole('button', { name: 'Discard changes' }),
+    );
+
+    expect(
+      await screen.findByRole('complementary', {
+        name: 'Configure step-second',
+      }),
+    ).toBeVisible();
   });
 
   it('asks before discarding unapplied node changes during vNext navigation', async () => {
