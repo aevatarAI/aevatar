@@ -1,4 +1,5 @@
 import { t } from "@/shared/i18n/messages";
+
 function normalizeWhitespace(value: string | null | undefined): string {
   return String(value ?? "")
     .replace(/\s+/g, " ")
@@ -59,6 +60,7 @@ export type ResponseErrorPayload = {
 
 export type ResponseErrorDetails = {
   readonly code?: string;
+  readonly fieldErrors?: Readonly<Record<string, readonly string[]>>;
   readonly message: string;
   readonly preflightLocator?: string;
   readonly requiredStateVersion?: number;
@@ -111,33 +113,39 @@ function readResponseErrorFromPayload(
   return "";
 }
 
-function readValidationErrors(value: unknown): string | null {
+function readValidationErrorMap(
+  value: unknown,
+): Readonly<Record<string, readonly string[]>> | undefined {
   if (!value || typeof value !== "object") {
-    return null;
+    return undefined;
   }
 
-  const messages: string[] = [];
+  const fields: Record<string, string[]> = {};
   for (const [field, fieldErrors] of Object.entries(value)) {
     const normalizedField = normalizeWhitespace(field);
+    if (!normalizedField) continue;
+    const messages: string[] = [];
     if (Array.isArray(fieldErrors)) {
       for (const entry of fieldErrors) {
         const message = readJsonErrorText(entry);
-        if (!message) {
-          continue;
-        }
-
-        messages.push(normalizedField ? `${normalizedField}: ${message}` : message);
+        if (message) messages.push(message);
       }
-      continue;
+    } else {
+      const message = readJsonErrorText(fieldErrors);
+      if (message) messages.push(message);
     }
-
-    const message = readJsonErrorText(fieldErrors);
-    if (message) {
-      messages.push(normalizedField ? `${normalizedField}: ${message}` : message);
-    }
+    if (messages.length > 0) fields[normalizedField] = messages;
   }
 
-  return messages.length > 0 ? messages.join("; ") : null;
+  return Object.keys(fields).length > 0 ? fields : undefined;
+}
+
+function readValidationErrors(value: unknown): string | null {
+  const fields = readValidationErrorMap(value);
+  if (!fields) return null;
+  return Object.entries(fields)
+    .flatMap(([field, messages]) => messages.map((message) => `${field}: ${message}`))
+    .join("; ");
 }
 
 export async function readResponseErrorDetails(
@@ -160,6 +168,7 @@ export async function readResponseErrorDetails(
         readJsonErrorText(payload.code) ??
         readJsonErrorText(payload.error) ??
         undefined,
+      fieldErrors: readValidationErrorMap(payload.errors),
       message,
       preflightLocator:
         readJsonErrorText((payload as ResponseErrorPayload & { preflightLocator?: unknown }).preflightLocator) ??

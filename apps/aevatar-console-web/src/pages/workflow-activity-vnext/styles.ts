@@ -209,6 +209,18 @@ export const workflowActivityVNextCss = `
 .wa-vnext__editor-yaml { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; width: 100%; }
 .wa-vnext__run-panel { margin-top: 16px; }
 .wa-vnext__run-panel-content { width: 100%; }
+.wa-vnext__run-input-field { display: grid; gap: 6px; }
+.wa-vnext__run-input-heading { align-items: center; display: flex; gap: 8px; }
+.wa-vnext__run-input-heading label { font-size: 12px; font-weight: 700; }
+.wa-vnext__run-input-heading span { background: var(--wa-red-bg); border-radius: 3px; color: var(--wa-red); font-size: 10px; font-weight: 700; padding: 1px 5px; }
+.wa-vnext__run-input-field > p { color: var(--wa-muted); font-size: 11px; margin: 0; }
+.wa-vnext__run-input-field > .wa-vnext__field-error { color: var(--wa-red); }
+.wa-vnext__run-result { border-top: 1px solid var(--wa-line); display: grid; gap: 12px; padding-top: 16px; }
+.wa-vnext__run-result-heading { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; }
+.wa-vnext__run-result p { margin: 0; }
+.wa-vnext__run-snapshot, .wa-vnext__run-outcome { background: var(--wa-subtle); border-left: 3px solid var(--wa-line); display: grid; gap: 4px; min-width: 0; padding: 10px 12px; }
+.wa-vnext__run-snapshot span, .wa-vnext__run-outcome p { overflow-wrap: anywhere; white-space: pre-wrap; }
+.wa-vnext__run-snapshot small, .wa-vnext__run-details-note { color: var(--wa-muted); font-size: 11px; }
 .wa-vnext__run-summary { display: grid; gap: 12px; margin-bottom: 16px; }
 .wa-vnext__run-summary .ant-descriptions { border-radius: var(--wa-radius); overflow: hidden; }
 .wa-vnext__run-tabs { margin-top: 16px; }

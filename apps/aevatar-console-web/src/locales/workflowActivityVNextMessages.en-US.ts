@@ -22,9 +22,12 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.activity.originService': 'Service',
   'workflowActivityVNext.activity.search': 'Search runs',
   'workflowActivityVNext.activity.searchAria': 'Search runs',
+  'workflowActivityVNext.activity.statusCancelled': 'Cancelled',
   'workflowActivityVNext.activity.statusCompleted': 'Completed',
   'workflowActivityVNext.activity.statusFilter': 'Run status',
+  'workflowActivityVNext.activity.statusQueued': 'Queued',
   'workflowActivityVNext.activity.statusRunning': 'Running',
+  'workflowActivityVNext.activity.statusTimedOut': 'Timed out',
   'workflowActivityVNext.activity.statusWaiting': 'Waiting',
   'workflowActivityVNext.activity.title': 'Activity',
   'workflowActivityVNext.activity.unavailable': 'Activity unavailable',
@@ -136,10 +139,25 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.publish.title': 'Publish workflow',
   'workflowActivityVNext.publish.unauthorizedDescription':
     'Sign in again to check this publication.',
-  'workflowActivityVNext.editor.runAccepted': 'Preparing run…',
+  'workflowActivityVNext.editor.checkLatestStatus': 'Check latest status',
+  'workflowActivityVNext.editor.currentStep': 'Current step',
+  'workflowActivityVNext.editor.failureSummary': 'Failure summary',
+  'workflowActivityVNext.editor.fullDetailsNotice':
+    'Open run details for the full timeline, diagnostics, and recovery actions.',
+  'workflowActivityVNext.editor.openRunDetails': 'Open run details',
+  'workflowActivityVNext.editor.outputSummary': 'Output summary',
+  'workflowActivityVNext.editor.runAccepted': 'Run accepted',
+  'workflowActivityVNext.editor.runAgain': 'Run again',
   'workflowActivityVNext.editor.runFailed': 'Run failed',
-  'workflowActivityVNext.editor.runInput': 'Test input',
+  'workflowActivityVNext.editor.runInput': 'Input',
+  'workflowActivityVNext.editor.runInputExample':
+    'For example: Review order 42',
+  'workflowActivityVNext.editor.runInputHelp':
+    'This workflow accepts one text input. For example: Review order 42.',
+  'workflowActivityVNext.editor.runInputRequired': 'Input is required.',
+  'workflowActivityVNext.editor.runInputRequiredTag': 'Required',
   'workflowActivityVNext.editor.runPanel': 'Test run',
+  'workflowActivityVNext.editor.runResult': 'Run result',
   'workflowActivityVNext.editor.runUnavailable':
     'Add at least one valid step before running.',
   'workflowActivityVNext.editor.runSubmitting': 'Starting run…',
@@ -158,6 +176,9 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.streamEnded':
     'Live updates ended. Open Activity to check the latest status.',
   'workflowActivityVNext.editor.submitRun': 'Start run',
+  'workflowActivityVNext.editor.submittedInput': 'Submitted input',
+  'workflowActivityVNext.editor.snapshotNotice':
+    'Run again uses this exact input and workflow snapshot.',
   'workflowActivityVNext.editor.unavailable': 'Workflow unavailable',
   'workflowActivityVNext.editor.unavailableDescription':
     "This workflow couldn't be loaded.",
