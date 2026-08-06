@@ -2,12 +2,13 @@ import {
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
+  InboxOutlined,
   MoreOutlined,
   PlusOutlined,
   ReloadOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Button,
   Dropdown,
@@ -20,9 +21,14 @@ import {
 } from 'antd';
 import React from 'react';
 import { scopesApi } from '@/shared/api/scopesApi';
+import { servicesApi } from '@/shared/api/servicesApi';
 import { t } from '@/shared/i18n/messages';
 import type { ScopeWorkflowSummary } from '@/shared/models/scopes';
 import { history } from '@/shared/navigation/history';
+import {
+  scopeServiceAppId,
+  scopeServiceNamespace,
+} from '@/shared/runs/scopeConsole';
 import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
 import type { StudioWorkflowDraftSummary } from '@/shared/studio/models';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
@@ -34,9 +40,16 @@ import {
 } from '../navigation';
 import TableScrollRegion from '../TableScrollRegion';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
+import {
+  canArchiveWorkflow,
+  isWorkflowArchived,
+  observeWorkflowArchival,
+} from './workflowArchival';
 
 type WorkflowRow = {
   readonly activeRevisionId: string;
+  readonly deploymentId: string;
+  readonly deploymentStatus: string;
   readonly description: string;
   readonly hasCommittedSource: boolean;
   readonly hasDraftSource: boolean;
@@ -54,6 +67,8 @@ function toDraftRow(
     activeRevisionId:
       item.activeRevisionId?.trim() || committed?.activeRevisionId || '',
     description: item.description,
+    deploymentId: committed?.deploymentId ?? '',
+    deploymentStatus: committed?.deploymentStatus ?? '',
     hasCommittedSource: Boolean(committed),
     hasDraftSource: true,
     name: item.name,
@@ -67,6 +82,8 @@ function toCommittedRow(item: ScopeWorkflowSummary): WorkflowRow {
   return {
     activeRevisionId: item.activeRevisionId.trim(),
     description: '',
+    deploymentId: item.deploymentId.trim(),
+    deploymentStatus: item.deploymentStatus.trim(),
     hasCommittedSource: true,
     hasDraftSource: false,
     name: item.displayName || item.workflowName,
@@ -75,10 +92,12 @@ function toCommittedRow(item: ScopeWorkflowSummary): WorkflowRow {
   };
 }
 
-type WorkflowView = 'all' | 'drafts';
+type WorkflowView = 'active' | 'archived' | 'drafts';
 
 function readWorkflowView(params: URLSearchParams): WorkflowView {
-  return params.get('view') === 'drafts' ? 'drafts' : 'all';
+  const view = params.get('view');
+  if (view === 'archived' || view === 'drafts') return view;
+  return 'active';
 }
 
 function formatDate(value: string | null): string {
@@ -99,6 +118,7 @@ function normalizeWorkflowName(value: string): string {
 
 const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const location = useConsoleLocation();
+  const queryClient = useQueryClient();
   const toast = useConsoleToast();
   const lastListErrorSignature = React.useRef('');
   const suppressNextDraftListError = React.useRef(false);
@@ -110,6 +130,14 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const [view, setView] = React.useState<WorkflowView>(
     readWorkflowView(initialParams),
   );
+  const [archiveTarget, setArchiveTarget] = React.useState<WorkflowRow | null>(
+    null,
+  );
+  const [archiving, setArchiving] = React.useState(false);
+  const [archiveSubmitted, setArchiveSubmitted] = React.useState(false);
+  const [archivePhase, setArchivePhase] = React.useState<
+    'delayed' | 'failed' | 'idle'
+  >('idle');
   const [renameTarget, setRenameTarget] = React.useState<WorkflowRow | null>(
     null,
   );
@@ -141,7 +169,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   React.useEffect(() => {
     const params = new URLSearchParams();
     if (query.trim()) params.set('q', query.trim());
-    if (view === 'drafts') params.set('view', 'drafts');
+    if (view !== 'active') params.set('view', view);
     const suffix = params.toString();
     history.replace(`${location.pathname}${suffix ? `?${suffix}` : ''}`);
   }, [location.pathname, query, view]);
@@ -162,9 +190,11 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       );
     const normalized = query.trim().toLowerCase();
     return [...merged.values()]
-      .filter(
-        (item) => view !== 'drafts' || draftWorkflowIds.has(item.workflowId),
-      )
+      .filter((item) => {
+        if (view === 'drafts') return draftWorkflowIds.has(item.workflowId);
+        if (view === 'archived') return isWorkflowArchived(item);
+        return !isWorkflowArchived(item);
+      })
       .filter(
         (item) =>
           !normalized ||
@@ -179,7 +209,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       );
   }, [committed.data, draftWorkflowIds, drafts.data, query, view]);
   const totalFailure = drafts.isError && committed.isError;
-  const filtersActive = Boolean(query.trim()) || view === 'drafts';
+  const filtersActive = Boolean(query.trim()) || view !== 'active';
   const renameDuplicates = React.useMemo(() => {
     if (!renameTarget) return false;
     const normalizedName = normalizeWorkflowName(renameName);
@@ -306,6 +336,81 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     }
   };
 
+  const openArchive = (row: WorkflowRow) => {
+    setArchiveTarget(row);
+    setArchiveSubmitted(false);
+    setArchivePhase('idle');
+  };
+
+  const closeArchive = () => {
+    if (archiving) return;
+    setArchiveTarget(null);
+    setArchiveSubmitted(false);
+    setArchivePhase('idle');
+  };
+
+  const confirmArchive = async () => {
+    if (!archiveTarget || archiving) return;
+    const target = archiveTarget;
+    let accepted = archiveSubmitted;
+    setArchiving(true);
+    setArchivePhase('idle');
+
+    try {
+      if (!accepted) {
+        await servicesApi.deactivateDeployment(
+          target.workflowId,
+          target.deploymentId,
+          {
+            tenantId: scopeId,
+            appId: scopeServiceAppId,
+            namespace: scopeServiceNamespace,
+          },
+        );
+        accepted = true;
+        setArchiveSubmitted(true);
+      }
+
+      const observation = await observeWorkflowArchival({
+        readWorkflows: () => scopesApi.listWorkflows(scopeId),
+        workflowId: target.workflowId,
+      });
+      if (observation.kind === 'delayed') {
+        setArchivePhase('delayed');
+        return;
+      }
+
+      queryClient.setQueryData(
+        ['workflow-activity-vnext', 'committed', scopeId],
+        observation.workflows,
+      );
+      void committed.refetch();
+      setArchiveTarget(null);
+      setArchiveSubmitted(false);
+      setArchivePhase('idle');
+      toast.success(
+        t(
+          'workflowActivityVNext.workflows.archiveSuccess',
+          'Workflow archived',
+        ),
+      );
+    } catch {
+      if (accepted) {
+        setArchivePhase('delayed');
+      } else {
+        setArchivePhase('failed');
+        toast.error(
+          t(
+            'workflowActivityVNext.workflows.archiveFailed',
+            "Workflow couldn't be archived",
+          ),
+        );
+      }
+    } finally {
+      setArchiving(false);
+    }
+  };
+
   const closeDelete = () => {
     if (deleting) return;
     setDeleteTarget(null);
@@ -414,10 +519,10 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             options={[
               {
                 label: t(
-                  'workflowActivityVNext.workflows.allView',
-                  'All workflows',
+                  'workflowActivityVNext.workflows.activeView',
+                  'Active workflows',
                 ),
-                value: 'all',
+                value: 'active',
               },
               {
                 disabled: drafts.isError,
@@ -426,6 +531,13 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                   'Drafts',
                 ),
                 value: 'drafts',
+              },
+              {
+                label: t(
+                  'workflowActivityVNext.workflows.archivedView',
+                  'Archived',
+                ),
+                value: 'archived',
               },
             ]}
             value={view}
@@ -522,7 +634,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
               <Button
                 onClick={() => {
                   setQuery('');
-                  setView('all');
+                  setView('active');
                 }}
               >
                 {t(
@@ -576,6 +688,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             <tbody>
               {rows.map((row) => {
                 const description = row.description.trim();
+                const isArchived = isWorkflowArchived(row);
                 const isPublished = Boolean(row.activeRevisionId);
                 const workflowName = (
                   <span className="wa-vnext__title">{row.name}</span>
@@ -627,20 +740,27 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                     >
                       <span
                         className={`wa-vnext__status ${
-                          isPublished
-                            ? 'wa-vnext__status--committed'
-                            : 'wa-vnext__status--draft'
+                          isArchived
+                            ? 'wa-vnext__status--archived'
+                            : isPublished
+                              ? 'wa-vnext__status--committed'
+                              : 'wa-vnext__status--draft'
                         }`}
                       >
-                        {isPublished
+                        {isArchived
                           ? t(
-                              'workflowActivityVNext.workflows.publishedStatus',
-                              'Published',
+                              'workflowActivityVNext.workflows.archivedStatus',
+                              'Archived',
                             )
-                          : t(
-                              'workflowActivityVNext.workflows.draftStatus',
-                              'Draft',
-                            )}
+                          : isPublished
+                            ? t(
+                                'workflowActivityVNext.workflows.publishedStatus',
+                                'Published',
+                              )
+                            : t(
+                                'workflowActivityVNext.workflows.draftStatus',
+                                'Draft',
+                              )}
                       </span>
                     </td>
                     <td
@@ -728,11 +848,26 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                                   'Copy workflow reference',
                                 ),
                               },
+                              ...(canArchiveWorkflow(row)
+                                ? [
+                                    { type: 'divider' as const },
+                                    {
+                                      danger: true,
+                                      icon: <InboxOutlined />,
+                                      key: 'archive',
+                                      label: t(
+                                        'workflowActivityVNext.workflows.archive',
+                                        'Archive',
+                                      ),
+                                    },
+                                  ]
+                                : []),
                             ],
                             onClick: ({ key }) => {
                               if (key === 'rename') openRename(row);
                               if (key === 'copy-reference')
                                 void copyWorkflowReference(row);
+                              if (key === 'archive') openArchive(row);
                             },
                           }}
                           placement="bottomRight"
@@ -757,6 +892,61 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           </table>
         </TableScrollRegion>
       )}
+      <Modal
+        cancelButtonProps={{ disabled: archiving }}
+        cancelText={t('workflowActivityVNext.common.cancel', 'Cancel')}
+        closable={!archiving}
+        confirmLoading={archiving}
+        destroyOnHidden
+        keyboard={!archiving}
+        mask={{ closable: false }}
+        okButtonProps={{ danger: true }}
+        okText={
+          archivePhase === 'delayed'
+            ? t(
+                'workflowActivityVNext.workflows.archiveCheckAgain',
+                'Check again',
+              )
+            : archivePhase === 'failed'
+              ? t(
+                  'workflowActivityVNext.workflows.archiveTryAgain',
+                  'Try again',
+                )
+              : t(
+                  'workflowActivityVNext.workflows.archiveConfirm',
+                  'Archive workflow',
+                )
+        }
+        onCancel={closeArchive}
+        onOk={() => void confirmArchive()}
+        open={Boolean(archiveTarget)}
+        title={t(
+          'workflowActivityVNext.workflows.archiveTitle',
+          'Archive this workflow?',
+        )}
+      >
+        <p>
+          {t(
+            'workflowActivityVNext.workflows.archiveDescription',
+            'This stops new runs for the published workflow. Its editable draft, published revisions, and Activity history remain available. Publishing it again restores it.',
+          )}
+        </p>
+        {archivePhase === 'failed' ? (
+          <p className="wa-vnext__duplicate-warning" role="alert">
+            {t(
+              'workflowActivityVNext.workflows.archiveFailed',
+              "Workflow couldn't be archived",
+            )}
+          </p>
+        ) : archivePhase === 'delayed' ? (
+          <p className="wa-vnext__duplicate-warning" role="status">
+            {t(
+              'workflowActivityVNext.workflows.archiveDelayed',
+              "Archive was accepted, but it hasn't been confirmed yet",
+            )}
+          </p>
+        ) : null}
+      </Modal>
       <Modal
         cancelText={t('workflowActivityVNext.common.cancel', 'Cancel')}
         closable={!renaming}

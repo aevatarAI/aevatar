@@ -157,6 +157,7 @@ export const workflowActivityVNextCss = `
 .wa-vnext__status { align-items: center; border: 1px solid currentColor; border-radius: 5px; display: inline-flex; font-size: 11px; font-weight: 600; gap: 6px; min-height: 24px; padding: 0 8px; white-space: nowrap; }
 .wa-vnext__status::before { background: currentColor; border-radius: 50%; content: ""; height: 6px; width: 6px; }
 .wa-vnext__status--draft { background: #f4f3ff; color: #6941c6; }
+.wa-vnext__status--archived { background: var(--wa-subtle); color: var(--wa-muted); }
 .wa-vnext__status--committed, .wa-vnext__status--succeeded { background: var(--wa-green-bg); color: var(--wa-green); }
 .wa-vnext__status--running, .wa-vnext__status--accepted { background: var(--wa-blue-bg); color: var(--wa-blue); }
 .wa-vnext__status--failed { background: var(--wa-red-bg); color: var(--wa-red); }
