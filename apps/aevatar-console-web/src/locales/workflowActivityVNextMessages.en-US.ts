@@ -541,7 +541,21 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.unavailable.description':
     "The page you requested isn't available.",
   'workflowActivityVNext.unavailable.title': 'Unavailable',
-  'workflowActivityVNext.workflows.allView': 'All workflows',
+  'workflowActivityVNext.workflows.activeView': 'Active workflows',
+  'workflowActivityVNext.workflows.archive': 'Archive',
+  'workflowActivityVNext.workflows.archiveCheckAgain': 'Check again',
+  'workflowActivityVNext.workflows.archiveConfirm': 'Archive workflow',
+  'workflowActivityVNext.workflows.archiveDelayed':
+    "Archive was accepted, but it hasn't been confirmed yet",
+  'workflowActivityVNext.workflows.archiveDescription':
+    'This stops new runs for the published workflow. Its editable draft, published revisions, and Activity history remain available. Publishing it again restores it.',
+  'workflowActivityVNext.workflows.archiveFailed':
+    "Workflow couldn't be archived",
+  'workflowActivityVNext.workflows.archiveSuccess': 'Workflow archived',
+  'workflowActivityVNext.workflows.archiveTitle': 'Archive this workflow?',
+  'workflowActivityVNext.workflows.archiveTryAgain': 'Try again',
+  'workflowActivityVNext.workflows.archivedStatus': 'Archived',
+  'workflowActivityVNext.workflows.archivedView': 'Archived',
   'workflowActivityVNext.workflows.clearFilters': 'Clear filters',
   'workflowActivityVNext.workflows.columnActions': 'Actions',
   'workflowActivityVNext.workflows.columnStatus': 'Status',
@@ -561,7 +575,6 @@ const workflowActivityVNextMessages = {
     'Another workflow already uses this name. Duplicate names are allowed.',
   'workflowActivityVNext.workflows.deleteDescription':
     'This deletes only the editable draft. Published versions and run history remain available.',
-  'workflowActivityVNext.workflows.deleteAria': 'Delete {name}',
   'workflowActivityVNext.workflows.deleteDraft': 'Delete draft',
   'workflowActivityVNext.workflows.deleteFailed': "Draft couldn't be deleted",
   'workflowActivityVNext.workflows.deleteRefreshFailed':
@@ -572,12 +585,13 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.workflows.emptyDescription':
     'Create a workflow to get started.',
   'workflowActivityVNext.workflows.loading': 'Loading workflows…',
-  'workflowActivityVNext.workflows.moreActionsAria': 'More actions for {name}',
+  'workflowActivityVNext.workflows.moreActionsAria':
+    'More actions for {name} in {owner}',
   'workflowActivityVNext.workflows.new': 'New workflow',
   'workflowActivityVNext.workflows.noMatch': 'No matching workflows',
   'workflowActivityVNext.workflows.noMatchDescription':
     'Try a different search or filter.',
-  'workflowActivityVNext.workflows.openAria': 'Open {name}',
+  'workflowActivityVNext.workflows.openAria': 'Open {name} in {owner}',
   'workflowActivityVNext.workflows.runAria': 'Run {name}',
   'workflowActivityVNext.workflows.refreshAria': 'Refresh workflows',
   'workflowActivityVNext.workflows.retryAria': 'Retry workflows',
@@ -603,7 +617,10 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.workflows.renameSave': 'Save name',
   'workflowActivityVNext.workflows.renameSuccess': 'Workflow renamed',
   'workflowActivityVNext.workflows.renameTitle': 'Rename workflow',
-  'workflowActivityVNext.workflows.viewActivity': 'Activity',
+  'workflowActivityVNext.workflows.viewActivity': 'View activity',
+  'workflowActivityVNext.workflows.viewActivityAria':
+    'View activity for {name} in {owner}',
+  'workflowActivityVNext.workflows.workspaceOwner': 'Workspace',
 } as const;
 
 export default workflowActivityVNextMessages;

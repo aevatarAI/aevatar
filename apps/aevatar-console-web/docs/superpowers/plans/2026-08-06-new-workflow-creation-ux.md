@@ -234,7 +234,9 @@ it('generates, validates, creates, and opens a described workflow with one actio
   renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
 
   fireEvent.click(await screen.findByRole('button', { name: 'Describe' }));
-  expect(screen.queryByLabelText('Workflow name')).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Workflow name'), {
+    target: { value: 'Weekly feedback' },
+  });
   expect(screen.queryByLabelText('Generated YAML')).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText('What should this workflow do?'), {
     target: { value: 'Summarize weekly customer feedback' },
@@ -247,7 +249,7 @@ it('generates, validates, creates, and opens a described workflow with one actio
     expect.objectContaining({ onText: expect.any(Function) }),
   );
   expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledWith(
-    expect.objectContaining({ workflowName: 'weekly_feedback' }),
+    expect.objectContaining({ workflowName: 'Weekly feedback' }),
   );
   expect(history.push).toHaveBeenCalledWith(
     '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha',
@@ -285,12 +287,7 @@ const createFromDescription = async () => {
     const parsed = await studioApi.parseYaml({ yaml: generated });
     setFindings(parsed.findings);
     if (hasBlockingFindings(parsed.document, parsed.findings)) return;
-    const generatedName = String(parsed.document?.name ?? '').trim();
-    if (!generatedName) {
-      setFailure(t('workflowActivityVNext.new.generatedNameMissing', 'The generated workflow has no name. Try describing it again.'));
-      return;
-    }
-    await persist(generated, generatedName, { manageSubmitting: false });
+    await persist(generated, name.trim(), { manageSubmitting: false });
   } catch (error) {
     setFailure(errorMessage(error));
   } finally {
@@ -304,8 +301,8 @@ and create. Keep the materialized/accepted handling in `finishSave` unchanged.
 
 - [ ] **Step 4: Render the focused Describe surface**
 
-Use `Describe your workflow`, the supporting sentence, a labeled textarea, and
-one primary button:
+Use `Describe your workflow`, the supporting sentence, a Workflow name input,
+a labeled textarea, and one primary button:
 
 ```tsx
 <label className="wa-vnext__creation-field">
@@ -409,11 +406,13 @@ Expected: FAIL on old name fields and old action labels.
 - [ ] **Step 3: Implement method-specific name derivation**
 
 - Blank continues to require `Workflow name` and uses `Create and open`.
+- Describe requires `Workflow name`, uses it independently of the generated
+  YAML document name, and completes through `Generate and open`.
 - Import parses first, rejects a missing parsed name with localized actionable
   copy, then persists using that parsed name and `Import and open`.
 - Template copies the selected YAML, parses it, and persists with the localized
   display name `${templateName} copy` through `Use template and open`.
-- Describe, Import, and Template do not render the shared Workflow name field.
+- Import and Template do not render the shared Workflow name field.
 
 Keep the server parser call for template YAML so backend field naming and
 validation remain authoritative.
@@ -463,8 +462,6 @@ Use equivalent English and Chinese product copy for:
 'workflowActivityVNext.new.importAndOpen': 'Import and open',
 'workflowActivityVNext.new.templateAndOpen': 'Use template and open',
 'workflowActivityVNext.new.directory': 'Save to',
-'workflowActivityVNext.new.generatedNameMissing':
-  'The generated workflow has no name. Try describing it again.',
 'workflowActivityVNext.new.importedNameMissing':
   'The imported workflow needs a name before it can be created.',
 ```

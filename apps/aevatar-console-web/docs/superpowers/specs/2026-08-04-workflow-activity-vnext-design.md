@@ -345,6 +345,12 @@ save uses draft creation, not draft update. The create response's
 `workflowId` becomes canonical after materialization, and the editor replaces
 the route if it differs from the committed source ID.
 
+Each catalogue row keeps exactly three persistent actions: primary `Open`,
+neutral `View activity`, and neutral `More actions`. `Rename`, `Copy workflow
+reference`, and `Delete draft` belong in the overflow menu. `Delete draft` is
+the final item, separated from ordinary actions, presented as dangerous, and
+opens the existing confirmation before any mutation occurs.
+
 `Run` follows this policy:
 
 - A validated draft may run through the reviewed scope draft-run endpoint.

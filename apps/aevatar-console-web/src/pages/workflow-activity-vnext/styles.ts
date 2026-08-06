@@ -148,6 +148,9 @@ export const workflowActivityVNextCss = `
 .wa-vnext__table tr:last-child td { border-bottom: 0; }
 .wa-vnext__table tbody tr:hover { background: #f9fafb; }
 .wa-vnext__table pre { margin: 0; max-width: 100%; white-space: pre-wrap; word-break: break-word; }
+.wa-vnext__workflow-actions-cell { text-align: right; }
+.wa-vnext__workflow-actions { align-items: center; display: inline-flex; white-space: nowrap; }
+.wa-vnext__workflow-actions .ant-btn { flex: 0 0 auto; }
 .wa-vnext__run-link { max-width: 100%; min-width: 0; overflow: hidden; }
 .wa-vnext__title { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wa-vnext__sub { color: var(--wa-muted); display: block; font-size: 12px; line-height: 17px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -157,6 +160,7 @@ export const workflowActivityVNextCss = `
 .wa-vnext__status { align-items: center; border: 1px solid currentColor; border-radius: 5px; display: inline-flex; font-size: 11px; font-weight: 600; gap: 6px; min-height: 24px; padding: 0 8px; white-space: nowrap; }
 .wa-vnext__status::before { background: currentColor; border-radius: 50%; content: ""; height: 6px; width: 6px; }
 .wa-vnext__status--draft { background: #f4f3ff; color: #6941c6; }
+.wa-vnext__status--archived { background: var(--wa-subtle); color: var(--wa-muted); }
 .wa-vnext__status--committed, .wa-vnext__status--succeeded { background: var(--wa-green-bg); color: var(--wa-green); }
 .wa-vnext__status--running, .wa-vnext__status--accepted { background: var(--wa-blue-bg); color: var(--wa-blue); }
 .wa-vnext__status--failed { background: var(--wa-red-bg); color: var(--wa-red); }
@@ -340,6 +344,8 @@ export const workflowActivityVNextCss = `
   .wa-vnext__content { padding: 16px 16px 40px; }
   .wa-vnext__settings-footer { padding-inline: 16px; }
   .wa-vnext__table-wrap { max-height: min(560px, calc(100dvh - 240px)); }
+  .wa-vnext__workflow-actions .ant-btn { min-height: 44px; }
+  .wa-vnext__workflow-actions .ant-btn-icon-only { min-width: 44px; width: 44px; }
   .wa-vnext__settings-layout { max-width: none; }
   .wa-vnext__node-inspector { bottom: 12px; left: 12px; max-height: calc(100% - 24px); max-width: none; right: 12px; top: auto; width: auto; }
 }

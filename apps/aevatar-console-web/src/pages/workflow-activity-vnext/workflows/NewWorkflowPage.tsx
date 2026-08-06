@@ -219,7 +219,8 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
   };
 
   const generateAndOpen = async () => {
-    if (!prompt.trim() || submitting) return;
+    const workflowName = name.trim();
+    if (!workflowName || !prompt.trim() || submitting) return;
     setSubmitting(true);
     setFailure('');
     setFindings([]);
@@ -231,8 +232,6 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
       const parsed = await studioApi.parseYaml({ yaml: generated });
       setFindings(parsed.findings);
       if (hasBlockingFindings(parsed.document, parsed.findings)) return;
-      const workflowName = String(parsed.document?.name ?? '').trim();
-      if (!workflowName) return;
       await persistDraft(generated, workflowName);
     } catch (error) {
       setFailure(errorMessage(error));
@@ -445,7 +444,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                 />
               </div>
             ) : null}
-            {mode === 'blank' ? (
+            {mode === 'blank' || mode === 'describe' ? (
               <div className="wa-vnext__creation-field">
                 <span>
                   {t('workflowActivityVNext.new.name', 'Workflow name')}
@@ -492,7 +491,9 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                 </div>
                 <div className="wa-vnext__creation-actions">
                   <Button
-                    disabled={!prompt.trim() || saveTargetUnavailable}
+                    disabled={
+                      !name.trim() || !prompt.trim() || saveTargetUnavailable
+                    }
                     loading={submitting}
                     onClick={() => void generateAndOpen()}
                     type="primary"
