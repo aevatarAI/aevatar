@@ -1063,6 +1063,47 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task BuildApprovedToolStepContinuation_WhenCallbackActivityDiffers_ShouldUseOriginalToolRequestIdentity()
+    {
+        var registeredTool = new CountingTool("use_skill");
+        var executor = CreateToolEnabledExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name));
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var originalToolRequestId = llmWorkItem.Request.Activity.Id;
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildDurablyAuthorizedToolStepWorkItem(llmWorkItem, execution.Continuation);
+        var callbackRequest = toolWorkItem.Request.Clone();
+        callbackRequest.Activity.Id = "approval-callback-1";
+        toolWorkItem = toolWorkItem with { Request = callbackRequest };
+        var pendingCall = toolWorkItem.StepState.PendingToolCalls.Should().ContainSingle().Subject;
+        var pendingApproval = new AgentRunPendingToolApprovalState
+        {
+            RunId = toolWorkItem.RunId,
+            CorrelationId = callbackRequest.CorrelationId,
+            Attempt = toolWorkItem.Attempt,
+            StepIndex = toolWorkItem.StepIndex,
+            ApprovalRequestId = "tool-approval-1",
+            ToolRequestId = originalToolRequestId,
+            ToolCallId = pendingCall.Id,
+            ToolName = pendingCall.Name,
+            ArgumentsSha256 = AgentToolArgumentsDigest.ComputeSha256(pendingCall.ArgumentsJson),
+            Decision = AgentRunToolApprovalDecision.Approved,
+        };
+
+        var continuation = await executor.BuildApprovedToolStepContinuationAsync(
+            toolWorkItem,
+            pendingApproval,
+            CancellationToken.None);
+
+        continuation.ToolStepResult.Should().NotBeNull();
+        continuation.ToolStepResult.ResultMessages.Should().ContainSingle();
+        registeredTool.ExecuteCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task BuildToolStepContinuation_WithDurableAuthorization_ShouldMatchSafetyInsideToolContextScope()
     {
         var registeredTool = new ContextClassifiedTool("use_skill");

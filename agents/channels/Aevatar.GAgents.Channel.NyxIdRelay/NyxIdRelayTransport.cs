@@ -780,6 +780,19 @@ public sealed class NyxIdRelayTransport
                 "nyxid_approval_request_id",
                 "nyxid_approval_approved");
         }
+
+        if (TryBuildAgentRunApprovalPayload(submission, out var agentRunApproval))
+        {
+            submission.AgentRunApproval = agentRunApproval;
+            RemoveKeys(
+                submission.Arguments,
+                "agent_run_id",
+                "agent_run_approval_request_id",
+                "agent_run_tool_call_id",
+                "agent_run_tool_name",
+                "agent_run_arguments_sha256",
+                "agent_run_approved");
+        }
     }
 
     private static ActionElementKind ResolveActionKind(
@@ -972,6 +985,31 @@ public sealed class NyxIdRelayTransport
         }
 
         payload.RequestId = requestId;
+        payload.Approved = approved;
+        return true;
+    }
+
+    private static bool TryBuildAgentRunApprovalPayload(
+        CardActionSubmission submission,
+        out AgentRunApprovalActionPayload payload)
+    {
+        payload = new AgentRunApprovalActionPayload();
+        if (!TryGetRequiredValue(submission.Arguments, "agent_run_id", out var runId) ||
+            !TryGetRequiredValue(submission.Arguments, "agent_run_approval_request_id", out var approvalRequestId) ||
+            !TryGetRequiredValue(submission.Arguments, "agent_run_tool_call_id", out var toolCallId) ||
+            !TryGetRequiredValue(submission.Arguments, "agent_run_tool_name", out var toolName) ||
+            !TryGetRequiredValue(submission.Arguments, "agent_run_arguments_sha256", out var argumentsSha256) ||
+            !submission.Arguments.TryGetValue("agent_run_approved", out var rawApproved) ||
+            !bool.TryParse(rawApproved, out var approved))
+        {
+            return false;
+        }
+
+        payload.RunId = runId;
+        payload.ApprovalRequestId = approvalRequestId;
+        payload.ToolCallId = toolCallId;
+        payload.ToolName = toolName;
+        payload.ArgumentsSha256 = argumentsSha256;
         payload.Approved = approved;
         return true;
     }

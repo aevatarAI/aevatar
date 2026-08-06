@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.ChatRouting.Abstractions;
@@ -14,6 +15,7 @@ using Aevatar.GAgents.Channel.Runtime;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
+using System.Text.Json;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -65,7 +67,9 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AgentRunGAgent> _logger;
     private readonly IAgentToolReceiptRenderer _toolReceiptRenderer;
+    private readonly IInteractiveReplyDispatcher? _interactiveReplyDispatcher;
     private AgentRunAuthorizedToolStep? _authorizedToolStep;
+    private string? _continuedToolApprovalRequestId;
 
     public AgentRunGAgent(
         IActorRuntime actorRuntime,
@@ -74,7 +78,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         ILogger<AgentRunGAgent> logger,
         IActorRuntimeCallbackScheduler? callbackScheduler = null,
         TimeProvider? timeProvider = null,
-        IAgentToolReceiptRenderer? toolReceiptRenderer = null)
+        IAgentToolReceiptRenderer? toolReceiptRenderer = null,
+        IInteractiveReplyDispatcher? interactiveReplyDispatcher = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _generationExecutor = generationExecutor ?? throw new ArgumentNullException(nameof(generationExecutor));
@@ -83,6 +88,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _toolReceiptRenderer = toolReceiptRenderer ?? new AgentToolReceiptRenderer();
+        _interactiveReplyDispatcher = interactiveReplyDispatcher;
     }
 
     protected override AgentRunGAgentState TransitionState(AgentRunGAgentState current, IMessage evt) =>
@@ -91,6 +97,9 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             .On<AgentRunStartedEvent>(ApplyStarted)
             .On<AgentRunReplyGenerationRequestedEvent>(ApplyReplyGenerationRequested)
             .On<AgentRunReplyStepStateUpdatedEvent>(ApplyReplyStepStateUpdated)
+            .On<AgentRunToolApprovalRequestedEvent>(ApplyToolApprovalRequested)
+            .On<AgentRunToolApprovalNotificationDispatchedEvent>(ApplyToolApprovalNotificationDispatched)
+            .On<AgentRunToolApprovalDecisionRecordedEvent>(ApplyToolApprovalDecisionRecorded)
             .On<AgentRunReplyProducedEvent>(ApplyReplyProduced)
             .On<AgentRunCardDeliveryCompletionPreparedEvent>(ApplyCardDeliveryCompletionPrepared)
             .On<AgentRunReplyDispatchedEvent>(ApplyReplyDispatched)
@@ -347,6 +356,18 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         ArgumentNullException.ThrowIfNull(command);
         if (!IsCurrentGenerationContinuation(command.RunId, command.CorrelationId, command.Attempt))
             return;
+
+        // Human approval deliberately suspends the generation loop. The original
+        // generation timeout must not turn a healthy suspended run into a failure.
+        if (State.PendingToolApproval is not null)
+        {
+            _logger.LogInformation(
+                "Ignoring agent run generation timeout while tool approval is pending: runId={RunId} correlation={CorrelationId} approvalRequest={ApprovalRequestId}",
+                command.RunId,
+                command.CorrelationId,
+                State.PendingToolApproval.ApprovalRequestId);
+            return;
+        }
 
         await DispatchGenerationTimeoutDropNotificationAsync(command);
 
@@ -1102,6 +1123,36 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             if (!IsCurrentStepResult(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
                 return;
 
+            if (TryBuildPendingToolApproval(
+                    State.GenerationStep!,
+                    command.ToolStepResult!,
+                    out var pendingApproval))
+            {
+                if (State.PendingToolApproval is { Decision: not AgentRunToolApprovalDecision.Unspecified })
+                {
+                    await ProduceApprovalContinuationFailureAsync(
+                        command.Request?.Clone() ?? BuildStepRequest(command),
+                        "agent_run_tool_approval_grant_rejected",
+                        "The approved tool call requested approval again and was not executed.");
+                    return;
+                }
+
+                var approvalRequest = command.Request?.Clone() ?? BuildStepRequest(command);
+                ApplyTargetRefOverrides(approvalRequest);
+                await SuspendForToolApprovalAsync(approvalRequest, pendingApproval);
+                return;
+            }
+
+            if (command.ToolStepResult!.ToolReceipts.Any(static receipt =>
+                    receipt.Status == AgentToolReceiptStatus.ApprovalRequired))
+            {
+                await ProduceApprovalContinuationFailureAsync(
+                    command.Request?.Clone() ?? BuildStepRequest(command),
+                    "agent_run_tool_approval_identity_invalid",
+                    "The tool approval request did not contain one exact resumable tool identity.");
+                return;
+            }
+
             await PersistStepStateAsync(ApplyToolStepResult(State.GenerationStep!, command.ToolStepResult!, command.StepIndex));
         }
         else if (!IsCurrentStepRequest(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
@@ -1133,6 +1184,419 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             stepState = await AdvanceToFinalNoToolsStepAsync(stepState);
 
         await DispatchLlmStepExecutorAsync(request, stepState);
+    }
+
+    [EventHandler]
+    public async Task HandleToolApprovalDecisionAsync(AgentRunToolApprovalDecisionRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (IsTerminal())
+            return;
+
+        var isRecordedDecision = IsDuplicateToolApprovalDecision(command);
+        if (isRecordedDecision &&
+            string.Equals(
+                _continuedToolApprovalRequestId,
+                command.ApprovalRequestId,
+                StringComparison.Ordinal))
+        {
+            _logger.LogInformation(
+                "Ignoring duplicate AgentRun tool approval decision: runId={RunId} approvalRequest={ApprovalRequestId} approved={Approved}",
+                command.RunId,
+                command.ApprovalRequestId,
+                command.Approved);
+            return;
+        }
+
+        if (!TryValidateToolApprovalDecision(command, isRecordedDecision, out var validationError))
+        {
+            _logger.LogWarning(
+                "Rejecting AgentRun tool approval decision: runId={RunId} approvalRequest={ApprovalRequestId} reason={Reason}",
+                command.RunId,
+                command.ApprovalRequestId,
+                validationError);
+            return;
+        }
+
+        if (!isRecordedDecision)
+        {
+            var decision = command.Approved
+                ? AgentRunToolApprovalDecision.Approved
+                : AgentRunToolApprovalDecision.Rejected;
+            await PersistDomainEventAsync(new AgentRunToolApprovalDecisionRecordedEvent
+            {
+                ApprovalRequestId = command.ApprovalRequestId,
+                ToolCallId = command.ToolCallId,
+                ArgumentsSha256 = command.ArgumentsSha256,
+                Decision = decision,
+                DecidedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            });
+        }
+        else
+        {
+            _logger.LogInformation(
+                "Resuming recorded AgentRun tool approval decision after actor recovery: runId={RunId} approvalRequest={ApprovalRequestId} approved={Approved}",
+                command.RunId,
+                command.ApprovalRequestId,
+                command.Approved);
+        }
+
+        var continuationRequest = BuildToolApprovalContinuationRequest(command.Request!);
+        if (!command.Approved)
+        {
+            await RejectToolApprovalAsync(continuationRequest, State.PendingToolApproval!);
+            return;
+        }
+
+        var stepState = State.GenerationStep;
+        var pending = State.PendingToolApproval;
+        if (stepState is null || pending is null)
+        {
+            await ProduceApprovalContinuationFailureAsync(
+                continuationRequest,
+                "agent_run_tool_approval_state_unavailable",
+                "The approved tool call can no longer be resumed from actor state.");
+            return;
+        }
+
+        var executionRequest = new AgentRunReplyStepExecutionRequest(
+            State.RunId,
+            Id,
+            stepState.Attempt,
+            pending.StepIndex,
+            continuationRequest.Clone(),
+            stepState.Clone(),
+            AllowDurableToolAuthorization: true);
+        try
+        {
+            var continuation = await _generationExecutor.BuildApprovedToolStepContinuationAsync(
+                    executionRequest,
+                    pending.Clone(),
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+            await PublishAsync(continuation, TopologyAudience.Self, CancellationToken.None);
+            _continuedToolApprovalRequestId = pending.ApprovalRequestId;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Approved AgentRun tool continuation failed: runId={RunId} approvalRequest={ApprovalRequestId}",
+                State.RunId,
+                pending.ApprovalRequestId);
+            await ProduceApprovalContinuationFailureAsync(
+                continuationRequest,
+                "agent_run_tool_approval_continuation_failed",
+                "The approved tool call could not be resumed with its current capability.");
+        }
+    }
+
+    private bool TryBuildPendingToolApproval(
+        AgentRunReplyStepState stepState,
+        AgentRunToolStepResult result,
+        out AgentRunPendingToolApprovalState pending)
+    {
+        pending = new AgentRunPendingToolApprovalState();
+        var approvalReceipts = result.ToolReceipts
+            .Where(static receipt => receipt.Status == AgentToolReceiptStatus.ApprovalRequired)
+            .ToArray();
+        if (approvalReceipts.Length == 0)
+            return false;
+        if (approvalReceipts.Length != 1 || stepState.PendingToolCalls.Count != 1)
+            return false;
+
+        var receipt = approvalReceipts[0];
+        var call = stepState.PendingToolCalls[0];
+        var authorization = stepState.PendingToolAuthorizations.SingleOrDefault(candidate =>
+            candidate.Call is not null &&
+            string.Equals(candidate.Call.Id, call.Id, StringComparison.Ordinal) &&
+            string.Equals(candidate.Call.Name, call.Name, StringComparison.Ordinal) &&
+            string.Equals(candidate.Call.ArgumentsJson, call.ArgumentsJson, StringComparison.Ordinal));
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(stepState.ToolContext);
+        if (authorization is null ||
+            string.IsNullOrWhiteSpace(receipt.ApprovalRequestId) ||
+            string.IsNullOrWhiteSpace(toolContext.Request.RequestId) ||
+            string.IsNullOrWhiteSpace(call.Id) ||
+            string.IsNullOrWhiteSpace(call.Name) ||
+            !string.Equals(receipt.CallId, call.Id, StringComparison.Ordinal) ||
+            !string.Equals(receipt.ToolName, call.Name, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(toolContext.Channel.SenderId) ||
+            string.IsNullOrWhiteSpace(toolContext.Channel.RegistrationScopeId))
+        {
+            return false;
+        }
+
+        // The canonical conversation key is not part of AgentToolChannelContext.
+        // It is supplied by the transient request in SuspendForToolApprovalAsync.
+        pending = new AgentRunPendingToolApprovalState
+        {
+            RunId = stepState.RunId,
+            CorrelationId = stepState.CorrelationId,
+            Attempt = stepState.Attempt,
+            StepIndex = stepState.NextStepIndex,
+            ApprovalRequestId = receipt.ApprovalRequestId.Trim(),
+            ToolRequestId = toolContext.Request.RequestId!.Trim(),
+            ToolCallId = call.Id.Trim(),
+            ToolName = call.Name.Trim(),
+            ArgumentsSha256 = AgentToolArgumentsDigest.ComputeSha256(call.ArgumentsJson ?? string.Empty),
+            IsDestructive = receipt.IsDestructive || authorization.IsDestructive,
+            SideEffectKind = NormalizeOptional(receipt.SideEffectKind) ?? authorization.SideEffectKind ?? string.Empty,
+            SubjectKind = receipt.SubjectKind ?? string.Empty,
+            SubjectId = receipt.SubjectId ?? string.Empty,
+            SenderId = toolContext.Channel.SenderId!.Trim(),
+            RegistrationScopeId = toolContext.Channel.RegistrationScopeId!.Trim(),
+            ConversationKey = string.Empty,
+            RequestedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            Decision = AgentRunToolApprovalDecision.Unspecified,
+        };
+        return true;
+    }
+
+    private async Task SuspendForToolApprovalAsync(
+        NeedsLlmReplyEvent request,
+        AgentRunPendingToolApprovalState pending)
+    {
+        var conversationKey = NormalizeOptional(request.Activity?.Conversation?.CanonicalKey);
+        if (conversationKey is null)
+        {
+            await ProduceApprovalContinuationFailureAsync(
+                request,
+                "agent_run_tool_approval_conversation_missing",
+                "The tool approval request is missing its conversation identity.");
+            return;
+        }
+
+        pending.ConversationKey = conversationKey;
+        if (State.PendingToolApproval is null)
+        {
+            await PersistDomainEventAsync(new AgentRunToolApprovalRequestedEvent
+            {
+                Pending = pending.Clone(),
+            });
+        }
+        else if (!ToolApprovalIdentityMatches(State.PendingToolApproval, pending))
+        {
+            await ProduceApprovalContinuationFailureAsync(
+                request,
+                "agent_run_tool_approval_conflict",
+                "A different tool approval request is already pending for this run.");
+            return;
+        }
+
+        if (State.PendingToolApproval!.NotificationDispatchedAtUnixMs != 0)
+            return;
+
+        if (!TryGetApprovalDispatchContext(request, out var channel, out var messageId, out var relayToken))
+        {
+            await ProduceApprovalContinuationFailureAsync(
+                request,
+                "agent_run_tool_approval_delivery_context_missing",
+                "The tool approval card cannot be delivered because its relay reply context is unavailable.");
+            return;
+        }
+
+        if (_interactiveReplyDispatcher is null)
+        {
+            await ProduceApprovalContinuationFailureAsync(
+                request,
+                "agent_run_tool_approval_dispatcher_unavailable",
+                "The tool approval card dispatcher is unavailable.");
+            return;
+        }
+
+        var result = await _interactiveReplyDispatcher.DispatchAsync(
+            channel,
+            messageId,
+            relayToken,
+            AgentRunToolApprovalMessageMapper.ToMessageContent(State.PendingToolApproval),
+            new ComposeContext
+            {
+                Conversation = request.Activity!.Conversation?.Clone() ?? new ConversationReference(),
+            },
+            CancellationToken.None);
+        if (!result.Succeeded || result.FellBackToText)
+        {
+            await ProduceApprovalContinuationFailureAsync(
+                request,
+                "agent_run_tool_approval_card_delivery_failed",
+                NormalizeOptional(result.Detail) ?? "The channel did not accept an interactive approval card.");
+            return;
+        }
+
+        await PersistDomainEventAsync(new AgentRunToolApprovalNotificationDispatchedEvent
+        {
+            ApprovalRequestId = State.PendingToolApproval.ApprovalRequestId,
+            DispatchedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+        });
+    }
+
+    private bool TryValidateToolApprovalDecision(
+        AgentRunToolApprovalDecisionRequested command,
+        bool allowRecordedDecision,
+        out string error)
+    {
+        error = string.Empty;
+        var pending = State.PendingToolApproval;
+        var request = command.Request;
+        var activity = request?.Activity;
+        var expectedDecision = command.Approved
+            ? AgentRunToolApprovalDecision.Approved
+            : AgentRunToolApprovalDecision.Rejected;
+        if (pending is null ||
+            (pending.Decision != AgentRunToolApprovalDecision.Unspecified &&
+             (!allowRecordedDecision || pending.Decision != expectedDecision)))
+            error = "no_matching_pending_approval";
+        else if (!string.Equals(command.RunId, State.RunId, StringComparison.Ordinal) ||
+                 !string.Equals(command.RunId, pending.RunId, StringComparison.Ordinal))
+            error = "run_id_mismatch";
+        else if (!string.Equals(command.ApprovalRequestId, pending.ApprovalRequestId, StringComparison.Ordinal))
+            error = "approval_request_id_mismatch";
+        else if (!string.Equals(command.ToolCallId, pending.ToolCallId, StringComparison.Ordinal))
+            error = "tool_call_id_mismatch";
+        else if (!string.Equals(command.ToolName, pending.ToolName, StringComparison.Ordinal))
+            error = "tool_name_mismatch";
+        else if (!string.Equals(command.ArgumentsSha256, pending.ArgumentsSha256, StringComparison.Ordinal))
+            error = "arguments_sha256_mismatch";
+        else if (!string.Equals(command.SenderId, pending.SenderId, StringComparison.Ordinal))
+            error = "sender_id_mismatch";
+        else if (!string.Equals(command.RegistrationScopeId, pending.RegistrationScopeId, StringComparison.Ordinal))
+            error = "registration_scope_id_mismatch";
+        else if (!string.Equals(command.ConversationKey, pending.ConversationKey, StringComparison.Ordinal))
+            error = "conversation_key_mismatch";
+        else if (request is null || activity is null || string.IsNullOrWhiteSpace(request.ReplyToken))
+            error = "callback_delivery_context_missing";
+        else if (!string.Equals(activity.From?.CanonicalId, command.SenderId, StringComparison.Ordinal))
+            error = "callback_sender_id_mismatch";
+        else if (!string.Equals(activity.Conversation?.CanonicalKey, command.ConversationKey, StringComparison.Ordinal))
+            error = "callback_conversation_key_mismatch";
+        else if (!string.Equals(
+                     activity.TransportExtras?.NyxRegistrationScopeId,
+                     command.RegistrationScopeId,
+                     StringComparison.Ordinal))
+            error = "callback_registration_scope_id_mismatch";
+
+        return error.Length == 0;
+    }
+
+    private bool IsDuplicateToolApprovalDecision(AgentRunToolApprovalDecisionRequested command)
+    {
+        var resolution = State.LastToolApprovalResolution;
+        if (resolution is null)
+            return false;
+
+        var decision = command.Approved
+            ? AgentRunToolApprovalDecision.Approved
+            : AgentRunToolApprovalDecision.Rejected;
+        return string.Equals(resolution.ApprovalRequestId, command.ApprovalRequestId, StringComparison.Ordinal) &&
+               string.Equals(resolution.ToolCallId, command.ToolCallId, StringComparison.Ordinal) &&
+               string.Equals(resolution.ArgumentsSha256, command.ArgumentsSha256, StringComparison.Ordinal) &&
+               resolution.Decision == decision;
+    }
+
+    private NeedsLlmReplyEvent BuildToolApprovalContinuationRequest(NeedsLlmReplyEvent source)
+    {
+        var request = source.Clone();
+        request.RunId = State.RunId;
+        request.CorrelationId = State.CorrelationId;
+        request.TargetActorId = State.TargetActorId;
+        request.RequestedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        return request;
+    }
+
+    private async Task RejectToolApprovalAsync(
+        NeedsLlmReplyEvent request,
+        AgentRunPendingToolApprovalState pending)
+    {
+        var resultJson = JsonSerializer.Serialize(new
+        {
+            error = "Tool approval denied.",
+            approval_request_id = pending.ApprovalRequestId,
+        });
+        var receipt = new AgentToolReceipt
+        {
+            CallId = pending.ToolCallId,
+            ToolName = pending.ToolName,
+            Status = AgentToolReceiptStatus.Denied,
+            ApprovalRequestId = pending.ApprovalRequestId,
+            IsDestructive = pending.IsDestructive,
+            SideEffectKind = pending.SideEffectKind,
+            SubjectKind = pending.SubjectKind,
+            SubjectId = pending.SubjectId,
+            Effect = pending.IsDestructive || !string.IsNullOrWhiteSpace(pending.SideEffectKind)
+                ? AgentToolReceiptEffect.Mutating
+                : AgentToolReceiptEffect.ReadOnly,
+            ErrorCode = "approval_denied",
+            ErrorMessage = "Tool approval denied. No action was taken.",
+            ResultJson = resultJson,
+        };
+        var history = State.GenerationStep?.AppendedHistory.Select(static entry => entry.Clone()).ToList()
+                      ?? [];
+        history.Add(new ConversationHistoryEntry
+        {
+            Role = "tool",
+            ToolCallId = pending.ToolCallId,
+            Content = resultJson,
+        });
+        await ProduceAndDispatchAsync(
+            request,
+            State.RunId,
+            "Tool approval was rejected. No action was taken.",
+            null,
+            LlmReplyTerminalState.Completed,
+            string.Empty,
+            string.Empty,
+            history,
+            [receipt],
+            [new AgentRunToolCall
+            {
+                Id = pending.ToolCallId,
+                Name = pending.ToolName,
+                ArgumentsJson = string.Empty,
+            }]);
+    }
+
+    private async Task ProduceApprovalContinuationFailureAsync(
+        NeedsLlmReplyEvent request,
+        string errorCode,
+        string errorSummary)
+    {
+        ApplyTargetRefOverrides(request);
+        request.RunId = State.RunId;
+        request.CorrelationId = State.CorrelationId;
+        request.TargetActorId = State.TargetActorId;
+        await ProduceAndDispatchAsync(
+            request,
+            State.RunId,
+            "The tool approval could not be continued safely. Please retry the command.",
+            null,
+            LlmReplyTerminalState.Failed,
+            errorCode,
+            errorSummary);
+    }
+
+    private static bool ToolApprovalIdentityMatches(
+        AgentRunPendingToolApprovalState left,
+        AgentRunPendingToolApprovalState right) =>
+        string.Equals(left.RunId, right.RunId, StringComparison.Ordinal) &&
+        string.Equals(left.ApprovalRequestId, right.ApprovalRequestId, StringComparison.Ordinal) &&
+        string.Equals(left.ToolCallId, right.ToolCallId, StringComparison.Ordinal) &&
+        string.Equals(left.ToolName, right.ToolName, StringComparison.Ordinal) &&
+        string.Equals(left.ArgumentsSha256, right.ArgumentsSha256, StringComparison.Ordinal);
+
+    private static bool TryGetApprovalDispatchContext(
+        NeedsLlmReplyEvent request,
+        out ChannelId channel,
+        out string messageId,
+        out string relayToken)
+    {
+        channel = request.Activity?.ChannelId?.Clone()
+                  ?? request.Activity?.Conversation?.Channel?.Clone()
+                  ?? new ChannelId();
+        messageId = NormalizeOptional(request.Activity?.OutboundDelivery?.ReplyMessageId) ?? string.Empty;
+        relayToken = NormalizeOptional(request.ReplyToken) ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(channel.Value) &&
+               messageId.Length > 0 &&
+               relayToken.Length > 0;
     }
 
     // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
@@ -1574,6 +2038,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             ErrorSummary = errorSummary,
             ProducedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
             ReplyText = replyText ?? string.Empty,
+            UseSourceActivityDeliveryContext = State.ProducedUseSourceActivityDeliveryContext,
         };
         if (outbound is not null)
             evt.Outbound = outbound.Clone();
@@ -1605,6 +2070,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 ? completion.CompletedAtUnixMs
                 : _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
             ReplyText = replyText ?? string.Empty,
+            UseSourceActivityDeliveryContext = State.ProducedUseSourceActivityDeliveryContext,
         };
         if (outbound is not null)
             produced.Outbound = outbound.Clone();
@@ -1760,6 +2226,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             ReplyToken = request.ReplyToken ?? string.Empty,
             ReplyTokenExpiresAtUnixMs = request.ReplyTokenExpiresAtUnixMs,
             RunId = runId,
+            UseSourceActivityDeliveryContext = State.ProducedUseSourceActivityDeliveryContext,
         };
         ready.AppendedHistory.AddRange((appendedHistory ?? []).Select(entry => entry.Clone()));
         try
@@ -2287,6 +2754,66 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (evt.Attempt > 0)
             next.GenerationAttempt = evt.Attempt;
         next.GenerationStep = evt.StepState?.Clone();
+        if (next.PendingToolApproval is { } pending &&
+            pending.Decision != AgentRunToolApprovalDecision.Unspecified &&
+            evt.StepState is { } step &&
+            step.NextStepIndex > pending.StepIndex)
+        {
+            next.PendingToolApproval = null;
+        }
+        return next;
+    }
+
+    private static AgentRunGAgentState ApplyToolApprovalRequested(
+        AgentRunGAgentState current,
+        AgentRunToolApprovalRequestedEvent evt)
+    {
+        var next = current.Clone();
+        if (evt.Pending is not null)
+            next.PendingToolApproval = evt.Pending.Clone();
+        return next;
+    }
+
+    private static AgentRunGAgentState ApplyToolApprovalNotificationDispatched(
+        AgentRunGAgentState current,
+        AgentRunToolApprovalNotificationDispatchedEvent evt)
+    {
+        var next = current.Clone();
+        if (next.PendingToolApproval is not null &&
+            string.Equals(
+                next.PendingToolApproval.ApprovalRequestId,
+                evt.ApprovalRequestId,
+                StringComparison.Ordinal))
+        {
+            next.PendingToolApproval.NotificationDispatchedAtUnixMs = evt.DispatchedAtUnixMs;
+        }
+
+        return next;
+    }
+
+    private static AgentRunGAgentState ApplyToolApprovalDecisionRecorded(
+        AgentRunGAgentState current,
+        AgentRunToolApprovalDecisionRecordedEvent evt)
+    {
+        var next = current.Clone();
+        if (next.PendingToolApproval is not null &&
+            string.Equals(next.PendingToolApproval.ApprovalRequestId, evt.ApprovalRequestId, StringComparison.Ordinal) &&
+            string.Equals(next.PendingToolApproval.ToolCallId, evt.ToolCallId, StringComparison.Ordinal) &&
+            string.Equals(next.PendingToolApproval.ArgumentsSha256, evt.ArgumentsSha256, StringComparison.Ordinal))
+        {
+            next.PendingToolApproval.Decision = evt.Decision;
+            next.PendingToolApproval.DecidedAtUnixMs = evt.DecidedAtUnixMs;
+        }
+
+        next.LastToolApprovalResolution = new AgentRunToolApprovalResolutionState
+        {
+            ApprovalRequestId = evt.ApprovalRequestId,
+            ToolCallId = evt.ToolCallId,
+            ArgumentsSha256 = evt.ArgumentsSha256,
+            Decision = evt.Decision,
+            DecidedAtUnixMs = evt.DecidedAtUnixMs,
+        };
+        next.ProducedUseSourceActivityDeliveryContext = true;
         return next;
     }
 
@@ -2309,6 +2836,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.ProducedAppendedHistory.AddRange(evt.AppendedHistory.Select(entry => entry.Clone()));
         next.ToolReceipts.Clear();
         next.ToolReceipts.AddRange(evt.ToolReceipts.Select(receipt => receipt.Clone()));
+        next.ProducedUseSourceActivityDeliveryContext = evt.UseSourceActivityDeliveryContext;
+        next.PendingToolApproval = null;
         // Backward-compat: AgentRunReplyProducedEvents persisted by the pre-refactor
         // codepath have no reply_text / outbound / terminal_state fields (proto3 defaults
         // on deserialize). Historically, Status=ReplyProduced was only written *after* the
@@ -2384,6 +2913,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.CompletedAtUnixMs = evt.DroppedAtUnixMs;
         next.ErrorCode = evt.Reason;
         next.ErrorSummary = string.Empty;
+        next.PendingToolApproval = null;
         next.PendingDropNotificationRunId = evt.RunId;
         next.PendingDropNotificationCorrelationId = evt.CorrelationId;
         next.PendingDropNotificationTargetActorId = evt.TargetActorId;
@@ -2415,6 +2945,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.CompletedAtUnixMs = evt.FailedAtUnixMs;
         next.ErrorCode = evt.ErrorCode;
         next.ErrorSummary = evt.ErrorSummary;
+        next.PendingToolApproval = null;
         return next;
     }
 

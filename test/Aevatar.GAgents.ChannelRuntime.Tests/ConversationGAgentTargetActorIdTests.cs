@@ -34,6 +34,57 @@ public sealed class ConversationGAgentTargetActorIdTests
         agent.State.PendingLlmReplyRequests[0].TargetActorId.Should().Be(actorId);
     }
 
+    [Theory]
+    [InlineData(true, "callback-reply-message-1")]
+    [InlineData(false, "original-reply-message-1")]
+    public async Task HandleLlmReplyReadyAsync_ShouldSelectSourceActivityDeliveryContextOnlyWhenRequested(
+        bool useSourceActivityDeliveryContext,
+        string expectedReplyMessageId)
+    {
+        var actorId = ConversationGAgent.BuildActorId("lark:group:oc_group_chat_1");
+        var runner = new DeferredReplyTurnRunner();
+        runner.Request.Activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "original-reply-message-1",
+            CorrelationId = runner.Request.CorrelationId,
+        };
+        var agent = await CreateAgentAsync(actorId, runner, new RecordingLlmReplyRunDispatcher());
+        var inboundActivity = BuildInboundActivity("msg-target-1");
+        inboundActivity.OutboundDelivery = runner.Request.Activity.OutboundDelivery.Clone();
+        await agent.HandleNyxRelayInboundActivityAsync(new NyxRelayInboundActivity
+        {
+            Activity = inboundActivity,
+            CorrelationId = runner.Request.CorrelationId,
+            ReplyToken = "original-reply-token-1",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        });
+        var callbackActivity = BuildInboundActivity("callback-approval-1");
+        callbackActivity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "callback-reply-message-1",
+            CorrelationId = "callback-approval-1",
+        };
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = runner.Request.CorrelationId,
+            RunId = runner.Request.RunId,
+            RegistrationId = runner.Request.RegistrationId,
+            SourceActorId = "channel-agent-run:agent-run-target-1",
+            Activity = callbackActivity,
+            Outbound = new MessageContent { Text = "completed" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReplyToken = "callback-reply-token-1",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            UseSourceActivityDeliveryContext = useSourceActivityDeliveryContext,
+        });
+
+        var context = runner.ReplyRuntimeContexts.Should().ContainSingle().Subject;
+        context.NyxRelayReplyToken.Should().NotBeNull();
+        context.NyxRelayReplyToken!.ReplyToken.Should().Be("callback-reply-token-1");
+        context.NyxRelayReplyToken.ReplyMessageId.Should().Be(expectedReplyMessageId);
+    }
+
     [Fact]
     public async Task HandleInboundActivityAsync_WhenNyxIdAuthorityIsOnlyDurableToolFact_PersistsItWithoutCredentials()
     {
@@ -510,6 +561,8 @@ public sealed class ConversationGAgentTargetActorIdTests
             RequestedAtUnixMs = 10,
         };
 
+        public List<ConversationTurnRuntimeContext> ReplyRuntimeContexts { get; } = [];
+
         public Task<ConversationTurnResult> RunInboundAsync(
             ChatActivity activity,
             ConversationTurnRuntimeContext runtimeContext,
@@ -519,11 +572,14 @@ public sealed class ConversationGAgentTargetActorIdTests
         public Task<ConversationTurnResult> RunLlmReplyAsync(
             LlmReplyReadyEvent reply,
             ConversationTurnRuntimeContext runtimeContext,
-            CancellationToken ct) =>
-            Task.FromResult(ConversationTurnResult.Sent(
+            CancellationToken ct)
+        {
+            ReplyRuntimeContexts.Add(runtimeContext);
+            return Task.FromResult(ConversationTurnResult.Sent(
                 "sent",
                 reply.Outbound?.Clone() ?? new MessageContent(),
                 "bot"));
+        }
 
         public Task<ConversationTurnResult> RunContinueAsync(
             ConversationContinueRequestedEvent command,

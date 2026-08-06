@@ -966,7 +966,9 @@ public sealed partial class ConversationGAgent :
             return;
         }
 
-        var referenceActivity = pendingRequest?.Activity ?? pendingWorkflowRequest?.Activity ?? evt.Activity;
+        var referenceActivity = evt.UseSourceActivityDeliveryContext
+            ? evt.Activity
+            : pendingRequest?.Activity ?? pendingWorkflowRequest?.Activity ?? evt.Activity;
         var runtimeContext = await BuildNyxRelayRuntimeContextForReplyAsync(
             evt,
             referenceActivity,

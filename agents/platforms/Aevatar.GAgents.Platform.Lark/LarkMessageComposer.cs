@@ -403,13 +403,14 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         CopyWorkflowResumePayload(action.WorkflowResume, map);
         CopyLlmSelectionPayload(action.LlmSelection, map);
         CopyNyxIdApprovalPayload(action.NyxIdApproval, map);
+        CopyAgentRunApprovalPayload(action.AgentRunApproval, map);
 
         foreach (var argument in action.Arguments)
         {
             if (string.Equals(argument.Key, "action_id", StringComparison.Ordinal) ||
                 string.Equals(argument.Key, "value", StringComparison.Ordinal) ||
                 string.Equals(argument.Key, "action_kind", StringComparison.Ordinal) ||
-                IsReservedNyxIdApprovalArgument(action, argument.Key))
+                IsReservedTypedApprovalArgument(action, argument.Key))
                 continue;
 
             map[argument.Key] = CoerceArgumentValue(argument.Value);
@@ -418,10 +419,17 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         return map;
     }
 
-    private static bool IsReservedNyxIdApprovalArgument(ActionElement action, string key) =>
-        action.NyxIdApproval is not null &&
-        (string.Equals(key, "nyxid_approval_request_id", StringComparison.Ordinal) ||
-         string.Equals(key, "nyxid_approval_approved", StringComparison.Ordinal));
+    private static bool IsReservedTypedApprovalArgument(ActionElement action, string key) =>
+        (action.NyxIdApproval is not null &&
+         (string.Equals(key, "nyxid_approval_request_id", StringComparison.Ordinal) ||
+          string.Equals(key, "nyxid_approval_approved", StringComparison.Ordinal))) ||
+        (action.AgentRunApproval is not null &&
+         (string.Equals(key, "agent_run_id", StringComparison.Ordinal) ||
+          string.Equals(key, "agent_run_approval_request_id", StringComparison.Ordinal) ||
+          string.Equals(key, "agent_run_tool_call_id", StringComparison.Ordinal) ||
+          string.Equals(key, "agent_run_tool_name", StringComparison.Ordinal) ||
+          string.Equals(key, "agent_run_arguments_sha256", StringComparison.Ordinal) ||
+          string.Equals(key, "agent_run_approved", StringComparison.Ordinal)));
 
     private static string ToBoundaryActionKind(ActionElementKind kind) =>
         kind switch
@@ -496,6 +504,26 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         if (!string.IsNullOrWhiteSpace(payload.RequestId))
             map["nyxid_approval_request_id"] = payload.RequestId;
         map["nyxid_approval_approved"] = payload.Approved;
+    }
+
+    private static void CopyAgentRunApprovalPayload(
+        AgentRunApprovalActionPayload? payload,
+        IDictionary<string, object?> map)
+    {
+        if (payload is null)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(payload.RunId))
+            map["agent_run_id"] = payload.RunId;
+        if (!string.IsNullOrWhiteSpace(payload.ApprovalRequestId))
+            map["agent_run_approval_request_id"] = payload.ApprovalRequestId;
+        if (!string.IsNullOrWhiteSpace(payload.ToolCallId))
+            map["agent_run_tool_call_id"] = payload.ToolCallId;
+        if (!string.IsNullOrWhiteSpace(payload.ToolName))
+            map["agent_run_tool_name"] = payload.ToolName;
+        if (!string.IsNullOrWhiteSpace(payload.ArgumentsSha256))
+            map["agent_run_arguments_sha256"] = payload.ArgumentsSha256;
+        map["agent_run_approved"] = payload.Approved;
     }
 
     private static object? CoerceArgumentValue(string raw)

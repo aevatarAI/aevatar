@@ -1396,6 +1396,59 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldRouteTypedAgentRunApprovalToExactRunActor()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var dispatcher = new RecordingAgentRunToolApprovalDecisionDispatcher();
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            agentRunToolApprovalDecisionDispatcher: dispatcher);
+        var activity = BuildCardActionActivity("evt-agent-run-approval-1");
+        activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "relay-card-action-1",
+            CorrelationId = activity.Id,
+        };
+        activity.Content.CardAction.ActionKind = ActionElementKind.Button;
+        activity.Content.CardAction.AgentRunApproval = new AgentRunApprovalActionPayload
+        {
+            RunId = "agent-run-approval-1",
+            ApprovalRequestId = "tool-approval-1",
+            ToolCallId = "call-approval-1",
+            ToolName = "use_skill",
+            ArgumentsSha256 = "sha256-approval-1",
+            Approved = true,
+        };
+
+        var result = await runner.RunInboundAsync(
+            activity,
+            RelayRuntimeContext(
+                activity.Id,
+                replyToken: "relay-token-callback-1",
+                replyMessageId: "relay-card-action-1",
+                nyxUserAccessToken: "callback-user-token-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().BeNull();
+        adapter.Replies.Should().BeEmpty();
+        var command = dispatcher.Commands.Should().ContainSingle().Subject;
+        command.RunId.Should().Be("agent-run-approval-1");
+        command.ApprovalRequestId.Should().Be("tool-approval-1");
+        command.ToolCallId.Should().Be("call-approval-1");
+        command.ToolName.Should().Be("use_skill");
+        command.ArgumentsSha256.Should().Be("sha256-approval-1");
+        command.SenderId.Should().Be("ou_user_1");
+        command.RegistrationScopeId.Should().Be("scope-1");
+        command.ConversationKey.Should().Be("lark:dm:ou_user_1");
+        command.Request.ReplyToken.Should().Be("relay-token-callback-1");
+        command.Request.Activity.TransportExtras.NyxUserAccessToken.Should().Be("callback-user-token-1");
+        command.Request.Activity.TransportExtras.NyxRegistrationScopeId.Should().Be("scope-1");
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldRouteNyxIdApprovalCardAction_WithCurrentUserToken()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
@@ -4793,7 +4846,8 @@ public sealed class ChannelConversationTurnRunnerTests
         ILarkBotIdentityResolver? botIdentityResolver = null,
         IChannelRelayTailTextSender? relayTailTextSender = null,
         IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null,
-        IBindingRevocationReconciler? bindingRevocationReconciler = null)
+        IBindingRevocationReconciler? bindingRevocationReconciler = null,
+        IAgentRunToolApprovalDecisionDispatcher? agentRunToolApprovalDecisionDispatcher = null)
     {
         services ??= BuildAgentBuilderToolServices();
         relayHandler ??= new RecordingJsonHandler("""{"message_id":"relay-reply"}""");
@@ -4852,7 +4906,21 @@ public sealed class ChannelConversationTurnRunnerTests
                 new LarkOutboundDispatcher(nyxClient, NullLogger.Instance),
                 NullLogger<LarkChannelRelayTailTextSender>.Instance),
             relayProxyResponseClassifier: relayProxyResponseClassifier ?? new LarkRelayProxyResponseClassifier(),
-            toolExecutionPort: services.GetService<IAgentToolExecutionPort>() ?? new TestAgentToolExecutionPort());
+            toolExecutionPort: services.GetService<IAgentToolExecutionPort>() ?? new TestAgentToolExecutionPort(),
+            agentRunToolApprovalDecisionDispatcher: agentRunToolApprovalDecisionDispatcher);
+    }
+
+    private sealed class RecordingAgentRunToolApprovalDecisionDispatcher
+        : IAgentRunToolApprovalDecisionDispatcher
+    {
+        public List<AgentRunToolApprovalDecisionRequested> Commands { get; } = [];
+
+        public Task DispatchAsync(AgentRunToolApprovalDecisionRequested command, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Commands.Add(command.Clone());
+            return Task.CompletedTask;
+        }
     }
 
     internal sealed class TestAgentToolExecutionPort : IAgentToolExecutionPort

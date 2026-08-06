@@ -599,11 +599,41 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         };
     }
 
+    public async Task<AgentRunNextToolStepRequestedEvent> BuildApprovedToolStepContinuationAsync(
+        AgentRunReplyStepExecutionRequest workItem,
+        AgentRunPendingToolApprovalState pendingApproval,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(pendingApproval);
+        var request = workItem.Request.Clone();
+        var toolCalls = workItem.StepState.PendingToolCalls.Select(AgentRunReplyStepMappers.FromProto).ToArray();
+        var toolStepResult = await TryExecuteDurablyAuthorizedToolStepAsync(
+                workItem with { AllowDurableToolAuthorization = true },
+                request,
+                toolCalls,
+                ct,
+                pendingApproval)
+            .ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The approved AgentRun tool capability no longer matches the suspended call.");
+
+        return new AgentRunNextToolStepRequestedEvent
+        {
+            RunId = workItem.RunId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            Attempt = workItem.Attempt,
+            StepIndex = workItem.StepIndex + 1,
+            Request = request.Clone(),
+            ToolStepResult = toolStepResult,
+        };
+    }
+
     private async Task<AgentRunToolStepResult?> TryExecuteDurablyAuthorizedToolStepAsync(
         AgentRunReplyStepExecutionRequest workItem,
         NeedsLlmReplyEvent request,
         IReadOnlyList<ToolCall> toolCalls,
-        CancellationToken ct)
+        CancellationToken ct,
+        AgentRunPendingToolApprovalState? pendingApproval = null)
     {
         if (!TryMatchDurablePendingToolAuthorizations(workItem.StepState, toolCalls, out var authorizations))
         {
@@ -658,9 +688,10 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 turnCatalog: workItem.TurnCatalog)
             .ConfigureAwait(false);
         var messages = workItem.StepState.Messages.Select(AgentRunReplyStepMappers.FromProto).ToList();
+        var toolRequestId = pendingApproval?.ToolRequestId ?? request.Activity.Id;
         var llmRequest = plan.StepExecutor.BuildLlmStepRequest(
             messages,
-            request.Activity.Id,
+            toolRequestId,
             plan.Metadata,
             plan.ToolContext,
             plan.LlmControl,
@@ -684,24 +715,83 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             return null;
         }
 
+        AgentToolApprovalGrant? approvalGrant = null;
+        if (pendingApproval is not null)
+        {
+            if (!TryBuildApprovalGrant(workItem, toolCalls, executionToolContext, pendingApproval, out approvalGrant))
+            {
+                _logger.LogWarning(
+                    "Agent run approved tool call failed exact identity validation. runId={RunId} correlation={CorrelationId} step={StepIndex} approvalRequest={ApprovalRequestId}",
+                    workItem.RunId,
+                    request.CorrelationId,
+                    workItem.StepIndex,
+                    pendingApproval.ApprovalRequestId);
+                return null;
+            }
+        }
+
         _logger.LogWarning(
-            "Agent run tool step executing with durable authorization. runId={RunId} correlation={CorrelationId} step={StepIndex} toolNames={ToolNames} inputFileRefCount={InputFileRefCount}",
+            "Agent run tool step executing with durable authorization. runId={RunId} correlation={CorrelationId} step={StepIndex} toolNames={ToolNames} inputFileRefCount={InputFileRefCount} approvalGrantPresent={ApprovalGrantPresent}",
             workItem.RunId,
             request.CorrelationId,
             workItem.StepIndex,
             FormatToolNames(toolCalls.Select(static call => call.Name)),
-            executionToolContext.InputFileRefs.Count);
+            executionToolContext.InputFileRefs.Count,
+            approvalGrant is not null);
         using var toolScope = TryBeginInteractiveScope(request);
         var toolResults = await plan.StepExecutor.ExecuteAuthorizedToolStepAsync(
                 toolCalls,
                 admittedTools,
                 executionToolContext,
-                ct)
+                ct,
+                approvalGrant)
             .ConfigureAwait(false);
         var toolStepResult = BuildToolStepResult(toolResults);
         if (TryTakeOutboundIntent(generator) is { } toolOutboundIntent)
             toolStepResult.OutboundIntent = toolOutboundIntent.Clone();
         return toolStepResult;
+    }
+
+    private static bool TryBuildApprovalGrant(
+        AgentRunReplyStepExecutionRequest workItem,
+        IReadOnlyList<ToolCall> toolCalls,
+        AgentToolExecutionContext executionToolContext,
+        AgentRunPendingToolApprovalState pending,
+        out AgentToolApprovalGrant? approvalGrant)
+    {
+        approvalGrant = null;
+        if (pending.Decision != AgentRunToolApprovalDecision.Approved ||
+            toolCalls.Count != 1 ||
+            !string.Equals(pending.RunId, workItem.RunId, StringComparison.Ordinal) ||
+            !string.Equals(pending.CorrelationId, workItem.Request.CorrelationId, StringComparison.Ordinal) ||
+            pending.Attempt != workItem.Attempt ||
+            pending.StepIndex != workItem.StepIndex ||
+            string.IsNullOrWhiteSpace(pending.ApprovalRequestId) ||
+            string.IsNullOrWhiteSpace(pending.ToolRequestId))
+        {
+            return false;
+        }
+
+        var call = toolCalls[0];
+        if (!string.Equals(pending.ToolRequestId, executionToolContext.Request.RequestId, StringComparison.Ordinal) ||
+            !string.Equals(pending.ToolCallId, call.Id, StringComparison.Ordinal) ||
+            !string.Equals(pending.ToolName, call.Name, StringComparison.Ordinal) ||
+            !string.Equals(
+                pending.ArgumentsSha256,
+                AgentToolArgumentsDigest.ComputeSha256(call.ArgumentsJson),
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        approvalGrant = new AgentToolApprovalGrant(
+            executionToolContext.ExecutionOwner.Clone(),
+            pending.ApprovalRequestId,
+            pending.ToolRequestId,
+            pending.ToolName,
+            pending.ToolCallId,
+            pending.ArgumentsSha256);
+        return true;
     }
 
     private static bool TryMatchDurablePendingToolAuthorizations(

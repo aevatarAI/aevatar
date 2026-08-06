@@ -87,6 +87,48 @@ message AgentRunGAgentState {
   AgentRunLarkCardDeliveryCompletion pending_card_delivery_completion = 26;
   repeated aevatar.gagents.channel.abstractions.DeliveryLedgerEntry recent_deliveries = 27;
   aevatar.gagents.channel.abstractions.DeliveryLedgerEntry last_successful_delivery = 28;
+  AgentRunPendingToolApprovalState pending_tool_approval = 29;
+  AgentRunToolApprovalResolutionState last_tool_approval_resolution = 30;
+  bool produced_use_source_activity_delivery_context = 31;
+}
+
+enum AgentRunToolApprovalDecision {
+  AGENT_RUN_TOOL_APPROVAL_DECISION_UNSPECIFIED = 0;
+  AGENT_RUN_TOOL_APPROVAL_DECISION_APPROVED = 1;
+  AGENT_RUN_TOOL_APPROVAL_DECISION_REJECTED = 2;
+}
+
+// Actor-owned suspension identity for exactly one tool call. Runtime
+// credentials and raw argument values are deliberately excluded.
+message AgentRunPendingToolApprovalState {
+  string run_id = 1;
+  string correlation_id = 2;
+  int32 attempt = 3;
+  int32 step_index = 4;
+  string approval_request_id = 5;
+  string tool_request_id = 6;
+  string tool_call_id = 7;
+  string tool_name = 8;
+  string arguments_sha256 = 9;
+  bool is_destructive = 10;
+  string side_effect_kind = 11;
+  string subject_kind = 12;
+  string subject_id = 13;
+  string sender_id = 14;
+  string registration_scope_id = 15;
+  string conversation_key = 16;
+  int64 requested_at_unix_ms = 17;
+  int64 notification_dispatched_at_unix_ms = 18;
+  AgentRunToolApprovalDecision decision = 19;
+  int64 decided_at_unix_ms = 20;
+}
+
+message AgentRunToolApprovalResolutionState {
+  string approval_request_id = 1;
+  string tool_call_id = 2;
+  string arguments_sha256 = 3;
+  AgentRunToolApprovalDecision decision = 4;
+  int64 decided_at_unix_ms = 5;
 }
 
 enum AgentRunLarkCardDeliveryPhase {
@@ -388,6 +430,39 @@ message AgentRunReplyProducedEvent {
   aevatar.gagents.channel.abstractions.MessageContent outbound = 9;
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 10;
   repeated aevatar.ai.AgentToolReceipt tool_receipts = 11;
+  bool use_source_activity_delivery_context = 12;
+}
+
+message AgentRunToolApprovalRequestedEvent {
+  AgentRunPendingToolApprovalState pending = 1;
+}
+
+message AgentRunToolApprovalNotificationDispatchedEvent {
+  string approval_request_id = 1;
+  int64 dispatched_at_unix_ms = 2;
+}
+
+message AgentRunToolApprovalDecisionRecordedEvent {
+  string approval_request_id = 1;
+  string tool_call_id = 2;
+  string arguments_sha256 = 3;
+  AgentRunToolApprovalDecision decision = 4;
+  int64 decided_at_unix_ms = 5;
+}
+
+// Transient card-callback command. The nested request may carry the fresh
+// callback reply token and NyxID user bearer and must never be persisted.
+message AgentRunToolApprovalDecisionRequested {
+  string run_id = 1;
+  string approval_request_id = 2;
+  string tool_call_id = 3;
+  string tool_name = 4;
+  string arguments_sha256 = 5;
+  bool approved = 6;
+  string sender_id = 7;
+  string registration_scope_id = 8;
+  string conversation_key = 9;
+  aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 10;
 }
 
 // Persisted after admission gates pass and before the transient generation

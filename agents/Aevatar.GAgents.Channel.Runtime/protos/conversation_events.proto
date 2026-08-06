@@ -215,6 +215,10 @@ message LlmReplyReadyEvent {
   // the producer actor's committed state.
   aevatar.credentials.RuntimeSecretReference relay_reply_token_ref = 14;
   aevatar.credentials.RuntimeSecretReference relay_user_access_token_ref = 15;
+  // Approval continuations receive a fresh relay credential from the card
+  // callback. When true, delivery uses this event's activity rather than the
+  // original pending turn activity while correlation still closes that turn.
+  bool use_source_activity_delivery_context = 16;
 }
 
 enum ConversationReplyLifecycleMode {

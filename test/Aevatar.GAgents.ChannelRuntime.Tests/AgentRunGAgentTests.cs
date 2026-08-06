@@ -106,6 +106,219 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleNextToolStepAsync_WhenApprovalIsRequired_ShouldSuspendWithoutAppendingToolResult()
+    {
+        const string argumentsJson = "{\"skill\":\"lark-contact-batch-resolution\",\"secret\":\"must-not-leak\"}";
+        MessageContent? dispatchedIntent = null;
+        var interactiveDispatcher = Substitute.For<IInteractiveReplyDispatcher>();
+        interactiveDispatcher.DispatchAsync(
+                Arg.Any<ChannelId>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MessageContent>(),
+                Arg.Any<ComposeContext>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                dispatchedIntent = call.ArgAt<MessageContent>(3).Clone();
+                return Task.FromResult(new InteractiveReplyDispatchResult(
+                    Succeeded: true,
+                    MessageId: "approval-card-1",
+                    PlatformMessageId: "om-approval-card-1",
+                    Capability: ComposeCapability.Exact,
+                    FellBackToText: false,
+                    Detail: null));
+            });
+        var runtime = CreateRunAgentWithExecutor(
+            new DispatchingActorRuntime(),
+            new PausedReplyGenerationExecutor(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions(),
+            interactiveReplyDispatcher: interactiveDispatcher);
+        var state = BuildPendingApprovalState();
+        state.GenerationStep!.PendingToolCalls[0].ArgumentsJson = argumentsJson;
+        state.GenerationStep.PendingToolAuthorizations[0].Call!.ArgumentsJson = argumentsJson;
+        state.PendingToolApproval = null;
+        SetState(runtime, state);
+
+        await runtime.HandleNextToolStepAsync(new AgentRunNextToolStepRequestedEvent
+        {
+            RunId = state.RunId,
+            CorrelationId = state.CorrelationId,
+            TargetActorId = state.TargetActorId,
+            Attempt = state.GenerationAttempt,
+            StepIndex = state.GenerationStep.NextStepIndex + 1,
+            Request = BuildApprovalDecisionCommand(approved: true).Request,
+            ToolStepResult = new AgentRunToolStepResult
+            {
+                ToolReceipts =
+                {
+                    new AgentToolReceipt
+                    {
+                        CallId = "call-approval-1",
+                        ToolName = "use_skill",
+                        Status = AgentToolReceiptStatus.ApprovalRequired,
+                        ApprovalRequestId = "tool-approval-1",
+                        IsDestructive = true,
+                        SideEffectKind = "skill.mount",
+                        SubjectKind = "skill",
+                        SubjectId = "lark-contact-batch-resolution",
+                    },
+                },
+            },
+        });
+
+        runtime.State.PendingToolApproval.Should().NotBeNull();
+        var pending = runtime.State.PendingToolApproval!;
+        pending.RunId.Should().Be("agent-run-approval-1");
+        pending.ToolRequestId.Should().Be("tool-request-1");
+        pending.ToolCallId.Should().Be("call-approval-1");
+        pending.ToolName.Should().Be("use_skill");
+        pending.ArgumentsSha256.Should().Be(AgentToolArgumentsDigest.ComputeSha256(argumentsJson));
+        pending.SenderId.Should().Be("ou_user_1");
+        pending.RegistrationScopeId.Should().Be("scope-1");
+        pending.ConversationKey.Should().Be("lark:group:oc_group_chat_1");
+        pending.NotificationDispatchedAtUnixMs.Should().BeGreaterThan(0);
+        RoundTrip(runtime.State).PendingToolApproval.Should().BeEquivalentTo(pending);
+        runtime.State.GenerationStep!.Messages.Should().NotContain(message => message.Role == "tool");
+        runtime.State.GenerationStep.ToolReceipts.Should().BeEmpty();
+
+        dispatchedIntent.Should().NotBeNull();
+        var actions = dispatchedIntent!.Cards.Should().ContainSingle().Subject.Actions;
+        actions.Should().HaveCount(2);
+        actions.Should().OnlyContain(action => action.AgentRunApproval != null);
+        actions.Should().OnlyContain(action => action.AgentRunApproval.ArgumentsSha256 == pending.ArgumentsSha256);
+        dispatchedIntent.ToString().Should().NotContain(argumentsJson);
+        dispatchedIntent.ToString().Should().NotContain("must-not-leak");
+    }
+
+    [Fact]
+    public async Task HandleToolApprovalDecisionAsync_ShouldExecuteOnceAndResumeAfterActorRecovery()
+    {
+        var publisher = new RecordingSelfEventPublisher();
+        var executor = new ApprovalTrackingReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            new DispatchingActorRuntime(),
+            executor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions(),
+            publisher);
+        SetState(runtime, BuildPendingApprovalState());
+        var command = BuildApprovalDecisionCommand(approved: true);
+
+        await runtime.HandleToolApprovalDecisionAsync(command);
+        await runtime.HandleToolApprovalDecisionAsync(command.Clone());
+
+        executor.ApprovedContinuations.Should().ContainSingle();
+        publisher.Published.Should().ContainSingle(message => message is AgentRunNextToolStepRequestedEvent);
+        runtime.State.PendingToolApproval!.Decision.Should().Be(AgentRunToolApprovalDecision.Approved);
+
+        var recoveredExecutor = new ApprovalTrackingReplyGenerationExecutor();
+        var recoveredPublisher = new RecordingSelfEventPublisher();
+        var recovered = CreateRunAgentWithExecutor(
+            new DispatchingActorRuntime(),
+            recoveredExecutor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions(),
+            recoveredPublisher);
+        SetState(recovered, RoundTrip(runtime.State));
+
+        await recovered.HandleToolApprovalDecisionAsync(command.Clone());
+
+        recoveredExecutor.ApprovedContinuations.Should().ContainSingle(
+            continuation => continuation.Pending.Decision == AgentRunToolApprovalDecision.Approved);
+        recoveredPublisher.Published.Should().ContainSingle(message => message is AgentRunNextToolStepRequestedEvent);
+    }
+
+    [Theory]
+    [InlineData("sender")]
+    [InlineData("scope")]
+    [InlineData("conversation")]
+    [InlineData("hash")]
+    public async Task HandleToolApprovalDecisionAsync_ShouldRejectMismatchedIdentity(string mismatch)
+    {
+        var executor = new ApprovalTrackingReplyGenerationExecutor();
+        var publisher = new RecordingSelfEventPublisher();
+        var runtime = CreateRunAgentWithExecutor(
+            new DispatchingActorRuntime(),
+            executor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions(),
+            publisher);
+        SetState(runtime, BuildPendingApprovalState());
+        var command = BuildApprovalDecisionCommand(approved: true);
+        switch (mismatch)
+        {
+            case "sender":
+                command.SenderId = "ou_attacker";
+                command.Request!.Activity!.From!.CanonicalId = "ou_attacker";
+                break;
+            case "scope":
+                command.RegistrationScopeId = "scope-other";
+                command.Request!.Activity!.TransportExtras!.NyxRegistrationScopeId = "scope-other";
+                break;
+            case "conversation":
+                command.ConversationKey = "lark:group:oc_other";
+                command.Request!.Activity!.Conversation!.CanonicalKey = "lark:group:oc_other";
+                break;
+            case "hash":
+                command.ArgumentsSha256 = new string('0', 64);
+                break;
+        }
+
+        await runtime.HandleToolApprovalDecisionAsync(command);
+
+        runtime.State.PendingToolApproval!.Decision.Should().Be(AgentRunToolApprovalDecision.Unspecified);
+        executor.ApprovedContinuations.Should().BeEmpty();
+        publisher.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleToolApprovalDecisionAsync_WhenRejected_ShouldReturnDeniedReceiptWithCallbackCredential()
+    {
+        var conversationActor = Substitute.For<IActor>();
+        conversationActor.Id.Returns("actor-1");
+        var handled = new List<EventEnvelope>();
+        conversationActor.When(actor => actor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var runtime = CreateRunAgentWithExecutor(
+            new DispatchingActorRuntime(("actor-1", conversationActor)),
+            new ApprovalTrackingReplyGenerationExecutor(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
+        SetState(runtime, BuildPendingApprovalState());
+
+        await runtime.HandleToolApprovalDecisionAsync(BuildApprovalDecisionCommand(approved: false));
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        runtime.State.ToolReceipts.Should().ContainSingle(receipt =>
+            receipt.Status == AgentToolReceiptStatus.Denied &&
+            receipt.ErrorCode == "approval_denied" &&
+            receipt.ApprovalRequestId == "tool-approval-1");
+        var ready = handled.Should().ContainSingle().Subject.Payload.Unpack<LlmReplyReadyEvent>();
+        ready.ReplyToken.Should().Be("relay-token-callback-1");
+        ready.UseSourceActivityDeliveryContext.Should().BeTrue();
+        ready.Activity.Id.Should().Be("callback-approval-1");
+    }
+
+    [Fact]
+    public async Task HandleReplyGenerationTimedOutAsync_WhenApprovalIsPending_ShouldIgnoreOriginalTimeout()
+    {
+        var runtime = CreateRunAgentWithExecutor(
+            new DispatchingActorRuntime(),
+            new ApprovalTrackingReplyGenerationExecutor(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
+        SetState(runtime, BuildPendingApprovalState());
+
+        await runtime.HandleReplyGenerationTimedOutAsync(new AgentRunReplyGenerationTimedOut
+        {
+            RunId = runtime.State.RunId,
+            CorrelationId = runtime.State.CorrelationId,
+            TargetActorId = runtime.State.TargetActorId,
+            Attempt = runtime.State.GenerationAttempt,
+            TimedOutAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyGenerationRequested);
+        runtime.State.PendingToolApproval.Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task HandleNextToolStepAsync_MergesToolStepOutboundIntentIntoStepState()
     {
         // Regression for the relay interactive-reply scope gap: reply_with_interaction
@@ -3669,14 +3882,16 @@ public sealed class AgentRunGAgentTests
         IAgentRunReplyGenerationExecutorPort generationExecutor,
         Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions relayOptions,
         IEventPublisher? eventPublisher = null,
-        IActorRuntimeCallbackScheduler? callbackScheduler = null)
+        IActorRuntimeCallbackScheduler? callbackScheduler = null,
+        IInteractiveReplyDispatcher? interactiveReplyDispatcher = null)
     {
         var agent = new AgentRunGAgent(
             actorRuntime,
             generationExecutor,
             relayOptions,
             NullLogger<AgentRunGAgent>.Instance,
-            callbackScheduler);
+            callbackScheduler,
+            interactiveReplyDispatcher: interactiveReplyDispatcher);
         SetId(agent, ExpectedRunActorId(Guid.NewGuid().ToString("N")));
         agent.EventSourcing = new StateTransitionEventSourcing<AgentRunGAgentState>((current, evt) =>
             InvokeAgentTransition(agent, current, evt));
@@ -3685,6 +3900,125 @@ public sealed class AgentRunGAgentTests
             dispatchingPublisher.SelfTarget = agent;
         agent.EventPublisher = publisher;
         return agent;
+    }
+
+    private static AgentRunGAgentState BuildPendingApprovalState()
+    {
+        const string argumentsJson = "{\"skill\":\"lark-contact-batch-resolution\"}";
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("tool-request-1", "call-approval-1"),
+            Channel = new AgentToolChannelContext(
+                "lark",
+                "ou_user_1",
+                "scope-1",
+                "relay-msg-1",
+                "om-1"),
+        };
+        return new AgentRunGAgentState
+        {
+            RunId = "agent-run-approval-1",
+            CorrelationId = "corr-approval-1",
+            TargetActorId = "actor-1",
+            Status = AgentRunStatus.ReplyGenerationRequested,
+            GenerationAttempt = 1,
+            GenerationStep = new AgentRunReplyStepState
+            {
+                RunId = "agent-run-approval-1",
+                CorrelationId = "corr-approval-1",
+                TargetActorId = "actor-1",
+                Attempt = 1,
+                NextStepIndex = 2,
+                MaxToolRounds = 4,
+                PendingToolAuthorizationConsumed = true,
+                ToolContext = toolContext.ToPayload(),
+                PendingToolCalls =
+                {
+                    new AgentRunToolCall
+                    {
+                        Id = "call-approval-1",
+                        Name = "use_skill",
+                        ArgumentsJson = argumentsJson,
+                    },
+                },
+                PendingToolAuthorizations =
+                {
+                    new AgentRunPendingToolAuthorization
+                    {
+                        Call = new AgentRunToolCall
+                        {
+                            Id = "call-approval-1",
+                            Name = "use_skill",
+                            ArgumentsJson = argumentsJson,
+                        },
+                        HasRequiresApproval = true,
+                        RequiresApproval = true,
+                        IsDestructive = true,
+                        SideEffectKind = "skill.mount",
+                    },
+                },
+            },
+            PendingToolApproval = new AgentRunPendingToolApprovalState
+            {
+                RunId = "agent-run-approval-1",
+                CorrelationId = "corr-approval-1",
+                Attempt = 1,
+                StepIndex = 2,
+                ApprovalRequestId = "tool-approval-1",
+                ToolRequestId = "tool-request-1",
+                ToolCallId = "call-approval-1",
+                ToolName = "use_skill",
+                ArgumentsSha256 = AgentToolArgumentsDigest.ComputeSha256(argumentsJson),
+                IsDestructive = true,
+                SideEffectKind = "skill.mount",
+                SubjectKind = "skill",
+                SubjectId = "lark-contact-batch-resolution",
+                SenderId = "ou_user_1",
+                RegistrationScopeId = "scope-1",
+                ConversationKey = "lark:group:oc_group_chat_1",
+                RequestedAtUnixMs = 10,
+                NotificationDispatchedAtUnixMs = 20,
+                Decision = AgentRunToolApprovalDecision.Unspecified,
+            },
+        };
+    }
+
+    private static AgentRunToolApprovalDecisionRequested BuildApprovalDecisionCommand(bool approved)
+    {
+        var activity = BuildRelayActivity();
+        activity.Id = "callback-approval-1";
+        activity.From = new ParticipantRef
+        {
+            CanonicalId = "ou_user_1",
+            DisplayName = "User One",
+        };
+        activity.TransportExtras = new TransportExtras
+        {
+            NyxRegistrationScopeId = "scope-1",
+            NyxUserAccessToken = "callback-user-token-1",
+        };
+        return new AgentRunToolApprovalDecisionRequested
+        {
+            RunId = "agent-run-approval-1",
+            ApprovalRequestId = "tool-approval-1",
+            ToolCallId = "call-approval-1",
+            ToolName = "use_skill",
+            ArgumentsSha256 = AgentToolArgumentsDigest.ComputeSha256(
+                "{\"skill\":\"lark-contact-batch-resolution\"}"),
+            Approved = approved,
+            SenderId = "ou_user_1",
+            RegistrationScopeId = "scope-1",
+            ConversationKey = "lark:group:oc_group_chat_1",
+            Request = new NeedsLlmReplyEvent
+            {
+                RunId = "agent-run-approval-1",
+                CorrelationId = "callback-approval-1",
+                RegistrationId = "reg-1",
+                Activity = activity,
+                ReplyToken = "relay-token-callback-1",
+                ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            },
+        };
     }
 
     private static AgentRunGAgent CreateCapabilityTestAgent(
@@ -4089,6 +4423,65 @@ public sealed class AgentRunGAgentTests
         public void CompleteLlm() => _llmRelease.TrySetResult();
 
         public void CompleteTool() => _toolRelease.TrySetResult();
+    }
+
+    private sealed class ApprovalTrackingReplyGenerationExecutor : IAgentRunReplyGenerationExecutorPort
+    {
+        public List<(AgentRunReplyStepExecutionRequest Request, AgentRunPendingToolApprovalState Pending)>
+            ApprovedContinuations { get; } = [];
+
+        public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
+            AgentRunReplyGenerationExecutionRequest request,
+            CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<AgentRunLlmStepExecution> BuildLlmStepExecutionAsync(
+            AgentRunReplyStepExecutionRequest request,
+            CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<AgentRunNextToolStepRequestedEvent> BuildToolStepContinuationAsync(
+            AgentRunReplyStepExecutionRequest request,
+            AgentRunAuthorizedToolStep? authorizedToolStep,
+            CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<AgentRunNextToolStepRequestedEvent> BuildApprovedToolStepContinuationAsync(
+            AgentRunReplyStepExecutionRequest request,
+            AgentRunPendingToolApprovalState pendingApproval,
+            CancellationToken ct)
+        {
+            ApprovedContinuations.Add((
+                request with
+                {
+                    Request = request.Request.Clone(),
+                    StepState = request.StepState.Clone(),
+                },
+                pendingApproval.Clone()));
+            return Task.FromResult(new AgentRunNextToolStepRequestedEvent
+            {
+                RunId = request.RunId,
+                CorrelationId = request.Request.CorrelationId,
+                TargetActorId = request.Request.TargetActorId,
+                Attempt = request.Attempt,
+                StepIndex = request.StepIndex + 1,
+                Request = request.Request.Clone(),
+                ToolStepResult = new AgentRunToolStepResult
+                {
+                    AdvanceRound = true,
+                    ToolReceipts =
+                    {
+                        new AgentToolReceipt
+                        {
+                            CallId = pendingApproval.ToolCallId,
+                            ToolName = pendingApproval.ToolName,
+                            Status = AgentToolReceiptStatus.Success,
+                            ApprovalRequestId = pendingApproval.ApprovalRequestId,
+                        },
+                    },
+                },
+            });
+        }
     }
 
     private sealed class CapabilityTrackingReplyGenerationExecutor : IAgentRunReplyGenerationExecutorPort
