@@ -35,8 +35,15 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         ArgumentNullException.ThrowIfNull(intent);
         ArgumentNullException.ThrowIfNull(context);
 
-        var effectiveText = Truncate(intent.Text, context.Capabilities?.MaxMessageLength ?? DefaultCapabilities.MaxMessageLength);
-        if (intent.Actions.Count == 0 && intent.Cards.Count == 0)
+        var maxMessageLength = context.Capabilities?.MaxMessageLength ?? DefaultCapabilities.MaxMessageLength;
+        var jsonPresentation = LarkJsonTableFormatter.Parse(intent.Text);
+        var effectiveText = Truncate(
+            jsonPresentation.HasTables ? jsonPresentation.RenderMarkdown() : intent.Text,
+            maxMessageLength);
+        var effectiveProse = Truncate(
+            jsonPresentation.HasTables ? jsonPresentation.RenderProse() : intent.Text,
+            maxMessageLength);
+        if (!jsonPresentation.HasTables && intent.Actions.Count == 0 && intent.Cards.Count == 0)
         {
             return new LarkOutboundMessage(
                 MessageType: "text",
@@ -45,14 +52,23 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
                 IsInteractive: false);
         }
 
-        var headerTitle = ResolveHeaderTitle(intent, effectiveText);
+        var headerTitle = ResolveHeaderTitle(
+            intent,
+            jsonPresentation.HasTables && string.IsNullOrWhiteSpace(effectiveProse)
+                ? "Result"
+                : effectiveProse);
         var template = ResolveHeaderTemplate(intent);
         var formMode = RequiresFormWrapping(intent);
 
         if (formMode)
         {
             var formElements = new List<object>();
-            var leading = BuildLeadingMarkdown(effectiveText, intent);
+            if (jsonPresentation.HasTables)
+                AppendJsonPresentationElements(formElements, jsonPresentation, maxMessageLength);
+
+            var leading = BuildLeadingMarkdown(
+                jsonPresentation.HasTables ? string.Empty : effectiveText,
+                intent);
             if (leading is not null)
                 formElements.Add(leading);
 
@@ -96,7 +112,11 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         }
 
         var elements = new List<object>();
-        if (!string.IsNullOrWhiteSpace(effectiveText))
+        if (jsonPresentation.HasTables)
+        {
+            AppendJsonPresentationElements(elements, jsonPresentation, maxMessageLength);
+        }
+        else if (!string.IsNullOrWhiteSpace(effectiveText))
         {
             elements.Add(new
             {
@@ -239,6 +259,60 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             tag = "markdown",
             content = string.Join("\n\n", parts),
         };
+    }
+
+    private static void AppendJsonPresentationElements(
+        ICollection<object> elements,
+        LarkJsonTablePresentation presentation,
+        int maxTextLength)
+    {
+        var remainingTextLength = maxTextLength <= 0 ? int.MaxValue : maxTextLength;
+        var tableIndex = 0;
+        foreach (var part in presentation.Parts)
+        {
+            switch (part)
+            {
+                case LarkJsonTextPart textPart:
+                {
+                    if (remainingTextLength <= 0 || string.IsNullOrWhiteSpace(textPart.Text))
+                        break;
+
+                    var content = Truncate(textPart.Text.Trim(), remainingTextLength);
+                    if (string.IsNullOrWhiteSpace(content))
+                        break;
+
+                    elements.Add(new
+                    {
+                        tag = "markdown",
+                        content,
+                    });
+                    remainingTextLength -= new StringInfo(content).LengthInTextElements;
+                    break;
+                }
+                case LarkJsonTablePart { NativeEligible: true } tablePart:
+                {
+                    if (!string.IsNullOrWhiteSpace(tablePart.Table.Title))
+                    {
+                        elements.Add(new
+                        {
+                            tag = "markdown",
+                            content = $"**{tablePart.Table.Title.Trim()}**",
+                        });
+                    }
+
+                    elements.Add(tablePart.Table.BuildNativeElement($"json_table_{tableIndex}"));
+                    tableIndex++;
+                    break;
+                }
+                case LarkJsonTablePart tablePart:
+                    elements.Add(new
+                    {
+                        tag = "markdown",
+                        content = tablePart.Table.RenderMarkdown(),
+                    });
+                    break;
+            }
+        }
     }
 
     private static IEnumerable<object> BuildFormChildElements(ActionElement action)

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
@@ -50,6 +51,31 @@ public sealed class ChannelCardConversationTurnRunnerTests
         lark.ReplyCalls[0].Token.Should().Be("runtime-card-token-1");
         cardKit.StreamCalls.Should().ContainSingle();
         cardKit.StreamCalls[0].Token.Should().Be("runtime-card-token-1");
+    }
+
+    [Fact]
+    public async Task RunCardCreateAsync_WhenAccumulatedTextIsJson_ShouldStreamTableMarkdownInsteadOfJson()
+    {
+        var cardKit = new RecordingCardKitClient();
+        var lark = new RecordingLarkNyxClient();
+        var runner = new ChannelCardConversationTurnRunner(
+            cardKit,
+            lark,
+            NullLogger<ChannelCardConversationTurnRunner>.Instance);
+        var chunk = BuildChunk("corr-card-json-create-1");
+        chunk.AccumulatedText = """[{"name":"Ada"},{"name":"Lin"}]""";
+
+        var result = await runner.RunCardCreateAsync(
+            chunk,
+            "streaming_main",
+            RuntimeContext("runtime-card-json-create-token"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        var streamed = cardKit.StreamCalls.Should().ContainSingle().Subject.Request.Content;
+        streamed.Should().Contain("| name |");
+        streamed.Should().Contain("| Ada |");
+        streamed.Should().NotContain("{\"name\"");
     }
 
     [Fact]
@@ -232,6 +258,40 @@ public sealed class ChannelCardConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunCardFinalizeAsync_WhenFinalTextIsJson_ShouldReplaceStreamingShellWithNativeTable()
+    {
+        var cardKit = new RecordingCardKitClient();
+        var lark = new RecordingLarkNyxClient();
+        var runner = new ChannelCardConversationTurnRunner(
+            cardKit,
+            lark,
+            NullLogger<ChannelCardConversationTurnRunner>.Instance);
+
+        var result = await runner.RunCardFinalizeAsync(
+            BuildSanitizedActivity(),
+            "card-json-final-1",
+            "streaming_main",
+            """[{"name":"Ada","score":42},{"name":"Lin","score":37}]""",
+            finalTextDiffersFromLastFlushed: false,
+            sequence: 5,
+            RuntimeContext("runtime-card-json-final-token"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        cardKit.StreamCalls.Should().BeEmpty();
+        var update = cardKit.UpdateCalls.Should().ContainSingle().Subject;
+        update.Token.Should().Be("runtime-card-json-final-token");
+        update.Request.Sequence.Should().Be(5);
+        using var card = JsonDocument.Parse(update.Request.CardJson);
+        var table = card.RootElement.GetProperty("body").GetProperty("elements")[0];
+        table.GetProperty("tag").GetString().Should().Be("table");
+        table.GetProperty("rows").GetArrayLength().Should().Be(2);
+        table.GetProperty("rows")[0].GetProperty("c0").GetString().Should().Be("Ada");
+        cardKit.SettingsCalls.Should().ContainSingle();
+        cardKit.SettingsCalls[0].Request.Sequence.Should().Be(6);
+    }
+
+    [Fact]
     public async Task RunCardCreateAsync_ShouldProxyThroughInboundBotSlug_WhenActivityCarriesProviderSlug()
     {
         // The inbound DM was received by the bot whose NyxID proxy slug is api-lark-bot-4. The
@@ -393,6 +453,7 @@ public sealed class ChannelCardConversationTurnRunnerTests
         public List<(string Token, LarkCardKitCreateRequest Request)> CreateCalls { get; } = [];
         public List<(string Token, LarkCardKitStreamElementContentRequest Request)> StreamCalls { get; } = [];
         public List<(string Token, LarkCardKitSettingsRequest Request)> SettingsCalls { get; } = [];
+        public List<(string Token, LarkCardKitUpdateRequest Request)> UpdateCalls { get; } = [];
 
         public Task<string> CreateCardAsync(string token, LarkCardKitCreateRequest request, CancellationToken ct)
         {
@@ -415,8 +476,11 @@ public sealed class ChannelCardConversationTurnRunnerTests
             return Task.FromResult("""{"code":0,"data":{}}""");
         }
 
-        public Task<string> UpdateCardAsync(string token, LarkCardKitUpdateRequest request, CancellationToken ct) =>
-            Task.FromResult("""{"code":0,"data":{}}""");
+        public Task<string> UpdateCardAsync(string token, LarkCardKitUpdateRequest request, CancellationToken ct)
+        {
+            UpdateCalls.Add((token, request));
+            return Task.FromResult("""{"code":0,"data":{}}""");
+        }
     }
 
     private sealed class RecordingLarkNyxClient : ILarkNyxClient

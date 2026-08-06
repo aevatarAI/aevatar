@@ -1980,6 +1980,7 @@ Rotation is forward-only because NyxID immediately deactivates the old key. The 
 
 - **平台职责**：`Platform.Lark` 现在只保留 Lark 平台渲染/组合能力，例如 `LarkMessageComposer`、`LarkOutboundMessage`
 - **生产 transport**：Lark 生产 ingress/egress 已统一走 `Channel.NyxIdRelay`，不再由 `Platform.Lark` 直接承载 webhook 验签、payload 解密或 direct reply
+- **JSON 展示策略**：Lark presentation boundary 对回复文本中的完整合法 JSON 做有界解析，并由 `LarkMessageComposer` 投影为 Card JSON 2.0 原生 `table`；对象数组映射为行列，嵌套值展开为非 JSON 单元格文本。这个策略只改变 Lark 出站载荷，不改写模型历史、工具结果或内部协议。流式阶段尚未闭合的 JSON 保持原文本，闭合后改为表格表示；CardKit/interactive dispatcher 不可用时降级为无原始 JSON 的 Markdown 表格文本。
 - **兼容性壳**：`LarkPlatformAdapter` 仅保留为 retired direct-callback shell；任何 direct callback / direct reply 尝试都返回 retired/410 语义
 - **Capability gap**：不支持 ephemeral / modal
 

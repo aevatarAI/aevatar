@@ -1489,7 +1489,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         var conversation = chunk.Activity.Conversation;
         var platform = ResolveRelayPlatform(inbound, conversation);
-        var content = new MessageContent { Text = NormalizeReplyText(chunk.AccumulatedText) };
+        var content = new MessageContent
+        {
+            Text = FormatReplyTextForPlatform(platform, NormalizeReplyText(chunk.AccumulatedText)),
+        };
         var segments = operation == NyxRelayTextOperationKind.Final &&
                        !string.IsNullOrWhiteSpace(currentPlatformMessageId)
             ? ChannelTextMessageSegmenter.Segment(content.Text)
@@ -1747,10 +1750,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 $"No platform adapter registered for '{registration.Platform}'.");
         }
 
-        var replyText = NormalizeReplyText(
-            string.IsNullOrWhiteSpace(outboundIntent.Text) && HasInteractiveContent(outboundIntent)
-                ? NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(outboundIntent)
-                : outboundIntent.Text);
+        var replyText = FormatReplyTextForPlatform(
+            registration.Platform,
+            NormalizeReplyText(
+                string.IsNullOrWhiteSpace(outboundIntent.Text) && HasInteractiveContent(outboundIntent)
+                    ? NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(outboundIntent)
+                    : outboundIntent.Text));
         if (string.IsNullOrWhiteSpace(replyText))
         {
             return ConversationTurnResult.TransientFailure(
@@ -1792,10 +1797,15 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         string relayToken,
         CancellationToken ct)
     {
-        if (!HasInteractiveContent(outboundIntent))
+        var relayChannel = ResolveRelayChannel(inbound, conversation);
+        var hasJsonTable = IsLarkChannel(relayChannel) &&
+                           LarkJsonTableFormatter.ContainsConvertibleJson(outboundIntent.Text);
+        if (!HasInteractiveContent(outboundIntent) && !hasJsonTable)
             return null;
 
-        var fallbackText = NormalizeReplyText(NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(outboundIntent));
+        var fallbackText = hasJsonTable
+            ? NormalizeReplyText(LarkJsonTableFormatter.FormatAsMarkdownTable(outboundIntent.Text))
+            : NormalizeReplyText(NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(outboundIntent));
         if (_interactiveReplyDispatcher is null)
         {
             _logger.LogWarning(
@@ -1812,7 +1822,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
 
         var dispatch = await _interactiveReplyDispatcher.DispatchAsync(
-            ResolveRelayChannel(inbound, conversation),
+            relayChannel,
             relayDelivery.ReplyMessageId,
             relayToken,
             outboundIntent,
@@ -3579,6 +3589,14 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     private static string NormalizeReplyText(string? text) =>
         string.IsNullOrWhiteSpace(text) ? "(no content)" : text.Trim();
+
+    private static string FormatReplyTextForPlatform(string? platform, string text) =>
+        string.Equals(platform?.Trim(), "lark", StringComparison.OrdinalIgnoreCase)
+            ? LarkJsonTableFormatter.FormatAsMarkdownTable(text)
+            : text;
+
+    private static bool IsLarkChannel(ChannelId channel) =>
+        string.Equals(channel.Value, "lark", StringComparison.OrdinalIgnoreCase);
 
     private static ConversationTurnResult BuildRelaySentResult(
         string? sentActivityId,

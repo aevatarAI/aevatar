@@ -3953,6 +3953,121 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunLlmReplyAsync_WhenLarkReplyIsJson_ShouldDispatchInteractiveTableReply()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var interactiveDispatcher = Substitute.For<IInteractiveReplyDispatcher>();
+        interactiveDispatcher.DispatchAsync(
+                Arg.Any<ChannelId>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MessageContent>(),
+                Arg.Any<ComposeContext>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new InteractiveReplyDispatchResult(
+                Succeeded: true,
+                MessageId: "reply-json-table-1",
+                PlatformMessageId: "platform-json-table-1",
+                Capability: ComposeCapability.Exact,
+                FellBackToText: false,
+                Detail: null)));
+        var relayHandler = new RecordingJsonHandler("""{"message_id":"unexpected-text-reply"}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler,
+            interactiveReplyDispatcher: interactiveDispatcher);
+        var activity = BuildInboundActivity(
+            "show users",
+            "msg-relay-json-table-1",
+            ConversationScope.Group,
+            "oc_group_chat_1",
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "relay-msg-json-table-1",
+                CorrelationId = "corr-relay-json-table-1",
+            },
+            new TransportExtras { NyxPlatform = "lark" });
+        var outbound = new MessageContent
+        {
+            Text = """[{"name":"Ada"},{"name":"Lin"}]""",
+        };
+
+        var result = await runner.RunLlmReplyAsync(
+            new LlmReplyReadyEvent
+            {
+                CorrelationId = "corr-relay-json-table-1",
+                RegistrationId = "reg-1",
+                Activity = activity,
+                Outbound = outbound,
+                TerminalState = LlmReplyTerminalState.Completed,
+            },
+            RelayRuntimeContext(
+                "corr-relay-json-table-1",
+                replyMessageId: "relay-msg-json-table-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.SentActivityId.Should().Be("reply-json-table-1");
+        relayHandler.Requests.Should().BeEmpty();
+        await interactiveDispatcher.Received(1).DispatchAsync(
+            Arg.Is<ChannelId>(channel => channel.Value == "lark"),
+            "relay-msg-json-table-1",
+            "relay-token-1",
+            Arg.Is<MessageContent>(message => message.Text == outbound.Text && message.Actions.Count == 0),
+            Arg.Any<ComposeContext>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunLlmReplyAsync_WhenJsonTableDispatcherIsMissing_ShouldSendTableTextFallback()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler("""{"message_id":"reply-json-fallback-1"}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler);
+        var activity = BuildInboundActivity(
+            "show users",
+            "msg-relay-json-fallback-1",
+            ConversationScope.Group,
+            "oc_group_chat_1",
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "relay-msg-json-fallback-1",
+                CorrelationId = "corr-relay-json-fallback-1",
+            },
+            new TransportExtras { NyxPlatform = "lark" });
+
+        var result = await runner.RunLlmReplyAsync(
+            new LlmReplyReadyEvent
+            {
+                CorrelationId = "corr-relay-json-fallback-1",
+                RegistrationId = "reg-1",
+                Activity = activity,
+                Outbound = new MessageContent
+                {
+                    Text = """[{"name":"Ada"},{"name":"Lin"}]""",
+                },
+                TerminalState = LlmReplyTerminalState.Completed,
+            },
+            RelayRuntimeContext(
+                "corr-relay-json-fallback-1",
+                replyMessageId: "relay-msg-json-fallback-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        var request = relayHandler.Requests.Should().ContainSingle().Subject;
+        request.Body.Should().Contain("| name |");
+        request.Body.Should().Contain("| Ada |");
+        request.Body.Should().NotContain("{\\\"name\\\"");
+        result.Outbound.Text.Should().Contain("| name |");
+    }
+
+    [Fact]
     public async Task RunLlmReplyAsync_ShouldSendRelayTextFallback_WhenInteractiveDispatcherIsMissing()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
