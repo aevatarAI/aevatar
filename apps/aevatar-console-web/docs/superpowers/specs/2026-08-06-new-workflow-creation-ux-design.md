@@ -48,20 +48,23 @@ error and never overwrites the existing draft.
 
 ### Describe
 
-Describe is a focused single-input flow:
+Describe is a focused two-input flow with one final action:
 
 - heading: `Describe your workflow`;
+- field label: `Workflow name`;
 - field label: `What should this workflow do?`;
 - supporting copy explains that the generated steps can be reviewed in the
   editor;
 - one primary action: `Generate and open`.
 
 The action calls the real generator, parses and validates the returned YAML,
-derives the workflow name from the parsed document, creates the draft, waits
-for the exact draft to become readable when creation is accepted, and opens
-the editor. The page does not expose generated YAML or require a second create
-confirmation. Generator, parse, validation, create, and materialization
-failures preserve the prompt and identify the failed stage in product terms.
+uses the user-provided Workflow name for the draft display name and filename,
+creates the draft, waits for the exact draft to become readable when creation
+is accepted, and opens the editor. The generated YAML document name remains an
+independent document field. The page does not expose generated YAML or require
+a second create confirmation. Generator, parse, validation, create, and
+materialization failures preserve both inputs and identify the failed stage in
+product terms.
 
 ### Other Creation Methods
 
@@ -70,7 +73,7 @@ provide, then use one final action.
 
 | Method | Visible input | Name source | Primary action |
 | --- | --- | --- | --- |
-| Describe | Natural-language workflow outcome | Parsed generator result | Generate and open |
+| Describe | Workflow name and natural-language workflow outcome | User input | Generate and open |
 | Start blank | Workflow name | User input | Create and open |
 | Import YAML | Workflow YAML | Parsed YAML document | Import and open |
 | Use template | Bundled template selection and concise preview | Template name, made independent for the new draft | Use template and open |
@@ -83,17 +86,17 @@ details. Creation does not add a second editor.
 
 ### Focused Prompt
 
-Show one task-specific input and one action. Derive the name for generated,
-imported, and template workflows; ask for a name only when starting blank.
-This is the selected approach because it minimizes decisions without hiding a
-decision the user can actually make.
+Show only task-specific inputs and one final action. Describe and Start blank
+ask for the user-controlled display name; Import and Template derive their
+names from their respective sources. This is the selected approach because it
+keeps the flow direct without hiding a decision the user can actually make.
 
-### Optional Name Before Generation
+### Derived Name For Describe
 
-Keep an optional name above the Describe prompt. This gives early naming
-control but duplicates a value the generator already supplies and weakens the
-primary hierarchy. It is rejected for Describe; naming remains available in
-the editor.
+Derive the draft display name from generated YAML and ask only for the outcome.
+This is rejected because the generated document name is not a substitute for
+the user's intended Workflow display name. Describe therefore requires an
+explicit name before generation.
 
 ### Guided Wizard
 
@@ -187,14 +190,16 @@ The owning route integration test will protect these observable risks:
    create request.
 2. Multiple returned directories render `Save to` and the selected value is
    used in the create request.
-3. Describe exposes `What should this workflow do?` and one action that calls
-   generator, parser, draft create, then opens the materialized workflow.
+3. Describe requires both `Workflow name` and `What should this workflow do?`,
+   then exposes one action that calls generator, parser, draft create, and opens
+   the materialized workflow using the user-provided display name.
 4. File-name resolution chooses the first available suffix within the selected
    directory without changing the Workflow display name.
 5. Import derives the name from parsed YAML and creates without a separate
    workflow-name field.
-6. Generator or create failure preserves the prompt; switching methods clears
-   stale failure output.
+6. Generator or create failure preserves the Workflow name and prompt;
+   switching methods clears stale failure output without discarding shared
+   name input.
 7. Accepted draft creation preserves the existing observe-and-retry contract
    and never resubmits create during readiness retry.
 
