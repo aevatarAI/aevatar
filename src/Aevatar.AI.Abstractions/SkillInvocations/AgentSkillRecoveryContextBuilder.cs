@@ -19,7 +19,8 @@ public static class AgentSkillRecoveryContextBuilder
                 PrimarySkillName: null,
                 MaxOrnnSearchAttempts: 1,
                 CommandArguments: null,
-                DiscoveryRequested: true);
+                DiscoveryRequested: true,
+                IsolatePriorConversationHistory: false);
         }
 
         return new AgentSkillRecoveryContext(
@@ -30,6 +31,7 @@ public static class AgentSkillRecoveryContextBuilder
             PrimarySkillName: trigger.Name,
             MaxOrnnSearchAttempts: 2,
             CommandArguments: trigger.Arguments,
-            DiscoveryRequested: false);
+            DiscoveryRequested: false,
+            IsolatePriorConversationHistory: true);
     }
 }

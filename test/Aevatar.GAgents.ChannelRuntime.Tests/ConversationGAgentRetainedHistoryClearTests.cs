@@ -1,4 +1,5 @@
 using System.Reflection;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -95,17 +96,61 @@ public sealed class ConversationGAgentRetainedHistoryClearTests
                 StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData(true, 0)]
+    [InlineData(false, 1)]
+    public async Task HandleInboundActivityAsync_WhenSkillRecoveryStartsNewRun_AppliesTypedHistoryPolicy(
+        bool isolatePriorHistory,
+        int expectedPriorHistoryCount)
+    {
+        var actorId = ConversationGAgent.BuildActorId("lark:dm:ou_user_1");
+        var eventStore = new InMemoryEventStore();
+        var runner = new SeedThenSkillRecoveryTurnRunner(isolatePriorHistory);
+        var dispatcher = new RecordingLlmReplyRunDispatcher();
+        var agent = await CreateAgentAsync(actorId, runner, eventStore, dispatcher);
+
+        await agent.HandleInboundActivityAsync(BuildInboundActivity("msg-seed-1", "previous request"));
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "msg-seed-1",
+            RunId = "agent-run-seed-1",
+            Activity = BuildInboundActivity("msg-seed-1", "previous request"),
+            Outbound = new MessageContent { Text = "{\"status\":\"AwaitingToolApproval\"}" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            AppendedHistory =
+            {
+                new ConversationHistoryEntry
+                {
+                    Role = "assistant",
+                    Content = "{\"status\":\"AwaitingToolApproval\"}",
+                },
+            },
+        });
+        dispatcher.Requests.Clear();
+
+        await agent.HandleInboundActivityAsync(BuildInboundActivity(
+            "msg-skill-1",
+            "请使用已挂载的 lark-contact-batch-resolution 解析 1 个合成联系人标识，并只返回脱敏结果。"));
+
+        var dispatched = dispatcher.Requests.Should().ContainSingle().Which;
+        dispatched.PriorHistory.Should().HaveCount(expectedPriorHistoryCount);
+        dispatched.Activity.Content.Text.Should().Contain("lark-contact-batch-resolution");
+        agent.State.RetainedHistory.Should().ContainSingle(
+            "history isolation is scoped to the new run and must not erase conversation-owned state");
+    }
+
     private static async Task<ConversationGAgent> CreateAgentAsync(
         string id,
         IConversationTurnRunner runner,
-        InMemoryEventStore eventStore)
+        InMemoryEventStore eventStore,
+        IChannelLlmReplyRunDispatcher? dispatcher = null)
     {
         var services = new ServiceCollection()
             .AddSingleton<IEventStore>(eventStore)
             .AddSingleton<IActorDispatchPort, NoopActorDispatchPort>()
             .AddSingleton<IActorRuntimeCallbackScheduler, NoopCallbackScheduler>()
             .AddSingleton(runner)
-            .AddSingleton<IChannelLlmReplyRunDispatcher, RecordingLlmReplyRunDispatcher>()
+            .AddSingleton(dispatcher ?? new RecordingLlmReplyRunDispatcher())
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
@@ -221,11 +266,73 @@ public sealed class ConversationGAgentRetainedHistoryClearTests
 
     private sealed class RecordingLlmReplyRunDispatcher : IChannelLlmReplyRunDispatcher
     {
+        public List<NeedsLlmReplyEvent> Requests { get; } = [];
+
         public Task DispatchAsync(NeedsLlmReplyEvent request, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
+            Requests.Add(request.Clone());
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class SeedThenSkillRecoveryTurnRunner(bool isolatePriorHistory) : IConversationTurnRunner
+    {
+        public Task<ConversationTurnResult> RunInboundAsync(
+            ChatActivity activity,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct)
+        {
+            var isSeed = activity.Id == "msg-seed-1";
+            var request = new NeedsLlmReplyEvent
+            {
+                CorrelationId = activity.Id,
+                RunId = isSeed ? "agent-run-seed-1" : "agent-run-skill-1",
+                RegistrationId = "reg-1",
+                Activity = activity.Clone(),
+                RequestedAtUnixMs = 10,
+            };
+            if (!isSeed)
+            {
+                request.ToolContext = (AgentToolExecutionContext.Empty with
+                {
+                    SkillRecovery = new AgentSkillRecoveryContext(
+                        RequireInitialOrnnSearch: true,
+                        RequireOrnnSearchOnBlocker: true,
+                        CommandName: "lark-contact-batch-resolution",
+                        OriginalCommand: activity.Content.Text,
+                        PrimarySkillName: "lark-contact-batch-resolution",
+                        MaxOrnnSearchAttempts: 2,
+                        CommandArguments: activity.Content.Text,
+                        DiscoveryRequested: false,
+                        IsolatePriorConversationHistory: isolatePriorHistory),
+                }).ToPayload();
+            }
+
+            return Task.FromResult(ConversationTurnResult.LlmReplyRequested(request));
+        }
+
+        public Task<ConversationTurnResult> RunLlmReplyAsync(
+            LlmReplyReadyEvent reply,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct) =>
+            Task.FromResult(ConversationTurnResult.Sent(
+                "sent",
+                reply.Outbound?.Clone() ?? new MessageContent(),
+                "bot"));
+
+        public Task<ConversationTurnResult> RunContinueAsync(
+            ConversationContinueRequestedEvent command,
+            CancellationToken ct) =>
+            Task.FromResult(ConversationTurnResult.Ignored("not-used", command.CommandId));
+
+        public Task<ConversationStreamChunkResult> RunStreamChunkAsync(
+            LlmReplyStreamChunkEvent chunk,
+            string? currentPlatformMessageId,
+            NyxRelayTextOperationKind operation,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct) =>
+            Task.FromResult(ConversationStreamChunkResult.Succeeded(currentPlatformMessageId));
     }
 
     private sealed class NoopActorDispatchPort : IActorDispatchPort

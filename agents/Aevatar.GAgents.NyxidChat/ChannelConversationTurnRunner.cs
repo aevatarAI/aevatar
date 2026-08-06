@@ -2731,7 +2731,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         out AgentSkillRecoveryContext context)
     {
         context = AgentSkillRecoveryContext.Empty;
-        if (!TryResolveSkillInvocationTrigger(text, platform, defaultSkillName, out var trigger, out _))
+        if (!TryResolveSkillInvocationTrigger(
+                text,
+                platform,
+                defaultSkillName,
+                out var trigger,
+                out var viaDefaultSkillBinding))
             return false;
 
         if (trigger.IsDiscovery)
@@ -2755,6 +2760,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             CommandName = normalizedCommand,
             PrimarySkillName = normalizedCommand,
+            IsolatePriorConversationHistory = !viaDefaultSkillBinding,
         };
         return true;
     }

@@ -20,6 +20,7 @@ public sealed class AgentSkillRecoveryContextBuilderTests
         context.MaxOrnnSearchAttempts.Should().Be(2);
         context.CommandArguments.Should().Be("ship today");
         context.DiscoveryRequested.Should().BeFalse();
+        context.IsolatePriorConversationHistory.Should().BeTrue();
     }
 
     [Fact]
@@ -37,5 +38,6 @@ public sealed class AgentSkillRecoveryContextBuilderTests
         context.MaxOrnnSearchAttempts.Should().Be(1);
         context.CommandArguments.Should().BeNull();
         context.DiscoveryRequested.Should().BeTrue();
+        context.IsolatePriorConversationHistory.Should().BeFalse();
     }
 }

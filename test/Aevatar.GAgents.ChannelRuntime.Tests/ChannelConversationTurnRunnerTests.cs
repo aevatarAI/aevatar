@@ -2421,6 +2421,7 @@ public sealed class ChannelConversationTurnRunnerTests
         recovery.PrimarySkillName.Should().Be("lark-contact-batch-resolution");
         recovery.CommandArguments.Should().Be(message);
         recovery.OriginalCommand.Should().Be(message);
+        recovery.IsolatePriorConversationHistory.Should().BeTrue();
         adapter.Replies.Should().BeEmpty();
     }
 
@@ -2457,6 +2458,7 @@ public sealed class ChannelConversationTurnRunnerTests
         recovery.PrimarySkillName.Should().Be("whatsapp-reply-draft");
         recovery.CommandArguments.Should().Be(message);
         recovery.DiscoveryRequested.Should().BeFalse();
+        recovery.IsolatePriorConversationHistory.Should().BeFalse();
         adapter.Replies.Should().BeEmpty();
     }
 
@@ -2486,6 +2488,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext).SkillRecovery;
         recovery.PrimarySkillName.Should().Be("goal");
         recovery.CommandArguments.Should().Be("ship command fix");
+        recovery.IsolatePriorConversationHistory.Should().BeTrue();
         result.LlmReplyRequest.Activity.Content.Text.Should().NotContain("whatsapp-reply-draft");
         adapter.Replies.Should().BeEmpty();
     }

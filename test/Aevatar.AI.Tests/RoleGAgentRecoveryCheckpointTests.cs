@@ -808,11 +808,20 @@ public sealed class RoleGAgentRecoveryCheckpointTests
                 "skill",
                 2,
                 "arguments-with-secret",
-                true),
+                true,
+                IsolatePriorConversationHistory: true),
         };
 
-        var payloadBytes = context.ToRecoveryPayload().ToByteArray();
+        var recoveryPayload = context.ToRecoveryPayload();
+        var payloadBytes = recoveryPayload.ToByteArray();
         var persisted = System.Text.Encoding.UTF8.GetString(payloadBytes);
+
+        AgentToolExecutionContextMapper
+            .FromRecoveryPayload(recoveryPayload)
+            .SkillRecovery
+            .IsolatePriorConversationHistory
+            .Should()
+            .BeTrue();
 
         persisted.Should().NotContain(bearer)
             .And.NotContain(orgToken)

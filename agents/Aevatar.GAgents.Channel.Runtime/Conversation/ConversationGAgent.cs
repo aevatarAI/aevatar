@@ -346,7 +346,8 @@ public sealed partial class ConversationGAgent :
             RestoreRuntimeTransportCredentials(runCopy.Activity, runtimeContext);
             await AttachRelayRuntimeSecretReferencesAsync(runCopy, runtimeContext, CancellationToken.None);
             runCopy.PriorHistory.Clear();
-            runCopy.PriorHistory.AddRange(State.RetainedHistory.Select(entry => entry.Clone()));
+            if (!ShouldIsolatePriorConversationHistory(runCopy))
+                runCopy.PriorHistory.AddRange(State.RetainedHistory.Select(entry => entry.Clone()));
             runCopy.RecentAttachmentActivities.Clear();
             runCopy.RecentAttachmentActivities.AddRange(SelectRecentAttachmentActivities(State, nowMs));
             var persistedCopy = runCopy.Clone();
@@ -481,10 +482,17 @@ public sealed partial class ConversationGAgent :
         context.ExternalMetadata.Count > 0 ||
         context.SkillRecovery.RequireInitialOrnnSearch ||
         context.SkillRecovery.RequireOrnnSearchOnBlocker ||
+        context.SkillRecovery.IsolatePriorConversationHistory ||
         !string.IsNullOrWhiteSpace(context.SkillRecovery.CommandName) ||
         !string.IsNullOrWhiteSpace(context.SkillRecovery.OriginalCommand) ||
         !string.IsNullOrWhiteSpace(context.SkillRecovery.PrimarySkillName) ||
         context.SkillRecovery.MaxOrnnSearchAttempts > 0;
+
+    private static bool ShouldIsolatePriorConversationHistory(NeedsLlmReplyEvent request) =>
+        AgentToolExecutionContextMapper
+            .FromPayload(request.ToolContext)
+            .SkillRecovery
+            .IsolatePriorConversationHistory;
 
     private async Task<ChatRouteAction> ResolveInboundTargetRefAsync(
         ChatActivity activity,
