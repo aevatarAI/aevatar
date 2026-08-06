@@ -12,6 +12,7 @@ export const DRAFT_MATERIALIZATION_DELAYS_MS = [
 type ObservationInput<T> = {
   readonly delaysMs?: readonly number[];
   readonly isNotFound: (error: unknown) => boolean;
+  readonly isObserved?: (workflow: T) => boolean;
   readonly read: (workflowId: string) => Promise<T>;
   readonly wait?: (delayMs: number) => Promise<void>;
   readonly workflowId: string;
@@ -34,7 +35,10 @@ export async function observeDraftMaterialization<T>(
   for (const delayMs of delays) {
     if (delayMs > 0) await wait(delayMs);
     try {
-      return { kind: 'readable', workflow: await input.read(input.workflowId) };
+      const workflow = await input.read(input.workflowId);
+      if (!input.isObserved || input.isObserved(workflow)) {
+        return { kind: 'readable', workflow };
+      }
     } catch (error) {
       if (!input.isNotFound(error)) throw error;
     }

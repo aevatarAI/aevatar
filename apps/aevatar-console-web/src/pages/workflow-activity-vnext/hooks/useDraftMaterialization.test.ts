@@ -51,6 +51,28 @@ describe('observeDraftMaterialization', () => {
     );
   });
 
+  it('keeps observing an existing draft until the expected update is visible', async () => {
+    const read = jest
+      .fn()
+      .mockResolvedValueOnce({ workflowId: 'wf-alpha', name: 'Old name' })
+      .mockResolvedValueOnce({ workflowId: 'wf-alpha', name: 'New name' });
+
+    await expect(
+      observeDraftMaterialization({
+        workflowId: 'wf-alpha',
+        read,
+        isNotFound: () => false,
+        isObserved: (workflow) => workflow.name === 'New name',
+        wait: async () => undefined,
+        delaysMs: [0, 0],
+      }),
+    ).resolves.toEqual({
+      kind: 'readable',
+      workflow: { workflowId: 'wf-alpha', name: 'New name' },
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it('surfaces non-404 failures immediately', async () => {
     const forbidden = Object.assign(new Error('forbidden'), { status: 403 });
     const read = jest.fn().mockRejectedValue(forbidden);
