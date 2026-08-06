@@ -7,15 +7,23 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.activity.columnAction': 'Action',
   'workflowActivityVNext.activity.columnOrigin': 'Source',
   'workflowActivityVNext.activity.columnRun': 'Workflow',
-  'workflowActivityVNext.activity.columnStarted': 'Started / duration',
+  'workflowActivityVNext.activity.columnStarted': 'Started',
   'workflowActivityVNext.activity.columnStatus': 'Status',
   'workflowActivityVNext.activity.columnUpdated': 'Updated',
   'workflowActivityVNext.activity.copiedRun': 'Copied',
   'workflowActivityVNext.activity.copyRun': 'Copy run reference',
   'workflowActivityVNext.activity.copyRunAria':
     'Copy run reference {reference}',
+  'workflowActivityVNext.activity.copyRunFailed':
+    'Failed to copy run reference.',
+  'workflowActivityVNext.activity.copyRunSuccess': 'Run reference copied.',
   'workflowActivityVNext.activity.description':
     'Review recent workflow runs and open one for details.',
+  'workflowActivityVNext.activity.durationHoursMinutes': '{hours}h {minutes}m',
+  'workflowActivityVNext.activity.durationMinutes': '{minutes}m',
+  'workflowActivityVNext.activity.durationMinutesSeconds':
+    '{minutes}m {seconds}s',
+  'workflowActivityVNext.activity.durationSeconds': '{seconds}s',
   'workflowActivityVNext.activity.empty': 'No runs yet',
   'workflowActivityVNext.activity.emptyDescription':
     'Runs will appear here after a workflow starts.',

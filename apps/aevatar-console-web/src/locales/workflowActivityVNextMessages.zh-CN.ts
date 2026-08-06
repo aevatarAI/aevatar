@@ -11,14 +11,22 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.activity.columnAction': '操作',
     'workflowActivityVNext.activity.columnOrigin': '来源',
     'workflowActivityVNext.activity.columnRun': '工作流',
-    'workflowActivityVNext.activity.columnStarted': '开始时间 / 持续时长',
+    'workflowActivityVNext.activity.columnStarted': '开始时间',
     'workflowActivityVNext.activity.columnStatus': '状态',
     'workflowActivityVNext.activity.columnUpdated': '更新时间',
     'workflowActivityVNext.activity.copiedRun': '已复制',
     'workflowActivityVNext.activity.copyRun': '复制运行编号',
     'workflowActivityVNext.activity.copyRunAria': '复制运行编号 {reference}',
+    'workflowActivityVNext.activity.copyRunFailed': '复制运行编号失败。',
+    'workflowActivityVNext.activity.copyRunSuccess': '运行编号已复制。',
     'workflowActivityVNext.activity.description':
       '查看最近的工作流运行并打开详情。',
+    'workflowActivityVNext.activity.durationHoursMinutes':
+      '{hours}小时 {minutes}分钟',
+    'workflowActivityVNext.activity.durationMinutes': '{minutes}分钟',
+    'workflowActivityVNext.activity.durationMinutesSeconds':
+      '{minutes}分钟 {seconds}秒',
+    'workflowActivityVNext.activity.durationSeconds': '{seconds}秒',
     'workflowActivityVNext.activity.empty': '暂无运行记录',
     'workflowActivityVNext.activity.emptyDescription':
       '工作流开始运行后，记录会显示在这里。',

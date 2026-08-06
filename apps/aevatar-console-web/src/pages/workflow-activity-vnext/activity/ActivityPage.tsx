@@ -14,6 +14,7 @@ import {
 } from '@/shared/api/workflowActivityApi';
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
+import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
 import { buildWorkflowActivityRunHref } from '../navigation';
 import TableScrollRegion from '../TableScrollRegion';
@@ -59,27 +60,80 @@ function getShortRunReference(runId: string): string {
   return tail.length <= 12 ? tail : `${tail.slice(0, 6)}…${tail.slice(-4)}`;
 }
 
-function formatDuration(
-  startedAtUtc: string | null,
-  updatedAtUtc: string,
-  running: boolean,
-  now: number,
-): string {
+function fallbackCopy(text: string): boolean {
+  if (typeof document === 'undefined') {
+    return false;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'absolute';
+  textarea.style.left = '-9999px';
+  document.body.append(textarea);
+  textarea.select();
+
+  try {
+    return document.execCommand('copy');
+  } finally {
+    textarea.remove();
+  }
+}
+
+function formatLiveDuration(startedAtUtc: string | null, now: number): string {
   if (!startedAtUtc) {
     return t('workflowActivityVNext.common.unavailable', 'Unavailable');
   }
   const startedAt = new Date(startedAtUtc).getTime();
-  const endedAt = running ? now : new Date(updatedAtUtc).getTime();
-  if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt)) {
+  if (!Number.isFinite(startedAt) || !Number.isFinite(now)) {
     return t('workflowActivityVNext.common.unavailable', 'Unavailable');
   }
-  const totalSeconds = Math.max(0, Math.floor((endedAt - startedAt) / 1000));
+  const totalSeconds = Math.max(0, Math.floor((now - startedAt) / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  if (minutes > 0) return `${minutes}m${seconds ? ` ${seconds}s` : ''}`;
-  return `${seconds}s`;
+  if (hours > 0) {
+    return t(
+      'workflowActivityVNext.activity.durationHoursMinutes',
+      '{hours}h {minutes}m',
+      { hours, minutes },
+    );
+  }
+  if (minutes > 0 && seconds > 0) {
+    return t(
+      'workflowActivityVNext.activity.durationMinutesSeconds',
+      '{minutes}m {seconds}s',
+      { minutes, seconds },
+    );
+  }
+  if (minutes > 0) {
+    return t('workflowActivityVNext.activity.durationMinutes', '{minutes}m', {
+      minutes,
+    });
+  }
+  return t('workflowActivityVNext.activity.durationSeconds', '{seconds}s', {
+    seconds,
+  });
+}
+
+function preservesRunPageForLoadMore(
+  previousQueryKey: readonly unknown[] | undefined,
+  nextQueryKey: readonly unknown[],
+): boolean {
+  if (!previousQueryKey || previousQueryKey.length !== nextQueryKey.length) {
+    return false;
+  }
+
+  const previousTake = previousQueryKey.at(-1);
+  const nextTake = nextQueryKey.at(-1);
+  return (
+    typeof previousTake === 'number' &&
+    typeof nextTake === 'number' &&
+    nextTake > previousTake &&
+    previousQueryKey
+      .slice(0, -1)
+      .every((value, index) => Object.is(value, nextQueryKey[index]))
+  );
 }
 
 function failureTitle(error: unknown): string {
@@ -103,6 +157,7 @@ function failureTitle(error: unknown): string {
 
 const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const location = useConsoleLocation();
+  const toast = useConsoleToast();
   const initialParams = React.useMemo(
     () => new URLSearchParams(location.search),
     [location.search],
@@ -126,18 +181,19 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   );
   const [take, setTake] = React.useState(DEFAULT_RUN_TAKE);
   const [copiedRunId, setCopiedRunId] = React.useState('');
+  const runsQueryKey = [
+    'workflow-activity-vnext',
+    'runs',
+    scopeId,
+    status,
+    origin,
+    definition,
+    from,
+    to,
+    take,
+  ] as const;
   const runs = useQuery({
-    queryKey: [
-      'workflow-activity-vnext',
-      'runs',
-      scopeId,
-      status,
-      origin,
-      definition,
-      from,
-      to,
-      take,
-    ],
+    queryKey: runsQueryKey,
     queryFn: () =>
       workflowActivityApi.listRuns(scopeId, {
         status: status || undefined,
@@ -147,7 +203,10 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         toUtc: toUtcFilter(to),
         take,
       }),
-    placeholderData: (previous) => previous,
+    placeholderData: (previous, previousQuery) =>
+      preservesRunPageForLoadMore(previousQuery?.queryKey, runsQueryKey)
+        ? previous
+        : undefined,
     retry: false,
   });
 
@@ -201,15 +260,37 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
 
   React.useEffect(() => {
     if (!hasLiveRuns) return undefined;
+    setNow(Date.now());
     const interval = window.setInterval(() => setNow(Date.now()), 30_000);
     return () => window.clearInterval(interval);
   }, [hasLiveRuns]);
 
   const copyRunReference = async (runId: string) => {
-    if (!navigator.clipboard?.writeText) return;
-    await navigator.clipboard.writeText(runId);
-    setCopiedRunId(runId);
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(runId);
+      } else if (!fallbackCopy(runId)) {
+        throw new Error('Clipboard is unavailable.');
+      }
+      setCopiedRunId(runId);
+      toast.success(
+        t(
+          'workflowActivityVNext.activity.copyRunSuccess',
+          'Run reference copied.',
+        ),
+      );
+    } catch {
+      toast.error(
+        t(
+          'workflowActivityVNext.activity.copyRunFailed',
+          'Failed to copy run reference.',
+        ),
+      );
+    }
   };
+
+  const isLoadingMore = runs.isPlaceholderData && runs.isFetching;
+  const canLoadMore = (runs.data?.length ?? 0) === take && take < MAX_RUN_TAKE;
 
   return (
     <WorkflowActivityVNextShell
@@ -465,9 +546,10 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                     { count: runs.data?.length ?? 0 },
                   )}
             </span>
-            {(runs.data?.length ?? 0) === take && take < MAX_RUN_TAKE ? (
+            {canLoadMore || isLoadingMore ? (
               <Button
-                loading={runs.isFetching}
+                disabled={isLoadingMore}
+                loading={isLoadingMore}
                 onClick={() =>
                   setTake((current) =>
                     Math.min(current + DEFAULT_RUN_TAKE, MAX_RUN_TAKE),
@@ -494,7 +576,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                   <th>
                     {t(
                       'workflowActivityVNext.activity.columnStarted',
-                      'Started / duration',
+                      'Started',
                     )}
                   </th>
                   <th className="wa-vnext__activity-source">
@@ -574,31 +656,24 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                       <td
                         data-label={t(
                           'workflowActivityVNext.activity.columnStarted',
-                          'Started / duration',
+                          'Started',
                         )}
                       >
                         <span>{formatDate(run.startedAtUtc)}</span>
-                        <span className="wa-vnext__sub">
-                          {running
-                            ? t(
-                                'workflowActivityVNext.activity.elapsed',
-                                '{duration} elapsed',
-                                {
-                                  duration: formatDuration(
-                                    run.startedAtUtc,
-                                    run.updatedAtUtc,
-                                    true,
-                                    now,
-                                  ),
-                                },
-                              )
-                            : formatDuration(
-                                run.startedAtUtc,
-                                run.updatedAtUtc,
-                                false,
-                                now,
-                              )}
-                        </span>
+                        {running ? (
+                          <span className="wa-vnext__sub">
+                            {t(
+                              'workflowActivityVNext.activity.elapsed',
+                              '{duration} elapsed',
+                              {
+                                duration: formatLiveDuration(
+                                  run.startedAtUtc,
+                                  now,
+                                ),
+                              },
+                            )}
+                          </span>
+                        ) : null}
                       </td>
                       <td
                         className="wa-vnext__activity-source"

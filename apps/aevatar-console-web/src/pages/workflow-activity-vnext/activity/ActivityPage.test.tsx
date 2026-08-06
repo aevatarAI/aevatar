@@ -1,4 +1,10 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import * as React from 'react';
 import { history } from '@/shared/navigation/history';
 import {
@@ -55,6 +61,18 @@ jest.mock('@/shared/navigation/history', () => ({
   history: { push: jest.fn(), replace: jest.fn() },
 }));
 
+const mockConsoleToast = {
+  error: jest.fn(),
+  info: jest.fn(),
+  success: jest.fn(),
+  warning: jest.fn(),
+};
+
+jest.mock('@/shared/ui/ConsoleToast', () => ({
+  ...jest.requireActual('@/shared/ui/ConsoleToast'),
+  useConsoleToast: () => mockConsoleToast,
+}));
+
 jest.mock('@/shared/ui/ConsoleHeaderActions', () => ({
   ConsoleAuthActions: () => <button type="button">Account</button>,
   ConsoleLanguageSwitch: () => <button type="button">Language</button>,
@@ -71,6 +89,14 @@ jest.mock('../hooks/useConsoleLocation', () => ({
 const mockListRuns = jest.requireMock('@/shared/api/workflowActivityApi')
   .workflowActivityApi.listRuns as jest.Mock;
 const mockWriteText = jest.fn();
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
 
 function runSummary(
   overrides: Partial<{
@@ -100,14 +126,15 @@ function runSummary(
 }
 
 describe('Workflow Activity vNext Activity ledger', () => {
-  beforeAll(() => {
+  beforeEach(() => {
     Object.defineProperty(window.navigator, 'clipboard', {
       configurable: true,
       value: { writeText: mockWriteText },
     });
-  });
-
-  beforeEach(() => {
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: undefined,
+    });
     jest.clearAllMocks();
     mockSearch = '';
     mockListRuns.mockResolvedValue([]);
@@ -272,7 +299,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
     expect(screen.queryByText('Waiting')).not.toBeInTheDocument();
   });
 
-  it('distinguishes duplicate workflow runs with a stable reference, timing, and exact actions', async () => {
+  it('distinguishes duplicate workflow runs without inferring terminal duration', async () => {
     mockWriteText.mockResolvedValue(undefined);
     mockListRuns.mockResolvedValue([
       runSummary({
@@ -297,8 +324,8 @@ describe('Workflow Activity vNext Activity ledger', () => {
         name: 'Open Customer follow-up run beta-0…4321',
       }),
     ).toBeEnabled();
-    expect(screen.getByText('1m')).toBeInTheDocument();
-    expect(screen.getByText('2m 30s')).toBeInTheDocument();
+    expect(screen.queryByText('1m')).not.toBeInTheDocument();
+    expect(screen.queryByText('2m 30s')).not.toBeInTheDocument();
 
     fireEvent.click(
       screen.getByRole('button', {
@@ -310,9 +337,131 @@ describe('Workflow Activity vNext Activity ledger', () => {
         'workflow-definition:studio:run:alpha-1234567890',
       ),
     );
+    expect(mockConsoleToast.success).toHaveBeenCalledWith(
+      'Run reference copied.',
+    );
     expect(
       screen.queryByText('workflow-definition:studio:run:alpha-1234567890'),
     ).not.toBeInTheDocument();
+  });
+
+  it('uses the fallback copy path when the Clipboard API is unavailable', async () => {
+    const fallbackCopy = jest.fn(() => true);
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: undefined,
+    });
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: fallbackCopy,
+    });
+    mockListRuns.mockResolvedValue([runSummary()]);
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Copy run reference alpha-…7890',
+      }),
+    );
+
+    await waitFor(() => expect(fallbackCopy).toHaveBeenCalledWith('copy'));
+    expect(mockConsoleToast.success).toHaveBeenCalledWith(
+      'Run reference copied.',
+    );
+  });
+
+  it('reports a rejected clipboard write without an unhandled copy state', async () => {
+    mockWriteText.mockRejectedValueOnce(new Error('clipboard denied'));
+    mockListRuns.mockResolvedValue([runSummary()]);
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Copy run reference alpha-…7890',
+      }),
+    );
+
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        'Failed to copy run reference.',
+      ),
+    );
+    expect(mockConsoleToast.success).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the elapsed clock immediately when a running row appears', async () => {
+    const now = jest
+      .spyOn(Date, 'now')
+      .mockReturnValue(new Date('2026-08-04T10:00:00Z').getTime());
+    mockListRuns.mockResolvedValueOnce([runSummary()]).mockResolvedValueOnce([
+      runSummary({
+        runId: 'run-live',
+        status: 'running',
+        success: null,
+        startedAtUtc: '2026-08-04T10:00:00Z',
+        updatedAtUtc: '2026-08-04T10:00:00Z',
+      }),
+    ]);
+
+    try {
+      renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+      await screen.findByText('Completed');
+      now.mockReturnValue(new Date('2026-08-04T10:02:00Z').getTime());
+
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+      expect(await screen.findByText('2m elapsed')).toBeInTheDocument();
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('clears prior scope rows while the next scope is loading', async () => {
+    const nextScope = deferred<ReturnType<typeof runSummary>[]>();
+    mockListRuns.mockImplementation((scopeId: string) =>
+      scopeId === 'scope-alpha'
+        ? Promise.resolve([runSummary({ workflowName: 'Alpha workflow' })])
+        : nextScope.promise,
+    );
+
+    const ScopeHarness = () => {
+      const [scopeId, setScopeId] = React.useState('scope-alpha');
+      return (
+        <>
+          <button type="button" onClick={() => setScopeId('scope-beta')}>
+            Switch scope
+          </button>
+          <ActivityPage scopeId={scopeId} />
+        </>
+      );
+    };
+
+    renderWithQueryClient(<ScopeHarness />);
+    await screen.findByText('Alpha workflow');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Switch scope' }));
+
+    expect(await screen.findByText('Loading activity…')).toBeInTheDocument();
+    expect(screen.queryByText('Alpha workflow')).not.toBeInTheDocument();
+  });
+
+  it('clears prior filter rows while the next filter is loading', async () => {
+    const nextFilter = deferred<ReturnType<typeof runSummary>[]>();
+    mockListRuns
+      .mockResolvedValueOnce([runSummary({ workflowName: 'Unfiltered run' })])
+      .mockReturnValueOnce(nextFilter.promise);
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+    await screen.findByText('Unfiltered run');
+
+    fireEvent.change(screen.getByLabelText('Activity after'), {
+      target: { value: '2026-08-01T09:30' },
+    });
+
+    expect(await screen.findByText('Loading activity…')).toBeInTheDocument();
+    expect(screen.queryByText('Unfiltered run')).not.toBeInTheDocument();
   });
 
   it('restores URL-backed time filters and sends their UTC bounds to the API', async () => {
@@ -339,14 +488,19 @@ describe('Workflow Activity vNext Activity ledger', () => {
   });
 
   it('loads a larger server-backed page and reports the visible result count', async () => {
+    const loadMore = deferred<ReturnType<typeof runSummary>[]>();
     mockListRuns.mockImplementation(
       (_scopeId: string, filter: { take: number }) =>
-        Array.from({ length: filter.take === 50 ? 50 : 51 }, (_, index) =>
-          runSummary({
-            runId: `run-${index + 1}`,
-            workflowName: `Workflow ${index + 1}`,
-          }),
-        ),
+        filter.take === 50
+          ? Promise.resolve(
+              Array.from({ length: 50 }, (_, index) =>
+                runSummary({
+                  runId: `run-${index + 1}`,
+                  workflowName: `Workflow ${index + 1}`,
+                }),
+              ),
+            )
+          : loadMore.promise,
     );
 
     renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
@@ -361,6 +515,19 @@ describe('Workflow Activity vNext Activity ledger', () => {
         expect.objectContaining({ take: 100 }),
       ),
     );
+    expect(screen.getByRole('button', { name: /Load more/ })).toBeDisabled();
+
+    await act(async () => {
+      loadMore.resolve(
+        Array.from({ length: 51 }, (_, index) =>
+          runSummary({
+            runId: `run-${index + 1}`,
+            workflowName: `Workflow ${index + 1}`,
+          }),
+        ),
+      );
+    });
+
     expect(
       await screen.findByText('Showing 51 loaded runs'),
     ).toBeInTheDocument();
