@@ -229,6 +229,50 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.nodeInspector.targetRole': 'Target role',
   'workflowActivityVNext.nodeInspector.title': 'Configure {name}',
   'workflowActivityVNext.nodeInspector.type': 'Type',
+  'workflowActivityVNext.failure.accessDenied':
+    'You do not have access to use this service or model.',
+  'workflowActivityVNext.failure.accessDeniedGuidance':
+    'Request access or choose a service and model available to your account.',
+  'workflowActivityVNext.failure.cancelled': 'Run cancelled.',
+  'workflowActivityVNext.failure.cancelledGuidance':
+    'The run stopped without being reported as a system failure.',
+  'workflowActivityVNext.failure.chooseAllowedService':
+    'Choose allowed service',
+  'workflowActivityVNext.failure.copyTrackingId': 'Copy tracking ID',
+  'workflowActivityVNext.failure.internal':
+    'The request could not be completed.',
+  'workflowActivityVNext.failure.internalGuidance':
+    'Try again or contact support with the tracking ID when one is available.',
+  'workflowActivityVNext.failure.invalidInput':
+    'The input or workflow definition needs attention.',
+  'workflowActivityVNext.failure.invalidInputGuidance':
+    'Review the affected input or workflow step before trying again.',
+  'workflowActivityVNext.failure.rateLimited': 'This request was rate limited.',
+  'workflowActivityVNext.failure.rateLimitedGuidance':
+    'Wait for the quota window to reset before trying again.',
+  'workflowActivityVNext.failure.reloadLatest': 'Reload latest',
+  'workflowActivityVNext.failure.resourceMissing':
+    'This run is no longer available.',
+  'workflowActivityVNext.failure.resourceMissingGuidance':
+    'Refresh Activity or return to the run list.',
+  'workflowActivityVNext.failure.retryAfter': 'Try again in {seconds} seconds.',
+  'workflowActivityVNext.failure.reviewInput': 'Review input',
+  'workflowActivityVNext.failure.sessionExpired': 'Your session has expired.',
+  'workflowActivityVNext.failure.sessionExpiredGuidance':
+    'Sign in again to continue.',
+  'workflowActivityVNext.failure.signInAgain': 'Sign in again',
+  'workflowActivityVNext.failure.stateConflict':
+    'This run changed since it was loaded.',
+  'workflowActivityVNext.failure.stateConflictGuidance':
+    'Reload the latest state before continuing.',
+  'workflowActivityVNext.failure.timeoutOrOffline':
+    'The request timed out or the connection was interrupted.',
+  'workflowActivityVNext.failure.timeoutOrOfflineGuidance':
+    'Check the connection, then try again.',
+  'workflowActivityVNext.failure.upstreamUnavailable':
+    'The selected service is temporarily unavailable.',
+  'workflowActivityVNext.failure.upstreamUnavailableGuidance':
+    'Check service status or try again later.',
   'workflowActivityVNext.nav.activity': 'Activity',
   'workflowActivityVNext.nav.aria': 'Workflow workbench',
   'workflowActivityVNext.nav.openMenu': 'Open navigation',

@@ -217,6 +217,42 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.nodeInspector.targetRole': '目标角色',
     'workflowActivityVNext.nodeInspector.title': '配置 {name}',
     'workflowActivityVNext.nodeInspector.type': '类型',
+    'workflowActivityVNext.failure.accessDenied': '你无权使用此服务或模型。',
+    'workflowActivityVNext.failure.accessDeniedGuidance':
+      '请申请权限，或选择你的账户可用的服务和模型。',
+    'workflowActivityVNext.failure.cancelled': '运行已取消。',
+    'workflowActivityVNext.failure.cancelledGuidance':
+      '此次运行已停止，但未被报告为系统故障。',
+    'workflowActivityVNext.failure.chooseAllowedService': '选择可用服务',
+    'workflowActivityVNext.failure.copyTrackingId': '复制跟踪 ID',
+    'workflowActivityVNext.failure.internal': '请求无法完成。',
+    'workflowActivityVNext.failure.internalGuidance':
+      '请重试；如果仍然失败，请在有跟踪 ID 时联系支持。',
+    'workflowActivityVNext.failure.invalidInput': '输入或工作流定义需要处理。',
+    'workflowActivityVNext.failure.invalidInputGuidance':
+      '请检查受影响的输入或工作流步骤后再试。',
+    'workflowActivityVNext.failure.rateLimited': '请求受到速率限制。',
+    'workflowActivityVNext.failure.rateLimitedGuidance':
+      '请等待配额窗口重置后再试。',
+    'workflowActivityVNext.failure.reloadLatest': '加载最新状态',
+    'workflowActivityVNext.failure.resourceMissing': '此次运行已不可用。',
+    'workflowActivityVNext.failure.resourceMissingGuidance':
+      '请刷新活动记录或返回运行列表。',
+    'workflowActivityVNext.failure.retryAfter': '{seconds} 秒后重试。',
+    'workflowActivityVNext.failure.reviewInput': '检查输入',
+    'workflowActivityVNext.failure.sessionExpired': '登录会话已过期。',
+    'workflowActivityVNext.failure.sessionExpiredGuidance':
+      '请重新登录后继续。',
+    'workflowActivityVNext.failure.signInAgain': '重新登录',
+    'workflowActivityVNext.failure.stateConflict': '加载后此次运行已发生变化。',
+    'workflowActivityVNext.failure.stateConflictGuidance':
+      '请加载最新状态后再继续。',
+    'workflowActivityVNext.failure.timeoutOrOffline': '请求超时或连接中断。',
+    'workflowActivityVNext.failure.timeoutOrOfflineGuidance':
+      '请检查网络连接后再试。',
+    'workflowActivityVNext.failure.upstreamUnavailable': '所选服务暂时不可用。',
+    'workflowActivityVNext.failure.upstreamUnavailableGuidance':
+      '请检查服务状态或稍后重试。',
     'workflowActivityVNext.nav.activity': '活动',
     'workflowActivityVNext.nav.aria': '工作流工作台',
     'workflowActivityVNext.nav.openMenu': '打开导航',
