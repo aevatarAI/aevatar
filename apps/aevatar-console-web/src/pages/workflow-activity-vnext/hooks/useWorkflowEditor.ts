@@ -10,6 +10,7 @@ import {
   applyStepInspectorDraft,
   createStepInspectorDraft,
   insertStepByType,
+  materializeImplicitSequentialTransitions,
 } from '@/shared/studio/document';
 import {
   buildStudioGraphElements,
@@ -497,7 +498,17 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         const current = document ?? (await parseCurrentYaml());
         if (!current || generation !== structuralMutationGenerationRef.current)
           return false;
-        const inserted = insertStepByType(current, stepType);
+        const explicitDocument = materializeImplicitSequentialTransitions(current);
+        const selectedStepId = selectedNodeId.startsWith('step:')
+          ? selectedNodeId.slice('step:'.length).trim()
+          : '';
+        const finalStepId = [...(explicitDocument.steps ?? [])]
+          .reverse()
+          .map((step) => String(step.id ?? '').trim())
+          .find(Boolean);
+        const inserted = insertStepByType(explicitDocument, stepType, {
+          afterStepId: selectedStepId || finalStepId || null,
+        });
         const serialized = await studioApi.serializeYaml({
           document: inserted.document,
         });
@@ -522,7 +533,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         }
       }
     },
-    [document, markLocalEdit, parseCurrentYaml],
+    [document, markLocalEdit, parseCurrentYaml, selectedNodeId],
   );
 
   const retryNodeInsertion = React.useCallback(
