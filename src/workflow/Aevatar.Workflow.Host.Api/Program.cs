@@ -9,9 +9,10 @@
 // LLM API Key 可从环境变量 DEEPSEEK_API_KEY / OPENAI_API_KEY 或 secrets 读取。
 // ─────────────────────────────────────────────────────────────
 
+using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Audit.Core.DependencyInjection;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
-using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Host.Api;
 
@@ -24,6 +25,9 @@ builder.AddAevatarDefaultHost(
         options.EnableWebSockets = true;
     });
 builder.AddAevatarPlatform();
+builder.Services.AddAuditTrailCore(builder.Configuration);
+if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"))
+    builder.Services.AddInMemoryAuditTrailForDevelopment();
 builder.AddWorkflowAgentToolAdmission();
 // NyxID-backed current-user resolver plus aevatar admin access policy.
 builder.Services.AddNyxIdPlatformAuthorization(builder.Configuration);

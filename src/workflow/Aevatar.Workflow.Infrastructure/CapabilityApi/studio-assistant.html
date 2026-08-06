@@ -12,12 +12,12 @@
       href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;family=Mona+Sans:wght@400;500;600;700&amp;display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260806-transcript" />
+    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260806-transcript-layout" />
     <script defer src="https://unpkg.com/lucide@0.563.0/dist/umd/lucide.min.js"></script>
     <script defer src="https://unpkg.com/marked@15.0.12/marked.min.js"></script>
     <script defer src="https://unpkg.com/dompurify@3.2.6/dist/purify.min.js"></script>
     <script>globalThis.__AEVATAR_ASSISTANT_CONFIG__ = __BACKEND_CONSOLE_CONFIG__;</script>
-    <script type="module" src="/workflow/studio/assets/app.js?v=20260806-transcript"></script>
+    <script type="module" src="/workflow/studio/assets/app.js?v=20260806-transcript-layout"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -41,6 +41,10 @@
               <span>Services</span>
               <strong id="servicesCount">0</strong>
             </button>
+            <button class="toolbar-button run-details-button" id="mobileInspectorButton" type="button" aria-label="打开运行详情" title="运行详情">
+              <i data-lucide="panel-right"></i>
+              <span>运行详情</span>
+            </button>
             <button class="connection-pill" id="connectionButton" type="button" aria-label="查看连接设置">
               <span class="status-dot idle" id="connectionDot"></span>
               <span id="connectionText">正在检查</span>
@@ -58,20 +62,6 @@
               <span class="target-badge">生产</span>
             </div>
             <p class="framing">从意图到交付的真实对话。计划、工具调用、人工决策与校验结果沿同一条 Actor 工作流呈现。</p>
-            <nav class="studio-tabs" aria-label="Studio 工作面" role="tablist">
-              <button class="studio-tab active" id="assistantNavButton" type="button" role="tab" aria-selected="true">
-                <i data-lucide="message-square"></i>
-                <span>Assistant</span>
-              </button>
-              <button class="studio-tab" id="openSettingsNav" type="button" role="tab" aria-selected="false">
-                <i data-lucide="boxes"></i>
-                <span>Services</span>
-              </button>
-              <button class="studio-tab" id="mobileInspectorButton" type="button" role="tab" aria-selected="false">
-                <i data-lucide="panel-right"></i>
-                <span>运行详情</span>
-              </button>
-            </nav>
           </div>
         </section>
       </header>
@@ -82,6 +72,41 @@
             <i data-lucide="square-pen"></i>
             <span>新会话</span>
           </button>
+
+          <section class="sidebar-group phase-group" aria-labelledby="taskPhaseTitle">
+            <h2 class="group-label" id="taskPhaseTitle">阶段</h2>
+            <ol class="task-phase-list" id="taskPhaseList">
+              <li class="task-phase current" data-phase="understand">
+                <span class="task-phase-marker">1</span>
+                <div>
+                  <strong>理解问题</strong>
+                  <p>一次问清任务开始前需要确认的范围，此时不执行工具。</p>
+                </div>
+              </li>
+              <li class="task-phase pending" data-phase="decide">
+                <span class="task-phase-marker">2</span>
+                <div>
+                  <strong>决策</strong>
+                  <p>解析能力并披露完整计划，先决定再执行。</p>
+                </div>
+              </li>
+              <li class="task-phase pending" data-phase="execute">
+                <span class="task-phase-marker">3</span>
+                <div>
+                  <strong>执行任务工具</strong>
+                  <p>按计划推进工具、连接与审批，支持转向、停止和重试。</p>
+                </div>
+              </li>
+              <li class="task-phase pending" data-phase="verify">
+                <span class="task-phase-marker">4</span>
+                <div>
+                  <strong>校验与交付</strong>
+                  <p>用后置条件证明效果，再报告完成和交付结果。</p>
+                </div>
+              </li>
+            </ol>
+            <p class="task-phase-summary" id="taskPhaseSummary">发送消息后显示当前任务阶段。</p>
+          </section>
 
           <div class="sidebar-group session-group">
             <div class="group-label">当前实录</div>
@@ -173,6 +198,13 @@
           </div>
 
           <div class="composer-wrap">
+            <section class="composer-input-request hidden" id="composerInputRequest" aria-live="polite">
+              <div class="composer-input-request-copy">
+                <span class="eyebrow">需要你的输入</span>
+                <strong id="composerInputPrompt"></strong>
+              </div>
+              <div class="composer-input-options hidden" id="composerInputOptions" role="group" aria-label="可选答案"></div>
+            </section>
             <section class="composer-service-panel hidden" id="composerServicePanel" aria-label="NyxID service 状态">
               <header class="composer-service-header">
                 <div>

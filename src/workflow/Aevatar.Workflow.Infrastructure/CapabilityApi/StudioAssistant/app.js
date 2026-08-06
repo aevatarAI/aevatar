@@ -44,7 +44,6 @@ const transportLabels = {
 const $ = (selector) => document.querySelector(selector);
 const dom = {
   actorFact: $("#actorFact"),
-  assistantNavButton: $("#assistantNavButton"),
   attachButton: $("#attachButton"),
   attachmentChip: $("#attachmentChip"),
   attachmentName: $("#attachmentName"),
@@ -56,6 +55,9 @@ const dom = {
   commandFact: $("#commandFact"),
   commandFactRow: $("#commandFactRow"),
   composerForm: $("#composerForm"),
+  composerInputOptions: $("#composerInputOptions"),
+  composerInputPrompt: $("#composerInputPrompt"),
+  composerInputRequest: $("#composerInputRequest"),
   composerServiceCount: $("#composerServiceCount"),
   composerServiceList: $("#composerServiceList"),
   composerServicePanel: $("#composerServicePanel"),
@@ -84,7 +86,6 @@ const dom = {
   mobileInspectorButton: $("#mobileInspectorButton"),
   mobileMenuButton: $("#mobileMenuButton"),
   newChatButton: $("#newChatButton"),
-  openSettingsNav: $("#openSettingsNav"),
   observationDisconnectButton: $("#observationDisconnectButton"),
   promptInput: $("#promptInput"),
   quickActions: $("#quickActions"),
@@ -134,6 +135,8 @@ const dom = {
   stepList: $("#stepList"),
   steerButton: $("#steerButton"),
   stopButton: $("#stopButton"),
+  taskPhaseList: $("#taskPhaseList"),
+  taskPhaseSummary: $("#taskPhaseSummary"),
   testConnectionButton: $("#testConnectionButton"),
   thread: $("#thread"),
   toast: $("#toast"),
@@ -422,17 +425,22 @@ async function init() {
 function bindEvents() {
   dom.composerForm.addEventListener("submit", (event) => {
     event.preventDefault();
-    void sendPrompt();
+    void submitComposer();
   });
   dom.promptInput.addEventListener("input", () => {
     if (state.activeConversation) state.activeConversation.draft = dom.promptInput.value;
+    const pending = activePendingInputContext();
+    if (pending && dom.promptInput.value.trim() && pending.draft.selectedOptionIds.size) {
+      pending.draft.selectedOptionIds.clear();
+      renderComposerInputRequest(pending.entry, pending.projection);
+    }
     autoResizeComposer();
     renderActorControlUi();
   });
   dom.promptInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
-      void sendPrompt();
+      void submitComposer();
     }
   });
   dom.stopButton.addEventListener("click", () => {
@@ -445,10 +453,8 @@ function bindEvents() {
   });
   dom.observationDisconnectButton.addEventListener("click", cancelObservation);
   dom.newChatButton.addEventListener("click", newChat);
-  dom.assistantNavButton.addEventListener("click", focusCurrentConversation);
   dom.currentSessionButton.addEventListener("click", focusCurrentConversation);
   dom.settingsButton.addEventListener("click", openSettings);
-  dom.openSettingsNav.addEventListener("click", openSettings);
   dom.servicesButton.addEventListener("click", openSettings);
   dom.composerServicesButton.addEventListener("click", toggleComposerServices);
   dom.closeComposerServicesButton.addEventListener("click", closeComposerServices);
@@ -1648,13 +1654,11 @@ function openSettings() {
   if (!dom.settingsDialog.open) dom.settingsDialog.showModal();
   if (state.auth.authenticated) void loadServices();
   closeMobilePanels();
-  setStudioTab("services");
   refreshIcons(dom.settingsDialog);
 }
 
 function closeSettings() {
   if (dom.settingsDialog.open) dom.settingsDialog.close();
-  setStudioTab("assistant");
 }
 
 function applyConfigToForm(config) {
@@ -2139,6 +2143,103 @@ function actorStatusCopy(status) {
   return labels[String(status || "").toLowerCase()] || String(status || "状态未知");
 }
 
+function deriveTaskPhases(projection) {
+  const phases = [
+    { key: "understand", state: "pending" },
+    { key: "decide", state: "pending" },
+    { key: "execute", state: "pending" },
+    { key: "verify", state: "pending" },
+  ];
+  const task = projection?.task;
+  if (!task) {
+    phases[0].state = "current";
+    return { phases, summary: "发送消息后显示当前任务阶段。" };
+  }
+
+  const steps = projection.steps instanceof Map
+    ? [...projection.steps.values()]
+    : Array.isArray(task.steps) ? task.steps : [];
+  const taskStatus = String(task.status || projection.taskStatus || "active").toLowerCase();
+  const inputSteps = steps.filter((step) => step.kind === "input");
+  const executionSteps = steps.filter((step) =>
+    ["tool", "browser_action", "approval", "web"].includes(step.kind));
+  const verificationSteps = steps.filter((step) => step.kind === "postcondition");
+  const successfulStepStatuses = new Set(["done", "skipped", "cancelled"]);
+  const terminalStepStatuses = new Set([...successfulStepStatuses, "failed", "uncertain"]);
+  const statusOf = (step) => String(step?.status || "planned").toLowerCase();
+  const pendingInput = Boolean(projection.pendingInput);
+  const pendingApproval = Boolean(projection.pendingApproval);
+  const hasAction = Boolean(projection.actions?.size);
+
+  if (pendingInput || inputSteps.some((step) => !terminalStepStatuses.has(statusOf(step)))) {
+    phases[0].state = "current";
+    return { phases, summary: "正在理解问题，等待一次性补齐任务范围。" };
+  }
+  phases[0].state = "complete";
+
+  const planReady = Number(task.planRevision || 1) > 1 ||
+    executionSteps.length > 0 || verificationSteps.length > 0 || pendingApproval || hasAction;
+  if (!planReady && taskStatus === "active") {
+    phases[1].state = "current";
+    return { phases, summary: "正在解析能力并形成完整执行计划。" };
+  }
+  phases[1].state = "complete";
+
+  const executionFailed = executionSteps.some((step) =>
+    ["failed", "uncertain"].includes(statusOf(step)));
+  const executionComplete = executionSteps.length === 0 ||
+    executionSteps.every((step) => successfulStepStatuses.has(statusOf(step)));
+  if (executionFailed || ["failed", "stopped"].includes(taskStatus) && !executionComplete) {
+    phases[2].state = "error";
+  } else if (pendingApproval || hasAction || !executionComplete || taskStatus === "blocked") {
+    phases[2].state = "current";
+  } else {
+    phases[2].state = "complete";
+  }
+
+  if (taskStatus === "succeeded") {
+    phases[2].state = "complete";
+    phases[3].state = "complete";
+    return { phases, summary: "任务已通过 Actor 事实完成并交付。" };
+  }
+  if (["failed", "stopped"].includes(taskStatus)) {
+    phases[3].state = "error";
+    return { phases, summary: taskStatus === "stopped" ? "任务已停止。" : "任务未能完成校验与交付。" };
+  }
+
+  const verificationActive = verificationSteps.some((step) =>
+    ["planned", "waiting", "running"].includes(statusOf(step)));
+  const verificationFailed = verificationSteps.some((step) =>
+    ["failed", "uncertain"].includes(statusOf(step)));
+  if (verificationFailed) phases[3].state = "error";
+  else if (phases[2].state === "complete" &&
+      (verificationActive || verificationSteps.length === 0)) phases[3].state = "current";
+
+  const current = phases.find((phase) => phase.state === "current");
+  const summary = current?.key === "execute"
+    ? pendingApproval ? "执行已到审批门，等待 NyxID 决定。" : "正在按计划执行任务工具。"
+    : current?.key === "verify"
+      ? "正在校验承诺的效果并准备交付。"
+      : phases.some((phase) => phase.state === "error")
+        ? "任务需要恢复或重新决策。"
+        : "Actor 正在推进任务。";
+  return { phases, summary };
+}
+
+function renderTaskPhases(projection) {
+  if (!dom.taskPhaseList) return;
+  const derived = deriveTaskPhases(projection);
+  for (const phase of derived.phases) {
+    const item = dom.taskPhaseList.querySelector(`[data-phase="${phase.key}"]`);
+    if (!item) continue;
+    item.classList.remove("pending", "current", "complete", "error");
+    item.classList.add(phase.state);
+    if (phase.state === "current") item.setAttribute("aria-current", "step");
+    else item.removeAttribute("aria-current");
+  }
+  dom.taskPhaseSummary.textContent = derived.summary;
+}
+
 const actorEffectCopy = {
   not_started: {
     label: "尚未开始",
@@ -2256,6 +2357,62 @@ function pruneNeedsYouState(entry, projection) {
   }
 }
 
+function renderComposerInputRequest(entry, projection) {
+  if (entry !== state.activeConversation) return;
+  const pending = projection?.pendingInput;
+  if (!pending?.requestId) {
+    dom.composerInputRequest.classList.add("hidden");
+    dom.composerInputPrompt.textContent = "";
+    dom.composerInputOptions.replaceChildren();
+    dom.composerInputOptions.classList.add("hidden");
+    dom.promptInput.readOnly = false;
+    dom.promptInput.placeholder = "告诉 Assistant 你要完成的操作";
+    dom.promptInput.removeAttribute("aria-describedby");
+    return;
+  }
+
+  const key = needsYouKey("input", pending.requestId);
+  const draft = entry.needsYouDrafts.get(key) || { selectedOptionIds: new Set(), freeText: "" };
+  entry.needsYouDrafts.set(key, draft);
+  const submission = entry.needsYouSubmissions.get(key);
+  const locked = submission?.status === "pending" || submission?.status === "accepted";
+  dom.composerInputRequest.classList.remove("hidden");
+  dom.composerInputPrompt.textContent = pending.prompt;
+  dom.composerInputOptions.replaceChildren();
+  for (const option of pending.options || []) {
+    const selected = draft.selectedOptionIds.has(option.optionId);
+    const button = el("button", `composer-input-option${selected ? " selected" : ""}`, option.label);
+    button.type = "button";
+    button.disabled = locked;
+    button.setAttribute("aria-pressed", String(selected));
+    if (option.description) button.title = option.description;
+    button.addEventListener("click", () => {
+      if (pending.multiSelect) {
+        if (selected) draft.selectedOptionIds.delete(option.optionId);
+        else draft.selectedOptionIds.add(option.optionId);
+      } else {
+        draft.selectedOptionIds.clear();
+        if (!selected) draft.selectedOptionIds.add(option.optionId);
+      }
+      if (draft.selectedOptionIds.size) {
+        dom.promptInput.value = "";
+        entry.draft = "";
+      }
+      renderComposerInputRequest(entry, projection);
+      autoResizeComposer();
+      renderActorControlUi();
+    });
+    dom.composerInputOptions.append(button);
+  }
+  dom.composerInputOptions.classList.toggle("hidden", !dom.composerInputOptions.childElementCount);
+  dom.promptInput.readOnly = !pending.allowFreeText;
+  dom.promptInput.placeholder = pending.allowFreeText
+    ? "一次写完所有需要补充的信息"
+    : "选择上方选项后提交";
+  dom.promptInput.setAttribute("aria-describedby", "composerInputPrompt");
+  refreshIcons(dom.composerInputRequest);
+}
+
 function renderPendingInput(entry, projection) {
   const pending = projection.pendingInput;
   if (!pending?.requestId) return null;
@@ -2263,88 +2420,25 @@ function renderPendingInput(entry, projection) {
   const draft = entry.needsYouDrafts.get(key) || { selectedOptionIds: new Set(), freeText: "" };
   entry.needsYouDrafts.set(key, draft);
   const submission = entry.needsYouSubmissions.get(key);
-  const locked = submission?.status === "pending" || submission?.status === "accepted";
-  const reliableVersion = Number.isSafeInteger(projection.stateVersion) && projection.stateVersion > 0;
   const section = el("section", "needs-you-panel input-required");
   section.dataset.requestId = pending.requestId;
   const heading = el("div", "needs-you-heading");
   heading.append(iconNode("circle-help"), el("strong", "", "需要你的输入"));
   section.append(heading, el("p", "needs-you-prompt", pending.prompt));
-
-  const options = el("div", "needs-you-options");
-  const optionInputs = [];
-  for (const option of pending.options || []) {
-    const label = el("label", "needs-you-option");
-    const input = document.createElement("input");
-    input.type = pending.multiSelect ? "checkbox" : "radio";
-    input.name = `actor-input-${pending.requestId}`;
-    input.value = option.optionId;
-    input.checked = draft.selectedOptionIds.has(option.optionId);
-    input.disabled = locked;
-    const copy = el("span", "needs-you-option-copy");
-    copy.append(el("strong", "", option.label));
-    if (option.description) copy.append(el("small", "", option.description));
-    label.append(input, copy);
-    optionInputs.push(input);
-    input.addEventListener("change", () => {
-      if (pending.multiSelect) {
-        if (input.checked) draft.selectedOptionIds.add(option.optionId);
-        else draft.selectedOptionIds.delete(option.optionId);
-      } else {
-        draft.selectedOptionIds.clear();
-        if (input.checked) draft.selectedOptionIds.add(option.optionId);
-      }
-      if (draft.selectedOptionIds.size) {
-        draft.freeText = "";
-        if (freeText) freeText.value = "";
-      }
-      updateSubmitState();
-    });
-    options.append(label);
+  section.append(el(
+    "p",
+    "needs-you-boundary",
+    (pending.options || []).length
+      ? "请在下方输入区选择一个建议，或一次写完你的完整回答。"
+      : "请在下方输入框一次写完你的完整回答。",
+  ));
+  if (submission?.message) {
+    section.append(el(
+      "span",
+      `needs-you-state ${submission.status || ""}`,
+      submission.message,
+    ));
   }
-  if (options.childElementCount) section.append(options);
-
-  let freeText = null;
-  if (pending.allowFreeText) {
-    freeText = document.createElement("textarea");
-    freeText.className = "needs-you-free-text";
-    freeText.rows = 3;
-    freeText.placeholder = "输入其他答案";
-    freeText.setAttribute("aria-label", "自由文本答案");
-    freeText.value = draft.freeText;
-    freeText.disabled = locked;
-    freeText.addEventListener("input", () => {
-      draft.freeText = freeText.value;
-      if (freeText.value.trim()) {
-        draft.selectedOptionIds.clear();
-        optionInputs.forEach((input) => { input.checked = false; });
-      }
-      updateSubmitState();
-    });
-    section.append(freeText);
-  }
-
-  const footer = el("div", "needs-you-actions");
-  const submit = el("button", "needs-you-primary", "提交答案");
-  submit.type = "button";
-  const status = el("span", `needs-you-state ${submission?.status || ""}`,
-    submission?.message || (!reliableVersion ? "正在同步 Actor 状态…" : ""));
-  function updateSubmitState() {
-    submit.disabled = locked || !reliableVersion ||
-      (!draft.selectedOptionIds.size && !draft.freeText.trim());
-  }
-  updateSubmitState();
-  submit.addEventListener("click", () => {
-    const answer = draft.freeText.trim()
-      ? { freeText: draft.freeText.trim() }
-      : { selectedOptionIds: [...draft.selectedOptionIds] };
-    void submitNeedsYouDecision(entry, "input", pending.requestId, {
-      type: "input.resolve",
-      answer,
-    });
-  });
-  footer.append(submit, status);
-  section.append(footer);
   return section;
 }
 
@@ -2444,10 +2538,10 @@ function renderPendingApproval(entry, projection) {
 async function submitNeedsYouDecision(entry, kind, requestId, payload) {
   const projection = entryActorProjection(entry);
   if (!entry?.actorId || !projection || !requestId ||
-      !Number.isSafeInteger(projection.stateVersion) || projection.stateVersion <= 0) return;
+      !Number.isSafeInteger(projection.stateVersion) || projection.stateVersion <= 0) return false;
   const key = needsYouKey(kind, requestId);
   const existing = entry.needsYouSubmissions.get(key);
-  if (existing?.status === "pending" || existing?.status === "accepted") return;
+  if (existing?.status === "pending" || existing?.status === "accepted") return false;
   const clientRequestId = createId(`client-${kind}`);
   entry.needsYouSubmissions.set(key, { status: "pending", message: "正在提交…" });
   renderActorProjection(entry);
@@ -2478,6 +2572,7 @@ async function submitNeedsYouDecision(entry, kind, requestId, payload) {
       void refreshActorState(entry);
       void loadConversations({ silent: true });
     }, 500);
+    return true;
   } catch (error) {
     entry.needsYouSubmissions.set(key, {
       status: "error",
@@ -2485,6 +2580,7 @@ async function submitNeedsYouDecision(entry, kind, requestId, payload) {
     });
     renderActorProjection(entry);
     await refreshActorState(entry, { uncursored: true });
+    return false;
   }
 }
 
@@ -2498,7 +2594,11 @@ function renderActorProjection(entry) {
   if (!hasProjection) {
     entry.actorTaskElement?.remove();
     entry.actorTaskElement = null;
-    if (entry === state.activeConversation) renderInspector();
+    if (entry === state.activeConversation) {
+      renderComposerInputRequest(entry, projection);
+      renderTaskPhases(projection);
+      renderInspector();
+    }
     return;
   }
 
@@ -2731,7 +2831,11 @@ function renderActorProjection(entry) {
     ));
   }
   if (!root.isConnected) entry.thread.append(root);
-  if (entry === state.activeConversation) renderInspector();
+  if (entry === state.activeConversation) {
+    renderComposerInputRequest(entry, projection);
+    renderTaskPhases(projection);
+    renderInspector();
+  }
 }
 
 async function submitActorControl(kind, step = null, instruction = null) {
@@ -2849,6 +2953,8 @@ function renderActiveConversationState() {
     : entry.actorProjection?.pendingApproval
       ? "Approval"
       : null;
+  renderComposerInputRequest(entry, entry.actorProjection);
+  renderTaskPhases(entry.actorProjection);
   setConversationTitle(entry.title || entry.meta?.title || "新会话");
   setRunningUi(running);
   const actorStatus = actorTerminalRunStatus(entry.actorProjection);
@@ -2945,7 +3051,6 @@ function scheduleHistoryRefresh() {
 
 function focusCurrentConversation() {
   closeMobilePanels();
-  setStudioTab("assistant");
   dom.threadViewport.scrollTo({ top: dom.threadViewport.scrollHeight, behavior: "smooth" });
   dom.promptInput.focus();
 }
@@ -2958,6 +3063,64 @@ function formatHistoryTime(value) {
   return date.toLocaleString("zh-CN", sameDay
     ? { hour: "2-digit", minute: "2-digit", hour12: false }
     : { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+function activePendingInputContext() {
+  const entry = state.activeConversation;
+  const projection = entryActorProjection(entry);
+  const pending = projection?.pendingInput;
+  if (!entry || !pending?.requestId) return null;
+  const key = needsYouKey("input", pending.requestId);
+  const draft = entry.needsYouDrafts.get(key) || { selectedOptionIds: new Set(), freeText: "" };
+  entry.needsYouDrafts.set(key, draft);
+  return { entry, projection, pending, key, draft };
+}
+
+async function submitComposer() {
+  const pending = activePendingInputContext();
+  if (pending) {
+    await submitPendingInputFromComposer(pending);
+    return;
+  }
+  const projection = entryActorProjection(state.activeConversation);
+  const actorActive = state.config.surface === "nyxid-chat" && Boolean(
+    projection?.activeTurn || projection?.task?.status === "active",
+  );
+  const instruction = dom.promptInput.value.trim();
+  if (actorActive && instruction) {
+    await submitActorControl("steer", null, instruction);
+    return;
+  }
+  await sendPrompt();
+}
+
+async function submitPendingInputFromComposer(context = activePendingInputContext()) {
+  if (!context) return;
+  const { entry, pending, key, draft } = context;
+  const freeText = dom.promptInput.value.trim();
+  const selectedOptionIds = [...draft.selectedOptionIds];
+  if (!freeText && !selectedOptionIds.length) return;
+  const answer = freeText ? { freeText } : { selectedOptionIds };
+  const accepted = await submitNeedsYouDecision(entry, "input", pending.requestId, {
+    type: "input.resolve",
+    answer,
+  });
+  if (!accepted) return;
+
+  const selectedLabels = (pending.options || [])
+    .filter((option) => selectedOptionIds.includes(option.optionId))
+    .map((option) => option.label);
+  withConversationState(entry, () => {
+    addUserMessage(freeText || selectedLabels.join("、"));
+    dom.promptInput.value = "";
+    entry.draft = "";
+    draft.freeText = "";
+    draft.selectedOptionIds.clear();
+    autoResizeComposer();
+    persistConversationState(entry);
+  });
+  entry.needsYouDrafts.set(key, draft);
+  renderComposerInputRequest(entry, entry.actorProjection);
 }
 
 async function sendPrompt(overridePrompt, options = {}) {
@@ -4128,6 +4291,33 @@ function renderActorControlUi() {
   const actorActive = nyxid && Boolean(
     projection?.activeTurn || projection?.task?.status === "active",
   );
+  const pendingInput = nyxid ? activePendingInputContext() : null;
+  if (pendingInput) {
+    const submission = pendingInput.entry.needsYouSubmissions.get(pendingInput.key);
+    const locked = submission?.status === "pending" || submission?.status === "accepted";
+    const reliableVersion = Number.isSafeInteger(projection?.stateVersion) && projection.stateVersion > 0;
+    const hasAnswer = Boolean(
+      dom.promptInput.value.trim() || pendingInput.draft.selectedOptionIds.size,
+    );
+    dom.sendButton.classList.remove("hidden");
+    dom.sendButton.disabled = !state.auth.authenticated || locked || !reliableVersion || !hasAnswer;
+    dom.sendButton.setAttribute("aria-label", "提交回答");
+    dom.sendButton.title = "提交回答";
+    dom.steerButton.classList.add("hidden");
+    dom.stopButton.classList.toggle("hidden", !authoritativeStop);
+    dom.stopButton.disabled = false;
+    dom.promptInput.disabled = !state.auth.authenticated;
+    dom.attachButton.disabled = true;
+    dom.composerServicesButton.disabled = true;
+    dom.observationDisconnectButton.classList.toggle("hidden", !state.activeController);
+    dom.composerStatus.textContent = locked
+      ? submission.message || "回答已受理，等待 Actor 确认。"
+      : reliableVersion
+        ? "一次回答全部缺口；提交后 Actor 将继续当前任务"
+        : "正在同步 Actor 状态…";
+    return;
+  }
+
   const canSteer = state.auth.authenticated && actorActive;
   dom.stopButton.classList.toggle("hidden", nyxid ? !authoritativeStop : !state.activeController);
   dom.stopButton.disabled = false;
@@ -4136,6 +4326,15 @@ function renderActorControlUi() {
   dom.steerButton.classList.toggle("hidden", !actorActive);
   dom.steerButton.disabled = !canSteer || !dom.promptInput.value.trim();
   dom.promptInput.disabled = !state.auth.authenticated || (Boolean(state.activeController) && !canSteer);
+  dom.attachButton.disabled = !state.auth.authenticated || Boolean(state.activeController) || actorActive;
+  dom.composerServicesButton.disabled = !state.auth.authenticated;
+  dom.sendButton.classList.toggle("hidden", actorActive || Boolean(state.activeController));
+  dom.sendButton.disabled = !state.auth.authenticated || Boolean(state.activeController);
+  dom.sendButton.setAttribute("aria-label", "发送");
+  dom.sendButton.title = "发送";
+  if (actorActive) {
+    dom.composerStatus.textContent = "当前任务执行中；输入内容将作为 steering 指令提交";
+  }
   dom.observationDisconnectButton.classList.toggle("hidden", !state.activeController);
 }
 
@@ -4243,7 +4442,6 @@ function setRunningUi(running) {
   dom.sendButton.disabled = !canCompose;
   dom.newChatButton.disabled = !state.auth.authenticated;
   dom.settingsButton.disabled = false;
-  dom.openSettingsNav.disabled = false;
   dom.servicesButton.disabled = false;
   dom.connectionButton.disabled = false;
   if (!running) dom.stopButton.disabled = false;
@@ -4381,27 +4579,12 @@ function openMobilePanel(panel) {
   dom.sidebar.classList.toggle("open", panel === "sidebar");
   dom.inspector.classList.toggle("open", panel === "inspector");
   dom.mobileBackdrop.classList.remove("hidden");
-  setStudioTab(panel === "inspector" ? "inspector" : "assistant");
 }
 
 function closeMobilePanels() {
   dom.sidebar.classList.remove("open");
   dom.inspector.classList.remove("open");
   dom.mobileBackdrop.classList.add("hidden");
-  setStudioTab("assistant");
-}
-
-function setStudioTab(tab) {
-  const tabs = [
-    [dom.assistantNavButton, "assistant"],
-    [dom.openSettingsNav, "services"],
-    [dom.mobileInspectorButton, "inspector"],
-  ];
-  for (const [button, value] of tabs) {
-    const selected = value === tab;
-    button.classList.toggle("active", selected);
-    button.setAttribute("aria-selected", String(selected));
-  }
 }
 
 function iconNode(name) {

@@ -64,7 +64,9 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             html.Should().Contain("Aevatar Studio");
             html.Should().Contain("class=\"site-header\"");
             html.Should().Contain("id=\"studioTitle\"");
-            html.Should().Contain("class=\"studio-tabs\"");
+            html.Should().Contain("id=\"servicesButton\"");
+            html.Should().Contain("id=\"mobileInspectorButton\"");
+            html.Should().NotContain("class=\"studio-tabs\"");
             html.Should().Contain("<div class=\"group-label\">当前实录</div>");
             html.Should().Contain("name=\"color-scheme\" content=\"only light\"");
             html.Should().NotContain("themeButton");
@@ -169,6 +171,9 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().Contain("async function refreshActorState(");
         app.Should().Contain("async function submitActorControl(");
         app.Should().Contain("async function submitNeedsYouDecision(");
+        app.Should().Contain("async function submitPendingInputFromComposer(");
+        app.Should().Contain("async function submitComposer(");
+        app.Should().Contain("function deriveTaskPhases(projection)");
         app.Should().Contain("async function loadReadiness(");
         app.Should().Contain("state.pendingFirstTurn ||=");
         app.Should().Contain("已受理，等待 Actor 确认");
@@ -193,6 +198,8 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         blocks.Should().Contain("export function buildConnectCardBlock(");
         html.Should().Contain("id=\"readinessPanel\"");
         html.Should().Contain("id=\"needsYouFilterButton\"");
+        html.Should().Contain("id=\"taskPhaseList\"");
+        html.Should().Contain("id=\"composerInputRequest\"");
         styles.Should().Contain(".connect-card");
         styles.Should().Contain(".readiness-panel");
         styles.Should().Contain(".needs-you-panel");
@@ -208,16 +215,174 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         styles.Should().Contain("grid-template-columns: 236px minmax(0, 1fr)");
         app.Should().Contain("展开计划详情");
         app.Should().Contain("cc-progress-step");
-        app.Should().Contain("function setStudioTab(tab)");
+        app.Should().NotContain("function setStudioTab(tab)");
+        html.Should().NotContain("id=\"assistantNavButton\"");
+        html.Should().NotContain("id=\"openSettingsNav\"");
+        styles.Should().NotContain(".studio-tabs");
+        styles.Should().Contain(".composer-wrap {\n  position: relative;");
+        app.Should().Contain("await submitActorControl(\"steer\", null, instruction)");
+        app.Should().Contain("type: \"input.resolve\"");
+        app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("v=20260806-transcript");
+        html.Should().Contain("v=20260806-transcript-layout");
         styles.Should().Contain("color-scheme: only light");
         styles.Should().NotContain("color-scheme: dark");
         styles.Should().NotContain("prefers-color-scheme");
         styles.Should().Contain("--bg: #fafafa");
         styles.Should().Contain("--accent: #5a2af1");
         styles.Should().NotContain("data-theme");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_TaskPhases_ShouldReflectAuthoritativeActorFacts()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('function deriveTaskPhases(projection)');
+            const end = source.indexOf('\nfunction renderTaskPhases(', start);
+            assert.notEqual(start, -1);
+            assert.notEqual(end, -1);
+            const context = { Map, Set };
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end), context);
+
+            const waiting = context.deriveTaskPhases({
+              task:{taskId:'task-alpha',status:'active',planRevision:1,steps:[]},
+              steps:new Map([['input-alpha',{stepId:'input-alpha',kind:'input',status:'waiting'}]]),
+              pendingInput:{requestId:'request-alpha'}, pendingApproval:null, actions:new Map()
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(waiting.phases.map(item => item.state))),
+              ['current','pending','pending','pending']);
+
+            const running = context.deriveTaskPhases({
+              task:{taskId:'task-alpha',status:'active',planRevision:2},
+              steps:new Map([
+                ['input-alpha',{stepId:'input-alpha',kind:'input',status:'done'}],
+                ['tool-alpha',{stepId:'tool-alpha',kind:'tool',status:'running'}],
+                ['verify-alpha',{stepId:'verify-alpha',kind:'postcondition',status:'planned'}]
+              ]), pendingInput:null, pendingApproval:null, actions:new Map()
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(running.phases.map(item => item.state))),
+              ['complete','complete','current','pending']);
+
+            const delivered = context.deriveTaskPhases({
+              task:{taskId:'task-alpha',status:'succeeded',planRevision:2},
+              steps:new Map([
+                ['tool-alpha',{stepId:'tool-alpha',kind:'tool',status:'done'}],
+                ['verify-alpha',{stepId:'verify-alpha',kind:'postcondition',status:'done'}]
+              ]), pendingInput:null, pendingApproval:null, actions:new Map()
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(delivered.phases.map(item => item.state))),
+              ['complete','complete','complete','complete']);
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_Composer_ShouldRoutePendingInputAndActiveTaskCommands()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            (async () => {
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('function activePendingInputContext()');
+            const end = source.indexOf('\nasync function sendPrompt(', start);
+            assert.notEqual(start, -1);
+            assert.notEqual(end, -1);
+
+            const entry = {
+              actorId:'actor-alpha', actorProjection:null, draft:'',
+              needsYouDrafts:new Map(), needsYouSubmissions:new Map()
+            };
+            let acceptsInput = true;
+            const decisions = [];
+            const controls = [];
+            const messages = [];
+            let sends = 0;
+            const context = {
+              Map, Set,
+              state:{activeConversation:entry,config:{surface:'nyxid-chat'}},
+              dom:{promptInput:{value:''}},
+              entryActorProjection:(candidate) => candidate?.actorProjection || null,
+              needsYouKey:(kind, requestId) => `${kind}:${requestId}`,
+              createId:(prefix) => `${prefix}-alpha`,
+              submitNeedsYouDecision:async (...args) => {
+                decisions.push(args);
+                return acceptsInput;
+              },
+              submitActorControl:async (...args) => { controls.push(args); },
+              sendPrompt:async () => { sends += 1; },
+              withConversationState:(_candidate, action) => action(),
+              addUserMessage:(message) => { messages.push(message); },
+              autoResizeComposer:() => {},
+              persistConversationState:() => {},
+              renderComposerInputRequest:() => {}
+            };
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end), context);
+
+            entry.actorProjection = {
+              stateVersion:7,
+              pendingInput:{
+                requestId:'request-alpha', allowFreeText:true,
+                options:[{optionId:'option-alpha',label:'建议答案'}]
+              }
+            };
+            context.dom.promptInput.value = '完整回答';
+            entry.draft = '完整回答';
+            await context.submitComposer();
+            assert.equal(decisions.length, 1);
+            assert.equal(decisions[0][1], 'input');
+            assert.equal(decisions[0][2], 'request-alpha');
+            assert.deepEqual(JSON.parse(JSON.stringify(decisions[0][3])), {
+              type:'input.resolve', answer:{freeText:'完整回答'}
+            });
+            assert.equal(context.dom.promptInput.value, '');
+            assert.equal(entry.draft, '');
+            assert.deepEqual(messages, ['完整回答']);
+            assert.equal(controls.length, 0);
+            assert.equal(sends, 0);
+
+            acceptsInput = false;
+            context.dom.promptInput.value = '失败后保留';
+            entry.draft = '失败后保留';
+            await context.submitPendingInputFromComposer();
+            assert.equal(decisions.length, 2);
+            assert.equal(context.dom.promptInput.value, '失败后保留');
+            assert.equal(entry.draft, '失败后保留');
+            assert.deepEqual(messages, ['完整回答']);
+
+            entry.actorProjection = {
+              stateVersion:8, pendingInput:null,
+              activeTurn:{turnId:'turn-alpha'}, task:{status:'active'}
+            };
+            context.dom.promptInput.value = '改为只处理后端';
+            await context.submitComposer();
+            assert.deepEqual(controls, [['steer', null, '改为只处理后端']]);
+            assert.equal(sends, 0);
+
+            entry.actorProjection = {stateVersion:9,pendingInput:null,task:{status:'succeeded'}};
+            context.dom.promptInput.value = '开始新任务';
+            await context.submitComposer();
+            assert.equal(sends, 1);
+            })().catch((error) => {
+              console.error(error);
+              process.exitCode = 1;
+            });
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     [Fact]

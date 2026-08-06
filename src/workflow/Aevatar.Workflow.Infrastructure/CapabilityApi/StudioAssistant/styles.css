@@ -310,6 +310,101 @@ summary:focus-visible {
   font-weight: 600;
 }
 
+.phase-group {
+  flex: 0 0 auto;
+  margin-top: 20px;
+}
+
+.phase-group .group-label {
+  margin: 0;
+  padding-left: 0;
+}
+
+.task-phase-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-phase {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 9px;
+  padding: 8px 0 11px;
+}
+
+.task-phase:not(:last-child)::after {
+  position: absolute;
+  top: 30px;
+  bottom: -2px;
+  left: 10px;
+  width: 1px;
+  background: var(--border);
+  content: "";
+}
+
+.task-phase-marker {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 21px;
+  height: 21px;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--tertiary);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
+.task-phase strong {
+  display: block;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 21px;
+}
+
+.task-phase p {
+  margin: 3px 0 0;
+  color: var(--tertiary);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.task-phase.current .task-phase-marker {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.task-phase.current strong {
+  color: var(--text);
+}
+
+.task-phase.complete .task-phase-marker {
+  border-color: var(--success);
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.task-phase.error .task-phase-marker {
+  border-color: var(--error);
+  background: var(--error-soft);
+  color: var(--error);
+}
+
+.task-phase-summary {
+  margin: 5px 0 0;
+  color: var(--tertiary);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
 .new-chat-button:hover {
   filter: brightness(1.08);
 }
@@ -3887,57 +3982,11 @@ body {
   line-height: 1.5;
 }
 
-.studio-tabs {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
-  margin-top: 13px;
-}
-
-.studio-tab {
-  display: inline-flex;
-  min-width: 0;
-  min-height: 34px;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  overflow: hidden;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-lg);
-  background: var(--overlay);
-  color: var(--muted);
-  padding: 7px 10px;
-  font-size: 11px;
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  transition: border-color 180ms, background-color 180ms, color 180ms;
-}
-
-.studio-tab svg {
-  width: 13px;
-  height: 13px;
-}
-
-.studio-tab:hover {
-  border-color: var(--hairline-strong);
-  background: var(--overlay-strong);
-  color: var(--text);
-}
-
-.studio-tab.active,
-body:has(.settings-dialog[open]) #openSettingsNav,
+body:has(.settings-dialog[open]) #servicesButton,
 .app-shell:has(.inspector.open) #mobileInspectorButton {
-  border-color: transparent;
-  background: var(--accent);
-  color: #fff;
-}
-
-body:has(.settings-dialog[open]) #assistantNavButton,
-.app-shell:has(.inspector.open) #assistantNavButton {
-  border-color: var(--hairline);
-  background: var(--overlay);
-  color: var(--muted);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--hairline));
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .workspace {
@@ -4085,7 +4134,7 @@ body:has(.settings-dialog[open]) #assistantNavButton,
 }
 
 .thread {
-  padding: 0 0 132px;
+  padding: 0 0 20px;
   scrollbar-color: var(--border-strong) transparent;
 }
 
@@ -4097,7 +4146,7 @@ body:has(.settings-dialog[open]) #assistantNavButton,
   width: min(100%, 758px);
   align-items: flex-start;
   justify-content: flex-start;
-  padding: 42px 30px 140px;
+  padding: 42px 30px 32px;
   text-align: left;
 }
 
@@ -4451,9 +4500,12 @@ body:has(.settings-dialog[open]) #assistantNavButton,
 }
 
 .composer-wrap {
+  position: relative;
   right: 0;
+  bottom: auto;
   left: 0;
   width: 100%;
+  flex: 0 0 auto;
   margin: 0;
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   background: color-mix(in srgb, var(--bg) 92%, transparent);
@@ -4465,6 +4517,61 @@ body:has(.settings-dialog[open]) #assistantNavButton,
   width: min(calc(100% - 30px), 728px);
   margin-right: auto;
   margin-left: auto;
+}
+
+.composer-input-request {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  border-left: 2px solid var(--accent-secondary);
+  padding: 3px 0 3px 11px;
+}
+
+.composer-input-request-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.composer-input-request-copy strong {
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: 10.5px;
+  font-weight: 550;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-input-options {
+  display: flex;
+  max-width: 52%;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.composer-input-option {
+  min-height: 25px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--muted);
+  padding: 4px 8px;
+  font-size: 9px;
+}
+
+.composer-input-option:hover,
+.composer-input-option.selected {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .composer-service-panel {
@@ -4634,10 +4741,6 @@ body:has(.settings-dialog[open]) #assistantNavButton,
     white-space: nowrap;
   }
 
-  .studio-tabs {
-    margin-top: 10px;
-  }
-
   .workspace {
     display: block;
     width: 100%;
@@ -4699,19 +4802,9 @@ body:has(.settings-dialog[open]) #assistantNavButton,
     font-size: 10px;
   }
 
-  .studio-tab {
-    min-height: 32px;
-    padding-right: 6px;
-    padding-left: 6px;
-  }
-
-  .studio-tab svg {
-    display: none;
-  }
-
   .thread {
     padding-top: 20px;
-    padding-bottom: 124px;
+    padding-bottom: 20px;
   }
 
   .message {
@@ -4764,6 +4857,33 @@ body:has(.settings-dialog[open]) #assistantNavButton,
     width: 100%;
   }
 
+  #servicesButton {
+    display: none;
+  }
+
+  .run-details-button {
+    width: 32px;
+    padding: 0;
+  }
+
+  .run-details-button span {
+    display: none;
+  }
+
+  .composer-input-request {
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .composer-input-request-copy strong {
+    white-space: normal;
+  }
+
+  .composer-input-options {
+    max-width: none;
+    justify-content: flex-start;
+  }
+
   .composer-service-panel {
     right: 11px;
     left: 11px;
@@ -4780,19 +4900,7 @@ body:has(.settings-dialog[open]) #assistantNavButton,
 }
 
 @media (max-width: 420px) {
-  .topbar-actions .toolbar-button {
-    display: none;
-  }
-
   .connection-pill {
     width: 32px;
-  }
-
-  .studio-tabs {
-    gap: 4px;
-  }
-
-  .studio-tab {
-    font-size: 10px;
   }
 }

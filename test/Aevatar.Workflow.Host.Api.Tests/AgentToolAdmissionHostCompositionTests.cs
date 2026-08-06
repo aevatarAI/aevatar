@@ -11,6 +11,32 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public sealed class AgentToolAdmissionHostCompositionTests
 {
+    [Fact]
+    public void WorkflowHostProgram_ShouldComposeAuditIdentityHashingBeforeToolAdmission()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var program = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "src",
+            "workflow",
+            "Aevatar.Workflow.Host.Api",
+            "Program.cs"));
+        var project = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "src",
+            "workflow",
+            "Aevatar.Workflow.Host.Api",
+            "Aevatar.Workflow.Host.Api.csproj"));
+
+        program.Should().Contain("builder.Services.AddAuditTrailCore(builder.Configuration);");
+        program.Should().Contain("builder.Services.AddInMemoryAuditTrailForDevelopment();");
+        program.IndexOf("AddAuditTrailCore", StringComparison.Ordinal).Should().BeLessThan(
+            program.IndexOf("AddWorkflowAgentToolAdmission", StringComparison.Ordinal));
+        program.IndexOf("AddInMemoryAuditTrailForDevelopment", StringComparison.Ordinal).Should().BeLessThan(
+            program.IndexOf("AddWorkflowAgentToolAdmission", StringComparison.Ordinal));
+        project.Should().Contain("Aevatar.Audit.Core\\Aevatar.Audit.Core.csproj");
+    }
+
     [Theory]
     [InlineData("Development")]
     [InlineData("Testing")]
@@ -92,5 +118,18 @@ public sealed class AgentToolAdmissionHostCompositionTests
         if (values is not null)
             builder.Configuration.AddInMemoryCollection(values);
         return builder;
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "aevatar.slnx")))
+                return directory.FullName;
+            directory = directory.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate repository root.");
     }
 }
