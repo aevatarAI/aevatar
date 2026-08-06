@@ -142,6 +142,21 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
                 ObservedAtUtc: observedAtUtc);
         }
 
+        if (WorkflowServiceArtifactReadiness.RequiresCapabilityAdmissionRebind(artifact!))
+        {
+            return new ScopeBindingReadinessSnapshot(
+                normalizedScopeId,
+                normalizedServiceId,
+                ScopeBindingReadinessStatus.InvocationCatalogNotReady,
+                ServiceCatalogVisible: true,
+                ServingSetVisible: true,
+                EligibleServingTargetVisible: true,
+                InvokeReady: false,
+                RevisionId: eligibleTarget.RevisionId,
+                DeploymentId: eligibleTarget.DeploymentId,
+                ObservedAtUtc: observedAtUtc);
+        }
+
         var invocationCatalog = await _invocationCatalogQueryReader.GetAsync(identity, ct).ConfigureAwait(false);
         if (!IsInvocationCatalogReady(invocationCatalog, serviceEndpointIds, eligibleTarget))
         {

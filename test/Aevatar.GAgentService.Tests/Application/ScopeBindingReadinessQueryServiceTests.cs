@@ -3,6 +3,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Workflows;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.Options;
 
@@ -355,6 +356,43 @@ public sealed class ScopeBindingReadinessQueryServiceTests
     }
 
     [Fact]
+    public async Task GetReadinessAsync_WhenWorkflowArtifactHasLegacyAdmissionPlan_ShouldReturnRebindRequired()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Service = CreateServiceSnapshot("service-a", activeRevisionId: "rev-ready", endpoints: [CreateServiceEndpoint("chat")]),
+        };
+        var servingPort = new FakeServiceServingQueryPort
+        {
+            ServingSet = CreateServingSet([
+                CreateTarget("rev-ready", ServiceServingState.Active, allocationWeight: 100, enabledEndpointIds: ["chat"]),
+            ]),
+            TrafficView = CreateTrafficView([
+                CreateTrafficEndpoint("chat", [CreateTrafficTarget("rev-ready", ServiceServingState.Active, allocationWeight: 100)]),
+            ]),
+        };
+        var revisionCatalogReader = CreateRevisionCatalogReader(preparedArtifacts: new Dictionary<string, PreparedServiceRevisionArtifact>(StringComparer.Ordinal)
+        {
+            ["rev-ready"] = CreateWorkflowArtifact(
+                "rev-ready",
+                WorkflowCapabilityAdmissionPlanIntegrity.LegacySchemaVersion,
+                ExternalCapabilityExecutionMode.Interactive),
+        });
+        var service = CreateService(lifecyclePort, servingPort, revisionCatalogReader);
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest(
+            "scope-a",
+            "service-a",
+            ExpectedRevisionId: "rev-ready",
+            ExpectedEndpointIds: ["chat"]));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.InvocationCatalogNotReady);
+        snapshot.InvokeReady.Should().BeFalse();
+        snapshot.RevisionId.Should().Be("rev-ready");
+        snapshot.DeploymentId.Should().Be("deployment-rev-ready");
+    }
+
+    [Fact]
     public async Task GetReadinessAsync_WhenTrafficViewHasStaleTargets_ShouldReturnTrafficViewTargetMissing()
     {
         var lifecyclePort = new FakeServiceLifecycleQueryPort
@@ -606,6 +644,48 @@ public sealed class ScopeBindingReadinessQueryServiceTests
             RequestTypeUrl = "type.googleapis.com/a.Request",
             ResponseTypeUrl = "type.googleapis.com/a.Response",
         }));
+        return artifact;
+    }
+
+    private static PreparedServiceRevisionArtifact CreateWorkflowArtifact(
+        string revisionId,
+        string schemaVersion,
+        ExternalCapabilityExecutionMode executionMode)
+    {
+        var artifact = new PreparedServiceRevisionArtifact
+        {
+            Identity = new ServiceIdentity
+            {
+                TenantId = "scope-a",
+                AppId = DefaultOptions.ServiceAppId,
+                Namespace = DefaultOptions.ServiceNamespace,
+                ServiceId = "service-a",
+            },
+            RevisionId = revisionId,
+            ImplementationKind = ServiceImplementationKind.Workflow,
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                WorkflowPlan = new WorkflowServiceDeploymentPlan
+                {
+                    WorkflowName = "invoice_file_extract",
+                    WorkflowYaml = "name: invoice_file_extract\nsteps: []",
+                    ExecutionMode = executionMode,
+                    CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+                    {
+                        SchemaVersion = schemaVersion,
+                        ExecutionMode = executionMode,
+                    },
+                },
+            },
+        };
+        artifact.Endpoints.Add(new ServiceEndpointDescriptor
+        {
+            EndpointId = "chat",
+            DisplayName = "chat",
+            Kind = ServiceEndpointKind.Chat,
+            RequestTypeUrl = "type.googleapis.com/a.Request",
+            ResponseTypeUrl = "type.googleapis.com/a.Response",
+        });
         return artifact;
     }
 
