@@ -70,8 +70,43 @@ jest.mock('../hooks/useConsoleLocation', () => ({
 
 const mockListRuns = jest.requireMock('@/shared/api/workflowActivityApi')
   .workflowActivityApi.listRuns as jest.Mock;
+const mockWriteText = jest.fn();
+
+function runSummary(
+  overrides: Partial<{
+    runId: string;
+    workflowName: string;
+    status: string;
+    success: boolean | null;
+    startedAtUtc: string | null;
+    updatedAtUtc: string;
+    stateVersion: number;
+    scopeId: string;
+    runOrigin: string;
+  }> = {},
+) {
+  return {
+    runId: 'workflow-definition:studio:run:alpha-1234567890',
+    workflowName: 'Customer follow-up',
+    status: 'completed',
+    success: true,
+    startedAtUtc: '2026-08-04T10:00:00Z',
+    updatedAtUtc: '2026-08-04T10:01:00Z',
+    stateVersion: 21,
+    scopeId: 'scope-alpha',
+    runOrigin: 'ad-hoc-chat',
+    ...overrides,
+  };
+}
 
 describe('Workflow Activity vNext Activity ledger', () => {
+  beforeAll(() => {
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: mockWriteText },
+    });
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     mockSearch = '';
@@ -95,7 +130,9 @@ describe('Workflow Activity vNext Activity ledger', () => {
         status: undefined,
         origins: undefined,
         definitionActorIds: undefined,
-        take: 100,
+        take: 50,
+        fromUtc: undefined,
+        toUtc: undefined,
       }),
     );
   });
@@ -110,7 +147,9 @@ describe('Workflow Activity vNext Activity ledger', () => {
         status: 'failed',
         origins: ['draft'],
         definitionActorIds: ['definition-alpha'],
-        take: 100,
+        take: 50,
+        fromUtc: undefined,
+        toUtc: undefined,
       }),
     );
     expect(
@@ -128,14 +167,18 @@ describe('Workflow Activity vNext Activity ledger', () => {
         status: undefined,
         origins: ['draft'],
         definitionActorIds: undefined,
-        take: 100,
+        take: 50,
+        fromUtc: undefined,
+        toUtc: undefined,
       }),
     );
     expect(mockListRuns).not.toHaveBeenCalledWith('scope-alpha', {
       status: 'waiting',
       origins: ['draft'],
       definitionActorIds: undefined,
-      take: 100,
+      take: 50,
+      fromUtc: undefined,
+      toUtc: undefined,
     });
     await waitFor(() =>
       expect(history.replace).toHaveBeenLastCalledWith(
@@ -158,7 +201,9 @@ describe('Workflow Activity vNext Activity ledger', () => {
         status: 'failed',
         origins: ['draft'],
         definitionActorIds: ['definition-alpha'],
-        take: 100,
+        take: 50,
+        fromUtc: undefined,
+        toUtc: undefined,
       }),
     );
 
@@ -175,29 +220,25 @@ describe('Workflow Activity vNext Activity ledger', () => {
       status: 'failed',
       origins: ['draft'],
       definitionActorIds: ['definition-alpha'],
-      take: 100,
+      take: 50,
+      fromUtc: undefined,
+      toUtc: undefined,
     });
   });
 
   it('shows product run information without exposing internal observation fields', async () => {
     mockListRuns.mockResolvedValue([
-      {
+      runSummary({
         runId: 'workflow-definition:studio:run:internal-alpha',
-        workflowName: 'Customer follow-up',
-        status: 'completed',
-        success: true,
-        startedAtUtc: '2026-08-04T10:00:00Z',
-        updatedAtUtc: '2026-08-04T10:01:00Z',
-        stateVersion: 21,
-        scopeId: 'scope-alpha',
-        runOrigin: 'ad-hoc-chat',
-      },
+      }),
     ]);
 
     renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
 
     expect(
-      await screen.findByRole('button', { name: 'Open Customer follow-up' }),
+      await screen.findByRole('button', {
+        name: 'Open Customer follow-up run intern…lpha',
+      }),
     ).toBeEnabled();
     expect(screen.getByText('Completed')).toBeInTheDocument();
     expect(screen.getByText('Chat')).toBeInTheDocument();
@@ -217,22 +258,114 @@ describe('Workflow Activity vNext Activity ledger', () => {
 
   it('renders unrecognized returned run states as Unknown', async () => {
     mockListRuns.mockResolvedValue([
-      {
+      runSummary({
         runId: 'run-unknown-state',
-        workflowName: 'Customer follow-up',
         status: 'waiting',
         success: null,
-        startedAtUtc: '2026-08-04T10:00:00Z',
-        updatedAtUtc: '2026-08-04T10:01:00Z',
-        stateVersion: 21,
-        scopeId: 'scope-alpha',
         runOrigin: 'draft',
-      },
+      }),
     ]);
 
     renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
 
     expect(await screen.findByText('Unknown')).toBeInTheDocument();
     expect(screen.queryByText('Waiting')).not.toBeInTheDocument();
+  });
+
+  it('distinguishes duplicate workflow runs with a stable reference, timing, and exact actions', async () => {
+    mockWriteText.mockResolvedValue(undefined);
+    mockListRuns.mockResolvedValue([
+      runSummary({
+        runId: 'workflow-definition:studio:run:alpha-1234567890',
+      }),
+      runSummary({
+        runId: 'workflow-definition:studio:run:beta-0987654321',
+        startedAtUtc: '2026-08-04T11:00:00Z',
+        updatedAtUtc: '2026-08-04T11:02:30Z',
+      }),
+    ]);
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    expect(
+      await screen.findByRole('button', {
+        name: 'Open Customer follow-up run alpha-…7890',
+      }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole('button', {
+        name: 'Open Customer follow-up run beta-0…4321',
+      }),
+    ).toBeEnabled();
+    expect(screen.getByText('1m')).toBeInTheDocument();
+    expect(screen.getByText('2m 30s')).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Copy run reference alpha-…7890',
+      }),
+    );
+    await waitFor(() =>
+      expect(mockWriteText).toHaveBeenCalledWith(
+        'workflow-definition:studio:run:alpha-1234567890',
+      ),
+    );
+    expect(
+      screen.queryByText('workflow-definition:studio:run:alpha-1234567890'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('restores URL-backed time filters and sends their UTC bounds to the API', async () => {
+    mockSearch = '?from=2026-08-01T09%3A30&to=2026-08-05T18%3A15&status=failed';
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    expect(screen.getByLabelText('Activity after')).toHaveValue(
+      '2026-08-01T09:30',
+    );
+    expect(screen.getByLabelText('Activity before')).toHaveValue(
+      '2026-08-05T18:15',
+    );
+    await waitFor(() =>
+      expect(mockListRuns).toHaveBeenLastCalledWith('scope-alpha', {
+        status: 'failed',
+        origins: undefined,
+        definitionActorIds: undefined,
+        fromUtc: new Date('2026-08-01T09:30').toISOString(),
+        toUtc: new Date('2026-08-05T18:15').toISOString(),
+        take: 50,
+      }),
+    );
+  });
+
+  it('loads a larger server-backed page and reports the visible result count', async () => {
+    mockListRuns.mockImplementation(
+      (_scopeId: string, filter: { take: number }) =>
+        Array.from({ length: filter.take === 50 ? 50 : 51 }, (_, index) =>
+          runSummary({
+            runId: `run-${index + 1}`,
+            workflowName: `Workflow ${index + 1}`,
+          }),
+        ),
+    );
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    expect(
+      await screen.findByText('Showing 50 loaded runs'),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await waitFor(() =>
+      expect(mockListRuns).toHaveBeenLastCalledWith(
+        'scope-alpha',
+        expect.objectContaining({ take: 100 }),
+      ),
+    );
+    expect(
+      await screen.findByText('Showing 51 loaded runs'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Load more' }),
+    ).not.toBeInTheDocument();
   });
 });

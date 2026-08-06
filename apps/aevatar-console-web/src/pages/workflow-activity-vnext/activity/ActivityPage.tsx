@@ -1,4 +1,9 @@
-import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
+import {
+  ArrowRightOutlined,
+  CopyOutlined,
+  ReloadOutlined,
+  SearchOutlined,
+} from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { getLocale } from '@umijs/max';
 import { Alert, Button, Input, Select, Space } from 'antd';
@@ -17,6 +22,8 @@ import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 import { getRunOriginLabel, getRunStatusPresentation } from './runPresentation';
 
 const supportedRunStatuses = new Set(['running', 'completed', 'failed']);
+const DEFAULT_RUN_TAKE = 50;
+const MAX_RUN_TAKE = 500;
 
 function normalizeRunStatusFilter(value: string | null): string {
   const normalized = value?.trim().toLowerCase() ?? '';
@@ -33,6 +40,46 @@ function formatDate(value: string | null): string {
         dateStyle: 'medium',
         timeStyle: 'short',
       }).format(date);
+}
+
+function normalizeDateTimeFilter(value: string | null): string {
+  const normalized = value?.trim() ?? '';
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(normalized) ? normalized : '';
+}
+
+function toUtcFilter(value: string): string | undefined {
+  if (!value) return undefined;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function getShortRunReference(runId: string): string {
+  const normalized = runId.trim();
+  const tail = normalized.split(':').at(-1) || normalized;
+  return tail.length <= 12 ? tail : `${tail.slice(0, 6)}…${tail.slice(-4)}`;
+}
+
+function formatDuration(
+  startedAtUtc: string | null,
+  updatedAtUtc: string,
+  running: boolean,
+  now: number,
+): string {
+  if (!startedAtUtc) {
+    return t('workflowActivityVNext.common.unavailable', 'Unavailable');
+  }
+  const startedAt = new Date(startedAtUtc).getTime();
+  const endedAt = running ? now : new Date(updatedAtUtc).getTime();
+  if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt)) {
+    return t('workflowActivityVNext.common.unavailable', 'Unavailable');
+  }
+  const totalSeconds = Math.max(0, Math.floor((endedAt - startedAt) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m${seconds ? ` ${seconds}s` : ''}`;
+  return `${seconds}s`;
 }
 
 function failureTitle(error: unknown): string {
@@ -71,6 +118,14 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     initialParams.get('workflowFilter') ?? '',
   );
   const [search, setSearch] = React.useState(initialParams.get('q') ?? '');
+  const [from, setFrom] = React.useState(
+    normalizeDateTimeFilter(initialParams.get('from')),
+  );
+  const [to, setTo] = React.useState(
+    normalizeDateTimeFilter(initialParams.get('to')),
+  );
+  const [take, setTake] = React.useState(DEFAULT_RUN_TAKE);
+  const [copiedRunId, setCopiedRunId] = React.useState('');
   const runs = useQuery({
     queryKey: [
       'workflow-activity-vnext',
@@ -79,14 +134,20 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       status,
       origin,
       definition,
+      from,
+      to,
+      take,
     ],
     queryFn: () =>
       workflowActivityApi.listRuns(scopeId, {
         status: status || undefined,
         origins: origin ? [origin] : undefined,
         definitionActorIds: definition ? [definition] : undefined,
-        take: 100,
+        fromUtc: toUtcFilter(from),
+        toUtc: toUtcFilter(to),
+        take,
       }),
+    placeholderData: (previous) => previous,
     retry: false,
   });
 
@@ -97,6 +158,9 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     setOrigin(params.get('origin') ?? '');
     setDefinition(params.get('definition') ?? '');
     setWorkflowFilter(params.get('workflowFilter') ?? '');
+    setFrom(normalizeDateTimeFilter(params.get('from')));
+    setTo(normalizeDateTimeFilter(params.get('to')));
+    setTake(DEFAULT_RUN_TAKE);
   }, [location.search]);
 
   React.useEffect(() => {
@@ -106,9 +170,20 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     if (origin) params.set('origin', origin);
     if (definition) params.set('definition', definition);
     if (workflowFilter) params.set('workflowFilter', workflowFilter);
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
     const suffix = params.toString();
     history.replace(`${location.pathname}${suffix ? `?${suffix}` : ''}`);
-  }, [definition, location.pathname, origin, search, status, workflowFilter]);
+  }, [
+    definition,
+    from,
+    location.pathname,
+    origin,
+    search,
+    status,
+    to,
+    workflowFilter,
+  ]);
 
   const filtered = (runs.data ?? []).filter((run) => {
     const normalized = search.trim().toLowerCase();
@@ -119,6 +194,22 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       )
     );
   });
+  const hasLiveRuns = (runs.data ?? []).some(
+    (run) => run.status.trim().toLowerCase() === 'running',
+  );
+  const [now, setNow] = React.useState(() => Date.now());
+
+  React.useEffect(() => {
+    if (!hasLiveRuns) return undefined;
+    const interval = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(interval);
+  }, [hasLiveRuns]);
+
+  const copyRunReference = async (runId: string) => {
+    if (!navigator.clipboard?.writeText) return;
+    await navigator.clipboard.writeText(runId);
+    setCopiedRunId(runId);
+  };
 
   return (
     <WorkflowActivityVNextShell
@@ -170,7 +261,10 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
               'workflowActivityVNext.activity.statusFilter',
               'Run status',
             )}
-            onChange={setStatus}
+            onChange={(nextStatus) => {
+              setStatus(nextStatus);
+              setTake(DEFAULT_RUN_TAKE);
+            }}
             options={[
               {
                 label: t(
@@ -205,7 +299,10 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
               'workflowActivityVNext.activity.originFilter',
               'Run source',
             )}
-            onChange={setOrigin}
+            onChange={(nextOrigin) => {
+              setOrigin(nextOrigin);
+              setTake(DEFAULT_RUN_TAKE);
+            }}
             options={[
               {
                 label: t(
@@ -249,8 +346,53 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             ]}
             value={origin}
           />
+          <label className="wa-vnext__date-filter">
+            <span>
+              {t(
+                'workflowActivityVNext.activity.activityAfter',
+                'Activity after',
+              )}
+            </span>
+            <input
+              aria-label={t(
+                'workflowActivityVNext.activity.activityAfter',
+                'Activity after',
+              )}
+              onChange={(event) => {
+                setFrom(event.target.value);
+                setTake(DEFAULT_RUN_TAKE);
+              }}
+              type="datetime-local"
+              value={from}
+            />
+          </label>
+          <label className="wa-vnext__date-filter">
+            <span>
+              {t(
+                'workflowActivityVNext.activity.activityBefore',
+                'Activity before',
+              )}
+            </span>
+            <input
+              aria-label={t(
+                'workflowActivityVNext.activity.activityBefore',
+                'Activity before',
+              )}
+              onChange={(event) => {
+                setTo(event.target.value);
+                setTake(DEFAULT_RUN_TAKE);
+              }}
+              type="datetime-local"
+              value={to}
+            />
+          </label>
           {definition ? (
-            <Button onClick={() => setDefinition('')}>
+            <Button
+              onClick={() => {
+                setDefinition('');
+                setTake(DEFAULT_RUN_TAKE);
+              }}
+            >
               {t(
                 'workflowActivityVNext.activity.clearWorkflowFilter',
                 'Show all workflows',
@@ -305,102 +447,229 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           </div>
         </div>
       ) : (
-        <TableScrollRegion
-          ariaLabel={t('workflowActivityVNext.activity.title', 'Activity')}
-          className="wa-vnext__activity-table"
-        >
-          <table className="wa-vnext__table">
-            <thead>
-              <tr>
-                <th>
-                  {t('workflowActivityVNext.activity.columnRun', 'Workflow')}
-                </th>
-                <th>
-                  {t('workflowActivityVNext.activity.columnStatus', 'Status')}
-                </th>
-                <th>
-                  {t('workflowActivityVNext.activity.columnOrigin', 'Source')}
-                </th>
-                <th>
-                  {t('workflowActivityVNext.activity.columnUpdated', 'Updated')}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((run) => {
-                const statusPresentation = getRunStatusPresentation(run.status);
-                const workflowName =
-                  run.workflowName ||
-                  t(
-                    'workflowActivityVNext.activity.unnamed',
-                    'Unnamed workflow',
+        <>
+          <div aria-live="polite" className="wa-vnext__result-summary">
+            <span>
+              {search.trim()
+                ? t(
+                    'workflowActivityVNext.activity.filteredCount',
+                    'Showing {visible} of {loaded} loaded runs',
+                    {
+                      visible: filtered.length,
+                      loaded: runs.data?.length ?? 0,
+                    },
+                  )
+                : t(
+                    'workflowActivityVNext.activity.resultCount',
+                    'Showing {count} loaded runs',
+                    { count: runs.data?.length ?? 0 },
+                  )}
+            </span>
+            {(runs.data?.length ?? 0) === take && take < MAX_RUN_TAKE ? (
+              <Button
+                loading={runs.isFetching}
+                onClick={() =>
+                  setTake((current) =>
+                    Math.min(current + DEFAULT_RUN_TAKE, MAX_RUN_TAKE),
+                  )
+                }
+              >
+                {t('workflowActivityVNext.activity.loadMore', 'Load more')}
+              </Button>
+            ) : null}
+          </div>
+          <TableScrollRegion
+            ariaLabel={t('workflowActivityVNext.activity.title', 'Activity')}
+            className="wa-vnext__activity-table"
+          >
+            <table className="wa-vnext__table">
+              <thead>
+                <tr>
+                  <th>
+                    {t('workflowActivityVNext.activity.columnRun', 'Workflow')}
+                  </th>
+                  <th>
+                    {t('workflowActivityVNext.activity.columnStatus', 'Status')}
+                  </th>
+                  <th>
+                    {t(
+                      'workflowActivityVNext.activity.columnStarted',
+                      'Started / duration',
+                    )}
+                  </th>
+                  <th className="wa-vnext__activity-source">
+                    {t('workflowActivityVNext.activity.columnOrigin', 'Source')}
+                  </th>
+                  <th className="wa-vnext__activity-actions">
+                    {t('workflowActivityVNext.activity.columnAction', 'Action')}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((run) => {
+                  const statusPresentation = getRunStatusPresentation(
+                    run.status,
                   );
-                return (
-                  <tr key={run.runId}>
-                    <td
-                      data-label={t(
-                        'workflowActivityVNext.activity.columnRun',
-                        'Workflow',
-                      )}
-                    >
-                      <button
-                        aria-label={t(
-                          'workflowActivityVNext.activity.openRunAria',
-                          'Open {name}',
-                          { name: workflowName },
+                  const workflowName =
+                    run.workflowName ||
+                    t(
+                      'workflowActivityVNext.activity.unnamed',
+                      'Unnamed workflow',
+                    );
+                  const runReference = getShortRunReference(run.runId);
+                  const running = run.status.trim().toLowerCase() === 'running';
+                  return (
+                    <tr key={run.runId}>
+                      <td
+                        data-label={t(
+                          'workflowActivityVNext.activity.columnRun',
+                          'Workflow',
                         )}
-                        className="wa-vnext__run-link"
-                        onClick={() =>
-                          history.push(
-                            buildWorkflowActivityRunHref(scopeId, run.runId),
-                          )
-                        }
-                        style={{
-                          background: 'transparent',
-                          border: 0,
-                          color: 'var(--wa-blue)',
-                          padding: 0,
-                          textAlign: 'left',
-                        }}
-                        type="button"
                       >
-                        <span className="wa-vnext__title">{workflowName}</span>
-                      </button>
-                    </td>
-                    <td
-                      data-label={t(
-                        'workflowActivityVNext.activity.columnStatus',
-                        'Status',
-                      )}
-                    >
-                      <span
-                        className={`wa-vnext__status wa-vnext__status--${statusPresentation.className}`}
+                        <button
+                          aria-label={t(
+                            'workflowActivityVNext.activity.openRunAria',
+                            'Open {name} run {reference}',
+                            { name: workflowName, reference: runReference },
+                          )}
+                          className="wa-vnext__run-link"
+                          onClick={() =>
+                            history.push(
+                              buildWorkflowActivityRunHref(scopeId, run.runId),
+                            )
+                          }
+                          style={{
+                            background: 'transparent',
+                            border: 0,
+                            color: 'var(--wa-blue)',
+                            padding: 0,
+                            textAlign: 'left',
+                          }}
+                          type="button"
+                        >
+                          <span className="wa-vnext__title">
+                            {workflowName}
+                          </span>
+                          <span className="wa-vnext__sub">
+                            {t(
+                              'workflowActivityVNext.activity.runReference',
+                              'Run {reference}',
+                              { reference: runReference },
+                            )}
+                          </span>
+                        </button>
+                      </td>
+                      <td
+                        data-label={t(
+                          'workflowActivityVNext.activity.columnStatus',
+                          'Status',
+                        )}
                       >
-                        {statusPresentation.label}
-                      </span>
-                    </td>
-                    <td
-                      data-label={t(
-                        'workflowActivityVNext.activity.columnOrigin',
-                        'Source',
-                      )}
-                    >
-                      {getRunOriginLabel(run.runOrigin)}
-                    </td>
-                    <td
-                      data-label={t(
-                        'workflowActivityVNext.activity.columnUpdated',
-                        'Updated',
-                      )}
-                    >
-                      {formatDate(run.updatedAtUtc)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </TableScrollRegion>
+                        <span
+                          className={`wa-vnext__status wa-vnext__status--${statusPresentation.className}`}
+                        >
+                          {statusPresentation.label}
+                        </span>
+                      </td>
+                      <td
+                        data-label={t(
+                          'workflowActivityVNext.activity.columnStarted',
+                          'Started / duration',
+                        )}
+                      >
+                        <span>{formatDate(run.startedAtUtc)}</span>
+                        <span className="wa-vnext__sub">
+                          {running
+                            ? t(
+                                'workflowActivityVNext.activity.elapsed',
+                                '{duration} elapsed',
+                                {
+                                  duration: formatDuration(
+                                    run.startedAtUtc,
+                                    run.updatedAtUtc,
+                                    true,
+                                    now,
+                                  ),
+                                },
+                              )
+                            : formatDuration(
+                                run.startedAtUtc,
+                                run.updatedAtUtc,
+                                false,
+                                now,
+                              )}
+                        </span>
+                      </td>
+                      <td
+                        className="wa-vnext__activity-source"
+                        data-label={t(
+                          'workflowActivityVNext.activity.columnOrigin',
+                          'Source',
+                        )}
+                      >
+                        {getRunOriginLabel(run.runOrigin)}
+                      </td>
+                      <td
+                        className="wa-vnext__activity-actions"
+                        data-label={t(
+                          'workflowActivityVNext.activity.columnAction',
+                          'Action',
+                        )}
+                      >
+                        <Space size={4}>
+                          <Button
+                            aria-label={t(
+                              'workflowActivityVNext.activity.copyRunAria',
+                              'Copy run reference {reference}',
+                              { reference: runReference },
+                            )}
+                            icon={<CopyOutlined />}
+                            onClick={() => void copyRunReference(run.runId)}
+                            size="small"
+                            title={
+                              copiedRunId === run.runId
+                                ? t(
+                                    'workflowActivityVNext.activity.copiedRun',
+                                    'Copied',
+                                  )
+                                : t(
+                                    'workflowActivityVNext.activity.copyRun',
+                                    'Copy run reference',
+                                  )
+                            }
+                            type="text"
+                          />
+                          <Button
+                            aria-label={t(
+                              'workflowActivityVNext.activity.openExactRunAria',
+                              'Open run {reference}',
+                              { reference: runReference },
+                            )}
+                            icon={<ArrowRightOutlined />}
+                            onClick={() =>
+                              history.push(
+                                buildWorkflowActivityRunHref(
+                                  scopeId,
+                                  run.runId,
+                                ),
+                              )
+                            }
+                            size="small"
+                            title={t(
+                              'workflowActivityVNext.activity.openRun',
+                              'Open run',
+                            )}
+                            type="text"
+                          />
+                        </Space>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </TableScrollRegion>
+        </>
       )}
     </WorkflowActivityVNextShell>
   );

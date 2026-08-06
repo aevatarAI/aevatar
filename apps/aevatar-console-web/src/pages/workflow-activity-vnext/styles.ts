@@ -109,6 +109,10 @@ export const workflowActivityVNextCss = `
 .wa-vnext__toolbar-search { flex: 0 1 320px; max-width: 100%; width: 320px; }
 .wa-vnext__toolbar-filters { justify-content: flex-end; }
 .wa-vnext__toolbar-filters .ant-select { min-width: 150px; }
+.wa-vnext__date-filter { color: var(--wa-muted); display: grid; font-size: 10px; gap: 3px; line-height: 13px; }
+.wa-vnext__date-filter input { background: var(--wa-surface); border: 1px solid var(--wa-line); border-radius: 5px; color: var(--wa-text); font: inherit; font-size: 12px; height: 32px; min-width: 186px; padding: 0 9px; }
+.wa-vnext__date-filter input:focus-visible { border-color: var(--wa-blue); outline: 2px solid color-mix(in srgb, var(--wa-blue) 24%, transparent); outline-offset: 1px; }
+.wa-vnext__result-summary { align-items: center; color: var(--wa-muted); display: flex; font-size: 12px; justify-content: space-between; min-height: 36px; padding: 0 2px 8px; }
 .wa-vnext__table-wrap {
   border: 1px solid var(--wa-line);
   border-radius: var(--wa-radius);
@@ -143,6 +147,7 @@ export const workflowActivityVNextCss = `
 .wa-vnext__table tbody tr:hover { background: #f9fafb; }
 .wa-vnext__table pre { margin: 0; max-width: 100%; white-space: pre-wrap; word-break: break-word; }
 .wa-vnext__run-link { max-width: 100%; min-width: 0; overflow: hidden; }
+.wa-vnext__activity-actions { text-align: right !important; width: 92px; }
 .wa-vnext__title { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wa-vnext__sub { color: var(--wa-muted); display: block; font-size: 12px; line-height: 17px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wa-vnext__status { align-items: center; border: 1px solid currentColor; border-radius: 5px; display: inline-flex; font-size: 11px; font-weight: 600; gap: 6px; min-height: 24px; padding: 0 8px; white-space: nowrap; }
@@ -309,6 +314,16 @@ export const workflowActivityVNextCss = `
   .wa-vnext__toolbar-search { flex-basis: auto; width: 100%; }
   .wa-vnext__toolbar-filters { display: grid; grid-template-columns: 1fr; width: 100%; }
   .wa-vnext__toolbar-filters .ant-space-item, .wa-vnext__toolbar-filters .ant-select, .wa-vnext__toolbar-filters .ant-btn { width: 100%; }
+  .wa-vnext__date-filter input { min-width: 0; width: 100%; }
+  .wa-vnext__activity-table .wa-vnext__table { min-width: 0; table-layout: auto; }
+  .wa-vnext__activity-table .wa-vnext__table thead { clip: rect(0 0 0 0); clip-path: inset(50%); height: 1px; overflow: hidden; position: absolute; white-space: nowrap; width: 1px; }
+  .wa-vnext__activity-table .wa-vnext__table tbody { display: block; }
+  .wa-vnext__activity-table .wa-vnext__table tr { align-items: center; display: grid; gap: 6px 10px; grid-template-columns: minmax(0, 1fr) auto; padding: 12px; }
+  .wa-vnext__activity-table .wa-vnext__table td { border: 0; display: block; height: auto; padding: 0; }
+  .wa-vnext__activity-table .wa-vnext__table tr:not(:last-child) { border-bottom: 1px solid var(--wa-line); }
+  .wa-vnext__activity-table .wa-vnext__activity-source { display: none; }
+  .wa-vnext__activity-table .wa-vnext__activity-actions { grid-column: 2; grid-row: 2; width: auto; }
+  .wa-vnext__activity-table .wa-vnext__table td:nth-child(3) { grid-column: 1; grid-row: 2; }
   .wa-vnext__creation-options { grid-template-columns: 1fr; }
   .wa-vnext__creation-option { min-height: 118px; }
   .wa-vnext__settings-panel { padding: 16px; }
