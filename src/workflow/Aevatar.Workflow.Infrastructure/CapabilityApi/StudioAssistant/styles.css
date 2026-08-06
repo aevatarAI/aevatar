@@ -1,25 +1,25 @@
 :root {
   color-scheme: only light;
-  --bg: #fafafa;
+  --bg: #f6f8f7;
   --panel: #ffffff;
   --panel-raised: #ffffff;
-  --surface: #f4f4f5;
-  --surface-hover: #ececef;
-  --text: #18181b;
-  --text-soft: #27272a;
-  --muted: #52525b;
-  --tertiary: #71717a;
-  --border: #e4e4e7;
-  --border-strong: #d4d4d8;
-  --accent: #5a2af1;
-  --accent-soft: #f3efff;
-  --success: #10b981;
-  --success-soft: #eafaf0;
-  --warning: #c46a12;
-  --warning-soft: #fdf3e3;
-  --error: #dc2626;
-  --error-soft: #fdeeee;
-  --info: #3b82f6;
+  --surface: #eef2f0;
+  --surface-hover: #e5ebe8;
+  --text: #17201d;
+  --text-soft: #28332f;
+  --muted: #52605b;
+  --tertiary: #74807b;
+  --border: #dce4e0;
+  --border-strong: #c8d3ce;
+  --accent: #0f766e;
+  --accent-soft: #e8f4f1;
+  --success: #16875f;
+  --success-soft: #e7f5ef;
+  --warning: #a96817;
+  --warning-soft: #fbf2e5;
+  --error: #c2413b;
+  --error-soft: #fbeceb;
+  --info: #3267a8;
   --info-soft: #eff6ff;
   --shadow: 0 16px 42px rgba(24, 24, 27, 0.14);
   --assistant-card-max-width: 860px;
@@ -362,7 +362,7 @@ summary:focus-visible {
 
 .history-filter:hover,
 .history-filter.active {
-  border-color: #d9cdfd;
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
   background: var(--accent-soft);
   color: var(--accent);
 }
@@ -384,7 +384,7 @@ summary:focus-visible {
 }
 
 .history-filter.active strong {
-  background: #e9e1ff;
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
   color: var(--accent);
 }
 
@@ -690,7 +690,7 @@ summary:focus-visible {
   width: 42px;
   height: 42px;
   place-items: center;
-  border: 1px solid #d9cdfd;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
   border-radius: var(--radius);
   background: var(--accent-soft);
   color: var(--accent);
@@ -886,7 +886,7 @@ summary:focus-visible {
 }
 
 .message.assistant .message-avatar {
-  border-color: #d9cdfd;
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
   background: var(--accent-soft);
   color: var(--accent);
 }
@@ -2297,7 +2297,7 @@ summary:focus-visible {
 }
 
 .needs-you-option:has(input:checked) {
-  border-color: #b8a4fb;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   background: var(--accent-soft);
 }
 
@@ -3699,39 +3699,40 @@ summary:focus-visible {
 /* ── Admin Studio transcript layout ─────────────────────────────────────── */
 
 :root {
-  --bg: #fafafa;
+  --bg: #f6f8f7;
   --panel: #ffffff;
   --panel-raised: #ffffff;
-  --surface: #f4f4f5;
-  --surface-hover: #ececef;
-  --text: #18181b;
-  --text-soft: #27272a;
-  --muted: #52525b;
-  --tertiary: #71717a;
-  --border: #e4e4e7;
-  --border-strong: #d4d4d8;
-  --hairline: rgba(0, 0, 0, 0.1);
-  --hairline-strong: rgba(0, 0, 0, 0.18);
-  --overlay: rgba(0, 0, 0, 0.04);
-  --overlay-strong: rgba(0, 0, 0, 0.07);
-  --accent: #5a2af1;
-  --accent-strong: #4a1fd4;
-  --accent-secondary: #a672fb;
-  --accent-soft: rgba(90, 42, 241, 0.08);
-  --success: #059669;
-  --success-soft: rgba(5, 150, 105, 0.08);
-  --warning: #b45309;
-  --warning-soft: rgba(180, 83, 9, 0.08);
-  --error: #dc2626;
-  --error-soft: rgba(220, 38, 38, 0.08);
-  --info: #2563eb;
-  --info-soft: rgba(37, 99, 235, 0.08);
-  --shadow: 0 18px 38px rgba(24, 24, 27, 0.16), 0 3px 10px rgba(24, 24, 27, 0.08);
+  --surface: #eef2f0;
+  --surface-hover: #e5ebe8;
+  --text: #17201d;
+  --text-soft: #28332f;
+  --muted: #52605b;
+  --tertiary: #74807b;
+  --border: #dce4e0;
+  --border-strong: #c8d3ce;
+  --hairline: rgba(23, 32, 29, 0.1);
+  --hairline-strong: rgba(23, 32, 29, 0.18);
+  --overlay: rgba(23, 32, 29, 0.04);
+  --overlay-strong: rgba(23, 32, 29, 0.07);
+  --accent: #0f766e;
+  --accent-strong: #0b5d57;
+  --accent-secondary: #df6b45;
+  --accent-soft: rgba(15, 118, 110, 0.09);
+  --success: #16875f;
+  --success-soft: rgba(22, 135, 95, 0.09);
+  --warning: #a96817;
+  --warning-soft: rgba(169, 104, 23, 0.09);
+  --error: #c2413b;
+  --error-soft: rgba(194, 65, 59, 0.09);
+  --info: #3267a8;
+  --info-soft: rgba(50, 103, 168, 0.09);
+  --shadow: 0 18px 38px rgba(23, 32, 29, 0.14), 0 3px 10px rgba(23, 32, 29, 0.07);
   --assistant-card-max-width: 860px;
   --assistant-card-inline-gutter: 48px;
   --workspace-max-width: 1400px;
   --sidebar-width: 264px;
   --conversation-max-width: 900px;
+  --conversation-inline-gutter: 48px;
   --topbar-h: 60px;
   --radius: 8px;
   --radius-lg: 10px;
@@ -4020,9 +4021,9 @@ body:has(.settings-dialog[open]) #servicesButton,
 .assistant-emblem {
   width: 44px;
   height: 44px;
-  border-color: rgba(166, 114, 251, 0.24);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
   border-radius: var(--radius-lg);
-  background: rgba(166, 114, 251, 0.08);
+  background: var(--accent-soft);
 }
 
 .assistant-emblem svg {
@@ -4067,7 +4068,7 @@ body:has(.settings-dialog[open]) #servicesButton,
 }
 
 .message {
-  width: min(100%, var(--conversation-max-width));
+  width: min(calc(100% - var(--conversation-inline-gutter)), var(--conversation-max-width));
   grid-template-columns: 28px minmax(0, 1fr);
   gap: 14px;
   margin: 0 auto 32px;
@@ -4085,8 +4086,8 @@ body:has(.settings-dialog[open]) #servicesButton,
 }
 
 .message.assistant .message-avatar {
-  border-color: rgba(166, 114, 251, 0.2);
-  background: rgba(166, 114, 251, 0.06);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  background: var(--accent-soft);
   color: var(--accent);
 }
 
@@ -4096,7 +4097,8 @@ body:has(.settings-dialog[open]) #servicesButton,
 }
 
 .message-body {
-  padding: 3px 0 0 4px;
+  min-width: 0;
+  padding: 3px 0 0;
 }
 
 .message-text {
@@ -4239,7 +4241,7 @@ body:has(.settings-dialog[open]) #servicesButton,
 .primary-button,
 .send-button {
   border-color: transparent;
-  background: linear-gradient(90deg, var(--accent-secondary), var(--accent));
+  background: var(--accent);
   color: #fff;
 }
 
@@ -4293,10 +4295,10 @@ body:has(.settings-dialog[open]) #servicesButton,
   display: grid;
   width: 38px;
   height: 38px;
-  border: 1px solid rgba(166, 114, 251, 0.3);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
   border-radius: var(--radius-lg);
-  background: rgba(166, 114, 251, 0.1);
-  color: var(--accent-secondary);
+  background: var(--accent-soft);
+  color: var(--accent);
   padding: 7px;
 }
 
@@ -4381,7 +4383,7 @@ body:has(.settings-dialog[open]) #servicesButton,
 }
 
 .composer-wrap > * {
-  width: min(calc(100% - 48px), var(--conversation-max-width));
+  width: min(calc(100% - var(--conversation-inline-gutter)), var(--conversation-max-width));
   margin-right: auto;
   margin-left: auto;
 }
@@ -4865,6 +4867,7 @@ body:has(.settings-dialog[open]) #servicesButton,
   }
 
   .message {
+    width: calc(100% - 22px);
     grid-template-columns: 24px minmax(0, 1fr);
     gap: 11px;
   }

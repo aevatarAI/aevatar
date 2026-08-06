@@ -14,19 +14,19 @@ Use the screenshot as the visual source of truth for layout, hierarchy, density,
 
 ## Design Summary
 
-The page is a quiet operational transcript with confident workspace scale. A substantial session sidebar supports navigation, while a generous conversation column carries user messages, plan state, approvals, connection journeys, tool progress, verification, and final delivery in one chronological stream. Purple is reserved for the current action; green, amber, and red communicate proven outcomes.
+The page is a quiet operational transcript with confident workspace scale. A substantial session sidebar supports navigation, while a generous conversation column carries user messages, plan state, approvals, connection journeys, tool progress, verification, and final delivery in one chronological stream. Deep teal identifies the current action, terracotta adds restrained brand contrast, and green, amber, blue, and red communicate proven outcomes.
 
 ## Design Tokens
 
 ### Colors
 
-- Background: `#FAFAFA` (observed)
+- Background: `#F6F8F7` (Admin implementation)
 - Panel: `#FFFFFF` (observed)
-- Primary action: `#5A2AF1` (observed from rendered controls)
-- Secondary purple: `#A672FB` (observed)
-- Text: `#18181B` / `#52525B` (observed)
-- Border: `#E4E4E7` (observed)
-- Success: `#059669` (Firecrawl branding evidence)
+- Primary action: `#0F766E` deep teal
+- Secondary brand contrast: `#DF6B45` terracotta
+- Text: `#17201D` / `#52605B`
+- Border: `#DCE4E0`
+- Success: `#16875F`
 - Warning/error: amber and red semantic accents (inferred from cards)
 
 ### Typography
@@ -41,7 +41,7 @@ The page is a quiet operational transcript with confident workspace scale. A sub
 - Reference main container: `1022px` (measured evidence, not an Admin implementation constraint)
 - Admin workspace: up to `1400px` with 24px responsive gutters
 - Admin grid: `264px` sidebar, `36px` gap, fluid conversation column
-- Conversation and composer: up to `900px`; assistant cards: up to `860px`
+- Conversation and composer: the same `900px / 48px gutter` content line; assistant cards: up to `860px` inside the avatar-aware message grid
 - Base spacing: 4px; common gaps: 8, 12, 16, 24, 32, 36px
 - Card radius: 8-12px; high-frequency controls: 36-40px; composer: 60px minimum height
 - Borders are preferred over shadows; fixed composer uses a translucent background and blur

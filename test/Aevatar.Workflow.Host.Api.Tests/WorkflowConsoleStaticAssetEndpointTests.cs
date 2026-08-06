@@ -214,6 +214,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         styles.Should().Contain("--workspace-max-width: 1400px");
         styles.Should().Contain("--sidebar-width: 264px");
         styles.Should().Contain("--conversation-max-width: 900px");
+        styles.Should().Contain("--conversation-inline-gutter: 48px");
         styles.Should().Contain("width: min(448px, calc(100% - 48px))");
         styles.Should().Contain("grid-template-columns: var(--sidebar-width) minmax(0, 1fr)");
         app.Should().Contain("展开计划详情");
@@ -229,12 +230,12 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("v=20260806-studio-workbench");
+        html.Should().Contain("v=20260806-studio-color-align");
         styles.Should().Contain("color-scheme: only light");
         styles.Should().NotContain("color-scheme: dark");
         styles.Should().NotContain("prefers-color-scheme");
-        styles.Should().Contain("--bg: #fafafa");
-        styles.Should().Contain("--accent: #5a2af1");
+        styles.Should().Contain("--bg: #f6f8f7");
+        styles.Should().Contain("--accent: #0f766e");
         styles.Should().NotContain("data-theme");
     }
 
