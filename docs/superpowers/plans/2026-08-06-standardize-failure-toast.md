@@ -237,7 +237,7 @@ git commit -m "Standardize console toast notifications"
 - Modify: `apps/aevatar-console-web/src/pages/workflow-activity-vnext/activity/runFailurePresentation.test.tsx`
 - Modify: `apps/aevatar-console-web/src/pages/workflow-activity-vnext/activity/runFailurePresentation.tsx`
 
-- [ ] **Step 1: Write the failing duration and hierarchy expectations**
+- [x] **Step 1: Write the failing duration and hierarchy expectations**
 
 Change every expected duration in the classification table to `8`. Extend the accessible-action test with explicit compact hierarchy expectations:
 
@@ -251,7 +251,7 @@ expect(message).toHaveClass('ant-typography');
 expect(guidance).toHaveClass('ant-typography-secondary');
 ```
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 ```bash
 pnpm exec jest src/pages/workflow-activity-vnext/activity/runFailurePresentation.test.tsx --runInBand
@@ -259,7 +259,7 @@ pnpm exec jest src/pages/workflow-activity-vnext/activity/runFailurePresentation
 
 Expected: FAIL because current categories still use `0`, `3`, or `5` seconds and the guidance is a plain `div`.
 
-- [ ] **Step 3: Implement one failure duration and token-backed hierarchy**
+- [x] **Step 3: Implement one failure duration and token-backed hierarchy**
 
 Import `Typography`, define one duration constant, replace every category-specific duration with it, and render message/guidance/retry timing with Ant Design typography.
 
@@ -329,7 +329,7 @@ export const RunFailureToastContent: React.FC<{
 };
 ```
 
-- [ ] **Step 4: Run the failure-presentation test and verify GREEN**
+- [x] **Step 4: Run the failure-presentation test and verify GREEN**
 
 ```bash
 pnpm exec jest src/pages/workflow-activity-vnext/activity/runFailurePresentation.test.tsx --runInBand

@@ -1,4 +1,4 @@
-import { Button, Space } from 'antd';
+import { Button, Space, Typography } from 'antd';
 import React from 'react';
 import { t } from '@/shared/i18n/messages';
 
@@ -49,6 +49,8 @@ type CategoryDefinition = Omit<
 > & {
   readonly fallbackMessage: string;
 };
+
+const RUN_FAILURE_TOAST_DURATION_SECONDS = 8;
 
 function normalizeCode(value: string | undefined): string {
   return value?.trim().toUpperCase() ?? '';
@@ -114,7 +116,7 @@ function definitionFor(category: RunFailureCategory): CategoryDefinition {
           'Sign in again',
         ),
         category,
-        duration: 0,
+        duration: RUN_FAILURE_TOAST_DURATION_SECONDS,
         fallbackMessage: t(
           'workflowActivityVNext.failure.sessionExpired',
           'Your session has expired.',
@@ -133,7 +135,7 @@ function definitionFor(category: RunFailureCategory): CategoryDefinition {
           'Choose allowed service',
         ),
         category,
-        duration: 0,
+        duration: RUN_FAILURE_TOAST_DURATION_SECONDS,
         fallbackMessage: t(
           'workflowActivityVNext.failure.accessDenied',
           'You do not have access to use this service or model.',
@@ -149,7 +151,7 @@ function definitionFor(category: RunFailureCategory): CategoryDefinition {
         action: 'retry',
         actionLabel: t('workflowActivityVNext.common.retry', 'Retry'),
         category,
-        duration: 0,
+        duration: RUN_FAILURE_TOAST_DURATION_SECONDS,
         fallbackMessage: t(
           'workflowActivityVNext.failure.rateLimited',
           'This request was rate limited.',
@@ -168,7 +170,7 @@ function definitionFor(category: RunFailureCategory): CategoryDefinition {
           'Review input',
         ),
         category,
-        duration: 0,
+        duration: RUN_FAILURE_TOAST_DURATION_SECONDS,
         fallbackMessage: t(
           'workflowActivityVNext.failure.invalidInput',
           'The input or workflow definition needs attention.',
@@ -187,7 +189,7 @@ function definitionFor(category: RunFailureCategory): CategoryDefinition {
           'Back to Activity',
         ),
         category,
-        duration: 5,
+        duration: RUN_FAILURE_TOAST_DURATION_SECONDS,
         fallbackMessage: t(
           'workflowActivityVNext.failure.resourceMissing',
           'This run is no longer available.',
@@ -206,7 +208,7 @@ function definitionFor(category: RunFailureCategory): CategoryDefinition {
           'Reload latest',
         ),
         category,
-        duration: 0,
+        duration: RUN_FAILURE_TOAST_DURATION_SECONDS,
         fallbackMessage: t(
           'workflowActivityVNext.failure.stateConflict',
           'This run changed since it was loaded.',
@@ -222,7 +224,7 @@ function definitionFor(category: RunFailureCategory): CategoryDefinition {
         action: 'retry',
         actionLabel: t('workflowActivityVNext.common.retry', 'Retry'),
         category,
-        duration: 5,
+        duration: RUN_FAILURE_TOAST_DURATION_SECONDS,
         fallbackMessage: t(
           'workflowActivityVNext.failure.timeoutOrOffline',
           'The request timed out or the connection was interrupted.',
@@ -238,7 +240,7 @@ function definitionFor(category: RunFailureCategory): CategoryDefinition {
         action: 'retry',
         actionLabel: t('workflowActivityVNext.common.retry', 'Retry'),
         category,
-        duration: 5,
+        duration: RUN_FAILURE_TOAST_DURATION_SECONDS,
         fallbackMessage: t(
           'workflowActivityVNext.failure.upstreamUnavailable',
           'The selected service is temporarily unavailable.',
@@ -257,7 +259,7 @@ function definitionFor(category: RunFailureCategory): CategoryDefinition {
           'Open Activity',
         ),
         category,
-        duration: 3,
+        duration: RUN_FAILURE_TOAST_DURATION_SECONDS,
         fallbackMessage: t(
           'workflowActivityVNext.failure.cancelled',
           'Run cancelled.',
@@ -276,7 +278,7 @@ function definitionFor(category: RunFailureCategory): CategoryDefinition {
           'Reload latest',
         ),
         category,
-        duration: 0,
+        duration: RUN_FAILURE_TOAST_DURATION_SECONDS,
         fallbackMessage: t(
           'workflowActivityVNext.failure.internal',
           'The request could not be completed.',
@@ -317,17 +319,27 @@ export const RunFailureToastContent: React.FC<{
 }> = ({ onAction, presentation }) => {
   const correlationId = presentation.correlationId;
   return (
-    <div>
-      <div>{presentation.message}</div>
-      <div>{presentation.guidance}</div>
+    <div
+      style={{
+        alignItems: 'flex-start',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+        textAlign: 'left',
+      }}
+    >
+      <Typography.Text strong>{presentation.message}</Typography.Text>
+      <Typography.Text type="secondary">
+        {presentation.guidance}
+      </Typography.Text>
       {presentation.retryAfterSeconds !== undefined ? (
-        <div>
+        <Typography.Text type="secondary">
           {t(
             'workflowActivityVNext.failure.retryAfter',
             'Try again in {seconds} seconds.',
             { seconds: presentation.retryAfterSeconds },
           )}
-        </div>
+        </Typography.Text>
       ) : null}
       <Space size="small" wrap>
         {onAction ? (
