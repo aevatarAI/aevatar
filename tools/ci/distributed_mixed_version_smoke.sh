@@ -187,17 +187,19 @@ import socket
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 port = os.environ["OLD_NODE_PORT"]
 bearer_token = os.environ["AEVATAR_TEST_CLUSTER_BEARER_TOKEN"]
-max_attempts = 5
-retryable_status_codes = {502, 503, 504}
+max_attempts = 10
 required_workflow = "mission_wall_15_node_probe"
+readiness_status_codes = {404, 502, 503, 504}
 
 for attempt in range(1, max_attempts + 1):
     request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/api/workflows",
+        f"http://127.0.0.1:{port}/api/workflows/"
+        f"{urllib.parse.quote(required_workflow, safe='')}",
         headers={"Authorization": f"Bearer {bearer_token}"},
         method="GET",
     )
@@ -205,55 +207,50 @@ for attempt in range(1, max_attempts + 1):
         with urllib.request.urlopen(request, timeout=5) as response:
             raw = response.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as error:
-        if error.code not in retryable_status_codes or attempt == max_attempts:
-            print(f"Workflow catalog probe returned HTTP {error.code}.", file=sys.stderr)
+        if error.code not in readiness_status_codes or attempt == max_attempts:
+            print(f"Workflow detail readiness probe returned HTTP {error.code}.", file=sys.stderr)
             raise SystemExit(1)
         print(
-            f"Workflow catalog probe attempt {attempt}/{max_attempts} returned HTTP {error.code}; retrying.",
+            f"Workflow detail readiness probe attempt {attempt}/{max_attempts} returned "
+            f"HTTP {error.code}; retrying.",
             file=sys.stderr,
         )
     except (ConnectionError, urllib.error.URLError, TimeoutError, socket.timeout) as error:
         if attempt == max_attempts:
             print(
-                f"Workflow catalog probe failed after {max_attempts} attempts with {type(error).__name__}.",
+                f"Workflow detail readiness probe failed after {max_attempts} attempts with "
+                f"{type(error).__name__}.",
                 file=sys.stderr,
             )
             raise SystemExit(1)
         print(
-            f"Workflow catalog probe attempt {attempt}/{max_attempts} failed with {type(error).__name__}; retrying.",
+            f"Workflow detail readiness probe attempt {attempt}/{max_attempts} failed with "
+            f"{type(error).__name__}; retrying.",
             file=sys.stderr,
         )
     else:
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
-            print("Workflow catalog probe returned invalid JSON.", file=sys.stderr)
+            print("Workflow detail readiness probe returned invalid JSON.", file=sys.stderr)
             raise SystemExit(1)
 
-        if not isinstance(data, list):
-            print("Workflow catalog probe returned an unexpected payload.", file=sys.stderr)
+        if not isinstance(data, dict):
+            print("Workflow detail readiness probe returned an unexpected payload.", file=sys.stderr)
             raise SystemExit(1)
 
-        workflow_names = {
-            item.strip()
-            for item in data
-            if isinstance(item, str) and item.strip()
-        }
-        if required_workflow in workflow_names:
+        catalog = data.get("catalog")
+        workflow_name = catalog.get("name", "").strip() if isinstance(catalog, dict) else ""
+        if workflow_name == required_workflow:
             print(required_workflow)
             raise SystemExit(0)
 
-        if attempt == max_attempts:
-            print(
-                f"Required event-path probe workflow is unavailable: {required_workflow}.",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
         print(
-            f"Workflow catalog probe attempt {attempt}/{max_attempts} did not include "
-            f"{required_workflow}; retrying.",
+            f"Workflow detail readiness probe returned a mismatched workflow: "
+            f"{workflow_name or 'missing'}.",
             file=sys.stderr,
         )
+        raise SystemExit(1)
 
     time.sleep(attempt)
 PY

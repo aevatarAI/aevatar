@@ -277,7 +277,7 @@ public class CiTestAuthorityContractTests
     }
 
     [Fact]
-    public void DistributedMixedVersionSmoke_ShouldRetryOnlyTransientWorkflowCatalogProbeFailures()
+    public void DistributedMixedVersionSmoke_ShouldWaitForCommittedWorkflowDetailReadiness()
     {
         var scriptPath = Path.Combine(
             TemporaryCiRepo.FindRepositoryRoot(),
@@ -289,14 +289,21 @@ public class CiTestAuthorityContractTests
         Assert.Contains("query_workflow_name()", script, StringComparison.Ordinal);
         Assert.Contains("method=\"GET\"", script, StringComparison.Ordinal);
         Assert.Contains("required_workflow = \"mission_wall_15_node_probe\"", script, StringComparison.Ordinal);
-        Assert.Contains("if required_workflow in workflow_names:", script, StringComparison.Ordinal);
-        Assert.Contains("Workflow catalog probe attempt {attempt}/{max_attempts}", script, StringComparison.Ordinal);
-        Assert.Contains("error.code not in retryable_status_codes", script, StringComparison.Ordinal);
+        Assert.Contains("max_attempts = 10", script, StringComparison.Ordinal);
+        Assert.Contains("/api/workflows/", script, StringComparison.Ordinal);
+        Assert.Contains("urllib.parse.quote(required_workflow, safe='')", script, StringComparison.Ordinal);
+        Assert.Contains("readiness_status_codes = {404, 502, 503, 504}", script, StringComparison.Ordinal);
+        Assert.Contains("if workflow_name == required_workflow:", script, StringComparison.Ordinal);
+        Assert.Contains(
+            "Workflow detail readiness probe attempt {attempt}/{max_attempts}",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains("error.code not in readiness_status_codes", script, StringComparison.Ordinal);
         Assert.Contains(
             "except (ConnectionError, urllib.error.URLError, TimeoutError, socket.timeout)",
             script,
             StringComparison.Ordinal);
-        Assert.Contains("Workflow catalog probe returned invalid JSON.", script, StringComparison.Ordinal);
+        Assert.Contains("Workflow detail readiness probe returned invalid JSON.", script, StringComparison.Ordinal);
     }
 
     [Fact]
