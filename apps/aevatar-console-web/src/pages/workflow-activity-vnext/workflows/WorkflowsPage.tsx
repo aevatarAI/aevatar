@@ -2,22 +2,14 @@ import {
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
+  HistoryOutlined,
   MoreOutlined,
   PlusOutlined,
   ReloadOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import {
-  Button,
-  Dropdown,
-  Input,
-  Modal,
-  Popover,
-  Select,
-  Space,
-  Tooltip,
-} from 'antd';
+import { Button, Dropdown, Input, Modal, Popover, Select, Space } from 'antd';
 import React from 'react';
 import { scopesApi } from '@/shared/api/scopesApi';
 import { t } from '@/shared/i18n/messages';
@@ -26,6 +18,7 @@ import { history } from '@/shared/navigation/history';
 import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
 import type { StudioWorkflowDraftSummary } from '@/shared/studio/models';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
+import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
 import {
   buildWorkflowActivityEditorHref,
@@ -41,6 +34,7 @@ type WorkflowRow = {
   readonly hasCommittedSource: boolean;
   readonly hasDraftSource: boolean;
   readonly name: string;
+  readonly ownershipLabel: string;
   readonly stepCount?: number;
   readonly updatedAtUtc: string | null;
   readonly workflowId: string;
@@ -57,6 +51,9 @@ function toDraftRow(
     hasCommittedSource: Boolean(committed),
     hasDraftSource: true,
     name: item.name,
+    ownershipLabel:
+      item.directoryLabel.trim() ||
+      t('workflowActivityVNext.workflows.workspaceOwner', 'Workspace'),
     stepCount: item.stepCount,
     updatedAtUtc: item.updatedAtUtc,
     workflowId: item.workflowId,
@@ -70,6 +67,10 @@ function toCommittedRow(item: ScopeWorkflowSummary): WorkflowRow {
     hasCommittedSource: true,
     hasDraftSource: false,
     name: item.displayName || item.workflowName,
+    ownershipLabel: t(
+      'workflowActivityVNext.workflows.workspaceOwner',
+      'Workspace',
+    ),
     updatedAtUtc: item.updatedAt,
     workflowId: item.workflowId,
   };
@@ -95,6 +96,23 @@ function formatDate(value: string | null): string {
 
 function normalizeWorkflowName(value: string): string {
   return value.trim().toLocaleLowerCase();
+}
+
+function handleClientLinkClick(
+  event: React.MouseEvent<HTMLElement>,
+  href: string,
+): void {
+  if (
+    event.button !== 0 ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.shiftKey
+  )
+    return;
+
+  event.preventDefault();
+  history.push(href);
 }
 
 const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
@@ -228,13 +246,6 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const retry = () => {
     void drafts.refetch();
     void committed.refetch();
-  };
-
-  const openActivity = (row: WorkflowRow) => {
-    const activityHref = buildWorkflowActivitySectionHref(scopeId, 'activity');
-    history.push(
-      `${activityHref}?workflowId=${encodeURIComponent(row.workflowId)}`,
-    );
   };
 
   const copyWorkflowReference = async (row: WorkflowRow) => {
@@ -565,7 +576,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                     'Last updated',
                   )}
                 </th>
-                <th className="wa-vnext__table-column--actions">
+                <th className="wa-vnext__table-column--actions wa-vnext__workflow-actions-cell">
                   {t(
                     'workflowActivityVNext.workflows.columnActions',
                     'Actions',
@@ -575,6 +586,14 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             </thead>
             <tbody>
               {rows.map((row) => {
+                const editorHref = buildWorkflowActivityEditorHref(
+                  scopeId,
+                  row.workflowId,
+                );
+                const activityHref = `${buildWorkflowActivitySectionHref(
+                  scopeId,
+                  'activity',
+                )}?workflowId=${encodeURIComponent(row.workflowId)}`;
                 const description = row.description.trim();
                 const isPublished = Boolean(row.activeRevisionId);
                 const workflowName = (
@@ -652,59 +671,47 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                       {formatDate(row.updatedAtUtc)}
                     </td>
                     <td
+                      className="wa-vnext__workflow-actions-cell"
                       data-label={t(
                         'workflowActivityVNext.workflows.columnActions',
                         'Actions',
                       )}
                     >
-                      <Space>
+                      <Space className="wa-vnext__workflow-actions" size={6}>
                         <Button
                           aria-label={t(
                             'workflowActivityVNext.workflows.openAria',
-                            'Open {name}',
-                            { name: row.name },
+                            'Open {name} in {owner}',
+                            { name: row.name, owner: row.ownershipLabel },
                           )}
-                          onClick={() =>
-                            history.push(
-                              buildWorkflowActivityEditorHref(
-                                scopeId,
-                                row.workflowId,
-                              ),
-                            )
+                          className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                          href={editorHref}
+                          icon={<EditOutlined />}
+                          onClick={(event) =>
+                            handleClientLinkClick(event, editorHref)
                           }
+                          type="primary"
                         >
                           {t('workflowActivityVNext.common.open', 'Open')}
                         </Button>
-                        <Button onClick={() => openActivity(row)}>
+                        <Button
+                          aria-label={t(
+                            'workflowActivityVNext.workflows.viewActivityAria',
+                            'View activity for {name} in {owner}',
+                            { name: row.name, owner: row.ownershipLabel },
+                          )}
+                          className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                          href={activityHref}
+                          icon={<HistoryOutlined />}
+                          onClick={(event) =>
+                            handleClientLinkClick(event, activityHref)
+                          }
+                        >
                           {t(
                             'workflowActivityVNext.workflows.viewActivity',
-                            'Activity',
+                            'View activity',
                           )}
                         </Button>
-                        {row.hasDraftSource ? (
-                          <Tooltip
-                            title={t(
-                              'workflowActivityVNext.workflows.deleteDraft',
-                              'Delete draft',
-                            )}
-                          >
-                            <Button
-                              aria-label={t(
-                                'workflowActivityVNext.workflows.deleteAria',
-                                'Delete {name}',
-                                { name: row.name },
-                              )}
-                              danger
-                              icon={<DeleteOutlined />}
-                              onClick={() => {
-                                setDeleteTarget(row);
-                                setDeleteFailed(false);
-                                setDeleteSucceeded(false);
-                              }}
-                              type="text"
-                            />
-                          </Tooltip>
-                        ) : null}
                         <Dropdown
                           menu={{
                             items: [
@@ -728,11 +735,30 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                                   'Copy workflow reference',
                                 ),
                               },
+                              ...(row.hasDraftSource
+                                ? [
+                                    { type: 'divider' as const },
+                                    {
+                                      danger: true,
+                                      icon: <DeleteOutlined />,
+                                      key: 'delete',
+                                      label: t(
+                                        'workflowActivityVNext.workflows.deleteDraft',
+                                        'Delete draft',
+                                      ),
+                                    },
+                                  ]
+                                : []),
                             ],
                             onClick: ({ key }) => {
                               if (key === 'rename') openRename(row);
                               if (key === 'copy-reference')
                                 void copyWorkflowReference(row);
+                              if (key === 'delete') {
+                                setDeleteTarget(row);
+                                setDeleteFailed(false);
+                                setDeleteSucceeded(false);
+                              }
                             },
                           }}
                           placement="bottomRight"
@@ -741,11 +767,11 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                           <Button
                             aria-label={t(
                               'workflowActivityVNext.workflows.moreActionsAria',
-                              'More actions for {name}',
-                              { name: row.name },
+                              'More actions for {name} in {owner}',
+                              { name: row.name, owner: row.ownershipLabel },
                             )}
+                            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                             icon={<MoreOutlined />}
-                            type="text"
                           />
                         </Dropdown>
                       </Space>

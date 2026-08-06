@@ -521,7 +521,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '另一个工作流已使用此名称。允许使用重复名称。',
     'workflowActivityVNext.workflows.deleteDescription':
       '此操作只删除可编辑草稿，已发布版本和运行历史会继续保留。',
-    'workflowActivityVNext.workflows.deleteAria': '删除 {name}',
     'workflowActivityVNext.workflows.deleteDraft': '删除草稿',
     'workflowActivityVNext.workflows.deleteFailed': '无法删除草稿',
     'workflowActivityVNext.workflows.deleteRefreshFailed':
@@ -532,12 +531,13 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.workflows.emptyDescription':
       '创建一个工作流即可开始。',
     'workflowActivityVNext.workflows.loading': '正在加载工作流…',
-    'workflowActivityVNext.workflows.moreActionsAria': '{name}的更多操作',
+    'workflowActivityVNext.workflows.moreActionsAria':
+      '{owner}中{name}的更多操作',
     'workflowActivityVNext.workflows.new': '新建工作流',
     'workflowActivityVNext.workflows.noMatch': '没有匹配的工作流',
     'workflowActivityVNext.workflows.noMatchDescription':
       '请尝试其他搜索或筛选条件。',
-    'workflowActivityVNext.workflows.openAria': '打开 {name}',
+    'workflowActivityVNext.workflows.openAria': '打开{owner}中的{name}',
     'workflowActivityVNext.workflows.runAria': '运行 {name}',
     'workflowActivityVNext.workflows.refreshAria': '刷新工作流',
     'workflowActivityVNext.workflows.retryAria': '重试加载工作流',
@@ -559,7 +559,10 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.workflows.renameSave': '保存名称',
     'workflowActivityVNext.workflows.renameSuccess': '工作流已重命名',
     'workflowActivityVNext.workflows.renameTitle': '重命名工作流',
-    'workflowActivityVNext.workflows.viewActivity': '活动',
+    'workflowActivityVNext.workflows.viewActivity': '查看活动',
+    'workflowActivityVNext.workflows.viewActivityAria':
+      '查看{owner}中{name}的活动',
+    'workflowActivityVNext.workflows.workspaceOwner': '工作区',
   };
 
 export default workflowActivityVNextMessages;
