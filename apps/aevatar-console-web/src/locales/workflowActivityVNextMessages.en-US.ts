@@ -385,6 +385,8 @@ const workflowActivityVNextMessages = {
     'Uses the system-selected service and model.',
   'workflowActivityVNext.settings.title': 'Settings',
   'workflowActivityVNext.settings.unsaved': 'Unsaved changes',
+  'workflowActivityVNext.settings.unsavedActionsAria':
+    'Unsaved settings actions',
   'workflowActivityVNext.settings.unsavedDescription':
     'Your AI defaults have not been saved.',
   'workflowActivityVNext.settings.unsavedLeaveDescription':

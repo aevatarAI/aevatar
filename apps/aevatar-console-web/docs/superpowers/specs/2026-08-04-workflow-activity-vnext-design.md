@@ -517,9 +517,11 @@ menu that preserves the same section labels and focus behavior.
 
 Normal state contains two decisions: Preferred service and Default model.
 Changing service refreshes the valid model choices. Dirty state alone reveals
-the sticky Discard and Save changes bar. Save uses the existing LLM settings
-contract and follows accepted-to-observed semantics; success appears only when
-the authoritative query observes the selected values.
+the shell-fixed Restore and Save changes dock. Settings keeps the shell footer
+slot mounted in clean and dirty states so showing the dock does not remount the
+form or move focus. Save uses the existing LLM settings contract and follows
+accepted-to-observed semantics; success appears only when the authoritative
+query observes the selected values.
 
 Fallback, provider unavailable, and catalogue unavailable are exceptional
 states with direct recovery actions. The UI must not silently select and save
@@ -663,7 +665,7 @@ hierarchy and density while using production tokens and real data states.
 | Fork | Failed | Source remains unchanged; inputs preserved | Retry request |
 | Settings | Loading | Stable controls without default invention | Wait |
 | Settings | Clean | Quiet current values | Edit |
-| Settings | Dirty | Sticky Discard and Save changes | Save or discard |
+| Settings | Dirty | Shell-fixed Restore and Save changes dock | Save or restore |
 | Settings | Save accepted | Confirming saved values | Continue observing |
 | Settings | Save failed | Preserve dirty choices | Retry or discard |
 | Settings | Catalogue unavailable | Existing choice remains visible | Retry catalogue |

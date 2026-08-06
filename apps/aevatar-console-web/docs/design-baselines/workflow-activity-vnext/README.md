@@ -143,7 +143,7 @@ failures rather than undocumented implementation choices.
 - `prototype-create-mobile.png`：移动端 Workflow 画布，保留 Run、Add node、Edit YAML、Save 和 Publish。
 - `prototype-editor-mobile-node.png`：移动端点击节点后的底部配置面板。
 - `prototype-settings-llm.png`：重构后的 AI defaults 桌面视图。
-- `prototype-settings-save.png`：产生修改后才出现的 sticky save bar 与保存确认状态。
+- `prototype-settings-save.png`：展示来源原型中产生修改后才出现的 sticky save bar 与保存确认状态；生产实现按专项设计改为 shell-fixed dock。
 - `prototype-settings-account.png`：Account 身份、会话与 service access 桌面视图。
 - `prototype-settings-advanced.png`：独立的只读 Runtime 与 request values 视图。
 - `prototype-settings-tablet.png`：Settings 的 768px 布局。
@@ -251,7 +251,7 @@ Settings 的功能来源仍然是当前 Aevatar Console，但信息架构已经�
 - `Account`：当前浏览器身份、User ID、roles、groups、会话到期时间、NyxID provider、scope、Sign in / Sign out 和 Manage service access；字段本身足够明确，不再重复配小节说明。
 - `Advanced`：只保留一份 effective request values。Runtime mode 与 base URL 不再同时出现在只读输入和 raw values 两处。
 
-独立原型会把 AI 默认值保存在浏览器 `localStorage`，仅用于演示重开页面后的交互连续性。生产实现必须通过真实 Settings API 读取、保存并观察 AI 默认值，不能读取这份原型存储。选择 exact connected service 时，模型列表会跟着服务切换。默认状态保持安静；只有产生修改后，sticky save bar 才出现。保存动作先进入 accepted / confirming saved values，再根据权威查询更新已保存 service。fallback、catalog unavailable 与 provider unavailable 只在异常状态出现。Account 的 Sign in、Sign out 与 service access 继续复用现有真实逻辑。
+独立原型会把 AI 默认值保存在浏览器 `localStorage`，仅用于演示重开页面后的交互连续性。生产实现必须通过真实 Settings API 读取、保存并观察 AI 默认值，不能读取这份原型存储。选择 exact connected service 时，模型列表会跟着服务切换。默认状态保持安静；只有产生修改后，来源原型中的 sticky save bar 才出现；生产实现必须按 `2026-08-06-settings-save-action-dock-design.md` 使用 shell-fixed dock。保存动作先进入 accepted / confirming saved values，再根据权威查询更新已保存 service。fallback、catalog unavailable 与 provider unavailable 只在异常状态出现。Account 的 Sign in、Sign out 与 service access 继续复用现有真实逻辑。
 
 ## 基线完整性校验
 

@@ -93,6 +93,9 @@ export const workflowActivityVNextCss = `
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+.wa-vnext__main--with-footer { display: grid; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; }
+.wa-vnext__main-scroll { min-height: 0; min-width: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
+.wa-vnext__main-footer { min-width: 0; }
 .wa-vnext__header {
   align-items: flex-end;
   display: flex;
@@ -223,7 +226,8 @@ export const workflowActivityVNextCss = `
 .wa-vnext__settings-field-copy strong { display: block; font-size: 12px; line-height: 17px; }
 .wa-vnext__settings-field-copy span { color: var(--wa-muted); display: block; font-size: 12px; line-height: 17px; margin-top: 3px; text-wrap: pretty; }
 .wa-vnext__settings-field .ant-select { max-width: 520px; width: 100%; }
-.wa-vnext__settings-savebar { align-items: center; background: #1d2939; border: 1px solid #344054; border-radius: var(--wa-radius); bottom: 12px; box-shadow: 0 12px 30px rgba(16, 24, 40, .2); color: #fff; display: flex; gap: 20px; justify-content: space-between; margin-top: 20px; padding: 10px 12px; position: sticky; z-index: 8; }
+.wa-vnext__settings-footer { background: var(--wa-surface); padding: 0 40px max(12px, env(safe-area-inset-bottom)); }
+.wa-vnext__settings-savebar { align-items: center; background: #1d2939; border: 1px solid #344054; border-radius: var(--wa-radius); box-shadow: 0 12px 30px rgba(16, 24, 40, .2); color: #fff; display: flex; gap: 20px; justify-content: space-between; margin: 0 auto; max-width: 1120px; padding: 10px 12px; }
 .wa-vnext__settings-savebar strong { display: block; font-size: 12px; }
 .wa-vnext__settings-savebar span { color: #d0d5dd; display: block; font-size: 11px; margin-top: 2px; }
 .wa-vnext__settings-savebar .ant-btn-default { background: transparent; border-color: #667085; color: #fff; }
@@ -274,6 +278,7 @@ export const workflowActivityVNextCss = `
 @media (max-width: 1100px) {
   .wa-vnext__header { padding-inline: 32px; }
   .wa-vnext__content { padding-inline: 32px; }
+  .wa-vnext__settings-footer { padding-inline: 32px; }
   .wa-vnext__creation-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .wa-vnext__split { grid-template-columns: 1fr; }
 }
@@ -290,6 +295,7 @@ export const workflowActivityVNextCss = `
   .wa-vnext__header h1 { font-size: 22px; line-height: 22px; }
   .wa-vnext__header-actions { max-width: 50%; }
   .wa-vnext__content { padding: 16px 16px 40px; }
+  .wa-vnext__settings-footer { padding-inline: 16px; }
   .wa-vnext__table-wrap { max-height: min(560px, calc(100dvh - 240px)); }
   .wa-vnext__settings-layout { max-width: none; }
   .wa-vnext__node-inspector { bottom: 12px; left: 12px; max-height: calc(100% - 24px); max-width: none; right: 12px; top: auto; width: auto; }
@@ -315,11 +321,14 @@ export const workflowActivityVNextCss = `
   .wa-vnext__settings-nav { gap: 18px; }
   .wa-vnext__settings-field { align-items: stretch; gap: 8px; grid-template-columns: 1fr; min-height: 0; padding: 16px 0; }
   .wa-vnext__settings-field .ant-select { max-width: none; }
-  .wa-vnext__settings-savebar { align-items: stretch; bottom: max(8px, env(safe-area-inset-bottom)); flex-direction: column; gap: 10px; position: static; }
-  .wa-vnext__settings-savebar .ant-space { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+  .wa-vnext__settings-savebar { align-items: stretch; flex-direction: column; gap: 10px; }
+  .wa-vnext__settings-actions.ant-space { display: grid; gap: 8px !important; grid-template-columns: 1fr 1fr; width: 100%; }
   .wa-vnext__settings-savebar .ant-btn { width: 100%; }
   .wa-vnext__state--compact { padding: 18px; }
   .wa-vnext__publish-review-item { gap: 6px; padding-block: 10px; }
+}
+@media (max-width: 360px) {
+  .wa-vnext__settings-actions.ant-space { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { .wa-vnext *, .wa-vnext *::before, .wa-vnext *::after { scroll-behavior: auto !important; transition: none !important; } }
 `;

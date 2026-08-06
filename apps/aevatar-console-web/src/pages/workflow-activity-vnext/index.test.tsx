@@ -1018,6 +1018,76 @@ describe('Workflow Activity vNext settings', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('keeps dirty save actions outside the scrolling AI defaults panel', async () => {
+    mockStudioApi.getUserLlmSettings.mockResolvedValue({
+      savedSelection: null,
+      savedRouteLabel: 'System default',
+      selectionStatus: 'system_default',
+      catalogDiagnostic: 'unspecified',
+      remediation: 'none',
+      catalogStatus: 'ready',
+      capabilities: {
+        canEditRoute: true,
+        canEditModel: true,
+        canSave: true,
+        canRetryCatalog: true,
+      },
+      routeOptions: [
+        {
+          routeValue: '/api/v1/proxy/s/service-alpha',
+          label: 'Service alpha',
+          source: 'user_service',
+          status: 'ready',
+          allowed: true,
+          ready: true,
+          userServiceId: 'us-alpha',
+          serviceSlug: 'service-alpha',
+          modelCatalog: {
+            certainty: 'enumerated',
+            modelIds: ['model-alpha'],
+            defaultModelId: 'model-alpha',
+            diagnostic: 'unspecified',
+          },
+          description: null,
+        },
+      ],
+      modelGroupsByRoute: [],
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(
+      screen.queryByRole('region', { name: 'Unsaved settings actions' }),
+    ).not.toBeInTheDocument();
+    const routeSelect = await screen.findByRole('combobox', {
+      name: 'Preferred service',
+    });
+    fireEvent.mouseDown(routeSelect);
+    fireEvent.click(await screen.findByText('Service alpha'));
+
+    expect(routeSelect).toBeInTheDocument();
+    const aiDefaultsPanel = screen.getByRole('region', {
+      name: 'AI defaults',
+    });
+    const saveActions = screen.getByRole('region', {
+      name: 'Unsaved settings actions',
+    });
+    expect(aiDefaultsPanel).not.toContainElement(saveActions);
+    expect(
+      within(saveActions).getByRole('button', { name: 'Save changes' }),
+    ).toBeEnabled();
+
+    fireEvent.click(
+      within(saveActions).getByRole('button', {
+        name: 'Restore saved settings',
+      }),
+    );
+    expect(
+      screen.queryByRole('region', { name: 'Unsaved settings actions' }),
+    ).not.toBeInTheDocument();
+    expect(mockStudioApi.saveUserLlmSettings).not.toHaveBeenCalled();
+  });
+
   it('keeps connected services selectable without an enumerated model catalogue', async () => {
     mockStudioApi.getUserLlmSettings.mockResolvedValue({
       savedSelection: {

@@ -15,7 +15,7 @@
 **Files:**
 - Modify: `apps/aevatar-console-web/src/pages/workflow-activity-vnext/index.test.tsx`
 
-- [ ] **Step 1: Add a focused route integration test**
+- [x] **Step 1: Add a focused route integration test**
 
 Add a test in the existing `Workflow Activity vNext settings` describe block. Use distinct authoritative service data, edit Preferred service through the rendered select, and assert the accessible ownership contract:
 
@@ -91,7 +91,7 @@ it('keeps dirty save actions outside the scrolling AI defaults panel', async () 
 
 Reuse the file's existing `within` import from Testing Library.
 
-- [ ] **Step 2: Run the exact test and verify RED**
+- [x] **Step 2: Run the exact test and verify RED**
 
 Run from the repository root:
 
@@ -113,7 +113,7 @@ Expected: FAIL because no region named `Unsaved settings actions` exists and the
 - Modify: `apps/aevatar-console-web/src/locales/workflowActivityVNextMessages.en-US.ts`
 - Modify: `apps/aevatar-console-web/src/locales/workflowActivityVNextMessages.zh-CN.ts`
 
-- [ ] **Step 1: Add a route-neutral shell footer slot**
+- [x] **Step 1: Add a route-neutral shell footer slot**
 
 Extend `ShellProps` with:
 
@@ -139,63 +139,37 @@ render the current main DOM and scrolling unchanged. When present, render:
 
 Do not add the wrapper on routes without a footer.
 
-- [ ] **Step 2: Move the action surface out of `aiPanel`**
+- [x] **Step 2: Move the action surface out of `aiPanel`**
 
 Delete the dirty action JSX from the `wa-vnext__form`. Create one route-owned
 action region using the same handlers and state:
 
 ```tsx
-const settingsFooter = dirty ? (
-  <div className="wa-vnext__settings-footer">
-    <section
-      aria-label={t(
-        'workflowActivityVNext.settings.unsavedActionsAria',
-        'Unsaved settings actions',
-      )}
-      className="wa-vnext__settings-savebar"
-    >
-      <div aria-live="polite" role="status">
-        <strong>
-          {t('workflowActivityVNext.settings.unsaved', 'Unsaved changes')}
-        </strong>
-        <span>
-          {t(
-            'workflowActivityVNext.settings.unsavedDescription',
-            'Your AI defaults have not been saved.',
+const settingsFooter = (
+  <>
+    {dirty ? (
+      <div className="wa-vnext__settings-footer">
+        <section
+          aria-label={t(
+            'workflowActivityVNext.settings.unsavedActionsAria',
+            'Unsaved settings actions',
           )}
-        </span>
+          className="wa-vnext__settings-savebar"
+        >
+          {/* Existing status copy and Restore / Save controls. */}
+        </section>
       </div>
-      <Space className="wa-vnext__settings-actions" wrap>
-        <Button
-          disabled={savePhase === 'saving' || savePhase === 'accepted'}
-          onClick={discard}
-        >
-          {t(
-            'workflowActivityVNext.settings.discard',
-            'Restore saved settings',
-          )}
-        </Button>
-        <Button
-          disabled={
-            !llm.data?.capabilities.canSave || savePhase === 'accepted'
-          }
-          icon={<SaveOutlined />}
-          loading={savePhase === 'saving'}
-          onClick={() => void save()}
-          type="primary"
-        >
-          {t('workflowActivityVNext.settings.save', 'Save changes')}
-        </Button>
-      </Space>
-    </section>
-  </div>
-) : undefined;
+    ) : null}
+  </>
+);
 ```
 
-Pass `footer={settingsFooter}` to `WorkflowActivityVNextShell`. Keep save,
-discard, accepted-to-observed, error, delayed, and navigation logic unchanged.
+Pass `footer={settingsFooter}` to `WorkflowActivityVNextShell`. The fragment is
+always present so toggling dirty state does not replace the shell's scroll
+subtree. Keep save, discard, accepted-to-observed, error, delayed, and
+navigation logic unchanged.
 
-- [ ] **Step 3: Add synchronized locale messages**
+- [x] **Step 3: Add synchronized locale messages**
 
 Add to the English catalogue:
 
@@ -210,7 +184,7 @@ Add to the Chinese catalogue:
 'workflowActivityVNext.settings.unsavedActionsAria': '未保存设置操作',
 ```
 
-- [ ] **Step 4: Implement stable scroll ownership and responsive sizing**
+- [x] **Step 4: Implement stable scroll ownership and responsive sizing**
 
 Add the shell contract:
 
@@ -241,13 +215,13 @@ Change the save bar to normal layout inside the shell footer: remove
 360 px change the action grid to one column. The dock must never overlay the
 scroll region.
 
-- [ ] **Step 5: Run the exact test and verify GREEN**
+- [x] **Step 5: Run the exact test and verify GREEN**
 
 Run the Task 1 Jest command again.
 
 Expected: PASS with one test and no warning or console error.
 
-- [ ] **Step 6: Run dependency-related route coverage**
+- [x] **Step 6: Run dependency-related route coverage**
 
 Run the complete colocated route file because shell composition is shared by
 all vNext child routes:
@@ -269,7 +243,7 @@ Expected: PASS for every test in that file.
 - Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/README.md`
 - Modify: `apps/aevatar-console-web/docs/superpowers/plans/2026-08-06-settings-save-action-dock.md`
 
-- [ ] **Step 1: Record the approved and implemented contract**
+- [x] **Step 1: Record the approved and implemented contract**
 
 Mark the new design approved for implementation, then implemented after the
 focused checks pass. Replace the two sticky references at lines 520 and 666 of
@@ -280,7 +254,7 @@ Keep the imported Excalidraw, generator, PNGs, and prototype byte-identical;
 document the required production deviation instead of editing those source
 assets.
 
-- [ ] **Step 2: Run the frontend scope analyzer**
+- [x] **Step 2: Run the frontend scope analyzer**
 
 ```bash
 python3 ~/.codex/skills/frontend-incremental-pr/scripts/frontend_change_scope.py \
@@ -292,7 +266,7 @@ Read the JSON. Run every changed test explicitly and dependency-related Jest
 tests for changed source files. Pass only reported `staticCheckFiles` to Biome.
 Do not run a full local frontend test, lint, typecheck, or production build.
 
-- [ ] **Step 3: Run documentation and repository hygiene checks**
+- [x] **Step 3: Run documentation and repository hygiene checks**
 
 ```bash
 python3 apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/verify-baseline.py
@@ -304,7 +278,7 @@ git diff --check
 Expected: baseline SHA matches, 17/17 frames pass, docs lint passes, test
 stability guard passes, and no whitespace error is reported.
 
-- [ ] **Step 4: Verify real layout behavior in the existing browser**
+- [x] **Step 4: Verify real layout behavior in the existing browser**
 
 Start the worktree frontend on a free non-5000/non-5050 port with matching
 local OAuth origin configuration and no mock data. At 1440 x 900, 834 x 1112,
@@ -320,12 +294,17 @@ Capture screenshots as task evidence. If real authenticated backend state is
 unavailable, report that exact residual gap and do not inject production mock
 data.
 
+Result: the real application ran on port 5187 with `MOCK=none`, but that origin
+had no authenticated session and the registered NyxID callback port 5173 was
+owned by another process. No session or Settings data was mocked. Authenticated
+responsive screenshots remain a preview-environment verification item.
+
 ### Task 4: Review, Commit, Deliver, And Reach Mergeable State
 
 **Files:**
 - Review every file changed from `origin/feat/2026-08-04_workflow-activity-vnext`
 
-- [ ] **Step 1: Review the complete diff**
+- [x] **Step 1: Review the complete diff**
 
 Confirm that the diff is frontend-only, contains no imported baseline artifact
 changes, preserves all save contracts, and includes no unrelated worktree

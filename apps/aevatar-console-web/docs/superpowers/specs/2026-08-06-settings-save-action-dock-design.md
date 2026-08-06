@@ -2,12 +2,12 @@
 
 ## Status
 
-Proposed for written review on 2026-08-06.
+Approved and implemented on 2026-08-06.
 
 This specification covers only the Workflow Activity vNext Settings save
 action layout. It is based on branch
 `feat/2026-08-04_workflow-activity-vnext` at
-`fad9adf6283a620c60b4b4afd377615653f999e9`.
+`3416817a147df0d362bcf770b9cf59f65b624ab8`.
 
 The approved direction is a shell-owned bottom action area. It supersedes the
 earlier use of the word `sticky` for this save bar in the Workflow Activity
@@ -103,11 +103,13 @@ or editor layout.
 
 ### Settings Ownership
 
-`SettingsPage` provides the footer only while the AI defaults draft is dirty.
-The save action component is removed from the AI defaults form body. It remains
-owned by `SettingsPage`, so it uses the existing `draft`, `baseline`,
-`savePhase`, `discard`, and `save` state and handlers without introducing a
-second state container.
+`SettingsPage` always provides the shell footer slot so changing dirty state
+does not remount the scrolling form or move focus away from the edited control.
+The slot renders no visible content while the draft is clean and renders the
+action dock only while it is dirty. The save action component is removed from
+the AI defaults form body. It remains owned by `SettingsPage`, so it uses the
+existing `draft`, `baseline`, `savePhase`, `discard`, and `save` state and
+handlers without introducing a second state container.
 
 The footer wrapper follows the same responsive horizontal gutters as the
 Settings content. The dark action surface is centered at the existing Settings
@@ -216,6 +218,15 @@ CSS is verified through browser QA at 1440 x 900, 834 x 1112, and 390 x 844.
 The checks confirm a stationary dock during content scrolling, no covered last
 field or alert, no page-level horizontal overflow, reachable buttons, and
 correct mobile safe-area spacing.
+
+Local authenticated browser QA was attempted on port 5187 with the real API
+proxy and `MOCK=none`. The temporary origin had no authenticated session, and
+the configured NyxID client returned to the registered port 5173, which was
+already owned by another process. The implementation did not inject a session,
+copy browser storage, or substitute mock Settings data. Final authenticated
+screenshots therefore remain preview-environment verification; focused route
+tests, locale parity, changed-file static checks, and CI protect the local
+implementation contract.
 
 Local automated verification remains focused on changed and dependency-related
 files. Full frontend tests, typecheck, and production build are delegated to
