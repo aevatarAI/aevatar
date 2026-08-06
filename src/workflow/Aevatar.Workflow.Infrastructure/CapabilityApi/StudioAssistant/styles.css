@@ -3842,51 +3842,6 @@ body {
   background: var(--overlay);
 }
 
-.workflow-nav {
-  background: var(--bg);
-}
-
-.header-inner {
-  width: min(calc(100% - 32px), 1022px);
-  margin: 0 auto;
-  padding: 16px 0 14px;
-}
-
-.title-row {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-}
-
-.title-row h1 {
-  margin: 0;
-  color: var(--text);
-  font-size: 19px;
-  font-weight: 650;
-  line-height: 1.25;
-}
-
-.target-badge {
-  display: inline-flex;
-  min-height: 21px;
-  align-items: center;
-  border-radius: 999px;
-  background: var(--accent-secondary);
-  color: #fff;
-  padding: 0 8px;
-  font-size: 9px;
-  font-weight: 600;
-}
-
-.framing {
-  max-width: 720px;
-  margin: 5px 0 0;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.5;
-}
-
 body:has(.settings-dialog[open]) #servicesButton,
 .app-shell:has(.inspector.open) #mobileInspectorButton {
   border-color: color-mix(in srgb, var(--accent) 35%, var(--hairline));
@@ -4635,17 +4590,6 @@ body:has(.settings-dialog[open]) #servicesButton,
     display: none;
   }
 
-  .header-inner {
-    width: calc(100% - 24px);
-    padding: 13px 0 12px;
-  }
-
-  .framing {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
   .workspace {
     display: block;
     width: 100%;
@@ -4693,18 +4637,6 @@ body:has(.settings-dialog[open]) #servicesButton,
 @media (max-width: 620px) {
   .brand-name {
     display: inline;
-  }
-
-  .title-row h1 {
-    font-size: 15px;
-  }
-
-  .target-badge {
-    min-height: 19px;
-  }
-
-  .framing {
-    font-size: 10px;
   }
 
   .thread {

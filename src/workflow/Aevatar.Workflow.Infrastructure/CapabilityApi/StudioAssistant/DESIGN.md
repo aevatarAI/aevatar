@@ -47,8 +47,7 @@ The page is a quiet, dense operational transcript. A compact session sidebar sup
 
 ## Components
 
-- Header: brand, breadcrumb, compact utility actions
-- Transcript header: literal product/work surface title and state badge
+- Top bar: brand, current conversation, services, run details, connection, and account controls
 - Session sidebar: current and recent transcripts without a second task-lifecycle display
 - Message row: small avatar, compact copy, right-aligned user bubble
 - Plan card: revision, current step, typed source, effect evidence, retry/skip controls

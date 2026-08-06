@@ -12,7 +12,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
 {
     [Theory]
     [InlineData("admin-observatory", "Workflow Run Observatory")]
-    [InlineData("studio", "Aevatar Studio · 工作流实录")]
+    [InlineData("studio", "<title>Aevatar Studio</title>")]
     public async Task WorkflowStaticShellEndpoints_ShouldRenderInjectedEmbeddedAssets(string endpoint, string marker)
     {
         var http = new DefaultHttpContext
@@ -63,7 +63,8 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             html.Should().Contain("globalThis.__AEVATAR_ASSISTANT_CONFIG__");
             html.Should().Contain("Aevatar Studio");
             html.Should().Contain("class=\"site-header\"");
-            html.Should().Contain("id=\"studioTitle\"");
+            html.Should().NotContain("id=\"studioTitle\"");
+            html.Should().NotContain("class=\"workflow-nav\"");
             html.Should().Contain("id=\"servicesButton\"");
             html.Should().Contain("id=\"mobileInspectorButton\"");
             html.Should().NotContain("class=\"studio-tabs\"");
@@ -224,7 +225,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("v=20260806-transcript-final");
+        html.Should().Contain("v=20260806-studio-shell");
         styles.Should().Contain("color-scheme: only light");
         styles.Should().NotContain("color-scheme: dark");
         styles.Should().NotContain("prefers-color-scheme");
