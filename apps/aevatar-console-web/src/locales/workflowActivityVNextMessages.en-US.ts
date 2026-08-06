@@ -541,7 +541,21 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.unavailable.description':
     "The page you requested isn't available.",
   'workflowActivityVNext.unavailable.title': 'Unavailable',
-  'workflowActivityVNext.workflows.allView': 'All workflows',
+  'workflowActivityVNext.workflows.activeView': 'Active workflows',
+  'workflowActivityVNext.workflows.archive': 'Archive',
+  'workflowActivityVNext.workflows.archiveCheckAgain': 'Check again',
+  'workflowActivityVNext.workflows.archiveConfirm': 'Archive workflow',
+  'workflowActivityVNext.workflows.archiveDelayed':
+    "Archive was accepted, but it hasn't been confirmed yet",
+  'workflowActivityVNext.workflows.archiveDescription':
+    'This stops new runs for the published workflow. Its editable draft, published revisions, and Activity history remain available. Publishing it again restores it.',
+  'workflowActivityVNext.workflows.archiveFailed':
+    "Workflow couldn't be archived",
+  'workflowActivityVNext.workflows.archiveSuccess': 'Workflow archived',
+  'workflowActivityVNext.workflows.archiveTitle': 'Archive this workflow?',
+  'workflowActivityVNext.workflows.archiveTryAgain': 'Try again',
+  'workflowActivityVNext.workflows.archivedStatus': 'Archived',
+  'workflowActivityVNext.workflows.archivedView': 'Archived',
   'workflowActivityVNext.workflows.clearFilters': 'Clear filters',
   'workflowActivityVNext.workflows.columnActions': 'Actions',
   'workflowActivityVNext.workflows.columnStatus': 'Status',
