@@ -180,6 +180,24 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         exception.Message.Should().NotContain(RawKey);
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized, "managed_proxy_authentication_failed")]
+    [InlineData(HttpStatusCode.Forbidden, "managed_proxy_authorization_denied")]
+    public async Task ExecuteAsync_WhenProxyRejectsAtHttpBoundary_DistinguishesAuthenticationFromAuthorization(
+        HttpStatusCode statusCode,
+        string expectedCode)
+    {
+        var handler = new RecordingHandler($$"""{"detail":"denied {{RawKey}}"}""", statusCode);
+        var (transport, _) = CreateTransport(handler);
+
+        var act = () => transport.ExecuteAsync(Request(), Descriptor());
+
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
+        exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.AdmissionDenied);
+        exception.Failure.Code.Should().Be(expectedCode);
+        exception.Message.Should().NotContain(RawKey);
+    }
+
     [Fact]
     public async Task ExecuteAsync_DefensivelyRedactsInvocationKeyFromSuccessfulOutput()
     {
@@ -371,7 +389,9 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         }
     }
 
-    private sealed class RecordingHandler(string response) : HttpMessageHandler
+    private sealed class RecordingHandler(
+        string response,
+        HttpStatusCode statusCode = HttpStatusCode.OK) : HttpMessageHandler
     {
         public int CallCount { get; private set; }
         public string? Path { get; private set; }
@@ -394,7 +414,7 @@ public sealed class NyxIdManagedCodexChronoTransportTests
             Body = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
-            return new HttpResponseMessage(HttpStatusCode.OK)
+            return new HttpResponseMessage(statusCode)
             {
                 Content = new StringContent(response, Encoding.UTF8, "application/json"),
             };

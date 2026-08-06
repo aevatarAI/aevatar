@@ -289,7 +289,11 @@ internal sealed class NyxIdManagedCodexChronoTransport(
 
     private static ManagedCodexTransportException ProxyFailure(int status) => status switch
     {
-        401 or 403 => Failure(
+        401 => Failure(
+            CodexExecutionFailureKind.AdmissionDenied,
+            "managed_proxy_authentication_failed",
+            "Managed Codex proxy authentication failed."),
+        403 => Failure(
             CodexExecutionFailureKind.AdmissionDenied,
             "managed_proxy_authorization_denied",
             "Managed Codex proxy authorization was denied."),
