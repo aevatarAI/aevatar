@@ -387,7 +387,7 @@ pnpm exec jest \
   --runInBand
 ```
 
-Expected: both changed test suites pass.
+Expected: all three changed test suites pass.
 
 - [x] **Step 4: Run required test and changed-file static guards**
 
@@ -405,7 +405,7 @@ pnpm --dir apps/aevatar-console-web exec biome check \
 
 Expected: the stability guard and Biome checks pass. Skip local full typecheck and build; GitHub CI owns them.
 
-- [ ] **Step 5: Review the complete task diff**
+- [x] **Step 5: Review the complete task diff**
 
 ```bash
 git status --short
