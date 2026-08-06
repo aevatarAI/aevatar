@@ -43,8 +43,6 @@ const enUSMessages = {
   'pages.chat.index.chatStopped': 'Chat stopped.',
   'pages.chat.index.composerPlaceholder':
     'Describe the workflow you want, or ask about the current setup...',
-  'pages.chat.index.confirmAndCreate': 'Confirm and create',
-  'pages.chat.index.confirmPrompt': 'Confirm. Please create it now.',
   'pages.chat.index.continuationContextMissing':
     'The continuation may have been accepted, but its turn identity was not received. Reload this page before continuing.',
   'pages.chat.index.cancel': 'Cancel',
@@ -80,15 +78,12 @@ const enUSMessages = {
   'pages.chat.index.resolvingScope': 'Resolving scope',
   'pages.chat.index.retry': 'Retry',
   'pages.chat.index.retryHistory': 'Retry chat history',
-  'pages.chat.index.reviewPlan': 'Review the plan before creating resources.',
   'pages.chat.index.scopeMismatch':
     'Requested scope {requestedScopeId} does not match authenticated scope {authenticatedScopeId}. Open Chat from the active workspace or sign in again.',
   'pages.chat.index.scopeValue': 'Scope {scopeId}',
-  'pages.chat.index.status.completed': 'Completed',
-  'pages.chat.index.status.creating': 'Creating',
+  'pages.chat.index.status.completed': 'Ready for reply',
   'pages.chat.index.status.draft': 'Draft',
   'pages.chat.index.status.error': 'Error',
-  'pages.chat.index.status.needsConfirmation': 'Needs confirmation',
   'pages.chat.index.status.streaming': 'Streaming',
   'pages.chat.index.status.studioReady': 'Studio ready',
   'pages.chat.index.time.daysAgo': '{count}d ago',
