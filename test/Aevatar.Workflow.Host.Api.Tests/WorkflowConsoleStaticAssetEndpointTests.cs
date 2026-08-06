@@ -173,7 +173,6 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().Contain("async function submitNeedsYouDecision(");
         app.Should().Contain("async function submitPendingInputFromComposer(");
         app.Should().Contain("async function submitComposer(");
-        app.Should().Contain("function deriveTaskPhases(projection)");
         app.Should().Contain("async function loadReadiness(");
         app.Should().Contain("state.pendingFirstTurn ||=");
         app.Should().Contain("已受理，等待 Actor 确认");
@@ -198,7 +197,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         blocks.Should().Contain("export function buildConnectCardBlock(");
         html.Should().Contain("id=\"readinessPanel\"");
         html.Should().Contain("id=\"needsYouFilterButton\"");
-        html.Should().Contain("id=\"taskPhaseList\"");
+        html.Should().NotContain("id=\"taskPhaseList\"");
         html.Should().Contain("id=\"composerInputRequest\"");
         styles.Should().Contain(".connect-card");
         styles.Should().Contain(".readiness-panel");
@@ -225,64 +224,13 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("v=20260806-transcript-layout");
+        html.Should().Contain("v=20260806-transcript-final");
         styles.Should().Contain("color-scheme: only light");
         styles.Should().NotContain("color-scheme: dark");
         styles.Should().NotContain("prefers-color-scheme");
         styles.Should().Contain("--bg: #fafafa");
         styles.Should().Contain("--accent: #5a2af1");
         styles.Should().NotContain("data-theme");
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_TaskPhases_ShouldReflectAuthoritativeActorFacts()
-    {
-        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8');
-            const start = source.indexOf('function deriveTaskPhases(projection)');
-            const end = source.indexOf('\nfunction renderTaskPhases(', start);
-            assert.notEqual(start, -1);
-            assert.notEqual(end, -1);
-            const context = { Map, Set };
-            vm.createContext(context);
-            vm.runInContext(source.slice(start, end), context);
-
-            const waiting = context.deriveTaskPhases({
-              task:{taskId:'task-alpha',status:'active',planRevision:1,steps:[]},
-              steps:new Map([['input-alpha',{stepId:'input-alpha',kind:'input',status:'waiting'}]]),
-              pendingInput:{requestId:'request-alpha'}, pendingApproval:null, actions:new Map()
-            });
-            assert.deepEqual(JSON.parse(JSON.stringify(waiting.phases.map(item => item.state))),
-              ['current','pending','pending','pending']);
-
-            const running = context.deriveTaskPhases({
-              task:{taskId:'task-alpha',status:'active',planRevision:2},
-              steps:new Map([
-                ['input-alpha',{stepId:'input-alpha',kind:'input',status:'done'}],
-                ['tool-alpha',{stepId:'tool-alpha',kind:'tool',status:'running'}],
-                ['verify-alpha',{stepId:'verify-alpha',kind:'postcondition',status:'planned'}]
-              ]), pendingInput:null, pendingApproval:null, actions:new Map()
-            });
-            assert.deepEqual(JSON.parse(JSON.stringify(running.phases.map(item => item.state))),
-              ['complete','complete','current','pending']);
-
-            const delivered = context.deriveTaskPhases({
-              task:{taskId:'task-alpha',status:'succeeded',planRevision:2},
-              steps:new Map([
-                ['tool-alpha',{stepId:'tool-alpha',kind:'tool',status:'done'}],
-                ['verify-alpha',{stepId:'verify-alpha',kind:'postcondition',status:'done'}]
-              ]), pendingInput:null, pendingApproval:null, actions:new Map()
-            });
-            assert.deepEqual(JSON.parse(JSON.stringify(delivered.phases.map(item => item.state))),
-              ['complete','complete','complete','complete']);
-            """;
-
-        var result = await RunNodeAsync(script, app);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     [Fact]

@@ -12,12 +12,12 @@
       href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;family=Mona+Sans:wght@400;500;600;700&amp;display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260806-transcript-layout" />
+    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260806-transcript-final" />
     <script defer src="https://unpkg.com/lucide@0.563.0/dist/umd/lucide.min.js"></script>
     <script defer src="https://unpkg.com/marked@15.0.12/marked.min.js"></script>
     <script defer src="https://unpkg.com/dompurify@3.2.6/dist/purify.min.js"></script>
     <script>globalThis.__AEVATAR_ASSISTANT_CONFIG__ = __BACKEND_CONSOLE_CONFIG__;</script>
-    <script type="module" src="/workflow/studio/assets/app.js?v=20260806-transcript-layout"></script>
+    <script type="module" src="/workflow/studio/assets/app.js?v=20260806-transcript-final"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -72,41 +72,6 @@
             <i data-lucide="square-pen"></i>
             <span>新会话</span>
           </button>
-
-          <section class="sidebar-group phase-group" aria-labelledby="taskPhaseTitle">
-            <h2 class="group-label" id="taskPhaseTitle">阶段</h2>
-            <ol class="task-phase-list" id="taskPhaseList">
-              <li class="task-phase current" data-phase="understand">
-                <span class="task-phase-marker">1</span>
-                <div>
-                  <strong>理解问题</strong>
-                  <p>一次问清任务开始前需要确认的范围，此时不执行工具。</p>
-                </div>
-              </li>
-              <li class="task-phase pending" data-phase="decide">
-                <span class="task-phase-marker">2</span>
-                <div>
-                  <strong>决策</strong>
-                  <p>解析能力并披露完整计划，先决定再执行。</p>
-                </div>
-              </li>
-              <li class="task-phase pending" data-phase="execute">
-                <span class="task-phase-marker">3</span>
-                <div>
-                  <strong>执行任务工具</strong>
-                  <p>按计划推进工具、连接与审批，支持转向、停止和重试。</p>
-                </div>
-              </li>
-              <li class="task-phase pending" data-phase="verify">
-                <span class="task-phase-marker">4</span>
-                <div>
-                  <strong>校验与交付</strong>
-                  <p>用后置条件证明效果，再报告完成和交付结果。</p>
-                </div>
-              </li>
-            </ol>
-            <p class="task-phase-summary" id="taskPhaseSummary">发送消息后显示当前任务阶段。</p>
-          </section>
 
           <div class="sidebar-group session-group">
             <div class="group-label">当前实录</div>

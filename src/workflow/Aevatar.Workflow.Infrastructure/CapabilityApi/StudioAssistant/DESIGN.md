@@ -14,7 +14,7 @@ Use the screenshot as the visual source of truth for layout, hierarchy, density,
 
 ## Design Summary
 
-The page is a quiet, dense operational transcript. A narrow phase rail explains where the current task is, while a fixed-width conversation column carries user messages, plan state, approvals, connection journeys, tool progress, verification, and final delivery in one chronological stream. Purple is reserved for the current action; green, amber, and red communicate proven outcomes.
+The page is a quiet, dense operational transcript. A compact session sidebar supports navigation, while a fixed-width conversation column carries user messages, plan state, approvals, connection journeys, tool progress, verification, and final delivery in one chronological stream. Purple is reserved for the current action; green, amber, and red communicate proven outcomes.
 
 ## Design Tokens
 
@@ -48,8 +48,8 @@ The page is a quiet, dense operational transcript. A narrow phase rail explains 
 ## Components
 
 - Header: brand, breadcrumb, compact utility actions
-- Transcript header: literal product/work surface title, state badge, compact tabs
-- Phase rail: four ordered reading-aid states: understand, decide, execute, verify/deliver
+- Transcript header: literal product/work surface title and state badge
+- Session sidebar: current and recent transcripts without a second task-lifecycle display
 - Message row: small avatar, compact copy, right-aligned user bubble
 - Plan card: revision, current step, typed source, effect evidence, retry/skip controls
 - Pending input: question in the transcript; answer through the shared composer
@@ -61,7 +61,7 @@ The page is a quiet, dense operational transcript. A narrow phase rail explains 
 
 ## Page Patterns
 
-- Desktop keeps the phase rail and conversation centered; run details open in a drawer.
+- Desktop keeps session navigation and the conversation centered; run details open in a drawer.
 - Mobile collapses navigation and inspector into drawers, keeps all controls within viewport width, and stacks pending-input choices above the composer.
 - The composer command changes with authoritative actor state: new `text`, pending `input.resolve`, active `task.steer`, or explicit `task.stop`.
 - Task completion is displayed only from committed actor/current-state facts. A browser journey or transport ACK is never presented as verified success.
@@ -76,7 +76,7 @@ The page is a quiet, dense operational transcript. A narrow phase rail explains 
 
 - Preserve the single `/api/chat` and actor current-state contracts.
 - Do not infer task, approval, connection, or effect success from local browser state.
-- Derive the phase rail as a read-only aid from typed task/step/pending facts; never persist it as another lifecycle.
+- Keep task and step status inside the chronological transcript; do not add a parallel lifecycle rail.
 - Send clarification as one typed `input.resolve` from the shared composer.
 - Keep `task.steer`, `task.stop`, `step.retry`, and `step.skip` explicit and identity/version guarded.
 - Render final verification only when actor-owned postcondition or terminal facts prove it.

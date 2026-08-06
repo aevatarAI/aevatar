@@ -135,8 +135,6 @@ const dom = {
   stepList: $("#stepList"),
   steerButton: $("#steerButton"),
   stopButton: $("#stopButton"),
-  taskPhaseList: $("#taskPhaseList"),
-  taskPhaseSummary: $("#taskPhaseSummary"),
   testConnectionButton: $("#testConnectionButton"),
   thread: $("#thread"),
   toast: $("#toast"),
@@ -2143,103 +2141,6 @@ function actorStatusCopy(status) {
   return labels[String(status || "").toLowerCase()] || String(status || "状态未知");
 }
 
-function deriveTaskPhases(projection) {
-  const phases = [
-    { key: "understand", state: "pending" },
-    { key: "decide", state: "pending" },
-    { key: "execute", state: "pending" },
-    { key: "verify", state: "pending" },
-  ];
-  const task = projection?.task;
-  if (!task) {
-    phases[0].state = "current";
-    return { phases, summary: "发送消息后显示当前任务阶段。" };
-  }
-
-  const steps = projection.steps instanceof Map
-    ? [...projection.steps.values()]
-    : Array.isArray(task.steps) ? task.steps : [];
-  const taskStatus = String(task.status || projection.taskStatus || "active").toLowerCase();
-  const inputSteps = steps.filter((step) => step.kind === "input");
-  const executionSteps = steps.filter((step) =>
-    ["tool", "browser_action", "approval", "web"].includes(step.kind));
-  const verificationSteps = steps.filter((step) => step.kind === "postcondition");
-  const successfulStepStatuses = new Set(["done", "skipped", "cancelled"]);
-  const terminalStepStatuses = new Set([...successfulStepStatuses, "failed", "uncertain"]);
-  const statusOf = (step) => String(step?.status || "planned").toLowerCase();
-  const pendingInput = Boolean(projection.pendingInput);
-  const pendingApproval = Boolean(projection.pendingApproval);
-  const hasAction = Boolean(projection.actions?.size);
-
-  if (pendingInput || inputSteps.some((step) => !terminalStepStatuses.has(statusOf(step)))) {
-    phases[0].state = "current";
-    return { phases, summary: "正在理解问题，等待一次性补齐任务范围。" };
-  }
-  phases[0].state = "complete";
-
-  const planReady = Number(task.planRevision || 1) > 1 ||
-    executionSteps.length > 0 || verificationSteps.length > 0 || pendingApproval || hasAction;
-  if (!planReady && taskStatus === "active") {
-    phases[1].state = "current";
-    return { phases, summary: "正在解析能力并形成完整执行计划。" };
-  }
-  phases[1].state = "complete";
-
-  const executionFailed = executionSteps.some((step) =>
-    ["failed", "uncertain"].includes(statusOf(step)));
-  const executionComplete = executionSteps.length === 0 ||
-    executionSteps.every((step) => successfulStepStatuses.has(statusOf(step)));
-  if (executionFailed || ["failed", "stopped"].includes(taskStatus) && !executionComplete) {
-    phases[2].state = "error";
-  } else if (pendingApproval || hasAction || !executionComplete || taskStatus === "blocked") {
-    phases[2].state = "current";
-  } else {
-    phases[2].state = "complete";
-  }
-
-  if (taskStatus === "succeeded") {
-    phases[2].state = "complete";
-    phases[3].state = "complete";
-    return { phases, summary: "任务已通过 Actor 事实完成并交付。" };
-  }
-  if (["failed", "stopped"].includes(taskStatus)) {
-    phases[3].state = "error";
-    return { phases, summary: taskStatus === "stopped" ? "任务已停止。" : "任务未能完成校验与交付。" };
-  }
-
-  const verificationActive = verificationSteps.some((step) =>
-    ["planned", "waiting", "running"].includes(statusOf(step)));
-  const verificationFailed = verificationSteps.some((step) =>
-    ["failed", "uncertain"].includes(statusOf(step)));
-  if (verificationFailed) phases[3].state = "error";
-  else if (phases[2].state === "complete" &&
-      (verificationActive || verificationSteps.length === 0)) phases[3].state = "current";
-
-  const current = phases.find((phase) => phase.state === "current");
-  const summary = current?.key === "execute"
-    ? pendingApproval ? "执行已到审批门，等待 NyxID 决定。" : "正在按计划执行任务工具。"
-    : current?.key === "verify"
-      ? "正在校验承诺的效果并准备交付。"
-      : phases.some((phase) => phase.state === "error")
-        ? "任务需要恢复或重新决策。"
-        : "Actor 正在推进任务。";
-  return { phases, summary };
-}
-
-function renderTaskPhases(projection) {
-  if (!dom.taskPhaseList) return;
-  const derived = deriveTaskPhases(projection);
-  for (const phase of derived.phases) {
-    const item = dom.taskPhaseList.querySelector(`[data-phase="${phase.key}"]`);
-    if (!item) continue;
-    item.classList.remove("pending", "current", "complete", "error");
-    item.classList.add(phase.state);
-    if (phase.state === "current") item.setAttribute("aria-current", "step");
-    else item.removeAttribute("aria-current");
-  }
-  dom.taskPhaseSummary.textContent = derived.summary;
-}
-
 const actorEffectCopy = {
   not_started: {
     label: "尚未开始",
@@ -2596,7 +2497,6 @@ function renderActorProjection(entry) {
     entry.actorTaskElement = null;
     if (entry === state.activeConversation) {
       renderComposerInputRequest(entry, projection);
-      renderTaskPhases(projection);
       renderInspector();
     }
     return;
@@ -2833,7 +2733,6 @@ function renderActorProjection(entry) {
   if (!root.isConnected) entry.thread.append(root);
   if (entry === state.activeConversation) {
     renderComposerInputRequest(entry, projection);
-    renderTaskPhases(projection);
     renderInspector();
   }
 }
@@ -2954,7 +2853,6 @@ function renderActiveConversationState() {
       ? "Approval"
       : null;
   renderComposerInputRequest(entry, entry.actorProjection);
-  renderTaskPhases(entry.actorProjection);
   setConversationTitle(entry.title || entry.meta?.title || "新会话");
   setRunningUi(running);
   const actorStatus = actorTerminalRunStatus(entry.actorProjection);
