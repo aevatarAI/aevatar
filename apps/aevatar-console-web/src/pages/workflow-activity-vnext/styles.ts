@@ -208,6 +208,26 @@ export const workflowActivityVNextCss = `
 .wa-vnext__run-tabs > .ant-tabs-nav { margin: 0 0 16px; min-height: 32px; }
 .wa-vnext__run-tabs > .ant-tabs-nav::before { border-color: var(--wa-line); }
 .wa-vnext__run-tabs .ant-tabs-tab { font-size: 12px; min-height: 32px; padding: 7px 2px; }
+.wa-vnext__run-overview { display: grid; gap: 16px; }
+.wa-vnext__outcome { align-items: start; background: var(--wa-subtle); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); display: grid; gap: 8px; justify-items: start; padding: 20px; }
+.wa-vnext__outcome h2 { font-size: 20px; line-height: 26px; margin: 0; }
+.wa-vnext__outcome p { color: var(--wa-muted); line-height: 18px; margin: 0; max-width: 720px; }
+.wa-vnext__eyebrow { color: var(--wa-muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+.wa-vnext__primary-cause { color: var(--wa-ink) !important; font-size: 14px; font-weight: 600; }
+.wa-vnext__step-metrics { border: 1px solid var(--wa-line); border-radius: var(--wa-radius); display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); overflow: hidden; }
+.wa-vnext__step-metric { border-right: 1px solid var(--wa-line); display: grid; gap: 5px; min-height: 72px; padding: 12px; }
+.wa-vnext__step-metric:last-child { border-right: 0; }
+.wa-vnext__step-metric > span:first-child { color: var(--wa-muted); font-size: 11px; }
+.wa-vnext__step-metric strong { font-size: 20px; line-height: 24px; }
+.wa-vnext__timeline, .wa-vnext__execution-path { list-style: none; margin: 0; padding: 0; }
+.wa-vnext__timeline li, .wa-vnext__execution-path li { border-bottom: 1px solid var(--wa-line); padding: 14px 0; }
+.wa-vnext__timeline li:first-child, .wa-vnext__execution-path li:first-child { padding-top: 0; }
+.wa-vnext__timeline li:last-child, .wa-vnext__execution-path li:last-child { border-bottom: 0; }
+.wa-vnext__timeline-heading, .wa-vnext__execution-path li > div:first-child { align-items: center; display: flex; gap: 12px; justify-content: space-between; }
+.wa-vnext__timeline-heading span, .wa-vnext__timeline time, .wa-vnext__execution-path li > span, .wa-vnext__execution-path li > div:first-child span { color: var(--wa-muted); font-size: 11px; }
+.wa-vnext__timeline time { display: block; margin-top: 3px; }
+.wa-vnext__execution-path li { display: grid; gap: 5px; padding-left: 22px; position: relative; }
+.wa-vnext__execution-path li::before { background: var(--wa-blue); border: 3px solid var(--wa-blue-bg); border-radius: 50%; content: ""; height: 11px; left: 0; position: absolute; top: 17px; width: 11px; }
 .wa-vnext__settings-layout { margin: 0 auto; max-width: 1120px; min-width: 0; }
 .wa-vnext__settings-nav { border-bottom: 1px solid var(--wa-line); display: flex; gap: 22px; margin-bottom: 16px; min-height: 32px; overflow-x: auto; scrollbar-width: thin; }
 .wa-vnext__settings-nav-link { border-bottom: 2px solid transparent; color: var(--wa-muted); flex: 0 0 auto; font-size: 12px; font-weight: 600; line-height: 17px; min-height: 32px; padding: 7px 2px 6px; text-decoration: none; }
@@ -320,6 +340,10 @@ export const workflowActivityVNextCss = `
   .wa-vnext__settings-savebar .ant-btn { width: 100%; }
   .wa-vnext__state--compact { padding: 18px; }
   .wa-vnext__publish-review-item { gap: 6px; padding-block: 10px; }
+  .wa-vnext__step-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .wa-vnext__step-metric { border-bottom: 1px solid var(--wa-line); }
+  .wa-vnext__step-metric:nth-child(2n) { border-right: 0; }
+  .wa-vnext__step-metric:last-child { border-bottom: 0; grid-column: 1 / -1; }
 }
 @media (prefers-reduced-motion: reduce) { .wa-vnext *, .wa-vnext *::before, .wa-vnext *::after { scroll-behavior: auto !important; transition: none !important; } }
 `;

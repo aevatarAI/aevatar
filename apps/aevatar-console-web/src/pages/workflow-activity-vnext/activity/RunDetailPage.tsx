@@ -1,5 +1,6 @@
 import { ArrowLeftOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
+import { getLocale } from '@umijs/max';
 import { Alert, Button, Descriptions, Modal, Space, Tabs } from 'antd';
 import React from 'react';
 import {
@@ -13,6 +14,13 @@ import { buildWorkflowActivitySectionHref } from '../navigation';
 import TableScrollRegion from '../TableScrollRegion';
 import TechnicalDetails from '../TechnicalDetails';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
+import {
+  buildFailurePresentation,
+  buildStepMetrics,
+  buildUsagePresentation,
+  getStepDisplayName,
+  getTimelineEventLabel,
+} from './runDetailPresentation';
 import { getRunOriginLabel, getRunStatusPresentation } from './runPresentation';
 import { resolveRunRecovery } from './runRecovery';
 
@@ -63,6 +71,121 @@ function RunFailureSummary({
   );
 }
 
+function formatDuration(durationMs: number | null): string {
+  if (durationMs === null || !Number.isFinite(durationMs) || durationMs < 0) {
+    return t('workflowActivityVNext.common.notReported', 'Not reported');
+  }
+  const totalSeconds = Math.round(durationMs / 1000);
+  if (totalSeconds < 60) {
+    return t('workflowActivityVNext.run.durationSeconds', '{seconds}s', {
+      seconds: totalSeconds,
+    });
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds
+    ? t(
+        'workflowActivityVNext.run.durationMinutesSeconds',
+        '{minutes}m {seconds}s',
+        { minutes, seconds },
+      )
+    : t('workflowActivityVNext.run.durationMinutes', '{minutes}m', {
+        minutes,
+      });
+}
+
+function runDurationMilliseconds(
+  startedAtUtc: string | null,
+  timeline: readonly { readonly kind: string; readonly timestampUtc: string }[],
+): number | null {
+  if (!startedAtUtc) return null;
+  const startedAt = Date.parse(startedAtUtc);
+  const terminalTimestamp = [...timeline]
+    .reverse()
+    .find((event) =>
+      ['runcompleted', 'runerror', 'runstopped'].includes(
+        event.kind.trim().toLowerCase(),
+      ),
+    )?.timestampUtc;
+  if (!terminalTimestamp) return null;
+  const terminalAt = Date.parse(terminalTimestamp);
+  return Number.isFinite(startedAt) && Number.isFinite(terminalAt)
+    ? Math.max(0, terminalAt - startedAt)
+    : null;
+}
+
+function formatLocalTimestamp(timestampUtc: string): string {
+  const timestamp = new Date(timestampUtc);
+  if (Number.isNaN(timestamp.getTime())) return timestampUtc;
+  return new Intl.DateTimeFormat(getLocale(), {
+    dateStyle: 'medium',
+    timeStyle: 'medium',
+  }).format(timestamp);
+}
+
+function formatTimelineOffset(
+  startedAtUtc: string | null,
+  timestampUtc: string,
+): string {
+  if (!startedAtUtc) return '';
+  const startedAt = Date.parse(startedAtUtc);
+  const timestamp = Date.parse(timestampUtc);
+  if (!Number.isFinite(startedAt) || !Number.isFinite(timestamp)) return '';
+  return `+${formatDuration(Math.max(0, timestamp - startedAt))}`;
+}
+
+function stepOutcome(success: boolean | null): string {
+  if (success === null) {
+    return t('workflowActivityVNext.run.waiting', 'Waiting');
+  }
+  return success
+    ? t('workflowActivityVNext.common.succeeded', 'Succeeded')
+    : t('workflowActivityVNext.common.failed', 'Failed');
+}
+
+function localizedTimelineEventLabel(event: {
+  readonly kind: string;
+  readonly stage: string;
+}): string {
+  const label = getTimelineEventLabel(event);
+  const translations: Record<string, [string, string]> = {
+    'Run completed': [
+      'workflowActivityVNext.run.timelineEvent.completed',
+      'Run completed',
+    ],
+    'Run failed': [
+      'workflowActivityVNext.run.timelineEvent.failed',
+      'Run failed',
+    ],
+    'Run started': [
+      'workflowActivityVNext.run.timelineEvent.started',
+      'Run started',
+    ],
+    'Run stopped': [
+      'workflowActivityVNext.run.timelineEvent.stopped',
+      'Run stopped',
+    ],
+    'Run updated': [
+      'workflowActivityVNext.run.timelineEvent.updated',
+      'Run updated',
+    ],
+    'Step produced a response': [
+      'workflowActivityVNext.run.timelineEvent.response',
+      'Step produced a response',
+    ],
+    'Tool finished': [
+      'workflowActivityVNext.run.timelineEvent.toolFinished',
+      'Tool finished',
+    ],
+    'Tool started': [
+      'workflowActivityVNext.run.timelineEvent.toolStarted',
+      'Tool started',
+    ],
+  };
+  const translation = translations[label];
+  return translation ? t(translation[0], translation[1]) : label;
+}
+
 const RunDetailPage: React.FC<{
   readonly runId: string;
   readonly scopeId: string;
@@ -85,6 +208,7 @@ const RunDetailPage: React.FC<{
     readonly kind: 'retry' | 'run_again';
     readonly stepId: string;
   } | null>(null);
+  const [activeTab, setActiveTab] = React.useState('overview');
 
   const recovery = resolveRunRecovery(detail.data?.steps ?? [], graph.data);
   const fork = async (startAtStepId: string): Promise<boolean> => {
@@ -162,6 +286,17 @@ const RunDetailPage: React.FC<{
 
   const run = detail.data;
   const statusPresentation = getRunStatusPresentation(run.summary.status);
+  const failure = buildFailurePresentation(run);
+  const stepMetrics = buildStepMetrics(run.steps);
+  const usage = buildUsagePresentation(
+    run.usageTotals,
+    run.steps,
+    run.timeline,
+  );
+  const notReported = t(
+    'workflowActivityVNext.common.notReported',
+    'Not reported',
+  );
   return (
     <WorkflowActivityVNextShell
       activeSection="activity"
@@ -353,44 +488,219 @@ const RunDetailPage: React.FC<{
           type="success"
         />
       ) : null}
-      <div className="wa-vnext__run-summary">
-        <Descriptions
-          bordered
-          column={{ xs: 1, sm: 2 }}
-          items={[
-            {
-              key: 'origin',
-              label: t('workflowActivityVNext.activity.columnOrigin', 'Source'),
-              children: getRunOriginLabel(run.summary.runOrigin),
-            },
-            {
-              key: 'input',
-              label: t('workflowActivityVNext.run.input', 'Input'),
-              children:
-                run.input || t('workflowActivityVNext.common.empty', 'Empty'),
-            },
-            {
-              key: 'output',
-              label: t('workflowActivityVNext.run.output', 'Final output'),
-              children:
-                run.finalOutput ||
-                t('workflowActivityVNext.common.unavailable', 'Unavailable'),
-            },
-            {
-              key: 'error',
-              label: t('workflowActivityVNext.run.error', 'Final error'),
-              children: run.finalError ? (
-                <RunFailureSummary detail={run.finalError} kind="run" />
-              ) : (
-                t('workflowActivityVNext.common.unavailable', 'Unavailable')
-              ),
-            },
-          ]}
-        />
-      </div>
       <Tabs
+        activeKey={activeTab}
         className="wa-vnext__run-tabs"
+        onChange={setActiveTab}
         items={[
+          {
+            key: 'overview',
+            label: t('workflowActivityVNext.run.overview', 'Overview'),
+            children: (
+              <div className="wa-vnext__run-overview">
+                <section className="wa-vnext__outcome">
+                  <span className="wa-vnext__eyebrow">
+                    {t('workflowActivityVNext.run.outcome', 'Outcome')}
+                  </span>
+                  <h2>{statusPresentation.label}</h2>
+                  {run.finalError ? (
+                    <span>
+                      {t(
+                        'workflowActivityVNext.run.failedSummary',
+                        'The run did not complete.',
+                      )}
+                    </span>
+                  ) : null}
+                  {failure.primaryCause ? (
+                    <p className="wa-vnext__primary-cause">
+                      {failure.primaryCause}
+                    </p>
+                  ) : run.finalOutput ? (
+                    <p>{run.finalOutput}</p>
+                  ) : (
+                    <p>
+                      {t(
+                        'workflowActivityVNext.run.noOutcomeYet',
+                        'No final outcome is available yet.',
+                      )}
+                    </p>
+                  )}
+                  {stepMetrics.failed > 0 ? (
+                    <Button
+                      onClick={() => setActiveTab('steps')}
+                      type="primary"
+                    >
+                      {t(
+                        'workflowActivityVNext.run.reviewFailedStep',
+                        'Review failed step',
+                      )}
+                    </Button>
+                  ) : run.summary.success === null ? (
+                    <Button
+                      icon={<ReloadOutlined />}
+                      onClick={() => void detail.refetch()}
+                    >
+                      {t('workflowActivityVNext.common.refresh', 'Refresh')}
+                    </Button>
+                  ) : null}
+                </section>
+                <div
+                  className="wa-vnext__step-metrics"
+                  data-testid="run-step-metrics"
+                >
+                  {[
+                    [
+                      t('workflowActivityVNext.run.attempted', 'Attempted'),
+                      stepMetrics.attempted,
+                    ],
+                    [
+                      t('workflowActivityVNext.run.succeeded', 'Succeeded'),
+                      stepMetrics.succeeded,
+                    ],
+                    [
+                      t('workflowActivityVNext.run.failed', 'Failed'),
+                      stepMetrics.failed,
+                    ],
+                    [
+                      t('workflowActivityVNext.run.waiting', 'Waiting'),
+                      stepMetrics.waiting,
+                    ],
+                    [
+                      t('workflowActivityVNext.run.skipped', 'Skipped'),
+                      stepMetrics.skipped,
+                    ],
+                  ].map(([label, value]) => (
+                    <div className="wa-vnext__step-metric" key={String(label)}>
+                      <span>{label}</span>
+                      {value === null ? (
+                        <span>{notReported}</span>
+                      ) : (
+                        <strong>{value}</strong>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <Descriptions
+                  bordered
+                  column={{ xs: 1, sm: 2 }}
+                  items={[
+                    {
+                      key: 'source',
+                      label: t(
+                        'workflowActivityVNext.activity.columnOrigin',
+                        'Source',
+                      ),
+                      children: getRunOriginLabel(run.summary.runOrigin),
+                    },
+                    {
+                      key: 'duration',
+                      label: t(
+                        'workflowActivityVNext.run.duration',
+                        'Duration',
+                      ),
+                      children: formatDuration(
+                        runDurationMilliseconds(
+                          run.summary.startedAtUtc,
+                          run.timeline,
+                        ),
+                      ),
+                    },
+                    {
+                      key: 'initiator',
+                      label: t(
+                        'workflowActivityVNext.run.initiator',
+                        'Initiator',
+                      ),
+                      children: t(
+                        'workflowActivityVNext.common.unavailable',
+                        'Unavailable',
+                      ),
+                    },
+                    {
+                      key: 'inputSummary',
+                      label: t(
+                        'workflowActivityVNext.run.inputSummary',
+                        'Input summary',
+                      ),
+                      children: t(
+                        'workflowActivityVNext.common.unavailable',
+                        'Unavailable',
+                      ),
+                    },
+                    {
+                      key: 'output',
+                      label: t(
+                        'workflowActivityVNext.run.output',
+                        'Final output',
+                      ),
+                      span: 2,
+                      children:
+                        run.finalOutput ||
+                        t(
+                          'workflowActivityVNext.common.unavailable',
+                          'Unavailable',
+                        ),
+                    },
+                  ]}
+                />
+                <TechnicalDetails>
+                  <Descriptions
+                    column={1}
+                    size="small"
+                    items={[
+                      {
+                        key: 'runId',
+                        label: t('workflowActivityVNext.run.runId', 'Run ID'),
+                        children: (
+                          <span className="wa-vnext__mono">{runId}</span>
+                        ),
+                      },
+                      {
+                        key: 'stateVersion',
+                        label: t(
+                          'workflowActivityVNext.run.stateVersion',
+                          'State version',
+                        ),
+                        children: run.summary.stateVersion,
+                      },
+                      {
+                        key: 'input',
+                        label: t('workflowActivityVNext.run.input', 'Input'),
+                        children:
+                          run.input ||
+                          t('workflowActivityVNext.common.empty', 'Empty'),
+                      },
+                      {
+                        key: 'finalError',
+                        label: t(
+                          'workflowActivityVNext.run.error',
+                          'Final error',
+                        ),
+                        children:
+                          run.finalError ||
+                          t(
+                            'workflowActivityVNext.common.unavailable',
+                            'Unavailable',
+                          ),
+                      },
+                    ]}
+                  />
+                  {failure.evidence.length ? (
+                    <pre className="wa-vnext__mono">
+                      {JSON.stringify(
+                        {
+                          evidence: failure.evidence,
+                          diagnostics: run.diagnostics,
+                        },
+                        null,
+                        2,
+                      )}
+                    </pre>
+                  ) : null}
+                </TechnicalDetails>
+              </div>
+            ),
+          },
           {
             key: 'steps',
             label: t('workflowActivityVNext.run.steps', 'Steps'),
@@ -402,67 +712,46 @@ const RunDetailPage: React.FC<{
                   <thead>
                     <tr>
                       <th>{t('workflowActivityVNext.run.step', 'Step')}</th>
-                      <th>{t('workflowActivityVNext.run.type', 'Type')}</th>
                       <th>
-                        {t(
-                          'workflowActivityVNext.activity.columnStatus',
-                          'Status',
-                        )}
+                        {t('workflowActivityVNext.run.outcome', 'Outcome')}
                       </th>
-                      <th>{t('workflowActivityVNext.run.output', 'Output')}</th>
                       <th>
-                        {t(
-                          'workflowActivityVNext.run.requestParameters',
-                          'Request parameters',
-                        )}
+                        {t('workflowActivityVNext.run.duration', 'Duration')}
                       </th>
+                      <th>{t('workflowActivityVNext.run.result', 'Result')}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {run.steps.map((step) => (
                       <tr key={step.stepId}>
                         <td
-                          className="wa-vnext__mono"
                           data-label={t(
                             'workflowActivityVNext.run.step',
                             'Step',
                           )}
                         >
-                          {step.stepId}
+                          <strong>{getStepDisplayName(step)}</strong>
                         </td>
                         <td
                           data-label={t(
-                            'workflowActivityVNext.run.type',
-                            'Type',
+                            'workflowActivityVNext.run.outcome',
+                            'Outcome',
                           )}
                         >
-                          {step.stepType}
+                          {stepOutcome(step.success)}
                         </td>
                         <td
                           data-label={t(
-                            'workflowActivityVNext.activity.columnStatus',
-                            'Status',
+                            'workflowActivityVNext.run.duration',
+                            'Duration',
                           )}
                         >
-                          {step.success === null
-                            ? t(
-                                'workflowActivityVNext.common.pending',
-                                'Pending',
-                              )
-                            : step.success
-                              ? t(
-                                  'workflowActivityVNext.common.succeeded',
-                                  'Succeeded',
-                                )
-                              : t(
-                                  'workflowActivityVNext.common.failed',
-                                  'Failed',
-                                )}
+                          {formatDuration(step.durationMs)}
                         </td>
                         <td
                           data-label={t(
-                            'workflowActivityVNext.run.output',
-                            'Output',
+                            'workflowActivityVNext.run.result',
+                            'Result',
                           )}
                         >
                           {step.error ? (
@@ -477,21 +766,21 @@ const RunDetailPage: React.FC<{
                               'Unavailable',
                             )
                           )}
-                        </td>
-                        <td
-                          data-label={t(
-                            'workflowActivityVNext.run.requestParameters',
-                            'Request parameters',
-                          )}
-                        >
-                          <pre className="wa-vnext__mono">
-                            {Object.keys(step.requestParameters).length
-                              ? JSON.stringify(step.requestParameters, null, 2)
-                              : t(
-                                  'workflowActivityVNext.common.empty',
-                                  'Empty',
-                                )}
-                          </pre>
+                          <TechnicalDetails>
+                            <pre className="wa-vnext__mono">
+                              {JSON.stringify(
+                                {
+                                  stepId: step.stepId,
+                                  requestParameters: step.requestParameters,
+                                  requestedAtUtc: step.requestedAtUtc,
+                                  completedAtUtc: step.completedAtUtc,
+                                  error: step.error,
+                                },
+                                null,
+                                2,
+                              )}
+                            </pre>
+                          </TechnicalDetails>
                         </td>
                       </tr>
                     ))}
@@ -510,102 +799,10 @@ const RunDetailPage: React.FC<{
             ),
           },
           {
-            key: 'diagnostics',
-            label: t('workflowActivityVNext.run.diagnostics', 'Diagnostics'),
-            children: run.diagnostics.length ? (
-              <TableScrollRegion
-                ariaLabel={t(
-                  'workflowActivityVNext.run.diagnostics',
-                  'Diagnostics',
-                )}
-              >
-                <table className="wa-vnext__table">
-                  <thead>
-                    <tr>
-                      <th>
-                        {t('workflowActivityVNext.run.severity', 'Severity')}
-                      </th>
-                      <th>{t('workflowActivityVNext.run.code', 'Code')}</th>
-                      <th>{t('workflowActivityVNext.run.step', 'Step')}</th>
-                      <th>
-                        {t('workflowActivityVNext.run.message', 'Message')}
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {run.diagnostics.map((diagnostic) => (
-                      <tr
-                        key={[
-                          diagnostic.timestampUtc,
-                          diagnostic.code,
-                          diagnostic.stepId,
-                          diagnostic.message,
-                        ].join('|')}
-                      >
-                        <td
-                          data-label={t(
-                            'workflowActivityVNext.run.severity',
-                            'Severity',
-                          )}
-                        >
-                          {diagnostic.severity}
-                        </td>
-                        <td
-                          className="wa-vnext__mono"
-                          data-label={t(
-                            'workflowActivityVNext.run.code',
-                            'Code',
-                          )}
-                        >
-                          {diagnostic.code}
-                        </td>
-                        <td
-                          className="wa-vnext__mono"
-                          data-label={t(
-                            'workflowActivityVNext.run.step',
-                            'Step',
-                          )}
-                        >
-                          {diagnostic.stepId ||
-                            t(
-                              'workflowActivityVNext.common.unavailable',
-                              'Unavailable',
-                            )}
-                        </td>
-                        <td
-                          data-label={t(
-                            'workflowActivityVNext.run.message',
-                            'Message',
-                          )}
-                        >
-                          {diagnostic.message}
-                          {diagnostic.hint ? (
-                            <span className="wa-vnext__sub">
-                              {diagnostic.hint}
-                            </span>
-                          ) : null}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </TableScrollRegion>
-            ) : (
-              <div className="wa-vnext__state">
-                <p>
-                  {t(
-                    'workflowActivityVNext.run.noDiagnostics',
-                    'No diagnostics were returned.',
-                  )}
-                </p>
-              </div>
-            ),
-          },
-          {
             key: 'timeline',
             label: t('workflowActivityVNext.run.timeline', 'Timeline'),
             children: run.timeline.length ? (
-              <ol>
+              <ol className="wa-vnext__timeline">
                 {run.timeline.map((event) => (
                   <li
                     key={[
@@ -615,16 +812,23 @@ const RunDetailPage: React.FC<{
                       event.message,
                     ].join('|')}
                   >
-                    <span className="wa-vnext__mono">{event.timestampUtc}</span>{' '}
-                    · {event.kind} · {event.message}
-                    {event.content ? (
-                      <pre className="wa-vnext__mono">{event.content}</pre>
-                    ) : null}
-                    {event.toolCall ? (
+                    <div className="wa-vnext__timeline-heading">
+                      <strong>{localizedTimelineEventLabel(event)}</strong>
+                      <span>
+                        {formatTimelineOffset(
+                          run.summary.startedAtUtc,
+                          event.timestampUtc,
+                        )}
+                      </span>
+                    </div>
+                    <time dateTime={event.timestampUtc}>
+                      {formatLocalTimestamp(event.timestampUtc)}
+                    </time>
+                    <TechnicalDetails>
                       <pre className="wa-vnext__mono">
-                        {JSON.stringify(event.toolCall, null, 2)}
+                        {JSON.stringify(event, null, 2)}
                       </pre>
-                    ) : null}
+                    </TechnicalDetails>
                   </li>
                 ))}
               </ol>
@@ -640,47 +844,31 @@ const RunDetailPage: React.FC<{
             ),
           },
           {
-            key: 'statistics',
-            label: t(
-              'workflowActivityVNext.run.statisticsUsage',
-              'Statistics and usage',
-            ),
+            key: 'usage',
+            label: t('workflowActivityVNext.run.usage', 'Usage'),
             children: (
               <Descriptions
                 bordered
                 column={{ xs: 1, sm: 2 }}
                 items={[
                   {
-                    key: 'totalSteps',
+                    key: 'reportingState',
                     label: t(
-                      'workflowActivityVNext.run.totalSteps',
-                      'Total steps',
+                      'workflowActivityVNext.run.reportingState',
+                      'Reporting state',
                     ),
-                    children: run.statistics.totalSteps,
+                    children:
+                      usage.state === 'reported'
+                        ? t('workflowActivityVNext.run.reported', 'Reported')
+                        : notReported,
                   },
                   {
-                    key: 'requestedSteps',
+                    key: 'toolCalls',
                     label: t(
-                      'workflowActivityVNext.run.requestedSteps',
-                      'Requested steps',
+                      'workflowActivityVNext.run.toolCalls',
+                      'Tool calls',
                     ),
-                    children: run.statistics.requestedSteps,
-                  },
-                  {
-                    key: 'completedSteps',
-                    label: t(
-                      'workflowActivityVNext.run.completedSteps',
-                      'Completed steps',
-                    ),
-                    children: run.statistics.completedSteps,
-                  },
-                  {
-                    key: 'roleReplies',
-                    label: t(
-                      'workflowActivityVNext.run.roleReplies',
-                      'Role replies',
-                    ),
-                    children: run.statistics.roleReplyCount,
+                    children: usage.toolCalls ?? notReported,
                   },
                   {
                     key: 'promptTokens',
@@ -688,7 +876,7 @@ const RunDetailPage: React.FC<{
                       'workflowActivityVNext.run.promptTokens',
                       'Prompt tokens',
                     ),
-                    children: run.usageTotals.promptTokens,
+                    children: usage.promptTokens ?? notReported,
                   },
                   {
                     key: 'completionTokens',
@@ -696,7 +884,7 @@ const RunDetailPage: React.FC<{
                       'workflowActivityVNext.run.completionTokens',
                       'Completion tokens',
                     ),
-                    children: run.usageTotals.completionTokens,
+                    children: usage.completionTokens ?? notReported,
                   },
                   {
                     key: 'totalTokens',
@@ -704,61 +892,94 @@ const RunDetailPage: React.FC<{
                       'workflowActivityVNext.run.totalTokens',
                       'Total tokens',
                     ),
-                    children: run.usageTotals.totalTokens,
+                    children: usage.totalTokens ?? notReported,
                   },
                   {
                     key: 'cost',
-                    label: t('workflowActivityVNext.run.cost', 'Returned cost'),
-                    children: run.usageTotals.cost,
+                    label: t('workflowActivityVNext.run.cost', 'Cost'),
+                    children:
+                      usage.cost === null
+                        ? notReported
+                        : `${usage.cost} · ${t(
+                            'workflowActivityVNext.run.currencyNotReported',
+                            'Currency not reported',
+                          )}`,
                   },
                 ]}
               />
             ),
           },
           {
-            key: 'graph',
-            label: t('workflowActivityVNext.run.graph', 'Graph'),
-            children: graph.isPending ? (
-              <p>
-                {t(
-                  'workflowActivityVNext.run.graphLoading',
-                  'Loading run graph…',
-                )}
-              </p>
-            ) : graph.isError ? (
-              <Alert
-                action={
-                  <Button onClick={() => void graph.refetch()}>
-                    {t('workflowActivityVNext.common.retry', 'Retry')}
-                  </Button>
-                }
-                message={t(
-                  'workflowActivityVNext.run.graphUnavailable',
-                  'Run graph unavailable',
-                )}
-                showIcon
-                type="warning"
-              />
+            key: 'execution-path',
+            label: t(
+              'workflowActivityVNext.run.executionPath',
+              'Execution path',
+            ),
+            children: run.steps.length ? (
+              <ol className="wa-vnext__execution-path">
+                {run.steps.map((step) => (
+                  <li key={step.stepId}>
+                    <div>
+                      <strong>{getStepDisplayName(step)}</strong>
+                      <span>{stepOutcome(step.success)}</span>
+                    </div>
+                    <span>{formatDuration(step.durationMs)}</span>
+                    {step.branchKey ? (
+                      <span>
+                        {t('workflowActivityVNext.run.branch', 'Branch')}:{' '}
+                        {step.branchKey}
+                      </span>
+                    ) : null}
+                    {step.suspensionType ? (
+                      <span>
+                        {t('workflowActivityVNext.run.wait', 'Wait')}:{' '}
+                        {step.suspensionType}
+                      </span>
+                    ) : null}
+                    <TechnicalDetails>
+                      <Descriptions
+                        column={1}
+                        size="small"
+                        items={[
+                          {
+                            key: 'stepId',
+                            label: t(
+                              'workflowActivityVNext.run.stepId',
+                              'Step ID',
+                            ),
+                            children: (
+                              <span className="wa-vnext__mono">
+                                {step.stepId}
+                              </span>
+                            ),
+                          },
+                          {
+                            key: 'nextStepId',
+                            label: t(
+                              'workflowActivityVNext.run.nextStepId',
+                              'Next step ID',
+                            ),
+                            children:
+                              step.nextStepId ||
+                              t(
+                                'workflowActivityVNext.common.unavailable',
+                                'Unavailable',
+                              ),
+                          },
+                        ]}
+                      />
+                    </TechnicalDetails>
+                  </li>
+                ))}
+              </ol>
             ) : (
-              <div>
+              <div className="wa-vnext__state">
                 <p>
                   {t(
-                    'workflowActivityVNext.run.graphSummary',
-                    '{nodes} nodes · {edges} edges',
-                    {
-                      nodes: graph.data?.nodes.length ?? 0,
-                      edges: graph.data?.edges.length ?? 0,
-                    },
+                    'workflowActivityVNext.run.noExecutionPath',
+                    'No execution path is available yet.',
                   )}
                 </p>
-                <ul>
-                  {graph.data?.nodes.map((node) => (
-                    <li className="wa-vnext__mono" key={node.nodeId}>
-                      {node.nodeId}
-                      {node.stepId ? ` · ${node.stepId}` : ''}
-                    </li>
-                  ))}
-                </ul>
               </div>
             ),
           },

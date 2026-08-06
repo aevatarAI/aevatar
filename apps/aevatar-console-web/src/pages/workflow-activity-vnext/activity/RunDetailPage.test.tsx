@@ -228,7 +228,7 @@ describe('Workflow Activity vNext run detail recovery', () => {
     expect(
       screen.queryByText('/api/workflow/runs/status/command-alpha'),
     ).not.toBeVisible();
-    expect(screen.queryByText(/state version/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/state version/i)).not.toBeVisible();
   });
 
   it("keeps a retry failure's server detail out of the confirmation message", async () => {
@@ -265,10 +265,8 @@ describe('Workflow Activity vNext run detail recovery', () => {
     );
 
     expect(await screen.findByText('Incident review')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('tab', { name: 'Graph' }));
-    expect(
-      await screen.findByText('Run graph unavailable'),
-    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Execution path' }));
+    expect(await screen.findByText('Human approval')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Run again' })).toBeDisabled();
   });
 
@@ -278,6 +276,7 @@ describe('Workflow Activity vNext run detail recovery', () => {
     );
 
     expect(await screen.findByText('The run did not complete.')).toBeVisible();
+    fireEvent.click(screen.getByRole('tab', { name: 'Steps' }));
     expect(screen.getByText('This step did not complete.')).toBeVisible();
     for (const rawError of screen.getAllByText('Approval timed out')) {
       expect(rawError).not.toBeVisible();
@@ -296,7 +295,7 @@ describe('Workflow Activity vNext run detail recovery', () => {
     expect(
       await screen.findByRole('heading', { level: 1, name: 'Run details' }),
     ).toBeInTheDocument();
-    expect(screen.queryByText('run-source-alpha')).not.toBeInTheDocument();
+    expect(screen.getByText('run-source-alpha')).not.toBeVisible();
   });
 
   it('names a forbidden detail response without inventing run facts', async () => {
@@ -321,35 +320,148 @@ describe('Workflow Activity vNext run detail recovery', () => {
     expect(screen.queryByText('Incident review')).not.toBeInTheDocument();
   });
 
-  it('renders returned diagnostics, request parameters, statistics, and usage facts', async () => {
+  it('reconciles a failed one-step outcome before technical evidence', async () => {
+    const run = buildRunDetail();
+    run.steps = [run.steps[0]];
+    run.statistics = {
+      completedSteps: 1,
+      requestedSteps: 1,
+      roleReplyCount: 0,
+      stepTypeCounts: { human_approval: 1 },
+      totalSteps: 1,
+    };
+    mockWorkflowActivityApi.getRun.mockResolvedValue(run);
+
     renderWithQueryClient(
       <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
     );
 
     expect(
-      await screen.findByText(/"prompt": "Investigate"/),
-    ).toBeInTheDocument();
+      await screen.findByText('Approval did not arrive before the deadline'),
+    ).toBeVisible();
+    expect(screen.getByText('Attempted')).toBeVisible();
+    expect(screen.getByText('Succeeded')).toBeVisible();
+    expect(
+      within(screen.getByTestId('run-step-metrics')).getByText('Failed'),
+    ).toBeVisible();
+    expect(screen.getByText('Waiting')).toBeVisible();
+    expect(screen.getByText('Skipped')).toBeVisible();
+    expect(
+      within(screen.getByTestId('run-step-metrics')).getByText('Not reported'),
+    ).toBeVisible();
+    expect(screen.queryByText('Completed steps')).not.toBeInTheDocument();
+
+    const outcome = screen.getByTestId('run-step-metrics');
+    expect(
+      within(outcome).getAllByText('1', { selector: 'strong' }),
+    ).toHaveLength(2);
+    expect(
+      within(outcome).getAllByText('0', { selector: 'strong' }),
+    ).toHaveLength(2);
+    const reviewFailedStep = screen.getByRole('button', {
+      name: 'Review failed step',
+    });
+    expect(reviewFailedStep).toBeEnabled();
+    fireEvent.click(reviewFailedStep);
+    expect(screen.getByRole('tab', { name: 'Steps' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    for (const rawError of screen.getAllByText('Approval timed out')) {
+      expect(rawError).not.toBeVisible();
+    }
+  });
+
+  it('shows ordered product steps without raw IDs in the default surface', async () => {
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Steps' }));
 
     const stepsRegion = screen.getByRole('region', { name: 'Steps' });
     expect(stepsRegion).toHaveAttribute('tabindex', '0');
+    expect(within(stepsRegion).getByText('Responder · LLM call')).toBeVisible();
+    expect(within(stepsRegion).getByText('Human approval')).toBeVisible();
+    expect(within(stepsRegion).getByText('Succeeded')).toBeVisible();
+    expect(within(stepsRegion).getByText('Failed')).toBeVisible();
     expect(
-      within(stepsRegion).getByText('step-root').closest('td'),
-    ).toHaveAttribute('data-label', 'Step');
+      within(stepsRegion).queryByText('step-root'),
+    ).not.toBeInTheDocument();
+    expect(
+      within(stepsRegion).getByText(/"prompt": "Investigate"/),
+    ).not.toBeVisible();
+  });
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Diagnostics' }));
-    const diagnosticsRegion = screen.getByRole('region', {
-      name: 'Diagnostics',
-    });
-    expect(diagnosticsRegion).toHaveAttribute('tabindex', '0');
-    expect(
-      within(diagnosticsRegion).getByText('APPROVAL_TIMEOUT').closest('td'),
-    ).toHaveAttribute('data-label', 'Code');
-    expect(
-      screen.getByText('Approval did not arrive before the deadline'),
-    ).toBeInTheDocument();
+  it('localizes timeline events and keeps machine vocabulary collapsed', async () => {
+    const run = buildRunDetail();
+    run.timeline = [
+      {
+        kind: 'RunStarted',
+        timestampUtc: '2026-08-04T10:00:00Z',
+        stage: 'runtime.start',
+        message: 'command accepted',
+        agentId: 'actor-internal-alpha',
+        stepId: '',
+        stepType: '',
+        toolCall: null,
+        content: '',
+        data: { commandId: 'command-internal-alpha' },
+      },
+      {
+        kind: 'InternalRoleReplyReceived',
+        timestampUtc: '2026-08-04T10:00:30Z',
+        stage: 'role.reply',
+        message: 'responder',
+        agentId: 'actor-internal-alpha',
+        stepId: 'step-root',
+        stepType: 'llm_call',
+        toolCall: null,
+        content: 'Prepared response',
+        data: {},
+      },
+    ];
+    mockWorkflowActivityApi.getRun.mockResolvedValue(run);
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Statistics and usage' }));
-    expect(screen.getByText('12')).toBeInTheDocument();
-    expect(screen.getByText('0.02')).toBeInTheDocument();
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Timeline' }));
+    expect(screen.getByText('Run started')).toBeVisible();
+    expect(screen.getByText('Step produced a response')).toBeVisible();
+    expect(screen.getByText('+30s')).toBeVisible();
+    expect(
+      screen.queryByText('InternalRoleReplyReceived'),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/command-internal-alpha/)).not.toBeVisible();
+  });
+
+  it('labels reported usage honestly and does not invent a currency', async () => {
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Usage' }));
+    const usageRegion = screen.getByRole('tabpanel', { name: 'Usage' });
+    expect(within(usageRegion).getByText('Reported')).toBeVisible();
+    expect(within(usageRegion).getByText('12')).toBeVisible();
+    expect(
+      within(usageRegion).getByText('0.02 · Currency not reported'),
+    ).toBeVisible();
+    expect(within(usageRegion).getByText('Tool calls')).toBeVisible();
+    expect(within(usageRegion).getByText('Not reported')).toBeVisible();
+  });
+
+  it('renders the execution path from same-version step facts, not graph IDs', async () => {
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Execution path' }));
+    expect(screen.getByText('Responder · LLM call')).toBeVisible();
+    expect(screen.getByText('Human approval')).toBeVisible();
+    expect(screen.queryByText('node-root')).not.toBeInTheDocument();
+    expect(screen.queryByText('node-failed')).not.toBeInTheDocument();
   });
 });
