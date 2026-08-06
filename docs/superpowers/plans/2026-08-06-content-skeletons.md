@@ -28,9 +28,51 @@
 - Modify: `apps/aevatar-console-web/src/shared/ui/InventoryReadinessState.tsx`
 - Modify: `apps/aevatar-console-web/src/shared/ui/InventoryReadinessState.test.tsx`
 
-- [ ] **Step 1: Write failing preset tests**
+- [ ] **Step 1: Write a failing readiness table-skeleton test**
 
-Add tests that render all presets and assert the stable public contract:
+Update the existing readiness loading test to require a table preset, a hidden accessible label, no visible description, and no empty state:
+
+```tsx
+expect(screen.getByRole("status")).toHaveAttribute("aria-busy", "true");
+expect(screen.getByRole("status")).toHaveAttribute("data-variant", "table");
+expect(screen.getAllByTestId("aevatar-content-skeleton-row")).toHaveLength(4);
+expect(screen.queryByText("Keep the current inventory visible until the request resolves.")).toBeNull();
+expect(screen.queryByText("No inventory")).toBeNull();
+```
+
+- [ ] **Step 2: Run readiness test and verify RED**
+
+```bash
+pnpm --dir apps/aevatar-console-web jest --runInBand \
+  src/shared/ui/InventoryReadinessState.test.tsx
+```
+
+Expected: FAIL because readiness still renders visible loading prose and has no `data-variant="table"` contract.
+
+- [ ] **Step 3: Implement the table preset and integrate readiness**
+
+Create the shared component with the exported API from the design, implement its table renderer, and change only the readiness loading branch. Normalize row counts to at least one and table columns to a small default set. Use stable test IDs and theme tokens.
+
+```tsx
+if (kind === "loading") {
+  return (
+    <AevatarContentSkeleton
+      ariaLabel={String(title)}
+      columnWidths={[96, "1.6fr", "1fr", "1fr", 112]}
+      rows={4}
+      variant="table"
+    />
+  );
+}
+```
+
+- [ ] **Step 4: Run readiness test and verify GREEN**
+
+Run the Step 2 command again. Expected: PASS.
+
+- [ ] **Step 5: Write failing direct list and canvas preset tests**
+
+Create `AevatarContentSkeleton.test.tsx`. Confirm the already implemented table contract, then require list and canvas geometry that is not implemented yet:
 
 ```tsx
 render(
@@ -41,8 +83,6 @@ render(
     variant="table"
   />,
 );
-expect(screen.getByRole("status")).toHaveAttribute("aria-busy", "true");
-expect(screen.getByRole("status")).toHaveAttribute("data-variant", "table");
 expect(screen.getAllByTestId("aevatar-content-skeleton-row")).toHaveLength(3);
 expect(screen.getAllByTestId("aevatar-content-skeleton-cell")).toHaveLength(9);
 
@@ -67,21 +107,18 @@ expect(screen.getByRole("status")).toHaveClass("mission-wall-stage-skeleton");
 expect(screen.getAllByTestId("aevatar-content-skeleton-node").length).toBeGreaterThan(1);
 ```
 
-Update the readiness test so loading requires a table preset, a hidden accessible label, no visible description, and no empty state.
-
-- [ ] **Step 2: Run tests and verify RED**
+- [ ] **Step 6: Run direct preset test and verify RED**
 
 Run:
 
 ```bash
 pnpm --dir apps/aevatar-console-web jest --runInBand \
-  src/shared/ui/AevatarContentSkeleton.test.tsx \
-  src/shared/ui/InventoryReadinessState.test.tsx
+  src/shared/ui/AevatarContentSkeleton.test.tsx
 ```
 
-Expected: FAIL because `AevatarContentSkeleton` does not exist and readiness still renders visible loading prose.
+Expected: FAIL because the component does not yet render list-layout metadata or canvas nodes.
 
-- [ ] **Step 3: Implement the shared presets**
+- [ ] **Step 7: Implement list and canvas presets**
 
 Implement the exported API exactly as designed. Normalize row counts to at least one and table columns to a small default set. Use stable test IDs and theme tokens:
 
@@ -113,26 +150,17 @@ return (
 );
 ```
 
-Change only the readiness loading branch:
+- [ ] **Step 8: Run both shared tests and verify GREEN**
 
-```tsx
-if (kind === "loading") {
-  return (
-    <AevatarContentSkeleton
-      ariaLabel={String(title)}
-      columnWidths={[96, "1.6fr", "1fr", "1fr", 112]}
-      rows={4}
-      variant="table"
-    />
-  );
-}
+```bash
+pnpm --dir apps/aevatar-console-web jest --runInBand \
+  src/shared/ui/AevatarContentSkeleton.test.tsx \
+  src/shared/ui/InventoryReadinessState.test.tsx
 ```
 
-- [ ] **Step 4: Run tests and verify GREEN**
+Expected: both test files PASS with no warnings.
 
-Run the Task 1 command again. Expected: both test files PASS with no warnings.
-
-- [ ] **Step 5: Commit the shared component batch**
+- [ ] **Step 9: Commit the shared component batch**
 
 ```bash
 git add apps/aevatar-console-web/src/shared/ui/AevatarContentSkeleton.tsx \
