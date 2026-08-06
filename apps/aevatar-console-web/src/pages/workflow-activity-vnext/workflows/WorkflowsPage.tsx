@@ -319,6 +319,15 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         renameTarget.workflowId,
         scopeId,
       );
+      const parsed = await studioApi.parseYaml({ yaml: draft.yaml });
+      if (!parsed.document)
+        throw new Error('Workflow YAML could not be parsed');
+      const serialized = await studioApi.serializeYaml({
+        document: {
+          ...parsed.document,
+          name: workflowName,
+        },
+      });
       await studioApi.updateWorkflowDraft({
         directoryId: draft.directoryId,
         fileName: draft.fileName,
@@ -326,8 +335,15 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         scopeId,
         workflowId: renameTarget.workflowId,
         workflowName,
-        yaml: draft.yaml,
+        yaml: serialized.yaml,
       });
+      const observedDraft = await studioApi.getWorkflowDraft(
+        renameTarget.workflowId,
+        scopeId,
+      );
+      if (observedDraft.name.trim() !== workflowName) {
+        throw new Error('Workflow rename was not observed');
+      }
       const refreshed = await drafts.refetch();
       if (refreshed.isError) throw refreshed.error;
       setRenameTarget(null);
