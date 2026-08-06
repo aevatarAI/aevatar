@@ -364,6 +364,30 @@ public sealed class MainnetManagedCodexCredentialEndpointsTests
             .Should().Contain(code);
     }
 
+    [Theory]
+    [InlineData("managed_user_authentication_failed", StatusCodes.Status401Unauthorized)]
+    [InlineData("managed_user_authorization_denied", StatusCodes.Status403Forbidden)]
+    public async Task RotateAsync_WhenNyxIdRejectsCaller_PreservesAuthenticationBoundary(
+        string code,
+        int expectedStatus)
+    {
+        var lifecycle = Substitute.For<IManagedCodexCredentialLifecycle>();
+        lifecycle.RotateAsync("user-bearer", "user-a", Arg.Any<CancellationToken>())
+            .Returns<Task<ManagedCodexCredentialMutationResult>>(_ =>
+                throw new ManagedCodexCredentialLifecycleException(
+                    code,
+                    "NyxID rejected the current user credential."));
+
+        var result = await ManagedCodexCredentialEndpoints.RotateAsync(
+            Context(subject: "user-a", bearer: "user-bearer"),
+            lifecycle,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(expectedStatus);
+        JsonSerializer.Serialize(((IValueHttpResult)result).Value)
+            .Should().Contain(code);
+    }
+
     [Fact]
     public async Task RevokeAsync_DoesNotDependOnTheKillSwitch()
     {

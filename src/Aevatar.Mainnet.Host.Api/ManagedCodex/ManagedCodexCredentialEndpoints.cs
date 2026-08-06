@@ -133,6 +133,7 @@ internal static class ManagedCodexCredentialEndpoints
 
     private static int StatusFor(string code) => code switch
     {
+        "managed_user_authentication_failed" or
         "managed_user_authorization_unavailable" => StatusCodes.Status401Unauthorized,
         "managed_target_disabled" or
         "managed_credential_commit_timeout" or
@@ -140,6 +141,7 @@ internal static class ManagedCodexCredentialEndpoints
         "managed_credential_persistence_pending" or
         "managed_credential_vault_unavailable" or
         "managed_user_services_unavailable" => StatusCodes.Status503ServiceUnavailable,
+        "managed_user_authorization_denied" or
         "managed_feature_not_enabled" or
         "nyxid_identity_mismatch" => StatusCodes.Status403Forbidden,
         "managed_credential_not_provisioned" => StatusCodes.Status404NotFound,

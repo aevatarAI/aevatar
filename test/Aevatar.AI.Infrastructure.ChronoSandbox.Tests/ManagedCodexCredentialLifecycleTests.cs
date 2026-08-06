@@ -1199,6 +1199,32 @@ public sealed class ManagedCodexCredentialLifecycleTests
             .Should().Equal("us-sandbox", "us-llm");
     }
 
+    [Theory]
+    [InlineData(401, "managed_user_authentication_failed")]
+    [InlineData(403, "managed_user_authorization_denied")]
+    public async Task RotateApiKeyAsync_WhenNyxIdRejectsCaller_PreservesAuthenticationBoundary(
+        int status,
+        string expectedCode)
+    {
+        var handler = new RoutingHandler(
+            $$"""{"error":true,"status":{{status}},"body":"denied {{RawKey}}"}""");
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+        var port = new NyxIdManagedCodexCredentialAdapter(
+            new TestNyxIdApiClientFactory(client));
+
+        var act = () => port.RotateApiKeyAsync(
+            "user-bearer",
+            "key-a",
+            CancellationToken.None);
+
+        var exception = (await act.Should()
+            .ThrowAsync<ManagedCodexCredentialLifecycleException>()).Which;
+        exception.Code.Should().Be(expectedCode);
+        exception.ToString().Should().NotContain(RawKey);
+    }
+
     [Fact]
     public async Task ReconcilePolicyAsync_UpdatesRelistsAndPreservesCurrentKeyAndVaultReference()
     {

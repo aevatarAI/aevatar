@@ -187,6 +187,8 @@ The public skill invoke endpoint uses the same trusted caller-credential extract
 - `managed_credential_not_provisioned`: call the explicit credential POST endpoint as that user; normal `codex_exec` will not repair it.
 - `managed_credential_inactive` / `managed_credential_expired`: reconcile through POST or force replacement through `/rotate`.
 - `managed_credential_owner_invalid` / `managed_credential_reference_invalid` / `managed_credential_service_binding_invalid`: stop execution and run explicit reconciliation; do not patch the read model.
+- `managed_user_authentication_failed`: NyxID returned HTTP 401 for the current lifecycle bearer; refresh the user's NyxID authentication and retry. The lifecycle endpoint preserves this boundary as HTTP 401.
+- `managed_user_authorization_denied`: NyxID returned HTTP 403 for the current lifecycle bearer; inspect the user's NyxID API-key lifecycle authority rather than rotating the managed key manually. The lifecycle endpoint preserves this boundary as HTTP 403.
 - `managed_user_authorization_unavailable`: an explicit lifecycle action needs the current user's bearer; do not substitute an operator credential.
 - `managed_credential_commit_timeout`: Actor commit or Projection Session observation did not finish inside the bounded mutation window; inspect dispatch/projection health rather than polling in the workflow.
 - `managed_user_services_unavailable`: the user's required `chrono-sandbox` or `chrono-llm-public` UserService is absent, ambiguous, inactive, or has invalid delegation configuration.
