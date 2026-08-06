@@ -221,6 +221,9 @@ public class CiTestAuthorityContractTests
         Assert.Contains("AEVATAR_ActorRuntime__Provider=Orleans", script, StringComparison.Ordinal);
         Assert.Contains("AEVATAR_ActorRuntime__OrleansPersistenceBackend=InMemory", script, StringComparison.Ordinal);
         Assert.Contains("AEVATAR_ActorRuntime__SecretStoreBackend=InMemory", script, StringComparison.Ordinal);
+        Assert.Contains("start_nyxid_stub", script, StringComparison.Ordinal);
+        Assert.Contains("wait_for_schedule_provisioning", script, StringComparison.Ordinal);
+        Assert.Contains("scheduleProvisioningId", script, StringComparison.Ordinal);
     }
 
     private static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
