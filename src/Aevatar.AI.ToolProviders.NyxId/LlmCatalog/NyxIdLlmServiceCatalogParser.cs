@@ -159,16 +159,28 @@ public static class NyxIdLlmServiceCatalogParser
                 diagnostic?.DisplayName,
                 inventoryService.Slug),
             RouteValue: $"/api/v1/proxy/s/{inventoryService.Slug}",
-            ModelCatalog: diagnostic?.ModelCatalog.Clone() ?? BuildModelCatalog(
-                [],
-                null,
-                ReadyStatus,
-                allowed: true),
+            ModelCatalog: ComposeInventoryModelCatalog(diagnostic, inventoryService),
             Status: diagnostic?.Status ?? ReadyStatus,
             Source: NyxIdLlmProviderSource.UserService,
             Allowed: true,
             Description: null,
             Identity: InventoryIdentity(inventoryService));
+    }
+
+    private static LLMModelCatalog ComposeInventoryModelCatalog(
+        NyxIdLlmService? diagnostic,
+        NyxIdUserService inventoryService)
+    {
+        if (string.IsNullOrWhiteSpace(inventoryService.DefaultModel))
+            return diagnostic?.ModelCatalog.Clone() ?? NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.NotPublished);
+
+        if (diagnostic?.ModelCatalog.Certainty == LLMModelCatalogCertainty.Unavailable)
+            return diagnostic.ModelCatalog.Clone();
+
+        IReadOnlyList<string> models = diagnostic?.ModelCatalog.Certainty == LLMModelCatalogCertainty.Enumerated
+            ? diagnostic.ModelCatalog.ModelIds
+            : [inventoryService.DefaultModel];
+        return BuildModelCatalog(models, inventoryService.DefaultModel, ReadyStatus, true);
     }
 
     private static bool IsEligible(NyxIdUserService service) =>

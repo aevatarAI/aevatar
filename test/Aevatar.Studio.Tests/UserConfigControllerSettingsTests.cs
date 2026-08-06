@@ -29,7 +29,7 @@ public sealed class UserConfigControllerSettingsTests
                   "display_name": "OpenAI Work",
                   "route_value": "/api/v1/proxy/s/openai-work",
                   "default_model": "gpt-5.4",
-                  "models": ["gpt-5.4"],
+                  "models": ["gpt-5.4", "gpt-5.5"],
                   "status": "ready",
                   "source": "user",
                   "allowed": true
@@ -39,7 +39,7 @@ public sealed class UserConfigControllerSettingsTests
             """),
             (HttpStatusCode.OK, """{"keys":[]}"""),
             (HttpStatusCode.OK, """{"services":[]}"""))
-            .RespondToUserServicesWith(PersonalUserServicesJson("us-openai", "openai-work", "OpenAI Work"));
+            .RespondToUserServicesWith(PersonalUserServicesJson("us-openai", "openai-work", "OpenAI Work", "gpt-5.5"));
         var controller = CreateController(
             current: UserServiceConfig("gpt-5.4", "openai-work", "us-openai"),
             httpHandler: httpHandler,
@@ -59,7 +59,7 @@ public sealed class UserConfigControllerSettingsTests
         payload.RouteOptions.Should().Contain(option =>
             option.UserServiceId == "us-openai" &&
             option.Ready &&
-            option.ModelCatalog.DefaultModelId == "gpt-5.4");
+            option.ModelCatalog.DefaultModelId == "gpt-5.5");
         payload.RouteOptions.Should()
             .ContainSingle(option => option.RouteValue == UserConfigLlmRouteDefaults.Gateway)
             .Which.ModelCatalog.Certainty.Should().Be("unavailable");
@@ -846,20 +846,29 @@ public sealed class UserConfigControllerSettingsTests
         BuildNyxIdConfiguration(),
         NullLogger<NyxIdLlmCatalogHttpClient>.Instance);
 
-    private static string PersonalUserServicesJson(string id, string slug, string label) => $$"""
-        {
-          "services": [
-            {
-              "id": "{{id}}",
-              "slug": "{{slug}}",
-              "label": "{{label}}",
-              "catalog_service_name": "{{label}}",
-              "is_active": true,
-              "credential_source": { "type": "personal" }
-            }
-          ]
-        }
+    private static string PersonalUserServicesJson(string id, string slug, string label, string? defaultModel = null)
+    {
+        var defaultModelJson = string.IsNullOrWhiteSpace(defaultModel)
+            ? string.Empty
+            : $$""",
+              "default_model": "{{defaultModel}}"
         """;
+
+        return $$"""
+            {
+              "services": [
+                {
+                  "id": "{{id}}",
+                  "slug": "{{slug}}",
+                  "label": "{{label}}",
+                  "catalog_service_name": "{{label}}",
+                  "is_active": true,
+                  "credential_source": { "type": "personal" }{{defaultModelJson}}
+                }
+              ]
+            }
+            """;
+    }
 
     private static string SingleReadyServiceJson() => """
         {
