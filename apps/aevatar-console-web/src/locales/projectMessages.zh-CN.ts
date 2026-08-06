@@ -2243,6 +2243,7 @@ const projectMessages = {
   "pages.primitives.index.exposed.parameters": "个已暴露参数",
   "pages.primitives.index.filter.categories": "筛选分类",
   "pages.primitives.index.filter.connector": "筛选连接器",
+  "pages.primitives.index.loading.connectors": "正在加载连接器",
   "pages.primitives.index.none": "无",
   "pages.primitives.index.open.behavior.definition": "打开行为定义",
   "pages.primitives.index.optional": "可选",

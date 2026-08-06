@@ -174,6 +174,7 @@ const zhCNMessages = {
   'pages.missionwall.state.publishedWorkflowTitle': '暂无可见 run',
   'pages.missionwall.stageSubtitle': 'Team {teamName} · {memberName}',
   'pages.missionwall.stageTitle': '{workflowName} · Step Flow',
+  'pages.missionwall.stepFlow': 'Step Flow',
   'pages.missionwall.stepStatus.active': '运行中',
   'pages.missionwall.stepStatus.completed': '已完成',
   'pages.missionwall.stepStatus.failed': '失败',

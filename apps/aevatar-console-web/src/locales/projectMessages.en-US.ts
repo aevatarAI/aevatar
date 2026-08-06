@@ -2243,6 +2243,7 @@ const projectMessages = {
   "pages.primitives.index.exposed.parameters": "Exposed parameters",
   "pages.primitives.index.filter.categories": "Filter categories",
   "pages.primitives.index.filter.connector": "Filter connector",
+  "pages.primitives.index.loading.connectors": "Loading connectors",
   "pages.primitives.index.none": "None",
   "pages.primitives.index.open.behavior.definition": "Open behavior definition",
   "pages.primitives.index.optional": "Optional",
