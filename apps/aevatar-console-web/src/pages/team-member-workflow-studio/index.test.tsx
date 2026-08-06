@@ -1135,10 +1135,10 @@ describe('TeamMemberWorkflowStudioPage', () => {
     );
     expect(message.error).not.toHaveBeenCalled();
     expect(
-      await screen.findByText(
+      screen.queryByText(
         "We couldn't create the workflow member. Review your changes and try again.",
       ),
-    ).toBeTruthy();
+    ).toBeNull();
   });
 
   it('waits for a newly created workflow member to materialize before linking the draft', async () => {
@@ -1265,14 +1265,16 @@ describe('TeamMemberWorkflowStudioPage', () => {
     const saveButton = screen.getByRole('button', { name: 'Save' });
     fireEvent.click(saveButton);
 
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        'Could not finish linking the workflow member. Save again to retry.',
+      ),
+    );
     expect(
-      await screen.findByText(
+      screen.queryByText(
         "We couldn't finish linking the workflow member. Your draft is still available. Save again to retry.",
       ),
-    ).toBeTruthy();
-    expect(mockConsoleToast.error).toHaveBeenCalledWith(
-      'Could not finish linking the workflow member. Save again to retry.',
-    );
+    ).toBeNull();
     expect(studioApi.saveWorkflow).toHaveBeenCalledTimes(1);
     expect(studioApi.createMember).toHaveBeenCalledTimes(1);
     expect(studioApi.updateMemberImplementationRef).not.toHaveBeenCalled();
@@ -7471,12 +7473,13 @@ describe('TeamMemberWorkflowStudioPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {
-      expect(
-        screen.getByText(
-          "We couldn't validate and publish the workflow. Review the workflow and try again.",
-        ),
-      ).toBeTruthy();
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        'Could not save and publish the workflow. Review the details and try again.',
+      );
     });
+    expect(
+      screen.queryByText('Latest workflow preview failed.'),
+    ).not.toBeInTheDocument();
     expect(studioApi.previewExplicitRequests).toHaveBeenCalledWith({
       executionMode: 'interactive',
       inlineWorkflowYamls: {},

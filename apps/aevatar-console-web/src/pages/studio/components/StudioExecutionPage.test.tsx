@@ -3,6 +3,17 @@ import { setLocale } from '@umijs/max';
 import React from 'react';
 import { StudioExecutionPage } from './StudioWorkbenchSections';
 
+const mockConsoleToast = {
+  error: jest.fn(),
+  info: jest.fn(),
+  success: jest.fn(),
+  warning: jest.fn(),
+};
+
+jest.mock('@/shared/ui/ConsoleToast', () => ({
+  useConsoleToast: () => mockConsoleToast,
+}));
+
 jest.mock('@/shared/graphs/GraphCanvas', () => ({
   __esModule: true,
   default: () => {
@@ -128,6 +139,7 @@ function createBaseProps(overrides = {}) {
 
 describe('StudioExecutionPage', () => {
   beforeEach(() => {
+    jest.clearAllMocks();
     setLocale('zh-CN', false);
   });
 
@@ -165,7 +177,9 @@ describe('StudioExecutionPage', () => {
     expect(screen.getByText('人工回放')).toBeInTheDocument();
     expect(screen.getByText('观察事实')).toBeInTheDocument();
     expect(screen.getByText('运行中')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '停止运行' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: '停止运行' }),
+    ).toBeInTheDocument();
     expect(screen.getByText('执行日志')).toBeInTheDocument();
     expect(screen.getByLabelText('选择运行记录')).toBeInTheDocument();
     expect(screen.getByText('Graph canvas')).toBeInTheDocument();
@@ -178,24 +192,26 @@ describe('StudioExecutionPage', () => {
       value: { writeText },
     });
 
-    render(
-      React.createElement(StudioExecutionPage, createBaseProps() as any),
-    );
+    render(React.createElement(StudioExecutionPage, createBaseProps() as any));
 
     expect(screen.queryByText('Actor ID')).toBeNull();
     expect(screen.queryByText('actor-1')).toBeNull();
-    expect(screen.queryByRole('button', { name: '复制 Actor ID。' })).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: '复制 Actor ID。' }),
+    ).toBeNull();
     expect(writeText).not.toHaveBeenCalled();
   });
 
   it('surfaces approval playback details from the selected execution trace', () => {
-    render(
-      React.createElement(StudioExecutionPage, createBaseProps() as any),
-    );
+    render(React.createElement(StudioExecutionPage, createBaseProps() as any));
 
-    expect(screen.getAllByText('triage waiting for approval').length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText('triage waiting for approval').length,
+    ).toBeGreaterThan(0);
     expect(screen.getAllByText('triage approved').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Need L2 approval before refund.').length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText('Need L2 approval before refund.').length,
+    ).toBeGreaterThan(0);
   });
 
   it('allows sending a signal when the selected run is waiting on wait_signal', async () => {
@@ -317,5 +333,28 @@ describe('StudioExecutionPage', () => {
     );
 
     expect(screen.getByText('Select a member to observe.')).toBeInTheDocument();
+  });
+
+  it('reports execution action failures with a safe toast', async () => {
+    render(
+      React.createElement(
+        StudioExecutionPage,
+        createBaseProps({
+          executionNotice: {
+            message: 'POST /api/runs/stop returned 500',
+            type: 'error',
+          },
+        }) as any,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        '无法完成运行操作，请重试。',
+      );
+    });
+    expect(
+      screen.queryByText('POST /api/runs/stop returned 500'),
+    ).not.toBeInTheDocument();
   });
 });

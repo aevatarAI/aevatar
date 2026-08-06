@@ -488,9 +488,14 @@ describe("GAgentsPage", () => {
 
     expect(
       await screen.findByText(
-        "Acknowledge the replacement impact before publishing a new binding revision."
+        "Binding action could not be completed. Try again."
       )
     ).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "Acknowledge the replacement impact before publishing a new binding revision."
+      )
+    ).toBeNull();
     expect(mockedRuntimeGAgentApi.bindScopeGAgent).not.toHaveBeenCalled();
 
     fireEvent.click(

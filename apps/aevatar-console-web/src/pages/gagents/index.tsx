@@ -59,6 +59,7 @@ import {
   AevatarWorkbenchLayout,
 } from '@/shared/ui/aevatarPageShells';
 import { describeError } from '@/shared/ui/errorText';
+import ConsoleOperationNotice from '@/shared/ui/ConsoleOperationNotice';
 import { getUserFacingIdentifierLabel } from '@/shared/ui/userFacingIdentifiers';
 import { resolveStudioScopeContext } from '@/pages/scopes/components/resolvedScope';
 import { t } from "@/shared/i18n/messages";
@@ -1756,15 +1757,14 @@ const GAgentsPage: React.FC = () => {
       title={t("pages.gagents.index.actor.registry", "Actor Registry")}
     >
       <Space orientation="vertical" size={12} style={{ width: '100%' }}>
-        {registryNotice ? (
-          <Alert
-            closable
-            onClose={() => setRegistryNotice(null)}
-            showIcon
-            title={registryNotice.message}
-            type={registryNotice.type}
-          />
-        ) : null}
+        <ConsoleOperationNotice
+          errorMessage={t(
+            'pages.gagents.index.registryActionFailed',
+            'Actor registry action could not be completed. Try again.',
+          )}
+          notice={registryNotice}
+          onClose={() => setRegistryNotice(null)}
+        />
 
         {gAgentActorsQuery.error ? (
           <Alert
@@ -2197,7 +2197,7 @@ const GAgentsPage: React.FC = () => {
                         <Space orientation="vertical" size={12} style={{ width: '100%' }}>
                           {bindingDraft.endpoints.map((endpoint, index) => (
                             <div
-                              key={`binding-endpoint-${index}`}
+                              key={endpoint.endpointId}
                               style={{
                                 ...summaryMetricStyle,
                                 display: 'flex',
@@ -2704,15 +2704,14 @@ const GAgentsPage: React.FC = () => {
       }}
     >
       {selectedTypePanel}
-      {bindingNotice ? (
-        <Alert
-          closable
-          onClose={() => setBindingNotice(null)}
-          showIcon
-          type={bindingNotice.type}
-          title={bindingNotice.message}
-        />
-      ) : null}
+      <ConsoleOperationNotice
+        errorMessage={t(
+          'pages.gagents.index.bindingActionFailed',
+          'Binding action could not be completed. Try again.',
+        )}
+        notice={bindingNotice}
+        onClose={() => setBindingNotice(null)}
+      />
       <Tabs
         activeKey={activeWorkbenchTab}
         items={workbenchTabs}

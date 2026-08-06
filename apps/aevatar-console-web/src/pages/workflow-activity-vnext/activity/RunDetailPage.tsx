@@ -131,7 +131,6 @@ const RunDetailPage: React.FC<{
     retry: false,
   });
   const [forking, setForking] = React.useState(false);
-  const [forkError, setForkError] = React.useState('');
   const [receipt, setReceipt] =
     React.useState<WorkflowRunForkAcceptedReceipt | null>(null);
   const [pendingRecovery, setPendingRecovery] = React.useState<{
@@ -200,7 +199,6 @@ const RunDetailPage: React.FC<{
   const fork = async (startAtStepId: string): Promise<boolean> => {
     if (forking) return false;
     setForking(true);
-    setForkError('');
     try {
       setReceipt(
         await workflowActivityApi.forkRun({
@@ -210,8 +208,13 @@ const RunDetailPage: React.FC<{
         }),
       );
       return true;
-    } catch (error) {
-      setForkError(errorMessage(error));
+    } catch {
+      toast.error(
+        t(
+          'workflowActivityVNext.run.startFailed',
+          "The new run couldn't be started",
+        ),
+      );
       return false;
     } finally {
       setForking(false);
@@ -365,17 +368,6 @@ const RunDetailPage: React.FC<{
           </Button>
         </Space>
       </div>
-      {forkError ? (
-        <Alert
-          description={<TechnicalDetails>{forkError}</TechnicalDetails>}
-          message={t(
-            'workflowActivityVNext.run.startFailed',
-            "The new run couldn't be started",
-          )}
-          showIcon
-          type="error"
-        />
-      ) : null}
       {receipt ? (
         <Alert
           action={
@@ -925,17 +917,6 @@ const RunDetailPage: React.FC<{
             },
           ]}
         />
-        {forkError ? (
-          <Alert
-            description={<TechnicalDetails>{forkError}</TechnicalDetails>}
-            message={t(
-              'workflowActivityVNext.run.startFailed',
-              "The new run couldn't be started",
-            )}
-            showIcon
-            type="error"
-          />
-        ) : null}
       </Modal>
     </WorkflowActivityVNextShell>
   );

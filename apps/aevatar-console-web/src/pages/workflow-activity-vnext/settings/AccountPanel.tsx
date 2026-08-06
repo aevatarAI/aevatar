@@ -5,7 +5,7 @@ import {
   SafetyCertificateOutlined,
   UserOutlined,
 } from '@ant-design/icons';
-import { Alert, Avatar, Button, Descriptions, Space, Typography } from 'antd';
+import { Avatar, Button, Descriptions, Space, Typography } from 'antd';
 import React from 'react';
 import { NyxIDAuthClient } from '@/shared/auth/client';
 import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
@@ -16,6 +16,7 @@ import {
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
 import { AevatarCompactText } from '@/shared/ui/compactText';
+import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import TechnicalDetails from '../TechnicalDetails';
 import type { AccountField, AccountIdentity } from './accountIdentity';
 
@@ -57,8 +58,8 @@ const AccountPanel: React.FC<AccountPanelProps> = ({
   onRefresh,
   returnTo,
 }) => {
+  const toast = useConsoleToast();
   const [reviewPending, setReviewPending] = React.useState(false);
-  const [reviewError, setReviewError] = React.useState('');
   const recoverable =
     identity.sessionState === 'expired' || identity.sessionState === 'invalid';
   const displayName = accountFieldValue(identity.displayName);
@@ -76,14 +77,13 @@ const AccountPanel: React.FC<AccountPanelProps> = ({
   const reviewServiceAccess = async () => {
     try {
       setReviewPending(true);
-      setReviewError('');
       await new NyxIDAuthClient(getNyxIDRuntimeConfig()).loginWithRedirect({
         flow: 'serviceAccessReview',
         returnTo,
       });
     } catch {
       setReviewPending(false);
-      setReviewError(
+      toast.error(
         t(
           'workflowActivityVNext.settings.serviceAccessFailed',
           'Could not start service access review. Try again.',
@@ -172,10 +172,6 @@ const AccountPanel: React.FC<AccountPanelProps> = ({
           </>
         )}
       </Space>
-
-      {reviewError ? (
-        <Alert message={reviewError} role="alert" showIcon type="error" />
-      ) : null}
 
       <TechnicalDetails
         summary={t(

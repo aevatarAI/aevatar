@@ -3,6 +3,7 @@ import { Alert, Button, Modal, Select, Space, Typography } from 'antd';
 import React from 'react';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import { t } from '@/shared/i18n/messages';
+import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import type {
   StudioExplicitRequestConfirmation,
   StudioExplicitRequestPreview,
@@ -92,7 +93,7 @@ const WorkflowPublishDialog: React.FC<WorkflowPublishDialogProps> = ({
   const [selectedServiceId, setSelectedServiceId] = React.useState('');
   const [stage, setStage] = React.useState<PublicationStage>('selecting');
   const [review, setReview] = React.useState<PublicationReview | null>(null);
-  const [actionError, setActionError] = React.useState<unknown>(null);
+  const toast = useConsoleToast();
   const reviewGenerationRef = React.useRef(0);
   const servicesQuery = useQuery({
     enabled: open && Boolean(normalizedScopeId),
@@ -117,7 +118,6 @@ const WorkflowPublishDialog: React.FC<WorkflowPublishDialogProps> = ({
     setSelectedServiceId('');
     setStage('selecting');
     setReview(null);
-    setActionError(null);
   }, [open, selectedServiceIsAvailable]);
 
   const servicesStatus = errorStatus(servicesQuery.error);
@@ -135,14 +135,12 @@ const WorkflowPublishDialog: React.FC<WorkflowPublishDialogProps> = ({
     reviewGenerationRef.current += 1;
     setStage('selecting');
     setReview(null);
-    setActionError(null);
     onReturnToSelection();
   }, [onReturnToSelection]);
 
   const handleReview = React.useCallback(async () => {
     if (!canReview) return;
     const generation = ++reviewGenerationRef.current;
-    setActionError(null);
     setReview(null);
     setStage('preparing');
     try {
@@ -161,14 +159,13 @@ const WorkflowPublishDialog: React.FC<WorkflowPublishDialogProps> = ({
       setStage('reviewing');
     } catch (error) {
       if (generation !== reviewGenerationRef.current) return;
-      setActionError(error);
+      toast.error(errorCopy(error));
       setStage('selecting');
     }
-  }, [canReview, onReview, selectedServiceId]);
+  }, [canReview, onReview, selectedServiceId, toast]);
 
   const handlePublish = React.useCallback(async () => {
     if (!review || stage !== 'reviewing') return;
-    setActionError(null);
     setStage('submitting');
     try {
       const confirmations = review.preview.items.map((item) => ({
@@ -184,10 +181,10 @@ const WorkflowPublishDialog: React.FC<WorkflowPublishDialogProps> = ({
         serviceId: review.serviceId,
       });
     } catch (error) {
-      setActionError(error);
+      toast.error(errorCopy(error));
       setStage('reviewing');
     }
-  }, [onPublish, review, stage]);
+  }, [onPublish, review, stage, toast]);
 
   const close = React.useCallback(() => {
     if (stage === 'submitting') return;
@@ -226,21 +223,6 @@ const WorkflowPublishDialog: React.FC<WorkflowPublishDialogProps> = ({
     />
   ) : null;
 
-  const actionErrorAlert = actionError ? (
-    <Alert
-      action={
-        stage === 'selecting' && selectedServiceId ? (
-          <Button onClick={() => void handleReview()}>
-            {t('workflowActivityVNext.publish.reviewAgain', 'Review again')}
-          </Button>
-        ) : undefined
-      }
-      message={errorCopy(actionError)}
-      showIcon
-      type="error"
-    />
-  ) : null;
-
   const selectionContent = (
     <>
       <Typography.Paragraph>
@@ -259,7 +241,6 @@ const WorkflowPublishDialog: React.FC<WorkflowPublishDialogProps> = ({
         </Typography.Text>
       ) : null}
       {serviceErrorAlert}
-      {actionErrorAlert}
       {hasNoServices ? (
         <Alert
           action={
@@ -282,7 +263,6 @@ const WorkflowPublishDialog: React.FC<WorkflowPublishDialogProps> = ({
             reviewGenerationRef.current += 1;
             setSelectedServiceId(value);
             setReview(null);
-            setActionError(null);
           }}
           options={services.map((service) => ({
             label: service.displayName,
@@ -362,7 +342,6 @@ const WorkflowPublishDialog: React.FC<WorkflowPublishDialogProps> = ({
           </div>
         ))
       )}
-      {actionErrorAlert}
     </>
   ) : null;
 

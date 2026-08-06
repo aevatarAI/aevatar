@@ -311,6 +311,27 @@ const WorkflowEditorPage: React.FC<{
     );
   }, [editor.saveError, toast]);
 
+  React.useEffect(() => {
+    if (!editor.nodeInsertionError) return;
+    toast.error(
+      <Space size="small">
+        <span>
+          {t(
+            'workflowActivityVNext.editor.addNodeFailed',
+            "Couldn't add node",
+          )}
+        </span>
+        <Button
+          onClick={() => void editor.retryNodeInsertion()}
+          size="small"
+          type="link"
+        >
+          {t('workflowActivityVNext.common.retry', 'Retry')}
+        </Button>
+      </Space>,
+    );
+  }, [editor.nodeInsertionError, editor.retryNodeInsertion, toast]);
+
   const retryMaterialization = React.useCallback(async () => {
     await editor.retryMaterialization();
   }, [editor.retryMaterialization]);
@@ -919,27 +940,6 @@ const WorkflowEditorPage: React.FC<{
           />
         </div>
       </div>
-      {editor.nodeInsertionError ? (
-        <Alert
-          action={
-            <Button
-              disabled={editorWriteLocked}
-              onClick={() => void editor.retryNodeInsertion()}
-            >
-              {t('workflowActivityVNext.common.retry', 'Retry')}
-            </Button>
-          }
-          description={
-            <TechnicalDetails>{editor.nodeInsertionError}</TechnicalDetails>
-          }
-          message={t(
-            'workflowActivityVNext.editor.addNodeFailed',
-            "Couldn't add node",
-          )}
-          showIcon
-          type="error"
-        />
-      ) : null}
       {editor.materialization.phase !== 'idle' &&
       editor.materialization.receipt ? (
         <Alert

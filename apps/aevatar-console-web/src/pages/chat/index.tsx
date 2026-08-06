@@ -30,6 +30,7 @@ import React, {
 } from "react";
 import { studioApi } from "@/shared/studio/api";
 import { AevatarPageShell } from "@/shared/ui/aevatarPageShells";
+import { useConsoleToast } from "@/shared/ui/ConsoleToast";
 import { resolveStudioScopeContext } from "../scopes/components/resolvedScope";
 import {
   applyRuntimeEvent,
@@ -609,6 +610,7 @@ function formatTurnCount(count: number): string {
 }
 
 const ChatPage: React.FC = () => {
+  const toast = useConsoleToast();
   const { token } = theme.useToken();
   const queryClient = useQueryClient();
   const activeConversationRef = useRef<ConversationState | null>(null);
@@ -626,7 +628,6 @@ const ChatPage: React.FC = () => {
   const [conversationStateScopeId, setConversationStateScopeId] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<ConversationMeta | null>(null);
   const [deletingConversation, setDeletingConversation] = useState(false);
-  const [deleteError, setDeleteError] = useState("");
   const [deletedConversationIds, setDeletedConversationIds] = useState<
     ReadonlySet<string>
   >(() => new Set());
@@ -800,7 +801,6 @@ const ChatPage: React.FC = () => {
     setConversationStateScopeId(scopeId);
     setActiveConversation(null);
     setDeleteTarget(null);
-    setDeleteError("");
     setDeletingConversation(false);
     setDeletedConversationIds(new Set());
     setPendingConversations(new Map());
@@ -965,7 +965,6 @@ const ChatPage: React.FC = () => {
       return;
     }
 
-    setDeleteError("");
     setDeletingConversation(true);
     const deleteScopeEpoch = scopeEpochRef.current;
     try {
@@ -994,17 +993,22 @@ const ChatPage: React.FC = () => {
       }
       setDeleteTarget(null);
       await queryClient.invalidateQueries({ queryKey: ["chat-history", scopeId] });
-    } catch (error) {
+    } catch {
       if (scopeEpochRef.current !== deleteScopeEpoch) {
         return;
       }
-      setDeleteError(errorMessage(error));
+      toast.error(
+        t(
+          "pages.chat.index.deleteChatFailed",
+          "Conversation could not be deleted",
+        ),
+      );
     } finally {
       if (scopeEpochRef.current === deleteScopeEpoch) {
         setDeletingConversation(false);
       }
     }
-  }, [deleteTarget, deletingConversation, isStreaming, queryClient, scopeId]);
+  }, [deleteTarget, deletingConversation, isStreaming, queryClient, scopeId, toast]);
 
   const reconcileConversation = useCallback(
     (conversation: ConversationState) => {
@@ -1918,7 +1922,6 @@ const ChatPage: React.FC = () => {
                       disabled={isStreaming}
                       icon={<DeleteOutlined />}
                       onClick={() => {
-                        setDeleteError("");
                         setDeleteTarget(conversation);
                       }}
                       style={{ minHeight: 40, minWidth: 40 }}
@@ -2324,7 +2327,6 @@ const ChatPage: React.FC = () => {
         onCancel={() => {
           if (!deletingConversation) {
             setDeleteTarget(null);
-            setDeleteError("");
           }
         }}
         onOk={() => void handleDeleteConversation()}
@@ -2339,17 +2341,6 @@ const ChatPage: React.FC = () => {
             { title: deleteTarget?.title || "" }
           )}
         </Typography.Paragraph>
-        {deleteError ? (
-          <Alert
-            description={deleteError}
-            message={t(
-              "pages.chat.index.deleteChatFailed",
-              "Conversation could not be deleted"
-            )}
-            showIcon
-            type="error"
-          />
-        ) : null}
       </Modal>
     </AevatarPageShell>
   );
