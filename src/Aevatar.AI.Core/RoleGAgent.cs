@@ -654,7 +654,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             {
                 var recoveredPendingContext = await TryResolveRecoveryExecutionContextAsync(
                     pendingCheckpoint,
-                    approvalResumeCt).ConfigureAwait(false);
+                    approvalResumeCt);
                 if (pendingCheckpoint.RequiresRuntimeCredential && recoveredPendingContext is null)
                 {
                     throw new InvalidOperationException(
@@ -690,7 +690,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     pending.SessionId,
                     pending.OperationId,
                     _timeProvider.GetUtcNow(),
-                    approvalResumeCt).ConfigureAwait(false);
+                    approvalResumeCt);
                 if (storedResult is null)
                 {
                     toolOutcome = await _toolExecutionPort.ExecuteAsync(
@@ -741,7 +741,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                             toolOutcome.FailureCode,
                             toolOutcome.Receipt),
                         ResolveRecoveryPayloadExpiry(State.Sessions[pending.SessionId].RecoveryCheckpoint!),
-                        approvalResumeCt).ConfigureAwait(false);
+                        approvalResumeCt);
 
                     Logger.LogInformation(
                         "[{Role}] Tool executed. result length={Len} request={RequestId}",
@@ -1814,7 +1814,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var recoveredControl = LLMControlContextMapper.FromPayload(checkpoint.LlmControl);
         var recoveredContext = await TryResolveRecoveryExecutionContextAsync(
             checkpoint,
-            CancellationToken.None).ConfigureAwait(false);
+            CancellationToken.None);
         if (recoveredContext is null)
         {
             await FinalizeRecoveryOutcomeUncertainAsync(
@@ -1837,7 +1837,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 request.SessionId,
                 checkpoint,
                 recoveredContext,
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None);
         }
         catch (ChatToolRecoveryPayloadMaterialException ex)
         {
@@ -2014,7 +2014,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 sourceSessionId,
                 checkpoint,
                 AgentToolExecutionContext.Empty,
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None);
         }
         catch (ChatToolRecoveryPayloadMaterialException)
         {
@@ -2083,7 +2083,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 reference.OwnerScopeKey,
                 reference.SubjectId,
                 "role-chat-checkpoint-recovery"),
-            ct).ConfigureAwait(false);
+            ct);
         if (!resolved.Resolved ||
             string.IsNullOrWhiteSpace(resolved.Secret) ||
             !MatchesResolvedCredentialReference(reference, resolved.Reference, _timeProvider.GetUtcNow()))
@@ -2187,7 +2187,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     sessionId,
                     intent.OperationId,
                     _timeProvider.GetUtcNow(),
-                    ct).ConfigureAwait(false);
+                    ct);
                 if (!string.Equals(
                         AgentToolArgumentsDigest.ComputeSha256(committedResult.ResultJson),
                         completion.ResultSha256,
@@ -2208,7 +2208,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     intent.OperationId,
                     ChatToolRecoveryPayloadKind.Arguments,
                     _timeProvider.GetUtcNow(),
-                    ct).ConfigureAwait(false);
+                    ct);
                 if (!string.Equals(
                         AgentToolArgumentsDigest.ComputeSha256(committedArguments),
                         intent.ArgumentsSha256,
@@ -2237,7 +2237,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 sessionId,
                 intent.OperationId,
                 _timeProvider.GetUtcNow(),
-                ct).ConfigureAwait(false);
+                ct);
             if (storedResult is not null)
             {
                 var storedArguments = await payloadStore.ResolveAsync(
@@ -2247,7 +2247,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     intent.OperationId,
                     ChatToolRecoveryPayloadKind.Arguments,
                     _timeProvider.GetUtcNow(),
-                    ct).ConfigureAwait(false);
+                    ct);
                 if (!string.Equals(
                         AgentToolArgumentsDigest.ComputeSha256(storedArguments),
                         intent.ArgumentsSha256,
@@ -2284,7 +2284,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                         !storedResult.Payload.Success,
                         storedResult.Payload.Receipt?.Clone()),
                     storedResult,
-                    ct).ConfigureAwait(false);
+                    ct);
                 results.Add(new RecoveredChatToolResult(
                     intent.Round,
                     storedOperation.ToolCall,
@@ -2309,7 +2309,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 intent.OperationId,
                 ChatToolRecoveryPayloadKind.Arguments,
                 _timeProvider.GetUtcNow(),
-                ct).ConfigureAwait(false);
+                ct);
             if (!string.Equals(
                     AgentToolArgumentsDigest.ComputeSha256(arguments),
                     intent.ArgumentsSha256,
@@ -2338,7 +2338,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 checkpoint,
                 intent,
                 operationContext,
-                ct).ConfigureAwait(false);
+                ct);
             if (tool is null)
                 return null;
             var outcome = await _toolExecutionPort.ExecuteAsync(
@@ -2349,7 +2349,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     AgentToolApprovalContinuationMode.ActorOwned,
                     null,
                     AgentToolExecutionAttemptKind.ActorRecovery),
-                ct).ConfigureAwait(false);
+                ct);
             if (!outcome.TerminalInvoked && outcome.Retryable)
                 throw new InvalidOperationException(outcome.SafeMessage);
             if (string.Equals(outcome.FailureCode, "outcome_uncertain", StringComparison.OrdinalIgnoreCase))
@@ -2379,7 +2379,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     AgentToolExecutionAttemptKind.ActorRecovery),
                 result,
                 storedResult: null,
-                ct).ConfigureAwait(false);
+                ct);
             results.Add(new RecoveredChatToolResult(
                 intent.Round,
                 new ToolCall

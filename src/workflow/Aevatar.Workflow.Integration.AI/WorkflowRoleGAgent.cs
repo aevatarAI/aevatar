@@ -344,7 +344,7 @@ public class WorkflowRoleGAgent(
                         : authority.BindingId,
                 },
             };
-            return await RefreshCallerTokenAsync(context, ct).ConfigureAwait(false);
+            return await RefreshCallerTokenAsync(context, ct);
         }
 
         if (checkpoint.RequiresRuntimeCredential)
@@ -357,11 +357,11 @@ public class WorkflowRoleGAgent(
             if (context.NyxIdAuthority.IsComplete &&
                 !string.IsNullOrWhiteSpace(context.NyxIdAuthority.Scope))
             {
-                return await RefreshCallerTokenAsync(context, ct).ConfigureAwait(false);
+                return await RefreshCallerTokenAsync(context, ct);
             }
         }
 
-        return await base.TryResolveRecoveryExecutionContextAsync(checkpoint, ct).ConfigureAwait(false);
+        return await base.TryResolveRecoveryExecutionContextAsync(checkpoint, ct);
     }
 
     protected override async Task<IAgentTool?> ResolveRecoveryToolAsync(
@@ -377,7 +377,7 @@ public class WorkflowRoleGAgent(
         var catalog = await BuildRequestToolCatalogAsync(
             ToToolScope(continuation),
             executionContext,
-            ct).ConfigureAwait(false);
+            ct);
         ct.ThrowIfCancellationRequested();
         return catalog?.RouteOwnedTools.GetValueOrDefault(intent.ToolName)
                ?? Tools.Get(intent.ToolName);
@@ -748,8 +748,7 @@ public class WorkflowRoleGAgent(
         {
             var toolContext = recoveryToolContext ?? await RefreshCallerTokenAsync(
                     AgentToolExecutionContextMapper.FromPayload(request.ToolContext),
-                    timeoutCts.Token)
-                .ConfigureAwait(false);
+                    timeoutCts.Token);
             timeoutCts.Token.ThrowIfCancellationRequested();
             toolContext = toolContext with
             {

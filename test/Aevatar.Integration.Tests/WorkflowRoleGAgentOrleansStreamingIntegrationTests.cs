@@ -5,11 +5,13 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Tests.Shared;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
@@ -26,6 +28,96 @@ namespace Aevatar.Integration.Tests;
 
 public sealed class WorkflowRoleGAgentOrleansStreamingIntegrationTests
 {
+    [Fact]
+    public async Task CheckpointRecovery_ShouldRetainActivationContext_AfterDurableCredentialResolution()
+    {
+        var roleActorId = $"workflow-role-recovery-{Guid.NewGuid():N}";
+        var provider = new YieldingLlmProvider(failAfterTool: false);
+        var tool = new ReadOnlyLookupTool();
+        var eventStore = new FailOnceToolCompletionCheckpointEventStore();
+        var vault = new YieldingSecretVault();
+        var credential = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+            "schedule:activation-recovery",
+            "subject-activation-recovery",
+            "synthetic-token",
+            "seed activation recovery test",
+            DateTimeOffset.UtcNow.AddMinutes(5),
+            "credential-activation-recovery"));
+        var host = await StartSiloHostAsync(provider, tool, vault, eventStore);
+
+        try
+        {
+            var grain = host.Services
+                .GetRequiredService<IGrainFactory>()
+                .GetGrain<IRuntimeActorGrain>(roleActorId);
+            (await grain.InitializeAgentByKindAsync(WorkflowRoleConventions.DefaultAgentKind))
+                .Should()
+                .BeTrue();
+
+            await grain.HandleEnvelopeAsync(BuildEnvelope(
+                roleActorId,
+                new WorkflowRoleInitializeEvent
+                {
+                    RoleId = "assistant",
+                    RoleName = "Assistant",
+                    ProviderName = provider.Name,
+                    SystemPrompt = "Reply to the recovered workflow turn.",
+                }));
+
+            var completionSource =
+                new TaskCompletionSource<WorkflowLlmInvocationCompletedEvent>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+            var stream = host.Services
+                .GetRequiredService<IStreamProvider>()
+                .GetStream(roleActorId);
+            await using var subscription = await stream.SubscribeAsync<EventEnvelope>(envelope =>
+            {
+                if (envelope.Payload?.Is(WorkflowLlmInvocationCompletedEvent.Descriptor) == true)
+                {
+                    completionSource.TrySetResult(
+                        envelope.Payload.Unpack<WorkflowLlmInvocationCompletedEvent>());
+                }
+
+                return Task.CompletedTask;
+            });
+
+            await grain.HandleEnvelopeAsync(BuildEnvelope(
+                roleActorId,
+                new WorkflowLlmExecutionIntent
+                {
+                    RunId = "run-recovery",
+                    StepId = "step-recovery",
+                    SessionId = "session-recovery",
+                    Prompt = "hello",
+                    SenderNyxIdAccessToken = "synthetic-sender-token",
+                    CallerCredential = new WorkflowCallerCredential
+                    {
+                        DurableCallerCredential = new DurableCallerCredentialRef
+                        {
+                            Ref = credential.Reference.Ref,
+                            Purpose = credential.Reference.Purpose,
+                            OwnerScopeKey = credential.Reference.OwnerScopeKey,
+                            SubjectId = "subject-activation-recovery",
+                            SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+                        },
+                    },
+                }));
+
+            var completion = await completionSource.Task.WaitAsync(TimeSpan.FromSeconds(20));
+            completion.Success.Should().BeTrue();
+            completion.Content.Should().Be("streamed response");
+            provider.CallCount.Should().Be(2);
+            tool.CallCount.Should().Be(1);
+            eventStore.InjectedFailureCount.Should().Be(1);
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
     [Theory]
     [InlineData(false, true, "streamed response", "")]
     [InlineData(true, false, "", "llm_request_failed: provider failed after tool")]
@@ -102,7 +194,9 @@ public sealed class WorkflowRoleGAgentOrleansStreamingIntegrationTests
 
     private static Task<IHost> StartSiloHostAsync(
         YieldingLlmProvider provider,
-        ReadOnlyLookupTool tool) =>
+        ReadOnlyLookupTool tool,
+        ISecretVault? secretVault = null,
+        IEventStore? eventStore = null) =>
         SharedOrleansPortAllocator.StartHostAsync(ports => Host.CreateDefaultBuilder()
             .UseOrleans(siloBuilder =>
             {
@@ -123,7 +217,9 @@ public sealed class WorkflowRoleGAgentOrleansStreamingIntegrationTests
             .ConfigureServices(services =>
             {
                 services.AddSingleton<ILLMProviderFactory>(provider);
-                services.AddSingleton<ISecretVault, YieldingSecretVault>();
+                services.AddSingleton(secretVault ?? new YieldingSecretVault());
+                if (eventStore is not null)
+                    services.AddSingleton(eventStore);
                 services.AddSingleton<IAgentToolSource>(new StaticToolSource(tool));
                 services.AddSingleton<IAgentToolExecutionPort, ExecutingAgentToolExecutionPort>();
             })
@@ -277,6 +373,48 @@ public sealed class WorkflowRoleGAgentOrleansStreamingIntegrationTests
             RevokeSecretRequest request,
             CancellationToken ct = default) =>
             _inner.RevokeAsync(request, ct);
+    }
+
+    private sealed class FailOnceToolCompletionCheckpointEventStore : IEventStore
+    {
+        private readonly InMemoryEventStore _inner = new();
+        private int _injectedFailureCount;
+
+        public int InjectedFailureCount => Volatile.Read(ref _injectedFailureCount);
+
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            var batch = events.Select(static stateEvent => stateEvent.Clone()).ToArray();
+            if (batch.Any(stateEvent =>
+                    stateEvent.EventData.Is(RoleChatRecoveryCheckpointUpdatedEvent.Descriptor) &&
+                    stateEvent.EventData.Unpack<RoleChatRecoveryCheckpointUpdatedEvent>()
+                        .Checkpoint.ToolCompletions.Count > 0) &&
+                Interlocked.CompareExchange(ref _injectedFailureCount, 1, 0) == 0)
+            {
+                throw new InvalidOperationException("completion checkpoint append failed");
+            }
+
+            return _inner.AppendAsync(agentId, batch, expectedVersion, ct);
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId,
+            long? fromVersion = null,
+            CancellationToken ct = default) =>
+            _inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            _inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(
+            string agentId,
+            long toVersion,
+            CancellationToken ct = default) =>
+            _inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
     }
 
     private static Task CompleteOnThreadPoolAsync(CancellationToken ct)
