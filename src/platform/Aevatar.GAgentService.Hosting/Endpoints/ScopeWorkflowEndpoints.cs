@@ -9,7 +9,9 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Hosting.Sse;
+using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -43,6 +45,13 @@ public static class ScopeWorkflowEndpoints
         group.MapGet("/{scopeId}/workflows", HandleListWorkflowsAsync)
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest);
+        if (app.ServiceProvider.GetService<IAppScopedWorkflowCatalogueService>() != null)
+        {
+            group.MapGet("/{scopeId}/workflow-catalogue", HandleQueryWorkflowCatalogueAsync)
+                .Produces<ScopeWorkflowCatalogueResponse>(StatusCodes.Status200OK)
+                .Produces(StatusCodes.Status400BadRequest);
+        }
+
         group.MapGet("/{scopeId}/workflows/{workflowId}", HandleGetWorkflowDetailAsync)
             .Produces<ScopeWorkflowDetail>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest)
@@ -85,6 +94,17 @@ public static class ScopeWorkflowEndpoints
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
         => await HandleListWorkflowsAsyncCore(http, scopeId, includeSource, workflowQueryPort, workflowActorBindingReader, revisionCatalogReader, options, ct);
+
+    internal static async Task<IResult> HandleQueryWorkflowCatalogueAsync(
+        HttpContext http,
+        string scopeId,
+        string? view,
+        string? query,
+        string? cursor,
+        int? take,
+        [FromServices] IAppScopedWorkflowCatalogueService catalogueService,
+        CancellationToken ct)
+        => await HandleQueryWorkflowCatalogueAsyncCore(http, scopeId, view, query, cursor, take, catalogueService, ct);
 
     internal static async Task<IResult> HandleGetWorkflowDetailAsync(
         HttpContext http,
@@ -380,6 +400,44 @@ public static class ScopeWorkflowEndpoints
             return Results.BadRequest(new
             {
                 code = "INVALID_USER_WORKFLOW_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static async Task<IResult> HandleQueryWorkflowCatalogueAsyncCore(
+        HttpContext http,
+        string scopeId,
+        string? view,
+        string? query,
+        string? cursor,
+        int? take,
+        IAppScopedWorkflowCatalogueService catalogueService,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            if (!TryParseCatalogueView(view, out var catalogueView))
+            {
+                return Results.BadRequest(new
+                {
+                    code = "INVALID_WORKFLOW_CATALOGUE_REQUEST",
+                    message = "view must be either 'all' or 'drafts'.",
+                });
+            }
+
+            return Results.Ok(await catalogueService.QueryAsync(
+                new ScopeWorkflowCatalogueQuery(scopeId, catalogueView, query, cursor, take ?? 0),
+                ct));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_WORKFLOW_CATALOGUE_REQUEST",
                 message = ex.Message,
             });
         }
@@ -788,6 +846,26 @@ public static class ScopeWorkflowEndpoints
                 "USER_WORKFLOW_NOT_READY",
                 $"Workflow '{workflowId}' is not ready to run for scope '{scopeId}'."),
         };
+
+    internal static bool TryParseCatalogueView(
+        string? rawValue,
+        out ScopeWorkflowCatalogueView view)
+    {
+        if (string.IsNullOrWhiteSpace(rawValue) || string.Equals(rawValue, "all", StringComparison.OrdinalIgnoreCase))
+        {
+            view = ScopeWorkflowCatalogueView.All;
+            return true;
+        }
+
+        if (string.Equals(rawValue, "drafts", StringComparison.OrdinalIgnoreCase))
+        {
+            view = ScopeWorkflowCatalogueView.Drafts;
+            return true;
+        }
+
+        view = ScopeWorkflowCatalogueView.All;
+        return false;
+    }
 
     internal static bool TryParseEventFormat(
         string? rawValue,
