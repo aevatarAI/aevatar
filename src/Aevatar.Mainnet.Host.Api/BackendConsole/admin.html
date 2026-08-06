@@ -3394,8 +3394,8 @@ function viewSchedules(){
     }};
 }
 /* ---------------- 模块分发 ---------------- */
-/* 内嵌真页(同源共享 token);onload 注入 CSS 隐藏真页自带 .topbar(brand+suite-nav),消除与 /admin 左栏的双层导航。 */
-function embedTrim(f){ try{ var d=f.contentDocument; if(d&&d.head){ var s=d.createElement('style'); s.textContent=':root{--topbar-h:0px!important}.topbar{display:none!important}'; d.head.appendChild(s); } }catch(e){} }
+/* 内嵌真页(同源共享 token);onload 注入 CSS 隐藏真页自带导航，消除与 /admin 壳的双层导航。 */
+function embedTrim(f){ try{ var d=f.contentDocument; if(d&&d.head){ var s=d.createElement('style'),studio=f.getAttribute('data-persistent-view')==='admin-studio'; s.setAttribute('data-admin-embed-trim',studio?'studio':'suite'); s.textContent=':root{--topbar-h:0px!important}'+(studio?'.site-header,.topbar':'.topbar')+'{display:none!important}'; d.head.appendChild(s); } }catch(e){} }
 function suiteFrame(src,title){
   var path=src.split('?')[0],key=path==='/admin/workflow-observatory'?'observatory':path.replace(/^\/+|\/+$/g,'').replace(/\//g,'-');
   return '<iframe class="suite-embed" src="'+src+'" title="'+title+'" data-console-frame="1" data-persistent-view="'+key+'" data-frame-source="'+src+'" onload="embedTrim(this)"></iframe>';
@@ -3424,7 +3424,7 @@ function viewCqrs(){
   var src='/cqrs'+(p.toString()?'?'+p.toString():'');
   return {html:suiteFrame(src,'投影管道 CQRS'),persistentKey:'cqrs',frameSource:src};
 }
-function viewStudio(){ return {html:suiteFrame('/workflow/studio','工作台'),persistentKey:'workflow-studio',frameSource:'/workflow/studio'}; }
+function viewStudio(){ return {html:suiteFrame('/admin/studio','工作台'),persistentKey:'admin-studio',frameSource:'/admin/studio'}; }
 function viewChannels(){ return {html:suiteFrame('/channels','通道接入'),persistentKey:'channels',frameSource:'/channels'}; }
 function viewVoice(){ return {html:suiteFrame('/voice','语音台'),persistentKey:'voice',frameSource:'/voice'}; }
 

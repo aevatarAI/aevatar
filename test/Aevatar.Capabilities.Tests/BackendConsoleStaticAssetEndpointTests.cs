@@ -18,6 +18,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
 {
     [Theory]
     [InlineData("/admin", "Aevatar Backend Console")]
+    [InlineData("/admin/studio", "<title>Aevatar Studio</title>")]
     [InlineData("/auto/callback", "正在完成登录")]
     [InlineData("/cqrs", "CQRS")]
     [InlineData("/voice", "Voice")]
@@ -57,7 +58,16 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().NotContain("'/workflow/observatory'");
             html.Should().NotContain("function bindObservatory(");
             html.Should().Contain("studio:{name:'工作台'");
-            html.Should().Contain("suiteFrame('/workflow/studio','工作台')");
+            html.Should().Contain("suiteFrame('/admin/studio','工作台')");
+            html.Should().NotContain("suiteFrame('/workflow/studio','工作台')");
+        }
+        else if (path == "/admin/studio")
+        {
+            html.Should().Contain("class=\"site-header\"");
+            html.Should().Contain("id=\"composerForm\"");
+            html.Should().Contain("生产环境 · 操作会影响真实数据，高风险操作需要确认");
+            html.Should().NotContain("Aevatar Studio · 工作流实录");
+            html.Should().NotContain("从意图到交付的真实对话");
         }
         else if (path == "/auto/callback")
         {
@@ -2266,6 +2276,21 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task AdminShell_Studio_ShouldUseAdminOwnedRouteAndTrimNestedHeader()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain(
+            "suiteFrame('/admin/studio','工作台'),persistentKey:'admin-studio',frameSource:'/admin/studio'");
+        html.Should().Contain(
+            "studio=f.getAttribute('data-persistent-view')==='admin-studio'");
+        html.Should().Contain("studio?'.site-header,.topbar':'.topbar'");
+        html.Should().Contain("data-admin-embed-trim");
+        html.Should().NotContain("suiteFrame('/workflow/studio','工作台')");
+    }
+
+    [Fact]
     public async Task AdminShell_ObservatoryRoute_ShouldEmbedCanonicalSurfaceWithDeepLink()
     {
         await using var app = await CreateAppAsync();
@@ -2369,11 +2394,11 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               return frame;
             }
             const obsFrame = frameStub('observatory', '/admin/workflow-observatory?run=abc');
-            const studioFrame = frameStub('workflow-studio', '/workflow/studio');
+            const studioFrame = frameStub('admin-studio', '/admin/studio');
             const dock = {
               querySelector(sel){
                 if (sel.indexOf('"observatory"') >= 0) return obsFrame;
-                if (sel.indexOf('"workflow-studio"') >= 0) return studioFrame;
+                if (sel.indexOf('"admin-studio"') >= 0) return studioFrame;
                 return null;
               },
               querySelectorAll(){ return [obsFrame, studioFrame]; },
@@ -2387,7 +2412,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             activate(dock, {persistentKey:'observatory', frameSource:'/admin/workflow-observatory?run=zzz', html:''});
             assert.equal(obsFrame.src, '/admin/workflow-observatory?run=zzz');
             assert.equal(obsFrame.attrs['data-frame-source'], '/admin/workflow-observatory?run=zzz');
-            activate(dock, {persistentKey:'workflow-studio', frameSource:'/workflow/studio', html:''});
+            activate(dock, {persistentKey:'admin-studio', frameSource:'/admin/studio', html:''});
             assert.equal(studioFrame.activeFlag, true);
             assert.equal(obsFrame.activeFlag, false);
             assert.equal(obsFrame.src, '/admin/workflow-observatory?run=zzz');
