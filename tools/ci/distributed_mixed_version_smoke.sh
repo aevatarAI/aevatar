@@ -193,6 +193,7 @@ port = os.environ["OLD_NODE_PORT"]
 bearer_token = os.environ["AEVATAR_TEST_CLUSTER_BEARER_TOKEN"]
 max_attempts = 5
 retryable_status_codes = {502, 503, 504}
+required_workflow = "mission_wall_15_node_probe"
 
 for attempt in range(1, max_attempts + 1):
     request = urllib.request.Request(
@@ -233,23 +234,56 @@ for attempt in range(1, max_attempts + 1):
             print("Workflow catalog probe returned an unexpected payload.", file=sys.stderr)
             raise SystemExit(1)
 
-        workflow_name = next(
-            (item.strip() for item in data if isinstance(item, str) and item.strip()),
-            "",
-        )
-        if workflow_name:
-            print(workflow_name)
+        workflow_names = {
+            item.strip()
+            for item in data
+            if isinstance(item, str) and item.strip()
+        }
+        if required_workflow in workflow_names:
+            print(required_workflow)
             raise SystemExit(0)
 
         if attempt == max_attempts:
-            print("No workflow available for event-path probe.", file=sys.stderr)
+            print(
+                f"Required event-path probe workflow is unavailable: {required_workflow}.",
+                file=sys.stderr,
+            )
             raise SystemExit(1)
         print(
-            f"Workflow catalog probe attempt {attempt}/{max_attempts} returned no workflows; retrying.",
+            f"Workflow catalog probe attempt {attempt}/{max_attempts} did not include "
+            f"{required_workflow}; retrying.",
             file=sys.stderr,
         )
 
     time.sleep(attempt)
+PY
+}
+
+print_event_probe_failure_diagnostic() {
+  local probe_log_file="$1"
+
+  python3 - "${probe_log_file}" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as handle:
+        payload = json.load(handle)
+except (OSError, json.JSONDecodeError):
+    print("Event-path probe failure detail: unavailable")
+    raise SystemExit(0)
+
+if not isinstance(payload, dict):
+    print("Event-path probe failure detail: unavailable")
+    raise SystemExit(0)
+
+def bounded(value):
+    return " ".join(str(value or "").split())[:160]
+
+code = bounded(payload.get("code")) or "UNKNOWN"
+message = bounded(payload.get("message")) or "No typed message."
+print(f"Event-path probe failure detail: code={code} message={message}")
 PY
 }
 
@@ -356,6 +390,7 @@ PY
 
   if [[ "${chat_status}" != "200" ]]; then
     echo "Event-path probe returned unexpected status: ${chat_status}"
+    print_event_probe_failure_diagnostic "${probe_log_file}"
     return 1
   fi
 

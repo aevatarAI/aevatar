@@ -288,6 +288,8 @@ public class CiTestAuthorityContractTests
 
         Assert.Contains("query_workflow_name()", script, StringComparison.Ordinal);
         Assert.Contains("method=\"GET\"", script, StringComparison.Ordinal);
+        Assert.Contains("required_workflow = \"mission_wall_15_node_probe\"", script, StringComparison.Ordinal);
+        Assert.Contains("if required_workflow in workflow_names:", script, StringComparison.Ordinal);
         Assert.Contains("Workflow catalog probe attempt {attempt}/{max_attempts}", script, StringComparison.Ordinal);
         Assert.Contains("error.code not in retryable_status_codes", script, StringComparison.Ordinal);
         Assert.Contains(
@@ -295,6 +297,26 @@ public class CiTestAuthorityContractTests
             script,
             StringComparison.Ordinal);
         Assert.Contains("Workflow catalog probe returned invalid JSON.", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DistributedMixedVersionSmoke_ShouldBoundTypedEventProbeFailureDiagnostics()
+    {
+        var scriptPath = Path.Combine(
+            TemporaryCiRepo.FindRepositoryRoot(),
+            "tools",
+            "ci",
+            "distributed_mixed_version_smoke.sh");
+        var script = File.ReadAllText(scriptPath);
+
+        Assert.Contains("print_event_probe_failure_diagnostic()", script, StringComparison.Ordinal);
+        Assert.Contains("payload.get(\"code\")", script, StringComparison.Ordinal);
+        Assert.Contains("payload.get(\"message\")", script, StringComparison.Ordinal);
+        Assert.Contains("[:160]", script, StringComparison.Ordinal);
+        Assert.Contains(
+            "print_event_probe_failure_diagnostic \"${probe_log_file}\"",
+            script,
+            StringComparison.Ordinal);
     }
 
     private static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
