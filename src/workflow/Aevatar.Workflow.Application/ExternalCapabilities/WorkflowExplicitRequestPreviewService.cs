@@ -58,6 +58,7 @@ public sealed class WorkflowExplicitRequestPreviewService(
                 policy?.AllowedExecutionModes.Contains(ExternalCapabilityExecutionMode.Durable) == true)
                 allowedExecutionModes.Add(ExternalCapabilityExecutionMode.Durable);
 
+            var approvalRequired = policy?.Approval == NyxIdOperationApproval.Required;
             items.Add(new WorkflowExplicitRequestPreviewItem(
                 invocation.CallSiteId,
                 WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdRequestContractDigest(canonical),
@@ -68,7 +69,10 @@ public sealed class WorkflowExplicitRequestPreviewService(
                 canonical.BodyRequired,
                 canonical.ResponseMode,
                 risk,
-                policy?.Approval == NyxIdOperationApproval.Required,
+                approvalRequired,
+                approvalRequired
+                    ? WorkflowExplicitRequestApprovalEnforcement.BindTimeConfirmation
+                    : WorkflowExplicitRequestApprovalEnforcement.None,
                 allowedExecutionModes));
         }
 

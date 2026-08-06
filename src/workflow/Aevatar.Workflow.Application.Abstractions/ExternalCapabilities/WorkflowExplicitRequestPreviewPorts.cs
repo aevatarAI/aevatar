@@ -11,6 +11,17 @@ public sealed record WorkflowExplicitRequestPreviewRequest(
     string? RevisionId = null,
     IReadOnlyList<string>? WorkflowYamls = null);
 
+/// <summary>
+/// 声明 <see cref="WorkflowExplicitRequestPreviewItem.ApprovalRequired"/> 在哪个阶段被兑现。
+/// authored explicit request 由 bind 时的 explicit-request confirmation 兑现批准，
+/// workflow 运行期不再二次拦截，因此调用方不能把 approval 解读为 run-time pause。
+/// </summary>
+public enum WorkflowExplicitRequestApprovalEnforcement
+{
+    None = 0,
+    BindTimeConfirmation = 1,
+}
+
 public sealed record WorkflowExplicitRequestPreviewItem(
     string CallSiteId,
     string RequestContractDigest,
@@ -22,6 +33,7 @@ public sealed record WorkflowExplicitRequestPreviewItem(
     NyxIdRequestResponseMode ResponseMode,
     NyxIdOperationRisk EffectiveRisk,
     bool ApprovalRequired,
+    WorkflowExplicitRequestApprovalEnforcement ApprovalEnforcement,
     IReadOnlyList<ExternalCapabilityExecutionMode> AllowedExecutionModes);
 
 public sealed record WorkflowExplicitRequestPreviewResult(

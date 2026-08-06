@@ -89,6 +89,8 @@ public sealed class WorkflowExplicitRequestPreviewServiceTests
         item.ResponseMode.Should().Be(NyxIdRequestResponseMode.Text);
         item.EffectiveRisk.Should().Be(NyxIdOperationRisk.Write);
         item.ApprovalRequired.Should().BeTrue();
+        item.ApprovalEnforcement.Should().Be(
+            WorkflowExplicitRequestApprovalEnforcement.BindTimeConfirmation);
         item.AllowedExecutionModes.Should().Equal(ExternalCapabilityExecutionMode.Interactive);
 
         var serialized = JsonSerializer.Serialize(result);
@@ -109,7 +111,42 @@ public sealed class WorkflowExplicitRequestPreviewServiceTests
                 "ResponseMode",
                 "EffectiveRisk",
                 "ApprovalRequired",
+                "ApprovalEnforcement",
                 "AllowedExecutionModes");
+    }
+
+    [Fact]
+    public async Task PreviewAsync_ForReadOnlyRequest_ShouldReportNoApprovalEnforcement()
+    {
+        var selector = RequestSelector("/records/{id}", NyxIdRequestMethod.Get, bodyRequired: false);
+        selector.BodyMode = NyxIdRequestBodyMode.None;
+        var parser = new StubParser(new ExternalToolInvocationSpec
+        {
+            CallSiteId = "wf-alpha/read-record",
+            ToolName = "nyxid_proxy",
+            Selector = new ExternalWorkflowCapabilitySelector { NyxIdRequest = selector },
+        });
+        var service = new WorkflowExplicitRequestPreviewService(
+            parser,
+            new RecordingReadinessPort(CanonicalReadiness(
+                selector,
+                "slug-preview-secret",
+                NyxIdOperationRisk.ReadOnly)));
+
+        var result = await service.PreviewAsync(new WorkflowExplicitRequestPreviewRequest(
+            new ExternalWorkflowCapabilityAccessContext(
+                "scope-alpha",
+                "authenticated-owner-alpha",
+                NyxIdCallerCredentialSelection.SourceReadableUserBearer("bearer-preview-secret")),
+            "name: wf-alpha",
+            null,
+            ExternalCapabilityExecutionMode.Interactive,
+            WorkflowId: "wf-alpha",
+            RevisionId: "rev-alpha"));
+
+        var item = result.Items.Should().ContainSingle().Which;
+        item.ApprovalRequired.Should().BeFalse();
+        item.ApprovalEnforcement.Should().Be(WorkflowExplicitRequestApprovalEnforcement.None);
     }
 
     [Fact]

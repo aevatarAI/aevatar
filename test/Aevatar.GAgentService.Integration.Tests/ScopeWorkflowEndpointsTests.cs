@@ -53,6 +53,7 @@ public sealed class ScopeWorkflowEndpointsTests
                     NyxIdRequestResponseMode.Text,
                     NyxIdOperationRisk.Write,
                     true,
+                    WorkflowExplicitRequestApprovalEnforcement.BindTimeConfirmation,
                     [ExternalCapabilityExecutionMode.Interactive]),
             ]),
         };

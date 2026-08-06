@@ -296,7 +296,17 @@ public static class ScopeWorkflowEndpoints
             ToWireValue(item.ResponseMode),
             ToWireValue(item.EffectiveRisk),
             item.ApprovalRequired,
+            ToWireValue(item.ApprovalEnforcement),
             item.AllowedExecutionModes.Select(ToWireValue).ToArray());
+
+    private static string ToWireValue(WorkflowExplicitRequestApprovalEnforcement value) =>
+        value switch
+        {
+            WorkflowExplicitRequestApprovalEnforcement.BindTimeConfirmation => "bind_time_confirmation",
+            WorkflowExplicitRequestApprovalEnforcement.None => "none",
+            _ => throw new InvalidOperationException(
+                "Explicit request approval enforcement is invalid."),
+        };
 
     private static string ToWireValue(NyxIdRequestMethod value) => value switch
     {
@@ -999,6 +1009,7 @@ public static class ScopeWorkflowEndpoints
         string ResponseMode,
         string EffectiveRisk,
         bool ApprovalRequired,
+        string ApprovalEnforcement,
         IReadOnlyList<string> AllowedExecutionModes);
 
     public sealed record RunScopeWorkflowByIdStreamHttpRequest(
