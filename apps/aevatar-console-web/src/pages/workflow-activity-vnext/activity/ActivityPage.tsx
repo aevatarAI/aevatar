@@ -14,6 +14,7 @@ import {
 } from '@/shared/api/workflowActivityApi';
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
+import AevatarContentSkeleton from '@/shared/ui/AevatarContentSkeleton';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
 import { buildWorkflowActivityRunHref } from '../navigation';
 import TableScrollRegion from '../TableScrollRegion';
@@ -326,14 +327,16 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           </div>
         </div>
       ) : workflowFilterPresent && workflow.isPending ? (
-        <div aria-live="polite" className="wa-vnext__state">
-          <p>
-            {t(
-              'workflowActivityVNext.activity.workflowFilterLoading',
-              'Loading workflow activity…',
-            )}
-          </p>
-        </div>
+        <AevatarContentSkeleton
+          ariaLabel={t(
+            'workflowActivityVNext.activity.workflowFilterLoading',
+            'Loading workflow activity…',
+          )}
+          columnWidths={['minmax(240px, 1fr)', 120, 120, 190]}
+          rows={4}
+          tableMinWidth={900}
+          variant="table"
+        />
       ) : workflowFilterPresent && workflow.isError ? (
         <div className="wa-vnext__state" role="alert">
           <div>
@@ -377,11 +380,16 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           </div>
         </div>
       ) : runs.isPending ? (
-        <div aria-live="polite" className="wa-vnext__state">
-          <p>
-            {t('workflowActivityVNext.activity.loading', 'Loading activity…')}
-          </p>
-        </div>
+        <AevatarContentSkeleton
+          ariaLabel={t(
+            'workflowActivityVNext.activity.loading',
+            'Loading activity…',
+          )}
+          columnWidths={['minmax(240px, 1fr)', 120, 120, 190]}
+          rows={4}
+          tableMinWidth={900}
+          variant="table"
+        />
       ) : runs.isError ? (
         <div className="wa-vnext__state" role="alert">
           <div>

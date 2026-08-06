@@ -434,7 +434,14 @@ describe('Workflow Activity vNext catalogue', () => {
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
-    expect(screen.getByText('Loading workflows')).toBeInTheDocument();
+    const workflowSkeleton = screen.getByRole('status');
+    expect(workflowSkeleton).toHaveAttribute('data-variant', 'table');
+    expect(screen.getAllByTestId('aevatar-content-skeleton-cell')).toHaveLength(
+      16,
+    );
+    expect(screen.getByText('Loading workflows')).toHaveClass(
+      'aevatar-loading-visually-hidden',
+    );
     expect(await screen.findByText('Support triage')).toBeInTheDocument();
     expect(screen.getByText('Invoice review')).toBeInTheDocument();
 
@@ -1403,7 +1410,10 @@ describe('Workflow Activity vNext catalogue', () => {
     await waitFor(() =>
       expect(mockStudioApi.listWorkflowDrafts).toHaveBeenCalledTimes(1),
     );
-    expect(screen.getByText('Loading workflows')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveAttribute('data-variant', 'table');
+    expect(screen.getByText('Loading workflows')).toHaveClass(
+      'aevatar-loading-visually-hidden',
+    );
     expect(
       screen.queryByText("Some workflows couldn't be loaded"),
     ).not.toBeInTheDocument();

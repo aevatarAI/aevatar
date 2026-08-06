@@ -86,6 +86,37 @@ describe('Workflow Activity vNext Activity ledger', () => {
 
   afterEach(() => cleanupTestQueryClients());
 
+  it('renders the activity table skeleton while the run list is loading', () => {
+    mockListRuns.mockImplementation(() => new Promise(() => {}));
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    expect(screen.getByRole('status')).toHaveAttribute('data-variant', 'table');
+    expect(screen.getAllByTestId('aevatar-content-skeleton-cell')).toHaveLength(
+      16,
+    );
+    expect(screen.getByText('Loading activity…')).toHaveClass(
+      'aevatar-loading-visually-hidden',
+    );
+    expect(
+      screen.getByRole('searchbox', { name: 'Search runs' }),
+    ).toBeEnabled();
+    expect(screen.queryByText('No runs yet')).not.toBeInTheDocument();
+  });
+
+  it('renders the activity table skeleton while resolving a workflow filter', () => {
+    mockSearch = '?workflowId=wf-alpha';
+    mockGetWorkflowDetail.mockImplementation(() => new Promise(() => {}));
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    expect(screen.getByRole('status')).toHaveAttribute('data-variant', 'table');
+    expect(screen.getByText('Loading workflow activity…')).toHaveClass(
+      'aevatar-loading-visually-hidden',
+    );
+    expect(mockListRuns).not.toHaveBeenCalled();
+  });
+
   it('restores a visible workflow filter from the URL and removes it back to global Activity', async () => {
     mockSearch = '?workflowId=wf-alpha';
     mockGetWorkflowDetail.mockResolvedValue({
