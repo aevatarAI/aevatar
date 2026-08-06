@@ -74,6 +74,13 @@ public sealed class StudioWorkflowScheduleProvisioningExecutor
                 "binding_projection_pending",
                 ex.Message);
         }
+        catch (StudioMemberAutomationPlanConflictException ex)
+            when (IsServingRevisionProjectionPending(ex))
+        {
+            return StudioWorkflowScheduleProvisioningExecutionResult.Retry(
+                ex.Code,
+                ex.Message);
+        }
 
         if (!preflight.Success)
         {
@@ -199,6 +206,10 @@ public sealed class StudioWorkflowScheduleProvisioningExecutor
     private static bool IsBindingProjectionPending(string message) =>
         message.Contains("has no bound workflow", StringComparison.Ordinal) ||
         message.Contains("not assigned to team", StringComparison.Ordinal);
+
+    private static bool IsServingRevisionProjectionPending(
+        StudioMemberAutomationPlanConflictException exception) =>
+        string.Equals(exception.Code, "serving_revision_not_ready", StringComparison.Ordinal);
 
     private static bool IsRetryableAuthorizationPlanChange(
         StudioMemberAutomationPlanConflictException exception) =>

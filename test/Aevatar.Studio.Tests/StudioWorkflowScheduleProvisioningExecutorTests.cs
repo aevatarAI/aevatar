@@ -31,6 +31,43 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenServingRevisionProjectionIsPending_ShouldReturnRetryableResult()
+    {
+        var port = new RecordingSchedulePort
+        {
+            PreflightException = new StudioMemberAutomationPlanConflictException(
+                "serving_revision_not_ready",
+                "The published member service has no invoke-ready serving revision."),
+        };
+        var sut = new StudioWorkflowScheduleProvisioningExecutor(port);
+
+        var result = await sut.ExecuteAsync(NewExecution());
+
+        result.Success.Should().BeFalse();
+        result.Retryable.Should().BeTrue();
+        result.FailureCode.Should().Be("serving_revision_not_ready");
+        port.GetScheduleIds.Should().BeEmpty();
+        port.CreateRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenServingTargetChangesDuringPreflight_ShouldFailClosed()
+    {
+        var port = new RecordingSchedulePort
+        {
+            PreflightException = new StudioMemberAutomationPlanConflictException(
+                "serving_target_changed",
+                "The member serving target changed."),
+        };
+        var sut = new StudioWorkflowScheduleProvisioningExecutor(port);
+
+        var action = () => sut.ExecuteAsync(NewExecution());
+
+        var conflict = await action.Should().ThrowAsync<StudioMemberAutomationPlanConflictException>();
+        conflict.Which.Code.Should().Be("serving_target_changed");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenWorkflowEvidenceIsVisible_ShouldCreateSchedulePinnedToExactRevision()
     {
         var port = new RecordingSchedulePort();
@@ -246,6 +283,8 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
         public StudioMemberWorkflowAuthorizationResult PreflightResult { get; set; } =
             NewAuthorizationResult("permission-digest-1");
 
+        public Exception? PreflightException { get; init; }
+
         public int PreflightCallCount { get; private set; }
 
         public StudioMemberAutomationView? Existing { get; init; }
@@ -274,6 +313,9 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
             CancellationToken ct = default)
         {
             PreflightCallCount++;
+            if (PreflightException is { } exception)
+                throw exception;
+
             return Task.FromResult(PreflightResult);
         }
 
