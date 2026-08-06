@@ -118,6 +118,32 @@ describe('Workflow Activity vNext Activity ledger', () => {
     ).toBeEnabled();
   });
 
+  it('drops an unsupported URL status before querying or preserving it', async () => {
+    mockSearch = '?status=waiting&origin=draft';
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    await waitFor(() =>
+      expect(mockListRuns).toHaveBeenLastCalledWith('scope-alpha', {
+        status: undefined,
+        origins: ['draft'],
+        definitionActorIds: undefined,
+        take: 100,
+      }),
+    );
+    expect(mockListRuns).not.toHaveBeenCalledWith('scope-alpha', {
+      status: 'waiting',
+      origins: ['draft'],
+      definitionActorIds: undefined,
+      take: 100,
+    });
+    await waitFor(() =>
+      expect(history.replace).toHaveBeenLastCalledWith(
+        '/scopes/scope-alpha/workflow-activity-vnext/activity?origin=draft',
+      ),
+    );
+  });
+
   it('restores search from the URL without sending it to the runs API', async () => {
     mockSearch =
       '?q=customer&status=failed&origin=draft&definition=definition-alpha&workflowFilter=unavailable';
@@ -187,5 +213,26 @@ describe('Workflow Activity vNext Activity ledger', () => {
     expect(
       within(activityRegion).getByText('Customer follow-up').closest('td'),
     ).toHaveAttribute('data-label', 'Workflow');
+  });
+
+  it('renders unrecognized returned run states as Unknown', async () => {
+    mockListRuns.mockResolvedValue([
+      {
+        runId: 'run-unknown-state',
+        workflowName: 'Customer follow-up',
+        status: 'waiting',
+        success: null,
+        startedAtUtc: '2026-08-04T10:00:00Z',
+        updatedAtUtc: '2026-08-04T10:01:00Z',
+        stateVersion: 21,
+        scopeId: 'scope-alpha',
+        runOrigin: 'draft',
+      },
+    ]);
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    expect(await screen.findByText('Unknown')).toBeInTheDocument();
+    expect(screen.queryByText('Waiting')).not.toBeInTheDocument();
   });
 });

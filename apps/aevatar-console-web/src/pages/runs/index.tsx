@@ -1,15 +1,11 @@
-import {
-  useHumanInteraction,
-  useRunSession,
-} from "@aevatar-react-sdk/agui";
-import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
+import { useHumanInteraction, useRunSession } from '@aevatar-react-sdk/agui';
 import {
   type AGUIEvent,
   AGUIEventType,
   CustomEventName,
   type WorkflowResumeRequest,
   type WorkflowSignalRequest,
-} from "@aevatar-react-sdk/types";
+} from '@aevatar-react-sdk/types';
 import {
   AppstoreOutlined,
   ArrowLeftOutlined,
@@ -17,158 +13,146 @@ import {
   DeploymentUnitOutlined,
   InfoCircleOutlined,
   SendOutlined,
-} from "@ant-design/icons";
-import type { ProFormInstance } from "@ant-design/pro-components";
-import {
-  PageContainer,
-} from "@ant-design/pro-components";
-import { useQuery } from "@tanstack/react-query";
-import {
-  history,
-} from "@/shared/navigation/history";
-import { sanitizeReturnTo } from "@/shared/auth/session";
-import { buildTeamDetailHref } from "@/shared/navigation/teamRoutes";
-import {
-  buildRuntimeExplorerHref,
-  buildRuntimeMissionControlHref,
-  buildRuntimeWorkflowsHref,
-} from "@/shared/navigation/runtimeRoutes";
-import {
-  Button,
-  Drawer,
-  Grid,
-  Input,
-  message,
-  Popover,
-  Space,
-  Typography,
-} from "antd";
+} from '@ant-design/icons';
+import type { ProFormInstance } from '@ant-design/pro-components';
+import { PageContainer } from '@ant-design/pro-components';
+import { useQuery } from '@tanstack/react-query';
+import { Button, Drawer, Grid, Input, Popover, Typography } from 'antd';
 import React, {
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-} from "react";
+} from 'react';
 import {
   getLatestCustomEventData,
   parseStepRequestData,
   parseWaitingSignalData,
-} from "@/shared/agui/customEventData";
-import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
-import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
-import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
-import { formatDateTime } from "@/shared/datetime/dateTime";
+} from '@/shared/agui/customEventData';
+import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
+import { runtimeActorsApi } from '@/shared/api/runtimeActorsApi';
+import { runtimeCatalogApi } from '@/shared/api/runtimeCatalogApi';
+import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
+import { sanitizeReturnTo } from '@/shared/auth/session';
+import { formatDateTime } from '@/shared/datetime/dateTime';
+import { t } from '@/shared/i18n/messages';
+import { history } from '@/shared/navigation/history';
 import {
-  clearRecentRuns,
-  loadRecentRuns,
-  type RecentRunEntry,
-  saveRecentRun,
-} from "@/shared/runs/recentRuns";
-import {
-  type RunEndpointKind,
-  normalizeRunEndpointKind,
-  resolveRunEndpointId as resolveStoredRunEndpointId,
-} from "@/shared/runs/endpointKinds";
-import { isAutoEncodableTextPayloadTypeUrl } from "@/shared/runs/protobufPayload";
+  buildRuntimeExplorerHref,
+  buildRuntimeMissionControlHref,
+  buildRuntimeWorkflowsHref,
+} from '@/shared/navigation/runtimeRoutes';
+import { buildTeamDetailHref } from '@/shared/navigation/teamRoutes';
 import {
   deleteDraftRunPayload as deleteQueuedDraftRunPayload,
   isEndpointInvocationDraftPayload,
   isObservedRunSessionPayload,
   isScopeDraftRunPayload,
   loadDraftRunPayload as loadQueuedDraftRunPayload,
-} from "@/shared/runs/draftRunSession";
+} from '@/shared/runs/draftRunSession';
 import {
-  buildWorkflowCatalogOptions,
-  findWorkflowCatalogItem,
-  listVisibleWorkflowCatalogItems,
-} from "@/shared/workflows/catalogVisibility";
+  normalizeRunEndpointKind,
+  type RunEndpointKind,
+  resolveRunEndpointId as resolveStoredRunEndpointId,
+} from '@/shared/runs/endpointKinds';
+import { isAutoEncodableTextPayloadTypeUrl } from '@/shared/runs/protobufPayload';
+import {
+  clearRecentRuns,
+  loadRecentRuns,
+  type RecentRunEntry,
+  saveRecentRun,
+} from '@/shared/runs/recentRuns';
+import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import {
   cardStackStyle,
   drawerBodyStyle,
   drawerScrollStyle,
-} from "@/shared/ui/proComponents";
-import RunsInspectorPane from "./components/RunsInspectorPane";
-import RunsActionRequiredPanel from "./components/RunsActionRequiredPanel";
-import RunsEventsView from "./components/RunsEventsView";
-import RunsLaunchRail from "./components/RunsLaunchRail";
-import RunsMessagesView from "./components/RunsMessagesView";
-import RunsStatusStrip from "./components/RunsStatusStrip";
-import RunsTracePane from "./components/RunsTracePane";
-import RunsTimelineView from "./components/RunsTimelineView";
+} from '@/shared/ui/proComponents';
 import {
-  buildTimelineGroups,
+  buildWorkflowCatalogOptions,
+  findWorkflowCatalogItem,
+  listVisibleWorkflowCatalogItems,
+} from '@/shared/workflows/catalogVisibility';
+import RunsActionRequiredPanel from './components/RunsActionRequiredPanel';
+import RunsEventsView from './components/RunsEventsView';
+import RunsInspectorPane from './components/RunsInspectorPane';
+import RunsLaunchRail from './components/RunsLaunchRail';
+import RunsMessagesView from './components/RunsMessagesView';
+import RunsStatusStrip from './components/RunsStatusStrip';
+import RunsTimelineView from './components/RunsTimelineView';
+import RunsTracePane from './components/RunsTracePane';
+import {
   buildEventRows,
-  resolveRunMessageFallback,
+  buildTimelineGroups,
   isHumanApprovalSuspension,
   type RunEventRow,
   type RunTimelineGroup,
   type RunTransport,
-} from "./runEventPresentation";
+  resolveRunMessageFallback,
+} from './runEventPresentation';
 import {
-  builtInPresets,
   buildRunReadinessSummary,
+  builtInPresets,
   type ConsoleViewKey,
   defaultRunRouteName,
-  formatElapsedDuration,
-  type HumanInputRecord,
-  readInitialRunFormValues,
   describeRunReturnTarget,
+  formatElapsedDuration,
+  getRunStatusLabel,
+  type HumanInputRecord,
   type RecentRunTableRow,
   type ResumeFormValues,
   type RunFocusRecord,
   type RunFormValues,
   type RunStatusValue,
-  runStatusValueEnum,
+  type RunSummaryRecord,
+  readInitialRunFormValues,
   runsWorkbenchMonitorStyle,
   runsWorkbenchShellStyle,
-  type RunSummaryRecord,
   type SelectedRouteRecord,
   type SignalFormValues,
-  getRunStatusLabel,
   trimOptional,
   type WaitingSignalRecord,
   workbenchOverviewGridStyle,
-} from "./runWorkbenchConfig";
-import { t } from "@/shared/i18n/messages";
+} from './runWorkbenchConfig';
 
 const runsWorkbenchHeaderBarStyle: React.CSSProperties = {
-  alignItems: "center",
-  background: "var(--ant-color-bg-container)",
-  border: "1px solid var(--ant-color-border-secondary)",
+  alignItems: 'center',
+  background: 'var(--ant-color-bg-container)',
+  border: '1px solid var(--ant-color-border-secondary)',
   borderRadius: 10,
-  display: "flex",
-  flexWrap: "wrap",
+  display: 'flex',
+  flexWrap: 'wrap',
   gap: 12,
-  justifyContent: "space-between",
-  padding: "10px 12px",
+  justifyContent: 'space-between',
+  padding: '10px 12px',
 };
 
 const runsWorkbenchHeaderTitleStyle: React.CSSProperties = {
-  alignItems: "center",
-  display: "flex",
+  alignItems: 'center',
+  display: 'flex',
   gap: 8,
   minWidth: 0,
 };
 
 const runsWorkbenchHeaderActionStyle: React.CSSProperties = {
-  alignItems: "center",
-  backdropFilter: "blur(10px)",
+  alignItems: 'center',
+  backdropFilter: 'blur(10px)',
   background:
-    "linear-gradient(180deg, rgba(248, 250, 252, 0.9) 0%, rgba(255, 255, 255, 0.78) 100%)",
-  border: "1px solid rgba(226, 232, 240, 0.95)",
+    'linear-gradient(180deg, rgba(248, 250, 252, 0.9) 0%, rgba(255, 255, 255, 0.78) 100%)',
+  border: '1px solid rgba(226, 232, 240, 0.95)',
   borderRadius: 16,
-  display: "flex",
-  flexWrap: "wrap",
+  display: 'flex',
+  flexWrap: 'wrap',
   gap: 8,
-  justifyContent: "flex-end",
+  justifyContent: 'flex-end',
   padding: 4,
 };
 
-const runsWorkbenchHeaderToolbarClassName = "runs-workbench-header-toolbar";
-const runsWorkbenchHeaderButtonClassName = "runs-workbench-header-button";
+const runsWorkbenchHeaderToolbarClassName = 'runs-workbench-header-toolbar';
+const runsWorkbenchHeaderButtonClassName = 'runs-workbench-header-button';
 const runsWorkbenchHeaderButtonAccentClassName =
-  "runs-workbench-header-button-accent";
+  'runs-workbench-header-button-accent';
 
 const runsWorkbenchHeaderToolbarCss = `
 .${runsWorkbenchHeaderToolbarClassName} .${runsWorkbenchHeaderButtonClassName} {
@@ -242,89 +226,89 @@ const runsWorkbenchHeaderToolbarCss = `
 `;
 
 const runsSetupStateStyle: React.CSSProperties = {
-  display: "flex",
+  display: 'flex',
   flex: 1,
-  justifyContent: "center",
+  justifyContent: 'center',
   minHeight: 0,
-  overflow: "hidden",
+  overflow: 'hidden',
 };
 
 const runsSetupRailViewportStyle: React.CSSProperties = {
-  display: "flex",
+  display: 'flex',
   flex: 1,
   maxWidth: 920,
   minHeight: 0,
-  overflow: "hidden",
-  width: "100%",
+  overflow: 'hidden',
+  width: '100%',
 };
 
 const runsRunStateStyle: React.CSSProperties = {
-  display: "flex",
+  display: 'flex',
   flex: 1,
   minHeight: 0,
-  overflow: "hidden",
+  overflow: 'hidden',
 };
 
 const runsChatLayoutStyle: React.CSSProperties = {
-  display: "grid",
+  display: 'grid',
   flex: 1,
   gap: 16,
-  gridTemplateColumns: "minmax(272px, 320px) minmax(0, 1fr)",
+  gridTemplateColumns: 'minmax(272px, 320px) minmax(0, 1fr)',
   minHeight: 0,
-  overflow: "hidden",
+  overflow: 'hidden',
 };
 
 const runsChatCompactLayoutStyle: React.CSSProperties = {
   ...runsChatLayoutStyle,
-  gridTemplateColumns: "minmax(0, 1fr)",
-  overflowX: "hidden",
-  overflowY: "auto",
+  gridTemplateColumns: 'minmax(0, 1fr)',
+  overflowX: 'hidden',
+  overflowY: 'auto',
 };
 
 const runsChatSidebarStyle: React.CSSProperties = {
-  display: "flex",
+  display: 'flex',
   flex: 1,
-  flexDirection: "column",
+  flexDirection: 'column',
   minHeight: 0,
   minWidth: 0,
-  overflow: "hidden",
+  overflow: 'hidden',
 };
 
 const runsChatMainStyle: React.CSSProperties = {
-  display: "flex",
+  display: 'flex',
   flex: 1,
-  flexDirection: "column",
+  flexDirection: 'column',
   gap: 12,
   minHeight: 0,
   minWidth: 0,
-  overflow: "hidden",
+  overflow: 'hidden',
 };
 
 const runsChatTraceWrapStyle: React.CSSProperties = {
-  display: "flex",
+  display: 'flex',
   flex: 1,
   minHeight: 0,
   minWidth: 0,
-  overflow: "hidden",
+  overflow: 'hidden',
 };
 
 const runsChatComposerCardStyle: React.CSSProperties = {
   background:
-    "linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 0.96) 100%)",
-  border: "1px solid rgba(148, 163, 184, 0.18)",
+    'linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 0.96) 100%)',
+  border: '1px solid rgba(148, 163, 184, 0.18)',
   borderRadius: 20,
-  boxShadow: "0 18px 40px rgba(15, 23, 42, 0.08)",
-  display: "flex",
-  flexDirection: "column",
+  boxShadow: '0 18px 40px rgba(15, 23, 42, 0.08)',
+  display: 'flex',
+  flexDirection: 'column',
   gap: 12,
-  padding: "14px 16px 16px",
-  position: "relative",
+  padding: '14px 16px 16px',
+  position: 'relative',
 };
 
 const runsChatComposerActionsStyle: React.CSSProperties = {
-  display: "flex",
-  flex: "0 0 auto",
-  flexDirection: "column",
+  display: 'flex',
+  flex: '0 0 auto',
+  flexDirection: 'column',
   gap: 10,
 };
 
@@ -334,80 +318,80 @@ const runsChatComposerInputWrapStyle: React.CSSProperties = {
 };
 
 const runsChatComposerHeaderStyle: React.CSSProperties = {
-  alignItems: "center",
-  display: "flex",
-  flexWrap: "wrap",
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
   gap: 12,
-  justifyContent: "space-between",
+  justifyContent: 'space-between',
 };
 
 const runsChatComposerLabelStyle: React.CSSProperties = {
-  color: "var(--ant-color-primary)",
+  color: 'var(--ant-color-primary)',
   fontSize: 12,
   fontWeight: 700,
-  letterSpacing: "0.08em",
+  letterSpacing: '0.08em',
   lineHeight: 1,
-  textTransform: "uppercase",
+  textTransform: 'uppercase',
 };
 
 const runsChatComposerHintStyle: React.CSSProperties = {
-  color: "var(--ant-color-text-secondary)",
+  color: 'var(--ant-color-text-secondary)',
   fontSize: 12,
 };
 
 const runsChatComposerContextStyle: React.CSSProperties = {
-  alignItems: "center",
-  display: "flex",
-  flexWrap: "wrap",
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
   gap: 6,
-  justifyContent: "flex-end",
+  justifyContent: 'flex-end',
 };
 
 const runsChatComposerContextTagStyle: React.CSSProperties = {
-  background: "rgba(255, 255, 255, 0.78)",
-  border: "1px solid rgba(148, 163, 184, 0.22)",
+  background: 'rgba(255, 255, 255, 0.78)',
+  border: '1px solid rgba(148, 163, 184, 0.22)',
   borderRadius: 999,
-  color: "var(--ant-color-text-secondary)",
+  color: 'var(--ant-color-text-secondary)',
   fontSize: 12,
   fontWeight: 600,
-  lineHeight: "18px",
+  lineHeight: '18px',
   maxWidth: 240,
-  overflow: "hidden",
-  padding: "3px 8px",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
+  overflow: 'hidden',
+  padding: '3px 8px',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
 };
 
 const runsChatComposerWarningStyle: React.CSSProperties = {
-  color: "var(--ant-color-warning-text)",
+  color: 'var(--ant-color-warning-text)',
   fontSize: 12,
-  lineHeight: "18px",
-  textAlign: "right",
+  lineHeight: '18px',
+  textAlign: 'right',
 };
 
 const runsChatComposerSendButtonStyle: React.CSSProperties = {
   borderRadius: 14,
-  boxShadow: "0 12px 24px rgba(22, 119, 255, 0.2)",
+  boxShadow: '0 12px 24px rgba(22, 119, 255, 0.2)',
   fontWeight: 600,
   height: 46,
   paddingInline: 20,
 };
 
 const runsChatComposerTextareaStyle: React.CSSProperties = {
-  background: "transparent",
-  border: "none",
-  boxShadow: "none",
-  color: "var(--ant-color-text)",
+  background: 'transparent',
+  border: 'none',
+  boxShadow: 'none',
+  color: 'var(--ant-color-text)',
   fontSize: 15,
   lineHeight: 1.65,
   padding: 0,
 };
 
-const runsChatComposerClassName = "runs-chat-composer";
-const runsChatComposerBodyClassName = "runs-chat-composer-body";
-const runsChatComposerInputShellClassName = "runs-chat-composer-input-shell";
-const runsChatComposerInputClassName = "runs-chat-composer-input";
-const runsChatComposerActionsClassName = "runs-chat-composer-actions";
+const runsChatComposerClassName = 'runs-chat-composer';
+const runsChatComposerBodyClassName = 'runs-chat-composer-body';
+const runsChatComposerInputShellClassName = 'runs-chat-composer-input-shell';
+const runsChatComposerInputClassName = 'runs-chat-composer-input';
+const runsChatComposerActionsClassName = 'runs-chat-composer-actions';
 
 const runsChatComposerCss = `
 .${runsChatComposerClassName} {
@@ -509,30 +493,30 @@ const runsChatComposerCss = `
 function resolveRequestedServiceId(
   request: Pick<
     RunFormValues,
-    "endpointId" | "endpointKind" | "routeName" | "serviceOverrideId"
+    'endpointId' | 'endpointKind' | 'routeName' | 'serviceOverrideId'
   >,
-  draftMode: boolean
+  draftMode: boolean,
 ): string {
   if (draftMode) {
-    return "";
+    return '';
   }
 
   const normalizedEndpointKind = normalizeRunEndpointKind(
     request.endpointKind,
-    request.endpointId
+    request.endpointId,
   );
   const normalizedServiceOverrideId =
-    trimOptional(request.serviceOverrideId) || "";
-  if (normalizedEndpointKind !== "chat") {
+    trimOptional(request.serviceOverrideId) || '';
+  if (normalizedEndpointKind !== 'chat') {
     return normalizedServiceOverrideId;
   }
 
-  return normalizedServiceOverrideId || trimOptional(request.routeName) || "";
+  return normalizedServiceOverrideId || trimOptional(request.routeName) || '';
 }
 
 function extractMissingServiceId(messageText: string): string {
   const match = messageText.match(/Service '([^']+)' was not found/i);
-  return match?.[1]?.trim() ?? "";
+  return match?.[1]?.trim() ?? '';
 }
 
 function isMissingScopeServiceError(messageText: string): boolean {
@@ -540,54 +524,56 @@ function isMissingScopeServiceError(messageText: string): boolean {
 }
 
 function resolveConsoleViewForEndpoint(
-  endpointKind: RunEndpointKind
+  endpointKind: RunEndpointKind,
 ): ConsoleViewKey {
-  return endpointKind === "chat" ? "messages" : "timeline";
+  return endpointKind === 'chat' ? 'messages' : 'timeline';
 }
 
 const RunsPage: React.FC = () => {
   const screens = Grid.useBreakpoint();
   const hasResolvedBreakpoint = Object.values(screens).some(Boolean);
   const useCompactChatLayout = hasResolvedBreakpoint && screens.md === false;
-  const [messageApi, messageContextHolder] = message.useMessage();
+  const toast = useConsoleToast();
   const urlInitialFormValues = useMemo(() => readInitialRunFormValues(), []);
   const draftRunKey = useMemo(() => {
-    if (typeof window === "undefined") {
-      return "";
+    if (typeof window === 'undefined') {
+      return '';
     }
 
-    return new URLSearchParams(window.location.search).get("draftKey") ?? "";
+    return new URLSearchParams(window.location.search).get('draftKey') ?? '';
   }, []);
   const requestedReturnTo = useMemo(() => {
-    if (typeof window === "undefined") {
-      return "";
+    if (typeof window === 'undefined') {
+      return '';
     }
 
-    const returnTo = new URLSearchParams(window.location.search).get("returnTo");
-    return returnTo ? sanitizeReturnTo(returnTo) : "";
+    const returnTo = new URLSearchParams(window.location.search).get(
+      'returnTo',
+    );
+    return returnTo ? sanitizeReturnTo(returnTo) : '';
   }, []);
   const draftRunPayload = useMemo(
     () => loadQueuedDraftRunPayload(draftRunKey),
-    [draftRunKey]
+    [draftRunKey],
   );
   const scopeDraftPayload = useMemo(
     () =>
       isScopeDraftRunPayload(draftRunPayload) ? draftRunPayload : undefined,
-    [draftRunPayload]
+    [draftRunPayload],
   );
   const endpointInvocationDraftPayload = useMemo(
     () =>
       isEndpointInvocationDraftPayload(draftRunPayload)
         ? draftRunPayload
         : undefined,
-    [draftRunPayload]
+    [draftRunPayload],
   );
   const observedRunDraftPayload = useMemo(
     () =>
       isObservedRunSessionPayload(draftRunPayload)
         ? draftRunPayload
         : undefined,
-    [draftRunPayload]
+    [draftRunPayload],
   );
   const initialFormValues = useMemo(
     () => ({
@@ -601,8 +587,7 @@ const RunsPage: React.FC = () => {
         observedRunDraftPayload?.prompt ??
         endpointInvocationDraftPayload?.prompt ??
         urlInitialFormValues.prompt,
-      scopeId:
-        observedRunDraftPayload?.scopeId ?? urlInitialFormValues.scopeId,
+      scopeId: observedRunDraftPayload?.scopeId ?? urlInitialFormValues.scopeId,
       serviceOverrideId:
         observedRunDraftPayload?.serviceOverrideId ??
         endpointInvocationDraftPayload?.serviceOverrideId ??
@@ -623,112 +608,111 @@ const RunsPage: React.FC = () => {
         observedRunDraftPayload?.payloadBase64 ??
         endpointInvocationDraftPayload?.payloadBase64 ??
         urlInitialFormValues.payloadBase64,
-      actorId:
-        observedRunDraftPayload?.actorId ?? urlInitialFormValues.actorId,
+      actorId: observedRunDraftPayload?.actorId ?? urlInitialFormValues.actorId,
     }),
     [
       endpointInvocationDraftPayload,
       observedRunDraftPayload,
       urlInitialFormValues,
-    ]
+    ],
   );
   const composerFormRef = useRef<ProFormInstance<RunFormValues> | undefined>(
-    undefined
+    undefined,
   );
-  const [catalogSearch, setCatalogSearch] = useState("");
+  const [catalogSearch, setCatalogSearch] = useState('');
   const [selectedRouteName, setSelectedRouteName] = useState(
     scopeDraftPayload?.bundleName ??
       (endpointInvocationDraftPayload || observedRunDraftPayload
-        ? ""
+        ? ''
         : undefined) ??
       initialFormValues.routeName ??
-      defaultRunRouteName
+      defaultRunRouteName,
   );
   const [recentRuns, setRecentRuns] = useState<RecentRunEntry[]>(() =>
-    loadRecentRuns()
+    loadRecentRuns(),
   );
   const [selectedTransport, setSelectedTransport] = useState<RunTransport>(
-    initialFormValues.transport
+    initialFormValues.transport,
   );
-  const [selectedTraceItemKey, setSelectedTraceItemKey] = useState("");
+  const [selectedTraceItemKey, setSelectedTraceItemKey] = useState('');
   const [activeTransport, setActiveTransport] = useState<RunTransport>(
-    initialFormValues.transport
+    initialFormValues.transport,
   );
   const [consoleView, setConsoleView] = useState<ConsoleViewKey>(() =>
     resolveConsoleViewForEndpoint(
       normalizeRunEndpointKind(
         initialFormValues.endpointKind,
-        initialFormValues.endpointId
-      )
-    )
+        initialFormValues.endpointId,
+      ),
+    ),
   );
   const [hasStartedRun, setHasStartedRun] = useState(false);
   const [isInspectorDrawerOpen, setIsInspectorDrawerOpen] = useState(false);
   const [isSetupDrawerOpen, setIsSetupDrawerOpen] = useState(false);
   const [runStartedAtMs, setRunStartedAtMs] = useState<number | undefined>(
-    undefined
+    undefined,
   );
   const [elapsedNow, setElapsedNow] = useState(() => Date.now());
   const [transportIssue, setTransportIssue] = useState<
     { code?: string; message: string } | undefined
   >(undefined);
   const [activeScopeId, setActiveScopeId] = useState(
-    initialFormValues.scopeId ?? ""
+    initialFormValues.scopeId ?? '',
   );
   const [activeServiceOverrideId, setActiveServiceOverrideId] = useState(
-    initialFormValues.serviceOverrideId ?? ""
+    initialFormValues.serviceOverrideId ?? '',
   );
   const [activeEndpointKind, setActiveEndpointKind] = useState<RunEndpointKind>(
     normalizeRunEndpointKind(
       initialFormValues.endpointKind,
-      initialFormValues.endpointId
-    )
+      initialFormValues.endpointId,
+    ),
   );
   const [activeEndpointId, setActiveEndpointId] = useState(
     resolveStoredRunEndpointId(
       initialFormValues.endpointKind,
-      initialFormValues.endpointId
-    )
+      initialFormValues.endpointId,
+    ),
   );
   const [composerPrompt, setComposerPrompt] = useState(
-    initialFormValues.prompt ?? ""
+    initialFormValues.prompt ?? '',
   );
   const [activePrompt, setActivePrompt] = useState(
-    initialFormValues.prompt ?? ""
+    initialFormValues.prompt ?? '',
   );
   const [activePayloadTypeUrl, setActivePayloadTypeUrl] = useState(
-    initialFormValues.payloadTypeUrl ?? ""
+    initialFormValues.payloadTypeUrl ?? '',
   );
   const [activePayloadBase64, setActivePayloadBase64] = useState(
-    initialFormValues.payloadBase64 ?? ""
+    initialFormValues.payloadBase64 ?? '',
   );
   const handleRouteSelection = useCallback((value: string) => {
-    const normalizedValue = value ?? "";
+    const normalizedValue = value ?? '';
     setSelectedRouteName((currentValue) =>
-      currentValue === normalizedValue ? currentValue : normalizedValue
+      currentValue === normalizedValue ? currentValue : normalizedValue,
     );
   }, []);
   const handleEndpointKindChange = useCallback((value: RunEndpointKind) => {
     setActiveEndpointKind((currentValue) =>
-      currentValue === value ? currentValue : value
+      currentValue === value ? currentValue : value,
     );
   }, []);
   const handleEndpointChange = useCallback((value: string) => {
     const normalizedValue = value.trim();
     setActiveEndpointId((currentValue) =>
-      currentValue === normalizedValue ? currentValue : normalizedValue
+      currentValue === normalizedValue ? currentValue : normalizedValue,
     );
   }, []);
   const handleScopeIdChange = useCallback((value: string) => {
     const normalizedValue = value.trim();
     setActiveScopeId((currentValue) =>
-      currentValue === normalizedValue ? currentValue : normalizedValue
+      currentValue === normalizedValue ? currentValue : normalizedValue,
     );
   }, []);
   const handleComposerPromptChange = useCallback((value: string) => {
     setComposerPrompt(value);
     if (composerFormRef.current?.setFieldValue) {
-      composerFormRef.current.setFieldValue("prompt", value);
+      composerFormRef.current.setFieldValue('prompt', value);
       return;
     }
 
@@ -738,7 +722,7 @@ const RunsPage: React.FC = () => {
   }, []);
   const handleTransportChange = useCallback((value: RunTransport) => {
     setSelectedTransport((currentValue) =>
-      currentValue === value ? currentValue : value
+      currentValue === value ? currentValue : value,
     );
   }, []);
   const stopActiveRunRef = useRef<(() => void) | undefined>(undefined);
@@ -746,7 +730,7 @@ const RunsPage: React.FC = () => {
   const hydratedObservedRunRef = useRef(false);
 
   const workflowCatalogQuery = useQuery({
-    queryKey: ["workflow-catalog"],
+    queryKey: ['workflow-catalog'],
     queryFn: () => runtimeCatalogApi.listWorkflowCatalog(),
   });
 
@@ -779,24 +763,24 @@ const RunsPage: React.FC = () => {
       setHasStartedRun(true);
       setActiveTransport(selectedTransport);
       setActiveScopeId(snapshot.scopeId);
-      setActiveServiceOverrideId(snapshot.serviceOverrideId ?? "");
+      setActiveServiceOverrideId(snapshot.serviceOverrideId ?? '');
       setActiveEndpointKind(
-        normalizeRunEndpointKind(snapshot.endpointKind, snapshot.endpointId)
+        normalizeRunEndpointKind(snapshot.endpointKind, snapshot.endpointId),
       );
       setActiveEndpointId(
-        resolveStoredRunEndpointId(snapshot.endpointKind, snapshot.endpointId)
+        resolveStoredRunEndpointId(snapshot.endpointKind, snapshot.endpointId),
       );
-      setSelectedRouteName(snapshot.routeName ?? "");
-      setSelectedTraceItemKey("");
+      setSelectedRouteName(snapshot.routeName ?? '');
+      setSelectedTraceItemKey('');
       setConsoleView(
         resolveConsoleViewForEndpoint(
-          normalizeRunEndpointKind(snapshot.endpointKind, snapshot.endpointId)
-        )
+          normalizeRunEndpointKind(snapshot.endpointKind, snapshot.endpointId),
+        ),
       );
       setComposerPrompt(snapshot.prompt);
       setActivePrompt(snapshot.prompt);
-      setActivePayloadTypeUrl(snapshot.payloadTypeUrl ?? "");
-      setActivePayloadBase64(snapshot.payloadBase64 ?? "");
+      setActivePayloadTypeUrl(snapshot.payloadTypeUrl ?? '');
+      setActivePayloadBase64(snapshot.payloadBase64 ?? '');
       setRunStartedAtMs(Date.now());
 
       composerFormRef.current?.setFieldsValue({
@@ -805,7 +789,7 @@ const RunsPage: React.FC = () => {
         endpointId: snapshot.endpointId,
         endpointKind: normalizeRunEndpointKind(
           snapshot.endpointKind,
-          snapshot.endpointId
+          snapshot.endpointId,
         ),
         payloadBase64: snapshot.payloadBase64,
         payloadTypeUrl: snapshot.payloadTypeUrl,
@@ -820,7 +804,7 @@ const RunsPage: React.FC = () => {
         dispatch(event);
       });
     },
-    [abortRun, dispatch, initialFormValues, reset, selectedTransport]
+    [abortRun, dispatch, initialFormValues, reset, selectedTransport],
   );
 
   const reportTransportError = useCallback(
@@ -831,43 +815,41 @@ const RunsPage: React.FC = () => {
         message: messageText,
         code,
       });
-      messageApi.error(code ? `${code}: ${messageText}` : messageText);
+      toast.error(
+        t('pages.runs.index.run.request.failed', 'Could not start the run.'),
+      );
     },
-    [dispatch, messageApi]
+    [dispatch, toast],
   );
 
   const sendRun = useCallback(
-    async (
-      scopeId: string,
-      request: RunFormValues
-    ) => {
+    async (scopeId: string, request: RunFormValues) => {
       const runAttempt = async (
         requestedRun: RunFormValues,
-        allowMissingServiceRecovery: boolean
+        allowMissingServiceRecovery: boolean,
       ): Promise<void> => {
         const normalizedScopeId = scopeId.trim();
         const normalizedEndpointKind = normalizeRunEndpointKind(
           requestedRun.endpointKind,
-          requestedRun.endpointId
+          requestedRun.endpointId,
         );
         const normalizedEndpointId = resolveStoredRunEndpointId(
           normalizedEndpointKind,
-          requestedRun.endpointId
+          requestedRun.endpointId,
         );
         const resolvedServiceId = resolveRequestedServiceId(
           requestedRun,
-          Boolean(scopeDraftPayload)
+          Boolean(scopeDraftPayload),
         );
         const requestedPayloadTypeUrl =
-          requestedRun.payloadTypeUrl?.trim() ?? "";
-        const requestedPayloadBase64 =
-          requestedRun.payloadBase64?.trim() ?? "";
+          requestedRun.payloadTypeUrl?.trim() ?? '';
+        const requestedPayloadBase64 = requestedRun.payloadBase64?.trim() ?? '';
 
         if (!normalizedScopeId) {
-          throw new Error("Workspace ID is required.");
+          throw new Error('Workspace ID is required.');
         }
-        if (normalizedEndpointKind === "command" && !normalizedEndpointId) {
-          throw new Error("Endpoint ID is required for command invokes.");
+        if (normalizedEndpointKind === 'command' && !normalizedEndpointId) {
+          throw new Error('Endpoint ID is required for command invokes.');
         }
         if (
           requestedPayloadTypeUrl &&
@@ -875,7 +857,7 @@ const RunsPage: React.FC = () => {
           !isAutoEncodableTextPayloadTypeUrl(requestedPayloadTypeUrl)
         ) {
           throw new Error(
-            `payloadBase64 is required for payloadTypeUrl '${requestedPayloadTypeUrl}'.`
+            `payloadBase64 is required for payloadTypeUrl '${requestedPayloadTypeUrl}'.`,
           );
         }
 
@@ -890,8 +872,8 @@ const RunsPage: React.FC = () => {
         setActiveEndpointId(normalizedEndpointId);
         setComposerPrompt(requestedRun.prompt);
         setActivePrompt(requestedRun.prompt);
-        setActivePayloadTypeUrl(requestedRun.payloadTypeUrl ?? "");
-        setActivePayloadBase64(requestedRun.payloadBase64 ?? "");
+        setActivePayloadTypeUrl(requestedRun.payloadTypeUrl ?? '');
+        setActivePayloadBase64(requestedRun.payloadBase64 ?? '');
         setConsoleView(resolveConsoleViewForEndpoint(normalizedEndpointKind));
         setRunStartedAtMs(Date.now());
         setStreaming(true);
@@ -907,9 +889,9 @@ const RunsPage: React.FC = () => {
                   prompt: requestedRun.prompt,
                   workflowYamls: scopeDraftPayload.bundleYamls,
                 },
-                controller.signal
+                controller.signal,
               )
-            : normalizedEndpointKind === "chat" &&
+            : normalizedEndpointKind === 'chat' &&
                 !requestedRun.payloadTypeUrl?.trim() &&
                 !requestedRun.payloadBase64?.trim()
               ? await runtimeRunsApi.streamChat(
@@ -921,7 +903,7 @@ const RunsPage: React.FC = () => {
                   controller.signal,
                   {
                     serviceId: resolvedServiceId || undefined,
-                  }
+                  },
                 )
               : null;
 
@@ -935,21 +917,22 @@ const RunsPage: React.FC = () => {
 
               if (
                 allowMissingServiceRecovery &&
-                normalizedEndpointKind === "chat" &&
+                normalizedEndpointKind === 'chat' &&
                 resolvedServiceId &&
                 event.type === AGUIEventType.RUN_ERROR &&
-                isMissingScopeServiceError(event.message ?? "")
+                isMissingScopeServiceError(event.message ?? '')
               ) {
                 composerFormRef.current?.setFieldsValue({
                   routeName: undefined,
                   serviceOverrideId: undefined,
                 });
-                setSelectedRouteName("");
-                setActiveServiceOverrideId("");
-                messageApi.warning(
-                  `Selected service '${extractMissingServiceId(
-                    event.message ?? ""
-                  )}' is no longer available. Retrying with the workspace default binding.`
+                setSelectedRouteName('');
+                setActiveServiceOverrideId('');
+                toast.warning(
+                  t(
+                    'pages.runs.index.selected.service.unavailable',
+                    'The selected service is unavailable. Retrying with the workspace default.',
+                  ),
                 );
                 await runAttempt(
                   {
@@ -957,7 +940,7 @@ const RunsPage: React.FC = () => {
                     routeName: undefined,
                     serviceOverrideId: undefined,
                   },
-                  false
+                  false,
                 );
                 return;
               }
@@ -976,26 +959,24 @@ const RunsPage: React.FC = () => {
               },
               {
                 serviceId: resolvedServiceId || undefined,
-              }
+              },
             );
             const receiptRunId =
               String(
                 receipt.request_id ??
                   receipt.requestId ??
                   receipt.commandId ??
-                  ""
+                  '',
               ).trim() || `${normalizedEndpointId}-${Date.now().toString(36)}`;
             const receiptActorId = String(
               receipt.target_actor_id ??
                 receipt.targetActorId ??
                 receipt.actorId ??
-                ""
+                '',
             ).trim();
             const receiptCorrelationId =
               String(
-                receipt.correlation_id ??
-                  receipt.correlationId ??
-                  receiptRunId
+                receipt.correlation_id ?? receipt.correlationId ?? receiptRunId,
               ).trim() || receiptRunId;
 
             dispatch({
@@ -1011,23 +992,26 @@ const RunsPage: React.FC = () => {
                 workflowName: normalizedEndpointId,
                 commandId:
                   String(
-                    receipt.command_id ?? receipt.commandId ?? ""
+                    receipt.command_id ?? receipt.commandId ?? '',
                   ).trim() || undefined,
               },
             });
-            messageApi.success(
-              `Endpoint ${normalizedEndpointId} accepted with request ${receiptRunId}.`
+            toast.info(
+              t(
+                'pages.runs.index.invocation.accepted.waiting.for.activity',
+                'Invocation accepted. Waiting for activity.',
+              ),
             );
           }
         } catch (error) {
-          if (error instanceof Error && error.name === "AbortError") {
+          if (error instanceof Error && error.name === 'AbortError') {
             return;
           }
 
           const text = error instanceof Error ? error.message : String(error);
           if (
             allowMissingServiceRecovery &&
-            normalizedEndpointKind === "chat" &&
+            normalizedEndpointKind === 'chat' &&
             resolvedServiceId &&
             isMissingScopeServiceError(text)
           ) {
@@ -1035,12 +1019,13 @@ const RunsPage: React.FC = () => {
               routeName: undefined,
               serviceOverrideId: undefined,
             });
-            setSelectedRouteName("");
-            setActiveServiceOverrideId("");
-            messageApi.warning(
-              `Selected service '${extractMissingServiceId(
-                text
-              )}' is no longer available. Retrying with the workspace default binding.`
+            setSelectedRouteName('');
+            setActiveServiceOverrideId('');
+            toast.warning(
+              t(
+                'pages.runs.index.selected.service.unavailable',
+                'The selected service is unavailable. Retrying with the workspace default.',
+              ),
             );
             await runAttempt(
               {
@@ -1048,7 +1033,7 @@ const RunsPage: React.FC = () => {
                 routeName: undefined,
                 serviceOverrideId: undefined,
               },
-              false
+              false,
             );
             return;
           }
@@ -1066,18 +1051,18 @@ const RunsPage: React.FC = () => {
       abortRun,
       composerFormRef,
       dispatch,
-      messageApi,
       reportTransportError,
       reset,
       scopeDraftPayload,
-    ]
+      toast,
+    ],
   );
 
   const resolveRunScopeId = useCallback(() => {
     return (
       activeScopeId.trim() ||
-      composerFormRef.current?.getFieldValue("scopeId")?.trim?.() ||
-      ""
+      composerFormRef.current?.getFieldValue('scopeId')?.trim?.() ||
+      ''
     );
   }, [activeScopeId]);
 
@@ -1088,25 +1073,25 @@ const RunsPage: React.FC = () => {
 
     const scopeId = resolveRunScopeId();
     if (!scopeId) {
-      return "";
+      return '';
     }
 
     return buildTeamDetailHref({
       scopeId,
-      tab: "overview",
+      tab: 'overview',
       runId: session.runId || undefined,
     });
   }, [requestedReturnTo, resolveRunScopeId, session.runId]);
   const returnTargetLabel = useMemo(
     () => describeRunReturnTarget(teamAdvancedHref),
-    [teamAdvancedHref]
+    [teamAdvancedHref],
   );
 
   const resolveRunServiceOverrideId = useCallback(() => {
     return (
       activeServiceOverrideId.trim() ||
-      composerFormRef.current?.getFieldValue("serviceOverrideId")?.trim?.() ||
-      ""
+      composerFormRef.current?.getFieldValue('serviceOverrideId')?.trim?.() ||
+      ''
     );
   }, [activeServiceOverrideId]);
 
@@ -1114,7 +1099,7 @@ const RunsPage: React.FC = () => {
     return normalizeRunEndpointKind(
       activeEndpointKind,
       activeEndpointId ||
-        composerFormRef.current?.getFieldValue("endpointId")?.trim?.()
+        composerFormRef.current?.getFieldValue('endpointId')?.trim?.(),
     );
   }, [activeEndpointId, activeEndpointKind]);
 
@@ -1122,7 +1107,7 @@ const RunsPage: React.FC = () => {
     return resolveStoredRunEndpointId(
       resolveRunEndpointKind(),
       activeEndpointId ||
-        composerFormRef.current?.getFieldValue("endpointId")?.trim?.()
+        composerFormRef.current?.getFieldValue('endpointId')?.trim?.(),
     );
   }, [activeEndpointId, resolveRunEndpointKind]);
 
@@ -1131,7 +1116,7 @@ const RunsPage: React.FC = () => {
       const scopeId = resolveRunScopeId();
       const serviceOverrideId = resolveRunServiceOverrideId();
       if (!scopeId) {
-        throw new Error("Workspace ID is required to resume a run.");
+        throw new Error('Workspace ID is required to resume a run.');
       }
 
       return runtimeRunsApi.resume(scopeId, request, {
@@ -1142,7 +1127,7 @@ const RunsPage: React.FC = () => {
       const scopeId = resolveRunScopeId();
       const serviceOverrideId = resolveRunServiceOverrideId();
       if (!scopeId) {
-        throw new Error("Workspace ID is required to signal a run.");
+        throw new Error('Workspace ID is required to signal a run.');
       }
 
       return runtimeRunsApi.signal(scopeId, request, {
@@ -1165,15 +1150,15 @@ const RunsPage: React.FC = () => {
     hydratedObservedRunRef.current = true;
     deleteQueuedDraftRunPayload(draftRunKey);
 
-    if (typeof window !== "undefined") {
+    if (typeof window !== 'undefined') {
       const searchParams = new URLSearchParams(window.location.search);
-      searchParams.delete("draftKey");
+      searchParams.delete('draftKey');
       const search = searchParams.toString();
       // Avoid router remount during observed-session handoff; we only need to clean the URL.
       window.history.replaceState(
         window.history.state,
-        "",
-        `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`
+        '',
+        `${window.location.pathname}${search ? `?${search}` : ''}${window.location.hash}`,
       );
     }
 
@@ -1189,19 +1174,15 @@ const RunsPage: React.FC = () => {
       scopeId: observedRunDraftPayload.scopeId,
       serviceOverrideId: observedRunDraftPayload.serviceOverrideId,
     });
-  }, [
-    draftRunKey,
-    hydrateObservedSession,
-    observedRunDraftPayload,
-  ]);
+  }, [draftRunKey, hydrateObservedSession, observedRunDraftPayload]);
 
   useEffect(() => {
     if (!scopeDraftPayload || !draftRunKey || autoStartedDraftRunRef.current) {
       return;
     }
 
-    const scopeId = initialFormValues.scopeId?.trim() ?? "";
-    const prompt = initialFormValues.prompt?.trim() ?? "";
+    const scopeId = initialFormValues.scopeId?.trim() ?? '';
+    const prompt = initialFormValues.prompt?.trim() ?? '';
     if (!scopeId || !prompt) {
       return;
     }
@@ -1209,30 +1190,30 @@ const RunsPage: React.FC = () => {
     autoStartedDraftRunRef.current = true;
     deleteQueuedDraftRunPayload(draftRunKey);
 
-    if (typeof window !== "undefined") {
+    if (typeof window !== 'undefined') {
       const searchParams = new URLSearchParams(window.location.search);
-      searchParams.delete("draftKey");
+      searchParams.delete('draftKey');
       const search = searchParams.toString();
       // Avoid router remount during auto-start handoff; we only need to clean the URL.
       window.history.replaceState(
         window.history.state,
-        "",
-        `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`
+        '',
+        `${window.location.pathname}${search ? `?${search}` : ''}${window.location.hash}`,
       );
     }
 
     void sendRun(scopeId, {
       ...initialFormValues,
       actorId: undefined,
-      endpointId: "chat",
-      endpointKind: "chat",
+      endpointId: 'chat',
+      endpointKind: 'chat',
       payloadBase64: undefined,
       payloadTypeUrl: undefined,
       prompt,
       scopeId,
       serviceOverrideId: undefined,
       routeName: scopeDraftPayload.bundleName,
-      transport: initialFormValues.transport ?? "sse",
+      transport: initialFormValues.transport ?? 'sse',
     });
   }, [draftRunKey, initialFormValues, scopeDraftPayload, sendRun]);
 
@@ -1248,7 +1229,7 @@ const RunsPage: React.FC = () => {
       return scopeDraftPayload.bundleName;
     }
 
-    if (endpointKind !== "chat") {
+    if (endpointKind !== 'chat') {
       return endpointName;
     }
 
@@ -1261,7 +1242,7 @@ const RunsPage: React.FC = () => {
     session.context?.workflowName,
   ]);
   const actorId = session.context?.actorId;
-  const commandId = session.context?.commandId ?? "";
+  const commandId = session.context?.commandId ?? '';
   const canOpenMissionControl = Boolean(activeScopeId.trim() && session.runId);
   const hasRunInspectorTarget = Boolean(actorId || session.runId);
   const handleOpenMissionControl = useCallback(() => {
@@ -1294,41 +1275,41 @@ const RunsPage: React.FC = () => {
   ]);
   const payloadTypeUrl =
     activePayloadTypeUrl.trim() ||
-    composerFormRef.current?.getFieldValue("payloadTypeUrl")?.trim?.() ||
+    composerFormRef.current?.getFieldValue('payloadTypeUrl')?.trim?.() ||
     initialFormValues.payloadTypeUrl ||
-    "";
+    '';
 
   const waitingSignal = useMemo(
     () =>
       getLatestCustomEventData(
         session.events,
         CustomEventName.WaitingSignal,
-        parseWaitingSignalData
+        parseWaitingSignalData,
       ),
-    [session.events]
+    [session.events],
   );
   const latestStepRequest = useMemo(
     () =>
       getLatestCustomEventData(
         session.events,
         CustomEventName.StepRequest,
-        parseStepRequestData
+        parseStepRequestData,
       ),
-    [session.events]
+    [session.events],
   );
 
   const actorSnapshotQuery = useQuery({
-    queryKey: ["run-actor-snapshot", actorId],
+    queryKey: ['run-actor-snapshot', actorId],
     enabled: Boolean(actorId),
-    queryFn: () => runtimeActorsApi.getActorSnapshot(actorId || ""),
+    queryFn: () => runtimeActorsApi.getActorSnapshot(actorId || ''),
     refetchInterval:
-      actorId && (streaming || session.status === "running") ? 2_000 : false,
+      actorId && (streaming || session.status === 'running') ? 2_000 : false,
   });
 
   const filteredCatalog = useMemo(() => {
     const keyword = catalogSearch.trim().toLowerCase();
     const items = listVisibleWorkflowCatalogItems(
-      workflowCatalogQuery.data ?? []
+      workflowCatalogQuery.data ?? [],
     );
     if (!keyword) {
       return items;
@@ -1336,9 +1317,9 @@ const RunsPage: React.FC = () => {
 
     return items.filter((item) =>
       [item.name, item.description, item.groupLabel, item.category]
-        .join(" ")
+        .join(' ')
         .toLowerCase()
-        .includes(keyword)
+        .includes(keyword),
     );
   }, [catalogSearch, workflowCatalogQuery.data]);
 
@@ -1346,10 +1327,10 @@ const RunsPage: React.FC = () => {
     const visibleNames = new Set(filteredCatalog.map((item) => item.name));
     return buildWorkflowCatalogOptions(
       workflowCatalogQuery.data ?? [],
-      selectedRouteName
+      selectedRouteName,
     ).filter(
       (option) =>
-        option.value === selectedRouteName || visibleNames.has(option.value)
+        option.value === selectedRouteName || visibleNames.has(option.value),
     );
   }, [filteredCatalog, selectedRouteName, workflowCatalogQuery.data]);
 
@@ -1357,41 +1338,43 @@ const RunsPage: React.FC = () => {
     () =>
       findWorkflowCatalogItem(
         workflowCatalogQuery.data ?? [],
-        selectedRouteName
+        selectedRouteName,
       ),
-    [selectedRouteName, workflowCatalogQuery.data]
+    [selectedRouteName, workflowCatalogQuery.data],
   );
 
-  const selectedRouteRecord = useMemo<
-    SelectedRouteRecord | undefined
-  >(() => {
+  const selectedRouteRecord = useMemo<SelectedRouteRecord | undefined>(() => {
     if (!selectedRouteDetails) {
       if (scopeDraftPayload) {
         return {
           routeName: scopeDraftPayload.bundleName,
-          groupLabel: "Studio",
-          sourceLabel: "Draft bundle",
-          llmStatus: "success",
-          description:
-            t("pages.runs.index.executing.the.current.studio.draft.2", "Executing the current Studio draft bundle through the scope draft-run endpoint."),
+          groupLabel: 'Studio',
+          sourceLabel: 'Draft bundle',
+          llmStatus: 'success',
+          description: t(
+            'pages.runs.index.executing.the.current.studio.draft.2',
+            'Executing the current Studio draft bundle through the scope draft-run endpoint.',
+          ),
         };
       }
 
-      if (!endpointName || endpointKind === "chat") {
+      if (!endpointName || endpointKind === 'chat') {
         return undefined;
       }
 
       return {
         routeName: endpointName,
-        groupLabel: endpointInvocationDraftPayload ? "Workspace" : "Workspace binding",
+        groupLabel: endpointInvocationDraftPayload
+          ? 'Workspace'
+          : 'Workspace binding',
         sourceLabel: endpointInvocationDraftPayload
-          ? "Invocation draft"
+          ? 'Invocation draft'
           : payloadTypeUrl
-          ? "Typed payload"
-          : "StringValue default",
-        llmStatus: "success",
+            ? 'Typed payload'
+            : 'StringValue default',
+        llmStatus: 'success',
         description: endpointInvocationDraftPayload
-          ? "Invoking the scoped endpoint with a prepared protobuf payload."
+          ? 'Invoking the scoped endpoint with a prepared protobuf payload.'
           : `Invoking the scoped endpoint '${endpointName}' through the generic invoke path.`,
       };
     }
@@ -1401,8 +1384,8 @@ const RunsPage: React.FC = () => {
       groupLabel: selectedRouteDetails.groupLabel,
       sourceLabel: selectedRouteDetails.sourceLabel,
       llmStatus: selectedRouteDetails.requiresLlmProvider
-        ? "processing"
-        : "success",
+        ? 'processing'
+        : 'success',
       description: selectedRouteDetails.description,
     };
   }, [
@@ -1417,24 +1400,24 @@ const RunsPage: React.FC = () => {
   const visiblePresets = useMemo(() => {
     const available = new Set(
       listVisibleWorkflowCatalogItems(workflowCatalogQuery.data ?? []).map(
-        (item) => item.name
-      )
+        (item) => item.name,
+      ),
     );
     return builtInPresets.filter((preset) => available.has(preset.routeName));
   }, [workflowCatalogQuery.data]);
 
   const snapshotMessageFallback = useMemo(() => {
     const snapshot = actorSnapshotQuery.data;
-    if (!snapshot || session.status !== "finished") {
-      return "";
+    if (!snapshot || session.status !== 'finished') {
+      return '';
     }
 
-    const snapshotCommandId = snapshot.lastCommandId?.trim() ?? "";
+    const snapshotCommandId = snapshot.lastCommandId?.trim() ?? '';
     if (commandId && snapshotCommandId && snapshotCommandId !== commandId) {
-      return "";
+      return '';
     }
 
-    return snapshot.lastOutput?.trim() ?? "";
+    return snapshot.lastOutput?.trim() ?? '';
   }, [actorSnapshotQuery.data, commandId, session.status]);
 
   const displayedMessages = useMemo(() => {
@@ -1444,7 +1427,7 @@ const RunsPage: React.FC = () => {
 
     const fallbackContent = resolveRunMessageFallback(
       session.events,
-      snapshotMessageFallback
+      snapshotMessageFallback,
     );
     if (!fallbackContent) {
       return session.messages;
@@ -1452,8 +1435,8 @@ const RunsPage: React.FC = () => {
 
     return [
       {
-        messageId: `final-output:${session.runId || commandId || actorId || "latest"}`,
-        role: "assistant",
+        messageId: `final-output:${session.runId || commandId || actorId || 'latest'}`,
+        role: 'assistant',
         content: fallbackContent,
         complete: true,
       },
@@ -1471,7 +1454,7 @@ const RunsPage: React.FC = () => {
     const lastWithContent = [...displayedMessages]
       .reverse()
       .find((item) => item.content?.trim());
-    return lastWithContent?.content?.trim() ?? "";
+    return lastWithContent?.content?.trim() ?? '';
   }, [displayedMessages]);
 
   const recentRunRows = useMemo<RecentRunTableRow[]>(
@@ -1479,11 +1462,11 @@ const RunsPage: React.FC = () => {
       recentRuns.map((entry) => ({
         ...entry,
         key: entry.id,
-        statusValue: ["idle", "running", "finished", "error"].includes(
-          entry.status
+        statusValue: ['idle', 'running', 'finished', 'error'].includes(
+          entry.status,
         )
           ? (entry.status as RunStatusValue)
-          : "unknown",
+          : 'unknown',
         onOpenActor: entry.actorId
           ? () =>
               history.push(
@@ -1495,22 +1478,21 @@ const RunsPage: React.FC = () => {
                     entry.serviceOverrideId === entry.routeName
                       ? undefined
                       : entry.serviceOverrideId || undefined,
-                })
+                }),
               )
           : undefined,
         onRestore: () => {
           const restoredEndpointKind = normalizeRunEndpointKind(
             entry.endpointKind,
-            entry.endpointId
+            entry.endpointId,
           );
           const restoredEndpointId = resolveStoredRunEndpointId(
             restoredEndpointKind,
-            entry.endpointId
+            entry.endpointId,
           );
-          const isChatEndpoint = restoredEndpointKind === "chat";
+          const isChatEndpoint = restoredEndpointKind === 'chat';
           const restoredServiceOverrideId =
-            isChatEndpoint &&
-            entry.serviceOverrideId === entry.routeName
+            isChatEndpoint && entry.serviceOverrideId === entry.routeName
               ? undefined
               : entry.serviceOverrideId || undefined;
           const restoredRouteName = isChatEndpoint
@@ -1525,11 +1507,11 @@ const RunsPage: React.FC = () => {
               events: entry.observedEvents,
               payloadBase64: entry.payloadBase64 || undefined,
               payloadTypeUrl: entry.payloadTypeUrl || undefined,
-            prompt: entry.prompt,
-            routeName: restoredRouteName,
-            scopeId: entry.scopeId,
-            serviceOverrideId: restoredServiceOverrideId,
-          });
+              prompt: entry.prompt,
+              routeName: restoredRouteName,
+              scopeId: entry.scopeId,
+              serviceOverrideId: restoredServiceOverrideId,
+            });
             return;
           }
 
@@ -1546,25 +1528,25 @@ const RunsPage: React.FC = () => {
             transport: selectedTransport,
           });
           setComposerPrompt(entry.prompt);
-          setSelectedRouteName(isChatEndpoint ? entry.routeName : "");
+          setSelectedRouteName(isChatEndpoint ? entry.routeName : '');
           setActiveEndpointKind(restoredEndpointKind);
           setActiveEndpointId(restoredEndpointId);
         },
       })),
-    [hydrateObservedSession, recentRuns, selectedTransport]
+    [hydrateObservedSession, recentRuns, selectedTransport],
   );
 
   const eventRows = useMemo<RunEventRow[]>(
     () => buildEventRows(session.events),
-    [session.events]
+    [session.events],
   );
   const timelineGroups = useMemo<RunTimelineGroup[]>(
     () => buildTimelineGroups(eventRows),
-    [eventRows]
+    [eventRows],
   );
   const selectedTraceItem = useMemo(
     () => eventRows.find((item) => item.key === selectedTraceItemKey),
-    [eventRows, selectedTraceItemKey]
+    [eventRows, selectedTraceItemKey],
   );
   const waitingSignalRecord = useMemo<WaitingSignalRecord | undefined>(() => {
     if (!waitingSignal) {
@@ -1572,17 +1554,17 @@ const RunsPage: React.FC = () => {
     }
 
     return {
-      signalName: waitingSignal.signalName ?? "",
-      stepId: waitingSignal.stepId ?? "",
-      runId: waitingSignal.runId ?? "",
-      prompt: waitingSignal.prompt ?? "",
+      signalName: waitingSignal.signalName ?? '',
+      stepId: waitingSignal.stepId ?? '',
+      runId: waitingSignal.runId ?? '',
+      prompt: waitingSignal.prompt ?? '',
     };
   }, [waitingSignal]);
 
   useEffect(() => {
     if (eventRows.length === 0) {
       if (selectedTraceItemKey) {
-        setSelectedTraceItemKey("");
+        setSelectedTraceItemKey('');
       }
       return;
     }
@@ -1599,13 +1581,13 @@ const RunsPage: React.FC = () => {
 
     return {
       stepId:
-        session.pendingHumanInput.stepId ?? latestStepRequest?.stepId ?? "",
-      runId: session.pendingHumanInput.runId ?? session.runId ?? "",
+        session.pendingHumanInput.stepId ?? latestStepRequest?.stepId ?? '',
+      runId: session.pendingHumanInput.runId ?? session.runId ?? '',
       suspensionType:
         session.pendingHumanInput.suspensionType ??
         latestStepRequest?.stepType ??
-        "",
-      prompt: session.pendingHumanInput.prompt ?? "",
+        '',
+      prompt: session.pendingHumanInput.prompt ?? '',
       timeoutSeconds: session.pendingHumanInput.timeoutSeconds ?? 0,
     };
   }, [
@@ -1616,90 +1598,115 @@ const RunsPage: React.FC = () => {
   ]);
 
   const runFocus = useMemo<RunFocusRecord>(() => {
-    if (transportIssue || session.error || session.status === "error") {
+    if (transportIssue || session.error || session.status === 'error') {
       return {
-        status: "error" as const,
+        status: 'error' as const,
         label:
-          transportIssue?.message || session.error?.message || "Run failed",
-        alertType: "error" as const,
-        title: transportIssue?.code ?? session.error?.code ?? "Run error",
+          transportIssue?.message || session.error?.message || 'Run failed',
+        alertType: 'error' as const,
+        title: transportIssue?.code ?? session.error?.code ?? 'Run error',
         description:
           transportIssue?.message ||
           session.error?.message ||
-          "The run ended with an error.",
+          'The run ended with an error.',
       };
     }
 
     if (humanInputRecord) {
       const approval = isHumanApprovalSuspension(
-        humanInputRecord.suspensionType
+        humanInputRecord.suspensionType,
       );
       return {
         status: approval
-          ? ("human_approval" as const)
-          : ("human_input" as const),
+          ? ('human_approval' as const)
+          : ('human_input' as const),
         label: approval
-          ? `Awaiting approval on ${humanInputRecord.stepId || "current step"}`
+          ? `Awaiting approval on ${humanInputRecord.stepId || 'current step'}`
           : `Awaiting human input on ${
-              humanInputRecord.stepId || "current step"
+              humanInputRecord.stepId || 'current step'
             }`,
-        alertType: "warning" as const,
-        title: approval ? "Approval required" : "Human input required",
+        alertType: 'warning' as const,
+        title: approval ? 'Approval required' : 'Human input required',
         description:
-          humanInputRecord.prompt || "Operator action is required to continue.",
+          humanInputRecord.prompt || 'Operator action is required to continue.',
       };
     }
 
     if (waitingSignalRecord) {
       return {
-        status: "wait_signal" as const,
-        label: t("pages.runs.index.waiting.for.signal", "Waiting for signal {value1}", { value1: waitingSignalRecord.signalName || "unknown" }),
-        alertType: "warning" as const,
-        title: t("pages.runs.index.waiting.for.external.signal.2", "Waiting for external signal"),
+        status: 'wait_signal' as const,
+        label: t(
+          'pages.runs.index.waiting.for.signal',
+          'Waiting for signal {value1}',
+          { value1: waitingSignalRecord.signalName || 'unknown' },
+        ),
+        alertType: 'warning' as const,
+        title: t(
+          'pages.runs.index.waiting.for.external.signal.2',
+          'Waiting for external signal',
+        ),
         description:
           waitingSignalRecord.prompt ||
-          "The run is paused until the expected signal arrives.",
+          'The run is paused until the expected signal arrives.',
       };
     }
 
     if (streaming) {
       return {
-        status: "running" as const,
-        label: t("pages.runs.index.streaming.over", "Streaming over {value1}", { value1: activeTransport.toUpperCase() }),
-        alertType: "info" as const,
-        title: t("pages.runs.index.run.in.progress.2", "Run in progress"),
-        description: t("pages.runs.index.messages.and.events.are.still.2", "Messages and events are still arriving from the backend."),
+        status: 'running' as const,
+        label: t('pages.runs.index.streaming.over', 'Streaming over {value1}', {
+          value1: activeTransport.toUpperCase(),
+        }),
+        alertType: 'info' as const,
+        title: t('pages.runs.index.run.in.progress.2', 'Run in progress'),
+        description: t(
+          'pages.runs.index.messages.and.events.are.still.2',
+          'Messages and events are still arriving from the backend.',
+        ),
       };
     }
 
-    if (session.status === "running") {
+    if (session.status === 'running') {
       return {
-        status: "running" as const,
-        label: t("pages.runs.index.invocation.accepted.2", "Invocation accepted"),
-        alertType: "info" as const,
-        title: t("pages.runs.index.awaiting.observation.2", "Awaiting observation"),
-        description:
-          t("pages.runs.index.the.backend.accepted.the.command.2", "The backend accepted the command. This console will stay pending until observed events arrive."),
+        status: 'running' as const,
+        label: t(
+          'pages.runs.index.invocation.accepted.2',
+          'Invocation accepted',
+        ),
+        alertType: 'info' as const,
+        title: t(
+          'pages.runs.index.awaiting.observation.2',
+          'Awaiting observation',
+        ),
+        description: t(
+          'pages.runs.index.the.backend.accepted.the.command.2',
+          'The backend accepted the command. This console will stay pending until observed events arrive.',
+        ),
       };
     }
 
-    if (session.status === "finished") {
+    if (session.status === 'finished') {
       return {
-        status: "finished" as const,
-        label: t("pages.runs.index.run.completed.2", "Run completed"),
-        alertType: "success" as const,
-        title: t("pages.runs.index.run.finished.2", "Run finished"),
-        description: t("pages.runs.index.the.backend.reported.completed.run.2", "The backend reported a completed run."),
+        status: 'finished' as const,
+        label: t('pages.runs.index.run.completed.2', 'Run completed'),
+        alertType: 'success' as const,
+        title: t('pages.runs.index.run.finished.2', 'Run finished'),
+        description: t(
+          'pages.runs.index.the.backend.reported.completed.run.2',
+          'The backend reported a completed run.',
+        ),
       };
     }
 
     return {
-      status: "idle" as const,
-      label: t("pages.runs.index.ready.to.start.run.2", "Ready to start a run"),
-      alertType: "info" as const,
-      title: "Idle",
-      description:
-        t("pages.runs.index.compose.prompt.or.payload.and.2", "Compose a prompt or payload and start a scoped endpoint run."),
+      status: 'idle' as const,
+      label: t('pages.runs.index.ready.to.start.run.2', 'Ready to start a run'),
+      alertType: 'info' as const,
+      title: 'Idle',
+      description: t(
+        'pages.runs.index.compose.prompt.or.payload.and.2',
+        'Compose a prompt or payload and start a scoped endpoint run.',
+      ),
     };
   }, [
     activeTransport,
@@ -1712,12 +1719,12 @@ const RunsPage: React.FC = () => {
   ]);
 
   const hasPendingInteraction = Boolean(
-    humanInputRecord || waitingSignalRecord
+    humanInputRecord || waitingSignalRecord,
   );
   const hasRunActivity =
     hasStartedRun ||
     streaming ||
-    session.status !== "idle" ||
+    session.status !== 'idle' ||
     session.events.length > 0 ||
     displayedMessages.length > 0 ||
     Boolean(session.runId) ||
@@ -1754,21 +1761,21 @@ const RunsPage: React.FC = () => {
       hasRunActivity,
       initialFormValues,
       selectedRouteName,
-    ]
+    ],
   );
   const runStatusText = getRunStatusLabel(session.status);
   const isRunLive =
     streaming ||
-    session.status === "running" ||
+    session.status === 'running' ||
     hasPendingInteraction ||
-    runFocus.status === "wait_signal";
+    runFocus.status === 'wait_signal';
   const runStatusTone = isRunLive
-    ? ("processing" as const)
-    : session.status === "finished"
-    ? ("success" as const)
-    : session.status === "error"
-    ? ("error" as const)
-    : ("default" as const);
+    ? ('processing' as const)
+    : session.status === 'finished'
+      ? ('success' as const)
+      : session.status === 'error'
+        ? ('error' as const)
+        : ('default' as const);
 
   useEffect(() => {
     if (hasRunActivity) {
@@ -1797,23 +1804,23 @@ const RunsPage: React.FC = () => {
 
   const elapsedLabel = runStartedAtMs
     ? formatElapsedDuration(elapsedNow - runStartedAtMs)
-    : "00:00";
+    : '00:00';
 
   const lastEventAt = useMemo(() => {
     const latest = session.events[session.events.length - 1];
-    return formatDateTime(latest?.timestamp, "");
+    return formatDateTime(latest?.timestamp, '');
   }, [session.events]);
 
   const runSummaryRecord = useMemo<RunSummaryRecord>(
     () => ({
       status: session.status,
       transport: activeTransport,
-      routeName: routeName ?? "",
+      routeName: routeName ?? '',
       endpointId: endpointName,
       endpointKind,
-      actorId: actorId ?? "",
+      actorId: actorId ?? '',
       commandId,
-      runId: session.runId ?? "",
+      runId: session.runId ?? '',
       focusStatus: runFocus.status,
       focusLabel: runFocus.label,
       lastEventAt,
@@ -1836,7 +1843,7 @@ const RunsPage: React.FC = () => {
       endpointKind,
       endpointName,
       routeName,
-    ]
+    ],
   );
 
   useEffect(() => {
@@ -1849,7 +1856,7 @@ const RunsPage: React.FC = () => {
     const candidateId =
       commandId ??
       session.runId ??
-      (actorId && routeName ? `${routeName}:${actorId}` : "");
+      (actorId && routeName ? `${routeName}:${actorId}` : '');
 
     if (!candidateId || (!routeName && !prompt)) {
       return;
@@ -1860,9 +1867,9 @@ const RunsPage: React.FC = () => {
         id: candidateId,
         scopeId: resolveRunScopeId(),
         serviceOverrideId:
-          currentEndpointKind === "chat" &&
+          currentEndpointKind === 'chat' &&
           currentServiceOverrideId === routeName
-            ? ""
+            ? ''
             : currentServiceOverrideId,
         endpointId: currentEndpointId,
         endpointKind: currentEndpointKind,
@@ -1870,13 +1877,13 @@ const RunsPage: React.FC = () => {
         payloadBase64: currentPayloadBase64,
         routeName,
         prompt,
-        actorId: actorId ?? "",
+        actorId: actorId ?? '',
         commandId,
-        runId: session.runId ?? "",
+        runId: session.runId ?? '',
         status: session.status,
         lastMessagePreview: latestMessagePreview,
         observedEvents: session.events.map((event) => ({ ...event })),
-      })
+      }),
     );
   }, [
     activePayloadBase64,
@@ -1898,22 +1905,27 @@ const RunsPage: React.FC = () => {
   const handleAbortRun = useCallback(async () => {
     const scopeId = resolveRunScopeId();
     const serviceOverrideId = resolveRunServiceOverrideId();
-    const runId = session.runId?.trim() ?? "";
-    const currentActorId = actorId?.trim() ?? "";
+    const runId = session.runId?.trim() ?? '';
+    const currentActorId = actorId?.trim() ?? '';
 
     if (scopeId && runId) {
       try {
-        await runtimeRunsApi.stop(scopeId, {
-          actorId: currentActorId || undefined,
-          runId,
-          commandId: commandId || undefined,
-          reason: "aborted from runtime console",
-        }, {
-          serviceId: serviceOverrideId || undefined,
-        });
-      } catch (error) {
-        const text = error instanceof Error ? error.message : String(error);
-        messageApi.error(`Failed to stop remote run: ${text}`);
+        await runtimeRunsApi.stop(
+          scopeId,
+          {
+            actorId: currentActorId || undefined,
+            runId,
+            commandId: commandId || undefined,
+            reason: 'aborted from runtime console',
+          },
+          {
+            serviceId: serviceOverrideId || undefined,
+          },
+        );
+      } catch {
+        toast.error(
+          t('pages.runs.index.stop.failed', 'Could not stop the run.'),
+        );
       }
     }
 
@@ -1922,15 +1934,15 @@ const RunsPage: React.FC = () => {
     abortRun,
     actorId,
     commandId,
-    messageApi,
     resolveRunScopeId,
     resolveRunServiceOverrideId,
     session.runId,
+    toast,
   ]);
 
   const submitPathLabel = scopeDraftPayload
-    ? "/api/scopes/{scopeId}/workflow/draft-run"
-    : endpointKind === "chat"
+    ? '/api/scopes/{scopeId}/workflow/draft-run'
+    : endpointKind === 'chat'
       ? resolveRequestedServiceId(
           {
             endpointId: endpointName,
@@ -1940,23 +1952,24 @@ const RunsPage: React.FC = () => {
               ? activeServiceOverrideId || undefined
               : initialFormValues.serviceOverrideId,
           },
-          false
+          false,
         )
-        ? "/api/scopes/{scopeId}/services/{serviceId}/invoke/chat:stream"
-        : "/api/scopes/{scopeId}/invoke/chat:stream"
+        ? '/api/scopes/{scopeId}/services/{serviceId}/invoke/chat:stream'
+        : '/api/scopes/{scopeId}/invoke/chat:stream'
       : trimOptional(
-          hasRunActivity
-            ? activeServiceOverrideId || undefined
-            : initialFormValues.serviceOverrideId
-        )
-        ? "/api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}"
-        : "/api/scopes/{scopeId}/invoke/{endpointId}";
+            hasRunActivity
+              ? activeServiceOverrideId || undefined
+              : initialFormValues.serviceOverrideId,
+          )
+        ? '/api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}'
+        : '/api/scopes/{scopeId}/invoke/{endpointId}';
 
-  const isChatConsole = endpointKind === "chat";
+  const isChatConsole = endpointKind === 'chat';
   const composerScopeId = resolveRunScopeId();
   const composerRouteLabel =
-    routeName || (scopeDraftPayload ? scopeDraftPayload.bundleName : "Workspace default");
-  const composerEndpointLabel = endpointName || "chat";
+    routeName ||
+    (scopeDraftPayload ? scopeDraftPayload.bundleName : 'Workspace default');
+  const composerEndpointLabel = endpointName || 'chat';
   const runReadiness = useMemo(
     () =>
       buildRunReadinessSummary({
@@ -1964,7 +1977,7 @@ const RunsPage: React.FC = () => {
         routeLabel: composerRouteLabel,
         scopeId: composerScopeId,
       }),
-    [composerEndpointLabel, composerRouteLabel, composerScopeId]
+    [composerEndpointLabel, composerRouteLabel, composerScopeId],
   );
   const composerReady = runReadiness.ready;
 
@@ -1974,7 +1987,7 @@ const RunsPage: React.FC = () => {
         return false;
       }
 
-      await resume({
+      const response = await resume({
         actorId,
         runId: humanInputRecord.runId,
         stepId: humanInputRecord.stepId,
@@ -1983,23 +1996,34 @@ const RunsPage: React.FC = () => {
         commandId,
       });
 
-      messageApi.success("Resume request accepted.");
+      if (!response.accepted) {
+        toast.warning(
+          t(
+            'pages.runs.index.resume.request.not.accepted',
+            'The resume request was not accepted. Try again.',
+          ),
+        );
+        return false;
+      }
+
+      toast.info(
+        t(
+          'pages.runs.index.resume.request.accepted.waiting.for.run',
+          'Resume request accepted. Waiting for the run to continue.',
+        ),
+      );
       return true;
     },
-    [actorId, commandId, humanInputRecord, messageApi, resume]
+    [actorId, commandId, humanInputRecord, resume, toast],
   );
 
   const handleSubmitSignal = useCallback(
     async (values: SignalFormValues) => {
-      if (
-        !actorId ||
-        !waitingSignal?.runId ||
-        !waitingSignal.signalName
-      ) {
+      if (!actorId || !waitingSignal?.runId || !waitingSignal.signalName) {
         return false;
       }
 
-      await signal({
+      const response = await signal({
         actorId,
         runId: waitingSignal.runId,
         stepId: waitingSignal.stepId,
@@ -2008,10 +2032,25 @@ const RunsPage: React.FC = () => {
         commandId,
       });
 
-      messageApi.success("Signal accepted.");
+      if (!response.accepted) {
+        toast.warning(
+          t(
+            'pages.runs.index.signal.not.accepted',
+            'The signal was not accepted. Try again.',
+          ),
+        );
+        return false;
+      }
+
+      toast.info(
+        t(
+          'pages.runs.index.signal.accepted.waiting.for.run',
+          'Signal accepted. Waiting for the run to continue.',
+        ),
+      );
       return true;
     },
-    [actorId, commandId, messageApi, signal, waitingSignal]
+    [actorId, commandId, signal, toast, waitingSignal],
   );
 
   const chatActionRequiredCard = hasPendingInteraction ? (
@@ -2030,12 +2069,12 @@ const RunsPage: React.FC = () => {
     <RunsMessagesView
       emptyDescription={
         isChatConsole
-          ? "No conversation yet. Send a prompt to start the run."
-          : "No message output yet."
+          ? 'No conversation yet. Send a prompt to start the run.'
+          : 'No message output yet.'
       }
       messages={displayedMessages}
       topAccessory={isChatConsole ? chatActionRequiredCard : undefined}
-      title={isChatConsole ? "Conversation" : "Message stream"}
+      title={isChatConsole ? 'Conversation' : 'Message stream'}
     />
   );
 
@@ -2053,7 +2092,12 @@ const RunsPage: React.FC = () => {
   const handleSubmitComposer = useCallback(async () => {
     const prompt = composerPrompt.trim();
     if (!prompt) {
-      messageApi.warning("Prompt is required.");
+      toast.warning(
+        t(
+          'pages.runs.index.prompt.required.before.sending',
+          'Enter a prompt before sending.',
+        ),
+      );
       return;
     }
 
@@ -2062,44 +2106,43 @@ const RunsPage: React.FC = () => {
       ({} as Partial<RunFormValues>);
     const nextEndpointKind = normalizeRunEndpointKind(
       currentValues.endpointKind ?? activeEndpointKind,
-      currentValues.endpointId ?? activeEndpointId
+      currentValues.endpointId ?? activeEndpointId,
     );
     const nextValues: RunFormValues = {
       actorId:
-        typeof currentValues.actorId === "string"
+        typeof currentValues.actorId === 'string'
           ? currentValues.actorId
-          : actorId ?? undefined,
+          : (actorId ?? undefined),
       endpointId:
-        typeof currentValues.endpointId === "string"
+        typeof currentValues.endpointId === 'string'
           ? currentValues.endpointId
-          : activeEndpointId || "chat",
+          : activeEndpointId || 'chat',
       endpointKind: nextEndpointKind,
       payloadBase64:
-        typeof currentValues.payloadBase64 === "string"
+        typeof currentValues.payloadBase64 === 'string'
           ? currentValues.payloadBase64
           : activePayloadBase64 || undefined,
       payloadTypeUrl:
-        typeof currentValues.payloadTypeUrl === "string"
+        typeof currentValues.payloadTypeUrl === 'string'
           ? currentValues.payloadTypeUrl
           : activePayloadTypeUrl || undefined,
       prompt,
       routeName:
-        typeof currentValues.routeName === "string"
+        typeof currentValues.routeName === 'string'
           ? currentValues.routeName
           : selectedRouteName || undefined,
       scopeId:
-        typeof currentValues.scopeId === "string"
+        typeof currentValues.scopeId === 'string'
           ? currentValues.scopeId
-          : activeScopeId || "",
+          : activeScopeId || '',
       serviceOverrideId:
-        typeof currentValues.serviceOverrideId === "string"
+        typeof currentValues.serviceOverrideId === 'string'
           ? currentValues.serviceOverrideId
           : activeServiceOverrideId || undefined,
-      transport:
-        currentValues.transport === "ws" ? "ws" : selectedTransport,
+      transport: currentValues.transport === 'ws' ? 'ws' : selectedTransport,
     };
 
-    await sendRun(nextValues.scopeId ?? "", nextValues);
+    await sendRun(nextValues.scopeId ?? '', nextValues);
   }, [
     activeEndpointId,
     activeEndpointKind,
@@ -2109,10 +2152,10 @@ const RunsPage: React.FC = () => {
     activeServiceOverrideId,
     actorId,
     composerPrompt,
-    messageApi,
     selectedRouteName,
     selectedTransport,
     sendRun,
+    toast,
   ]);
 
   const launchRailContent = (
@@ -2132,8 +2175,16 @@ const RunsPage: React.FC = () => {
       showSubmitActions={!isChatConsole}
       streaming={streaming}
       submitPathLabel={submitPathLabel}
-      transportOptions={[{ label: t("pages.runs.index.service.sse.stream.2", "Service SSE stream"), value: "sse" }]}
-      variant={isChatConsole ? "chat" : "default"}
+      transportOptions={[
+        {
+          label: t(
+            'pages.runs.index.service.sse.stream.2',
+            'Service SSE stream',
+          ),
+          value: 'sse',
+        },
+      ]}
+      variant={isChatConsole ? 'chat' : 'default'}
       visiblePresets={visiblePresets}
       workflowCatalogLoading={workflowCatalogQuery.isLoading}
       routeOptions={routeOptions}
@@ -2146,7 +2197,7 @@ const RunsPage: React.FC = () => {
       onSelectRouteName={handleRouteSelection}
       onScopeIdChange={handleScopeIdChange}
       onSubmitRun={async (values) => {
-        await sendRun(values.scopeId ?? "", values);
+        await sendRun(values.scopeId ?? '', values);
       }}
       onTransportChange={handleTransportChange}
       onUsePreset={(record) => {
@@ -2154,12 +2205,11 @@ const RunsPage: React.FC = () => {
           prompt: record.prompt,
           routeName: scopeDraftPayload?.bundleName ?? record.routeName,
           scopeId:
-            composerFormRef.current?.getFieldValue("scopeId") ??
+            composerFormRef.current?.getFieldValue('scopeId') ??
             composerRailInitialValues.scopeId,
           serviceOverrideId: undefined,
-          endpointId:
-            endpointKind === "chat" ? endpointName || "chat" : "chat",
-          endpointKind: "chat",
+          endpointId: endpointKind === 'chat' ? endpointName || 'chat' : 'chat',
+          endpointKind: 'chat',
           payloadTypeUrl: undefined,
           payloadBase64: undefined,
           actorId: undefined,
@@ -2167,11 +2217,11 @@ const RunsPage: React.FC = () => {
         });
         setComposerPrompt(record.prompt);
         setSelectedRouteName(scopeDraftPayload?.bundleName ?? record.routeName);
-        setActiveEndpointKind("chat");
+        setActiveEndpointKind('chat');
         setActiveEndpointId(
-          endpointKind === "chat" ? endpointName || "chat" : "chat"
+          endpointKind === 'chat' ? endpointName || 'chat' : 'chat',
         );
-        setCatalogSearch("");
+        setCatalogSearch('');
       }}
     />
   );
@@ -2180,30 +2230,38 @@ const RunsPage: React.FC = () => {
     : runsChatLayoutStyle;
 
   return (
-    <PageContainer pageHeaderRender={false} style={{ overflow: "hidden" }}>
-      {messageContextHolder}
+    <PageContainer pageHeaderRender={false} style={{ overflow: 'hidden' }}>
       <div style={runsWorkbenchShellStyle}>
         <div style={runsWorkbenchHeaderBarStyle}>
           <div style={runsWorkbenchHeaderTitleStyle}>
             <Typography.Title level={5} style={{ margin: 0 }}>
-              {t("pages.runs.index.run.console.2", "Run Console")}</Typography.Title>
+              {t('pages.runs.index.run.console.2', 'Run Console')}
+            </Typography.Title>
             <Popover
               content={
                 <Typography.Paragraph
                   style={{ margin: 0, maxWidth: 360 }}
                   type="secondary"
                 >
-                  {t("pages.runs.index.start.scoped.run.over.2", "Start a scoped run over")}{" "}
-                  <Typography.Text code>
-                    {submitPathLabel}
-                  </Typography.Text>{" "}
-                  {t("pages.runs.index.and.stay.in.one.place.2", "and stay in one place for conversation, events, trace, and operator actions.")}</Typography.Paragraph>
+                  {t(
+                    'pages.runs.index.start.scoped.run.over.2',
+                    'Start a scoped run over',
+                  )}{' '}
+                  <Typography.Text code>{submitPathLabel}</Typography.Text>{' '}
+                  {t(
+                    'pages.runs.index.and.stay.in.one.place.2',
+                    'and stay in one place for conversation, events, trace, and operator actions.',
+                  )}
+                </Typography.Paragraph>
               }
               placement="bottomLeft"
-              trigger={["hover", "click"]}
+              trigger={['hover', 'click']}
             >
               <Button
-                aria-label={t("pages.runs.index.open.runtime.console.guide.2", "Open runtime console guide")}
+                aria-label={t(
+                  'pages.runs.index.open.runtime.console.guide.2',
+                  'Open runtime console guide',
+                )}
                 icon={<InfoCircleOutlined />}
                 shape="circle"
                 type="text"
@@ -2229,7 +2287,8 @@ const RunsPage: React.FC = () => {
               icon={<AppstoreOutlined />}
               onClick={() => history.push(buildRuntimeWorkflowsHref())}
             >
-              {t("pages.runs.index.workflow.catalog.2", "Workflow catalog")}</Button>
+              {t('pages.runs.index.workflow.catalog.2', 'Workflow catalog')}
+            </Button>
             {hasRunInspectorTarget ? (
               <Button
                 className={runsWorkbenchHeaderButtonClassName}
@@ -2241,11 +2300,12 @@ const RunsPage: React.FC = () => {
                       runId: session.runId || undefined,
                       scopeId: activeScopeId || undefined,
                       serviceOverrideId: activeServiceOverrideId || undefined,
-                    })
+                    }),
                   )
                 }
               >
-                {t("pages.runs.index.actor.explorer.2", "Actor explorer")}</Button>
+                {t('pages.runs.index.actor.explorer.2', 'Actor explorer')}
+              </Button>
             ) : null}
             {canOpenMissionControl ? (
               <Button
@@ -2253,7 +2313,8 @@ const RunsPage: React.FC = () => {
                 icon={<ControlOutlined />}
                 onClick={handleOpenMissionControl}
               >
-                {t("pages.runs.index.mission.control.2", "Mission Control")}</Button>
+                {t('pages.runs.index.mission.control.2', 'Mission Control')}
+              </Button>
             ) : null}
           </div>
         </div>
@@ -2273,7 +2334,7 @@ const RunsPage: React.FC = () => {
                   onAbort={handleAbortRun}
                   onOpenDetails={() => setIsInspectorDrawerOpen(true)}
                   onOpenSetup={() => setIsSetupDrawerOpen(true)}
-                  runId={session.runId || commandId || "Not started"}
+                  runId={session.runId || commandId || 'Not started'}
                   runStatusLabel={runStatusText}
                   showSetupAction={false}
                   statusTone={runStatusTone}
@@ -2311,10 +2372,12 @@ const RunsPage: React.FC = () => {
               >
                 <style>{runsChatComposerCss}</style>
                 <div style={runsChatComposerHeaderStyle}>
-                  <div style={runsChatComposerLabelStyle}>{t("pages.runs.index.prompt.2", "Prompt")}</div>
+                  <div style={runsChatComposerLabelStyle}>
+                    {t('pages.runs.index.prompt.2', 'Prompt')}
+                  </div>
                   <div style={runsChatComposerContextStyle}>
                     <span style={runsChatComposerContextTagStyle}>
-                      Workspace: {composerScopeId || "required"}
+                      Workspace: {composerScopeId || 'required'}
                     </span>
                     <span style={runsChatComposerContextTagStyle}>
                       Route: {composerRouteLabel}
@@ -2323,7 +2386,8 @@ const RunsPage: React.FC = () => {
                       Endpoint: {composerEndpointLabel}
                     </span>
                     <Typography.Text style={runsChatComposerHintStyle}>
-                      {t("pages.runs.index.enter.to.send.2", "Enter to send")}</Typography.Text>
+                      {t('pages.runs.index.enter.to.send.2', 'Enter to send')}
+                    </Typography.Text>
                   </div>
                 </div>
                 {!composerReady ? (
@@ -2333,9 +2397,7 @@ const RunsPage: React.FC = () => {
                 ) : null}
                 <div className={runsChatComposerBodyClassName}>
                   <div style={runsChatComposerInputWrapStyle}>
-                    <div
-                      className={runsChatComposerInputShellClassName}
-                    >
+                    <div className={runsChatComposerInputShellClassName}>
                       <Input.TextArea
                         aria-label="Prompt"
                         autoSize={{ minRows: 2, maxRows: 6 }}
@@ -2345,7 +2407,7 @@ const RunsPage: React.FC = () => {
                         }
                         onKeyDown={(event) => {
                           if (
-                            event.key === "Enter" &&
+                            event.key === 'Enter' &&
                             !event.shiftKey &&
                             !event.nativeEvent.isComposing
                           ) {
@@ -2355,7 +2417,10 @@ const RunsPage: React.FC = () => {
                             }
                           }
                         }}
-                        placeholder={t("pages.runs.index.describe.the.task.to.run.2", "Describe the task to run.")}
+                        placeholder={t(
+                          'pages.runs.index.describe.the.task.to.run.2',
+                          'Describe the task to run.',
+                        )}
                         style={runsChatComposerTextareaStyle}
                         value={composerPrompt}
                       />
@@ -2373,7 +2438,8 @@ const RunsPage: React.FC = () => {
                       style={runsChatComposerSendButtonStyle}
                       type="primary"
                     >
-                      {t("pages.runs.index.send.2", "Send")}</Button>
+                      {t('pages.runs.index.send.2', 'Send')}
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -2392,7 +2458,7 @@ const RunsPage: React.FC = () => {
                 onAbort={handleAbortRun}
                 onOpenDetails={() => setIsInspectorDrawerOpen(true)}
                 onOpenSetup={() => setIsSetupDrawerOpen(true)}
-                runId={session.runId || commandId || "Not started"}
+                runId={session.runId || commandId || 'Not started'}
                 runStatusLabel={runStatusText}
                 statusTone={runStatusTone}
                 transport={activeTransport}
@@ -2430,7 +2496,10 @@ const RunsPage: React.FC = () => {
                       selectedItemKey={selectedTraceItemKey}
                     />
                   }
-                  title={t("pages.runs.index.invocation.trace.2", "Invocation trace")}
+                  title={t(
+                    'pages.runs.index.invocation.trace.2',
+                    'Invocation trace',
+                  )}
                 />
               </div>
             </div>
@@ -2448,7 +2517,7 @@ const RunsPage: React.FC = () => {
             open
             size={560}
             styles={{ body: drawerBodyStyle }}
-            title={t("pages.runs.index.run.setup.2", "Run setup")}
+            title={t('pages.runs.index.run.setup.2', 'Run setup')}
             onClose={() => setIsSetupDrawerOpen(false)}
           >
             <div style={drawerScrollStyle}>{launchRailContent}</div>
@@ -2462,9 +2531,7 @@ const RunsPage: React.FC = () => {
             open
             styles={{ body: drawerBodyStyle }}
             title={
-              hasPendingInteraction
-                ? "Details · action pending"
-                : "Details"
+              hasPendingInteraction ? 'Details · action pending' : 'Details'
             }
             size={520}
             onClose={() => setIsInspectorDrawerOpen(false)}
@@ -2474,7 +2541,8 @@ const RunsPage: React.FC = () => {
                 <RunsInspectorPane
                   actorSnapshot={actorSnapshotQuery.data}
                   actorSnapshotLoading={
-                    actorSnapshotQuery.isLoading || actorSnapshotQuery.isFetching
+                    actorSnapshotQuery.isLoading ||
+                    actorSnapshotQuery.isFetching
                   }
                   humanInputRecord={humanInputRecord}
                   latestMessagePreview={latestMessagePreview}

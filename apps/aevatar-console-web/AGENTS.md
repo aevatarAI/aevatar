@@ -220,6 +220,30 @@ pnpm --dir apps/aevatar-console-web build
 - Use established icon libraries and control patterns. Add accessible names or
   tooltips for icon-only or unfamiliar actions.
 
+### Action Feedback and Toasts
+
+- Use the shared `ConsoleToastProvider` and `useConsoleToast` from
+  `src/shared/ui/ConsoleToast.tsx` for transient user-action feedback. Do not
+  introduce new direct `antd` `message` or `notification` calls inside React
+  product surfaces. Non-React transport error boundaries retain their existing
+  handling unless the boundary receives a deliberate React-safe migration.
+- A success toast is evidence of a completed user-visible action, not of a
+  click, request dispatch, `202 Accepted` response, local optimistic update,
+  or background observation still in progress. Show it only after the API
+  contract has reached the state the copy claims.
+- Keep a toast short, localized, and action-oriented. Do not put endpoint
+  names, DTO fields, request IDs, raw backend errors, or recovery diagnostics
+  in it; expose those through the surface's existing technical-details path.
+- Use persistent inline state, alerts, or panels for loading, accepted,
+  observing, delayed, failed, retryable, authorization, and forbidden states.
+  A toast supplements a completed action; it must not be the only evidence of
+  durable status or the user's next recovery action.
+- Emit at most one toast for one user action. Avoid success toasts for local
+  form edits that still require an explicit page-level save. Migrate touched
+  user-feedback paths to the shared abstraction while preserving legacy
+  behavior outside the requested surface unless a deliberate migration is in
+  scope.
+
 ## Change and Review Hygiene
 
 - Branch names use `<type>/YYYY-MM-DD_<purpose>`, where `<type>` is one of

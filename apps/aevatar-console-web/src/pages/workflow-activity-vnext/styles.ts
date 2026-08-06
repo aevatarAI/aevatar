@@ -174,10 +174,29 @@ export const workflowActivityVNextCss = `
 .wa-vnext__creation-option-title { display: block; font-size: 14px; font-weight: 700; line-height: 20px; margin-top: 13px; }
 .wa-vnext__creation-option-description { color: var(--wa-muted); display: block; font-size: 12px; line-height: 17px; margin-top: 5px; }
 .wa-vnext__form-title { font-size: 16px; font-weight: 700; line-height: 22px; margin: 0; }
-.wa-vnext__editor-toolbar { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: thin; }
-.wa-vnext__editor-toolbar > * { flex: 0 0 auto; }
-.wa-vnext__editor-name { flex: 1 0 220px !important; max-width: 420px; }
+.wa-vnext__editor-toolbar { flex-wrap: nowrap; min-width: 0; overflow: visible; }
+.wa-vnext__editor-toolbar > * { flex: 0 1 auto; min-width: 0; }
+.wa-vnext__editor-name { flex: 1 1 220px !important; max-width: 420px; min-width: 0; }
+.wa-vnext__editor-toolbar-meta { align-items: center; display: flex; flex: 0 1 auto; gap: 8px; min-width: 0; }
+.wa-vnext__editor-mode-control { flex: 0 1 auto; min-width: 0; }
 .wa-vnext__editor-alerts { display: grid; gap: 6px; margin-bottom: 12px; }
+.wa-vnext__publish-review-item {
+  border-top: 1px solid var(--wa-line, #d0d5dd);
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px 0;
+}
+.wa-vnext__publish-review-item .ant-typography {
+  display: block;
+  line-height: 17px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.wa-vnext__publish-review-item .ant-typography:first-child {
+  color: var(--wa-ink, #17202a);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 .wa-vnext__editor-surface { min-height: 500px; overflow: hidden; position: relative; }
 .wa-vnext__editor-add { left: 16px; position: absolute; top: 16px; z-index: 5; }
 .wa-vnext__editor-yaml { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; width: 100%; }
@@ -247,6 +266,11 @@ export const workflowActivityVNextCss = `
 .wa-vnext-drawer .wa-vnext__nav { display: grid; gap: 4px; }
 .wa-vnext-drawer .wa-vnext__nav-button { align-items: center; border: 1px solid transparent; border-radius: 6px; color: #d0d5dd; display: flex; font-size: 12px; gap: 10px; min-height: 36px; padding: 0 12px; text-decoration: none; }
 .wa-vnext-drawer .wa-vnext__nav-button[aria-current="page"] { background: #344054; border-color: #475467; color: #fff; }
+.wa-vnext__drawer-actions { border-top: 1px solid #344054; display: grid; gap: 4px; margin: 16px 2px 0; padding: 12px 0 0; }
+.wa-vnext-drawer .wa-vnext__drawer-actions .console-header-actions__language { color: #f2f4f7; justify-content: flex-start; padding-inline: 12px; width: 100%; }
+.wa-vnext-drawer .wa-vnext__drawer-actions .console-header-actions__login { color: #f2f4f7; justify-content: flex-start; padding-inline: 12px; }
+.wa-vnext-drawer .wa-vnext__drawer-actions .console-header-actions__user { background: #1d2939 !important; border-color: #475467 !important; color: #f2f4f7; max-width: none !important; width: 100%; }
+.wa-vnext-drawer .wa-vnext__drawer-actions .console-header-actions__user-name { color: #f2f4f7 !important; }
 @media (max-width: 1100px) {
   .wa-vnext__header { padding-inline: 32px; }
   .wa-vnext__content { padding-inline: 32px; }
@@ -259,6 +283,7 @@ export const workflowActivityVNextCss = `
   .wa-vnext__menu-button { display: inline-flex; }
   .wa-vnext__topbar-leading { gap: 8px; }
   .wa-vnext__topbar-divider, .wa-vnext__topbar-context { display: none; }
+  .wa-vnext__topbar-actions { display: none; }
   .wa-vnext__rail { display: none; }
   .wa-vnext__main { grid-column: 1; }
   .wa-vnext__header { align-items: flex-start; gap: 14px; padding: 16px 16px 0; }
@@ -273,8 +298,14 @@ export const workflowActivityVNextCss = `
   .wa-vnext__header { flex-direction: column; }
   .wa-vnext__header-actions { justify-content: flex-start; max-width: 100%; width: 100%; }
   .wa-vnext__toolbar { align-items: stretch; flex-direction: column; }
-  .wa-vnext__editor-toolbar { align-items: center; flex-direction: row; }
-  .wa-vnext__editor-name { height: 32px; }
+  .wa-vnext__editor-toolbar { align-items: stretch; flex-direction: row; flex-wrap: wrap; overflow: visible; }
+  .wa-vnext__editor-toolbar > * { flex: 1 1 100%; }
+  .wa-vnext__editor-name { flex-basis: 100% !important; height: 32px; max-width: none; width: 100%; }
+  .wa-vnext__editor-toolbar-meta { display: grid; gap: 8px; grid-template-columns: max-content minmax(0, 1fr); width: 100%; }
+  .wa-vnext__editor-mode-control { width: 100%; }
+  .wa-vnext__editor-mode-control .ant-segmented-group { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+  .wa-vnext__editor-mode-control .ant-segmented-item { min-width: 0; }
+  .wa-vnext__editor-mode-control .ant-segmented-item-label { display: flex; justify-content: center; min-width: 0; }
   .wa-vnext__toolbar-search { flex-basis: auto; width: 100%; }
   .wa-vnext__toolbar-filters { display: grid; grid-template-columns: 1fr; width: 100%; }
   .wa-vnext__toolbar-filters .ant-space-item, .wa-vnext__toolbar-filters .ant-select, .wa-vnext__toolbar-filters .ant-btn { width: 100%; }
@@ -288,6 +319,7 @@ export const workflowActivityVNextCss = `
   .wa-vnext__settings-savebar .ant-space { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
   .wa-vnext__settings-savebar .ant-btn { width: 100%; }
   .wa-vnext__state--compact { padding: 18px; }
+  .wa-vnext__publish-review-item { gap: 6px; padding-block: 10px; }
 }
 @media (prefers-reduced-motion: reduce) { .wa-vnext *, .wa-vnext *::before, .wa-vnext *::after { scroll-behavior: auto !important; transition: none !important; } }
 `;

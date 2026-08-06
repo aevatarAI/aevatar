@@ -21,12 +21,6 @@ export function getRunStatusPresentation(status: string): {
         className: 'failed',
         label: t('workflowActivityVNext.common.failed', 'Failed'),
       };
-    case 'waiting':
-    case 'pending':
-      return {
-        className: 'pending',
-        label: t('workflowActivityVNext.activity.statusWaiting', 'Waiting'),
-      };
     default:
       return {
         className: 'unknown',

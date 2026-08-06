@@ -16,6 +16,13 @@ import TechnicalDetails from '../TechnicalDetails';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 import { getRunOriginLabel, getRunStatusPresentation } from './runPresentation';
 
+const supportedRunStatuses = new Set(['running', 'completed', 'failed']);
+
+function normalizeRunStatusFilter(value: string | null): string {
+  const normalized = value?.trim().toLowerCase() ?? '';
+  return supportedRunStatuses.has(normalized) ? normalized : '';
+}
+
 function formatDate(value: string | null): string {
   if (!value)
     return t('workflowActivityVNext.common.unavailable', 'Unavailable');
@@ -53,7 +60,9 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     () => new URLSearchParams(location.search),
     [location.search],
   );
-  const [status, setStatus] = React.useState(initialParams.get('status') ?? '');
+  const [status, setStatus] = React.useState(
+    normalizeRunStatusFilter(initialParams.get('status')),
+  );
   const [origin, setOrigin] = React.useState(initialParams.get('origin') ?? '');
   const [definition, setDefinition] = React.useState(
     initialParams.get('definition') ?? '',
@@ -84,7 +93,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   React.useEffect(() => {
     const params = new URLSearchParams(location.search);
     setSearch(params.get('q') ?? '');
-    setStatus(params.get('status') ?? '');
+    setStatus(normalizeRunStatusFilter(params.get('status')));
     setOrigin(params.get('origin') ?? '');
     setDefinition(params.get('definition') ?? '');
     setWorkflowFilter(params.get('workflowFilter') ?? '');
@@ -187,13 +196,6 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
               {
                 label: t('workflowActivityVNext.common.failed', 'Failed'),
                 value: 'failed',
-              },
-              {
-                label: t(
-                  'workflowActivityVNext.activity.statusWaiting',
-                  'Waiting',
-                ),
-                value: 'waiting',
               },
             ]}
             value={status}

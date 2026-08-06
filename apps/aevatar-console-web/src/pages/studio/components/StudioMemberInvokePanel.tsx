@@ -1,5 +1,5 @@
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { Alert, Button, Tooltip, message } from 'antd';
+import { Alert, Button, Tooltip } from 'antd';
 import React, {
   useCallback,
   useEffect,
@@ -15,6 +15,7 @@ import {
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
+import { t } from '@/shared/i18n/messages';
 import type { ScopeServiceEndpointContract } from '@/shared/models/runtime/scopeServices';
 import { isAutoEncodableTextPayloadTypeUrl } from '@/shared/runs/protobufPayload';
 import {
@@ -31,25 +32,28 @@ import {
 } from '@/shared/studio/models';
 import type { StudioObserveSessionSeed } from '@/shared/studio/observeSession';
 import {
+  type ConsoleToastApi,
+  useConsoleToast,
+} from '@/shared/ui/ConsoleToast';
+import StudioInvokeDiagnosticsDrawer from './StudioInvokeDiagnosticsDrawer';
+import StudioMemberCurrentRunPanel from './StudioMemberCurrentRunPanel';
+import StudioMemberInvokeHistoryPanel from './StudioMemberInvokeHistoryPanel';
+import {
   buildStudioInvokeCurrentRunViewModel,
+  type CurrentRunRequest,
   cloneInvokeResult,
   createIdleInvokeResult as createIdleResult,
-  type CurrentRunRequest,
   type InvokeHistoryEntry,
   type InvokeResultState,
   type StudioInvokeChatMessage,
 } from './StudioMemberInvokePanel.currentRun';
-import StudioMemberCurrentRunPanel from './StudioMemberCurrentRunPanel';
-import StudioMemberInvokeHistoryPanel from './StudioMemberInvokeHistoryPanel';
 import { StudioMemberInvokeComposerPanel } from './StudioMemberInvokeSetupPanels';
-import StudioInvokeDiagnosticsDrawer from './StudioInvokeDiagnosticsDrawer';
 import {
   getInvokeStatusTone,
   studioInvokeColors,
   trimOptional,
   trimPreview,
 } from './studioInvokeUi';
-import { t } from "@/shared/i18n/messages";
 
 type StudioMemberInvokePanelProps = {
   readonly enableFileAttachments?: boolean;
@@ -130,7 +134,9 @@ function resolveInvokeRouteTarget(input: {
     case 'member':
       return input.memberId ? { memberId: input.memberId } : {};
     case 'service':
-      return input.selectedServiceId ? { serviceId: input.selectedServiceId } : {};
+      return input.selectedServiceId
+        ? { serviceId: input.selectedServiceId }
+        : {};
     case 'team':
       return input.teamId ? { teamId: input.teamId } : {};
     default:
@@ -227,7 +233,9 @@ function renderTargetMetaItem(item: TargetMetaItem): React.ReactNode {
   );
 }
 
-function renderTargetMetaItems(items: readonly TargetMetaItem[]): React.ReactNode {
+function renderTargetMetaItems(
+  items: readonly TargetMetaItem[],
+): React.ReactNode {
   return items.flatMap((item, index) => {
     const rendered = renderTargetMetaItem(item);
     return index === 0
@@ -292,20 +300,53 @@ function createPendingHistoryEntry(input: {
   };
 }
 
-function writeClipboardText(value: string, label: string): boolean {
+async function writeClipboardText(
+  value: string,
+  label: string,
+  toast: ConsoleToastApi,
+): Promise<boolean> {
   const normalized = trimOptional(value);
   if (!normalized) {
-    void message.warning(
-      t("pages.studio.studiomemberinvokepanel.no.value.available.to.copy", "No {label} available to copy.", { label }),
+    toast.warning(
+      t(
+        'pages.studio.studiomemberinvokepanel.no.value.available.to.copy',
+        'No {label} available to copy.',
+        { label },
+      ),
     );
     return false;
   }
 
-  void globalThis.navigator?.clipboard?.writeText(normalized);
-  void message.success(
-    t("pages.studio.studiomemberinvokepanel.value.copied", "{label} copied.", { label }),
-  );
-  return true;
+  const clipboard = globalThis.navigator?.clipboard;
+  if (!clipboard?.writeText) {
+    toast.error(
+      t(
+        'pages.studio.studiomemberinvokepanel.copyFailed',
+        'Could not copy this value.',
+      ),
+    );
+    return false;
+  }
+
+  try {
+    await clipboard.writeText(normalized);
+    toast.success(
+      t(
+        'pages.studio.studiomemberinvokepanel.value.copied',
+        '{label} copied.',
+        { label },
+      ),
+    );
+    return true;
+  } catch {
+    toast.error(
+      t(
+        'pages.studio.studiomemberinvokepanel.copyFailed',
+        'Could not copy this value.',
+      ),
+    );
+    return false;
+  }
 }
 
 const surfaceStyle: React.CSSProperties = {
@@ -672,6 +713,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   presentation,
   targetSummaryVariant = 'default',
 }) => {
+  const toast = useConsoleToast();
   const abortControllerRef = useRef<AbortController | null>(null);
   const activeHistoryEntryIdRef = useRef('');
   const nyxIdChatBoundRef = useRef(false);
@@ -749,7 +791,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const currentMemberLabel =
     trimOptional(selectedMemberLabel) ||
     trimOptional(selectedService?.displayName) ||
-    t("pages.studio.studiomemberinvokepanel.current.member", "Member");
+    t('pages.studio.studiomemberinvokepanel.current.member', 'Member');
   const canInvoke = Boolean(
     scopeId && normalizedMemberId && selectedService && selectedEndpoint,
   );
@@ -818,7 +860,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     selectedEndpoint?.displayName || selectedEndpointId || '—';
   const endpointSummaryLabel =
     selectedEndpoint?.displayName ||
-    t("pages.studio.studiomemberinvokepanel.endpoint", "Endpoint");
+    t('pages.studio.studiomemberinvokepanel.endpoint', 'Endpoint');
   const invokePresentation = presentation ?? targetSummaryVariant;
   const currentImplementationKind =
     normalizeStudioMemberBindingImplementationKind(
@@ -830,12 +872,12 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       return [
         {
           key: 'endpoint',
-          label: t("pages.studio.studiomemberinvokepanel.endpoint", "Endpoint"),
+          label: t('pages.studio.studiomemberinvokepanel.endpoint', 'Endpoint'),
           value: endpointSummaryLabel,
         },
         {
           key: 'status',
-          label: t("pages.studio.studiomemberinvokepanel.status", "Status"),
+          label: t('pages.studio.studiomemberinvokepanel.status', 'Status'),
           value: lifecycleLabel,
         },
       ];
@@ -846,26 +888,32 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         ? [
             {
               key: 'team',
-              label: t("pages.studio.studiomemberinvokepanel.team", "Team"),
-              value: t("pages.studio.studiomemberinvokepanel.team.context", "Team context"),
+              label: t('pages.studio.studiomemberinvokepanel.team', 'Team'),
+              value: t(
+                'pages.studio.studiomemberinvokepanel.team.context',
+                'Team context',
+              ),
             },
           ]
         : []),
       {
         key: 'member',
-        label: t("pages.studio.studiomemberinvokepanel.member", "Member"),
+        label: t('pages.studio.studiomemberinvokepanel.member', 'Member'),
         value: currentMemberLabel,
       },
       {
         key: 'service',
-        label: t("pages.studio.studiomemberinvokepanel.service", "Service"),
+        label: t('pages.studio.studiomemberinvokepanel.service', 'Service'),
         value:
           selectedService?.displayName ||
-          t("pages.studio.studiomemberinvokepanel.bound.service", "Bound service"),
+          t(
+            'pages.studio.studiomemberinvokepanel.bound.service',
+            'Bound service',
+          ),
       },
       {
         key: 'endpoint',
-        label: t("pages.studio.studiomemberinvokepanel.endpoint", "Endpoint"),
+        label: t('pages.studio.studiomemberinvokepanel.endpoint', 'Endpoint'),
         value: endpointSummaryLabel,
       },
       {
@@ -874,7 +922,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       },
       {
         key: 'lifecycle',
-        label: t("pages.studio.studiomemberinvokepanel.lifecycle", "Lifecycle"),
+        label: t('pages.studio.studiomemberinvokepanel.lifecycle', 'Lifecycle'),
         value: lifecycleLabel,
       },
     ];
@@ -888,13 +936,25 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     invokePresentation,
   ]);
   const invokeBlockedReason = !scopeId
-    ? t("pages.studio.studiomemberinvokepanel.missing.workspace.scope", "Missing workspace scope.")
+    ? t(
+        'pages.studio.studiomemberinvokepanel.missing.workspace.scope',
+        'Missing workspace scope.',
+      )
     : !normalizedMemberId
-      ? t("pages.studio.studiomemberinvokepanel.missing.team.member.target", "Missing Team member target.")
+      ? t(
+          'pages.studio.studiomemberinvokepanel.missing.team.member.target',
+          'Missing Team member target.',
+        )
       : !selectedService
-        ? t("pages.studio.studiomemberinvokepanel.select.published.member.service", "Select a published member service before running.")
+        ? t(
+            'pages.studio.studiomemberinvokepanel.select.published.member.service',
+            'Select a published member service before running.',
+          )
         : !selectedEndpoint
-          ? t("pages.studio.studiomemberinvokepanel.select.endpoint.before.invoking", "Select an endpoint before running.")
+          ? t(
+              'pages.studio.studiomemberinvokepanel.select.endpoint.before.invoking',
+              'Select an endpoint before running.',
+            )
           : '';
   const selectedHistoryEntry =
     visibleRequestHistory.find((entry) => entry.id === selectedHistoryId) ??
@@ -921,26 +981,26 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     diagnosticsHistoryEntry?.snapshot.chatMessages ?? chatMessages;
   const diagnosticsCompletedAt =
     diagnosticsHistoryEntry?.completedAt ?? activeRunCompletedAt;
-  const diagnosticsRawOutput =
-    diagnosticsHistoryEntry?.snapshot.result.responseJson
-      ? diagnosticsHistoryEntry.snapshot.result.responseJson
-      : diagnosticsHistoryEntry
-        ? JSON.stringify(
-            {
-              endpointId: diagnosticsHistoryEntry.endpointId || undefined,
-              error: diagnosticsHistoryEntry.errorDetail || undefined,
-              eventCount:
-                diagnosticsHistoryEntry.snapshot.result.eventCount ||
-                diagnosticsHistoryEntry.snapshot.result.events.length,
-              mode: diagnosticsHistoryEntry.mode,
-              runId: diagnosticsHistoryEntry.runId || undefined,
-              serviceId: diagnosticsHistoryEntry.serviceId || undefined,
-              status: diagnosticsHistoryEntry.status,
-            },
-            null,
-            2,
-          )
-        : currentRawOutput;
+  const diagnosticsRawOutput = diagnosticsHistoryEntry?.snapshot.result
+    .responseJson
+    ? diagnosticsHistoryEntry.snapshot.result.responseJson
+    : diagnosticsHistoryEntry
+      ? JSON.stringify(
+          {
+            endpointId: diagnosticsHistoryEntry.endpointId || undefined,
+            error: diagnosticsHistoryEntry.errorDetail || undefined,
+            eventCount:
+              diagnosticsHistoryEntry.snapshot.result.eventCount ||
+              diagnosticsHistoryEntry.snapshot.result.events.length,
+            mode: diagnosticsHistoryEntry.mode,
+            runId: diagnosticsHistoryEntry.runId || undefined,
+            serviceId: diagnosticsHistoryEntry.serviceId || undefined,
+            status: diagnosticsHistoryEntry.status,
+          },
+          null,
+          2,
+        )
+      : currentRawOutput;
   const diagnosticsRunElapsedLabel = diagnosticsHistoryEntry
     ? formatElapsedTime(
         diagnosticsHistoryEntry.startedAt,
@@ -1202,10 +1262,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   }, [scopeId]);
 
   const upsertRequestHistory = useCallback((entry: InvokeHistoryEntry) => {
-    setRequestHistory((current) => [
-      entry,
-      ...current.filter((item) => item.id !== entry.id),
-    ].slice(0, 8));
+    setRequestHistory((current) =>
+      [entry, ...current.filter((item) => item.id !== entry.id)].slice(0, 8),
+    );
   }, []);
 
   const updateRequestHistoryEntry = useCallback(
@@ -1248,36 +1307,45 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     [requestHistory],
   );
 
-  const restorePromptForNewRun = useCallback((nextPrompt: string) => {
-    const normalizedPrompt = trimOptional(nextPrompt);
-    if (!normalizedPrompt) {
-      void message.warning(
-        t("pages.studio.studiomemberinvokepanel.no.input.available.to.retry", "No input available to retry."),
-      );
-      return;
-    }
+  const restorePromptForNewRun = useCallback(
+    (nextPrompt: string) => {
+      const normalizedPrompt = trimOptional(nextPrompt);
+      if (!normalizedPrompt) {
+        toast.warning(
+          t(
+            'pages.studio.studiomemberinvokepanel.no.input.available.to.retry',
+            'No input available to retry.',
+          ),
+        );
+        return;
+      }
 
-    setPrompt(normalizedPrompt);
-    setAttachedFiles([]);
-    setSubmittedFiles([]);
-    composerDockRef.current?.scrollIntoView({
-      behavior: 'smooth',
-      block: 'start',
-    });
-    window.setTimeout(() => {
-      composerDockRef.current
-        ?.querySelector<HTMLTextAreaElement>('textarea')
-        ?.focus();
-    }, 0);
-    void message.info(
-      isMemberRunSurface
-        ? t(
-            "pages.studio.studiomemberinvokepanel.input.restored.start.run",
-            "Input restored. Start run to create a separate run.",
-          )
-        : t("pages.studio.studiomemberinvokepanel.prompt.restored.click.invoke", "Request restored. Run workflow to create a new run."),
-    );
-  }, [isMemberRunSurface]);
+      setPrompt(normalizedPrompt);
+      setAttachedFiles([]);
+      setSubmittedFiles([]);
+      composerDockRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+      window.setTimeout(() => {
+        composerDockRef.current
+          ?.querySelector<HTMLTextAreaElement>('textarea')
+          ?.focus();
+      }, 0);
+      toast.info(
+        isMemberRunSurface
+          ? t(
+              'pages.studio.studiomemberinvokepanel.input.restored.start.run',
+              'Input restored. Start run to create a separate run.',
+            )
+          : t(
+              'pages.studio.studiomemberinvokepanel.prompt.restored.click.invoke',
+              'Request restored. Run workflow to create a new run.',
+            ),
+      );
+    },
+    [isMemberRunSurface, toast],
+  );
 
   const handleAttachmentsAdd = useCallback((files: readonly File[]) => {
     if (!files.length) {
@@ -1288,7 +1356,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   }, []);
 
   const handleAttachmentRemove = useCallback((index: number) => {
-    setAttachedFiles((current) => current.filter((_, itemIndex) => itemIndex !== index));
+    setAttachedFiles((current) =>
+      current.filter((_, itemIndex) => itemIndex !== index),
+    );
   }, []);
 
   const handleAbort = useCallback(() => {
@@ -1297,14 +1367,22 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     const completedAt = Date.now();
     setInvokeResult((current) => ({
       ...current,
-      error: t("pages.studio.studiomemberinvokepanel.the.call.was.aborted", "The call was aborted."),
+      error: t(
+        'pages.studio.studiomemberinvokepanel.the.call.was.aborted',
+        'The call was aborted.',
+      ),
       status: 'cancelled',
     }));
     setActiveRunCompletedAt(completedAt);
     updateRequestHistoryEntry(activeHistoryEntryIdRef.current, (entry) => {
       const cancelledResult: InvokeResultState = {
         ...entry.snapshot.result,
-        error: entry.snapshot.result.error || t("pages.studio.studiomemberinvokepanel.the.call.was.aborted.2", "The call was aborted."),
+        error:
+          entry.snapshot.result.error ||
+          t(
+            'pages.studio.studiomemberinvokepanel.the.call.was.aborted.2',
+            'The call was aborted.',
+          ),
         status: 'cancelled',
       };
 
@@ -1312,10 +1390,12 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         ...entry,
         completedAt,
         errorDetail: cancelledResult.error,
-        eventCount:
-          cancelledResult.eventCount || cancelledResult.events.length,
+        eventCount: cancelledResult.eventCount || cancelledResult.events.length,
         status: 'cancelled',
-        summary: t("pages.studio.studiomemberinvokepanel.the.run.has.stopped", "The run has stopped and only partial output may currently be displayed."),
+        summary: t(
+          'pages.studio.studiomemberinvokepanel.the.run.has.stopped',
+          'The run has stopped and only partial output may currently be displayed.',
+        ),
         snapshot: {
           chatMessages: cloneChatMessages(entry.snapshot.chatMessages),
           result: cloneInvokeResult(cancelledResult),
@@ -1354,16 +1434,25 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       !trimmedPrompt &&
       runFiles.length === 0
     ) {
-      setFormError(t("pages.studio.studiomemberinvokepanel.please.enter.prompt.before", "Enter a request before running this workflow."));
+      setFormError(
+        t(
+          'pages.studio.studiomemberinvokepanel.please.enter.prompt.before',
+          'Enter a request before running this workflow.',
+        ),
+      );
       return;
     }
 
     if (emptyFile) {
       setFormError(
         t(
-          "pages.studio.studiomemberinvokepanel.remove.empty.file.before.running",
-          "Remove empty file {name} before starting the run.",
-          { name: emptyFile.name || t("pages.studio.studiomemberinvokepanel.this.file", "this file") },
+          'pages.studio.studiomemberinvokepanel.remove.empty.file.before.running',
+          'Remove empty file {name} before starting the run.',
+          {
+            name:
+              emptyFile.name ||
+              t('pages.studio.studiomemberinvokepanel.this.file', 'this file'),
+          },
         ),
       );
       return;
@@ -1374,7 +1463,12 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       !trimmedPrompt &&
       !trimmedPayloadBase64
     ) {
-      setFormError(t("pages.studio.studiomemberinvokepanel.please.enter.prompt.before.2", "Enter a request before running this workflow."));
+      setFormError(
+        t(
+          'pages.studio.studiomemberinvokepanel.please.enter.prompt.before.2',
+          'Enter a request before running this workflow.',
+        ),
+      );
       return;
     }
 
@@ -1580,7 +1674,10 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
               trimOptional(accumulator.finalOutput) ||
               accumulator.assistantText ||
               displayRunInput ||
-              t("pages.studio.studiomemberinvokepanel.this.run.returns.no", "This Run returns no additional text."),
+              t(
+                'pages.studio.studiomemberinvokepanel.this.run.returns.no',
+                'This Run returns no additional text.',
+              ),
             snapshot: {
               chatMessages: cloneChatMessages(finalChatMessages),
               result: cloneInvokeResult(finalResult),
@@ -1751,7 +1848,10 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         summary:
           trimPreview(trimmedPrompt, 72) ||
           trimPreview(trimmedPayloadTypeUrl, 72) ||
-          t("pages.studio.studiomemberinvokepanel.structured.call", "structured call"),
+          t(
+            'pages.studio.studiomemberinvokepanel.structured.call',
+            'structured call',
+          ),
         snapshot: {
           chatMessages: [],
           result: cloneInvokeResult(finalResult),
@@ -1841,11 +1941,15 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       variant={variant}
       onCopyInput={(entryId) => {
         const entry = requestHistory.find((item) => item.id === entryId);
-        writeClipboardText(entry?.prompt || '', 'Input');
+        void writeClipboardText(entry?.prompt || '', 'Input', toast);
       }}
       onCopyOutput={(entryId) => {
         const entry = requestHistory.find((item) => item.id === entryId);
-        writeClipboardText(entry ? getHistoryOutputText(entry) : '', 'Output');
+        void writeClipboardText(
+          entry ? getHistoryOutputText(entry) : '',
+          'Output',
+          toast,
+        );
       }}
       onRetryAsNewRun={(entryId) => {
         const entry = requestHistory.find((item) => item.id === entryId);
@@ -1860,7 +1964,10 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       {!scopeId ? (
         <Alert
           showIcon
-          message={t("pages.studio.studiomemberinvokepanel.please.determine.the.team", "Please determine the team scope first before calling this member.")}
+          message={t(
+            'pages.studio.studiomemberinvokepanel.please.determine.the.team',
+            'Please determine the team scope first before calling this member.',
+          )}
           type="info"
         />
       ) : emptyState ? (
@@ -1873,8 +1980,14 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       ) : services.length === 0 ? (
         <Alert
           showIcon
-          message={t("pages.studio.studiomemberinvokepanel.there.are.no.published", "There are no published member services that can be called in the current scope.")}
-          description={t("pages.studio.studiomemberinvokepanel.please.complete.the.binding", "Please complete the binding and release the version for the member before calling back here.")}
+          message={t(
+            'pages.studio.studiomemberinvokepanel.there.are.no.published',
+            'There are no published member services that can be called in the current scope.',
+          )}
+          description={t(
+            'pages.studio.studiomemberinvokepanel.please.complete.the.binding',
+            'Please complete the binding and release the version for the member before calling back here.',
+          )}
           type="warning"
         />
       ) : (
@@ -1940,7 +2053,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             >
               <div
                 style={
-                  isMemberRunSurface ? memberRunTargetPillStyle : targetPillStyle
+                  isMemberRunSurface
+                    ? memberRunTargetPillStyle
+                    : targetPillStyle
                 }
               >
                 <span
@@ -1956,18 +2071,15 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                   <div style={memberRunMetricPillStyle}>
                     <span style={memberRunMetricLabelStyle}>
                       {t(
-                        "pages.studio.studiomemberinvokepanel.elapsed",
-                        "Elapsed",
+                        'pages.studio.studiomemberinvokepanel.elapsed',
+                        'Elapsed',
                       )}
                     </span>
                     <span>{runElapsedLabel}</span>
                   </div>
                   <div style={memberRunMetricPillStyle}>
                     <span style={memberRunMetricLabelStyle}>
-                      {t(
-                        "pages.studio.studiomemberinvokepanel.runs",
-                        "Runs",
-                      )}
+                      {t('pages.studio.studiomemberinvokepanel.runs', 'Runs')}
                     </span>
                     <span>{visibleRequestHistory.length}</span>
                   </div>
@@ -1982,12 +2094,12 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
               >
                 {isMemberRunSurface
                   ? t(
-                      "pages.studio.studiomemberinvokepanel.technical.details",
-                      "Technical details",
+                      'pages.studio.studiomemberinvokepanel.technical.details',
+                      'Technical details',
                     )
                   : t(
-                      "pages.studio.studiomemberinvokepanel.inspector",
-                      "Details",
+                      'pages.studio.studiomemberinvokepanel.inspector',
+                      'Details',
                     )}
               </Button>
             </div>
@@ -2006,14 +2118,14 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                 <div style={memberRunLauncherHeaderStyle}>
                   <span style={memberRunLauncherTitleStyle}>
                     {t(
-                      "pages.studio.studiomemberinvokepanel.launch.run",
-                      "Launch run",
+                      'pages.studio.studiomemberinvokepanel.launch.run',
+                      'Launch run',
                     )}
                   </span>
                   <span style={memberRunLauncherHintStyle}>
                     {t(
-                      "pages.studio.studiomemberinvokepanel.isolated.run.hint",
-                      "One input creates one isolated run.",
+                      'pages.studio.studiomemberinvokepanel.isolated.run.hint',
+                      'One input creates one isolated run.',
                     )}
                   </span>
                 </div>
@@ -2073,7 +2185,11 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                           runViewMode={runViewMode}
                           transcriptViewportRef={transcriptViewportRef}
                           onCopyError={() =>
-                            writeClipboardText(invokeResult.error, 'Error')
+                            void writeClipboardText(
+                              invokeResult.error,
+                              'Error',
+                              toast,
+                            )
                           }
                           onOpenDiagnostics={() => {
                             setDiagnosticsHistoryId('');
@@ -2126,8 +2242,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                   <div style={{ flex: '0 0 auto', padding: '12px 14px 0' }}>
                     <span style={invokeSectionTitleStyle}>
                       {t(
-                        "pages.studio.studiomemberinvokepanel.run.output",
-                        "Response",
+                        'pages.studio.studiomemberinvokepanel.run.output',
+                        'Response',
                       )}
                     </span>
                   </div>
@@ -2151,7 +2267,11 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                           runViewMode={runViewMode}
                           transcriptViewportRef={transcriptViewportRef}
                           onCopyError={() =>
-                            writeClipboardText(invokeResult.error, 'Error')
+                            void writeClipboardText(
+                              invokeResult.error,
+                              'Error',
+                              toast,
+                            )
                           }
                           onOpenDiagnostics={() => {
                             setDiagnosticsHistoryId('');
@@ -2195,8 +2315,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             title={
               isMemberRunSurface
                 ? t(
-                    "pages.studio.studiomemberinvokepanel.technical.details",
-                    "Technical details",
+                    'pages.studio.studiomemberinvokepanel.technical.details',
+                    'Technical details',
                   )
                 : undefined
             }

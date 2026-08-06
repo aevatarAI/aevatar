@@ -16,6 +16,7 @@ import {
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
 import { studioApi } from '@/shared/studio/api';
+import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
 import TechnicalDetails from '../TechnicalDetails';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
@@ -99,6 +100,7 @@ function SettingsErrorState({
 const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const location = useConsoleLocation();
   const queryClient = useQueryClient();
+  const toast = useConsoleToast();
   const [section, setSection] = React.useState<SettingsSection>(() =>
     readSection(location.search),
   );
@@ -247,6 +249,9 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       if (observation.phase === 'observed') {
         setBaseline(submitted ? cloneUserLlmSelection(submitted) : undefined);
         setSavePhase('observed');
+        toast.success(
+          t('workflowActivityVNext.settings.saveObserved', 'Settings saved'),
+        );
         return true;
       } else if (observation.phase === 'accepted_unobserved') {
         setSavePhase('delayed');

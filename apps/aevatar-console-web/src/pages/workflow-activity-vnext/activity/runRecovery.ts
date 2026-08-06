@@ -18,14 +18,19 @@ export function resolveRunRecovery(
   readonly retryStepId: string | null;
   readonly runAgainStepId: string | null;
 } {
-  const failed = steps.filter((step) => step.success === false && step.stepId.trim());
-  const rootNodeId = graph?.rootNodeId.trim() ?? "";
+  const failed = steps.filter(
+    (step) => step.success === false && step.stepId.trim(),
+  );
+  const rootNodeId = graph?.rootNodeId.trim() ?? '';
   const rootStepId = rootNodeId
-    ? graph?.nodes.find((node) => node.nodeId.trim() === rootNodeId)?.stepId.trim() ?? ""
-    : "";
-  const explicitRootStepId = rootStepId && steps.some((step) => step.stepId.trim() === rootStepId)
-    ? rootStepId
-    : null;
+    ? (graph?.nodes
+        .find((node) => node.nodeId.trim() === rootNodeId)
+        ?.stepId.trim() ?? '')
+    : '';
+  const explicitRootStepId =
+    rootStepId && steps.some((step) => step.stepId.trim() === rootStepId)
+      ? rootStepId
+      : null;
   return {
     retryStepId: failed.length === 1 ? failed[0].stepId : null,
     runAgainStepId: explicitRootStepId,

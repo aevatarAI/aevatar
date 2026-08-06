@@ -54,6 +54,21 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.common.unknown': '未知',
     'workflowActivityVNext.common.yes': '是',
     'workflowActivityVNext.editor.addNode': '添加节点',
+    'workflowActivityVNext.editor.addNodeFailed': '无法添加节点',
+    'workflowActivityVNext.editor.activityDelayed':
+      '此运行显示在活动中所需时间较长',
+    'workflowActivityVNext.editor.activityDelayedDescription':
+      '请再次检查最新状态。',
+    'workflowActivityVNext.editor.activityObserved': '已在活动中记录',
+    'workflowActivityVNext.editor.activityObservedDescription':
+      '你可以查看运行详情和进度。',
+    'workflowActivityVNext.editor.activityObserving':
+      '正在检查此运行的活动记录…',
+    'workflowActivityVNext.editor.activityObservingDescription':
+      '正在检查此运行。',
+    'workflowActivityVNext.editor.activityUnavailable': '活动暂不可用',
+    'workflowActivityVNext.editor.activityUnavailableDescription':
+      '请再次检查最新状态。',
     'workflowActivityVNext.editor.backAria': '返回工作流列表',
     'workflowActivityVNext.editor.canvas': '画布',
     'workflowActivityVNext.editor.canvasAria': '工作流画布',
@@ -61,18 +76,70 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.editor.discardLeave': '放弃并离开',
     'workflowActivityVNext.editor.emptyCanvas':
       '添加第一个可执行节点，使此工作流可运行。',
-    'workflowActivityVNext.editor.eventCount': '已收到 {count} 条更新',
     'workflowActivityVNext.editor.loading': '正在加载工作流…',
     'workflowActivityVNext.editor.loadingDescription': '正在准备编辑器…',
     'workflowActivityVNext.editor.openActivity': '打开活动',
     'workflowActivityVNext.editor.publish': '发布',
     'workflowActivityVNext.editor.publishUnavailable': '此工作流暂时无法发布。',
-    'workflowActivityVNext.editor.runAccepted': '运行已开始',
+    'workflowActivityVNext.publish.accepted': '发布请求已接受',
+    'workflowActivityVNext.publish.approvalNotRequired': '此请求无需额外审批。',
+    'workflowActivityVNext.publish.approvalRequired': '此请求运行前需要审批。',
+    'workflowActivityVNext.publish.backToService': '返回',
+    'workflowActivityVNext.publish.checkAgain': '再次检查',
+    'workflowActivityVNext.publish.delayed': '发布状态显示所需时间较长',
+    'workflowActivityVNext.publish.delayedDescription':
+      '请再次检查最新发布状态。',
+    'workflowActivityVNext.publish.destinationDescription':
+      '选择要使用 {workflowName} 的服务。',
+    'workflowActivityVNext.publish.failed': '无法确认发布状态',
+    'workflowActivityVNext.publish.failedDescription':
+      '请检查工作流或再次尝试发布。',
+    'workflowActivityVNext.publish.forbiddenDescription':
+      '你无权查看此发布状态。',
+    'workflowActivityVNext.publish.loadingServices': '正在加载服务…',
+    'workflowActivityVNext.publish.noExternalRequests':
+      '没有需要审核的外部请求。',
+    'workflowActivityVNext.publish.noServices': '此工作区暂无可用服务',
+    'workflowActivityVNext.publish.observed': '工作流已发布',
+    'workflowActivityVNext.publish.observedDescription':
+      '所选服务现在正在使用此工作流。',
+    'workflowActivityVNext.publish.observingDescription':
+      '正在检查所选服务是否已准备就绪。',
+    'workflowActivityVNext.publish.publishingTo': '正在发布到 {service}',
+    'workflowActivityVNext.publish.reviewAgain': '再次审核',
+    'workflowActivityVNext.publish.reviewAndPublish': '审核并发布',
+    'workflowActivityVNext.publish.reviewDescription':
+      '查看此工作流运行时可能执行的操作。',
+    'workflowActivityVNext.publish.reviewing': '正在准备审核…',
+    'workflowActivityVNext.publish.reviewingDescription':
+      '正在准备此工作流以供审核。',
+    'workflowActivityVNext.publish.reviewUnavailable':
+      '暂时无法准备此工作流以供发布。',
+    'workflowActivityVNext.publish.risk': '影响',
+    'workflowActivityVNext.publish.risk.destructive':
+      '可能删除数据或造成永久性更改',
+    'workflowActivityVNext.publish.risk.readOnly': '只读',
+    'workflowActivityVNext.publish.risk.write': '可进行更改',
+    'workflowActivityVNext.publish.saveBeforePublishing':
+      '请先保存此工作流，再发布。',
+    'workflowActivityVNext.publish.saveChangesBeforePublishing':
+      '请先保存更改，再发布。',
+    'workflowActivityVNext.publish.selectService': '选择服务',
+    'workflowActivityVNext.publish.service': '服务',
+    'workflowActivityVNext.publish.servicesUnavailable': '服务暂不可用',
+    'workflowActivityVNext.publish.submitting': '正在提交发布…',
+    'workflowActivityVNext.publish.submittingDescription':
+      '正在将此工作流发送到所选服务。',
+    'workflowActivityVNext.publish.title': '发布工作流',
+    'workflowActivityVNext.publish.unauthorizedDescription':
+      '请重新登录后检查此发布状态。',
+    'workflowActivityVNext.editor.runAccepted': '正在准备运行…',
     'workflowActivityVNext.editor.runFailed': '运行失败',
     'workflowActivityVNext.editor.runInput': '测试输入',
     'workflowActivityVNext.editor.runPanel': '测试运行',
     'workflowActivityVNext.editor.runUnavailable': '请先添加至少一个有效步骤。',
     'workflowActivityVNext.editor.runSubmitting': '正在启动运行…',
+    'workflowActivityVNext.editor.retryActivityObservation': '再次检查',
     'workflowActivityVNext.editor.saveDelayed': '保存时间比预期更长',
     'workflowActivityVNext.editor.saveFailed': '无法保存工作流',
     'workflowActivityVNext.editor.saveOpenFailed':
@@ -90,15 +157,21 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.editor.unavailableDescription': '无法加载此工作流。',
     'workflowActivityVNext.editor.unavailableGuidance': '请重试打开此工作流。',
     'workflowActivityVNext.editor.unsaved': '未保存',
+    'workflowActivityVNext.editor.updatingNode': '正在更新节点…',
     'workflowActivityVNext.editor.unsavedDescription':
       '保存更改、放弃更改，或留在编辑器。',
     'workflowActivityVNext.editor.unsavedTitle': '工作流有未保存更改',
     'workflowActivityVNext.editor.untitled': '未命名工作流',
+    'workflowActivityVNext.editor.viewRun': '查看运行',
     'workflowActivityVNext.editor.yaml': 'YAML',
+    'workflowActivityVNext.editor.yamlReadFailed': '无法读取工作流 YAML。',
     'workflowActivityVNext.nodeInspector.advanced': '高级选项',
     'workflowActivityVNext.nodeInspector.advancedDescription':
       '仅当上方没有对应设置时使用 JSON。',
     'workflowActivityVNext.nodeInspector.applyChanges': '应用更改',
+    'workflowActivityVNext.nodeInspector.applyBeforeSave':
+      '请先应用更改，再保存工作流。',
+    'workflowActivityVNext.nodeInspector.applyFailed': '无法应用配置',
     'workflowActivityVNext.nodeInspector.applyJson': '应用 JSON',
     'workflowActivityVNext.nodeInspector.branches': '分支',
     'workflowActivityVNext.nodeInspector.branchesUnavailable': '分支不可用',
@@ -276,6 +349,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.settings.retryGuidance': '请重试加载此部分。',
     'workflowActivityVNext.settings.save': '保存更改',
     'workflowActivityVNext.settings.saveLeave': '保存并离开',
+    'workflowActivityVNext.settings.saveObserved': '设置已保存',
     'workflowActivityVNext.settings.savedModelUnavailable':
       '已保存的模型当前不可用，保存的值不会被更改。',
     'workflowActivityVNext.settings.saving': '正在保存更改…',

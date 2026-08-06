@@ -3420,7 +3420,7 @@ const projectMessages = {
   "pages.studio.index.bind.the.selected.typed.gagent.2": "Bind the selected typed GAgent as this member service, then Studio can reveal the invoke URL and endpoint contract.",
   "pages.studio.index.binding.request.accepted.running": "{displayName} binding request was accepted and is still running.{status} Studio will keep refreshing the status before treating it as bound.",
   "pages.studio.index.binding.request.accepted.running.with.freshness": "{displayName} binding request was accepted and is still running.{freshness} Studio will keep refreshing the status before treating it as bound.",
-  "pages.studio.index.binding.request.was.accepted.and.is": "{value1} binding request was accepted and is still running.{value2}{value3} Studio will keep refreshing the status before treating it as bound.",
+  "pages.studio.index.binding.request.was.accepted.and.is": "{value1} binding request was accepted. Studio is waiting for the published contract before treating it as bound.{value2}{value3}",
   "pages.studio.index.build.gagent.prompt": "Define GAgent type, role, initial prompt, tools and state persistence within Build",
   "pages.studio.index.build.member.workbench.authoring": "The Build phase first determines which implementation method is used for the current member, and then directly completes authoring and dry-run in the same workbench.",
   "pages.studio.index.call.the.current.member": "Call the current member and retain the running observation context",

@@ -3420,7 +3420,7 @@ const projectMessages = {
   "pages.studio.index.bind.the.selected.typed.gagent.2": "将所选类型的 GAgent 绑定为此成员服务，然后 Studio 可以显示调用 URL 和 Endpoint 合约。",
   "pages.studio.index.binding.request.accepted.running": "{displayName} 的绑定请求已受理，仍在运行中。{status} Studio 会继续刷新状态，确认后再视为已绑定。",
   "pages.studio.index.binding.request.accepted.running.with.freshness": "{displayName} 的绑定请求已受理，仍在运行中。{freshness} Studio 会继续刷新状态，确认后再视为已绑定。",
-  "pages.studio.index.binding.request.was.accepted.and.is": "{value1} 的绑定请求已接受并且仍在运行。{value2}{value3} Studio 会持续刷新状态，确认后再视为已绑定。",
+  "pages.studio.index.binding.request.was.accepted.and.is": "{value1} 的绑定请求已受理。Studio 正在等待已发布的服务合同，在确认之前不会将其视为已绑定。{value2}{value3}",
   "pages.studio.index.build.gagent.prompt": "在 Build 内定义 GAgent 类型、角色、初始 Prompt、工具和状态持久化。",
   "pages.studio.index.build.member.workbench.authoring": "Build 阶段先确定当前成员采用哪种实现方式，然后在同一个工作台里完成创作和试运行。",
   "pages.studio.index.call.the.current.member": "调用当前成员并保留运行观察上下文",

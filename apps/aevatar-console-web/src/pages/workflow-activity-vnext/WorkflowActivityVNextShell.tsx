@@ -49,6 +49,18 @@ const items = [
   },
 ];
 
+function shouldHandleClientNavigation(
+  event: React.MouseEvent<HTMLAnchorElement>,
+): boolean {
+  return (
+    event.button === 0 &&
+    !event.altKey &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.shiftKey
+  );
+}
+
 function Navigation({
   activeSection,
   afterNavigate,
@@ -69,6 +81,7 @@ function Navigation({
           href={buildWorkflowActivitySectionHref(scopeId, item.key)}
           key={item.key}
           onClick={(event) => {
+            if (!shouldHandleClientNavigation(event)) return;
             event.preventDefault();
             const target = buildWorkflowActivitySectionHref(scopeId, item.key);
             if (onNavigate) onNavigate(target);
@@ -120,6 +133,7 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
             className="wa-vnext__brand"
             href={buildWorkflowActivitySectionHref(scopeId, 'workflows')}
             onClick={(event) => {
+              if (!shouldHandleClientNavigation(event)) return;
               event.preventDefault();
               const target = buildWorkflowActivitySectionHref(
                 scopeId,
@@ -174,6 +188,10 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
           onNavigate={onNavigate}
           scopeId={scopeId}
         />
+        <div className="wa-vnext__drawer-actions">
+          <ConsoleLanguageSwitch />
+          <ConsoleAuthActions />
+        </div>
       </Drawer>
     </div>
   );

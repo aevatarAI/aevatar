@@ -50,6 +50,21 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.common.unknown': 'Unknown',
   'workflowActivityVNext.common.yes': 'Yes',
   'workflowActivityVNext.editor.addNode': 'Add node',
+  'workflowActivityVNext.editor.addNodeFailed': "Couldn't add node",
+  'workflowActivityVNext.editor.activityDelayed':
+    'This run is taking longer to appear in Activity',
+  'workflowActivityVNext.editor.activityDelayedDescription':
+    'Try again to check the latest status.',
+  'workflowActivityVNext.editor.activityObserved': 'Observed in Activity',
+  'workflowActivityVNext.editor.activityObservedDescription':
+    'You can review its details and progress.',
+  'workflowActivityVNext.editor.activityObserving':
+    'Checking Activity for this run…',
+  'workflowActivityVNext.editor.activityObservingDescription':
+    'Checking for this run now.',
+  'workflowActivityVNext.editor.activityUnavailable': 'Activity unavailable',
+  'workflowActivityVNext.editor.activityUnavailableDescription':
+    'Try again to check the latest status.',
   'workflowActivityVNext.editor.backAria': 'Back to workflows',
   'workflowActivityVNext.editor.canvas': 'Canvas',
   'workflowActivityVNext.editor.canvasAria': 'Workflow canvas',
@@ -58,20 +73,77 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.discardLeave': 'Discard and leave',
   'workflowActivityVNext.editor.emptyCanvas':
     'Add the first executable node to make this workflow runnable.',
-  'workflowActivityVNext.editor.eventCount': 'Received {count} updates',
   'workflowActivityVNext.editor.loading': 'Loading workflow…',
   'workflowActivityVNext.editor.loadingDescription': 'Preparing the editor…',
   'workflowActivityVNext.editor.openActivity': 'Open Activity',
   'workflowActivityVNext.editor.publish': 'Publish',
   'workflowActivityVNext.editor.publishUnavailable':
     "Publishing isn't available for this workflow yet.",
-  'workflowActivityVNext.editor.runAccepted': 'Run started',
+  'workflowActivityVNext.publish.accepted': 'Publication accepted',
+  'workflowActivityVNext.publish.approvalNotRequired':
+    'No additional approval is required.',
+  'workflowActivityVNext.publish.approvalRequired':
+    'Approval is required before this request can run.',
+  'workflowActivityVNext.publish.backToService': 'Back',
+  'workflowActivityVNext.publish.checkAgain': 'Check again',
+  'workflowActivityVNext.publish.delayed':
+    'Publication is taking longer to appear',
+  'workflowActivityVNext.publish.delayedDescription':
+    'Check again for the latest publishing status.',
+  'workflowActivityVNext.publish.destinationDescription':
+    'Choose the service that will use {workflowName}.',
+  'workflowActivityVNext.publish.failed': "Publication couldn't be confirmed",
+  'workflowActivityVNext.publish.failedDescription':
+    'Review the workflow or try publishing again.',
+  'workflowActivityVNext.publish.forbiddenDescription':
+    "You don't have access to check this publication.",
+  'workflowActivityVNext.publish.loadingServices': 'Loading services…',
+  'workflowActivityVNext.publish.noExternalRequests':
+    'No external requests need review.',
+  'workflowActivityVNext.publish.noServices':
+    'No services are available in this workspace',
+  'workflowActivityVNext.publish.observed': 'Workflow published',
+  'workflowActivityVNext.publish.observedDescription':
+    'The selected service is now using this workflow.',
+  'workflowActivityVNext.publish.observingDescription':
+    'Checking whether the selected service is ready.',
+  'workflowActivityVNext.publish.publishingTo': 'Publishing to {service}',
+  'workflowActivityVNext.publish.reviewAgain': 'Review again',
+  'workflowActivityVNext.publish.reviewAndPublish': 'Review and publish',
+  'workflowActivityVNext.publish.reviewDescription':
+    'Review what this workflow may do when it runs.',
+  'workflowActivityVNext.publish.reviewing': 'Reviewing publication…',
+  'workflowActivityVNext.publish.reviewingDescription':
+    'Preparing this workflow for review.',
+  'workflowActivityVNext.publish.reviewUnavailable':
+    "We couldn't prepare this workflow for publishing.",
+  'workflowActivityVNext.publish.risk': 'Impact',
+  'workflowActivityVNext.publish.risk.destructive':
+    'May delete or permanently change data',
+  'workflowActivityVNext.publish.risk.readOnly': 'Read only',
+  'workflowActivityVNext.publish.risk.write': 'Can make changes',
+  'workflowActivityVNext.publish.saveBeforePublishing':
+    'Save this workflow before publishing.',
+  'workflowActivityVNext.publish.saveChangesBeforePublishing':
+    'Save your changes before publishing.',
+  'workflowActivityVNext.publish.selectService': 'Choose a service',
+  'workflowActivityVNext.publish.service': 'Service',
+  'workflowActivityVNext.publish.servicesUnavailable':
+    'Services are unavailable',
+  'workflowActivityVNext.publish.submitting': 'Submitting publication…',
+  'workflowActivityVNext.publish.submittingDescription':
+    'Sending this workflow to the selected service.',
+  'workflowActivityVNext.publish.title': 'Publish workflow',
+  'workflowActivityVNext.publish.unauthorizedDescription':
+    'Sign in again to check this publication.',
+  'workflowActivityVNext.editor.runAccepted': 'Preparing run…',
   'workflowActivityVNext.editor.runFailed': 'Run failed',
   'workflowActivityVNext.editor.runInput': 'Test input',
   'workflowActivityVNext.editor.runPanel': 'Test run',
   'workflowActivityVNext.editor.runUnavailable':
     'Add at least one valid step before running.',
   'workflowActivityVNext.editor.runSubmitting': 'Starting run…',
+  'workflowActivityVNext.editor.retryActivityObservation': 'Check again',
   'workflowActivityVNext.editor.saveDelayed':
     'Save is taking longer than expected',
   'workflowActivityVNext.editor.saveFailed': "Workflow couldn't be saved",
@@ -92,15 +164,23 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.unavailableGuidance':
     'Try again to reopen the workflow.',
   'workflowActivityVNext.editor.unsaved': 'Unsaved',
+  'workflowActivityVNext.editor.updatingNode': 'Updating node…',
   'workflowActivityVNext.editor.unsavedDescription':
     'Save your changes, discard them, or stay in the editor.',
   'workflowActivityVNext.editor.unsavedTitle': 'Unsaved workflow changes',
   'workflowActivityVNext.editor.untitled': 'Untitled workflow',
+  'workflowActivityVNext.editor.viewRun': 'View run',
   'workflowActivityVNext.editor.yaml': 'YAML',
+  'workflowActivityVNext.editor.yamlReadFailed':
+    'Workflow YAML could not be read.',
   'workflowActivityVNext.nodeInspector.advanced': 'Advanced options',
   'workflowActivityVNext.nodeInspector.advancedDescription':
     'Use JSON only when the setting is not available above.',
   'workflowActivityVNext.nodeInspector.applyChanges': 'Apply changes',
+  'workflowActivityVNext.nodeInspector.applyBeforeSave':
+    'Apply changes before saving this workflow.',
+  'workflowActivityVNext.nodeInspector.applyFailed':
+    "Couldn't apply configuration",
   'workflowActivityVNext.nodeInspector.applyJson': 'Apply JSON',
   'workflowActivityVNext.nodeInspector.branches': 'Branches',
   'workflowActivityVNext.nodeInspector.branchesUnavailable':
@@ -292,6 +372,7 @@ const workflowActivityVNextMessages = {
     'Try loading this section again.',
   'workflowActivityVNext.settings.save': 'Save changes',
   'workflowActivityVNext.settings.saveLeave': 'Save and leave',
+  'workflowActivityVNext.settings.saveObserved': 'Settings saved',
   'workflowActivityVNext.settings.savedModelUnavailable':
     'The saved model is unavailable. Your saved value remains unchanged.',
   'workflowActivityVNext.settings.saving': 'Saving changes…',

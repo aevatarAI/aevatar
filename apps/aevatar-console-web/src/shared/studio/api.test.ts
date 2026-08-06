@@ -1,6 +1,6 @@
+import { persistAuthSession } from '@/shared/auth/session';
 import { StudioApiError, studioApi } from './api';
 import type { StudioExplicitRequestConfirmation } from './models';
-import { persistAuthSession } from '@/shared/auth/session';
 
 describe('studioApi host-session requests', () => {
   const originalFetch = global.fetch;
@@ -339,10 +339,7 @@ describe('studioApi host-session requests', () => {
   });
 
   it.each([
-    [
-      'reset',
-      { action: 'reset' } as const,
-    ],
+    ['reset', { action: 'reset' } as const],
     [
       'Gateway',
       {
@@ -487,13 +484,15 @@ describe('studioApi host-session requests', () => {
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
-    await expect(studioApi.getWorkflow('missing-workflow')).rejects.toMatchObject({
+    await expect(
+      studioApi.getWorkflow('missing-workflow'),
+    ).rejects.toMatchObject({
       message: 'Not Found',
       status: 404,
     });
-    await expect(studioApi.getWorkflow('missing-workflow')).rejects.toBeInstanceOf(
-      StudioApiError,
-    );
+    await expect(
+      studioApi.getWorkflow('missing-workflow'),
+    ).rejects.toBeInstanceOf(StudioApiError);
   });
 
   it('includes the requested scope when loading a scoped workflow draft', async () => {
@@ -532,7 +531,9 @@ describe('studioApi host-session requests', () => {
       string,
       RequestInit | undefined,
     ];
-    expect(input).toBe('/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1');
+    expect(input).toBe(
+      '/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1',
+    );
     expect(new Headers(init?.headers).get('Authorization')).toBe(
       'Bearer access-token',
     );
@@ -656,7 +657,9 @@ describe('studioApi host-session requests', () => {
     });
 
     const fetchMock = jest.fn().mockImplementation(async (input: string) => {
-      if (input === '/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1') {
+      if (
+        input === '/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1'
+      ) {
         return {
           ok: false,
           status: 404,
@@ -699,7 +702,9 @@ describe('studioApi host-session requests', () => {
     });
     global.fetch = fetchMock as typeof global.fetch;
 
-    await expect(studioApi.getWorkflow('workflow-1', 'scope-1')).resolves.toEqual({
+    await expect(
+      studioApi.getWorkflow('workflow-1', 'scope-1'),
+    ).resolves.toEqual({
       workflowId: 'workflow-1',
       name: 'published-demo',
       fileName: 'workflow-1.yaml',
@@ -868,7 +873,9 @@ describe('studioApi host-session requests', () => {
       string,
       RequestInit | undefined,
     ];
-    expect(input).toBe('/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1');
+    expect(input).toBe(
+      '/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1',
+    );
     expect(init?.method).toBe('PUT');
     expect(new Headers(init?.headers).get('Authorization')).toBe(
       'Bearer access-token',
@@ -900,7 +907,9 @@ describe('studioApi host-session requests', () => {
       string,
       RequestInit | undefined,
     ];
-    expect(input).toBe('/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1');
+    expect(input).toBe(
+      '/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1',
+    );
     expect(init?.method).toBe('DELETE');
     expect(new Headers(init?.headers).get('Authorization')).toBe(
       'Bearer access-token',
@@ -1231,7 +1240,9 @@ describe('studioApi host-session requests', () => {
       workflowId: 'wf-alpha',
       revisionId: 'rev-alpha',
     });
-    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
+    expect(
+      JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)),
+    ).toMatchObject({
       implementationKind: 'workflow',
       explicitRequestConfirmations: confirmations,
       workflow: {
@@ -1280,9 +1291,10 @@ describe('studioApi host-session requests', () => {
       allowedExecutionModes: ['interactive'],
       ...override,
     };
-    const previewItems = _label === 'duplicate callSiteId'
-      ? [previewItem, { ...previewItem }]
-      : [previewItem];
+    const previewItems =
+      _label === 'duplicate callSiteId'
+        ? [previewItem, { ...previewItem }]
+        : [previewItem];
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -1576,7 +1588,9 @@ describe('studioApi host-session requests', () => {
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
-    await expect(studioApi.getMemberBinding('scope-1', 'joker')).resolves.toEqual(
+    await expect(
+      studioApi.getMemberBinding('scope-1', 'joker'),
+    ).resolves.toEqual(
       expect.objectContaining({
         lastBinding: expect.objectContaining({
           publishedServiceId: 'member-joker',
@@ -2141,7 +2155,9 @@ describe('studioApi host-session requests', () => {
       correlationId: 'corr-team-archive',
       ackedAt: '2026-05-01T08:07:00Z',
     });
-    await expect(studioApi.listTeamMembers('scope-1', 't-alpha')).resolves.toEqual({
+    await expect(
+      studioApi.listTeamMembers('scope-1', 't-alpha'),
+    ).resolves.toEqual({
       scopeId: 'scope-1',
       members: [
         {
@@ -2376,12 +2392,12 @@ describe('studioApi host-session requests', () => {
         method: 'PUT',
       }),
     );
-    expect(new Headers(fetchMock.mock.calls[0][1].headers).get('Authorization')).toBe(
-      'Bearer access-token',
-    );
-    expect(new Headers(fetchMock.mock.calls[0][1].headers).get('Content-Type')).toBe(
-      'application/json',
-    );
+    expect(
+      new Headers(fetchMock.mock.calls[0][1].headers).get('Authorization'),
+    ).toBe('Bearer access-token');
+    expect(
+      new Headers(fetchMock.mock.calls[0][1].headers).get('Content-Type'),
+    ).toBe('application/json');
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       '/api/scopes/scope-1/teams/t-alpha/entry-member',

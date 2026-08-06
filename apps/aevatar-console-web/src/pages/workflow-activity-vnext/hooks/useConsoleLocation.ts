@@ -1,8 +1,8 @@
-import React from "react";
+import React from 'react';
 import {
   getLocationSnapshot,
   subscribeToLocationChanges,
-} from "@/shared/navigation/history";
+} from '@/shared/navigation/history';
 
 export function useConsoleLocation(): {
   readonly pathname: string;
@@ -11,8 +11,8 @@ export function useConsoleLocation(): {
   const snapshot = React.useSyncExternalStore(
     subscribeToLocationChanges,
     getLocationSnapshot,
-    () => "",
+    () => '',
   );
-  const url = new URL(snapshot || "/", "http://console.local");
+  const url = new URL(snapshot || '/', 'http://console.local');
   return { pathname: url.pathname, search: url.search };
 }

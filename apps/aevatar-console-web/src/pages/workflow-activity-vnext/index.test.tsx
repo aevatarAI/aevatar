@@ -1,4 +1,10 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import * as React from 'react';
 import { history } from '@/shared/navigation/history';
 import {
@@ -8,8 +14,39 @@ import {
 import WorkflowActivityVNextPage from './index';
 
 let mockLocation = '/scopes/scope-alpha/workflow-activity-vnext/workflows';
+const mockLocationSubscribers = new Set<() => void>();
+const mockConsoleToast = {
+  error: jest.fn(),
+  info: jest.fn(),
+  success: jest.fn(),
+  warning: jest.fn(),
+};
 
 const readMockUrl = () => new URL(mockLocation, 'http://console.local');
+
+function createSseResponse(frames: readonly unknown[]): Response {
+  const encoder = new TextEncoder();
+  const body = frames
+    .map((frame) => `data: ${JSON.stringify(frame)}\n\n`)
+    .join('');
+
+  return {
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(body));
+        controller.close();
+      },
+    }),
+    ok: true,
+  } as Response;
+}
+
+function setMockLocation(nextLocation: string): void {
+  mockLocation = nextLocation;
+  act(() => {
+    for (const listener of mockLocationSubscribers) listener();
+  });
+}
 
 jest.mock('@umijs/max', () => ({
   getIntl: () => ({
@@ -35,7 +72,7 @@ jest.mock('@umijs/max', () => ({
     }) => defaultMessage ?? id,
   }),
   useLocation: () => ({
-    hash: '',
+    hash: readMockUrl().hash,
     pathname: readMockUrl().pathname,
     search: readMockUrl().search,
   }),
@@ -63,10 +100,16 @@ jest.mock('@/shared/studio/api', () => ({
     getWorkflowDraftFile: jest.fn(),
     listWorkflowDrafts: jest.fn(),
     parseYaml: jest.fn(),
+    previewExplicitRequests: jest.fn(),
     saveWorkflow: jest.fn(),
+    saveAndBindWorkflow: jest.fn(),
     saveUserLlmSettings: jest.fn(),
     serializeYaml: jest.fn(),
   },
+}));
+
+jest.mock('@/shared/studio/explicitRequestConfirmation', () => ({
+  createWorkflowRevisionIdentityCandidate: jest.fn(),
 }));
 
 jest.mock('@/shared/api/scopesApi', () => ({
@@ -76,9 +119,22 @@ jest.mock('@/shared/api/scopesApi', () => ({
   },
 }));
 
+jest.mock('@/shared/api/scopeRuntimeApi', () => ({
+  scopeRuntimeApi: {
+    getServiceRevisions: jest.fn(),
+    listServices: jest.fn(),
+  },
+}));
+
 jest.mock('@/shared/api/runtimeRunsApi', () => ({
   runtimeRunsApi: {
     streamDraftRun: jest.fn(),
+  },
+}));
+
+jest.mock('@/shared/api/workflowActivityApi', () => ({
+  workflowActivityApi: {
+    getRun: jest.fn(),
   },
 }));
 
@@ -87,14 +143,22 @@ jest.mock('@/pages/settings/userLlmSaveObservation', () => ({
 }));
 
 jest.mock('@/shared/navigation/history', () => ({
-  getLocationSnapshot: () => `${readMockUrl().pathname}${readMockUrl().search}`,
+  getLocationSnapshot: () =>
+    `${readMockUrl().pathname}${readMockUrl().search}${readMockUrl().hash}`,
   history: { push: jest.fn(), replace: jest.fn() },
-  subscribeToLocationChanges: () => () => undefined,
+  subscribeToLocationChanges: (listener: () => void) => {
+    mockLocationSubscribers.add(listener);
+    return () => mockLocationSubscribers.delete(listener);
+  },
 }));
 
 jest.mock('@/shared/ui/ConsoleHeaderActions', () => ({
   ConsoleAuthActions: () => <button type="button">Account</button>,
   ConsoleLanguageSwitch: () => <button type="button">Language</button>,
+}));
+
+jest.mock('@/shared/ui/ConsoleToast', () => ({
+  useConsoleToast: () => mockConsoleToast,
 }));
 
 jest.mock(
@@ -135,17 +199,32 @@ const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
   getWorkflowDraftFile: jest.Mock;
   listWorkflowDrafts: jest.Mock;
   parseYaml: jest.Mock;
+  previewExplicitRequests: jest.Mock;
   saveWorkflow: jest.Mock;
+  saveAndBindWorkflow: jest.Mock;
   saveUserLlmSettings: jest.Mock;
   serializeYaml: jest.Mock;
 };
+const mockCreateWorkflowRevisionIdentityCandidate = jest.requireMock(
+  '@/shared/studio/explicitRequestConfirmation',
+).createWorkflowRevisionIdentityCandidate as jest.Mock;
 const mockScopesApi = jest.requireMock('@/shared/api/scopesApi').scopesApi as {
   getWorkflowDetail: jest.Mock;
   listWorkflows: jest.Mock;
 };
+const mockScopeRuntimeApi = jest.requireMock('@/shared/api/scopeRuntimeApi')
+  .scopeRuntimeApi as {
+  getServiceRevisions: jest.Mock;
+  listServices: jest.Mock;
+};
 const mockRuntimeRunsApi = jest.requireMock('@/shared/api/runtimeRunsApi')
   .runtimeRunsApi as {
   streamDraftRun: jest.Mock;
+};
+const mockWorkflowActivityApi = jest.requireMock(
+  '@/shared/api/workflowActivityApi',
+).workflowActivityApi as {
+  getRun: jest.Mock;
 };
 const mockObserveUserLlmSave = jest.requireMock(
   '@/pages/settings/userLlmSaveObservation',
@@ -158,6 +237,44 @@ describe('Workflow Activity vNext catalogue', () => {
   });
 
   afterEach(() => cleanupTestQueryClients());
+
+  it('keeps language and account actions available inside the mobile navigation drawer', async () => {
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
+    mockScopesApi.listWorkflows.mockResolvedValue([]);
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(screen.getByLabelText('Open navigation'));
+
+    const drawer = await screen.findByRole('dialog');
+    expect(
+      within(drawer).getByRole('button', { name: 'Language' }),
+    ).toBeInTheDocument();
+    expect(
+      within(drawer).getByRole('button', { name: 'Account' }),
+    ).toBeInTheDocument();
+  });
+
+  it('keeps modified brand clicks as native link navigation', async () => {
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
+    mockScopesApi.listWorkflows.mockResolvedValue([]);
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const brand = screen.getByRole('link', { name: 'Aevatar' });
+    let preventedByComponent = false;
+    const preventJsdomNavigation = (event: MouseEvent) => {
+      if (event.target !== brand) return;
+      preventedByComponent = event.defaultPrevented;
+      event.preventDefault();
+    };
+    document.addEventListener('click', preventJsdomNavigation);
+    fireEvent.click(brand, { metaKey: true });
+    document.removeEventListener('click', preventJsdomNavigation);
+
+    expect(preventedByComponent).toBe(false);
+    expect(history.push).not.toHaveBeenCalled();
+  });
 
   it('renders authoritative draft and committed rows, searches, and navigates by the real workflow id', async () => {
     mockStudioApi.listWorkflowDrafts.mockResolvedValue([
@@ -994,12 +1111,14 @@ describe('Workflow Activity vNext settings', () => {
       expect(mockStudioApi.saveUserLlmSettings).toHaveBeenCalledTimes(1),
     );
     expect(history.push).not.toHaveBeenCalled();
+    expect(mockConsoleToast.success).not.toHaveBeenCalled();
     observeSaved?.({ phase: 'observed' });
     await waitFor(() =>
       expect(history.push).toHaveBeenCalledWith(
         '/scopes/scope-alpha/workflow-activity-vnext/workflows',
       ),
     );
+    expect(mockConsoleToast.success).toHaveBeenCalledWith('Settings saved');
   });
 });
 
@@ -1007,6 +1126,7 @@ describe('Workflow Activity vNext editor', () => {
   beforeEach(() => {
     mockLocation =
       '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-committed-source';
+    mockLocationSubscribers.clear();
     jest.clearAllMocks();
     mockStudioApi.getWorkspaceSettings.mockResolvedValue({
       runtimeBaseUrl: '',
@@ -1071,6 +1191,1113 @@ describe('Workflow Activity vNext editor', () => {
 
   afterEach(() => cleanupTestQueryClients());
 
+  it('requires an explicitly selected real scope service before publishing a saved workflow', async () => {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha';
+    mockStudioApi.getWorkflow.mockResolvedValue({
+      workflowId: 'wf-draft-alpha',
+      name: 'Workflow alpha',
+      fileName: 'workflow-alpha.yaml',
+      filePath: '/workflows/workflow-alpha.yaml',
+      directoryId: 'directory-alpha',
+      directoryLabel: 'Workflows',
+      yaml: 'name: workflow_alpha\nroles: []\nsteps:\n  - id: step-alpha\n    type: llm_call\n',
+      updatedAtUtc: '2026-08-06T10:00:00Z',
+      document: {
+        name: 'workflow_alpha',
+        roles: [],
+        steps: [{ id: 'step-alpha', type: 'llm_call' }],
+      },
+      draftExists: true,
+      findings: [],
+    });
+    mockStudioApi.parseYaml.mockResolvedValue({
+      document: {
+        name: 'workflow_alpha',
+        roles: [],
+        steps: [{ id: 'step-alpha', type: 'llm_call' }],
+      },
+      findings: [],
+    });
+    mockStudioApi.serializeYaml.mockResolvedValue({
+      yaml: 'name: workflow_alpha\nroles: []\nsteps:\n  - id: step-alpha\n    type: llm_call\n',
+      document: {
+        name: 'workflow_alpha',
+        roles: [],
+        steps: [{ id: 'step-alpha', type: 'llm_call' }],
+      },
+      findings: [],
+    });
+    mockScopeRuntimeApi.listServices.mockResolvedValue([
+      {
+        serviceKey: 'tenant-alpha/app-alpha/scope-alpha/svc-alpha',
+        tenantId: 'tenant-alpha',
+        appId: 'app-alpha',
+        namespace: 'scope-alpha',
+        serviceId: 'svc-alpha',
+        displayName: 'Service alpha',
+        defaultServingRevisionId: 'rev-existing',
+        activeServingRevisionId: 'rev-existing',
+        deploymentId: 'deployment-existing',
+        primaryActorId: 'actor-existing',
+        deploymentStatus: 'active',
+        endpoints: [],
+        policyIds: [],
+        updatedAt: '2026-08-06T10:00:00Z',
+      },
+    ]);
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const publish = await screen.findByRole('button', { name: 'Publish' });
+    expect(publish).toBeEnabled();
+    fireEvent.click(publish);
+
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Publish workflow',
+    });
+    expect(mockScopeRuntimeApi.listServices).toHaveBeenCalledWith(
+      'scope-alpha',
+      {
+        take: 200,
+      },
+    );
+    const continueButton = within(dialog).getByRole('button', {
+      name: 'Review and publish',
+    });
+    expect(continueButton).toBeDisabled();
+
+    const serviceSelect = await within(dialog).findByRole('combobox', {
+      name: 'Service',
+    });
+    fireEvent.mouseDown(serviceSelect);
+    fireEvent.click(await screen.findByText('Service alpha'));
+
+    expect(continueButton).toBeEnabled();
+  });
+
+  it('submits a saved draft only to the explicitly selected real scope service', async () => {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha';
+    mockCreateWorkflowRevisionIdentityCandidate.mockReturnValue(
+      'rev-preview-alpha',
+    );
+    mockStudioApi.getWorkflow.mockResolvedValue({
+      workflowId: 'wf-draft-alpha',
+      name: 'Workflow alpha',
+      fileName: 'workflow-alpha.yaml',
+      filePath: '/workflows/workflow-alpha.yaml',
+      directoryId: 'directory-alpha',
+      directoryLabel: 'Workflows',
+      yaml: 'name: workflow_alpha\nroles: []\nsteps:\n  - id: step-alpha\n    type: llm_call\n',
+      updatedAtUtc: '2026-08-06T10:00:00Z',
+      document: {
+        name: 'workflow_alpha',
+        roles: [],
+        steps: [{ id: 'step-alpha', type: 'llm_call' }],
+      },
+      draftExists: true,
+      findings: [],
+    });
+    mockStudioApi.parseYaml.mockResolvedValue({
+      document: {
+        name: 'workflow_alpha',
+        roles: [],
+        steps: [{ id: 'step-alpha', type: 'llm_call' }],
+      },
+      findings: [],
+    });
+    mockStudioApi.serializeYaml.mockResolvedValue({
+      yaml: 'name: workflow_alpha\nroles: []\nsteps:\n  - id: step-alpha\n    type: llm_call\n',
+      document: {
+        name: 'workflow_alpha',
+        roles: [],
+        steps: [{ id: 'step-alpha', type: 'llm_call' }],
+      },
+      findings: [],
+    });
+    mockScopeRuntimeApi.listServices.mockResolvedValue([
+      {
+        serviceKey: 'tenant-alpha/app-alpha/scope-alpha/svc-alpha',
+        tenantId: 'tenant-alpha',
+        appId: 'app-alpha',
+        namespace: 'scope-alpha',
+        serviceId: 'svc-alpha',
+        displayName: 'Service alpha',
+        defaultServingRevisionId: 'rev-existing',
+        activeServingRevisionId: 'rev-existing',
+        deploymentId: 'deployment-existing',
+        primaryActorId: 'actor-existing',
+        deploymentStatus: 'active',
+        endpoints: [],
+        policyIds: [],
+        updatedAt: '2026-08-06T10:00:00Z',
+      },
+    ]);
+    mockStudioApi.previewExplicitRequests.mockResolvedValue({
+      workflowId: 'wf-draft-alpha',
+      revisionId: 'rev-preview-alpha',
+      items: [],
+    });
+    mockStudioApi.saveAndBindWorkflow.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      workflowId: 'wf-draft-alpha',
+      revisionId: 'rev-preview-alpha',
+      binding: {
+        scopeId: 'scope-alpha',
+        serviceId: 'svc-alpha',
+        displayName: 'Workflow alpha',
+        revisionId: 'rev-preview-alpha',
+        targetKind: 'workflow',
+        targetName: 'Workflow alpha',
+      },
+      acceptanceStage: 'accepted',
+      propagationStage: 'readmodel_propagating',
+    });
+    mockScopesApi.getWorkflowDetail.mockResolvedValue({
+      available: true,
+      scopeId: 'scope-alpha',
+      workflow: {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-draft-alpha',
+        displayName: 'Workflow alpha',
+        serviceKey: 'workflow-alpha',
+        workflowName: 'Workflow alpha',
+        actorId: 'actor-workflow-alpha',
+        activeRevisionId: 'workflow-revision-alpha',
+        deploymentId: 'deployment-workflow-alpha',
+        deploymentStatus: 'Available',
+        updatedAt: '2026-08-06T10:00:00Z',
+      },
+      source: null,
+    });
+    mockScopeRuntimeApi.getServiceRevisions.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      serviceId: 'svc-alpha',
+      serviceKey: 'service-alpha',
+      displayName: 'Service alpha',
+      defaultServingRevisionId: 'rev-preview-alpha',
+      activeServingRevisionId: 'rev-preview-alpha',
+      deploymentId: 'deployment-service-alpha',
+      deploymentStatus: 'Active',
+      primaryActorId: 'actor-service-alpha',
+      catalogStateVersion: 12,
+      catalogLastEventId: 'evt-service-alpha',
+      updatedAt: '2026-08-06T10:00:00Z',
+      revisions: [
+        {
+          revisionId: 'rev-preview-alpha',
+          implementationKind: 'workflow',
+          status: 'Published',
+          artifactHash: 'artifact-publication-alpha',
+          failureReason: '',
+          isDefaultServing: false,
+          isActiveServing: true,
+          isServingTarget: true,
+          allocationWeight: 100,
+          servingState: 'Active',
+          deploymentId: 'deployment-service-alpha',
+          primaryActorId: 'actor-service-alpha',
+          createdAt: '2026-08-06T10:00:00Z',
+          preparedAt: '2026-08-06T10:00:01Z',
+          publishedAt: '2026-08-06T10:00:02Z',
+          retiredAt: null,
+          workflowName: 'Workflow alpha',
+          workflowDefinitionActorId: 'actor-workflow-alpha',
+          inlineWorkflowCount: 0,
+          scriptId: '',
+          scriptRevision: '',
+          scriptDefinitionActorId: '',
+          scriptSourceHash: '',
+          staticActorTypeName: '',
+        },
+      ],
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Publish workflow',
+    });
+    const serviceSelect = await within(dialog).findByRole('combobox', {
+      name: 'Service',
+    });
+    fireEvent.mouseDown(serviceSelect);
+    fireEvent.click(await screen.findByText('Service alpha'));
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Review and publish' }),
+    );
+
+    await waitFor(() =>
+      expect(mockStudioApi.previewExplicitRequests).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executionMode: 'interactive',
+          scopeId: 'scope-alpha',
+          workflowId: 'wf-draft-alpha',
+          workflowYaml:
+            'name: workflow_alpha\nroles: []\nsteps:\n  - id: step-alpha\n    type: llm_call\n',
+        }),
+      ),
+    );
+    expect(mockStudioApi.saveAndBindWorkflow).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      await within(dialog).findByRole('button', { name: 'Publish' }),
+    );
+    await waitFor(() =>
+      expect(mockStudioApi.saveAndBindWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          revisionId: 'rev-preview-alpha',
+          scopeId: 'scope-alpha',
+          serviceId: 'svc-alpha',
+          workflowId: 'wf-draft-alpha',
+          workflowYaml:
+            'name: workflow_alpha\nroles: []\nsteps:\n  - id: step-alpha\n    type: llm_call\n',
+        }),
+      ),
+    );
+    expect(await screen.findByText('Workflow published')).toBeInTheDocument();
+  });
+
+  it.each([
+    {
+      returnedRevisionId: 'rev-returned-other',
+      returnedWorkflowId: 'wf-draft-alpha',
+      mismatch: 'revision',
+    },
+    {
+      returnedRevisionId: 'rev-preview-alpha',
+      returnedWorkflowId: 'wf-returned-other',
+      mismatch: 'workflow ID',
+    },
+    {
+      returnedRevisionId: 'rev-preview-alpha',
+      returnedWorkflowId: 'wf-draft-alpha',
+      bindingTargetKind: 'script',
+      mismatch: 'binding target',
+    },
+  ])('keeps a returned $mismatch mismatch visible without starting observation', async ({
+    returnedRevisionId,
+    returnedWorkflowId,
+    bindingTargetKind,
+  }) => {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha';
+    mockCreateWorkflowRevisionIdentityCandidate.mockReturnValue(
+      'rev-preview-alpha',
+    );
+    mockStudioApi.getWorkflow.mockResolvedValue({
+      workflowId: 'wf-draft-alpha',
+      name: 'Workflow alpha',
+      fileName: 'workflow-alpha.yaml',
+      filePath: '/workflows/workflow-alpha.yaml',
+      directoryId: 'directory-alpha',
+      directoryLabel: 'Workflows',
+      yaml: 'name: workflow_alpha\nroles: []\nsteps:\n  - id: step-alpha\n    type: llm_call\n',
+      updatedAtUtc: '2026-08-06T10:00:00Z',
+      document: {
+        name: 'workflow_alpha',
+        roles: [],
+        steps: [{ id: 'step-alpha', type: 'llm_call' }],
+      },
+      draftExists: true,
+      findings: [],
+    });
+    mockStudioApi.parseYaml.mockResolvedValue({
+      document: {
+        name: 'workflow_alpha',
+        roles: [],
+        steps: [{ id: 'step-alpha', type: 'llm_call' }],
+      },
+      findings: [],
+    });
+    mockStudioApi.serializeYaml.mockResolvedValue({
+      yaml: 'name: workflow_alpha\nroles: []\nsteps:\n  - id: step-alpha\n    type: llm_call\n',
+      document: {
+        name: 'workflow_alpha',
+        roles: [],
+        steps: [{ id: 'step-alpha', type: 'llm_call' }],
+      },
+      findings: [],
+    });
+    mockScopeRuntimeApi.listServices.mockResolvedValue([
+      {
+        serviceKey: 'tenant-alpha/app-alpha/scope-alpha/svc-alpha',
+        tenantId: 'tenant-alpha',
+        appId: 'app-alpha',
+        namespace: 'scope-alpha',
+        serviceId: 'svc-alpha',
+        displayName: 'Service alpha',
+        defaultServingRevisionId: 'rev-existing',
+        activeServingRevisionId: 'rev-existing',
+        deploymentId: 'deployment-existing',
+        primaryActorId: 'actor-existing',
+        deploymentStatus: 'active',
+        endpoints: [],
+        policyIds: [],
+        updatedAt: '2026-08-06T10:00:00Z',
+      },
+    ]);
+    mockStudioApi.previewExplicitRequests.mockResolvedValue({
+      workflowId: 'wf-draft-alpha',
+      revisionId: 'rev-preview-alpha',
+      items: [],
+    });
+    mockStudioApi.saveAndBindWorkflow.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      workflowId: returnedWorkflowId,
+      revisionId: returnedRevisionId,
+      binding: {
+        scopeId: 'scope-alpha',
+        serviceId: 'svc-alpha',
+        displayName: 'Workflow alpha',
+        revisionId: returnedRevisionId,
+        targetKind: bindingTargetKind ?? 'workflow',
+        targetName: 'Workflow alpha',
+      },
+      acceptanceStage: 'accepted',
+      propagationStage: 'readmodel_propagating',
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Publish workflow',
+    });
+    const serviceSelect = await within(dialog).findByRole('combobox', {
+      name: 'Service',
+    });
+    fireEvent.mouseDown(serviceSelect);
+    fireEvent.click(await screen.findByText('Service alpha'));
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Review and publish' }),
+    );
+    fireEvent.click(
+      await within(dialog).findByRole('button', { name: 'Publish' }),
+    );
+
+    expect(
+      await screen.findByText("Publication couldn't be confirmed"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('dialog', { name: 'Publish workflow' }),
+    ).toBeInTheDocument();
+    expect(mockStudioApi.saveAndBindWorkflow).toHaveBeenCalledTimes(1);
+    expect(mockScopesApi.getWorkflowDetail).not.toHaveBeenCalled();
+    expect(mockScopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
+  });
+
+  function arrangeSavedDraftPublication(): void {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha';
+    mockCreateWorkflowRevisionIdentityCandidate.mockReturnValue(
+      'rev-preview-alpha',
+    );
+    mockStudioApi.getWorkflow.mockResolvedValue({
+      workflowId: 'wf-draft-alpha',
+      name: 'Workflow alpha',
+      fileName: 'workflow-alpha.yaml',
+      filePath: '/workflows/workflow-alpha.yaml',
+      directoryId: 'directory-alpha',
+      directoryLabel: 'Workflows',
+      yaml: 'name: workflow_alpha\nroles: []\nsteps:\n  - id: step-alpha\n    type: llm_call\n',
+      updatedAtUtc: '2026-08-06T10:00:00Z',
+      document: {
+        name: 'workflow_alpha',
+        roles: [],
+        steps: [{ id: 'step-alpha', type: 'llm_call' }],
+      },
+      draftExists: true,
+      findings: [],
+    });
+    mockStudioApi.parseYaml.mockResolvedValue({
+      document: {
+        name: 'workflow_alpha',
+        roles: [],
+        steps: [{ id: 'step-alpha', type: 'llm_call' }],
+      },
+      findings: [],
+    });
+    mockStudioApi.serializeYaml.mockResolvedValue({
+      yaml: 'name: workflow_alpha\nroles: []\nsteps:\n  - id: step-alpha\n    type: llm_call\n',
+      document: {
+        name: 'workflow_alpha',
+        roles: [],
+        steps: [{ id: 'step-alpha', type: 'llm_call' }],
+      },
+      findings: [],
+    });
+    mockScopeRuntimeApi.listServices.mockResolvedValue([
+      {
+        serviceKey: 'tenant-alpha/app-alpha/scope-alpha/svc-alpha',
+        tenantId: 'tenant-alpha',
+        appId: 'app-alpha',
+        namespace: 'scope-alpha',
+        serviceId: 'svc-alpha',
+        displayName: 'Service alpha',
+        defaultServingRevisionId: 'rev-existing',
+        activeServingRevisionId: 'rev-existing',
+        deploymentId: 'deployment-existing',
+        primaryActorId: 'actor-existing',
+        deploymentStatus: 'active',
+        endpoints: [],
+        policyIds: [],
+        updatedAt: '2026-08-06T10:00:00Z',
+      },
+    ]);
+    mockStudioApi.previewExplicitRequests.mockResolvedValue({
+      workflowId: 'wf-draft-alpha',
+      revisionId: 'rev-preview-alpha',
+      items: [],
+    });
+    mockStudioApi.saveAndBindWorkflow.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      workflowId: 'wf-draft-alpha',
+      revisionId: 'rev-preview-alpha',
+      binding: {
+        scopeId: 'scope-alpha',
+        serviceId: 'svc-alpha',
+        displayName: 'Workflow alpha',
+        revisionId: 'rev-preview-alpha',
+        targetKind: 'workflow',
+        targetName: 'Workflow alpha',
+      },
+      acceptanceStage: 'accepted',
+      propagationStage: 'readmodel_propagating',
+    });
+  }
+
+  it('retries a failed publication observation without sending a second POST', async () => {
+    arrangeSavedDraftPublication();
+    mockScopesApi.getWorkflowDetail
+      .mockRejectedValueOnce(
+        Object.assign(new Error('HTTP 503'), { status: 503 }),
+      )
+      .mockResolvedValueOnce({
+        available: true,
+        scopeId: 'scope-alpha',
+        workflow: {
+          scopeId: 'scope-alpha',
+          workflowId: 'wf-draft-alpha',
+          displayName: 'Workflow alpha',
+          serviceKey: 'workflow-alpha',
+          workflowName: 'Workflow alpha',
+          actorId: 'actor-workflow-alpha',
+          activeRevisionId: 'workflow-revision-alpha',
+          deploymentId: 'deployment-workflow-alpha',
+          deploymentStatus: 'Available',
+          updatedAt: '2026-08-06T10:00:00Z',
+        },
+        source: null,
+      });
+    mockScopeRuntimeApi.getServiceRevisions.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      serviceId: 'svc-alpha',
+      serviceKey: 'service-alpha',
+      displayName: 'Service alpha',
+      defaultServingRevisionId: 'rev-preview-alpha',
+      activeServingRevisionId: 'rev-preview-alpha',
+      deploymentId: 'deployment-service-alpha',
+      deploymentStatus: 'Active',
+      primaryActorId: 'actor-service-alpha',
+      catalogStateVersion: 12,
+      catalogLastEventId: 'evt-service-alpha',
+      updatedAt: '2026-08-06T10:00:00Z',
+      revisions: [
+        {
+          revisionId: 'rev-preview-alpha',
+          implementationKind: 'workflow',
+          status: 'Published',
+          artifactHash: 'artifact-publication-alpha',
+          failureReason: '',
+          isDefaultServing: false,
+          isActiveServing: true,
+          isServingTarget: true,
+          allocationWeight: 100,
+          servingState: 'Active',
+          deploymentId: 'deployment-service-alpha',
+          primaryActorId: 'actor-service-alpha',
+          createdAt: '2026-08-06T10:00:00Z',
+          preparedAt: '2026-08-06T10:00:01Z',
+          publishedAt: '2026-08-06T10:00:02Z',
+          retiredAt: null,
+          workflowName: 'Workflow alpha',
+          workflowDefinitionActorId: 'actor-workflow-alpha',
+          inlineWorkflowCount: 0,
+          scriptId: '',
+          scriptRevision: '',
+          scriptDefinitionActorId: '',
+          scriptSourceHash: '',
+          staticActorTypeName: '',
+        },
+      ],
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Publish workflow',
+    });
+    const serviceSelect = await within(dialog).findByRole('combobox', {
+      name: 'Service',
+    });
+    fireEvent.mouseDown(serviceSelect);
+    fireEvent.click(await screen.findByText('Service alpha'));
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Review and publish' }),
+    );
+    fireEvent.click(
+      await within(dialog).findByRole('button', { name: 'Publish' }),
+    );
+
+    expect(
+      await screen.findByText("Publication couldn't be confirmed"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+
+    await waitFor(() =>
+      expect(mockScopesApi.getWorkflowDetail).toHaveBeenCalledTimes(2),
+    );
+    expect(mockScopesApi.getWorkflowDetail).toHaveBeenLastCalledWith(
+      'scope-alpha',
+      'wf-draft-alpha',
+    );
+    expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenCalledTimes(2);
+    expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenLastCalledWith(
+      'scope-alpha',
+      'svc-alpha',
+    );
+    expect(mockStudioApi.previewExplicitRequests).toHaveBeenCalledTimes(1);
+    expect(mockStudioApi.saveAndBindWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [401, 'Sign in to continue'],
+    [403, "You don't have access to this workspace"],
+  ])('keeps an accepted publication receipt mutation-locked after a %i observation', async (status, message) => {
+    arrangeSavedDraftPublication();
+    mockScopesApi.getWorkflowDetail.mockRejectedValue(
+      Object.assign(new Error(`HTTP ${status}`), { status }),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Publish workflow',
+    });
+    const serviceSelect = await within(dialog).findByRole('combobox', {
+      name: 'Service',
+    });
+    fireEvent.mouseDown(serviceSelect);
+    fireEvent.click(await screen.findByText('Service alpha'));
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Review and publish' }),
+    );
+    fireEvent.click(
+      await within(dialog).findByRole('button', { name: 'Publish' }),
+    );
+
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+
+    await waitFor(() =>
+      expect(mockScopesApi.getWorkflowDetail).toHaveBeenCalledTimes(2),
+    );
+    expect(mockScopesApi.getWorkflowDetail).toHaveBeenLastCalledWith(
+      'scope-alpha',
+      'wf-draft-alpha',
+    );
+    expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenCalledTimes(2);
+    expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenLastCalledWith(
+      'scope-alpha',
+      'svc-alpha',
+    );
+    expect(mockStudioApi.previewExplicitRequests).toHaveBeenCalledTimes(1);
+    expect(mockStudioApi.saveAndBindWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires a fresh review before republishing a failed publication receipt', async () => {
+    arrangeSavedDraftPublication();
+    const receiptRevisionId = 'rev-receipt-alpha';
+    const freshRevisionId = 'rev-fresh-beta';
+    mockCreateWorkflowRevisionIdentityCandidate
+      .mockReturnValueOnce(receiptRevisionId)
+      .mockReturnValueOnce(freshRevisionId);
+    mockStudioApi.previewExplicitRequests
+      .mockResolvedValueOnce({
+        workflowId: 'wf-draft-alpha',
+        revisionId: receiptRevisionId,
+        items: [],
+      })
+      .mockResolvedValueOnce({
+        workflowId: 'wf-draft-alpha',
+        revisionId: freshRevisionId,
+        items: [],
+      });
+    mockStudioApi.saveAndBindWorkflow
+      .mockResolvedValueOnce({
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-draft-alpha',
+        revisionId: receiptRevisionId,
+        binding: {
+          scopeId: 'scope-alpha',
+          serviceId: 'svc-alpha',
+          displayName: 'Workflow alpha',
+          revisionId: receiptRevisionId,
+          targetKind: 'workflow',
+          targetName: 'Workflow alpha',
+        },
+        acceptanceStage: 'accepted',
+        propagationStage: 'readmodel_propagating',
+      })
+      .mockResolvedValueOnce({
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-draft-alpha',
+        revisionId: freshRevisionId,
+        binding: {
+          scopeId: 'scope-alpha',
+          serviceId: 'svc-alpha',
+          displayName: 'Workflow alpha',
+          revisionId: freshRevisionId,
+          targetKind: 'workflow',
+          targetName: 'Workflow alpha',
+        },
+        acceptanceStage: 'accepted',
+        propagationStage: 'readmodel_propagating',
+      });
+    mockScopesApi.getWorkflowDetail
+      .mockRejectedValueOnce(
+        Object.assign(new Error('HTTP 503'), { status: 503 }),
+      )
+      .mockResolvedValueOnce({
+        available: true,
+        scopeId: 'scope-alpha',
+        workflow: {
+          scopeId: 'scope-alpha',
+          workflowId: 'wf-draft-alpha',
+          displayName: 'Workflow alpha',
+          serviceKey: 'workflow-alpha',
+          workflowName: 'Workflow alpha',
+          actorId: 'actor-workflow-alpha',
+          activeRevisionId: 'workflow-revision-beta',
+          deploymentId: 'deployment-workflow-alpha',
+          deploymentStatus: 'Available',
+          updatedAt: '2026-08-06T10:00:00Z',
+        },
+        source: null,
+      });
+    mockScopeRuntimeApi.getServiceRevisions.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      serviceId: 'svc-alpha',
+      serviceKey: 'service-alpha',
+      displayName: 'Service alpha',
+      defaultServingRevisionId: freshRevisionId,
+      activeServingRevisionId: freshRevisionId,
+      deploymentId: 'deployment-service-alpha',
+      deploymentStatus: 'Active',
+      primaryActorId: 'actor-service-alpha',
+      catalogStateVersion: 12,
+      catalogLastEventId: 'evt-service-alpha',
+      updatedAt: '2026-08-06T10:00:00Z',
+      revisions: [
+        {
+          revisionId: freshRevisionId,
+          implementationKind: 'workflow',
+          status: 'Published',
+          artifactHash: 'artifact-publication-beta',
+          failureReason: '',
+          isDefaultServing: false,
+          isActiveServing: true,
+          isServingTarget: true,
+          allocationWeight: 100,
+          servingState: 'Active',
+          deploymentId: 'deployment-service-alpha',
+          primaryActorId: 'actor-service-alpha',
+          createdAt: '2026-08-06T10:00:00Z',
+          preparedAt: '2026-08-06T10:00:01Z',
+          publishedAt: '2026-08-06T10:00:02Z',
+          retiredAt: null,
+          workflowName: 'Workflow alpha',
+          workflowDefinitionActorId: 'actor-workflow-alpha',
+          inlineWorkflowCount: 0,
+          scriptId: '',
+          scriptRevision: '',
+          scriptDefinitionActorId: '',
+          scriptSourceHash: '',
+          staticActorTypeName: '',
+        },
+      ],
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
+    const initialDialog = await screen.findByRole('dialog', {
+      name: 'Publish workflow',
+    });
+    const initialServiceSelect = await within(initialDialog).findByRole(
+      'combobox',
+      { name: 'Service' },
+    );
+    fireEvent.mouseDown(initialServiceSelect);
+    fireEvent.click(await screen.findByText('Service alpha'));
+    fireEvent.click(
+      within(initialDialog).getByRole('button', {
+        name: 'Review and publish',
+      }),
+    );
+    fireEvent.click(
+      await within(initialDialog).findByRole('button', { name: 'Publish' }),
+    );
+
+    expect(
+      await screen.findByText("Publication couldn't be confirmed"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Review again' }));
+
+    const freshDialog = await screen.findByRole('dialog', {
+      name: 'Publish workflow',
+    });
+    const freshReview = within(freshDialog).getByRole('button', {
+      name: 'Review and publish',
+    });
+    expect(freshReview).toBeDisabled();
+    expect(mockStudioApi.saveAndBindWorkflow).toHaveBeenCalledTimes(1);
+
+    const freshServiceSelect = await within(freshDialog).findByRole(
+      'combobox',
+      { name: 'Service' },
+    );
+    fireEvent.mouseDown(freshServiceSelect);
+    fireEvent.click(await screen.findByText('Service alpha'));
+    expect(freshReview).toBeEnabled();
+    fireEvent.click(freshReview);
+
+    await waitFor(() =>
+      expect(mockStudioApi.previewExplicitRequests).toHaveBeenCalledTimes(2),
+    );
+    expect(mockStudioApi.saveAndBindWorkflow).toHaveBeenCalledTimes(1);
+    fireEvent.click(
+      await within(freshDialog).findByRole('button', { name: 'Publish' }),
+    );
+
+    await waitFor(() =>
+      expect(mockStudioApi.saveAndBindWorkflow).toHaveBeenLastCalledWith(
+        expect.objectContaining({ revisionId: freshRevisionId }),
+      ),
+    );
+    expect(mockStudioApi.saveAndBindWorkflow).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText('Workflow published')).toBeInTheDocument();
+  });
+
+  it('retries delayed publication observation without sending a second POST', async () => {
+    arrangeSavedDraftPublication();
+    mockScopesApi.getWorkflowDetail.mockRejectedValue(
+      Object.assign(new Error('HTTP 404'), { status: 404 }),
+    );
+    mockScopeRuntimeApi.getServiceRevisions.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      serviceId: 'svc-alpha',
+      serviceKey: 'service-alpha',
+      displayName: 'Service alpha',
+      defaultServingRevisionId: 'rev-existing',
+      activeServingRevisionId: 'rev-existing',
+      deploymentId: 'deployment-service-alpha',
+      deploymentStatus: 'Active',
+      primaryActorId: 'actor-service-alpha',
+      catalogStateVersion: 12,
+      catalogLastEventId: 'evt-service-alpha',
+      updatedAt: '2026-08-06T10:00:00Z',
+      revisions: [],
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Publish workflow',
+    });
+    const serviceSelect = await within(dialog).findByRole('combobox', {
+      name: 'Service',
+    });
+    fireEvent.mouseDown(serviceSelect);
+    fireEvent.click(await screen.findByText('Service alpha'));
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Review and publish' }),
+    );
+    const finalPublish = await within(dialog).findByRole('button', {
+      name: 'Publish',
+    });
+
+    jest.useFakeTimers();
+    try {
+      fireEvent.click(finalPublish);
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(mockScopesApi.getWorkflowDetail).toHaveBeenCalledTimes(1);
+      expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(5_000);
+      });
+
+      expect(
+        screen.getByText('Publication is taking longer to appear'),
+      ).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(5_000);
+      });
+
+      expect(mockScopesApi.getWorkflowDetail).toHaveBeenCalledTimes(10);
+      expect(mockScopesApi.getWorkflowDetail).toHaveBeenLastCalledWith(
+        'scope-alpha',
+        'wf-draft-alpha',
+      );
+      expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenCalledTimes(10);
+      expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenLastCalledWith(
+        'scope-alpha',
+        'svc-alpha',
+      );
+      expect(mockStudioApi.previewExplicitRequests).toHaveBeenCalledTimes(1);
+      expect(mockStudioApi.saveAndBindWorkflow).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('retains the latest reviewed publication when an earlier review resolves late', async () => {
+    arrangeSavedDraftPublication();
+    const workflowYamlA =
+      'name: workflow_alpha\nroles: []\nsteps:\n  - id: step-a\n    type: llm_call\n';
+    const workflowYamlB =
+      'name: workflow_alpha\nroles: []\nsteps:\n  - id: step-b\n    type: llm_call\n';
+    const previewA = {
+      workflowId: 'wf-draft-alpha',
+      revisionId: 'rev-A',
+      items: [
+        {
+          callSiteId: 'call-A',
+          requestContractDigest: 'digest-A',
+          userServiceId: 'external-A',
+          method: 'get',
+          pathTemplate: '/requests/a',
+          bodyMode: 'none',
+          bodyRequired: false,
+          responseMode: 'text',
+          effectiveRisk: 'read_only',
+          approvalRequired: false,
+          allowedExecutionModes: ['interactive'],
+        },
+      ],
+    };
+    const previewB = {
+      workflowId: 'wf-draft-alpha',
+      revisionId: 'rev-B',
+      items: [
+        {
+          callSiteId: 'call-B',
+          requestContractDigest: 'digest-B',
+          userServiceId: 'external-B',
+          method: 'post',
+          pathTemplate: '/requests/b',
+          bodyMode: 'json',
+          bodyRequired: true,
+          responseMode: 'text',
+          effectiveRisk: 'write',
+          approvalRequired: true,
+          allowedExecutionModes: ['interactive'],
+        },
+      ],
+    };
+    let resolvePreviewA: (preview: unknown) => void = () => undefined;
+    let resolvePreviewB: (preview: unknown) => void = () => undefined;
+    const previewAPromise = new Promise((resolve) => {
+      resolvePreviewA = resolve;
+    });
+    const previewBPromise = new Promise((resolve) => {
+      resolvePreviewB = resolve;
+    });
+    mockCreateWorkflowRevisionIdentityCandidate
+      .mockReturnValueOnce('rev-A')
+      .mockReturnValueOnce('rev-B');
+    mockStudioApi.serializeYaml
+      .mockResolvedValueOnce({
+        yaml: workflowYamlA,
+        document: {
+          name: 'workflow_alpha',
+          roles: [],
+          steps: [{ id: 'step-a', type: 'llm_call' }],
+        },
+        findings: [],
+      })
+      .mockResolvedValueOnce({
+        yaml: workflowYamlB,
+        document: {
+          name: 'workflow_alpha',
+          roles: [],
+          steps: [{ id: 'step-b', type: 'llm_call' }],
+        },
+        findings: [],
+      });
+    mockStudioApi.previewExplicitRequests
+      .mockImplementationOnce(() => previewAPromise)
+      .mockImplementationOnce(() => previewBPromise);
+    mockStudioApi.saveAndBindWorkflow.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      workflowId: 'wf-draft-alpha',
+      revisionId: 'rev-B',
+      binding: {
+        scopeId: 'scope-alpha',
+        serviceId: 'svc-alpha',
+        displayName: 'Workflow alpha',
+        revisionId: 'rev-B',
+        targetKind: 'workflow',
+        targetName: 'Workflow alpha',
+      },
+      acceptanceStage: 'accepted',
+      propagationStage: 'readmodel_propagating',
+    });
+    mockScopesApi.getWorkflowDetail.mockResolvedValue({
+      available: true,
+      scopeId: 'scope-alpha',
+      workflow: {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-draft-alpha',
+        displayName: 'Workflow alpha',
+        serviceKey: 'workflow-alpha',
+        workflowName: 'Workflow alpha',
+        actorId: 'actor-workflow-alpha',
+        activeRevisionId: 'workflow-revision-B',
+        deploymentId: 'deployment-workflow-alpha',
+        deploymentStatus: 'Available',
+        updatedAt: '2026-08-06T10:00:00Z',
+      },
+      source: null,
+    });
+    mockScopeRuntimeApi.getServiceRevisions.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      serviceId: 'svc-alpha',
+      serviceKey: 'service-alpha',
+      displayName: 'Service alpha',
+      defaultServingRevisionId: 'rev-B',
+      activeServingRevisionId: 'rev-B',
+      deploymentId: 'deployment-service-alpha',
+      deploymentStatus: 'Active',
+      primaryActorId: 'actor-service-alpha',
+      catalogStateVersion: 12,
+      catalogLastEventId: 'evt-service-alpha',
+      updatedAt: '2026-08-06T10:00:00Z',
+      revisions: [
+        {
+          revisionId: 'rev-B',
+          implementationKind: 'workflow',
+          status: 'Published',
+          artifactHash: 'artifact-publication-B',
+          failureReason: '',
+          isDefaultServing: false,
+          isActiveServing: true,
+          isServingTarget: true,
+          allocationWeight: 100,
+          servingState: 'Active',
+          deploymentId: 'deployment-service-alpha',
+          primaryActorId: 'actor-service-alpha',
+          createdAt: '2026-08-06T10:00:00Z',
+          preparedAt: '2026-08-06T10:00:01Z',
+          publishedAt: '2026-08-06T10:00:02Z',
+          retiredAt: null,
+          workflowName: 'Workflow alpha',
+          workflowDefinitionActorId: 'actor-workflow-alpha',
+          inlineWorkflowCount: 0,
+          scriptId: '',
+          scriptRevision: '',
+          scriptDefinitionActorId: '',
+          scriptSourceHash: '',
+          staticActorTypeName: '',
+        },
+      ],
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Publish workflow',
+    });
+    const serviceSelect = await within(dialog).findByRole('combobox', {
+      name: 'Service',
+    });
+    fireEvent.mouseDown(serviceSelect);
+    fireEvent.click(await screen.findByText('Service alpha'));
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Review and publish' }),
+    );
+    await waitFor(() =>
+      expect(mockStudioApi.previewExplicitRequests).toHaveBeenCalledTimes(1),
+    );
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }));
+    fireEvent.click(
+      await within(dialog).findByRole('button', { name: 'Review and publish' }),
+    );
+    await waitFor(() =>
+      expect(mockStudioApi.previewExplicitRequests).toHaveBeenCalledTimes(2),
+    );
+    expect(mockStudioApi.previewExplicitRequests.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        revisionId: 'rev-A',
+        workflowYaml: workflowYamlA,
+      }),
+    );
+    expect(mockStudioApi.previewExplicitRequests.mock.calls[1][0]).toEqual(
+      expect.objectContaining({
+        revisionId: 'rev-B',
+        workflowYaml: workflowYamlB,
+      }),
+    );
+
+    await act(async () => {
+      resolvePreviewB(previewB);
+      await Promise.resolve();
+    });
+    expect(
+      await within(dialog).findByText('POST /requests/b'),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      resolvePreviewA(previewA);
+      await Promise.resolve();
+    });
+    expect(within(dialog).getByText('POST /requests/b')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Publish' }));
+
+    await waitFor(() =>
+      expect(mockStudioApi.saveAndBindWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          explicitRequestConfirmations: [
+            {
+              workflowId: 'wf-draft-alpha',
+              revisionId: 'rev-B',
+              callSiteId: 'call-B',
+              requestContractDigest: 'digest-B',
+              attestedRisk: 'write',
+            },
+          ],
+          revisionId: 'rev-B',
+          workflowYaml: workflowYamlB,
+        }),
+      ),
+    );
+    expect(mockStudioApi.saveAndBindWorkflow).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText('Workflow published')).toBeInTheDocument();
+  });
+
   it('creates on first save for committed-only source and adopts the API-returned draft id', async () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
@@ -1103,6 +2330,27 @@ describe('Workflow Activity vNext editor', () => {
     );
   });
 
+  it('preserves a requested run target when first save adopts a draft id', async () => {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-committed-source?run=1#run-panel';
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(
+      await screen.findByDisplayValue('Committed source'),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Committed source saved' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
+
+    await waitFor(() =>
+      expect(history.replace).toHaveBeenCalledWith(
+        '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-new?run=1#run-panel',
+      ),
+    );
+  });
+
   it('confirms a workflow save only after the server returns a readable draft', async () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
@@ -1116,6 +2364,94 @@ describe('Workflow Activity vNext editor', () => {
 
     expect(await screen.findByText('Workflow saved')).toBeVisible();
     expect(mockStudioApi.saveWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps later edits while retrying a failed create receipt', async () => {
+    const unavailable = Object.assign(
+      new Error('GET /api/workspace/workflow-drafts/wf-draft-api returned 503'),
+      { status: 503 },
+    );
+    const adoptedDraft = {
+      workflowId: 'wf-draft-api',
+      name: 'Committed source',
+      fileName: 'committed-source.yaml',
+      filePath: '/workflows/committed-source.yaml',
+      directoryId: 'directory-alpha',
+      directoryLabel: 'Workflows',
+      yaml: 'name: committed_source\nroles: []\nsteps: []\n',
+      updatedAtUtc: '2026-08-04T10:02:00Z',
+      document: { name: 'committed_source', roles: [], steps: [] },
+      draftExists: true,
+      findings: [],
+    };
+    mockStudioApi.saveWorkflow
+      .mockResolvedValueOnce({
+        kind: 'accepted',
+        receipt: {
+          accepted: true,
+          workflowId: 'wf-draft-api',
+          commandId: 'command-draft-api',
+          ackStage: 'accepted',
+          actorId: 'actor-draft-api',
+          workspaceId: 'workspace-alpha',
+          ackedAtUtc: '2026-08-04T10:01:00Z',
+          readiness: {
+            readable: false,
+            stage: 'projection_pending',
+            message: 'pending',
+          },
+        },
+      })
+      .mockResolvedValueOnce({ kind: 'materialized', workflow: adoptedDraft });
+    mockStudioApi.getWorkflowDraftFile
+      .mockRejectedValueOnce(unavailable)
+      .mockResolvedValueOnce(adoptedDraft);
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(
+      await screen.findByDisplayValue('Committed source'),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Updated source' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
+
+    expect(
+      await screen.findByText("Workflow was saved but couldn't be reopened"),
+    ).toBeInTheDocument();
+    expect(mockStudioApi.getWorkflowDraftFile).toHaveBeenCalledWith(
+      'wf-draft-api',
+      'scope-alpha',
+    );
+    const workflowName = screen.getByLabelText('Workflow name');
+    expect(workflowName).toBeEnabled();
+    fireEvent.change(workflowName, {
+      target: { value: 'Updated draft' },
+    });
+    expect(workflowName).toHaveValue('Updated draft');
+    expect(
+      screen.getByRole('button', { name: 'Save workflow' }),
+    ).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() =>
+      expect(history.replace).toHaveBeenCalledWith(
+        '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-api',
+      ),
+    );
+    expect(workflowName).toHaveValue('Updated draft');
+    fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
+
+    await waitFor(() =>
+      expect(mockStudioApi.saveWorkflow).toHaveBeenCalledTimes(2),
+    );
+    expect(mockStudioApi.saveWorkflow).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        draftExists: true,
+        workflowId: 'wf-draft-api',
+      }),
+    );
   });
 
   it('parses authoritative YAML when the workflow response omits its document', async () => {
@@ -1152,6 +2488,43 @@ describe('Workflow Activity vNext editor', () => {
     expect(screen.getByRole('button', { name: 'Run' })).toBeEnabled();
   });
 
+  it('keeps a workflow YAML parser error out of the primary editor message', async () => {
+    mockStudioApi.getWorkflow.mockResolvedValue({
+      workflowId: 'wf-imported',
+      name: 'Imported workflow',
+      fileName: 'imported.yaml',
+      filePath: '/workflows/imported.yaml',
+      directoryId: 'directory-alpha',
+      directoryLabel: 'Workflows',
+      yaml: 'name: imported\nsteps:\n  - id: step-root\n    type: llm_call\n',
+      updatedAtUtc: '2026-08-04T10:00:00Z',
+      document: null,
+      draftExists: true,
+      findings: [
+        {
+          code: 'WORKFLOW_UNKNOWN_STEP',
+          level: 'warning',
+          message: 'A workflow step needs review.',
+        },
+      ],
+    });
+    mockStudioApi.parseYaml.mockRejectedValue(
+      new Error('yaml parser: unexpected token on line 3'),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(
+      await screen.findByText('Workflow YAML could not be read.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('A workflow step needs review.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('yaml parser: unexpected token on line 3'),
+    ).not.toBeInTheDocument();
+  });
+
   it('renders loaded nodes inside the sized Workflow Studio canvas region', async () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
@@ -1175,6 +2548,21 @@ describe('Workflow Activity vNext editor', () => {
         name: 'Select step:step-root',
       }),
     ).toBeInTheDocument();
+  });
+
+  it('keeps the Canvas/YAML editor view switch discoverable and keyboard operable', async () => {
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const viewSwitch = await screen.findByRole('radiogroup', {
+      name: 'Canvas / YAML',
+    });
+    const canvas = within(viewSwitch).getByRole('radio', { name: 'Canvas' });
+
+    expect(canvas).toBeChecked();
+    canvas.focus();
+    fireEvent.keyDown(canvas, { key: 'ArrowRight' });
+
+    expect(await screen.findByLabelText('Workflow YAML')).toBeVisible();
   });
 
   it('opens the existing test run panel after a valid requested draft loads', async () => {
@@ -1300,6 +2688,715 @@ describe('Workflow Activity vNext editor', () => {
     );
   });
 
+  it('keeps a raw JSON parser error behind technical details', async () => {
+    const invalidRawConfiguration = '{';
+    let parserError = '';
+    try {
+      JSON.parse(invalidRawConfiguration);
+    } catch (error) {
+      parserError = error instanceof Error ? error.message : String(error);
+    }
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Select step:step-root' }),
+    );
+    const inspector = await screen.findByRole('complementary', {
+      name: 'Configure step-root',
+    });
+    fireEvent.click(within(inspector).getByText('Advanced options'));
+    const rawConfiguration =
+      await within(inspector).findByLabelText('Raw configuration');
+
+    fireEvent.change(rawConfiguration, {
+      target: { value: invalidRawConfiguration },
+    });
+
+    expect(
+      await within(inspector).findByText(
+        'Configuration must be a JSON object.',
+      ),
+    ).toBeVisible();
+    expect(within(inspector).getByText('Technical details')).toBeVisible();
+    expect(within(inspector).getByText(parserError)).not.toBeVisible();
+
+    fireEvent.click(within(inspector).getByText('Technical details'));
+
+    expect(within(inspector).getByText(parserError)).toBeVisible();
+  });
+
+  it('requires applying or discarding local node changes before saving or running', async () => {
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Select step:step-root' }),
+    );
+    const inspector = await screen.findByRole('complementary', {
+      name: 'Configure step-root',
+    });
+    fireEvent.change(within(inspector).getByLabelText('Instruction'), {
+      target: { value: 'Updated prompt' },
+    });
+
+    expect(
+      within(inspector).getByText('Apply changes before saving this workflow.'),
+    ).toBeVisible();
+    expect(
+      screen.getByRole('button', { name: 'Save workflow' }),
+    ).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Run' })).toBeDisabled();
+  });
+
+  it('keeps node configuration editable while the current save awaits a readable draft', async () => {
+    const pendingDocument = {
+      name: 'committed_source',
+      roles: [],
+      steps: [
+        {
+          id: 'step-root',
+          type: 'llm_call',
+          parameters: { prompt_prefix: 'Original prompt' },
+        },
+      ],
+    };
+    const unavailable = Object.assign(
+      new Error('GET /api/workspace/workflow-drafts/wf-draft-api returned 503'),
+      { status: 503 },
+    );
+    mockStudioApi.parseYaml.mockResolvedValue({
+      document: pendingDocument,
+      findings: [],
+    });
+    mockStudioApi.serializeYaml.mockImplementation(async ({ document }) => ({
+      yaml: 'name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n',
+      document,
+      findings: [],
+    }));
+    mockStudioApi.saveWorkflow.mockResolvedValue({
+      kind: 'accepted',
+      receipt: {
+        accepted: true,
+        workflowId: 'wf-draft-api',
+        commandId: 'command-draft-api',
+        ackStage: 'accepted',
+        actorId: 'actor-draft-api',
+        workspaceId: 'workspace-alpha',
+        ackedAtUtc: '2026-08-04T10:01:00Z',
+        readiness: {
+          readable: false,
+          stage: 'projection_pending',
+          message: 'pending',
+        },
+      },
+    });
+    mockStudioApi.getWorkflowDraftFile.mockRejectedValue(unavailable);
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Select step:step-root' }),
+    );
+    const inspector = await screen.findByRole('complementary', {
+      name: 'Configure step-root',
+    });
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Updated source' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
+
+    expect(
+      await screen.findByText("Workflow was saved but couldn't be reopened"),
+    ).toBeInTheDocument();
+    expect(within(inspector).getByLabelText('Instruction')).toBeEnabled();
+  });
+
+  it('waits for a node insertion to finish before allowing a competing save', async () => {
+    let resolveInsertion:
+      | ((result: {
+          yaml: string;
+          document: unknown;
+          findings: readonly [];
+        }) => void)
+      | undefined;
+    mockStudioApi.serializeYaml.mockImplementationOnce(
+      ({ document }) =>
+        new Promise((resolve) => {
+          resolveInsertion = resolve;
+          void document;
+        }),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(
+      await screen.findByRole('button', { name: 'Add node' }),
+    ).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Add node' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Insert LLM call node' }),
+    );
+
+    await waitFor(() =>
+      expect(mockStudioApi.serializeYaml).toHaveBeenCalledTimes(1),
+    );
+    expect(mockStudioApi.serializeYaml).toHaveBeenCalledWith({
+      document: expect.objectContaining({
+        steps: expect.arrayContaining([
+          expect.objectContaining({ type: 'llm_call' }),
+        ]),
+      }),
+    });
+    expect(
+      screen.getByRole('button', { name: 'Save workflow' }),
+    ).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Run' })).toBeDisabled();
+
+    resolveInsertion?.({
+      yaml: 'name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n',
+      document: {
+        name: 'committed_source',
+        roles: [],
+        steps: [{ id: 'step-root', type: 'llm_call' }],
+      },
+      findings: [],
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Save workflow' }),
+      ).toBeEnabled(),
+    );
+  });
+
+  it('locks structural editing while a save is still in flight', async () => {
+    let resolveSave: ((result: unknown) => void) | undefined;
+    mockStudioApi.saveWorkflow.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(
+      await screen.findByRole('button', { name: 'Add node' }),
+    ).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Add node' }));
+    expect(
+      await screen.findByRole('button', { name: 'Insert LLM call node' }),
+    ).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
+
+    await waitFor(() =>
+      expect(mockStudioApi.saveWorkflow).toHaveBeenCalledTimes(1),
+    );
+    expect(screen.getByLabelText('Workflow name')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Add node' })).toBeDisabled();
+    expect(
+      screen.queryByRole('button', { name: 'Insert LLM call node' }),
+    ).not.toBeInTheDocument();
+
+    resolveSave?.({
+      kind: 'materialized',
+      workflow: {
+        workflowId: 'wf-draft-new',
+        name: 'Committed source',
+        fileName: 'committed-source.yaml',
+        filePath: '/workflows/committed-source.yaml',
+        directoryId: 'directory-alpha',
+        directoryLabel: 'Workflows',
+        yaml: 'name: committed_source\nroles: []\nsteps: []\n',
+        updatedAtUtc: '2026-08-04T10:01:00Z',
+        document: { name: 'committed_source', roles: [], steps: [] },
+        draftExists: true,
+        findings: [],
+      },
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Add node' })).toBeEnabled(),
+    );
+  });
+
+  it('keeps a failed node insertion visible and retryable', async () => {
+    const serializeFailure = new Error(
+      'POST /api/editor/serialize-yaml returned 500',
+    );
+    mockStudioApi.serializeYaml
+      .mockRejectedValueOnce(serializeFailure)
+      .mockImplementation(async ({ document }) => ({
+        yaml: 'name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n',
+        document,
+        findings: [],
+      }));
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add node' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Insert LLM call node' }),
+    );
+
+    expect(await screen.findByText("Couldn't add node")).toBeVisible();
+    expect(screen.getByText(serializeFailure.message)).not.toBeVisible();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() =>
+      expect(mockStudioApi.serializeYaml).toHaveBeenCalledTimes(2),
+    );
+    await waitFor(() =>
+      expect(screen.queryByText("Couldn't add node")).not.toBeInTheDocument(),
+    );
+  });
+
+  it('locks node configuration fields while Apply is in flight', async () => {
+    let resolveApply: ((result: unknown) => void) | undefined;
+    mockStudioApi.serializeYaml.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveApply = resolve;
+        }),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Select step:step-root' }),
+    );
+    const inspector = await screen.findByRole('complementary', {
+      name: 'Configure step-root',
+    });
+    const instruction = within(inspector).getByLabelText('Instruction');
+    fireEvent.change(instruction, { target: { value: 'Updated prompt' } });
+    fireEvent.click(
+      within(inspector).getByRole('button', { name: 'Apply changes' }),
+    );
+
+    await waitFor(() =>
+      expect(mockStudioApi.serializeYaml).toHaveBeenCalledTimes(1),
+    );
+    expect(instruction).toBeDisabled();
+
+    resolveApply?.({
+      yaml: 'name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n    parameters:\n      prompt_prefix: Updated prompt\n',
+      document: {
+        name: 'committed_source',
+        roles: [],
+        steps: [
+          {
+            id: 'step-root',
+            type: 'llm_call',
+            parameters: { prompt_prefix: 'Updated prompt' },
+          },
+        ],
+      },
+      findings: [],
+    });
+
+    await waitFor(() => expect(instruction).toBeEnabled());
+  });
+
+  it('submits only one draft run from a rapid double action', async () => {
+    const streamResolvers: Array<(response: Response) => void> = [];
+    mockRuntimeRunsApi.streamDraftRun.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          streamResolvers.push(resolve);
+        }),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
+    const startRun = await screen.findByRole('button', { name: 'Start run' });
+
+    await act(async () => {
+      startRun.click();
+      startRun.click();
+      await Promise.resolve();
+    });
+
+    await waitFor(() =>
+      expect(mockRuntimeRunsApi.streamDraftRun).toHaveBeenCalledTimes(1),
+    );
+
+    streamResolvers[0]?.({
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: async () => ({ done: true, value: undefined }),
+          releaseLock: () => undefined,
+        }),
+      },
+    } as unknown as Response);
+  });
+
+  it('keeps an unidentified draft run from being submitted again after live updates end', async () => {
+    const validDocument = {
+      name: 'committed_source',
+      roles: [],
+      steps: [{ id: 'step-root', type: 'llm_call' }],
+    };
+    mockStudioApi.parseYaml.mockResolvedValue({
+      document: validDocument,
+      findings: [],
+    });
+    mockStudioApi.serializeYaml.mockImplementation(async ({ document }) => ({
+      yaml: 'name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n',
+      document,
+      findings: [],
+    }));
+    mockRuntimeRunsApi.streamDraftRun.mockResolvedValue(createSseResponse([]));
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Start run' }));
+
+    expect(
+      await screen.findByText(
+        'Live updates ended. Open Activity to check the latest status.',
+      ),
+    ).toBeInTheDocument();
+    const startRun = await screen.findByRole('button', { name: 'Start run' });
+    expect(startRun).toBeDisabled();
+    fireEvent.click(startRun);
+    expect(mockRuntimeRunsApi.streamDraftRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a buffered old run event after opening and starting another workflow', async () => {
+    const otherWorkflow = {
+      workflowId: 'wf-draft-beta',
+      name: 'Other workflow',
+      fileName: 'other-workflow.yaml',
+      filePath: '/workflows/other-workflow.yaml',
+      directoryId: 'directory-alpha',
+      directoryLabel: 'Workflows',
+      yaml: 'name: other_workflow\nroles: []\nsteps:\n  - id: step-beta\n    type: llm_call\n',
+      updatedAtUtc: '2026-08-05T10:00:00Z',
+      document: {
+        name: 'other_workflow',
+        roles: [],
+        steps: [{ id: 'step-beta', type: 'llm_call' }],
+      },
+      draftExists: true,
+      findings: [],
+    };
+    mockStudioApi.getWorkflow.mockImplementation((requestedWorkflowId) =>
+      Promise.resolve(
+        requestedWorkflowId === otherWorkflow.workflowId
+          ? otherWorkflow
+          : {
+              workflowId: 'wf-committed-source',
+              name: 'Committed source',
+              fileName: 'committed-source.yaml',
+              filePath: '',
+              directoryId: '',
+              directoryLabel: '',
+              yaml: 'name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n',
+              updatedAtUtc: '2026-08-04T10:00:00Z',
+              document: {
+                name: 'committed_source',
+                roles: [],
+                steps: [{ id: 'step-root', type: 'llm_call' }],
+              },
+              draftExists: false,
+              findings: [],
+            },
+      ),
+    );
+
+    const encoder = new TextEncoder();
+    let firstReadStarted = false;
+    let resolveFirstRead:
+      | ((value: ReadableStreamReadResult<Uint8Array>) => void)
+      | undefined;
+    let resolveFirstStreamReleased: (() => void) | undefined;
+    const firstStreamReleased = new Promise<void>((resolve) => {
+      resolveFirstStreamReleased = resolve;
+    });
+    let secondReadStarted = false;
+    let resolveSecondRead:
+      | ((value: ReadableStreamReadResult<Uint8Array>) => void)
+      | undefined;
+    let resolveSecondStreamReleased: (() => void) | undefined;
+    const secondStreamReleased = new Promise<void>((resolve) => {
+      resolveSecondStreamReleased = resolve;
+    });
+    const deferredFirstResponse = {
+      body: {
+        getReader: () => ({
+          read: () => {
+            firstReadStarted = true;
+            return new Promise<ReadableStreamReadResult<Uint8Array>>(
+              (resolve) => {
+                resolveFirstRead = resolve;
+              },
+            );
+          },
+          releaseLock: () => resolveFirstStreamReleased?.(),
+        }),
+      },
+      ok: true,
+    } as unknown as Response;
+    const deferredSecondResponse = {
+      body: {
+        getReader: () => ({
+          read: () => {
+            secondReadStarted = true;
+            return new Promise<ReadableStreamReadResult<Uint8Array>>(
+              (resolve) => {
+                resolveSecondRead = resolve;
+              },
+            );
+          },
+          releaseLock: () => resolveSecondStreamReleased?.(),
+        }),
+      },
+      ok: true,
+    } as unknown as Response;
+    mockRuntimeRunsApi.streamDraftRun
+      .mockResolvedValueOnce(deferredFirstResponse)
+      .mockResolvedValueOnce(deferredSecondResponse);
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Start run' }));
+    expect(await screen.findByText('Preparing run…')).toBeInTheDocument();
+    await waitFor(() => expect(firstReadStarted).toBe(true));
+
+    setMockLocation(
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-beta',
+    );
+    expect(await screen.findByDisplayValue('Other workflow')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Start run' }));
+    await waitFor(() =>
+      expect(mockRuntimeRunsApi.streamDraftRun).toHaveBeenCalledTimes(2),
+    );
+    await waitFor(() => expect(secondReadStarted).toBe(true));
+
+    await act(async () => {
+      resolveFirstRead?.({
+        done: false,
+        value: encoder.encode(
+          'data: {"runError":{"message":"Old workflow failed."}}\n\n',
+        ),
+      });
+      await firstStreamReleased;
+    });
+
+    expect(screen.queryByText('Run failed')).not.toBeInTheDocument();
+    const startRun = screen.getByRole('button', { name: /Start run/ });
+    expect(startRun).toBeDisabled();
+    fireEvent.click(startRun);
+    expect(mockRuntimeRunsApi.streamDraftRun).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      resolveSecondRead?.({ done: true, value: undefined });
+      await secondStreamReleased;
+    });
+  });
+
+  it('opens a run detail only after the SSE run id is observed by the activity API', async () => {
+    mockWorkflowActivityApi.getRun.mockResolvedValue({
+      summary: {
+        runId: 'run-observed-alpha',
+        workflowName: 'Committed source',
+        status: 'running',
+        success: null,
+        startedAtUtc: '2026-08-05T10:00:00Z',
+        updatedAtUtc: '2026-08-05T10:00:01Z',
+        stateVersion: 7,
+        scopeId: 'scope-alpha',
+        runOrigin: 'draft',
+      },
+    });
+    mockRuntimeRunsApi.streamDraftRun.mockResolvedValue(
+      createSseResponse([
+        { runStarted: { runId: 'run-observed-alpha' } },
+        { runFinished: { runId: 'run-observed-alpha' } },
+      ]),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Start run' }));
+
+    expect(await screen.findByText('Observed in Activity')).toBeInTheDocument();
+    expect(mockWorkflowActivityApi.getRun).toHaveBeenCalledWith(
+      'scope-alpha',
+      'run-observed-alpha',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'View run' }));
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-observed-alpha',
+    );
+  });
+
+  it('keeps a stream run error as an execution failure even when no message is supplied', async () => {
+    mockRuntimeRunsApi.streamDraftRun.mockResolvedValue(
+      createSseResponse([{ runError: {} }]),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Start run' }));
+
+    expect(await screen.findByText('Run failed')).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        'Live updates ended. Open Activity to check the latest status.',
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it('observes the exact failed run when its SSE error includes a run id', async () => {
+    mockWorkflowActivityApi.getRun.mockResolvedValue({
+      summary: {
+        runId: 'run-failed-alpha',
+        workflowName: 'Committed source',
+        status: 'failed',
+        success: false,
+        startedAtUtc: '2026-08-05T10:00:00Z',
+        updatedAtUtc: '2026-08-05T10:00:01Z',
+        stateVersion: 8,
+        scopeId: 'scope-alpha',
+        runOrigin: 'draft',
+      },
+    });
+    mockRuntimeRunsApi.streamDraftRun.mockResolvedValue(
+      createSseResponse([
+        {
+          runError: {
+            message: 'The workflow failed.',
+            runId: 'run-failed-alpha',
+          },
+        },
+      ]),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Start run' }));
+
+    expect(await screen.findByText('Run failed')).toBeInTheDocument();
+    expect(await screen.findByText('Observed in Activity')).toBeInTheDocument();
+    expect(mockWorkflowActivityApi.getRun).toHaveBeenCalledWith(
+      'scope-alpha',
+      'run-failed-alpha',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'View run' }));
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-failed-alpha',
+    );
+  });
+
+  it('keeps a failed node configuration apply retryable without exposing the transport error', async () => {
+    const serializeFailure = new Error(
+      'PUT /api/editor/serialize-yaml returned 500',
+    );
+    mockStudioApi.serializeYaml
+      .mockRejectedValueOnce(serializeFailure)
+      .mockImplementation(async ({ document }) => ({
+        yaml: 'name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n    parameters:\n      prompt_prefix: Updated prompt\n',
+        document,
+        findings: [],
+      }));
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Select step:step-root' }),
+    );
+    const inspector = await screen.findByRole('complementary', {
+      name: 'Configure step-root',
+    });
+    fireEvent.change(within(inspector).getByLabelText('Instruction'), {
+      target: { value: 'Updated prompt' },
+    });
+    fireEvent.click(
+      within(inspector).getByRole('button', { name: 'Apply changes' }),
+    );
+
+    expect(
+      await screen.findByText("Couldn't apply configuration"),
+    ).toBeVisible();
+    expect(screen.getByText(serializeFailure.message)).not.toBeVisible();
+    expect(within(inspector).getByLabelText('Instruction')).toHaveValue(
+      'Updated prompt',
+    );
+    expect(
+      within(inspector).getByRole('button', { name: 'Apply changes' }),
+    ).toBeEnabled();
+
+    fireEvent.click(
+      within(inspector).getByRole('button', { name: 'Apply changes' }),
+    );
+    await waitFor(() =>
+      expect(mockStudioApi.serializeYaml).toHaveBeenCalledTimes(2),
+    );
+    await waitFor(() =>
+      expect(
+        within(inspector).getByRole('button', { name: 'Apply changes' }),
+      ).toBeDisabled(),
+    );
+  });
+
+  it('asks before discarding unapplied node changes during vNext navigation', async () => {
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Select step:step-root' }),
+    );
+    const inspector = await screen.findByRole('complementary', {
+      name: 'Configure step-root',
+    });
+    fireEvent.change(within(inspector).getByLabelText('Instruction'), {
+      target: { value: 'Updated prompt' },
+    });
+    fireEvent.click(screen.getAllByRole('link', { name: 'Activity' })[0]);
+
+    expect(history.push).not.toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/activity',
+    );
+    const discardDialog = await screen.findByRole('dialog', {
+      name: 'Discard node changes?',
+    });
+    await waitFor(() =>
+      expect(
+        within(discardDialog).getByText(/unapplied changes/i),
+      ).toBeVisible(),
+    );
+    expect(within(inspector).getByLabelText('Instruction')).toHaveValue(
+      'Updated prompt',
+    );
+
+    fireEvent.click(
+      within(discardDialog).getByRole('button', { name: 'Cancel' }),
+    );
+    expect(within(inspector).getByLabelText('Instruction')).toHaveValue(
+      'Updated prompt',
+    );
+
+    fireEvent.click(screen.getAllByRole('link', { name: 'Activity' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/activity',
+    );
+  });
+
   it('offers Save, Discard, and Stay before vNext navigation with unsaved changes', async () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
@@ -1332,6 +3429,213 @@ describe('Workflow Activity vNext editor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Discard and leave' }));
     expect(history.push).toHaveBeenCalledWith(
       '/scopes/scope-alpha/workflow-activity-vnext/activity',
+    );
+  });
+
+  it('requires an explicit decision before switching a dirty editor to another workflow route', async () => {
+    const otherWorkflow = {
+      workflowId: 'wf-draft-other',
+      name: 'Other workflow',
+      fileName: 'other-workflow.yaml',
+      filePath: '/workflows/other-workflow.yaml',
+      directoryId: 'directory-alpha',
+      directoryLabel: 'Workflows',
+      yaml: 'name: other_workflow\nroles: []\nsteps: []\n',
+      updatedAtUtc: '2026-08-04T10:03:00Z',
+      document: { name: 'other_workflow', roles: [], steps: [] },
+      draftExists: true,
+      findings: [],
+    };
+    mockStudioApi.getWorkflow.mockImplementation((requestedWorkflowId) =>
+      Promise.resolve(
+        requestedWorkflowId === otherWorkflow.workflowId
+          ? otherWorkflow
+          : {
+              workflowId: 'wf-committed-source',
+              name: 'Committed source',
+              fileName: 'committed-source.yaml',
+              filePath: '',
+              directoryId: '',
+              directoryLabel: '',
+              yaml: 'name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n    parameters:\n      prompt_prefix: Original prompt\n',
+              updatedAtUtc: '2026-08-04T10:00:00Z',
+              document: {
+                name: 'committed_source',
+                roles: [],
+                steps: [
+                  {
+                    id: 'step-root',
+                    type: 'llm_call',
+                    parameters: { prompt_prefix: 'Original prompt' },
+                  },
+                ],
+              },
+              draftExists: false,
+              findings: [],
+            },
+      ),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(
+      await screen.findByDisplayValue('Committed source'),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Unsaved source changes' },
+    });
+
+    setMockLocation(
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-other',
+    );
+
+    expect(
+      await screen.findByRole('dialog', { name: 'Unsaved workflow changes' }),
+    ).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Unsaved source changes')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discard and leave' }));
+
+    expect(
+      await screen.findByDisplayValue('Other workflow'),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Other workflow saved' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
+
+    await waitFor(() =>
+      expect(mockStudioApi.saveWorkflow).toHaveBeenLastCalledWith(
+        expect.objectContaining({ workflowId: 'wf-draft-other' }),
+      ),
+    );
+  });
+
+  it('requires an explicit decision before switching a dirty editor to another scope', async () => {
+    const scopeBetaWorkflow = {
+      workflowId: 'wf-shared-route',
+      name: 'Scope beta workflow',
+      fileName: 'scope-beta.yaml',
+      filePath: '/workflows/scope-beta.yaml',
+      directoryId: 'directory-alpha',
+      directoryLabel: 'Workflows',
+      yaml: 'name: scope_beta_workflow\nroles: []\nsteps: []\n',
+      updatedAtUtc: '2026-08-04T10:03:00Z',
+      document: { name: 'scope_beta_workflow', roles: [], steps: [] },
+      draftExists: true,
+      findings: [],
+    };
+    const scopeAlphaWorkflow = {
+      workflowId: 'wf-shared-route',
+      name: 'Scope alpha workflow',
+      fileName: 'scope-alpha.yaml',
+      filePath: '/workflows/scope-alpha.yaml',
+      directoryId: 'directory-alpha',
+      directoryLabel: 'Workflows',
+      yaml: 'name: scope_alpha_workflow\nroles: []\nsteps: []\n',
+      updatedAtUtc: '2026-08-04T10:00:00Z',
+      document: { name: 'scope_alpha_workflow', roles: [], steps: [] },
+      draftExists: true,
+      findings: [],
+    };
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-shared-route';
+    mockStudioApi.getWorkflow.mockImplementation(
+      (_requestedWorkflowId, requestedScopeId) =>
+        Promise.resolve(
+          requestedScopeId === 'scope-beta'
+            ? scopeBetaWorkflow
+            : scopeAlphaWorkflow,
+        ),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(
+      await screen.findByDisplayValue('Scope alpha workflow'),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Unsaved scope alpha changes' },
+    });
+
+    setMockLocation(
+      '/scopes/scope-beta/workflow-activity-vnext/workflows/wf-shared-route',
+    );
+
+    expect(
+      await screen.findByRole('dialog', { name: 'Unsaved workflow changes' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByDisplayValue('Unsaved scope alpha changes'),
+    ).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discard and leave' }));
+
+    expect(
+      await screen.findByDisplayValue('Scope beta workflow'),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Scope beta workflow saved' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
+
+    await waitFor(() =>
+      expect(mockStudioApi.saveWorkflow).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          scopeId: 'scope-beta',
+          workflowId: 'wf-shared-route',
+        }),
+      ),
+    );
+  });
+
+  it('continues to the requested workflow after saving a committed source creates a draft', async () => {
+    mockStudioApi.getWorkflow.mockImplementation((requestedWorkflowId) =>
+      Promise.resolve({
+        workflowId: requestedWorkflowId,
+        name:
+          requestedWorkflowId === 'wf-draft-other'
+            ? 'Other workflow'
+            : 'Committed source',
+        fileName: 'workflow.yaml',
+        filePath: '',
+        directoryId: 'directory-alpha',
+        directoryLabel: 'Workflows',
+        yaml: 'name: workflow\nroles: []\nsteps: []\n',
+        updatedAtUtc: '2026-08-04T10:00:00Z',
+        document: { name: 'workflow', roles: [], steps: [] },
+        draftExists: requestedWorkflowId === 'wf-draft-other',
+        findings: [],
+      }),
+    );
+    (history.replace as jest.Mock).mockImplementation((target: string) => {
+      setMockLocation(target);
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(
+      await screen.findByDisplayValue('Committed source'),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Committed source updated' },
+    });
+    setMockLocation(
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-other?run=1#requested-run',
+    );
+    expect(
+      await screen.findByRole('dialog', { name: 'Unsaved workflow changes' }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save and leave' }));
+
+    await waitFor(() =>
+      expect(history.replace).toHaveBeenCalledWith(
+        '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-new?run=1#requested-run',
+      ),
+    );
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-other?run=1#requested-run',
     );
   });
 });
