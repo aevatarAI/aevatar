@@ -17,7 +17,6 @@ import { getLocationSnapshot, history } from '@/shared/navigation/history';
 import { studioApi } from '@/shared/studio/api';
 import { createWorkflowRevisionIdentityCandidate } from '@/shared/studio/explicitRequestConfirmation';
 import type { StudioExplicitRequestPreview } from '@/shared/studio/models';
-import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import {
   getRunStatusPresentation,
   isRunStatusInProgress,
@@ -590,7 +589,6 @@ const WorkflowEditorPage: React.FC<{
   const publicationActionPending =
     publicationStage === 'reviewing' ||
     publicationStage === 'submitting' ||
-    publication.phase === 'accepted' ||
     publication.phase === 'observing';
   const canRetryPublicationObservation =
     publicationReceipt !== null &&
