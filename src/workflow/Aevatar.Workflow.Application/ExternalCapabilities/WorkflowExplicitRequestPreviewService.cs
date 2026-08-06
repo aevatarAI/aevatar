@@ -71,7 +71,7 @@ public sealed class WorkflowExplicitRequestPreviewService(
                 risk,
                 approvalRequired,
                 approvalRequired
-                    ? WorkflowExplicitRequestApprovalEnforcement.BindTimeConfirmation
+                    ? WorkflowExplicitRequestApprovalEnforcement.BindTimeConfirmationAndRunTimeToolApproval
                     : WorkflowExplicitRequestApprovalEnforcement.None,
                 allowedExecutionModes));
         }

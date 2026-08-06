@@ -1335,7 +1335,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Fact]
-    public void GetCallSafety_ShouldSkipGenericApprovalOnlyForProofBoundWorkflowCalls()
+    public void GetCallSafety_ShouldApplyAdmittedApprovalPolicyAcrossInvocationSurfaces()
     {
         var tool = CreateTool(new RecordingHandler());
 
@@ -1351,7 +1351,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         using (PushContext(CreateApprovalAdmission()))
         {
             tool.GetCallSafety("{}").Should().Be(new AgentToolCallSafety(
-                RequiresApproval: false,
+                RequiresApproval: true,
                 IsReadOnly: false,
                 IsDestructive: false));
         }
@@ -1362,7 +1362,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                }))
         {
             tool.GetCallSafety("{}").Should().Be(new AgentToolCallSafety(
-                RequiresApproval: false,
+                RequiresApproval: true,
                 IsReadOnly: false,
                 IsDestructive: true));
         }
@@ -1379,7 +1379,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Fact]
-    public async Task ProofBoundWorkflowWrite_ShouldBypassGenericApprovalInAdmittedExecutionAndReachNyxId()
+    public async Task ProofBoundWorkflowWrite_ShouldReachNyxIdOnlyAfterExactPerRunApproval()
     {
         var handler = new RecordingHandler();
         var tool = CreateTool(handler);
@@ -1398,12 +1398,30 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             new AppendedAuditTrail(),
             new StableIdentityHasher());
 
+        var waiting = await executor.ExecuteAsync(new AgentToolExecutionRequest(
+            tool,
+            argumentsJson,
+            executionContext,
+            AgentToolApprovalContinuationMode.ActorOwned,
+            null));
+
+        waiting.Kind.Should().Be(AgentToolExecutionOutcomeKind.ApprovalRequired);
+        waiting.Receipt.ApprovalRequestId.Should().NotBeNullOrWhiteSpace();
+        handler.ProxyRequests.Should().BeEmpty();
+
+        var grant = new AgentToolApprovalGrant(
+            executionContext.ExecutionOwner,
+            waiting.Receipt.ApprovalRequestId,
+            "request-proof-bound-write",
+            tool.Name,
+            "call-proof-bound-write",
+            AgentToolArgumentsDigest.ComputeSha256(argumentsJson));
         var outcome = await executor.ExecuteAsync(new AgentToolExecutionRequest(
             tool,
             argumentsJson,
             executionContext,
-            AgentToolApprovalContinuationMode.None,
-            null));
+            AgentToolApprovalContinuationMode.ActorOwned,
+            grant));
 
         outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
         outcome.ResultJson.Should().NotContain("approval_required");

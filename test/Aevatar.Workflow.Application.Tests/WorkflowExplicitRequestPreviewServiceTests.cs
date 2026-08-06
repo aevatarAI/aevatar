@@ -90,7 +90,7 @@ public sealed class WorkflowExplicitRequestPreviewServiceTests
         item.EffectiveRisk.Should().Be(NyxIdOperationRisk.Write);
         item.ApprovalRequired.Should().BeTrue();
         item.ApprovalEnforcement.Should().Be(
-            WorkflowExplicitRequestApprovalEnforcement.BindTimeConfirmation);
+            WorkflowExplicitRequestApprovalEnforcement.BindTimeConfirmationAndRunTimeToolApproval);
         item.AllowedExecutionModes.Should().Equal(ExternalCapabilityExecutionMode.Interactive);
 
         var serialized = JsonSerializer.Serialize(result);

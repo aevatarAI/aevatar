@@ -13,13 +13,13 @@ public sealed record WorkflowExplicitRequestPreviewRequest(
 
 /// <summary>
 /// 声明 <see cref="WorkflowExplicitRequestPreviewItem.ApprovalRequired"/> 在哪个阶段被兑现。
-/// authored explicit request 由 bind 时的 explicit-request confirmation 兑现批准，
-/// workflow 运行期不再二次拦截，因此调用方不能把 approval 解读为 run-time pause。
+/// authored explicit request 在 bind 时确认精确请求与风险，并在每次运行时继续要求
+/// typed tool approval；两个关口不能互相替代。
 /// </summary>
 public enum WorkflowExplicitRequestApprovalEnforcement
 {
     None = 0,
-    BindTimeConfirmation = 1,
+    BindTimeConfirmationAndRunTimeToolApproval = 1,
 }
 
 public sealed record WorkflowExplicitRequestPreviewItem(

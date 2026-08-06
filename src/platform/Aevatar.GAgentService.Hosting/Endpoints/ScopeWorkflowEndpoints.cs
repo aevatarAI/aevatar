@@ -302,7 +302,8 @@ public static class ScopeWorkflowEndpoints
     private static string ToWireValue(WorkflowExplicitRequestApprovalEnforcement value) =>
         value switch
         {
-            WorkflowExplicitRequestApprovalEnforcement.BindTimeConfirmation => "bind_time_confirmation",
+            WorkflowExplicitRequestApprovalEnforcement.BindTimeConfirmationAndRunTimeToolApproval =>
+                "bind_time_confirmation_and_run_time_tool_approval",
             WorkflowExplicitRequestApprovalEnforcement.None => "none",
             _ => throw new InvalidOperationException(
                 "Explicit request approval enforcement is invalid."),

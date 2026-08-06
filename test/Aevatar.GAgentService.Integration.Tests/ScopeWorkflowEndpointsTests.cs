@@ -53,7 +53,7 @@ public sealed class ScopeWorkflowEndpointsTests
                     NyxIdRequestResponseMode.Text,
                     NyxIdOperationRisk.Write,
                     true,
-                    WorkflowExplicitRequestApprovalEnforcement.BindTimeConfirmation,
+                    WorkflowExplicitRequestApprovalEnforcement.BindTimeConfirmationAndRunTimeToolApproval,
                     [ExternalCapabilityExecutionMode.Interactive]),
             ]),
         };
@@ -94,6 +94,8 @@ public sealed class ScopeWorkflowEndpointsTests
         body.Should().Contain("\"bodyMode\":\"json\"");
         body.Should().Contain("\"responseMode\":\"text\"");
         body.Should().Contain("\"effectiveRisk\":\"write\"");
+        body.Should().Contain(
+            "\"approvalEnforcement\":\"bind_time_confirmation_and_run_time_tool_approval\"");
         body.Should().Contain("\"allowedExecutionModes\":[\"interactive\"]");
         body.Should().NotContain(bearer);
         body.Should().NotContain(rawRequestSecret);
