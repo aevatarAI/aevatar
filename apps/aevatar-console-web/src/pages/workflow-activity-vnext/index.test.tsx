@@ -97,6 +97,7 @@ jest.mock('@/shared/studio/api', () => ({
     getUserConfigRuntime: jest.fn(),
     getUserLlmSettings: jest.fn(),
     getWorkflow: jest.fn(),
+    getWorkflowDraft: jest.fn(),
     getWorkflowDraftFile: jest.fn(),
     listWorkflowDrafts: jest.fn(),
     parseYaml: jest.fn(),
@@ -105,6 +106,7 @@ jest.mock('@/shared/studio/api', () => ({
     saveAndBindWorkflow: jest.fn(),
     saveUserLlmSettings: jest.fn(),
     serializeYaml: jest.fn(),
+    updateWorkflowDraft: jest.fn(),
   },
 }));
 
@@ -196,6 +198,7 @@ const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
   getUserConfigRuntime: jest.Mock;
   getUserLlmSettings: jest.Mock;
   getWorkflow: jest.Mock;
+  getWorkflowDraft: jest.Mock;
   getWorkflowDraftFile: jest.Mock;
   listWorkflowDrafts: jest.Mock;
   parseYaml: jest.Mock;
@@ -204,6 +207,7 @@ const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
   saveAndBindWorkflow: jest.Mock;
   saveUserLlmSettings: jest.Mock;
   serializeYaml: jest.Mock;
+  updateWorkflowDraft: jest.Mock;
 };
 const mockCreateWorkflowRevisionIdentityCandidate = jest.requireMock(
   '@/shared/studio/explicitRequestConfirmation',
@@ -355,6 +359,196 @@ describe('Workflow Activity vNext catalogue', () => {
     );
   });
 
+  it('distinguishes same-name workflows with purpose, publication state, ownership, and localized update context', async () => {
+    const writeText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([
+      {
+        workflowId: 'wf-support-emea',
+        name: 'Support triage',
+        description: 'Route urgent EMEA requests to the on-call queue',
+        fileName: 'support-emea.yaml',
+        filePath: '/emea/support-emea.yaml',
+        directoryId: 'directory-emea',
+        directoryLabel: 'EMEA operations',
+        stepCount: 3,
+        hasLayout: true,
+        updatedAtUtc: '2026-08-04T10:00:00Z',
+      },
+      {
+        activeRevisionId: 'rev-support-apac-7',
+        serviceKey: 'svc-support-apac',
+        workflowId: 'wf-support-apac',
+        name: 'Support triage',
+        description: 'Escalate APAC billing requests to finance',
+        fileName: 'support-apac.yaml',
+        filePath: '/apac/support-apac.yaml',
+        directoryId: 'directory-apac',
+        directoryLabel: 'APAC operations',
+        stepCount: 5,
+        hasLayout: true,
+        updatedAtUtc: '2026-08-05T11:30:00Z',
+      },
+    ]);
+    mockScopesApi.listWorkflows.mockResolvedValue([
+      {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-support-apac',
+        displayName: 'Support triage',
+        serviceKey: 'svc-support-apac',
+        workflowName: 'support_triage_apac',
+        actorId: 'definition-support-apac',
+        activeRevisionId: 'rev-support-apac-7',
+        deploymentId: 'deployment-support-apac',
+        deploymentStatus: 'active',
+        updatedAt: '2026-08-05T11:30:00Z',
+      },
+    ]);
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const duplicateNames = await screen.findAllByText('Support triage');
+    expect(duplicateNames).toHaveLength(2);
+    const emeaRow = screen
+      .getByText('Route urgent EMEA requests to the on-call queue')
+      .closest('tr');
+    const apacRow = screen
+      .getByText('Escalate APAC billing requests to finance')
+      .closest('tr');
+    expect(emeaRow).not.toBeNull();
+    expect(apacRow).not.toBeNull();
+    expect(within(emeaRow as HTMLElement).getByText('Draft')).toBeVisible();
+    expect(
+      within(emeaRow as HTMLElement).getByText(/EMEA operations/),
+    ).toBeVisible();
+    expect(
+      within(apacRow as HTMLElement).getByText('Published rev-support-apac-7'),
+    ).toBeVisible();
+    expect(
+      within(apacRow as HTMLElement).getByText(/APAC operations/),
+    ).toBeVisible();
+    expect(
+      within(apacRow as HTMLElement).queryByText('wf-support-apac'),
+    ).not.toBeInTheDocument();
+    expect(
+      within(apacRow as HTMLElement).queryByText('svc-support-apac'),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      within(apacRow as HTMLElement).getByRole('button', {
+        name: 'More actions for Support triage',
+      }),
+    );
+    expect(
+      await screen.findByRole('menuitem', { name: 'Rename' }),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole('menuitem', { name: 'Copy workflow reference' }),
+    );
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith('wf-support-apac'),
+    );
+    expect(writeText).not.toHaveBeenCalledWith('svc-support-apac');
+  });
+
+  it('renames a duplicate workflow without changing its definition identity', async () => {
+    let drafts = [
+      {
+        workflowId: 'wf-support-emea',
+        name: 'Support triage',
+        description: 'Route urgent EMEA requests',
+        fileName: 'support-emea.yaml',
+        filePath: '/emea/support-emea.yaml',
+        directoryId: 'directory-emea',
+        directoryLabel: 'EMEA operations',
+        stepCount: 3,
+        hasLayout: true,
+        updatedAtUtc: '2026-08-04T10:00:00Z',
+      },
+      {
+        workflowId: 'wf-support-apac',
+        name: 'Support triage',
+        description: 'Escalate APAC billing requests',
+        fileName: 'support-apac.yaml',
+        filePath: '/apac/support-apac.yaml',
+        directoryId: 'directory-apac',
+        directoryLabel: 'APAC operations',
+        stepCount: 5,
+        hasLayout: true,
+        updatedAtUtc: '2026-08-05T11:30:00Z',
+      },
+    ];
+    mockStudioApi.listWorkflowDrafts.mockImplementation(async () => drafts);
+    mockScopesApi.listWorkflows.mockResolvedValue([]);
+    mockStudioApi.getWorkflowDraft.mockResolvedValue({
+      workflowId: 'wf-support-apac',
+      name: 'Support triage',
+      fileName: 'support-apac.yaml',
+      filePath: '/apac/support-apac.yaml',
+      directoryId: 'directory-apac',
+      directoryLabel: 'APAC operations',
+      yaml: 'name: support_triage\nroles: []\nsteps: []\n',
+      layout: { nodes: [] },
+      updatedAtUtc: '2026-08-05T11:30:00Z',
+    });
+    mockStudioApi.updateWorkflowDraft.mockImplementation(async () => {
+      drafts = drafts.map((draft) =>
+        draft.workflowId === 'wf-support-apac'
+          ? { ...draft, name: 'APAC support triage' }
+          : draft,
+      );
+      return {
+        workflowId: 'wf-support-apac',
+        name: 'APAC support triage',
+        fileName: 'support-apac.yaml',
+        filePath: '/apac/support-apac.yaml',
+        directoryId: 'directory-apac',
+        directoryLabel: 'APAC operations',
+        yaml: 'name: support_triage\nroles: []\nsteps: []\n',
+        layout: { nodes: [] },
+        updatedAtUtc: '2026-08-05T11:31:00Z',
+      };
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const apacRow = (
+      await screen.findByText('Escalate APAC billing requests')
+    ).closest('tr');
+    fireEvent.click(
+      within(apacRow as HTMLElement).getByRole('button', {
+        name: 'More actions for Support triage',
+      }),
+    );
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename' }));
+    expect(
+      await screen.findByText(
+        'Another workflow already uses this name. Duplicate names are allowed.',
+      ),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Workflow name' }), {
+      target: { value: 'APAC support triage' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+
+    await waitFor(() =>
+      expect(mockStudioApi.updateWorkflowDraft).toHaveBeenCalledWith({
+        directoryId: 'directory-apac',
+        fileName: 'support-apac.yaml',
+        layout: { nodes: [] },
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-support-apac',
+        workflowName: 'APAC support triage',
+        yaml: 'name: support_triage\nroles: []\nsteps: []\n',
+      }),
+    );
+    expect(await screen.findByText('APAC support triage')).toBeVisible();
+    expect(mockConsoleToast.success).toHaveBeenCalledWith('Workflow renamed');
+  });
+
   it('reports an Activity resolution request failure with a toast instead of a page alert', async () => {
     mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
     mockScopesApi.listWorkflows.mockResolvedValue([
@@ -418,7 +612,7 @@ describe('Workflow Activity vNext catalogue', () => {
     );
   });
 
-  it('uses one editor entry point and exposes direct deletion only for editable drafts', async () => {
+  it('uses one editor entry point and exposes draft-only deletion with row actions', async () => {
     mockStudioApi.listWorkflowDrafts.mockResolvedValue([
       {
         workflowId: 'wf-draft-alpha',
@@ -469,10 +663,10 @@ describe('Workflow Activity vNext catalogue', () => {
       }),
     ).toBeEnabled();
     expect(
-      within(draftRow as HTMLElement).queryByRole('button', {
+      within(draftRow as HTMLElement).getByRole('button', {
         name: 'More actions for Support triage',
       }),
-    ).not.toBeInTheDocument();
+    ).toBeEnabled();
     expect(
       within(committedRow as HTMLElement).queryByRole('button', {
         name: 'Delete Invoice review',
@@ -545,10 +739,10 @@ describe('Workflow Activity vNext catalogue', () => {
       await screen.findByText('Committed support source'),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole('button', {
+      screen.getByRole('button', {
         name: 'More actions for Committed support source',
       }),
-    ).not.toBeInTheDocument();
+    ).toBeEnabled();
   });
 
   it('keeps the draft and offers retry when deletion fails', async () => {
@@ -3862,9 +4056,48 @@ describe('Workflow Activity vNext creation', () => {
         },
       ],
     });
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
+    mockScopesApi.listWorkflows.mockResolvedValue([]);
   });
 
   afterEach(() => cleanupTestQueryClients());
+
+  it('warns about a duplicate workflow name without blocking creation', async () => {
+    mockScopesApi.listWorkflows.mockResolvedValue([
+      {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-existing-incident-review',
+        displayName: 'Incident review',
+        serviceKey: 'svc-incident-review',
+        workflowName: 'incident_review',
+        actorId: 'definition-incident-review',
+        activeRevisionId: 'rev-incident-review-3',
+        deploymentId: 'deployment-incident-review',
+        deploymentStatus: 'active',
+        updatedAt: '2026-08-04T09:00:00Z',
+      },
+    ]);
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const blankButton = await screen.findByRole('button', {
+      name: 'Start blank',
+    });
+    await waitFor(() => expect(blankButton).toBeEnabled());
+    fireEvent.click(blankButton);
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: ' incident REVIEW ' },
+    });
+
+    expect(
+      await screen.findByText(
+        'Another workflow already uses this name. Duplicate names are allowed.',
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByRole('button', { name: 'Create workflow' }),
+    ).toBeEnabled();
+  });
 
   it('creates a blank draft with a server directory and navigates only after materialization', async () => {
     mockStudioApi.createWorkflowDraft.mockResolvedValue({
