@@ -229,6 +229,14 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                 $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}'.");
         }
 
+        if (request.ImplementationKind == ScopeBindingImplementationKind.Workflow &&
+            existingRevision.PreparedArtifact != null &&
+            WorkflowServiceArtifactReadiness.RequiresCapabilityAdmissionRebind(existingRevision.PreparedArtifact))
+        {
+            throw new InvalidOperationException(
+                $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but its workflow capability admission plan requires rebind; publish a new revision id.");
+        }
+
         if (string.IsNullOrWhiteSpace(existingRevision.ArtifactHash))
             return false;
 

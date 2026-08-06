@@ -48,6 +48,17 @@ public sealed class ServiceInvocationResolutionService : IServiceInvocationResol
             request.Identity,
             readiness.SelectedRevisionId,
             readiness);
+        if (WorkflowServiceArtifactReadiness.RequiresCapabilityAdmissionRebind(artifact))
+        {
+            throw CreateUnavailable(
+                readiness with
+                {
+                    UnavailableReason = ServiceInvokeUnavailableReason.PreparedArtifactIncompatible,
+                    ReadinessStatus = ServiceInvokeReadinessStatus.Unavailable,
+                },
+                $"Workflow service '{serviceKey}' endpoint '{request.EndpointId}' requires capability admission rebind before invoke.");
+        }
+
         var endpoint = artifact.Endpoints.FirstOrDefault(x =>
             string.Equals(x.EndpointId, request.EndpointId, StringComparison.Ordinal));
         if (endpoint == null)
