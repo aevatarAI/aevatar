@@ -1625,11 +1625,9 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
     compactNotices.push({
       description: executionNotice.message,
       title:
-        executionNotice.type === 'error'
-          ? t("pages.studio.studioworkbenchsections.operation.failed", "Operation failed")
-          : executionNotice.type === 'info'
-            ? t("pages.studio.studioworkbenchsections.requested.to.stop.running", "Requested to stop running")
-            : t("pages.studio.studioworkbenchsections.execution.status.updated", "Execution status updated"),
+        executionNotice.type === 'info'
+          ? t("pages.studio.studioworkbenchsections.requested.to.stop.running", "Requested to stop running")
+          : t("pages.studio.studioworkbenchsections.execution.status.updated", "Execution status updated"),
       type: executionNotice.type,
     });
   }
