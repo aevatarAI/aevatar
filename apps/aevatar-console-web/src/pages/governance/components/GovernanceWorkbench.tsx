@@ -44,6 +44,7 @@ import {
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
 import { AevatarCompactText } from "@/shared/ui/compactText";
+import AevatarContentSkeleton from "@/shared/ui/AevatarContentSkeleton";
 import type { AevatarBreadcrumbItem } from "@/shared/ui/aevatarPageShells";
 import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
 import ConsoleOperationNotice from "@/shared/ui/ConsoleOperationNotice";
@@ -1771,18 +1772,25 @@ const GovernanceWorkbench: React.FC = () => {
             ]}
           />
           <div style={stageTableShellStyle}>
-            <Table<ServicePolicySnapshot>
-              columns={policyTableColumns}
-              dataSource={policiesQuery.data?.policies ?? []}
-              locale={{
-                emptyText: policiesQuery.isLoading
-                  ? t("pages.governance.governanceworkbench.copy.77", "Loading policies...")
-                  : t("pages.governance.governanceworkbench.copy.78", "This service has no governance policies yet."),
-              }}
-              pagination={{ pageSize: 8, showSizeChanger: false }}
-              rowKey="policyId"
-              size="middle"
-            />
+            {policiesQuery.isLoading ? (
+              <AevatarContentSkeleton
+                ariaLabel={t("pages.governance.governanceworkbench.copy.77", "Loading policies...")}
+                columnWidths={["1.4fr", "1fr", "1fr", 120]}
+                rows={4}
+                variant="table"
+              />
+            ) : (
+              <Table<ServicePolicySnapshot>
+                columns={policyTableColumns}
+                dataSource={policiesQuery.data?.policies ?? []}
+                locale={{
+                  emptyText: t("pages.governance.governanceworkbench.copy.78", "This service has no governance policies yet."),
+                }}
+                pagination={{ pageSize: 8, showSizeChanger: false }}
+                rowKey="policyId"
+                size="middle"
+              />
+            )}
           </div>
         </div>
       );
@@ -1815,18 +1823,25 @@ const GovernanceWorkbench: React.FC = () => {
             ]}
           />
           <div style={stageTableShellStyle}>
-            <Table<ServiceBindingSnapshot>
-              columns={bindingTableColumns}
-              dataSource={bindingsQuery.data?.bindings ?? []}
-              locale={{
-                emptyText: bindingsQuery.isLoading
-                  ? t("pages.governance.governanceworkbench.copy.80", "Loading bindings...")
-                  : t("pages.governance.governanceworkbench.copy.81", "This service has no binding dependencies yet."),
-              }}
-              pagination={{ pageSize: 8, showSizeChanger: false }}
-              rowKey="bindingId"
-              size="middle"
-            />
+            {bindingsQuery.isLoading ? (
+              <AevatarContentSkeleton
+                ariaLabel={t("pages.governance.governanceworkbench.copy.80", "Loading bindings...")}
+                columnWidths={["1.2fr", "1fr", "1.4fr", 120]}
+                rows={4}
+                variant="table"
+              />
+            ) : (
+              <Table<ServiceBindingSnapshot>
+                columns={bindingTableColumns}
+                dataSource={bindingsQuery.data?.bindings ?? []}
+                locale={{
+                  emptyText: t("pages.governance.governanceworkbench.copy.81", "This service has no binding dependencies yet."),
+                }}
+                pagination={{ pageSize: 8, showSizeChanger: false }}
+                rowKey="bindingId"
+                size="middle"
+              />
+            )}
           </div>
         </div>
       );
@@ -1844,18 +1859,25 @@ const GovernanceWorkbench: React.FC = () => {
             ]}
           />
           <div style={stageTableShellStyle}>
-            <Table<ServiceEndpointExposureSnapshot>
-              columns={endpointTableColumns}
-              dataSource={endpointsQuery.data?.endpoints ?? []}
-              locale={{
-                emptyText: endpointsQuery.isLoading
-                  ? t("pages.governance.governanceworkbench.copy.86", "Loading endpoint catalog...")
-                  : t("pages.governance.governanceworkbench.copy.87", "This service has no endpoint catalog yet."),
-              }}
-              pagination={{ pageSize: 8, showSizeChanger: false }}
-              rowKey="endpointId"
-              size="middle"
-            />
+            {endpointsQuery.isLoading ? (
+              <AevatarContentSkeleton
+                ariaLabel={t("pages.governance.governanceworkbench.copy.86", "Loading endpoint catalog...")}
+                columnWidths={["1.2fr", "1fr", "1.4fr", "1fr", 120]}
+                rows={4}
+                variant="table"
+              />
+            ) : (
+              <Table<ServiceEndpointExposureSnapshot>
+                columns={endpointTableColumns}
+                dataSource={endpointsQuery.data?.endpoints ?? []}
+                locale={{
+                  emptyText: t("pages.governance.governanceworkbench.copy.87", "This service has no endpoint catalog yet."),
+                }}
+                pagination={{ pageSize: 8, showSizeChanger: false }}
+                rowKey="endpointId"
+                size="middle"
+              />
+            )}
           </div>
         </div>
       );

@@ -24,7 +24,7 @@ const workflowRole = {
 
 const workflowStep = {
   id: 'review_step',
-  type: 'connector_call',
+  type: 'connector_call' as const,
   targetRole: 'assistant',
   parameters: { connector: 'search', query: 'hello' },
   next: 'publish_step',
@@ -48,9 +48,11 @@ const savedRole = {
   connectors: ['search'],
 };
 
-function createBaseProps(overrides = {}) {
+function createBaseProps<const Overrides extends object>(
+  overrides?: Overrides,
+) {
   const nodeInspectorDraft = {
-    kind: 'step',
+    kind: 'step' as const,
     id: 'review_step',
     type: 'connector_call',
     targetRole: 'assistant',
@@ -61,7 +63,7 @@ function createBaseProps(overrides = {}) {
 
   return {
     draftYaml: 'name: studio_demo\nsteps:\n  - id: review_step\n',
-    inspectorTab: 'yaml',
+    inspectorTab: 'yaml' as const,
     workflowRoleIds: ['assistant'],
     workflowStepIds: ['review_step', 'publish_step', 'retry_step'],
     workflowRoles: [workflowRole],
@@ -93,7 +95,7 @@ function createBaseProps(overrides = {}) {
     onDeleteWorkflowRole: jest.fn(),
     onDeleteStep: jest.fn(),
     onResetSelectedNode: jest.fn(),
-    ...overrides,
+    ...(overrides ?? {}),
   };
 }
 
@@ -105,7 +107,7 @@ describe('StudioInspectorPane', () => {
   it('renders the YAML summary and validation digest', () => {
     const validationFindings = [
       {
-        level: 'warning',
+        level: 'warning' as const,
         path: '/steps/0',
         code: 'step-warning',
         message: 'Step should define a more specific timeout.',

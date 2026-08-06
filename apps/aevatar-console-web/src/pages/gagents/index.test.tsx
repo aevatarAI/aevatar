@@ -248,6 +248,50 @@ describe("GAgentsPage", () => {
     });
   });
 
+  it("renders stack skeletons for the initial kind and actor inventories", async () => {
+    let resolveKinds: (value: unknown[]) => void = () => {};
+    mockedRuntimeGAgentApi.listKinds.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveKinds = resolve;
+        }),
+    );
+    mockedRuntimeGAgentApi.listActors.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+
+    renderWithQueryClient(React.createElement(GAgentsPage));
+
+    const loadingKinds = await screen.findByRole("status");
+    expect(loadingKinds).toHaveAttribute("data-list-layout", "stack");
+    expect(loadingKinds).toHaveAttribute("data-variant", "list");
+    expect(screen.queryByText("Loading runtime GAgent kinds.")).toBeNull();
+
+    resolveKinds([
+      {
+        agentKind: "Tests.OrdersGAgent",
+        displayName: "Orders Assistant",
+        diagnosticClrTypeName: "Tests.OrdersGAgent, Tests",
+        endpoints: [],
+      },
+    ]);
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByRole("button", { name: "Manage actors" })[0],
+      ).not.toBeDisabled();
+    });
+    const manageActors = screen.getAllByRole("button", {
+      name: "Manage actors",
+    });
+    fireEvent.click(manageActors[0]);
+
+    const loadingRegistry = await screen.findByRole("status");
+    expect(loadingRegistry).toHaveAttribute("data-list-layout", "stack");
+    expect(loadingRegistry).toHaveAttribute("data-variant", "list");
+    expect(screen.queryByText("Loading actor registry.")).toBeNull();
+  });
+
   it("switches existing actor suggestions to the clicked GAgent type", async () => {
     window.history.replaceState(
       {},

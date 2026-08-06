@@ -183,6 +183,7 @@ const enUSMessages = {
   'pages.missionwall.state.publishedWorkflowTitle': 'No visible run',
   'pages.missionwall.stageSubtitle': 'Team {teamName} · {memberName}',
   'pages.missionwall.stageTitle': '{workflowName} · Step Flow',
+  'pages.missionwall.stepFlow': 'Step Flow',
   'pages.missionwall.stepStatus.active': 'ACTIVE',
   'pages.missionwall.stepStatus.completed': 'COMPLETED',
   'pages.missionwall.stepStatus.failed': 'FAILED',
