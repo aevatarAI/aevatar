@@ -58,3 +58,22 @@ Console Chat 的默认资源语义已经确定，不能再把公共模板目录�
 - Prompt 只负责选择正确工具，不承担鉴权。事实边界仍由 projection-backed query port、投影写入约束与 Host composition 强制保证。
 
 历史上已被错误物化进公共 catalog 的文档不在 query path 中修复。评估与清理必须走独立后台迁移，见 `docs/operations/2026-07-23-workflow-catalog-contamination-repair.md`。
+
+## Scope workflow catalogue query
+
+Console Workflow Activity vNext uses the scope-owned catalogue endpoint:
+
+`GET /api/scopes/{scopeId}/workflow-catalogue?view=all|drafts&query={text}&cursor={cursor}&take={take}`
+
+Contract:
+
+- `view=all` returns the deduplicated scope catalogue keyed by exact `workflowId`, preserving `hasDraftSource` and `hasCommittedSource` when both source read models contain the same workflow ID.
+- `view=drafts` returns only rows with an authoritative draft source, while still returning committed-source facts and capabilities when the same `workflowId` also has a committed workflow.
+- The backend applies scope authorization, view filtering, search, deterministic ordering, and cursor pagination in that order. Clients must not join draft/committed lists or filter an unbounded catalogue in memory.
+- Deterministic ordering is `updatedAtUtc DESC`, then `workflowId ASC` using ordinal comparison. `nextPageToken` is an opaque cursor token returned by the previous response.
+- Search trims and normalizes the query with Unicode FormKC. Empty, omitted, or whitespace-only `query` values are equivalent to no search filter and do not create a separate freshness domain.
+- Searchable fields are `name`, `description`, and `workflowId`. `name` and `description` use ordinal case-insensitive substring matching; `workflowId` supports exact or prefix matching only. Chinese and English text are both matched after the same normalization.
+- Query length after trimming/normalization is capped by the response `search.maximumQueryLength`; invalid cursor or overlong query returns `400`.
+- Rows expose typed capabilities for `open`, `activity`, `rename`, and `delete`. Unavailable actions carry a typed unavailable reason instead of requiring the client to infer from sources.
+- Rows keep `workflowId`, committed `actorId`, deployment/service IDs, and other identities separate. `workflowId` must not be reused as `memberId` or `publishedServiceId`.
+- `freshness.refreshWatermarkUtc` is the maximum source `UpdatedAt` observed from the materialized draft workspace and committed workflow read models used by the query. It is a refresh watermark, not a synthetic local `StateVersion++`.
