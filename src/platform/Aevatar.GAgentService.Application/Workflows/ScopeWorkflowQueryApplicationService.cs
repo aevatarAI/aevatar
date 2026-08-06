@@ -7,7 +7,7 @@ using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Application.Workflows;
 
-public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPort
+public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPort, IScopeWorkflowCatalogueCommittedSourcePort
 {
     private readonly IServiceLifecycleQueryPort _serviceLifecycleQueryPort;
     private readonly IWorkflowActorBindingReader _workflowActorBindingReader;
@@ -32,11 +32,28 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
         CancellationToken ct = default)
     {
         var normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(scopeId, nameof(scopeId));
+        return await ListCoreAsync(normalizedScopeId, _options.ListTake, applyResultTake: true, ct);
+    }
+
+    public async Task<IReadOnlyList<ScopeWorkflowSummary>> ListCatalogueAsync(
+        string scopeId,
+        CancellationToken ct = default)
+    {
+        var normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(scopeId, nameof(scopeId));
+        return await ListCoreAsync(normalizedScopeId, int.MaxValue, applyResultTake: false, ct);
+    }
+
+    private async Task<IReadOnlyList<ScopeWorkflowSummary>> ListCoreAsync(
+        string normalizedScopeId,
+        int sourceTake,
+        bool applyResultTake,
+        CancellationToken ct)
+    {
         var services = await _serviceLifecycleQueryPort.ListServicesAsync(
             normalizedScopeId,
             ScopeWorkflowCapabilityOptions.NormalizeRequired(_options.ServiceAppId, nameof(_options.ServiceAppId)),
             ScopeWorkflowCapabilityOptions.NormalizeRequired(_options.ServiceNamespace, nameof(_options.ServiceNamespace)),
-            _options.ListTake,
+            sourceTake,
             ct);
 
         var summaries = new List<ScopeWorkflowSummary>(services.Count);
@@ -61,7 +78,7 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
 
         foreach (var source in _descriptorSources)
         {
-            var descriptors = await source.ListAsync(normalizedScopeId, _options.ListTake, ct);
+            var descriptors = await source.ListAsync(normalizedScopeId, sourceTake, ct);
             foreach (var descriptor in descriptors)
             {
                 var normalizedDescriptor = NormalizeDescriptor(normalizedScopeId, descriptor);
@@ -87,7 +104,7 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
             }
         }
 
-        return summaries
+        var workflows = summaries
             .GroupBy(static workflow => workflow.WorkflowId, StringComparer.Ordinal)
             .Where(static group => group
                 .Select(workflow => workflow.ServiceKey)
@@ -95,9 +112,9 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
                 .Take(2)
                 .Count() == 1)
             .Select(static group => group.OrderByDescending(workflow => workflow.UpdatedAt).First())
-            .OrderByDescending(static workflow => workflow.UpdatedAt)
-            .Take(_options.ListTake)
-            .ToArray();
+            .OrderByDescending(static workflow => workflow.UpdatedAt);
+
+        return (applyResultTake ? workflows.Take(_options.ListTake) : workflows).ToArray();
     }
 
     public async Task<ScopeWorkflowLookupResult> LookupByWorkflowIdAsync(

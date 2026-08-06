@@ -27,14 +27,14 @@ public sealed class AppScopedWorkflowCatalogueService : IAppScopedWorkflowCatalo
         "workflowId participates only by exact match or ordinal case-insensitive prefix match.");
 
     private readonly AppScopedWorkflowService _draftWorkflowService;
-    private readonly IScopeWorkflowQueryPort _committedWorkflowQueryPort;
+    private readonly IScopeWorkflowCatalogueCommittedSourcePort _committedWorkflowSourcePort;
 
     public AppScopedWorkflowCatalogueService(
         AppScopedWorkflowService draftWorkflowService,
-        IScopeWorkflowQueryPort committedWorkflowQueryPort)
+        IScopeWorkflowCatalogueCommittedSourcePort committedWorkflowSourcePort)
     {
         _draftWorkflowService = draftWorkflowService ?? throw new ArgumentNullException(nameof(draftWorkflowService));
-        _committedWorkflowQueryPort = committedWorkflowQueryPort ?? throw new ArgumentNullException(nameof(committedWorkflowQueryPort));
+        _committedWorkflowSourcePort = committedWorkflowSourcePort ?? throw new ArgumentNullException(nameof(committedWorkflowSourcePort));
     }
 
     public async Task<ScopeWorkflowCatalogueResponse> QueryAsync(
@@ -49,9 +49,11 @@ public sealed class AppScopedWorkflowCatalogueService : IAppScopedWorkflowCatalo
         var take = NormalizeTake(query.Take);
 
         var drafts = await _draftWorkflowService.ListDraftsAsync(scopeId, ct);
-        var committedWorkflows = await _committedWorkflowQueryPort.ListAsync(scopeId, ct);
+        var committedWorkflows = await _committedWorkflowSourcePort.ListCatalogueAsync(scopeId, ct);
+        var sourceRows = BuildRows(scopeId, drafts, committedWorkflows);
+        DateTimeOffset? watermark = sourceRows.Count == 0 ? null : sourceRows.Max(static row => row.SourceWatermarkUtc);
 
-        var rows = BuildRows(scopeId, drafts, committedWorkflows)
+        var rows = sourceRows
             .Where(row => query.View != ScopeWorkflowCatalogueView.Drafts || row.HasDraftSource)
             .Where(row => Matches(row, normalizedSearch))
             .OrderByDescending(static row => row.UpdatedAtUtc)
@@ -61,7 +63,6 @@ public sealed class AppScopedWorkflowCatalogueService : IAppScopedWorkflowCatalo
         var page = rows.Skip(offset).Take(take).ToList();
         var nextOffset = offset + page.Count;
         var nextPageToken = nextOffset < rows.Count ? nextOffset.ToString(System.Globalization.CultureInfo.InvariantCulture) : null;
-        DateTimeOffset? watermark = rows.Count == 0 ? null : rows.Max(static row => row.SourceWatermarkUtc);
 
         return new ScopeWorkflowCatalogueResponse(
             page,

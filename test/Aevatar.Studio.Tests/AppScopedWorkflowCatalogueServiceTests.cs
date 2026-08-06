@@ -136,6 +136,22 @@ public sealed class AppScopedWorkflowCatalogueServiceTests
         response.Items.Should().ContainSingle().Which.WorkflowId.Should().Be("wf-alpha");
     }
 
+    [Fact]
+    public async Task QueryAsync_ShouldReportSourceWatermarkBeforeViewAndSearchFiltering()
+    {
+        var service = CreateService(
+            [Draft("wf-alpha", "Draft Alpha", "", DateTimeOffset.Parse("2026-08-01T00:00:00Z"))],
+            [Committed("wf-beta", "Committed Beta", "m-beta", "svc-beta", DateTimeOffset.Parse("2026-08-05T00:00:00Z"))]);
+
+        var response = await service.QueryAsync(new ScopeWorkflowCatalogueQuery(
+            ScopeId,
+            ScopeWorkflowCatalogueView.Drafts,
+            Query: "Draft Alpha"));
+
+        response.Items.Should().ContainSingle().Which.WorkflowId.Should().Be("wf-alpha");
+        response.Freshness.RefreshWatermarkUtc.Should().Be(DateTimeOffset.Parse("2026-08-05T00:00:00Z"));
+    }
+
     private static AppScopedWorkflowCatalogueService CreateService(
         IReadOnlyList<StudioWorkflowDraftRecord> drafts,
         IReadOnlyList<ScopeWorkflowSummary> committedWorkflows)
@@ -148,7 +164,7 @@ public sealed class AppScopedWorkflowCatalogueServiceTests
             workspaceCommandPort: null);
         return new AppScopedWorkflowCatalogueService(
             draftService,
-            new StubScopeWorkflowQueryPort(committedWorkflows));
+            new StubScopeWorkflowCatalogueCommittedSourcePort(committedWorkflows));
     }
 
     private static StudioWorkflowDraftRecord Draft(
@@ -232,21 +248,12 @@ public sealed class AppScopedWorkflowCatalogueServiceTests
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)));
     }
 
-    private sealed class StubScopeWorkflowQueryPort(IReadOnlyList<ScopeWorkflowSummary> workflows) : IScopeWorkflowQueryPort
+    private sealed class StubScopeWorkflowCatalogueCommittedSourcePort(IReadOnlyList<ScopeWorkflowSummary> workflows) : IScopeWorkflowCatalogueCommittedSourcePort
     {
-        public Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(string scopeId, CancellationToken ct = default)
+        public Task<IReadOnlyList<ScopeWorkflowSummary>> ListCatalogueAsync(string scopeId, CancellationToken ct = default)
         {
             scopeId.Should().Be(ScopeId);
             return Task.FromResult(workflows);
         }
-
-        public Task<ScopeWorkflowLookupResult> LookupByWorkflowIdAsync(string scopeId, string workflowId, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<ScopeWorkflowSummary?> GetByWorkflowIdAsync(string scopeId, string workflowId, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<ScopeWorkflowSummary?> GetByActorIdAsync(string scopeId, string actorId, CancellationToken ct = default) =>
-            throw new NotSupportedException();
     }
 }

@@ -45,9 +45,13 @@ public static class ScopeWorkflowEndpoints
         group.MapGet("/{scopeId}/workflows", HandleListWorkflowsAsync)
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest);
-        group.MapGet("/{scopeId}/workflow-catalogue", HandleQueryWorkflowCatalogueAsync)
-            .Produces<ScopeWorkflowCatalogueResponse>(StatusCodes.Status200OK)
-            .Produces(StatusCodes.Status400BadRequest);
+        if (app.ServiceProvider.GetService<IAppScopedWorkflowCatalogueService>() != null)
+        {
+            group.MapGet("/{scopeId}/workflow-catalogue", HandleQueryWorkflowCatalogueAsync)
+                .Produces<ScopeWorkflowCatalogueResponse>(StatusCodes.Status200OK)
+                .Produces(StatusCodes.Status400BadRequest);
+        }
+
         group.MapGet("/{scopeId}/workflows/{workflowId}", HandleGetWorkflowDetailAsync)
             .Produces<ScopeWorkflowDetail>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest)
@@ -97,7 +101,7 @@ public static class ScopeWorkflowEndpoints
         string? view,
         string? query,
         string? cursor,
-        int take,
+        int? take,
         [FromServices] IAppScopedWorkflowCatalogueService catalogueService,
         CancellationToken ct)
         => await HandleQueryWorkflowCatalogueAsyncCore(http, scopeId, view, query, cursor, take, catalogueService, ct);
@@ -407,7 +411,7 @@ public static class ScopeWorkflowEndpoints
         string? view,
         string? query,
         string? cursor,
-        int take,
+        int? take,
         IAppScopedWorkflowCatalogueService catalogueService,
         CancellationToken ct)
     {
@@ -426,7 +430,7 @@ public static class ScopeWorkflowEndpoints
             }
 
             return Results.Ok(await catalogueService.QueryAsync(
-                new ScopeWorkflowCatalogueQuery(scopeId, catalogueView, query, cursor, take),
+                new ScopeWorkflowCatalogueQuery(scopeId, catalogueView, query, cursor, take ?? 0),
                 ct));
         }
         catch (InvalidOperationException ex)

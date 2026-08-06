@@ -600,6 +600,89 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
+    public async Task HandleQueryWorkflowCatalogueAsync_ShouldUseDefaultTakeWhenQueryOmitsTake()
+    {
+        var http = CreateHttpContext();
+        var catalogueService = new RecordingWorkflowCatalogueService();
+
+        var result = await ScopeWorkflowEndpoints.HandleQueryWorkflowCatalogueAsync(
+            http,
+            "user-1",
+            view: null,
+            query: null,
+            cursor: null,
+            take: null,
+            catalogueService,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        catalogueService.Query.Should().NotBeNull();
+        catalogueService.Query!.Take.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ListCatalogueAsync_ShouldRequestUncappedCommittedSourceRows()
+    {
+        var queryPort = new FakeServiceLifecycleQueryPort
+        {
+            ListServicesResult =
+            [
+                new ServiceCatalogSnapshot(
+                    "tenant-a:workflow-app:user:token:approval",
+                    "tenant-a",
+                    "workflow-app",
+                    "user:user-1-token",
+                    "approval",
+                    "Approval",
+                    "rev-1",
+                    "rev-1",
+                    "dep-1",
+                    "definition-actor-1",
+                    "active",
+                    [],
+                    [],
+                    DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
+                new ServiceCatalogSnapshot(
+                    "tenant-a:workflow-app:user:token:billing",
+                    "tenant-a",
+                    "workflow-app",
+                    "user:user-1-token",
+                    "billing",
+                    "Billing",
+                    "rev-2",
+                    "rev-2",
+                    "dep-2",
+                    "definition-actor-2",
+                    "active",
+                    [],
+                    [],
+                    DateTimeOffset.Parse("2026-08-02T00:00:00Z")),
+            ],
+        };
+        var service = new ScopeWorkflowQueryApplicationService(
+            queryPort,
+            new FakeWorkflowActorBindingReader(),
+            Options.Create(new ScopeWorkflowCapabilityOptions
+            {
+                ServiceAppId = "default",
+                ServiceNamespace = "default",
+                DefinitionActorIdPrefix = "scope-workflow",
+                ListTake = 1,
+            }));
+
+        var legacyList = await service.ListAsync("user-1", CancellationToken.None);
+        queryPort.LastListRequest!.Take.Should().Be(1);
+        legacyList.Should().ContainSingle();
+
+        var catalogueList = await service.ListCatalogueAsync("user-1", CancellationToken.None);
+
+        queryPort.LastListRequest!.Take.Should().Be(int.MaxValue);
+        catalogueList.Select(static item => item.WorkflowId).Should().Equal("billing", "approval");
+    }
+
+    [Fact]
     public async Task HandleRunWorkflowStreamAsync_ShouldDelegateToWorkflowChatPipeline_WhenOwnershipMatches()
     {
         var queryPort = new FakeServiceLifecycleQueryPort
