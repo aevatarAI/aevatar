@@ -195,6 +195,20 @@ jest.mock('@/shared/api/scopesApi', () => ({
   },
 }));
 
+jest.mock('@/shared/api/servicesApi', () => ({
+  servicesApi: {
+    deactivateDeployment: jest.fn(),
+  },
+}));
+
+jest.mock('./workflows/workflowArchival', () => {
+  const actual = jest.requireActual('./workflows/workflowArchival');
+  return {
+    ...actual,
+    observeWorkflowArchival: jest.fn(),
+  };
+});
+
 jest.mock('@/shared/api/scopeRuntimeApi', () => ({
   scopeRuntimeApi: {
     getServiceRevisions: jest.fn(),
@@ -304,6 +318,13 @@ const mockScopesApi = jest.requireMock('@/shared/api/scopesApi').scopesApi as {
   getWorkflowDetail: jest.Mock;
   listWorkflows: jest.Mock;
 };
+const mockServicesApi = jest.requireMock('@/shared/api/servicesApi')
+  .servicesApi as {
+  deactivateDeployment: jest.Mock;
+};
+const mockObserveWorkflowArchival = jest.requireMock(
+  './workflows/workflowArchival',
+).observeWorkflowArchival as jest.Mock;
 const mockScopeRuntimeApi = jest.requireMock('@/shared/api/scopeRuntimeApi')
   .scopeRuntimeApi as {
   getServiceRevisions: jest.Mock;
@@ -326,6 +347,11 @@ describe('Workflow Activity vNext catalogue', () => {
   beforeEach(() => {
     mockLocation = '/scopes/scope-alpha/workflow-activity-vnext/workflows';
     jest.clearAllMocks();
+    mockServicesApi.deactivateDeployment.mockResolvedValue({
+      targetActorId: 'deployment-manager-alpha',
+      commandId: 'cmd-archive-alpha',
+      correlationId: 'corr-archive-alpha',
+    });
   });
 
   afterEach(() => cleanupTestQueryClients());
@@ -762,6 +788,300 @@ describe('Workflow Activity vNext catalogue', () => {
     expect(mockConsoleToast.success).toHaveBeenCalledWith('Workflow renamed');
   });
 
+  it('keeps archived workflows out of Active and offers Archive for active published rows', async () => {
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([
+      {
+        workflowId: 'wf-draft-alpha',
+        name: 'Draft workflow',
+        description: 'Editable only',
+        fileName: 'draft.yaml',
+        filePath: '/draft.yaml',
+        directoryId: 'directory-alpha',
+        directoryLabel: 'Workflows',
+        stepCount: 1,
+        hasLayout: true,
+        updatedAtUtc: '2026-08-06T09:00:00Z',
+      },
+    ]);
+    mockScopesApi.listWorkflows.mockResolvedValue([
+      {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-active-alpha',
+        displayName: 'Active workflow',
+        serviceKey: 'scope-alpha:default:default:wf-active-alpha',
+        workflowName: 'active_workflow',
+        actorId: 'actor-active-alpha',
+        activeRevisionId: 'rev-active-alpha',
+        deploymentId: 'dep-active-alpha',
+        deploymentStatus: 'Active',
+        updatedAt: '2026-08-06T10:00:00Z',
+      },
+      {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-archived-alpha',
+        displayName: 'Archived workflow',
+        serviceKey: 'scope-alpha:default:default:wf-archived-alpha',
+        workflowName: 'archived_workflow',
+        actorId: 'actor-archived-alpha',
+        activeRevisionId: 'rev-archived-alpha',
+        deploymentId: 'dep-archived-alpha',
+        deploymentStatus: 'Deactivated',
+        updatedAt: '2026-08-05T10:00:00Z',
+      },
+    ]);
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const activeName = await screen.findByText('Active workflow');
+    expect(screen.getByText('Draft workflow')).toBeInTheDocument();
+    expect(screen.queryByText('Archived workflow')).not.toBeInTheDocument();
+    expect(screen.getByText('Active workflows')).toBeInTheDocument();
+
+    const activeActions = within(
+      activeName.closest('tr') as HTMLElement,
+    ).getByRole('button', {
+      name: 'More actions for Active workflow in Workspace',
+    });
+    fireEvent.click(activeActions);
+    expect(
+      await screen.findByRole('menuitem', { name: 'Archive' }),
+    ).toBeInTheDocument();
+  });
+
+  it('restores the Archived view without offering Archive again', async () => {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows?view=archived';
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
+    mockScopesApi.listWorkflows.mockResolvedValue([
+      {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-active-alpha',
+        displayName: 'Active workflow',
+        serviceKey: 'scope-alpha:default:default:wf-active-alpha',
+        workflowName: 'active_workflow',
+        actorId: 'actor-active-alpha',
+        activeRevisionId: 'rev-active-alpha',
+        deploymentId: 'dep-active-alpha',
+        deploymentStatus: 'Active',
+        updatedAt: '2026-08-06T10:00:00Z',
+      },
+      {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-archived-alpha',
+        displayName: 'Archived workflow',
+        serviceKey: 'scope-alpha:default:default:wf-archived-alpha',
+        workflowName: 'archived_workflow',
+        actorId: 'actor-archived-alpha',
+        activeRevisionId: 'rev-archived-alpha',
+        deploymentId: 'dep-archived-alpha',
+        deploymentStatus: 'Deactivated',
+        updatedAt: '2026-08-05T10:00:00Z',
+      },
+    ]);
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const archivedName = await screen.findByText('Archived workflow');
+    expect(screen.queryByText('Active workflow')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Archived')).toHaveLength(2);
+    expect(
+      within(archivedName.closest('tr') as HTMLElement).getByText('Archived'),
+    ).toBeVisible();
+
+    fireEvent.click(
+      within(archivedName.closest('tr') as HTMLElement).getByRole('button', {
+        name: 'More actions for Archived workflow in Workspace',
+      }),
+    );
+    expect(
+      screen.queryByRole('menuitem', { name: 'Archive' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('reports Archive only after the accepted deployment deactivation is observed', async () => {
+    const activeWorkflow = {
+      scopeId: 'scope-alpha',
+      workflowId: 'wf-alpha',
+      displayName: 'Workflow Alpha',
+      serviceKey: 'scope-alpha:default:default:wf-alpha',
+      workflowName: 'workflow_alpha',
+      actorId: 'actor-alpha',
+      activeRevisionId: 'rev-alpha',
+      deploymentId: 'dep-alpha',
+      deploymentStatus: 'Active',
+      updatedAt: '2026-08-06T10:00:00Z',
+    };
+    const archivedWorkflow = {
+      ...activeWorkflow,
+      deploymentStatus: 'Deactivated',
+      updatedAt: '2026-08-06T10:01:00Z',
+    };
+    let committedRows = [activeWorkflow];
+    let resolveObservation!: (value: {
+      kind: 'observed';
+      workflows: (typeof archivedWorkflow)[];
+    }) => void;
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
+    mockScopesApi.listWorkflows.mockImplementation(async () => committedRows);
+    mockObserveWorkflowArchival.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveObservation = resolve;
+        }),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const workflowName = await screen.findByText('Workflow Alpha');
+    fireEvent.click(
+      within(workflowName.closest('tr') as HTMLElement).getByRole('button', {
+        name: 'More actions for Workflow Alpha in Workspace',
+      }),
+    );
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Archive' }));
+
+    expect(screen.getByText('Archive this workflow?')).toBeInTheDocument();
+    expect(mockServicesApi.deactivateDeployment).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Archive workflow' }));
+
+    await waitFor(() =>
+      expect(mockServicesApi.deactivateDeployment).toHaveBeenCalledWith(
+        'wf-alpha',
+        'dep-alpha',
+        {
+          tenantId: 'scope-alpha',
+          appId: 'default',
+          namespace: 'default',
+        },
+      ),
+    );
+    expect(mockConsoleToast.success).not.toHaveBeenCalledWith(
+      'Workflow archived',
+    );
+    expect(screen.getByText('Archive this workflow?')).toBeInTheDocument();
+
+    committedRows = [archivedWorkflow];
+    act(() => {
+      resolveObservation({
+        kind: 'observed',
+        workflows: [archivedWorkflow],
+      });
+    });
+
+    await waitFor(() =>
+      expect(mockConsoleToast.success).toHaveBeenCalledWith(
+        'Workflow archived',
+      ),
+    );
+    expect(
+      screen.queryByText('Archive this workflow?'),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('Workflow Alpha')).not.toBeInTheDocument();
+  });
+
+  it('checks an accepted Archive again without resubmitting deactivation', async () => {
+    const activeWorkflow = {
+      scopeId: 'scope-alpha',
+      workflowId: 'wf-alpha',
+      displayName: 'Workflow Alpha',
+      serviceKey: 'scope-alpha:default:default:wf-alpha',
+      workflowName: 'workflow_alpha',
+      actorId: 'actor-alpha',
+      activeRevisionId: 'rev-alpha',
+      deploymentId: 'dep-alpha',
+      deploymentStatus: 'Active',
+      updatedAt: '2026-08-06T10:00:00Z',
+    };
+    const archivedWorkflow = {
+      ...activeWorkflow,
+      deploymentStatus: 'Deactivated',
+      updatedAt: '2026-08-06T10:01:00Z',
+    };
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
+    mockScopesApi.listWorkflows.mockResolvedValue([activeWorkflow]);
+    mockObserveWorkflowArchival
+      .mockResolvedValueOnce({ kind: 'delayed' })
+      .mockResolvedValueOnce({
+        kind: 'observed',
+        workflows: [archivedWorkflow],
+      });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const workflowName = await screen.findByText('Workflow Alpha');
+    fireEvent.click(
+      within(workflowName.closest('tr') as HTMLElement).getByRole('button', {
+        name: 'More actions for Workflow Alpha in Workspace',
+      }),
+    );
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Archive' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Archive workflow' }));
+
+    expect(
+      await screen.findByText(
+        "Archive was accepted, but it hasn't been confirmed yet",
+      ),
+    ).toBeInTheDocument();
+    expect(mockServicesApi.deactivateDeployment).toHaveBeenCalledTimes(1);
+    expect(mockObserveWorkflowArchival).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Check again' }));
+
+    await waitFor(() =>
+      expect(mockObserveWorkflowArchival).toHaveBeenCalledTimes(2),
+    );
+    expect(mockServicesApi.deactivateDeployment).toHaveBeenCalledTimes(1);
+  });
+
+  it('resubmits Archive when the deactivation request was not accepted', async () => {
+    const activeWorkflow = {
+      scopeId: 'scope-alpha',
+      workflowId: 'wf-alpha',
+      displayName: 'Workflow Alpha',
+      serviceKey: 'scope-alpha:default:default:wf-alpha',
+      workflowName: 'workflow_alpha',
+      actorId: 'actor-alpha',
+      activeRevisionId: 'rev-alpha',
+      deploymentId: 'dep-alpha',
+      deploymentStatus: 'Active',
+      updatedAt: '2026-08-06T10:00:00Z',
+    };
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
+    mockScopesApi.listWorkflows.mockResolvedValue([activeWorkflow]);
+    mockServicesApi.deactivateDeployment
+      .mockRejectedValueOnce(new Error('request failed'))
+      .mockResolvedValueOnce({
+        targetActorId: 'deployment-manager-alpha',
+        commandId: 'cmd-archive-alpha',
+        correlationId: 'corr-archive-alpha',
+      });
+    mockObserveWorkflowArchival.mockResolvedValue({ kind: 'delayed' });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const workflowName = await screen.findByText('Workflow Alpha');
+    fireEvent.click(
+      within(workflowName.closest('tr') as HTMLElement).getByRole('button', {
+        name: 'More actions for Workflow Alpha in Workspace',
+      }),
+    );
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Archive' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Archive workflow' }));
+
+    expect(
+      await screen.findByText("Workflow couldn't be archived"),
+    ).toBeInTheDocument();
+    expect(mockObserveWorkflowArchival).not.toHaveBeenCalled();
+    expect(mockServicesApi.deactivateDeployment).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+
+    await waitFor(() =>
+      expect(mockServicesApi.deactivateDeployment).toHaveBeenCalledTimes(2),
+    );
+    expect(mockObserveWorkflowArchival).toHaveBeenCalledTimes(1);
+  });
+
   it('deep-links draft-only row Activity with its workflow id', async () => {
     mockStudioApi.listWorkflowDrafts.mockResolvedValue([
       {
@@ -895,7 +1215,10 @@ describe('Workflow Activity vNext catalogue', () => {
     );
     expect(
       (await screen.findAllByRole('menuitem')).map((item) => item.textContent),
-    ).toEqual(['Copy workflow reference']);
+    ).toEqual(['Copy workflow reference', 'Archive']);
+    expect(screen.getByRole('menuitem', { name: 'Archive' })).toHaveClass(
+      'ant-dropdown-menu-item-danger',
+    );
   });
 
   it('deletes only the editable draft and refreshes authoritative draft membership', async () => {
@@ -1205,9 +1528,12 @@ describe('Workflow Activity vNext catalogue', () => {
       screen.getByRole('combobox', { name: 'Workflow view' }),
     );
     expect(
-      await screen.findByRole('option', { name: 'All workflows' }),
+      await screen.findByRole('option', { name: 'Active workflows' }),
     ).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Drafts' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('option', { name: 'Archived' }),
+    ).toBeInTheDocument();
     expect(
       screen.queryByRole('option', { name: 'Committed' }),
     ).not.toBeInTheDocument();
