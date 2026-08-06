@@ -146,6 +146,62 @@ that gap with weak unit tests.
   relevant TypeScript, Biome, and build checks required by the frontend
   `AGENTS.md`.
 
+## Dependency-Discovery Fan-Out Guard
+
+Treat dependency discovery as a two-step selection process, never as a direct
+execution command. Before every `--findRelatedTests` run, use `--listTests`
+with the exact same production-file arguments and review the complete selected
+test-file list.
+
+Classify changed files before constructing the preflight command:
+
+| File class | Examples | Dependency-discovery rule |
+| --- | --- | --- |
+| Behavior-owning source | Page, component, hook, business helper, API adapter | May enter `--findRelatedTests`, but only after `--listTests` preflight |
+| Changed or new test | `*.test.ts`, `*.test.tsx` | Always run explicitly with `--runTestsByPath` |
+| High-fan-out shared source | Locale catalog, global style entry, app or router entry, shared provider, test bootstrap | Exclude by default; verify through changed-file static checks, dedicated contract tests, and the affected feature tests |
+| Documentation | Markdown and frontend guidance | Use document checks; do not select Jest tests |
+
+The changed-file analyzer reports candidates, not a ready-to-execute Jest
+argument list. A file under `src/` is not automatically safe for dependency
+discovery. Use behavior ownership and import fan-out to classify it.
+
+Reject the preflight result and do not run the related tests when any of these
+conditions is true:
+
+- the list contains pages or product domains outside the changed behavior;
+- an unrelated surface such as Chat, Teams, Deployments, or Mission is selected;
+- one locale, global style, shared entry, provider, or bootstrap file selects a
+  large portion of the frontend tests;
+- the selected test count is disproportionate to the change;
+- more than 10 test files are selected for a task that is not intentionally
+  cross-module.
+
+When preflight expands beyond the intended scope, remove high-fan-out files and
+run `--listTests` again. If the remaining behavior-owning files still do not
+produce a reliable scope, run only changed and directly related test files.
+Record why automatic dependency discovery was skipped. Never fall back to the
+complete frontend suite.
+
+Use these focused alternatives for high-fan-out files:
+
+- For locale catalogs, run changed-file Biome checks, the affected rendered
+  feature tests, and only an explicitly named locale-key or hardcoded-copy
+  audit when that contract changed.
+- For global styles, run changed-file static checks, the affected component or
+  route tests, and targeted browser verification when the task is visual.
+- For app entries, route entries, shared providers, and test bootstrap files,
+  prefer their dedicated contract tests. Use dependency discovery only when
+  the task intentionally changes the cross-module contract and the preflight
+  remains bounded.
+
+Keep one test process for each verification purpose. If a command outlives the
+tool response window, continue polling its existing process instead of
+starting the same command again. Before replacing a command, confirm the old
+process completed or stop it explicitly. Stop a command as soon as unexpected
+fan-out becomes visible, and never report an interrupted command or a command
+without a complete exit code as passing evidence.
+
 ## Selecting Tests to Run
 
 1. Identify the changed observable contract and concrete regression risk:
@@ -159,9 +215,10 @@ that gap with weak unit tests.
 4. Trace direct consumers when changing a shared API adapter, route builder,
    query key, auth helper, locale catalog, or reusable component. Add their
    focused tests only when their behavior can change.
-5. Use `--findRelatedTests` when an import fan-out is broad and the dependency
-   graph is more reliable than manual selection. Review the selected files;
-   do not treat an unexpectedly broad result as permission to run everything.
+5. Use `--findRelatedTests` only for behavior-owning dependencies when the
+   dependency graph is more reliable than manual selection. Run `--listTests`
+   first and apply the fan-out guard above. Do not pass locale catalogs, global
+   styles, shared entries, providers, or test bootstrap files by default.
 6. If no meaningful affected test can be identified, report that exact gap.
    Do not substitute the complete suite as an unexamined fallback.
 
@@ -194,12 +251,26 @@ pnpm --dir apps/aevatar-console-web exec jest \
   src/path/to/second.test.tsx
 ```
 
-Run affected tests for a shared production file:
+Preview affected tests for behavior-owning production files. This command does
+not execute tests:
+
+```bash
+pnpm --dir apps/aevatar-console-web exec jest \
+  --listTests \
+  --findRelatedTests \
+  src/path/to/changed-component.tsx \
+  src/path/to/changed-helper.ts
+```
+
+Only after the preflight list passes the fan-out guard, run affected tests with
+the same production-file arguments:
 
 ```bash
 pnpm --dir apps/aevatar-console-web exec jest \
   --runInBand \
-  --findRelatedTests src/path/to/shared-module.ts
+  --findRelatedTests \
+  src/path/to/changed-component.tsx \
+  src/path/to/changed-helper.ts
 ```
 
 Select a Jest project only when project-wide validation is justified:
@@ -299,6 +370,12 @@ distinct user-facing risk justifies it.
 - Generated files and third-party code are outside the coverage target.
 - Report every command that ran and whether it passed. Name any test case or
   file selected through a filter.
+- Report changed tests, dependency preflight, related tests, and changed-file
+  static checks as separate evidence. Include the selected test-file count from
+  `--listTests`.
+- When dependency discovery is skipped because a locale, global style, shared
+  entry, provider, or bootstrap file has package-wide fan-out, say so directly
+  and list the changed and directly related tests that ran instead.
 - Explicitly state that the complete frontend suite was not run under the
   incremental policy. If validation was skipped or could not run, state the
   exact gap and reason.
