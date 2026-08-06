@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using FluentAssertions;
 
@@ -84,6 +85,31 @@ public sealed class NyxIdAssistantToolSourceTests
         handler.RequestCount.Should().Be(0);
     }
 
+    [Fact]
+    public async Task ManagementReadTool_ShouldCallPinnedReadApiWithRequestToken()
+    {
+        var handler = new RecordingHandler();
+        using var client = CreateClient(handler);
+        var source = new NyxIdAssistantToolSource(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
+            client);
+        var services = (await source.DiscoverToolsAsync())
+            .Single(static tool => tool.Name == "nyxid_services");
+
+        using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials("request-token", null, null),
+        });
+        var result = await services.ExecuteAsync(
+            """{"action":"show","id":"service-alpha"}""");
+
+        result.Should().Be("{}");
+        handler.RequestCount.Should().Be(1);
+        handler.LastMethod.Should().Be(HttpMethod.Get);
+        handler.LastPathAndQuery.Should().Be("/api/v1/keys/service-alpha");
+        handler.LastBearerToken.Should().Be("request-token");
+    }
+
     private static NyxIdApiClient CreateClient(HttpMessageHandler handler) =>
         new(
             new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
@@ -92,6 +118,9 @@ public sealed class NyxIdAssistantToolSourceTests
     private sealed class RecordingHandler : HttpMessageHandler
     {
         public int RequestCount { get; private set; }
+        public HttpMethod? LastMethod { get; private set; }
+        public string? LastPathAndQuery { get; private set; }
+        public string? LastBearerToken { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -99,6 +128,9 @@ public sealed class NyxIdAssistantToolSourceTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             RequestCount++;
+            LastMethod = request.Method;
+            LastPathAndQuery = request.RequestUri?.PathAndQuery;
+            LastBearerToken = request.Headers.Authorization?.Parameter;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("{}"),

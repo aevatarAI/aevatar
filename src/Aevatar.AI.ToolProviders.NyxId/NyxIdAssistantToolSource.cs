@@ -76,13 +76,14 @@ public sealed class NyxIdAssistantToolSource : IAgentToolSource
         return Task.FromResult(tools);
     }
 
-    private static IAgentTool ReadOnly(
+    private IAgentTool ReadOnly(
         IAgentTool inner,
         IReadOnlyCollection<string> allowedActions,
         string defaultAction,
         params string[] allowedParameters) =>
         new NyxIdAssistantReadOnlyActionTool(
             inner,
+            _client,
             allowedActions,
             defaultAction,
             allowedParameters);
@@ -92,19 +93,24 @@ internal sealed class NyxIdAssistantReadOnlyActionTool : IAgentTool
 {
     private const string RejectedJson =
         "{\"error\":\"This NyxID management action is not callable from the assistant. Use the NyxID browser action instead.\"}";
+    private const string MissingTokenJson =
+        "{\"error\":\"No NyxID access token available. User must be authenticated.\"}";
 
     private readonly IAgentTool _inner;
+    private readonly NyxIdApiClient _client;
     private readonly HashSet<string> _allowedActions;
     private readonly HashSet<string> _allowedProperties;
     private readonly string _defaultAction;
 
     public NyxIdAssistantReadOnlyActionTool(
         IAgentTool inner,
+        NyxIdApiClient client,
         IReadOnlyCollection<string> allowedActions,
         string defaultAction,
         IReadOnlyCollection<string> allowedParameters)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+        _client = client ?? throw new ArgumentNullException(nameof(client));
         ArgumentNullException.ThrowIfNull(allowedActions);
         ArgumentNullException.ThrowIfNull(allowedParameters);
         _allowedActions = allowedActions
@@ -154,20 +160,76 @@ internal sealed class NyxIdAssistantReadOnlyActionTool : IAgentTool
             ? _inner.CreateResultReceipt(callId, toolName, argumentsJson, resultJson)
             : null;
 
-    public async Task<AgentToolTerminalOutcome> ExecuteWithOutcomeAsync(
-        string callId,
-        string toolName,
-        string argumentsJson,
-        CancellationToken ct = default) =>
-        IsAllowed(argumentsJson)
-            ? await _inner.ExecuteWithOutcomeAsync(callId, toolName, argumentsJson, ct)
-                .ConfigureAwait(false)
-            : new AgentToolTerminalOutcome(RejectedJson);
+    public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+    {
+        if (!IsAllowed(argumentsJson))
+            return RejectedJson;
 
-    public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-        IsAllowed(argumentsJson)
-            ? await _inner.ExecuteAsync(argumentsJson, ct).ConfigureAwait(false)
-            : RejectedJson;
+        var token = AgentToolRequestContext.NyxIdAccessToken;
+        if (string.IsNullOrWhiteSpace(token))
+            return MissingTokenJson;
+
+        var args = ToolArgs.Parse(argumentsJson);
+        var action = args.Str("action")?.Trim() ?? _defaultAction;
+        var id = args.Str("id");
+        var orgId = args.Str("org_id");
+
+        return (_inner.Name, action) switch
+        {
+            ("nyxid_profile", "consents") =>
+                await _client.ListConsentsAsync(token, ct).ConfigureAwait(false),
+            ("nyxid_mfa", "status") =>
+                await _client.GetCurrentUserAsync(token, ct).ConfigureAwait(false),
+            ("nyxid_services", "list") =>
+                await _client.ListServicesAsync(token, ct).ConfigureAwait(false),
+            ("nyxid_services", "show") when !string.IsNullOrWhiteSpace(id) =>
+                await _client.GetServiceAsync(token, id, ct).ConfigureAwait(false),
+            ("nyxid_services", "show") => MissingParameterJson("id", action),
+            ("nyxid_api_keys", "list") when !string.IsNullOrWhiteSpace(args.Str("org")) =>
+                await _client.ListApiKeysAsync(token, args.Str("org")!, ct).ConfigureAwait(false),
+            ("nyxid_api_keys", "list") =>
+                await _client.ListApiKeysAsync(token, ct).ConfigureAwait(false),
+            ("nyxid_api_keys", "show") when !string.IsNullOrWhiteSpace(id) =>
+                await _client.GetApiKeyAsync(token, id, ct).ConfigureAwait(false),
+            ("nyxid_api_keys", "show") => MissingParameterJson("id", action),
+            ("nyxid_nodes", "list") =>
+                await _client.ListNodesAsync(token, ct).ConfigureAwait(false),
+            ("nyxid_nodes", "show") when !string.IsNullOrWhiteSpace(id) =>
+                await _client.GetNodeAsync(token, id, ct).ConfigureAwait(false),
+            ("nyxid_nodes", "show") => MissingParameterJson("id", action),
+            ("nyxid_approvals", "list") =>
+                await _client.ListApprovalsAsync(token, ct).ConfigureAwait(false),
+            ("nyxid_approvals", "show") when !string.IsNullOrWhiteSpace(id) =>
+                await _client.GetApprovalAsync(token, id, ct).ConfigureAwait(false),
+            ("nyxid_approvals", "show") => MissingParameterJson("id", action),
+            ("nyxid_approvals", "configs") =>
+                await _client.ListApprovalServiceConfigsAsync(token, ct).ConfigureAwait(false),
+            ("nyxid_approvals", "grants") =>
+                await _client.ListApprovalGrantsAsync(token, ct).ConfigureAwait(false),
+            ("nyxid_endpoints", "list") =>
+                await _client.ListEndpointsAsync(token, ct).ConfigureAwait(false),
+            ("nyxid_external_keys", "list") =>
+                await _client.ListExternalKeysAsync(token, ct).ConfigureAwait(false),
+            ("nyxid_notifications", "settings") =>
+                await _client.GetNotificationSettingsAsync(token, ct).ConfigureAwait(false),
+            ("nyxid_providers", "list") =>
+                await _client.ListProviderTokensAsync(token, ct).ConfigureAwait(false),
+            ("nyxid_orgs", "list") =>
+                await _client.ListOrgsAsync(token, ct).ConfigureAwait(false),
+            ("nyxid_orgs", "show") when !string.IsNullOrWhiteSpace(orgId) =>
+                await _client.GetOrgAsync(token, orgId, ct).ConfigureAwait(false),
+            ("nyxid_orgs", "list_members") when !string.IsNullOrWhiteSpace(orgId) =>
+                await _client.ListOrgMembersAsync(token, orgId, ct).ConfigureAwait(false),
+            ("nyxid_orgs", "list_invites") when !string.IsNullOrWhiteSpace(orgId) =>
+                await _client.ListOrgInvitesAsync(token, orgId, ct).ConfigureAwait(false),
+            ("nyxid_orgs", "show" or "list_members" or "list_invites") =>
+                MissingParameterJson("org_id", action),
+            _ => RejectedJson,
+        };
+    }
+
+    private static string MissingParameterJson(string parameter, string action) =>
+        $"{{\"error\":\"'{parameter}' is required for {action}\"}}";
 
     private bool IsAllowed(string argumentsJson)
     {
@@ -187,7 +249,7 @@ internal sealed class NyxIdAssistantReadOnlyActionTool : IAgentTool
                 : _defaultAction;
             return action is not null && _allowedActions.Contains(action);
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
             return false;
         }

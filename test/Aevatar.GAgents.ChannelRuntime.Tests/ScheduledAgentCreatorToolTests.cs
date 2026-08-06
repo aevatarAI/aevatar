@@ -1459,6 +1459,9 @@ public sealed class ScheduledAgentCreatorToolTests
             },
             ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now.AddMinutes(-1)),
             FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now.AddMinutes(10)),
+            EvaluatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now.AddMinutes(-2)),
+            AuthorityContractVersion = "1",
+            AuthorityPolicyVersion = "api-key-scope-v1",
             LlmTarget = modelIds.Length == 0 ? null : ServiceLLMTarget(id, slug, modelIds),
         };
     }
