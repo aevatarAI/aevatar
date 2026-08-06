@@ -329,6 +329,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '你的个人资料与访问权限。',
     'workflowActivityVNext.settings.accountLoading': '正在加载账户…',
     'workflowActivityVNext.settings.accountUnavailable': '账户信息不可用',
+    'workflowActivityVNext.settings.accessNotLoaded': '未加载',
     'workflowActivityVNext.settings.activeRuntime': '当前连接 URL',
     'workflowActivityVNext.settings.advanced': '高级',
     'workflowActivityVNext.settings.advancedDescription':
@@ -340,6 +341,8 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.settings.catalogUnavailable':
       '已保存的选择没有改变，请重试加载可用服务。',
     'workflowActivityVNext.settings.catalogUnavailableTitle': '服务不可用',
+    'workflowActivityVNext.settings.capabilityContractMissing':
+      '当前账户服务未提供产品能力详情。',
     'workflowActivityVNext.settings.defaultModel': '默认模型',
     'workflowActivityVNext.settings.defaultModelHelp':
       '留空时使用服务默认模型。',
@@ -350,10 +353,14 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.settings.email': '邮箱',
     'workflowActivityVNext.settings.expires': '过期时间',
     'workflowActivityVNext.settings.failed': '无法保存更改',
+    'workflowActivityVNext.settings.groups': '群组声明',
     'workflowActivityVNext.settings.llmLoading': '正在加载 AI 默认设置…',
     'workflowActivityVNext.settings.llmUnavailable': 'AI 默认设置不可用',
     'workflowActivityVNext.settings.localRuntime': '本地连接 URL',
     'workflowActivityVNext.settings.name': '名称',
+    'workflowActivityVNext.settings.manageServiceAccess': '管理服务访问权限',
+    'workflowActivityVNext.settings.notLoaded': '未加载',
+    'workflowActivityVNext.settings.notProvided': '未提供',
     'workflowActivityVNext.settings.notAccepted': '设置更新未被接受。',
     'workflowActivityVNext.settings.observed': '更改已保存',
     'workflowActivityVNext.settings.providerDefault': 'Provider 默认值',
@@ -361,11 +368,23 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.settings.preferredServiceHelp':
       '选择新会话默认使用的服务。',
     'workflowActivityVNext.settings.provider': '登录方式',
+    'workflowActivityVNext.settings.productAccess': '产品访问权限',
+    'workflowActivityVNext.settings.refreshStatus': '刷新状态',
     'workflowActivityVNext.settings.remoteRuntime': '远端连接 URL',
     'workflowActivityVNext.settings.roles': '访问权限',
     'workflowActivityVNext.settings.runtimeLoading': '正在加载连接信息…',
     'workflowActivityVNext.settings.runtimeMode': '连接模式',
     'workflowActivityVNext.settings.runtimeUnavailable': '连接信息不可用',
+    'workflowActivityVNext.settings.serviceAccessFailed':
+      '无法启动服务访问权限检查，请重试。',
+    'workflowActivityVNext.settings.sessionActive': '有效',
+    'workflowActivityVNext.settings.sessionExpired': '已过期',
+    'workflowActivityVNext.settings.sessionExpiringSoon': '即将过期',
+    'workflowActivityVNext.settings.sessionInvalid': '无效',
+    'workflowActivityVNext.settings.sessionState': '会话状态',
+    'workflowActivityVNext.settings.signInAgain': '重新登录',
+    'workflowActivityVNext.settings.signOut': '退出登录',
+    'workflowActivityVNext.settings.supportDetails': '支持详情',
     'workflowActivityVNext.settings.retryGuidance': '请重试加载此部分。',
     'workflowActivityVNext.settings.save': '保存更改',
     'workflowActivityVNext.settings.saveLeave': '保存并离开',
@@ -380,6 +399,9 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.settings.systemDefaultModel':
       '使用系统选择的服务和模型。',
     'workflowActivityVNext.settings.title': '设置',
+    'workflowActivityVNext.settings.unauthorized': '无访问权限',
+    'workflowActivityVNext.settings.unauthorizedDescription':
+      '当前会话无权查看账户或能力详情。',
     'workflowActivityVNext.settings.unsaved': '未保存的更改',
     'workflowActivityVNext.settings.unsavedActionsAria': '未保存设置操作',
     'workflowActivityVNext.settings.unsavedDescription':
@@ -388,6 +410,8 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '保存更改、放弃更改，或留在设置页面。',
     'workflowActivityVNext.settings.unsavedLeaveTitle':
       'AI 默认设置有未保存的更改',
+    'workflowActivityVNext.settings.userId': '用户 ID',
+    'workflowActivityVNext.settings.workspaceContext': '工作区上下文',
     'workflowActivityVNext.state.forbidden': '你无权访问此工作区',
     'workflowActivityVNext.state.unauthorized': '请登录后继续',
     'workflowActivityVNext.unavailable.body': '请检查地址或返回其他页面。',

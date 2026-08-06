@@ -251,6 +251,14 @@ export const workflowActivityVNextCss = `
 .wa-vnext__settings-facts .ant-descriptions { border-radius: var(--wa-radius); overflow: hidden; }
 .wa-vnext__settings-facts .ant-descriptions-item-label { color: var(--wa-muted); font-size: 12px; }
 .wa-vnext__settings-facts .ant-descriptions-item-content { color: var(--wa-ink); font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
+.wa-vnext__account { display: flex; flex-direction: column; gap: 18px; padding-top: 16px; }
+.wa-vnext__account-profile { align-items: center; display: flex; gap: 14px; min-width: 0; }
+.wa-vnext__account-profile > div { min-width: 0; }
+.wa-vnext__account-profile .ant-typography { margin: 0; overflow-wrap: anywhere; }
+.wa-vnext__account .ant-descriptions { border-radius: var(--wa-radius); overflow: hidden; }
+.wa-vnext__account .ant-descriptions-item-label { color: var(--wa-muted); font-size: 12px; }
+.wa-vnext__account .ant-descriptions-item-content { color: var(--wa-ink); font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
+.wa-vnext__account-contract-note { font-size: 12px; margin: 0 !important; }
 .wa-vnext__technical-details { color: var(--wa-muted); font-size: 12px; margin-top: 16px; max-width: 100%; }
 .wa-vnext__technical-details summary { cursor: pointer; font-weight: 600; }
 .wa-vnext__technical-details-body { background: #fff; border: 1px solid var(--wa-line); border-radius: 6px; display: block; margin-top: 8px; max-width: 100%; overflow-wrap: anywhere; padding: 10px; }

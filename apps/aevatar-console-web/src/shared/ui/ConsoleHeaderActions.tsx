@@ -46,6 +46,14 @@ type ConsoleHeaderActionThemeProps = {
   readonly dropdownRootClassName?: string;
 };
 
+type ConsoleAuthActionsProps = ConsoleHeaderActionThemeProps & {
+  readonly principal?: {
+    readonly authenticated: boolean;
+    readonly displayName: string;
+    readonly picture: string | null;
+  } | null;
+};
+
 export const ConsoleLanguageSwitch: React.FC<ConsoleHeaderActionThemeProps> = ({
   dropdownRootClassName,
 }) => {
@@ -99,12 +107,17 @@ export const ConsoleLanguageSwitch: React.FC<ConsoleHeaderActionThemeProps> = ({
   );
 };
 
-export const ConsoleAuthActions: React.FC<ConsoleHeaderActionThemeProps> = ({
+export const ConsoleAuthActions: React.FC<ConsoleAuthActionsProps> = ({
   dropdownRootClassName,
+  principal,
 }) => {
   const intl = useIntl();
-  const session = loadRestorableAuthSession();
-  if (!session) {
+  const storedSession = loadRestorableAuthSession();
+  const hasAuthoritativePrincipal = principal !== undefined;
+  const signedIn = hasAuthoritativePrincipal
+    ? Boolean(principal?.authenticated)
+    : Boolean(storedSession);
+  if (!signedIn) {
     return (
       <Button
         className="console-header-actions__login"
@@ -122,8 +135,22 @@ export const ConsoleAuthActions: React.FC<ConsoleHeaderActionThemeProps> = ({
     );
   }
 
-  const displayName =
-    session.user.name || session.user.email || session.user.sub;
+  const displayName = hasAuthoritativePrincipal
+    ? principal?.displayName ||
+      intl.formatMessage({
+        defaultMessage: "Account",
+        id: "common.user.account",
+      })
+    : storedSession?.user.name ||
+      storedSession?.user.email ||
+      storedSession?.user.sub ||
+      intl.formatMessage({
+        defaultMessage: "Account",
+        id: "common.user.account",
+      });
+  const picture = hasAuthoritativePrincipal
+    ? principal?.picture
+    : storedSession?.user.picture;
 
   return (
     <Dropdown
@@ -178,11 +205,7 @@ export const ConsoleAuthActions: React.FC<ConsoleHeaderActionThemeProps> = ({
         }}
         title={displayName}
       >
-        <Avatar
-          icon={<UserOutlined />}
-          size={24}
-          src={session.user.picture}
-        />
+        <Avatar icon={<UserOutlined />} size={24} src={picture} />
         <Typography.Text
           className="console-header-actions__user-name"
           style={{

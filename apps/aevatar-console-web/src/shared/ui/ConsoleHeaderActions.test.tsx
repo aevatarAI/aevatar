@@ -5,7 +5,10 @@ import {
   clearStoredAuthSession,
   persistAuthSession,
 } from "@/shared/auth/session";
-import { ConsoleHeaderActions } from "./ConsoleHeaderActions";
+import {
+  ConsoleAuthActions,
+  ConsoleHeaderActions,
+} from "./ConsoleHeaderActions";
 
 const mockedHistoryPush = jest.fn();
 
@@ -63,6 +66,54 @@ describe("ConsoleHeaderActions", () => {
 
     expect(getLocale()).toBe("zh-CN");
     expect(screen.getByText("Abigail Deng")).toBeInTheDocument();
+  });
+
+  it("renders a supplied authoritative principal instead of the stored session identity", () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: "token",
+        expiresAt: Date.now() + 60_000,
+        expiresIn: 60,
+        tokenType: "Bearer",
+      },
+      user: {
+        name: "Stale Browser Name",
+        sub: "stored-user",
+      },
+    });
+
+    render(
+      React.createElement(ConsoleAuthActions, {
+        principal: {
+          authenticated: true,
+          displayName: "Authoritative Account Name",
+          picture: null,
+        },
+      }),
+    );
+
+    expect(screen.getByText("Authoritative Account Name")).toBeInTheDocument();
+    expect(screen.queryByText("Stale Browser Name")).not.toBeInTheDocument();
+  });
+
+  it("does not fall back to a stored identity when the authoritative principal is unavailable", () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: "token",
+        expiresAt: Date.now() + 60_000,
+        expiresIn: 60,
+        tokenType: "Bearer",
+      },
+      user: {
+        name: "Stale Browser Name",
+        sub: "stored-user",
+      },
+    });
+
+    render(React.createElement(ConsoleAuthActions, { principal: null }));
+
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
+    expect(screen.queryByText("Stale Browser Name")).not.toBeInTheDocument();
   });
 
   it("applies an optional dropdown root class to action menus", async () => {
