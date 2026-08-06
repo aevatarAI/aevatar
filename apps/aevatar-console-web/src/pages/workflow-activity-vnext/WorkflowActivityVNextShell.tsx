@@ -19,6 +19,11 @@ import {
 import { workflowActivityVNextCss } from './styles';
 
 type ShellProps = {
+  readonly accountPrincipal?: {
+    readonly authenticated: boolean;
+    readonly displayName: string;
+    readonly picture: string | null;
+  } | null;
   readonly activeSection: WorkflowActivitySection;
   readonly children: React.ReactNode;
   readonly description: string;
@@ -101,6 +106,7 @@ function Navigation({
 }
 
 const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
+  accountPrincipal,
   activeSection,
   children,
   description,
@@ -166,7 +172,7 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
         </div>
         <div className="wa-vnext__topbar-actions">
           <ConsoleLanguageSwitch />
-          <ConsoleAuthActions />
+          <ConsoleAuthActions principal={accountPrincipal} />
         </div>
       </header>
       <aside className="wa-vnext__rail">
@@ -204,7 +210,7 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
         />
         <div className="wa-vnext__drawer-actions">
           <ConsoleLanguageSwitch />
-          <ConsoleAuthActions />
+          <ConsoleAuthActions principal={accountPrincipal} />
         </div>
       </Drawer>
     </div>

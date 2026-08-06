@@ -229,7 +229,21 @@ jest.mock('@/shared/navigation/history', () => ({
 }));
 
 jest.mock('@/shared/ui/ConsoleHeaderActions', () => ({
-  ConsoleAuthActions: () => <button type="button">Account</button>,
+  ConsoleAuthActions: ({
+    principal,
+  }: {
+    principal?: {
+      authenticated: boolean;
+      displayName: string;
+    } | null;
+  }) => (
+    <button
+      data-auth-source={principal === undefined ? 'stored' : 'account'}
+      type="button"
+    >
+      {principal?.authenticated ? principal.displayName : 'Account'}
+    </button>
+  ),
   ConsoleLanguageSwitch: () => <button type="button">Language</button>,
 }));
 
@@ -1191,7 +1205,7 @@ describe('Workflow Activity vNext settings', () => {
         authenticated: true,
         scopeId: 'scope-alpha',
         scopeSource: 'nyxid-session',
-        expiresAtUtc: '2026-08-05T10:00:00Z',
+        expiresAtUtc: '2099-08-05T10:00:00Z',
       },
     });
     mockStudioApi.getUserConfigRuntime.mockResolvedValue({
@@ -1211,7 +1225,7 @@ describe('Workflow Activity vNext settings', () => {
 
   afterEach(() => cleanupTestQueryClients());
 
-  it('renders account facts while keeping runtime connection values behind technical details', async () => {
+  it('renders the same authoritative identity in the shell and Account while keeping support values secondary', async () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
     expect(
@@ -1224,21 +1238,21 @@ describe('Workflow Activity vNext settings', () => {
     );
     fireEvent.click(accountLink);
     expect(accountLink).toHaveAttribute('aria-current', 'page');
-    expect(await screen.findByText('Ada Operator')).toBeInTheDocument();
+    expect(await screen.findAllByText('Ada Operator')).toHaveLength(2);
+    expect(screen.getByText('Active')).toBeInTheDocument();
+    expect(screen.getByText('ada@example.test')).toBeInTheDocument();
     expect(screen.getByText('NyxID')).toBeInTheDocument();
-    expect(screen.getByText('operator')).toBeInTheDocument();
-    expect(screen.queryByText('user-subject-alpha')).not.toBeInTheDocument();
-    expect(screen.queryByText('platform')).not.toBeInTheDocument();
+    expect(screen.getByText('scope-alpha')).toBeInTheDocument();
+    expect(screen.getByText(/GMT|UTC/)).toHaveTextContent(/in .+ days/);
+    expect(screen.getByText('Support details')).toBeInTheDocument();
+    expect(screen.getByText('user-subject-alpha')).not.toBeVisible();
+    expect(screen.getByText('operator')).not.toBeVisible();
+    expect(screen.getByText('platform')).not.toBeVisible();
     expect(screen.queryByText('nyxid-session')).not.toBeInTheDocument();
-    expect(screen.queryByText('scope-alpha')).not.toBeInTheDocument();
-    expect(
-      screen.getByText(
-        new Intl.DateTimeFormat('en-US', {
-          dateStyle: 'medium',
-          timeStyle: 'short',
-        }).format(new Date('2026-08-05T10:00:00Z')),
-      ),
-    ).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Support details'));
+    expect(screen.getByText('user-subject-alpha')).toBeVisible();
+    expect(screen.getByText('operator')).toBeVisible();
+    expect(screen.getByText('platform')).toBeVisible();
 
     const advancedLink = screen.getByRole('link', { name: 'Advanced' });
     fireEvent.click(advancedLink);
@@ -1251,6 +1265,114 @@ describe('Workflow Activity vNext settings', () => {
       await screen.findAllByText('https://runtime.example.test'),
     ).toHaveLength(2);
     expect(screen.getByText('remote')).toBeInTheDocument();
+  });
+
+  it.each([
+    {
+      label: 'expired',
+      session: {
+        authenticated: false,
+        scopeId: 'scope-alpha',
+        expiresAtUtc: '2000-01-01T00:00:00Z',
+      },
+      authenticated: false,
+      expected: 'Expired',
+    },
+    {
+      label: 'invalid',
+      session: {
+        authenticated: false,
+        scopeId: 'scope-alpha',
+        expiresAtUtc: '2099-08-05T10:00:00Z',
+      },
+      authenticated: true,
+      expected: 'Invalid',
+    },
+  ])('offers direct sign-in recovery for an $label session', async ({
+    authenticated,
+    expected,
+    session,
+  }) => {
+    mockStudioApi.getAuthSession.mockResolvedValue({
+      enabled: true,
+      authenticated,
+      providerDisplayName: 'NyxID',
+      name: 'Ada Operator',
+      profile: null,
+      session,
+    });
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/settings?section=account';
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(await screen.findByText(expected)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sign in again' })).toBeEnabled();
+    expect(screen.queryByText('Active')).not.toBeInTheDocument();
+  });
+
+  it('renders optional missing fields without guessing that policy hid them', async () => {
+    mockStudioApi.getAuthSession.mockResolvedValueOnce({
+      enabled: true,
+      authenticated: true,
+      providerDisplayName: 'NyxID',
+      profile: {
+        subject: 'user-subject-alpha',
+        name: 'Ada Operator',
+        email: null,
+        emailVerified: null,
+        picture: null,
+        roles: [],
+        groups: [],
+      },
+      session: {
+        authenticated: true,
+        scopeId: null,
+        expiresAtUtc: null,
+      },
+    });
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/settings?section=account';
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect((await screen.findAllByText('Not provided')).length).toBeGreaterThan(
+      1,
+    );
+    expect(screen.queryByText('Hidden by policy')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    {
+      label: 'capability denial',
+      error: Object.assign(new Error('forbidden'), { status: 403 }),
+      expected: 'Unauthorized',
+    },
+    {
+      label: 'transient load failure',
+      error: Object.assign(new Error('temporarily unavailable'), {
+        status: 503,
+      }),
+      expected: 'Not loaded',
+    },
+  ])('keeps $label distinct from absent profile data', async ({
+    error,
+    expected,
+  }) => {
+    mockStudioApi.getAuthSession.mockRejectedValue(error);
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/settings?section=account';
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(await screen.findByText(expected)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Account' })).toHaveAttribute(
+      'data-auth-source',
+      'account',
+    );
+    if (expected === 'Not loaded') {
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
+    }
+    expect(screen.queryByText('Not provided')).not.toBeInTheDocument();
   });
 
   it('keeps an AI defaults decoding failure compact and actionable', async () => {
