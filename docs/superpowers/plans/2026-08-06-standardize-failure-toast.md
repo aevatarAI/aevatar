@@ -423,7 +423,7 @@ git diff origin/feat/2026-08-04_workflow-activity-vnext...HEAD -- \
 
 Expected: only the toast design, plan, shared adapter, failure presentation, and their tests are present.
 
-- [ ] **Step 6: Push and create the focused pull request**
+- [x] **Step 6: Push and create the focused pull request**
 
 ```bash
 git push -u origin fix/2026-08-06_standardize-failure-toast
