@@ -283,6 +283,35 @@ describe('StudioFilesPage', () => {
     jest.restoreAllMocks();
   });
 
+  it('renders tree skeletons for loading workflow and script folders', async () => {
+    (scriptsApi.listScripts as jest.Mock).mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+    const props = createProps({
+      workflows: {
+        isLoading: true,
+        isError: false,
+        error: null,
+        data: undefined,
+      },
+    });
+
+    renderWithQueryClient(React.createElement(StudioFilesPage, props));
+
+    const loadingFolders = await screen.findAllByRole('status');
+    expect(loadingFolders).toHaveLength(2);
+    for (const folder of loadingFolders) {
+      expect(folder).toHaveAttribute('data-list-layout', 'tree');
+      expect(folder).toHaveAttribute('data-variant', 'list');
+    }
+    expect(screen.getByText('Loading workflows...')).toHaveClass(
+      'aevatar-loading-visually-hidden',
+    );
+    expect(screen.getByText('Loading scripts...')).toHaveClass(
+      'aevatar-loading-visually-hidden',
+    );
+  });
+
   it('does not expose host provider settings as an editable file', () => {
     const props = createProps();
 

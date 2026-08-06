@@ -58,6 +58,7 @@ import {
   AevatarStatusTag,
   AevatarWorkbenchLayout,
 } from '@/shared/ui/aevatarPageShells';
+import AevatarContentSkeleton from '@/shared/ui/AevatarContentSkeleton';
 import { describeError } from '@/shared/ui/errorText';
 import { getUserFacingIdentifierLabel } from '@/shared/ui/userFacingIdentifiers';
 import { resolveStudioScopeContext } from '@/pages/scopes/components/resolvedScope';
@@ -1448,7 +1449,14 @@ const GAgentsPage: React.FC = () => {
           ) : null}
         </div>
 
-        {filteredKinds.length === 0 ? (
+        {gAgentKindsQuery.isLoading ? (
+          <AevatarContentSkeleton
+            ariaLabel="Loading runtime GAgent kinds"
+            listLayout="stack"
+            rows={5}
+            variant="list"
+          />
+        ) : filteredKinds.length === 0 ? (
           <div style={{ padding: 16 }}>
             <Empty
               description={
@@ -1771,6 +1779,13 @@ const GAgentsPage: React.FC = () => {
             showIcon
             title={describeError(gAgentActorsQuery.error)}
             type="warning"
+          />
+        ) : gAgentActorsQuery.isLoading ? (
+          <AevatarContentSkeleton
+            ariaLabel="Loading actor registry"
+            listLayout="stack"
+            rows={4}
+            variant="list"
           />
         ) : actorGroups.length === 0 ? (
           <Empty
