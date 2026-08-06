@@ -90,6 +90,8 @@ public sealed class AevatarInvocationToolSourceTests
         var tool = await DiscoverSingleAsync(new StartWorkflowToolSource(new Harness().CreateDispatcher()));
 
         tool.Description.Should().Contain("mounted/imported Aevatar Scope Workflow");
+        tool.Description.Should().Contain("run_id is the workflow run actor id");
+        tool.Description.Should().Contain("command_id is the start command/tool-call id");
         tool.Description.Should().Contain("workflow_yamls");
         tool.Description.Should().Contain("explicit fallback");
         tool.Description.Should().Contain("templates/import sources");
@@ -1837,8 +1839,9 @@ public sealed class AevatarInvocationToolSourceTests
         ShouldCarryTypedTrustedCallerValues(harness.WorkflowDispatch.Command);
 
         var result = Read(output);
-        result.GetProperty("run_id").GetString().Should().Be("call-workflow");
+        result.GetProperty("run_id").GetString().Should().Be("workflow-actor");
         result.GetProperty("actor_id").GetString().Should().Be("workflow-actor");
+        result.GetProperty("command_id").GetString().Should().Be("call-workflow");
         result.GetProperty("stream_topic").GetString().Should().Be("aevatar://actors/workflow-actor/runs/call-workflow");
     }
 
@@ -1883,12 +1886,13 @@ public sealed class AevatarInvocationToolSourceTests
             }
             """);
 
-        result.Result.Should().Contain("\"run_id\":\"call-workflow-executor\"");
+        result.Result.Should().Contain("\"run_id\":\"workflow-actor\"");
+        result.Result.Should().Contain("\"command_id\":\"call-workflow-executor\"");
         result.Result.Should().Contain("\"status\":\"streaming\"");
         result.Result.Should().NotContain("tool outcome could not be verified");
         result.Receipt.Should().NotBeNull();
         result.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
-        result.Receipt.SubjectId.Should().Be("call-workflow-executor");
+        result.Receipt.SubjectId.Should().Be("workflow-actor");
     }
 
     [Fact]
@@ -2298,7 +2302,9 @@ public sealed class AevatarInvocationToolSourceTests
         result.ToolCall.Should().BeSameAs(request.ToolCall);
         result.ArgumentsJson.Should().Be(request.ArgumentsJson);
         result.ToolExecutionResultJson.Should().NotBeNullOrWhiteSpace();
-        result.RunId.Should().Be("call-workflow-typed");
+        result.RunId.Should().Be("workflow-actor");
+        using var invocationResultJson = JsonDocument.Parse(result.ToolExecutionResultJson);
+        invocationResultJson.RootElement.GetProperty("command_id").GetString().Should().Be("call-workflow-typed");
         result.ScopeId.Should().Be("scope-1");
         result.WaitMode.Should().Be(ChatRunSubRunWaitMode.Stream);
         result.Status.Should().Be("streaming");
@@ -2420,7 +2426,9 @@ public sealed class AevatarInvocationToolSourceTests
         var result = await dispatcher.StartWorkflowForChatRunAsync(request, request.ArgumentsJson);
 
         result.ErrorCode.Should().BeEmpty(result.ToolExecutionResultJson);
-        result.RunId.Should().Be("command-alpha");
+        result.RunId.Should().Be("workflow-actor-alpha");
+        using var invocationResultJson = JsonDocument.Parse(result.ToolExecutionResultJson);
+        invocationResultJson.RootElement.GetProperty("command_id").GetString().Should().Be("command-alpha");
         result.ActorId.Should().Be("workflow-actor-alpha");
         harness.WorkflowRunDelivery.Reservations.Should().ContainSingle()
             .Which.ExpectedWorkflowCommandId.Should().Be("command-alpha");
@@ -2567,7 +2575,7 @@ public sealed class AevatarInvocationToolSourceTests
 
         result.ErrorCode.Should().BeEmpty();
         result.Status.Should().Be("streaming");
-        result.RunId.Should().Be("accepted-command-mismatch");
+        result.RunId.Should().Be("workflow-actor-mismatch");
         harness.WorkflowRunDelivery.Registrations.Should().ContainSingle();
         harness.WorkflowRunDelivery.Abandonments.Should().BeEmpty();
         using var resultJson = JsonDocument.Parse(result.ToolExecutionResultJson);
@@ -2652,7 +2660,7 @@ public sealed class AevatarInvocationToolSourceTests
 
         var result = await dispatcher.StartWorkflowForChatRunAsync(request, request.ArgumentsJson);
 
-        result.RunId.Should().Be("call-workflow-delivery-throws");
+        result.RunId.Should().Be("workflow-actor");
         result.Status.Should().Be("streaming");
         result.StreamTopic.Should().Be("aevatar://actors/workflow-actor/runs/call-workflow-delivery-throws");
         result.ErrorCode.Should().BeEmpty();
