@@ -75,6 +75,7 @@ import {
   type AevatarThemeSurfaceToken,
 } from '@/shared/ui/aevatarWorkbench';
 import ConsoleMenuPageShell from '@/shared/ui/ConsoleMenuPageShell';
+import ConsoleOperationNotice from '@/shared/ui/ConsoleOperationNotice';
 import {
   cardStackStyle,
   summaryFieldLabelStyle,
@@ -2116,15 +2117,16 @@ const DeploymentsPage: React.FC = () => {
       title="Deployments"
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {notice ? (
-          <Alert
-            closable
-            message={notice.message}
-            showIcon
-            type={notice.tone}
-            onClose={() => setNotice(null)}
-          />
-        ) : null}
+        <ConsoleOperationNotice
+          errorMessage={t(
+            'pages.deployments.index.actionFailed',
+            'Deployment action could not be completed. Try again.',
+          )}
+          notice={
+            notice ? { message: notice.message, type: notice.tone } : null
+          }
+          onClose={() => setNotice(null)}
+        />
 
         <DeploymentsScopeCard
           draft={draft}

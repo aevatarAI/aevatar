@@ -10,10 +10,21 @@ import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import { renderWithQueryClient } from '../../../../tests/reactQueryTestUtils';
 import WorkflowPublishDialog from './WorkflowPublishDialog';
 
+const mockConsoleToast = {
+  error: jest.fn(),
+  info: jest.fn(),
+  success: jest.fn(),
+  warning: jest.fn(),
+};
+
 jest.mock('@/shared/api/scopeRuntimeApi', () => ({
   scopeRuntimeApi: {
     listServices: jest.fn(),
   },
+}));
+
+jest.mock('@/shared/ui/ConsoleToast', () => ({
+  useConsoleToast: () => mockConsoleToast,
 }));
 
 const mockListServices = scopeRuntimeApi.listServices as jest.Mock;
@@ -111,7 +122,45 @@ function startReview(dialog: HTMLElement): void {
 
 describe('WorkflowPublishDialog', () => {
   beforeEach(() => {
+    jest.clearAllMocks();
     mockListServices.mockResolvedValue([service]);
+  });
+
+  it('reports a review failure with a toast instead of an inline error', async () => {
+    const onReview = jest.fn().mockRejectedValue(
+      new Error('POST /api/studio/publication-review returned 500'),
+    );
+
+    renderDialog({
+      onPublish: jest.fn(async () => undefined),
+      onReview,
+      onReturnToSelection: jest.fn(),
+    });
+
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Publish workflow',
+    });
+    await selectService(dialog);
+    startReview(dialog);
+
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "We couldn't prepare this workflow for publishing.",
+      ),
+    );
+    expect(
+      within(dialog).queryByText(
+        "We couldn't prepare this workflow for publishing.",
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByText(
+        'POST /api/studio/publication-review returned 500',
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).getByRole('button', { name: 'Review and publish' }),
+    ).toBeEnabled();
   });
 
   it('keeps the final publish action unavailable while preparing the review', async () => {

@@ -178,6 +178,7 @@ const zhCNMessages = {
   'pages.missionwall.state.publishedWorkflowTitle': '暂无可见 run',
   'pages.missionwall.stageSubtitle': 'Team {teamName} · {memberName}',
   'pages.missionwall.stageTitle': '{workflowName} · Step Flow',
+  'pages.missionwall.stepFlow': 'Step Flow',
   'pages.missionwall.stepStatus.active': '运行中',
   'pages.missionwall.stepStatus.completed': '已完成',
   'pages.missionwall.stepStatus.failed': '失败',
@@ -1607,7 +1608,7 @@ const zhCNMessages = {
   'pages.studio.bind.studiomemberbindpanel.run.completed': 'Run completed',
   'pages.studio.bind.studiomemberbindpanel.service.ready': 'Service ready',
   'pages.studio.bind.studiomemberbindpanel.smoke.test.request.failed':
-    '无法完成冒烟测试。请查看结果后重试。',
+    '无法完成冒烟测试，请重试。',
   'pages.studio.studiobuildpanels.command.accepted': 'command: accepted',
   'pages.studio.studiobuildpanels.current.run.ready': 'current run: ready',
   'pages.studio.studiobuildpanels.events.count': 'events: {count}',
@@ -1669,6 +1670,28 @@ const zhCNMessages = {
   'pages.studio.studiomemberinvokepanel.copyFailed': '无法复制该内容。',
   'pages.workflows.workflowyamlviewer.copy.success': 'YAML 已复制到剪贴板。',
   'pages.workflows.workflowyamlviewer.failed.to.copy.yaml': '复制 YAML 失败。',
+  'pages.chat.chatadvancedconsole.timelineActionFailed':
+    '无法完成运行操作，请重试。',
+  'pages.deployments.index.actionFailed': '无法完成部署操作，请重试。',
+  'pages.gagents.index.bindingActionFailed': '无法完成绑定操作，请重试。',
+  'pages.gagents.index.registryActionFailed':
+    '无法完成 Actor 注册表操作，请重试。',
+  'pages.governance.governanceworkbench.actionFailed':
+    '无法完成治理操作，请重试。',
+  'pages.studio.bind.studiomemberbindpanel.bindingActionFailed':
+    '无法完成绑定操作，请重试。',
+  'pages.studio.studiobuildpanels.workflowSaveFailed':
+    '无法保存工作流，请重试。',
+  'pages.studio.studiofilesdetailpane.connectorSaveFailed':
+    '无法保存连接器目录，请重试。',
+  'pages.studio.studiofilesdetailpane.conversationDeleteFailed':
+    '无法删除会话，请重试。',
+  'pages.studio.studiofilesdetailpane.roleSaveFailed':
+    '无法保存角色目录，请重试。',
+  'pages.studio.studioinspectorpane.nodeActionFailed':
+    '无法应用节点更改，请重试。',
+  'pages.studio.studioworkbenchsections.executionActionFailed':
+    '无法完成运行操作，请重试。',
 };
 
 export default zhCNMessages;
