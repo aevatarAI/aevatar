@@ -287,6 +287,52 @@ print(f"Event-path probe failure detail: code={code} message={message}")
 PY
 }
 
+print_event_probe_server_diagnostic() {
+  local node_log_file="$1"
+
+  python3 - "${node_log_file}" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        lines = handle.readlines()
+except OSError:
+    print("Event-path probe server exception: unavailable")
+    raise SystemExit(0)
+
+markers = [index for index, line in enumerate(lines) if "Workflow chat execution failed." in line]
+if not markers:
+    print("Event-path probe server exception: unavailable")
+    raise SystemExit(0)
+
+exception_header = re.compile(
+    r"^\s*(?:--->\s*)?((?:[A-Za-z_]\w*\.)+[A-Za-z_]\w*Exception):\s*(.+?)\s*$"
+)
+opaque_id = re.compile(
+    r"(?i)\b(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})\b"
+)
+bearer = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+")
+
+diagnostics = []
+for line in lines[markers[-1] + 1:markers[-1] + 81]:
+    match = exception_header.match(line)
+    if not match:
+        continue
+    message = bearer.sub("Bearer <redacted>", opaque_id.sub("<id>", match.group(2)))
+    diagnostics.append(f"{match.group(1)}: {' '.join(message.split())[:200]}")
+    if len(diagnostics) == 5:
+        break
+
+if not diagnostics:
+    print("Event-path probe server exception: unavailable")
+else:
+    for diagnostic in diagnostics:
+        print(f"Event-path probe server exception: {diagnostic}")
+PY
+}
+
 probe_event_path() {
   local old_node_port="$1"
   local workflow_name
@@ -391,6 +437,7 @@ PY
   if [[ "${chat_status}" != "200" ]]; then
     echo "Event-path probe returned unexpected status: ${chat_status}"
     print_event_probe_failure_diagnostic "${probe_log_file}"
+    print_event_probe_server_diagnostic "${log_dir}/node1.log"
     return 1
   fi
 

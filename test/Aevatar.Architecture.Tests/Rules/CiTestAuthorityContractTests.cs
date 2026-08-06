@@ -317,6 +317,15 @@ public class CiTestAuthorityContractTests
             "print_event_probe_failure_diagnostic \"${probe_log_file}\"",
             script,
             StringComparison.Ordinal);
+        Assert.Contains("print_event_probe_server_diagnostic()", script, StringComparison.Ordinal);
+        Assert.Contains("Workflow chat execution failed.", script, StringComparison.Ordinal);
+        Assert.Contains("if len(diagnostics) == 5:", script, StringComparison.Ordinal);
+        Assert.Contains("[:200]", script, StringComparison.Ordinal);
+        Assert.Contains("Bearer <redacted>", script, StringComparison.Ordinal);
+        Assert.Contains(
+            "print_event_probe_server_diagnostic \"${log_dir}/node1.log\"",
+            script,
+            StringComparison.Ordinal);
     }
 
     private static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
