@@ -16,7 +16,7 @@
 - Create: `apps/aevatar-console-web/src/shared/ui/ConsoleToast.test.tsx`
 - Modify: `apps/aevatar-console-web/src/shared/ui/ConsoleToast.tsx`
 
-- [ ] **Step 1: Write the failing shared-adapter test**
+- [x] **Step 1: Write the failing shared-adapter test**
 
 Create `ConsoleToast.test.tsx` with a typed notification stub. The first test must call the public hook and prove that an error is sent to the top-right notification API with a close control, hover pause, the supplied duration/key/callback, and compact token-backed surface styles.
 
@@ -102,7 +102,7 @@ describe('ConsoleToast', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run from `apps/aevatar-console-web`:
 
@@ -112,7 +112,7 @@ pnpm exec jest src/shared/ui/ConsoleToast.test.tsx --runInBand
 
 Expected: FAIL because `ConsoleToast` still calls the message instance and never calls `notification.error`.
 
-- [ ] **Step 3: Implement the notification adapter**
+- [x] **Step 3: Implement the notification adapter**
 
 Replace the message types with notification types, read `notification` and theme tokens from the existing Ant Design contexts, and keep the public toast methods unchanged.
 
@@ -215,7 +215,7 @@ export function useConsoleToast(): ConsoleToastApi {
 }
 ```
 
-- [ ] **Step 4: Run the test and verify GREEN**
+- [x] **Step 4: Run the test and verify GREEN**
 
 ```bash
 pnpm exec jest src/shared/ui/ConsoleToast.test.tsx --runInBand
@@ -223,7 +223,7 @@ pnpm exec jest src/shared/ui/ConsoleToast.test.tsx --runInBand
 
 Expected: PASS with 2 tests and 0 failures.
 
-- [ ] **Step 5: Commit the shared adapter**
+- [x] **Step 5: Commit the shared adapter**
 
 ```bash
 git add apps/aevatar-console-web/src/shared/ui/ConsoleToast.tsx \
