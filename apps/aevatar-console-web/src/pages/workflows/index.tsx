@@ -645,6 +645,7 @@ const WorkflowsPage: React.FC = () => {
               ariaLabel={t("pages.workflows.index.loading.workflow.catalog", "Loading workflow catalog")}
               columnWidths={["1.4fr", "1fr", "1fr", "1.2fr", 160]}
               rows={4}
+              tableMinWidth={1100}
               variant="table"
             />
           ) : filteredRows.length === 0 ? (

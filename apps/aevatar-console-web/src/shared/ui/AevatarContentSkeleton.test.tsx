@@ -9,11 +9,13 @@ describe('AevatarContentSkeleton', () => {
         ariaLabel="Loading workflow catalog"
         columnWidths={[120, '2fr', '1fr']}
         rows={3}
+        tableMinWidth={1100}
         variant="table"
       />,
     );
 
     expect(screen.getByRole('status')).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByRole('status')).toHaveClass('aevatar-content-skeleton');
     expect(screen.getByRole('status')).toHaveAttribute('data-variant', 'table');
     expect(screen.getAllByTestId('aevatar-content-skeleton-row')).toHaveLength(
       3,
@@ -29,6 +31,9 @@ describe('AevatarContentSkeleton', () => {
         .getAllByTestId('aevatar-content-skeleton-cell')[0]
         .closest("[aria-hidden='true']"),
     ).toBeTruthy();
+    expect(
+      screen.getAllByTestId('aevatar-content-skeleton-row')[0],
+    ).toHaveStyle('min-width: 1100px');
   });
 
   it('renders the configured list layout and item count', () => {

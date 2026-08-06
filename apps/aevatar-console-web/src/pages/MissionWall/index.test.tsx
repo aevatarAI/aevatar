@@ -295,6 +295,11 @@ describe("MissionWallPage", () => {
       "aevatar-loading-visually-hidden",
     );
     expect(screen.queryByText("Loading runtime")).toBeNull();
+    expect(screen.queryByText("No focus run")).toBeNull();
+    expect(screen.queryByText("Select a workflow.")).toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "Step Flow" }),
+    ).toBeInTheDocument();
   });
 
   it("renders the shared language switch and authenticated user entry in fullscreen mode", async () => {

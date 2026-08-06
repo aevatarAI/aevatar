@@ -24,7 +24,9 @@ export function MissionStage({
       <header className="mission-wall-stage-head">
         <div style={{ minWidth: 0 }}>
           <h2 className="mission-wall-stage-title">
-            {focusRun
+            {isRuntimeLoading
+              ? t("pages.missionwall.stepFlow", "Step Flow")
+              : focusRun
               ? t(
                   "pages.missionwall.stageTitle",
                   "{workflowName} · Step Flow",
@@ -32,28 +34,30 @@ export function MissionStage({
                 )
               : t("pages.missionwall.noFocusRun", "No focus run")}
           </h2>
-          <div className="mission-wall-stage-subtitle">
-            {focusRun
-              ? t(
-                  "pages.missionwall.stageSubtitle",
-                  "Team {teamName} · {memberName}",
-                  {
-                    memberName:
-                      focusRun.entryMemberName ||
-                      t(
-                        "pages.missionwall.unknownEntryMember",
-                        "Unknown entry member",
-                      ),
-                    teamName:
-                      focusRun.teamName ||
-                      t("pages.missionwall.unknownTeam", "Unknown team"),
-                  },
-                )
-              : t(
-                  "pages.missionwall.noFocusExplain",
-                  "Select a workflow.",
-                )}
-          </div>
+          {isRuntimeLoading ? null : (
+            <div className="mission-wall-stage-subtitle">
+              {focusRun
+                ? t(
+                    "pages.missionwall.stageSubtitle",
+                    "Team {teamName} · {memberName}",
+                    {
+                      memberName:
+                        focusRun.entryMemberName ||
+                        t(
+                          "pages.missionwall.unknownEntryMember",
+                          "Unknown entry member",
+                        ),
+                      teamName:
+                        focusRun.teamName ||
+                        t("pages.missionwall.unknownTeam", "Unknown team"),
+                    },
+                  )
+                : t(
+                    "pages.missionwall.noFocusExplain",
+                    "Select a workflow.",
+                  )}
+            </div>
+          )}
         </div>
       </header>
       {isRuntimeLoading ? (

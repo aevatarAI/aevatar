@@ -17,6 +17,12 @@ describe('InventoryReadinessState', () => {
     expect(screen.getAllByTestId('aevatar-content-skeleton-row')).toHaveLength(
       4,
     );
+    expect(screen.getAllByTestId('aevatar-content-skeleton-cell')).toHaveLength(
+      32,
+    );
+    expect(
+      screen.getAllByTestId('aevatar-content-skeleton-row')[0],
+    ).toHaveStyle('min-width: 1100px');
     expect(screen.getByText('Loading inventory')).toHaveClass(
       'aevatar-loading-visually-hidden',
     );

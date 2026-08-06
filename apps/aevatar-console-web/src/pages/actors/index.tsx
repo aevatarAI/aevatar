@@ -1492,6 +1492,7 @@ export const TopologyExplorerPage: React.FC<{
                 ariaLabel={t("pages.actors.index.reading", "Reading traceable objects")}
                 columnWidths={["1.4fr", "1fr", "1fr", "1.2fr", 160]}
                 rows={4}
+                tableMinWidth={actorTableMinWidth}
                 variant="table"
               />
             ) : displayActors.length > 0 ? (

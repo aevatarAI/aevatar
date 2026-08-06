@@ -10,6 +10,7 @@ export type AevatarContentSkeletonProps = {
   readonly listLayout?: 'grid' | 'stack' | 'tree';
   readonly rows?: number;
   readonly style?: React.CSSProperties;
+  readonly tableMinWidth?: number;
   readonly variant: AevatarContentSkeletonVariant;
 };
 
@@ -34,6 +35,7 @@ export const AevatarContentSkeleton: React.FC<AevatarContentSkeletonProps> = ({
   listLayout = 'stack',
   rows = 4,
   style,
+  tableMinWidth,
   variant,
 }) => {
   const { token } = theme.useToken();
@@ -57,7 +59,11 @@ export const AevatarContentSkeleton: React.FC<AevatarContentSkeletonProps> = ({
     gridTemplateColumns: skeletonColumns
       .map(({ width }) => toGridTrack(width))
       .join(' '),
-    minWidth: Math.max(640, skeletonColumns.length * 136),
+    minWidth: Math.max(
+      640,
+      skeletonColumns.length * 136,
+      Number.isFinite(tableMinWidth) ? (tableMinWidth ?? 0) : 0,
+    ),
   };
 
   const tablePreset =
@@ -283,7 +289,9 @@ export const AevatarContentSkeleton: React.FC<AevatarContentSkeletonProps> = ({
   return (
     <div
       aria-busy="true"
-      className={className}
+      className={['aevatar-content-skeleton', className]
+        .filter(Boolean)
+        .join(' ')}
       data-list-layout={variant === 'list' ? listLayout : undefined}
       data-variant={variant}
       role="status"

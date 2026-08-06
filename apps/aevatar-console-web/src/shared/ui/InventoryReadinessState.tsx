@@ -29,8 +29,9 @@ export const InventoryReadinessState: React.FC<
             ? String(title)
             : 'Loading inventory'
         }
-        columnWidths={[96, '1.6fr', '1fr', '1fr', 112]}
+        columnWidths={[96, 136, '1.4fr', '1fr', '1fr', 96, 152, 128]}
         rows={4}
+        tableMinWidth={1100}
         variant="table"
       />
     );
