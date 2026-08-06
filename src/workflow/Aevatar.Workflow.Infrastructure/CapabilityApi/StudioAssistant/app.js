@@ -1988,7 +1988,6 @@ async function loadConversation(conversation) {
     activateConversationState(cached);
     renderActiveConversationState();
     closeMobilePanels();
-    dom.promptInput.focus();
     void refreshActorState(cached);
     return;
   }
@@ -2008,7 +2007,6 @@ async function loadConversation(conversation) {
       activateConversationState(existing);
       renderActiveConversationState();
       closeMobilePanels();
-      dom.promptInput.focus();
       return;
     }
     const entry = createConversationState({
@@ -2031,7 +2029,6 @@ async function loadConversation(conversation) {
     closeMobilePanels();
     refreshIcons(dom.thread);
     scrollThread();
-    dom.promptInput.focus();
     void refreshActorState(entry);
   } catch (error) {
     if (sequence !== state.conversationLoadSequence) return;

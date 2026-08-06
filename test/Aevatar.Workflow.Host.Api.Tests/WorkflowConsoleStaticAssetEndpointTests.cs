@@ -230,13 +230,27 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("v=20260806-studio-color-align");
+        html.Should().Contain("app.js?v=20260806-studio-sidebar-focus");
         styles.Should().Contain("color-scheme: only light");
         styles.Should().NotContain("color-scheme: dark");
         styles.Should().NotContain("prefers-color-scheme");
         styles.Should().Contain("--bg: #f6f8f7");
         styles.Should().Contain("--accent: #0f766e");
         styles.Should().NotContain("data-theme");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_LoadConversation_ShouldNotMoveFocusToComposer()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        var start = app.IndexOf("async function loadConversation(", StringComparison.Ordinal);
+        var end = app.IndexOf("\nfunction actorStateTurnId(", start, StringComparison.Ordinal);
+
+        start.Should().BeGreaterThanOrEqualTo(0);
+        end.Should().BeGreaterThan(start);
+        var loadConversation = app[start..end];
+        loadConversation.Should().NotContain("dom.promptInput.focus()");
+        loadConversation.Should().Contain("scrollThread()");
     }
 
     [Fact]
