@@ -234,10 +234,14 @@ pnpm --dir apps/aevatar-console-web build
 - Keep a toast short, localized, and action-oriented. Do not put endpoint
   names, DTO fields, request IDs, raw backend errors, or recovery diagnostics
   in it; expose those through the surface's existing technical-details path.
+- Report transient API request failures through the shared error toast. Do not
+  add page-wide warning or error banners above otherwise usable content, and
+  do not render an error while another request required to classify the same
+  state is still pending.
 - Use persistent inline state, alerts, or panels for loading, accepted,
-  observing, delayed, failed, retryable, authorization, and forbidden states.
-  A toast supplements a completed action; it must not be the only evidence of
-  durable status or the user's next recovery action.
+  observing, delayed, retryable, authorization, forbidden, and primary-content
+  failures where the user needs a durable next step. A toast must not be the
+  only evidence of a durable status or recovery action.
 - Emit at most one toast for one user action. Avoid success toasts for local
   form edits that still require an explicit page-level save. Migrate touched
   user-feedback paths to the shared abstraction while preserving legacy

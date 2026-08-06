@@ -355,6 +355,42 @@ describe('Workflow Activity vNext catalogue', () => {
     );
   });
 
+  it('reports an Activity resolution request failure with a toast instead of a page alert', async () => {
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
+    mockScopesApi.listWorkflows.mockResolvedValue([
+      {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-committed-beta',
+        displayName: 'Invoice review',
+        serviceKey: '',
+        workflowName: 'invoice_review',
+        actorId: 'summary-actor-beta',
+        activeRevisionId: 'revision-beta',
+        deploymentId: 'deployment-beta',
+        deploymentStatus: 'active',
+        updatedAt: '2026-08-03T10:00:00Z',
+      },
+    ]);
+    mockScopesApi.getWorkflowDetail.mockRejectedValue(
+      new Error('GET returned 503'),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(await screen.findByText('Invoice review')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Activity' }));
+
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Activity couldn't be opened for this workflow",
+      ),
+    );
+    expect(
+      screen.queryByText("Activity couldn't be opened for this workflow"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('GET returned 503')).not.toBeInTheDocument();
+  });
+
   it('opens unfiltered Activity with an unavailable notice for a draft-only row', async () => {
     mockStudioApi.listWorkflowDrafts.mockResolvedValue([
       {
@@ -546,16 +582,111 @@ describe('Workflow Activity vNext catalogue', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Delete draft' }));
 
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Draft couldn't be deleted",
+      ),
+    );
     expect(
-      await screen.findByText("Draft couldn't be deleted"),
-    ).toBeInTheDocument();
-    expect(screen.getByText('DELETE returned 503')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
+      screen.queryByText("Draft couldn't be deleted"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('DELETE returned 503')).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled(),
+    );
     expect(screen.getByText('Support triage')).toBeInTheDocument();
     expect(mockStudioApi.listWorkflowDrafts).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps successful rows and names the failed source', async () => {
+  it('reports only the specific delete refresh failure after the draft was removed', async () => {
+    mockStudioApi.listWorkflowDrafts
+      .mockResolvedValueOnce([
+        {
+          workflowId: 'wf-draft-alpha',
+          name: 'Support triage',
+          description: 'Route support requests',
+          fileName: 'support.yaml',
+          filePath: '/support.yaml',
+          directoryId: 'directory-alpha',
+          directoryLabel: 'Workflows',
+          stepCount: 3,
+          hasLayout: true,
+          updatedAtUtc: '2026-08-04T10:00:00Z',
+        },
+      ])
+      .mockRejectedValueOnce(new Error('refresh returned 503'));
+    mockScopesApi.listWorkflows.mockResolvedValue([]);
+    mockStudioApi.deleteWorkflowDraft.mockResolvedValue(undefined);
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const draftName = await screen.findByText('Support triage');
+    fireEvent.click(
+      within(draftName.closest('tr') as HTMLElement).getByRole('button', {
+        name: 'Delete Support triage',
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Delete draft' }));
+
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Draft was deleted, but workflows couldn't refresh",
+      ),
+    );
+    expect(mockConsoleToast.error).toHaveBeenCalledTimes(1);
+    expect(mockStudioApi.deleteWorkflowDraft).toHaveBeenCalledTimes(1);
+    expect(mockStudioApi.listWorkflowDrafts).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for both workflow sources before reporting a list failure', async () => {
+    let resolveCommitted!: (rows: unknown[]) => void;
+    mockStudioApi.listWorkflowDrafts.mockRejectedValue(
+      new Error('draft source down'),
+    );
+    mockScopesApi.listWorkflows.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCommitted = resolve;
+        }),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    await waitFor(() =>
+      expect(mockStudioApi.listWorkflowDrafts).toHaveBeenCalledTimes(1),
+    );
+    expect(screen.getByText('Loading workflows')).toBeInTheDocument();
+    expect(
+      screen.queryByText("Some workflows couldn't be loaded"),
+    ).not.toBeInTheDocument();
+    expect(mockConsoleToast.error).not.toHaveBeenCalled();
+
+    act(() => {
+      resolveCommitted([
+        {
+          scopeId: 'scope-alpha',
+          workflowId: 'wf-committed-beta',
+          displayName: 'Invoice review',
+          serviceKey: '',
+          workflowName: 'invoice_review',
+          actorId: 'definition-beta',
+          activeRevisionId: 'revision-beta',
+          deploymentId: 'deployment-beta',
+          deploymentStatus: 'active',
+          updatedAt: '2026-08-03T10:00:00Z',
+        },
+      ]);
+    });
+
+    expect(await screen.findByText('Invoice review')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Some workflows couldn't be loaded",
+      ),
+    );
+  });
+
+  it('keeps successful rows and reports the failed source with a toast', async () => {
     mockStudioApi.listWorkflowDrafts.mockRejectedValue(
       new Error('draft source down'),
     );
@@ -578,8 +709,11 @@ describe('Workflow Activity vNext catalogue', () => {
 
     expect(await screen.findByText('Invoice review')).toBeInTheDocument();
     expect(
-      screen.getByText("Some workflows couldn't be loaded"),
-    ).toBeInTheDocument();
+      screen.queryByText("Some workflows couldn't be loaded"),
+    ).not.toBeInTheDocument();
+    expect(mockConsoleToast.error).toHaveBeenCalledWith(
+      "Some workflows couldn't be loaded",
+    );
     expect(screen.queryByText(/catalogue/i)).not.toBeInTheDocument();
     expect(screen.queryByText('No workflows yet')).not.toBeInTheDocument();
   });
@@ -2362,7 +2496,10 @@ describe('Workflow Activity vNext editor', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
 
-    expect(await screen.findByText('Workflow saved')).toBeVisible();
+    await waitFor(() =>
+      expect(mockConsoleToast.success).toHaveBeenCalledWith('Workflow saved'),
+    );
+    expect(screen.queryByText('Workflow saved')).not.toBeInTheDocument();
     expect(mockStudioApi.saveWorkflow).toHaveBeenCalledTimes(1);
   });
 

@@ -5,7 +5,7 @@ import {
   SearchOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Button, Input, Modal, Select, Space, Tooltip } from 'antd';
+import { Button, Input, Modal, Select, Space, Tooltip } from 'antd';
 import React from 'react';
 import { scopesApi } from '@/shared/api/scopesApi';
 import { t } from '@/shared/i18n/messages';
@@ -13,6 +13,7 @@ import type { ScopeWorkflowSummary } from '@/shared/models/scopes';
 import { history } from '@/shared/navigation/history';
 import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
 import type { StudioWorkflowDraftSummary } from '@/shared/studio/models';
+import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
 import {
   buildWorkflowActivityEditorHref,
@@ -20,7 +21,6 @@ import {
   buildWorkflowActivitySectionHref,
 } from '../navigation';
 import TableScrollRegion from '../TableScrollRegion';
-import TechnicalDetails from '../TechnicalDetails';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 
 type WorkflowRow = {
@@ -79,6 +79,9 @@ function formatDate(value: string | null): string {
 
 const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const location = useConsoleLocation();
+  const toast = useConsoleToast();
+  const lastListErrorSignature = React.useRef('');
+  const suppressNextDraftListError = React.useRef(false);
   const initialParams = React.useMemo(
     () => new URLSearchParams(location.search),
     [location.search],
@@ -88,11 +91,10 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     readWorkflowView(initialParams),
   );
   const [activityWorkflowId, setActivityWorkflowId] = React.useState('');
-  const [activityError, setActivityError] = React.useState('');
   const [deleteTarget, setDeleteTarget] = React.useState<WorkflowRow | null>(
     null,
   );
-  const [deleteError, setDeleteError] = React.useState('');
+  const [deleteFailed, setDeleteFailed] = React.useState(false);
   const [deleteSucceeded, setDeleteSucceeded] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
   const drafts = useQuery({
@@ -155,6 +157,38 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const totalFailure = drafts.isError && committed.isError;
   const filtersActive = Boolean(query.trim()) || view === 'drafts';
 
+  React.useEffect(() => {
+    if (loading || (!drafts.isError && !committed.isError)) return;
+
+    const errorSignature = [
+      scopeId,
+      drafts.isError ? drafts.errorUpdatedAt : 0,
+      committed.isError ? committed.errorUpdatedAt : 0,
+    ].join(':');
+    if (lastListErrorSignature.current === errorSignature) return;
+
+    lastListErrorSignature.current = errorSignature;
+    if (suppressNextDraftListError.current && drafts.isError) {
+      suppressNextDraftListError.current = false;
+      return;
+    }
+
+    toast.error(
+      t(
+        'workflowActivityVNext.workflows.partialUnavailable',
+        "Some workflows couldn't be loaded",
+      ),
+    );
+  }, [
+    committed.errorUpdatedAt,
+    committed.isError,
+    drafts.errorUpdatedAt,
+    drafts.isError,
+    loading,
+    scopeId,
+    toast,
+  ]);
+
   const retry = () => {
     void drafts.refetch();
     void committed.refetch();
@@ -162,7 +196,6 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
 
   const openActivity = async (row: WorkflowRow) => {
     const activityHref = buildWorkflowActivitySectionHref(scopeId, 'activity');
-    setActivityError('');
     if (!row.hasCommittedSource) {
       history.push(`${activityHref}?workflowFilter=unavailable`);
       return;
@@ -177,8 +210,13 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           ? `${activityHref}?definition=${encodeURIComponent(definitionActorId)}`
           : `${activityHref}?workflowFilter=unavailable`,
       );
-    } catch (error) {
-      setActivityError(error instanceof Error ? error.message : String(error));
+    } catch {
+      toast.error(
+        t(
+          'workflowActivityVNext.workflows.activityResolutionFailed',
+          "Activity couldn't be opened for this workflow",
+        ),
+      );
     } finally {
       setActivityWorkflowId('');
     }
@@ -187,14 +225,14 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const closeDelete = () => {
     if (deleting) return;
     setDeleteTarget(null);
-    setDeleteError('');
+    setDeleteFailed(false);
     setDeleteSucceeded(false);
   };
 
   const confirmDelete = async () => {
     if (!deleteTarget || deleting) return;
     setDeleting(true);
-    setDeleteError('');
+    setDeleteFailed(false);
     let removed = deleteSucceeded;
     try {
       if (!removed) {
@@ -209,12 +247,25 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         }
       }
 
+      suppressNextDraftListError.current = true;
       const refreshed = await drafts.refetch();
+      if (!refreshed.isError) suppressNextDraftListError.current = false;
       if (refreshed.isError) throw refreshed.error;
       setDeleteTarget(null);
       setDeleteSucceeded(false);
-    } catch (error) {
-      setDeleteError(error instanceof Error ? error.message : String(error));
+    } catch {
+      toast.error(
+        removed
+          ? t(
+              'workflowActivityVNext.workflows.deleteRefreshFailed',
+              "Draft was deleted, but workflows couldn't refresh",
+            )
+          : t(
+              'workflowActivityVNext.workflows.deleteFailed',
+              "Draft couldn't be deleted",
+            ),
+      );
+      setDeleteFailed(true);
       setDeleteSucceeded(removed);
     } finally {
       setDeleting(false);
@@ -297,38 +348,6 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           />
         </Space>
       </div>
-
-      {drafts.isError && !committed.isError && view !== 'drafts' ? (
-        <Alert
-          message={t(
-            'workflowActivityVNext.workflows.partialUnavailable',
-            "Some workflows couldn't be loaded",
-          )}
-          showIcon
-          type="warning"
-        />
-      ) : null}
-      {committed.isError && !drafts.isError ? (
-        <Alert
-          message={t(
-            'workflowActivityVNext.workflows.partialUnavailable',
-            "Some workflows couldn't be loaded",
-          )}
-          showIcon
-          type="warning"
-        />
-      ) : null}
-      {activityError ? (
-        <Alert
-          message={t(
-            'workflowActivityVNext.workflows.activityResolutionFailed',
-            "Activity couldn't be opened for this workflow",
-          )}
-          description={<TechnicalDetails>{activityError}</TechnicalDetails>}
-          showIcon
-          type="error"
-        />
-      ) : null}
 
       {loading ? (
         <div aria-live="polite" className="wa-vnext__state">
@@ -547,7 +566,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                             icon={<DeleteOutlined />}
                             onClick={() => {
                               setDeleteTarget(row);
-                              setDeleteError('');
+                              setDeleteFailed(false);
                               setDeleteSucceeded(false);
                             }}
                             type="text"
@@ -569,7 +588,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         mask={{ closable: false }}
         okButtonProps={{ danger: true }}
         okText={
-          deleteError
+          deleteFailed
             ? t('workflowActivityVNext.workflows.deleteRetry', 'Try again')
             : t('workflowActivityVNext.workflows.deleteDraft', 'Delete draft')
         }
@@ -587,24 +606,6 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             'This deletes only the editable draft. Published versions and run history remain available.',
           )}
         </p>
-        {deleteError ? (
-          <Alert
-            description={<TechnicalDetails>{deleteError}</TechnicalDetails>}
-            message={
-              deleteSucceeded
-                ? t(
-                    'workflowActivityVNext.workflows.deleteRefreshFailed',
-                    "Draft was deleted, but workflows couldn't refresh",
-                  )
-                : t(
-                    'workflowActivityVNext.workflows.deleteFailed',
-                    "Draft couldn't be deleted",
-                  )
-            }
-            showIcon
-            type="error"
-          />
-        ) : null}
       </Modal>
     </WorkflowActivityVNextShell>
   );
