@@ -25,7 +25,7 @@ import { hasBlockingFindings } from '../workflows/workflowCreation';
 import { useDraftMaterialization } from './useDraftMaterialization';
 import { useRunObservation } from './useRunObservation';
 
-export type DraftRunPhase =
+export type PublishedRunPhase =
   | 'idle'
   | 'submitting'
   | 'accepted'
@@ -37,13 +37,19 @@ type SubmittedSaveSnapshot = {
   readonly revision: number;
 };
 
-export type DraftRunSnapshot = {
-  readonly input: string;
+export type WorkflowPublishedInvocationTarget = {
+  readonly publishedServiceId: string;
+  readonly revisionId: string;
   readonly workflowId: string;
-  readonly workflowYaml: string;
+};
+
+export type PublishedRunSnapshot = {
+  readonly input: string;
+  readonly target: WorkflowPublishedInvocationTarget;
 };
 
 export type WorkflowPublicationPreparation = {
+  readonly documentVersion: number;
   readonly workflowId: string;
   readonly workflowName: string;
   readonly workflowYaml: string;
@@ -149,8 +155,8 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
   const [runInput, setRunInput] = React.useState('');
   const [runInputError, setRunInputError] = React.useState('');
   const [lastRunSnapshot, setLastRunSnapshot] =
-    React.useState<DraftRunSnapshot | null>(null);
-  const [runPhase, setRunPhase] = React.useState<DraftRunPhase>('idle');
+    React.useState<PublishedRunSnapshot | null>(null);
+  const [runPhase, setRunPhase] = React.useState<PublishedRunPhase>('idle');
   const [runError, setRunError] = React.useState('');
   const [sseRunId, setSseRunId] = React.useState('');
   const [selectedNodeId, setSelectedNodeId] = React.useState('');
@@ -629,6 +635,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       }
 
       return {
+        documentVersion: localEditRevisionRef.current,
         workflowId: workflow.workflowId,
         workflowName: workflowTitle.trim(),
         workflowYaml: serialized.yaml,
@@ -636,7 +643,10 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     }, [dirty, receiptPending, routeWorkflowId, workflow, workflowTitle, yaml]);
 
   const submitRun = React.useCallback(
-    async (snapshot?: DraftRunSnapshot) => {
+    async (
+      target: WorkflowPublishedInvocationTarget,
+      snapshot?: PublishedRunSnapshot,
+    ) => {
       if (
         runInFlightRef.current ||
         savingRef.current ||
@@ -647,6 +657,22 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         runAwaitingIdentification
       )
         return;
+      const activeWorkflowId = workflow?.workflowId ?? routeWorkflowId;
+      if (
+        !target.publishedServiceId.trim() ||
+        !target.revisionId.trim() ||
+        !target.workflowId.trim() ||
+        target.workflowId !== activeWorkflowId
+      ) {
+        setRunError(
+          t(
+            'workflowActivityVNext.editor.publishedTargetUnavailable',
+            'Publish this workflow before running it.',
+          ),
+        );
+        setRunPhase('failed');
+        return;
+      }
       const normalizedInput = (snapshot?.input ?? runInput).trim();
       if (!normalizedInput) {
         setRunInputError(
@@ -673,36 +699,15 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         runControllerRef.current === controller &&
         !controller.signal.aborted;
       try {
-        let submittedSnapshot = snapshot;
-        if (!submittedSnapshot) {
-          const current = await parseCurrentYaml(ownsRun);
-          if (!ownsRun()) return;
-          if (!current) {
-            setRunPhase('failed');
-            return;
-          }
-          const serialized = await studioApi.serializeYaml({
-            document: current,
-          });
-          if (!ownsRun()) return;
-          setFindings(serialized.findings);
-          if (hasBlockingFindings(serialized.document, serialized.findings)) {
-            setRunPhase('failed');
-            return;
-          }
-          submittedSnapshot = {
-            input: normalizedInput,
-            workflowId: workflow?.workflowId ?? routeWorkflowId,
-            workflowYaml: serialized.yaml,
-          };
-        }
-        const response = await runtimeRunsApi.streamDraftRun(
+        const submittedSnapshot: PublishedRunSnapshot = {
+          input: normalizedInput,
+          target,
+        };
+        const response = await runtimeRunsApi.streamChat(
           scopeId,
-          {
-            prompt: submittedSnapshot.input,
-            workflowYamls: [submittedSnapshot.workflowYaml],
-          },
+          { prompt: submittedSnapshot.input },
           controller.signal,
+          { serviceId: target.publishedServiceId },
         );
         if (!ownsRun()) return;
         setLastRunSnapshot(submittedSnapshot);
@@ -742,7 +747,6 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       }
     },
     [
-      parseCurrentYaml,
       routeWorkflowId,
       runInput,
       runObservationUnresolved,
@@ -752,15 +756,22 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     ],
   );
 
-  const run = React.useCallback(() => submitRun(), [submitRun]);
+  const run = React.useCallback(
+    (target: WorkflowPublishedInvocationTarget) => submitRun(target),
+    [submitRun],
+  );
   const runAgain = React.useCallback(
-    () => (lastRunSnapshot ? submitRun(lastRunSnapshot) : Promise.resolve()),
+    (target: WorkflowPublishedInvocationTarget) =>
+      lastRunSnapshot
+        ? submitRun(target, { ...lastRunSnapshot, target })
+        : Promise.resolve(),
     [lastRunSnapshot, submitRun],
   );
 
   return {
     addNode,
     canRun,
+    documentVersion: localEditRevisionRef.current,
     discardForRouteChange,
     dirty,
     document,

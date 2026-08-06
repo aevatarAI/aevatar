@@ -219,6 +219,7 @@ jest.mock('@/shared/api/scopeRuntimeApi', () => ({
 
 jest.mock('@/shared/api/runtimeRunsApi', () => ({
   runtimeRunsApi: {
+    streamChat: jest.fn(),
     streamDraftRun: jest.fn(),
   },
 }));
@@ -333,6 +334,7 @@ const mockScopeRuntimeApi = jest.requireMock('@/shared/api/scopeRuntimeApi')
 };
 const mockRuntimeRunsApi = jest.requireMock('@/shared/api/runtimeRunsApi')
   .runtimeRunsApi as {
+  streamChat: jest.Mock;
   streamDraftRun: jest.Mock;
 };
 const mockWorkflowActivityApi = jest.requireMock(
@@ -2752,6 +2754,93 @@ describe('Workflow Activity vNext editor', () => {
     });
   }
 
+  function arrangeObservedWorkflowPublication(): void {
+    arrangeSavedDraftPublication();
+    mockScopesApi.getWorkflowDetail.mockResolvedValue({
+      available: true,
+      scopeId: 'scope-alpha',
+      workflow: {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-draft-alpha',
+        displayName: 'Workflow alpha',
+        serviceKey: 'workflow-alpha',
+        workflowName: 'Workflow alpha',
+        actorId: 'actor-workflow-alpha',
+        activeRevisionId: 'workflow-revision-alpha',
+        deploymentId: 'deployment-workflow-alpha',
+        deploymentStatus: 'Available',
+        updatedAt: '2026-08-06T10:00:00Z',
+      },
+      source: null,
+    });
+    mockScopeRuntimeApi.getServiceRevisions.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      serviceId: 'svc-alpha',
+      serviceKey: 'service-alpha',
+      displayName: 'Service alpha',
+      defaultServingRevisionId: 'rev-preview-alpha',
+      activeServingRevisionId: 'rev-preview-alpha',
+      deploymentId: 'deployment-service-alpha',
+      deploymentStatus: 'Active',
+      primaryActorId: 'actor-service-alpha',
+      catalogStateVersion: 12,
+      catalogLastEventId: 'evt-service-alpha',
+      updatedAt: '2026-08-06T10:00:03Z',
+      revisions: [
+        {
+          revisionId: 'rev-preview-alpha',
+          implementationKind: 'workflow',
+          status: 'Published',
+          artifactHash: 'artifact-publication-alpha',
+          failureReason: '',
+          isDefaultServing: true,
+          isActiveServing: true,
+          isServingTarget: true,
+          allocationWeight: 100,
+          servingState: 'Active',
+          deploymentId: 'deployment-service-alpha',
+          primaryActorId: 'actor-service-alpha',
+          createdAt: '2026-08-06T10:00:00Z',
+          preparedAt: '2026-08-06T10:00:01Z',
+          publishedAt: '2026-08-06T10:00:02Z',
+          retiredAt: null,
+          workflowName: 'Workflow alpha',
+          workflowDefinitionActorId: 'actor-workflow-alpha',
+          inlineWorkflowCount: 0,
+          scriptId: '',
+          scriptRevision: '',
+          scriptDefinitionActorId: '',
+          scriptSourceHash: '',
+          staticActorTypeName: '',
+        },
+      ],
+    });
+  }
+
+  async function publishObservedWorkflow(): Promise<void> {
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Publish workflow',
+    });
+    fireEvent.mouseDown(
+      await within(dialog).findByRole('combobox', { name: 'Service' }),
+    );
+    fireEvent.click(await screen.findByText('Service alpha'));
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Review and publish' }),
+    );
+    fireEvent.click(
+      await within(dialog).findByRole('button', { name: 'Publish' }),
+    );
+    await screen.findByText('Workflow published');
+  }
+
+  async function renderPublishedWorkflowPage(): Promise<void> {
+    arrangeObservedWorkflowPublication();
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    await publishObservedWorkflow();
+  }
+
   it('keeps every publish blocker focusable and links validation issues to their fields and steps', async () => {
     mockStudioApi.getWorkflow.mockResolvedValue({
       workflowId: 'wf-committed-source',
@@ -3724,7 +3813,11 @@ describe('Workflow Activity vNext editor', () => {
     expect(mockStudioApi.parseYaml).toHaveBeenCalledWith({
       yaml: 'name: imported\nsteps:\n  - id: step-root\n    type: llm_call\n',
     });
-    expect(screen.getByRole('button', { name: 'Run' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Run' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Run' })).toHaveAttribute(
+      'title',
+      'Publish this workflow before running it.',
+    );
   });
 
   it('keeps a workflow YAML parser error out of the primary editor message', async () => {
@@ -3804,7 +3897,7 @@ describe('Workflow Activity vNext editor', () => {
     expect(await screen.findByLabelText('Workflow YAML')).toBeVisible();
   });
 
-  it('opens the existing test run panel after a valid requested draft loads', async () => {
+  it('does not honor a requested Run until publication is observed', async () => {
     mockLocation =
       '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha?run=1';
     mockStudioApi.getWorkflow.mockResolvedValue({
@@ -3828,9 +3921,13 @@ describe('Workflow Activity vNext editor', () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
     expect(
-      await screen.findByRole('region', { name: 'Test run' }),
+      await screen.findByDisplayValue('Support triage'),
     ).toBeInTheDocument();
-    expect(mockRuntimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole('dialog', { name: 'Run published workflow' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Run' })).toBeDisabled();
+    expect(mockRuntimeRunsApi.streamChat).not.toHaveBeenCalled();
   });
 
   it('does not open or submit a requested run for an invalid draft', async () => {
@@ -3854,9 +3951,9 @@ describe('Workflow Activity vNext editor', () => {
 
     expect(await screen.findByDisplayValue('Empty draft')).toBeInTheDocument();
     expect(
-      screen.queryByRole('region', { name: 'Test run' }),
+      screen.queryByRole('dialog', { name: 'Run published workflow' }),
     ).not.toBeInTheDocument();
-    expect(mockRuntimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
+    expect(mockRuntimeRunsApi.streamChat).not.toHaveBeenCalled();
   });
 
   it('reports a save failure with a toast instead of a page alert', async () => {
@@ -4256,16 +4353,85 @@ describe('Workflow Activity vNext editor', () => {
     await waitFor(() => expect(instruction).toBeEnabled());
   });
 
-  it('submits only one draft run from a rapid double action', async () => {
+  it('requires an observed publication before enabling Run', async () => {
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const run = await screen.findByRole('button', { name: 'Run' });
+    expect(run).toBeDisabled();
+    expect(run).toHaveAttribute(
+      'title',
+      'Publish this workflow before running it.',
+    );
+  });
+
+  it('opens the published run drawer after publication is observed', async () => {
+    arrangeObservedWorkflowPublication();
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    await publishObservedWorkflow();
+
+    const run = screen.getByRole('button', { name: 'Run' });
+    await waitFor(() => expect(run).toBeEnabled());
+    fireEvent.click(run);
+
+    const drawer = await screen.findByRole('dialog', {
+      name: 'Run published workflow',
+    });
+    expect(drawer).toBeVisible();
+    expect(within(drawer).getByText('svc-alpha')).toBeInTheDocument();
+    expect(within(drawer).getByText('rev-preview-alpha')).toBeInTheDocument();
+  });
+
+  it('locks Run again when the published workflow is edited', async () => {
+    await renderPublishedWorkflowPage();
+
+    const run = screen.getByRole('button', { name: 'Run' });
+    await waitFor(() => expect(run).toBeEnabled());
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Workflow alpha updated' },
+    });
+
+    expect(run).toBeDisabled();
+    expect(run).toHaveAttribute(
+      'title',
+      'Save and publish the latest changes before running.',
+    );
+  });
+
+  it('invokes the exact published service instead of running draft YAML', async () => {
+    arrangeObservedWorkflowPublication();
+    mockRuntimeRunsApi.streamChat.mockResolvedValue(createSseResponse([]));
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    await publishObservedWorkflow();
+
+    const run = screen.getByRole('button', { name: 'Run' });
+    await waitFor(() => expect(run).toBeEnabled());
+    fireEvent.click(run);
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Input' }), {
+      target: { value: 'Review order 42' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Start run' }));
+
+    await waitFor(() =>
+      expect(mockRuntimeRunsApi.streamChat).toHaveBeenCalledWith(
+        'scope-alpha',
+        { prompt: 'Review order 42' },
+        expect.any(AbortSignal),
+        { serviceId: 'svc-alpha' },
+      ),
+    );
+    expect(mockRuntimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
+  });
+
+  it('submits only one published run from a rapid double action', async () => {
     const streamResolvers: Array<(response: Response) => void> = [];
-    mockRuntimeRunsApi.streamDraftRun.mockImplementation(
+    mockRuntimeRunsApi.streamChat.mockImplementation(
       () =>
         new Promise<Response>((resolve) => {
           streamResolvers.push(resolve);
         }),
     );
 
-    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    await renderPublishedWorkflowPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
     fireEvent.change(await screen.findByRole('textbox', { name: 'Input' }), {
@@ -4280,7 +4446,7 @@ describe('Workflow Activity vNext editor', () => {
     });
 
     await waitFor(() =>
-      expect(mockRuntimeRunsApi.streamDraftRun).toHaveBeenCalledTimes(1),
+      expect(mockRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(1),
     );
 
     streamResolvers[0]?.({
@@ -4294,10 +4460,10 @@ describe('Workflow Activity vNext editor', () => {
     } as unknown as Response);
   });
 
-  it('requires the current string input contract before dispatching a draft run', async () => {
-    mockRuntimeRunsApi.streamDraftRun.mockResolvedValue(createSseResponse([]));
+  it('requires the current string input contract before invoking a published workflow', async () => {
+    mockRuntimeRunsApi.streamChat.mockResolvedValue(createSseResponse([]));
 
-    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    await renderPublishedWorkflowPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
     const input = await screen.findByRole('textbox', { name: 'Input' });
@@ -4311,22 +4477,23 @@ describe('Workflow Activity vNext editor', () => {
     fireEvent.click(startRun);
 
     await waitFor(() =>
-      expect(mockRuntimeRunsApi.streamDraftRun).toHaveBeenCalledWith(
+      expect(mockRuntimeRunsApi.streamChat).toHaveBeenCalledWith(
         'scope-alpha',
-        expect.objectContaining({ prompt: 'Review order 42' }),
+        { prompt: 'Review order 42' },
         expect.any(AbortSignal),
+        { serviceId: 'svc-alpha' },
       ),
     );
   });
 
   it('maps backend prompt validation to the run input without losing it', async () => {
-    mockRuntimeRunsApi.streamDraftRun.mockRejectedValue(
+    mockRuntimeRunsApi.streamChat.mockRejectedValue(
       Object.assign(new Error('The request could not be validated.'), {
         fieldErrors: { Prompt: ['Use at least three characters.'] },
       }),
     );
 
-    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    await renderPublishedWorkflowPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
     const input = await screen.findByRole('textbox', { name: 'Input' });
@@ -4341,22 +4508,6 @@ describe('Workflow Activity vNext editor', () => {
   });
 
   it('retains the accepted run while the panel is closed and follows its observed result', async () => {
-    const submittedWorkflowYaml =
-      'name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n';
-    const submittedDocument = {
-      name: 'committed_source',
-      roles: [],
-      steps: [{ id: 'step-root', type: 'llm_call' }],
-    };
-    mockStudioApi.parseYaml.mockResolvedValue({
-      document: submittedDocument,
-      findings: [],
-    });
-    mockStudioApi.serializeYaml.mockResolvedValue({
-      yaml: submittedWorkflowYaml,
-      document: submittedDocument,
-      findings: [],
-    });
     mockWorkflowActivityApi.getRun
       .mockResolvedValueOnce(
         createEditorRunDetail({
@@ -4373,7 +4524,7 @@ describe('Workflow Activity vNext editor', () => {
           status: 'completed',
         }),
       );
-    mockRuntimeRunsApi.streamDraftRun
+    mockRuntimeRunsApi.streamChat
       .mockResolvedValueOnce(
         createSseResponse([
           { runStarted: { runId: 'run-observed-alpha' } },
@@ -4387,7 +4538,7 @@ describe('Workflow Activity vNext editor', () => {
         ]),
       );
 
-    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    await renderPublishedWorkflowPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
     fireEvent.change(await screen.findByRole('textbox', { name: 'Input' }), {
@@ -4404,9 +4555,9 @@ describe('Workflow Activity vNext editor', () => {
       '/scopes/scope-alpha/workflow-activity-vnext/activity/run-observed-alpha',
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByText('Close'));
     expect(
-      screen.queryByRole('region', { name: 'Test run' }),
+      screen.queryByRole('dialog', { name: 'Run published workflow' }),
     ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
     expect(await screen.findByText('Running')).toBeInTheDocument();
@@ -4430,32 +4581,20 @@ describe('Workflow Activity vNext editor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Run again' }));
 
     await waitFor(() =>
-      expect(mockRuntimeRunsApi.streamDraftRun).toHaveBeenCalledTimes(2),
+      expect(mockRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(2),
     );
-    expect(mockRuntimeRunsApi.streamDraftRun.mock.calls[1]?.[1]).toEqual({
-      prompt: 'Review order 42',
-      workflowYamls: [submittedWorkflowYaml],
-    });
+    expect(mockRuntimeRunsApi.streamChat.mock.calls[1]).toEqual([
+      'scope-alpha',
+      { prompt: 'Review order 42' },
+      expect.any(AbortSignal),
+      { serviceId: 'svc-alpha' },
+    ]);
   });
 
-  it('keeps an unidentified draft run from being submitted again after live updates end', async () => {
-    const validDocument = {
-      name: 'committed_source',
-      roles: [],
-      steps: [{ id: 'step-root', type: 'llm_call' }],
-    };
-    mockStudioApi.parseYaml.mockResolvedValue({
-      document: validDocument,
-      findings: [],
-    });
-    mockStudioApi.serializeYaml.mockImplementation(async ({ document }) => ({
-      yaml: 'name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n',
-      document,
-      findings: [],
-    }));
-    mockRuntimeRunsApi.streamDraftRun.mockResolvedValue(createSseResponse([]));
+  it('keeps an unidentified published run from being submitted again after live updates end', async () => {
+    mockRuntimeRunsApi.streamChat.mockResolvedValue(createSseResponse([]));
 
-    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    await renderPublishedWorkflowPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
     fireEvent.change(await screen.findByRole('textbox', { name: 'Input' }), {
@@ -4471,10 +4610,11 @@ describe('Workflow Activity vNext editor', () => {
     const startRun = await screen.findByRole('button', { name: 'Start run' });
     expect(startRun).toBeDisabled();
     fireEvent.click(startRun);
-    expect(mockRuntimeRunsApi.streamDraftRun).toHaveBeenCalledTimes(1);
+    expect(mockRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(1);
   });
 
   it('ignores a buffered old run event after opening and starting another workflow', async () => {
+    arrangeObservedWorkflowPublication();
     const otherWorkflow = {
       workflowId: 'wf-draft-beta',
       name: 'Other workflow',
@@ -4497,20 +4637,20 @@ describe('Workflow Activity vNext editor', () => {
         requestedWorkflowId === otherWorkflow.workflowId
           ? otherWorkflow
           : {
-              workflowId: 'wf-committed-source',
-              name: 'Committed source',
-              fileName: 'committed-source.yaml',
-              filePath: '',
-              directoryId: '',
-              directoryLabel: '',
-              yaml: 'name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n',
-              updatedAtUtc: '2026-08-04T10:00:00Z',
+              workflowId: 'wf-draft-alpha',
+              name: 'Workflow alpha',
+              fileName: 'workflow-alpha.yaml',
+              filePath: '/workflows/workflow-alpha.yaml',
+              directoryId: 'directory-alpha',
+              directoryLabel: 'Workflows',
+              yaml: 'name: workflow_alpha\nroles: []\nsteps:\n  - id: step-alpha\n    type: llm_call\n',
+              updatedAtUtc: '2026-08-06T10:00:00Z',
               document: {
-                name: 'committed_source',
+                name: 'workflow_alpha',
                 roles: [],
-                steps: [{ id: 'step-root', type: 'llm_call' }],
+                steps: [{ id: 'step-alpha', type: 'llm_call' }],
               },
-              draftExists: false,
+              draftExists: true,
               findings: [],
             },
       ),
@@ -4524,14 +4664,6 @@ describe('Workflow Activity vNext editor', () => {
     let resolveFirstStreamReleased: (() => void) | undefined;
     const firstStreamReleased = new Promise<void>((resolve) => {
       resolveFirstStreamReleased = resolve;
-    });
-    let secondReadStarted = false;
-    let resolveSecondRead:
-      | ((value: ReadableStreamReadResult<Uint8Array>) => void)
-      | undefined;
-    let resolveSecondStreamReleased: (() => void) | undefined;
-    const secondStreamReleased = new Promise<void>((resolve) => {
-      resolveSecondStreamReleased = resolve;
     });
     const deferredFirstResponse = {
       body: {
@@ -4549,27 +4681,10 @@ describe('Workflow Activity vNext editor', () => {
       },
       ok: true,
     } as unknown as Response;
-    const deferredSecondResponse = {
-      body: {
-        getReader: () => ({
-          read: () => {
-            secondReadStarted = true;
-            return new Promise<ReadableStreamReadResult<Uint8Array>>(
-              (resolve) => {
-                resolveSecondRead = resolve;
-              },
-            );
-          },
-          releaseLock: () => resolveSecondStreamReleased?.(),
-        }),
-      },
-      ok: true,
-    } as unknown as Response;
-    mockRuntimeRunsApi.streamDraftRun
-      .mockResolvedValueOnce(deferredFirstResponse)
-      .mockResolvedValueOnce(deferredSecondResponse);
+    mockRuntimeRunsApi.streamChat.mockResolvedValueOnce(deferredFirstResponse);
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
+    await publishObservedWorkflow();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
     fireEvent.change(await screen.findByRole('textbox', { name: 'Input' }), {
@@ -4583,15 +4698,12 @@ describe('Workflow Activity vNext editor', () => {
       '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-beta',
     );
     expect(await screen.findByDisplayValue('Other workflow')).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
-    fireEvent.change(await screen.findByRole('textbox', { name: 'Input' }), {
-      target: { value: 'Review order 84' },
-    });
-    fireEvent.click(await screen.findByRole('button', { name: 'Start run' }));
-    await waitFor(() =>
-      expect(mockRuntimeRunsApi.streamDraftRun).toHaveBeenCalledTimes(2),
+    expect(screen.getByRole('button', { name: 'Run' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Run' })).toHaveAttribute(
+      'title',
+      'Publish this workflow before running it.',
     );
-    await waitFor(() => expect(secondReadStarted).toBe(true));
+    expect(mockRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       resolveFirstRead?.({
@@ -4604,15 +4716,7 @@ describe('Workflow Activity vNext editor', () => {
     });
 
     expect(screen.queryByText('Run failed')).not.toBeInTheDocument();
-    const startRun = screen.getByRole('button', { name: /Start run/ });
-    expect(startRun).toBeDisabled();
-    fireEvent.click(startRun);
-    expect(mockRuntimeRunsApi.streamDraftRun).toHaveBeenCalledTimes(2);
-
-    await act(async () => {
-      resolveSecondRead?.({ done: true, value: undefined });
-      await secondStreamReleased;
-    });
+    expect(mockRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(1);
   });
 
   it('opens a run detail only after the SSE run id is observed by the activity API', async () => {
@@ -4623,14 +4727,14 @@ describe('Workflow Activity vNext editor', () => {
         status: 'running',
       }),
     );
-    mockRuntimeRunsApi.streamDraftRun.mockResolvedValue(
+    mockRuntimeRunsApi.streamChat.mockResolvedValue(
       createSseResponse([
         { runStarted: { runId: 'run-observed-alpha' } },
         { runFinished: { runId: 'run-observed-alpha' } },
       ]),
     );
 
-    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    await renderPublishedWorkflowPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
     fireEvent.change(await screen.findByRole('textbox', { name: 'Input' }), {
@@ -4651,11 +4755,11 @@ describe('Workflow Activity vNext editor', () => {
   });
 
   it('keeps a stream run error as an execution failure even when no message is supplied', async () => {
-    mockRuntimeRunsApi.streamDraftRun.mockResolvedValue(
+    mockRuntimeRunsApi.streamChat.mockResolvedValue(
       createSseResponse([{ runError: {} }]),
     );
 
-    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    await renderPublishedWorkflowPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
     fireEvent.change(await screen.findByRole('textbox', { name: 'Input' }), {
@@ -4680,7 +4784,7 @@ describe('Workflow Activity vNext editor', () => {
         status: 'failed',
       }),
     );
-    mockRuntimeRunsApi.streamDraftRun.mockResolvedValue(
+    mockRuntimeRunsApi.streamChat.mockResolvedValue(
       createSseResponse([
         {
           runError: {
@@ -4691,7 +4795,7 @@ describe('Workflow Activity vNext editor', () => {
       ]),
     );
 
-    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    await renderPublishedWorkflowPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
     fireEvent.change(await screen.findByRole('textbox', { name: 'Input' }), {

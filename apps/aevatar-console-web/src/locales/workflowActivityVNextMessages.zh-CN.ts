@@ -99,7 +99,18 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.editor.loadingDescription': '正在准备编辑器…',
     'workflowActivityVNext.editor.openActivity': '打开活动',
     'workflowActivityVNext.editor.publish': '发布',
+    'workflowActivityVNext.editor.publishBeforeRun':
+      '请先发布此工作流，再运行。',
+    'workflowActivityVNext.editor.publishLatestBeforeRun':
+      '请先保存并发布最新更改，再运行。',
     'workflowActivityVNext.editor.publishUnavailable': '此工作流暂时无法发布。',
+    'workflowActivityVNext.editor.publishedRunDrawer': '运行已发布工作流',
+    'workflowActivityVNext.editor.publishedTargetUnavailable':
+      '请先发布此工作流，再运行。',
+    'workflowActivityVNext.editor.waitForEditorBeforeRun':
+      '请等待工作流更新完成。',
+    'workflowActivityVNext.editor.waitForPublishedRun':
+      '请等待已发布版本可用。',
     'workflowActivityVNext.publish.accepted': '发布请求已接受',
     'workflowActivityVNext.publish.approvalNotRequired': '此请求无需额外审批。',
     'workflowActivityVNext.publish.approvalRequired': '此请求运行前需要审批。',
@@ -134,6 +145,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.publish.publishedServiceId': '已发布服务 ID',
     'workflowActivityVNext.publish.publishing': '正在发布',
     'workflowActivityVNext.publish.publishingTo': '正在发布到 {service}',
+    'workflowActivityVNext.publish.revisionId': '版本 ID',
     'workflowActivityVNext.publish.reviewAgain': '再次审核',
     'workflowActivityVNext.publish.reviewAndPublish': '审核并发布',
     'workflowActivityVNext.publish.reviewDescription':
