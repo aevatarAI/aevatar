@@ -1372,8 +1372,19 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         commandPort.Calls.Should().Contain(call => call.Method == "ActivateServiceRevisionAsync");
     }
 
-    [Fact]
-    public async Task UpsertAsync_ShouldRejectExistingWorkflowReplay_WhenPreparedArtifactRequiresCapabilityAdmissionRebind()
+    [Theory]
+    [InlineData(
+        WorkflowCapabilityAdmissionPlanIntegrity.LegacySchemaVersion,
+        ExternalCapabilityExecutionMode.Interactive,
+        ExternalCapabilityExecutionMode.Interactive)]
+    [InlineData(
+        WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+        ExternalCapabilityExecutionMode.Interactive,
+        ExternalCapabilityExecutionMode.Durable)]
+    public async Task UpsertAsync_ShouldRejectExistingWorkflowReplay_WhenPreparedArtifactRequiresCapabilityAdmissionRebind(
+        string admissionSchemaVersion,
+        ExternalCapabilityExecutionMode workflowExecutionMode,
+        ExternalCapabilityExecutionMode admissionExecutionMode)
     {
         const string revisionId = "rev-platform-bind-1";
         const string workflowYaml = "name: main\nsteps:\n  - run: echo hello";
@@ -1421,7 +1432,9 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                             revisionId,
                             "main",
                             workflowYaml,
-                            WorkflowCapabilityAdmissionPlanIntegrity.LegacySchemaVersion)),
+                            admissionSchemaVersion,
+                            workflowExecutionMode,
+                            admissionExecutionMode)),
                 ],
                 DateTimeOffset.UtcNow));
         var service = CreateService(
@@ -2251,7 +2264,9 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         string revisionId,
         string workflowName,
         string workflowYaml,
-        string admissionSchemaVersion) =>
+        string admissionSchemaVersion,
+        ExternalCapabilityExecutionMode workflowExecutionMode,
+        ExternalCapabilityExecutionMode admissionExecutionMode) =>
         new()
         {
             Identity = DefaultServiceIdentity(),
@@ -2275,14 +2290,14 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                 {
                     WorkflowName = workflowName,
                     WorkflowYaml = workflowYaml,
-                    ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                    ExecutionMode = workflowExecutionMode,
                     DefinitionActorId = DefaultOptions.BuildDefinitionActorIdPrefix(
                         ScopeId,
                         DefaultOptions.DefaultServiceId),
                     CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
                     {
                         SchemaVersion = admissionSchemaVersion,
-                        ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                        ExecutionMode = admissionExecutionMode,
                     },
                 },
             },

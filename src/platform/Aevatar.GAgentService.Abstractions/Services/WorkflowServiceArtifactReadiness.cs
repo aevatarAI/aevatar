@@ -14,8 +14,12 @@ public static class WorkflowServiceArtifactReadiness
             return true;
 
         var workflowPlan = artifact.DeploymentPlan.WorkflowPlan;
-        if (workflowPlan == null || workflowPlan.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified)
+        if (workflowPlan == null ||
+            workflowPlan.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
+            !Enum.IsDefined(workflowPlan.ExecutionMode))
+        {
             return true;
+        }
 
         var admissionPlan = workflowPlan.CapabilityAdmissionPlan;
         if (admissionPlan == null)
@@ -26,6 +30,8 @@ public static class WorkflowServiceArtifactReadiness
                    admissionPlan.SchemaVersion,
                    WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
                    StringComparison.Ordinal)
-               || admissionPlan.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified;
+               || admissionPlan.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified
+               || !Enum.IsDefined(admissionPlan.ExecutionMode)
+               || workflowPlan.ExecutionMode != admissionPlan.ExecutionMode;
     }
 }

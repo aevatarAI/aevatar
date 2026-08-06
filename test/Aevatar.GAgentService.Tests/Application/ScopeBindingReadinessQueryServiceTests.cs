@@ -356,7 +356,7 @@ public sealed class ScopeBindingReadinessQueryServiceTests
     }
 
     [Fact]
-    public async Task GetReadinessAsync_WhenWorkflowArtifactHasLegacyAdmissionPlan_ShouldReturnRebindRequired()
+    public async Task GetReadinessAsync_WhenWorkflowArtifactHasLegacyAdmissionPlan_ShouldReturnInvocationCatalogNotReady()
     {
         var lifecyclePort = new FakeServiceLifecycleQueryPort
         {
