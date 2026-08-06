@@ -40,6 +40,7 @@ import {
   AevatarStatusTag,
 } from "@/shared/ui/aevatarPageShells";
 import { AevatarCompactText } from "@/shared/ui/compactText";
+import AevatarContentSkeleton from "@/shared/ui/AevatarContentSkeleton";
 import {
   codeBlockStyle,
   summaryFieldLabelStyle,
@@ -640,7 +641,12 @@ const WorkflowsPage: React.FC = () => {
           title={t("pages.workflows.index.workflow.catalog", "Workflow catalog")}
         >
           {catalogQuery.isLoading ? (
-            <Typography.Text type="secondary">{t("pages.workflows.index.loading.workflow.catalog", "Loading workflow catalog…")}</Typography.Text>
+            <AevatarContentSkeleton
+              ariaLabel={t("pages.workflows.index.loading.workflow.catalog", "Loading workflow catalog")}
+              columnWidths={["1.4fr", "1fr", "1fr", "1.2fr", 160]}
+              rows={4}
+              variant="table"
+            />
           ) : filteredRows.length === 0 ? (
             <Empty
               description={t("pages.workflows.index.no.workflows.matched.the.current", "No workflows matched the current filters.")}
