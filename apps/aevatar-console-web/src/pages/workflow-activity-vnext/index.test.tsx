@@ -4571,7 +4571,7 @@ describe('Workflow Activity vNext creation', () => {
       ),
     ).toBeVisible();
     expect(
-      screen.getByRole('button', { name: 'Create workflow' }),
+      screen.getByRole('button', { name: 'Create and open' }),
     ).toBeEnabled();
   });
 
@@ -4608,7 +4608,7 @@ describe('Workflow Activity vNext creation', () => {
     fireEvent.change(screen.getByLabelText('Workflow name'), {
       target: { value: 'Incident review' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create workflow' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create and open' }));
 
     await waitFor(() =>
       expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledTimes(1),
@@ -4624,7 +4624,7 @@ describe('Workflow Activity vNext creation', () => {
     );
   });
 
-  it('does not expose the scope id as the built-in save location label', async () => {
+  it('does not expose the only built-in save location', async () => {
     mockStudioApi.getWorkspaceSettings.mockResolvedValue({
       runtimeBaseUrl: '',
       directories: [
@@ -4644,7 +4644,8 @@ describe('Workflow Activity vNext creation', () => {
     await waitFor(() => expect(blankButton).toBeEnabled());
     fireEvent.click(blankButton);
 
-    expect(screen.getByText('Default workspace')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Save to')).not.toBeInTheDocument();
+    expect(screen.queryByText('Default workspace')).not.toBeInTheDocument();
     expect(screen.queryByText('scope-alpha')).not.toBeInTheDocument();
   });
 
@@ -4659,13 +4660,10 @@ describe('Workflow Activity vNext creation', () => {
     });
     await waitFor(() => expect(describeButton).toBeEnabled());
     fireEvent.click(describeButton);
-    fireEvent.change(screen.getByLabelText('Workflow name'), {
-      target: { value: 'Weekly review' },
-    });
-    fireEvent.change(screen.getByLabelText('Automation goal'), {
+    fireEvent.change(screen.getByLabelText('What should this workflow do?'), {
       target: { value: 'Summarize this week' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Generate workflow' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Generate and open' }));
 
     expect(
       await screen.findByText("Workflow couldn't be created"),
@@ -4676,7 +4674,7 @@ describe('Workflow Activity vNext creation', () => {
     expect(
       screen.queryByText("Workflow couldn't be created"),
     ).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Workflow name')).toHaveValue('Weekly review');
+    expect(screen.getByLabelText('Workflow name')).toHaveValue('');
   });
 
   it('keeps bundled template version metadata out of the primary interface', async () => {
@@ -4706,11 +4704,8 @@ describe('Workflow Activity vNext creation', () => {
     });
     await waitFor(() => expect(templateButton).toBeEnabled());
     fireEvent.click(templateButton);
-    fireEvent.change(screen.getByLabelText('Workflow name'), {
-      target: { value: 'Incident triage QA' },
-    });
     fireEvent.click(
-      screen.getByRole('button', { name: 'Create from template' }),
+      screen.getByRole('button', { name: 'Use template and open' }),
     );
 
     await waitFor(() => expect(mockStudioApi.parseYaml).toHaveBeenCalled());
@@ -4738,9 +4733,7 @@ describe('Workflow Activity vNext creation', () => {
     fireEvent.change(screen.getByLabelText('Workflow YAML'), {
       target: { value: 'name: [broken' },
     });
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Validate and create' }),
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'Import and open' }));
 
     expect(await screen.findByText('Invalid YAML')).toBeInTheDocument();
     expect(mockStudioApi.createWorkflowDraft).not.toHaveBeenCalled();

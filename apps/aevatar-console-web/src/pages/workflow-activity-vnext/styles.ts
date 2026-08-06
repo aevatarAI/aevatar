@@ -174,12 +174,20 @@ export const workflowActivityVNextCss = `
 .wa-vnext__modal-field { display: grid; font-size: 12px; font-weight: 600; gap: 6px; }
 .wa-vnext__mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
 .wa-vnext__split { display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr) minmax(280px, 34%); }
-.wa-vnext__creation-options { border: 0; display: grid; gap: 12px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; min-width: 0; padding: 0; }
+.wa-vnext__creation-options { border: 0; display: grid; gap: 12px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 auto; max-width: 960px; min-width: 0; padding: 0; width: 100%; }
 .wa-vnext__creation-option { background: var(--wa-surface); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); min-height: 142px; padding: 18px; text-align: left; transition: border-color .15s ease, box-shadow .15s ease; }
 .wa-vnext__creation-option:hover:not(:disabled) { border-color: var(--wa-blue); box-shadow: 0 3px 12px rgba(16, 24, 40, .08); }
 .wa-vnext__creation-option-icon { color: var(--wa-blue); display: block; font-size: 20px; line-height: 24px; }
 .wa-vnext__creation-option-title { display: block; font-size: 14px; font-weight: 700; line-height: 20px; margin-top: 13px; }
 .wa-vnext__creation-option-description { color: var(--wa-muted); display: block; font-size: 12px; line-height: 17px; margin-top: 5px; }
+.wa-vnext__creation-surface { margin: 0 auto; max-width: 720px; width: 100%; }
+.wa-vnext__creation-form { display: grid; gap: 22px; padding-block: 4px 28px; }
+.wa-vnext__creation-heading { align-items: center; border-bottom: 1px solid var(--wa-line); display: flex; gap: 10px; padding-bottom: 14px; }
+.wa-vnext__creation-heading .ant-btn { margin-left: -12px; }
+.wa-vnext__creation-field > span:first-child { color: var(--wa-ink); display: block; font-size: 12px; font-weight: 650; line-height: 18px; }
+.wa-vnext__creation-actions { display: flex; justify-content: flex-end; padding-top: 2px; }
+.wa-vnext__creation-actions .ant-btn { min-width: 156px; }
+.wa-vnext__creation-template-preview { border-left: 2px solid var(--wa-blue); padding: 2px 0 2px 14px; }
 .wa-vnext__form-title { font-size: 16px; font-weight: 700; line-height: 22px; margin: 0; }
 .wa-vnext__editor-toolbar { flex-wrap: nowrap; min-width: 0; overflow: visible; }
 .wa-vnext__editor-toolbar > * { flex: 0 1 auto; min-width: 0; }
@@ -348,6 +356,9 @@ export const workflowActivityVNextCss = `
   .wa-vnext__toolbar-filters .ant-space-item, .wa-vnext__toolbar-filters .ant-select, .wa-vnext__toolbar-filters .ant-btn { width: 100%; }
   .wa-vnext__creation-options { grid-template-columns: 1fr; }
   .wa-vnext__creation-option { min-height: 118px; }
+  .wa-vnext__creation-form { gap: 18px; }
+  .wa-vnext__creation-actions { justify-content: stretch; }
+  .wa-vnext__creation-actions .ant-btn { width: 100%; }
   .wa-vnext__settings-panel { padding: 16px; }
   .wa-vnext__settings-nav { gap: 18px; }
   .wa-vnext__settings-field { align-items: stretch; gap: 8px; grid-template-columns: 1fr; min-height: 0; padding: 16px 0; }

@@ -323,18 +323,16 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.new.back': 'Back to workflows',
   'workflowActivityVNext.new.changeMethod': 'Change method',
   'workflowActivityVNext.new.chooserAria': 'Workflow creation methods',
-  'workflowActivityVNext.new.createBlank': 'Create workflow',
+  'workflowActivityVNext.new.createBlank': 'Create and open',
   'workflowActivityVNext.new.createFailed': "Workflow couldn't be created",
-  'workflowActivityVNext.new.createGenerated': 'Create workflow',
-  'workflowActivityVNext.new.createTemplate': 'Create from template',
+  'workflowActivityVNext.new.createTemplate': 'Use template and open',
   'workflowActivityVNext.new.creatingDescription':
     'This usually takes only a moment.',
   'workflowActivityVNext.new.description': 'Choose how you want to start.',
   'workflowActivityVNext.new.defaultWorkspace': 'Default workspace',
-  'workflowActivityVNext.new.directory': 'Save location',
-  'workflowActivityVNext.new.generate': 'Generate workflow',
-  'workflowActivityVNext.new.generatedYaml': 'Generated YAML',
-  'workflowActivityVNext.new.goal': 'Automation goal',
+  'workflowActivityVNext.new.directory': 'Save to',
+  'workflowActivityVNext.new.generate': 'Generate and open',
+  'workflowActivityVNext.new.goal': 'What should this workflow do?',
   'workflowActivityVNext.new.mode.blank': 'Start blank',
   'workflowActivityVNext.new.mode.blank.description':
     'Start with an empty canvas and add steps yourself.',
@@ -365,9 +363,11 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.new.template': 'Template',
   'workflowActivityVNext.new.templateDescription.incidentTriage':
     'Classify an incident, prepare a response, and request human approval.',
+  'workflowActivityVNext.new.templateCopyName.incidentTriage':
+    'Incident triage copy',
   'workflowActivityVNext.new.templateName.incidentTriage': 'Incident triage',
   'workflowActivityVNext.new.title': 'New workflow',
-  'workflowActivityVNext.new.validateCreate': 'Validate and create',
+  'workflowActivityVNext.new.validateCreate': 'Import and open',
   'workflowActivityVNext.new.workspaceLoading': 'Loading save locations…',
   'workflowActivityVNext.new.workspaceLoadingDescription':
     'Choose a creation method now. Your input stays on this page while the current workspace save location loads.',

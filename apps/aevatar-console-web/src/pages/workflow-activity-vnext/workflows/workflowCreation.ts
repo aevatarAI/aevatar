@@ -43,6 +43,29 @@ export function slugifyWorkflowFileName(name: string): string {
   return `${slug || 'workflow'}.yaml`;
 }
 
+export function resolveAvailableWorkflowFileName(
+  name: string,
+  directoryId: string,
+  drafts: readonly {
+    readonly directoryId: string;
+    readonly fileName: string;
+  }[],
+): string {
+  const preferred = slugifyWorkflowFileName(name);
+  const stem = preferred.slice(0, -'.yaml'.length);
+  const occupied = new Set(
+    drafts
+      .filter((draft) => draft.directoryId === directoryId)
+      .map((draft) => draft.fileName.trim().toLowerCase()),
+  );
+
+  if (!occupied.has(preferred.toLowerCase())) return preferred;
+
+  let suffix = 2;
+  while (occupied.has(`${stem}-${suffix}.yaml`.toLowerCase())) suffix += 1;
+  return `${stem}-${suffix}.yaml`;
+}
+
 export function createBlankWorkflowYaml(name: string): string {
   const documentName =
     name
