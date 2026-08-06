@@ -314,6 +314,16 @@ const WorkflowEditorPage: React.FC<{
     return saved;
   }, [editor.save, toast]);
 
+  React.useEffect(() => {
+    if (!editor.saveError) return;
+    toast.error(
+      t(
+        'workflowActivityVNext.editor.saveFailed',
+        "Workflow couldn't be saved",
+      ),
+    );
+  }, [editor.saveError, toast]);
+
   const retryMaterialization = React.useCallback(async () => {
     if (await editor.retryMaterialization()) {
       toast.success(
@@ -626,10 +636,6 @@ const WorkflowEditorPage: React.FC<{
   return (
     <WorkflowActivityVNextShell
       activeSection="workflows"
-      description={t(
-        'workflowActivityVNext.editor.description',
-        'Build, test, and refine this workflow.',
-      )}
       headerActions={
         <>
           <Button
@@ -767,17 +773,6 @@ const WorkflowEditorPage: React.FC<{
           />
         </div>
       </div>
-      {editor.saveError ? (
-        <Alert
-          description={<TechnicalDetails>{editor.saveError}</TechnicalDetails>}
-          message={t(
-            'workflowActivityVNext.editor.saveFailed',
-            "Workflow couldn't be saved",
-          )}
-          showIcon
-          type="error"
-        />
-      ) : null}
       {editor.nodeInsertionError ? (
         <Alert
           action={

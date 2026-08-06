@@ -21,7 +21,7 @@ import { workflowActivityVNextCss } from './styles';
 type ShellProps = {
   readonly activeSection: WorkflowActivitySection;
   readonly children: React.ReactNode;
-  readonly description: string;
+  readonly description?: string;
   readonly footer?: React.ReactNode;
   readonly headerActions?: React.ReactNode;
   readonly onNavigate?: (target: string) => void;
@@ -120,7 +120,7 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
       <header className="wa-vnext__header">
         <div className="wa-vnext__heading-copy">
           <h1>{title}</h1>
-          <p>{description}</p>
+          {description ? <p>{description}</p> : null}
         </div>
         {headerActions ? (
           <div className="wa-vnext__header-actions">{headerActions}</div>

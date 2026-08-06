@@ -1663,6 +1663,17 @@ describe('Workflow Activity vNext editor', () => {
 
   afterEach(() => cleanupTestQueryClients());
 
+  it('keeps the editor header focused on the workflow name', async () => {
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(
+      await screen.findByDisplayValue('Committed source'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('Build, test, and refine this workflow.'),
+    ).not.toBeInTheDocument();
+  });
+
   it('requires an explicitly selected real scope service before publishing a saved workflow', async () => {
     mockLocation =
       '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha';
@@ -3095,7 +3106,7 @@ describe('Workflow Activity vNext editor', () => {
     expect(mockRuntimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
   });
 
-  it("keeps a save failure's server detail out of the primary editor message", async () => {
+  it('reports a save failure with a toast instead of a page alert', async () => {
     mockStudioApi.saveWorkflow.mockRejectedValue(
       new Error('PUT /api/studio/workflows/wf-committed-source returned 500'),
     );
@@ -3110,14 +3121,19 @@ describe('Workflow Activity vNext editor', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
 
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Workflow couldn't be saved",
+      ),
+    );
     expect(
-      await screen.findByText("Workflow couldn't be saved"),
-    ).toBeInTheDocument();
+      screen.queryByText("Workflow couldn't be saved"),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByText(
         'PUT /api/studio/workflows/wf-committed-source returned 500',
       ),
-    ).not.toBeVisible();
+    ).not.toBeInTheDocument();
   });
 
   it('puts editable node configuration first and keeps raw JSON advanced', async () => {
