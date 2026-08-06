@@ -544,10 +544,13 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.workflows.allView': 'All workflows',
   'workflowActivityVNext.workflows.clearFilters': 'Clear filters',
   'workflowActivityVNext.workflows.columnActions': 'Actions',
+  'workflowActivityVNext.workflows.columnStatus': 'Status',
+  'workflowActivityVNext.workflows.columnUpdated': 'Last updated',
   'workflowActivityVNext.workflows.columnWorkflow': 'Workflow',
   'workflowActivityVNext.workflows.copyReference': 'Copy workflow reference',
   'workflowActivityVNext.workflows.description':
     'Create, edit, and run your workflows.',
+  'workflowActivityVNext.workflows.descriptionAria': 'Description for {name}',
   'workflowActivityVNext.workflows.draftsUnavailable':
     'Draft workflows unavailable',
   'workflowActivityVNext.workflows.draftsUnavailableDescription':
@@ -589,7 +592,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.workflows.viewFilter': 'Workflow view',
   'workflowActivityVNext.workflows.partialUnavailable':
     "Some workflows couldn't be loaded",
-  'workflowActivityVNext.workflows.publishedRevision': 'Published {revision}',
+  'workflowActivityVNext.workflows.publishedStatus': 'Published',
   'workflowActivityVNext.workflows.referenceCopied':
     'Workflow reference copied',
   'workflowActivityVNext.workflows.referenceCopyFailed':
@@ -600,9 +603,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.workflows.renameSave': 'Save name',
   'workflowActivityVNext.workflows.renameSuccess': 'Workflow renamed',
   'workflowActivityVNext.workflows.renameTitle': 'Rename workflow',
-  'workflowActivityVNext.workflows.updatedContext': 'Updated {updatedAt}',
   'workflowActivityVNext.workflows.viewActivity': 'Activity',
-  'workflowActivityVNext.workflows.workspaceOwner': 'Workspace',
 } as const;
 
 export default workflowActivityVNextMessages;

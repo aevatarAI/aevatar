@@ -443,21 +443,23 @@ describe('Workflow Activity vNext catalogue', () => {
     );
   });
 
-  it('distinguishes same-name workflows with purpose, publication state, ownership, and localized update context', async () => {
+  it('separates workflow status and last update while disclosing descriptions on demand', async () => {
     const writeText = jest.fn().mockResolvedValue(undefined);
     Object.defineProperty(window.navigator, 'clipboard', {
       configurable: true,
       value: { writeText },
     });
+    const emeaDescription = 'Route urgent EMEA requests to the on-call queue';
+    const apacDescription = 'Escalate APAC billing requests to finance';
     mockStudioApi.listWorkflowDrafts.mockResolvedValue([
       {
         workflowId: 'wf-support-emea',
         name: 'Support triage',
-        description: 'Route urgent EMEA requests to the on-call queue',
+        description: emeaDescription,
         fileName: 'support-emea.yaml',
         filePath: '/emea/support-emea.yaml',
         directoryId: 'directory-emea',
-        directoryLabel: 'EMEA operations',
+        directoryLabel: 'scope-alpha',
         stepCount: 3,
         hasLayout: true,
         updatedAtUtc: '2026-08-04T10:00:00Z',
@@ -467,11 +469,11 @@ describe('Workflow Activity vNext catalogue', () => {
         serviceKey: 'svc-support-apac',
         workflowId: 'wf-support-apac',
         name: 'Support triage',
-        description: 'Escalate APAC billing requests to finance',
+        description: apacDescription,
         fileName: 'support-apac.yaml',
         filePath: '/apac/support-apac.yaml',
         directoryId: 'directory-apac',
-        directoryLabel: 'APAC operations',
+        directoryLabel: 'scope-alpha',
         stepCount: 5,
         hasLayout: true,
         updatedAtUtc: '2026-08-05T11:30:00Z',
@@ -490,36 +492,99 @@ describe('Workflow Activity vNext catalogue', () => {
         deploymentStatus: 'active',
         updatedAt: '2026-08-05T11:30:00Z',
       },
+      {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-nightly-reconciliation',
+        displayName: 'Nightly reconciliation',
+        serviceKey: 'svc-nightly-reconciliation',
+        workflowName: 'nightly_reconciliation',
+        actorId: 'definition-nightly-reconciliation',
+        activeRevisionId: 'rev-nightly-reconciliation-2',
+        deploymentId: 'deployment-nightly-reconciliation',
+        deploymentStatus: 'active',
+        updatedAt: '2026-08-03T09:15:00Z',
+      },
     ]);
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
     const duplicateNames = await screen.findAllByText('Support triage');
     expect(duplicateNames).toHaveLength(2);
-    const emeaRow = screen
-      .getByText('Route urgent EMEA requests to the on-call queue')
-      .closest('tr');
-    const apacRow = screen
-      .getByText('Escalate APAC billing requests to finance')
+    const apacRow = duplicateNames[0].closest('tr');
+    const emeaRow = duplicateNames[1].closest('tr');
+    const noDescriptionRow = screen
+      .getByText('Nightly reconciliation')
       .closest('tr');
     expect(emeaRow).not.toBeNull();
     expect(apacRow).not.toBeNull();
+    expect(noDescriptionRow).not.toBeNull();
+
+    const workflowTable = screen.getByRole('table');
+    expect(within(workflowTable).getAllByRole('columnheader')).toHaveLength(4);
+    expect(
+      within(workflowTable).getByRole('columnheader', { name: 'Status' }),
+    ).toBeVisible();
+    expect(
+      within(workflowTable).getByRole('columnheader', {
+        name: 'Last updated',
+      }),
+    ).toBeVisible();
+    expect(
+      within(workflowTable).queryByRole('columnheader', { name: 'Created' }),
+    ).not.toBeInTheDocument();
+
     expect(within(emeaRow as HTMLElement).getByText('Draft')).toBeVisible();
+    expect(within(apacRow as HTMLElement).getByText('Published')).toBeVisible();
     expect(
-      within(emeaRow as HTMLElement).getByText(/EMEA operations/),
-    ).toBeVisible();
+      within(apacRow as HTMLElement).queryByText('rev-support-apac-7'),
+    ).not.toBeInTheDocument();
     expect(
-      within(apacRow as HTMLElement).getByText('Published rev-support-apac-7'),
-    ).toBeVisible();
-    expect(
-      within(apacRow as HTMLElement).getByText(/APAC operations/),
-    ).toBeVisible();
+      within(workflowTable).queryByText('scope-alpha'),
+    ).not.toBeInTheDocument();
     expect(
       within(apacRow as HTMLElement).queryByText('wf-support-apac'),
     ).not.toBeInTheDocument();
     expect(
       within(apacRow as HTMLElement).queryByText('svc-support-apac'),
     ).not.toBeInTheDocument();
+
+    const apacUpdatedAt = new Intl.DateTimeFormat(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }).format(new Date('2026-08-05T11:30:00Z'));
+    expect(
+      within(apacRow as HTMLElement).getByText(apacUpdatedAt),
+    ).toBeVisible();
+    expect(
+      within(apacRow as HTMLElement)
+        .getByText(apacUpdatedAt)
+        .closest('td'),
+    ).toHaveAttribute('data-label', 'Last updated');
+
+    expect(screen.queryByText(emeaDescription)).not.toBeInTheDocument();
+    expect(screen.queryByText(apacDescription)).not.toBeInTheDocument();
+    const descriptionTriggers = within(workflowTable).getAllByRole('button', {
+      name: 'Description for Support triage',
+    });
+    expect(descriptionTriggers).toHaveLength(2);
+    expect(
+      within(noDescriptionRow as HTMLElement).queryByRole('button', {
+        name: 'Description for Nightly reconciliation',
+      }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.mouseEnter(descriptionTriggers[1]);
+    const disclosedDescription = await screen.findByText(emeaDescription);
+    await waitFor(() => expect(disclosedDescription).toBeVisible());
+    expect(disclosedDescription).toHaveClass('wa-vnext__workflow-description');
+    expect(disclosedDescription.closest('.ant-popover')).toHaveClass(
+      'ant-popover-placement-bottomLeft',
+    );
+
+    fireEvent.mouseLeave(descriptionTriggers[1]);
+    await waitFor(() => expect(disclosedDescription).not.toBeVisible());
+    fireEvent.focus(descriptionTriggers[1]);
+    await waitFor(() => expect(disclosedDescription).toBeVisible());
 
     fireEvent.click(
       within(apacRow as HTMLElement).getByRole('button', {
@@ -599,9 +664,10 @@ describe('Workflow Activity vNext catalogue', () => {
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
-    const apacRow = (
-      await screen.findByText('Escalate APAC billing requests')
-    ).closest('tr');
+    const [apacDescriptionTrigger] = await screen.findAllByRole('button', {
+      name: 'Description for Support triage',
+    });
+    const apacRow = apacDescriptionTrigger.closest('tr');
     fireEvent.click(
       within(apacRow as HTMLElement).getByRole('button', {
         name: 'More actions for Support triage',
