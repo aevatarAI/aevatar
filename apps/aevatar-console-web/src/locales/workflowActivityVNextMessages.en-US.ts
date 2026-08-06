@@ -110,15 +110,10 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.waitForPublishedRun':
     'Wait for the published revision to become available.',
   'workflowActivityVNext.publish.accepted': 'Publication accepted',
-  'workflowActivityVNext.publish.approvalNotRequired':
-    'No additional approval is required.',
-  'workflowActivityVNext.publish.approvalRequired':
-    'Approval is required before this request can run.',
   'workflowActivityVNext.publish.addExecutableStep':
     'Add at least one executable step before publishing.',
   'workflowActivityVNext.publish.applyNodeChanges':
     'Apply or discard node configuration before publishing.',
-  'workflowActivityVNext.publish.backToService': 'Back',
   'workflowActivityVNext.publish.blocked': 'Publish blocked · {count} issues',
   'workflowActivityVNext.publish.blockedOne': 'Publish blocked · 1 issue',
   'workflowActivityVNext.publish.checkAgain': 'Check again',
@@ -126,57 +121,30 @@ const workflowActivityVNextMessages = {
     'Publication is taking longer to appear',
   'workflowActivityVNext.publish.delayedDescription':
     'Check again for the latest publishing status.',
-  'workflowActivityVNext.publish.destinationDescription':
-    'Choose the service that will use {workflowName}.',
   'workflowActivityVNext.publish.failed': "Publication couldn't be confirmed",
   'workflowActivityVNext.publish.failedDescription':
-    'Review the workflow or try publishing again.',
+    'Resolve the error or try publishing again.',
   'workflowActivityVNext.publish.forbiddenDescription':
     "You don't have access to check this publication.",
-  'workflowActivityVNext.publish.loadingServices': 'Loading services…',
-  'workflowActivityVNext.publish.noExternalRequests':
-    'No external requests need review.',
-  'workflowActivityVNext.publish.noServices':
-    'No services are available in this workspace',
   'workflowActivityVNext.publish.observed': 'Workflow published',
   'workflowActivityVNext.publish.observedDescription':
-    'The selected service is now using this workflow.',
+    'The workflow is now published.',
   'workflowActivityVNext.publish.observingDescription':
-    'Checking whether the selected service is ready.',
+    'Checking whether the published revision is ready.',
   'workflowActivityVNext.publish.published': 'Published',
   'workflowActivityVNext.publish.publishedServiceId': 'Published service ID',
   'workflowActivityVNext.publish.publishing': 'Publishing',
-  'workflowActivityVNext.publish.publishingTo': 'Publishing to {service}',
   'workflowActivityVNext.publish.revisionId': 'Revision ID',
-  'workflowActivityVNext.publish.reviewAgain': 'Review again',
-  'workflowActivityVNext.publish.reviewAndPublish': 'Review and publish',
-  'workflowActivityVNext.publish.reviewDescription':
-    'Review what this workflow may do when it runs.',
-  'workflowActivityVNext.publish.reviewing': 'Reviewing publication…',
-  'workflowActivityVNext.publish.reviewingDescription':
-    'Preparing this workflow for review.',
-  'workflowActivityVNext.publish.reviewUnavailable':
-    "We couldn't prepare this workflow for publishing.",
   'workflowActivityVNext.publish.readinessIssues': 'Publish readiness issues',
   'workflowActivityVNext.publish.resolvePublication':
     'Resolve the current publication status before publishing again.',
-  'workflowActivityVNext.publish.risk': 'Impact',
-  'workflowActivityVNext.publish.risk.destructive':
-    'May delete or permanently change data',
-  'workflowActivityVNext.publish.risk.readOnly': 'Read only',
-  'workflowActivityVNext.publish.risk.write': 'Can make changes',
   'workflowActivityVNext.publish.saveBeforePublishing':
     'Save this workflow before publishing.',
   'workflowActivityVNext.publish.saveChangesBeforePublishing':
     'Save your changes before publishing.',
-  'workflowActivityVNext.publish.selectService': 'Choose a service',
-  'workflowActivityVNext.publish.service': 'Service',
-  'workflowActivityVNext.publish.servicesUnavailable':
-    'Services are unavailable',
   'workflowActivityVNext.publish.submitting': 'Submitting publication…',
   'workflowActivityVNext.publish.submittingDescription':
-    'Sending this workflow to the selected service.',
-  'workflowActivityVNext.publish.title': 'Publish workflow',
+    'Publishing this workflow.',
   'workflowActivityVNext.publish.waitForPublication':
     'Wait for the current publication to finish.',
   'workflowActivityVNext.publish.waitForEditorUpdate':

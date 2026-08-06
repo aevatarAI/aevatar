@@ -16,7 +16,6 @@ import { t } from '@/shared/i18n/messages';
 import { getLocationSnapshot, history } from '@/shared/navigation/history';
 import { studioApi } from '@/shared/studio/api';
 import { createWorkflowRevisionIdentityCandidate } from '@/shared/studio/explicitRequestConfirmation';
-import type { StudioExplicitRequestPreview } from '@/shared/studio/models';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import {
   getRunStatusPresentation,
@@ -39,9 +38,6 @@ import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 import WorkflowNodeInspector, {
   type WorkflowNodeInspectorHandle,
 } from './WorkflowNodeInspector';
-import WorkflowPublishDialog, {
-  type WorkflowPublishConfirmationInput,
-} from './WorkflowPublishDialog';
 import WorkflowPublishedRunDrawer from './WorkflowPublishedRunDrawer';
 
 function errorMessage(error: unknown): string {
@@ -60,21 +56,7 @@ type ActiveEditorRoute = {
   readonly workflowId: string;
 };
 
-type PublicationStage =
-  | 'idle'
-  | 'reviewing'
-  | 'submitting'
-  | 'accepted'
-  | 'failed';
-
-type PendingWorkflowPublication = {
-  readonly documentVersion: number;
-  readonly preview: StudioExplicitRequestPreview;
-  readonly serviceId: string;
-  readonly workflowId: string;
-  readonly workflowName: string;
-  readonly workflowYaml: string;
-};
+type PublicationStage = 'idle' | 'submitting' | 'accepted' | 'failed';
 
 type PublishReadinessIssue = {
   readonly id: string;
@@ -84,31 +66,6 @@ type PublishReadinessIssue = {
 
 function hasNonBlankIdentifier(value: unknown): value is string {
   return typeof value === 'string' && Boolean(value.trim());
-}
-
-function confirmationsMatchPreview(
-  input: WorkflowPublishConfirmationInput,
-  review: PendingWorkflowPublication,
-): boolean {
-  if (
-    input.serviceId !== review.serviceId ||
-    input.preview.workflowId !== review.preview.workflowId ||
-    input.preview.revisionId !== review.preview.revisionId ||
-    input.confirmations.length !== review.preview.items.length
-  ) {
-    return false;
-  }
-
-  return review.preview.items.every((item) =>
-    input.confirmations.some(
-      (confirmation) =>
-        confirmation.workflowId === review.preview.workflowId &&
-        confirmation.revisionId === review.preview.revisionId &&
-        confirmation.callSiteId === item.callSiteId &&
-        confirmation.requestContractDigest === item.requestContractDigest &&
-        confirmation.attestedRisk === item.effectiveRisk,
-    ),
-  );
 }
 
 const WorkflowEditorPage: React.FC<{
@@ -130,7 +87,6 @@ const WorkflowEditorPage: React.FC<{
   const toast = useConsoleToast();
   const [mode, setMode] = React.useState<'canvas' | 'yaml'>('canvas');
   const [nodeLibraryOpen, setNodeLibraryOpen] = React.useState(false);
-  const [publishDialogOpen, setPublishDialogOpen] = React.useState(false);
   const [publicationStage, setPublicationStage] =
     React.useState<PublicationStage>('idle');
   const [publicationError, setPublicationError] = React.useState<unknown>(null);
@@ -138,8 +94,6 @@ const WorkflowEditorPage: React.FC<{
     React.useState<WorkflowPublicationReceipt | null>(null);
   const [publishedDocumentVersion, setPublishedDocumentVersion] =
     React.useState<number | null>(null);
-  const [pendingPublication, setPendingPublication] =
-    React.useState<PendingWorkflowPublication | null>(null);
   const [runPanelOpen, setRunPanelOpen] = React.useState(false);
   const [pendingNavigation, setPendingNavigation] =
     React.useState<PendingNavigation | null>(null);
@@ -148,7 +102,8 @@ const WorkflowEditorPage: React.FC<{
   const workflowNameRef = React.useRef<React.ElementRef<typeof Input>>(null);
   const saveStatusRef = React.useRef<HTMLSpanElement>(null);
   const inspectorRef = React.useRef<WorkflowNodeInspectorHandle>(null);
-  const publicationReviewGenerationRef = React.useRef(0);
+  const publicationGenerationRef = React.useRef(0);
+  const publicationInFlightRef = React.useRef(false);
   const runRequested = new URLSearchParams(location.search).get('run') === '1';
   const editorWriteLocked = editor.saving || editor.structuralMutationPending;
   const publication = useWorkflowPublication(publicationReceipt);
@@ -170,19 +125,18 @@ const WorkflowEditorPage: React.FC<{
       !hasUnappliedNodeChanges,
   );
 
-  const invalidatePublicationReview = React.useCallback(() => {
-    publicationReviewGenerationRef.current += 1;
+  const invalidatePublication = React.useCallback(() => {
+    publicationGenerationRef.current += 1;
+    publicationInFlightRef.current = false;
   }, []);
 
   const clearPublication = React.useCallback(() => {
-    invalidatePublicationReview();
-    setPendingPublication(null);
+    invalidatePublication();
     setPublicationError(null);
     setPublicationReceipt(null);
     setPublishedDocumentVersion(null);
     setPublicationStage('idle');
-    setPublishDialogOpen(false);
-  }, [invalidatePublicationReview]);
+  }, [invalidatePublication]);
 
   React.useEffect(() => {
     if (runRequested && canOpenPublishedRun) setRunPanelOpen(true);
@@ -356,165 +310,114 @@ const WorkflowEditorPage: React.FC<{
     await editor.retryMaterialization();
   }, [editor.retryMaterialization]);
 
-  const reviewPublication = React.useCallback(
-    async (
-      selectedServiceId: string,
-    ): Promise<StudioExplicitRequestPreview> => {
-      if (!hasNonBlankIdentifier(selectedServiceId)) {
-        throw new Error('Select a service before reviewing this publication.');
-      }
+  const publishWorkflow = React.useCallback(async (): Promise<void> => {
+    if (publicationInFlightRef.current) return;
 
-      const reviewGeneration = ++publicationReviewGenerationRef.current;
-      const isCurrentReview = () =>
-        reviewGeneration === publicationReviewGenerationRef.current;
-      setPublicationError(null);
-      setPublicationReceipt(null);
-      setPublicationStage('reviewing');
-      try {
-        const preparation = await editor.preparePublication();
-        if (!isCurrentReview()) {
-          throw new Error('This publication review was superseded.');
-        }
-        const revisionId = createWorkflowRevisionIdentityCandidate();
-        if (!hasNonBlankIdentifier(revisionId)) {
-          throw new Error('A publication revision could not be prepared.');
-        }
-
-        const preview = await studioApi.previewExplicitRequests({
-          executionMode: 'interactive',
-          revisionId,
-          scopeId: activeScopeId,
-          workflowId: preparation.workflowId,
-          workflowYaml: preparation.workflowYaml,
-        });
-        if (!isCurrentReview()) return preview;
-        if (
-          preview.workflowId !== preparation.workflowId ||
-          preview.revisionId !== revisionId
-        ) {
-          throw new Error(
-            'The publication review does not match the saved workflow.',
-          );
-        }
-        if (
-          preview.items.some(
-            (item) => !item.allowedExecutionModes.includes('interactive'),
-          )
-        ) {
-          throw new Error(
-            'An external request is unavailable for interactive publication.',
-          );
-        }
-
-        if (!isCurrentReview()) return preview;
-        setPendingPublication({
-          documentVersion: preparation.documentVersion,
-          preview,
-          serviceId: selectedServiceId,
-          workflowId: preparation.workflowId,
-          workflowName: preparation.workflowName,
-          workflowYaml: preparation.workflowYaml,
-        });
-        setPublicationStage('idle');
-        return preview;
-      } catch (error) {
-        if (!isCurrentReview()) throw error;
-        setPendingPublication(null);
-        setPublicationError(error);
-        setPublicationStage('failed');
-        throw error;
-      }
-    },
-    [activeScopeId, editor.preparePublication],
-  );
-
-  const publishReviewedWorkflow = React.useCallback(
-    async (input: WorkflowPublishConfirmationInput): Promise<void> => {
-      const review = pendingPublication;
-      if (
-        !review ||
-        editor.documentVersion !== review.documentVersion ||
-        !confirmationsMatchPreview(input, review)
-      ) {
-        const error = new Error(
-          'The publication confirmation does not match the reviewed workflow.',
-        );
-        setPublicationError(error);
-        setPublicationStage('failed');
-        throw error;
-      }
-
-      setPublicationError(null);
-      setPublicationStage('submitting');
-      try {
-        const result = await studioApi.saveAndBindWorkflow({
-          displayName: review.workflowName,
-          explicitRequestConfirmations: input.confirmations,
-          revisionId: review.preview.revisionId,
-          scopeId: activeScopeId,
-          serviceId: review.serviceId,
-          workflowId: review.workflowId,
-          workflowName: review.workflowName,
-          workflowYaml: review.workflowYaml,
-        });
-        const binding = result.binding;
-        if (
-          result.acceptanceStage !== 'accepted' ||
-          result.scopeId !== activeScopeId ||
-          !hasNonBlankIdentifier(result.workflowId) ||
-          result.workflowId !== review.workflowId ||
-          !hasNonBlankIdentifier(result.revisionId) ||
-          result.revisionId !== review.preview.revisionId ||
-          (result.workflow &&
-            (result.workflow.scopeId !== result.scopeId ||
-              result.workflow.workflowId !== result.workflowId ||
-              result.workflow.revisionId !== result.revisionId)) ||
-          !binding ||
-          binding.scopeId !== activeScopeId ||
-          !hasNonBlankIdentifier(binding.serviceId) ||
-          binding.serviceId !== review.serviceId ||
-          binding.targetKind !== 'workflow' ||
-          binding.revisionId !== result.revisionId
-        ) {
-          throw new Error(
-            'The accepted publication response does not match the reviewed service.',
-          );
-        }
-
-        setPublicationReceipt({
-          publishedServiceId: binding.serviceId,
-          scopeId: result.scopeId,
-          revisionId: result.revisionId,
-          workflowId: result.workflowId,
-        });
-        setPublishedDocumentVersion(review.documentVersion);
-        setPendingPublication(null);
-        setPublicationStage('accepted');
-        setPublishDialogOpen(false);
-      } catch (error) {
-        setPublicationError(error);
-        setPublicationStage('failed');
-        throw error;
-      }
-    },
-    [activeScopeId, editor.documentVersion, pendingPublication],
-  );
-
-  const returnPublicationToSelection = React.useCallback(() => {
-    invalidatePublicationReview();
-    setPendingPublication(null);
-    setPublicationError(null);
-    setPublicationStage('idle');
-  }, [invalidatePublicationReview]);
-
-  const restartPublicationReview = React.useCallback(() => {
-    invalidatePublicationReview();
-    setPendingPublication(null);
+    publicationInFlightRef.current = true;
+    const publicationGeneration = ++publicationGenerationRef.current;
+    const isCurrentPublication = () =>
+      publicationGeneration === publicationGenerationRef.current;
     setPublicationError(null);
     setPublicationReceipt(null);
-    setPublicationStage('idle');
-    setPublishDialogOpen(true);
-  }, [invalidatePublicationReview]);
+    setPublishedDocumentVersion(null);
+    setPublicationStage('submitting');
+
+    try {
+      const preparation = await editor.preparePublication();
+      if (!isCurrentPublication()) return;
+
+      const revisionId = createWorkflowRevisionIdentityCandidate();
+      if (!hasNonBlankIdentifier(revisionId)) {
+        throw new Error('A publication revision could not be prepared.');
+      }
+
+      const preview = await studioApi.previewExplicitRequests({
+        executionMode: 'interactive',
+        revisionId,
+        scopeId: activeScopeId,
+        workflowId: preparation.workflowId,
+        workflowYaml: preparation.workflowYaml,
+      });
+      if (!isCurrentPublication()) return;
+      if (
+        editor.documentVersion !== preparation.documentVersion ||
+        preview.workflowId !== preparation.workflowId ||
+        preview.revisionId !== revisionId
+      ) {
+        throw new Error(
+          'The publication preparation does not match the saved workflow.',
+        );
+      }
+      if (
+        preview.items.some(
+          (item) => !item.allowedExecutionModes.includes('interactive'),
+        )
+      ) {
+        throw new Error(
+          'An external request is unavailable for interactive publication.',
+        );
+      }
+
+      const explicitRequestConfirmations = preview.items.map((item) => ({
+        workflowId: preview.workflowId,
+        revisionId: preview.revisionId,
+        callSiteId: item.callSiteId,
+        requestContractDigest: item.requestContractDigest,
+        attestedRisk: item.effectiveRisk,
+      }));
+      const result = await studioApi.saveAndBindWorkflow({
+        appId: 'studio',
+        displayName: preparation.workflowName,
+        explicitRequestConfirmations,
+        exposureDesired: true,
+        inlineWorkflowYamls: {},
+        revisionId: preview.revisionId,
+        scopeId: activeScopeId,
+        workflowId: preparation.workflowId,
+        workflowName: preparation.workflowName,
+        workflowYaml: preparation.workflowYaml,
+      });
+      if (!isCurrentPublication()) return;
+
+      const binding = result.binding;
+      if (
+        result.acceptanceStage !== 'accepted' ||
+        result.scopeId !== activeScopeId ||
+        !hasNonBlankIdentifier(result.workflowId) ||
+        result.workflowId !== preparation.workflowId ||
+        !hasNonBlankIdentifier(result.revisionId) ||
+        result.revisionId !== preview.revisionId ||
+        (result.workflow &&
+          (result.workflow.scopeId !== result.scopeId ||
+            result.workflow.workflowId !== result.workflowId ||
+            result.workflow.revisionId !== result.revisionId)) ||
+        !binding ||
+        binding.scopeId !== activeScopeId ||
+        !hasNonBlankIdentifier(binding.serviceId) ||
+        binding.targetKind !== 'workflow' ||
+        binding.revisionId !== result.revisionId
+      ) {
+        throw new Error(
+          'The accepted publication response does not match the submitted workflow.',
+        );
+      }
+
+      setPublicationReceipt({
+        publishedServiceId: binding.serviceId,
+        scopeId: result.scopeId,
+        revisionId: result.revisionId,
+        workflowId: result.workflowId,
+      });
+      setPublishedDocumentVersion(preparation.documentVersion);
+      setPublicationStage('accepted');
+    } catch (error) {
+      if (!isCurrentPublication()) return;
+      setPublicationError(error);
+      setPublicationStage('failed');
+    } finally {
+      if (isCurrentPublication()) publicationInFlightRef.current = false;
+    }
+  }, [activeScopeId, editor.documentVersion, editor.preparePublication]);
 
   const saveAndLeave = async () => {
     if (await saveWorkflow()) {
@@ -646,15 +549,15 @@ const WorkflowEditorPage: React.FC<{
   const publicationObservationPending =
     publicationReceipt !== null && publication.phase !== 'observed';
   const publicationActionPending =
-    publicationStage === 'reviewing' ||
-    publicationStage === 'submitting' ||
-    publication.phase === 'observing';
+    publicationStage === 'submitting' || publication.phase === 'observing';
   const canRetryPublicationObservation =
     publicationReceipt !== null &&
     (publication.phase === 'delayed' ||
       publication.phase === 'failed' ||
       publication.phase === 'unauthorized' ||
       publication.phase === 'forbidden');
+  const canRetryPublicationSubmission =
+    publicationReceipt === null && publicationStage === 'failed';
   const revealPublicationStatus = () => {
     document
       .getElementById('workflow-publication-status')
@@ -841,7 +744,7 @@ const WorkflowEditorPage: React.FC<{
       aria-disabled={!canPublish}
       icon={<RocketOutlined />}
       onClick={() => {
-        if (canPublish) setPublishDialogOpen(true);
+        if (canPublish) void publishWorkflow();
       }}
     >
       {publishLabel}
@@ -1031,17 +934,20 @@ const WorkflowEditorPage: React.FC<{
       {publicationPhase !== 'idle' ? (
         <Alert
           action={
-            canRetryPublicationObservation ? (
+            canRetryPublicationObservation || canRetryPublicationSubmission ? (
               <Space size="small">
-                <Button onClick={() => void publication.retry()}>
-                  {t('workflowActivityVNext.publish.checkAgain', 'Check again')}
-                </Button>
-                {publication.phase === 'failed' ? (
-                  <Button onClick={restartPublicationReview}>
+                {canRetryPublicationObservation ? (
+                  <Button onClick={() => void publication.retry()}>
                     {t(
-                      'workflowActivityVNext.publish.reviewAgain',
-                      'Review again',
+                      'workflowActivityVNext.publish.checkAgain',
+                      'Check again',
                     )}
+                  </Button>
+                ) : null}
+                {canRetryPublicationSubmission ||
+                publication.phase === 'failed' ? (
+                  <Button onClick={() => void publishWorkflow()}>
+                    {t('workflowActivityVNext.common.retry', 'Retry')}
                   </Button>
                 ) : null}
               </Space>
@@ -1049,46 +955,41 @@ const WorkflowEditorPage: React.FC<{
           }
           description={
             <>
-              {publicationPhase === 'reviewing'
+              {publicationPhase === 'submitting'
                 ? t(
-                    'workflowActivityVNext.publish.reviewingDescription',
-                    'Preparing the saved workflow for review.',
+                    'workflowActivityVNext.publish.submittingDescription',
+                    'Publishing this workflow.',
                   )
-                : publicationPhase === 'submitting'
+                : publicationPhase === 'accepted' ||
+                    publicationPhase === 'observing'
                   ? t(
-                      'workflowActivityVNext.publish.submittingDescription',
-                      'Sending this reviewed publication to the selected service.',
+                      'workflowActivityVNext.publish.observingDescription',
+                      'Checking whether the published revision is ready.',
                     )
-                  : publicationPhase === 'accepted' ||
-                      publicationPhase === 'observing'
+                  : publicationPhase === 'delayed'
                     ? t(
-                        'workflowActivityVNext.publish.observingDescription',
-                        'Checking the workflow and selected service revision.',
+                        'workflowActivityVNext.publish.delayedDescription',
+                        'Check again for the latest publication status.',
                       )
-                    : publicationPhase === 'delayed'
+                    : publicationPhase === 'observed'
                       ? t(
-                          'workflowActivityVNext.publish.delayedDescription',
-                          'Check again for the latest publication status.',
+                          'workflowActivityVNext.publish.observedDescription',
+                          'The workflow is now published.',
                         )
-                      : publicationPhase === 'observed'
+                      : publicationPhase === 'unauthorized'
                         ? t(
-                            'workflowActivityVNext.publish.observedDescription',
-                            'The selected service is now using this workflow revision.',
+                            'workflowActivityVNext.publish.unauthorizedDescription',
+                            'Sign in again to check this publication.',
                           )
-                        : publicationPhase === 'unauthorized'
+                        : publicationPhase === 'forbidden'
                           ? t(
-                              'workflowActivityVNext.publish.unauthorizedDescription',
-                              'Sign in again to check this publication.',
+                              'workflowActivityVNext.publish.forbiddenDescription',
+                              "You don't have access to check this publication.",
                             )
-                          : publicationPhase === 'forbidden'
-                            ? t(
-                                'workflowActivityVNext.publish.forbiddenDescription',
-                                "You don't have access to check this publication.",
-                              )
-                            : t(
-                                'workflowActivityVNext.publish.failedDescription',
-                                'Review the workflow or try publishing again.',
-                              )}
+                          : t(
+                              'workflowActivityVNext.publish.failedDescription',
+                              'Resolve the error or try publishing again.',
+                            )}
               {publicationPhase === 'observed' && publicationReceipt ? (
                 <dl className="wa-vnext__publication-identities">
                   <div>
@@ -1119,46 +1020,41 @@ const WorkflowEditorPage: React.FC<{
             </>
           }
           message={
-            publicationPhase === 'reviewing'
+            publicationPhase === 'submitting'
               ? t(
-                  'workflowActivityVNext.publish.reviewing',
-                  'Reviewing publication…',
+                  'workflowActivityVNext.publish.submitting',
+                  'Submitting publication…',
                 )
-              : publicationPhase === 'submitting'
+              : publicationPhase === 'accepted' ||
+                  publicationPhase === 'observing'
                 ? t(
-                    'workflowActivityVNext.publish.submitting',
-                    'Submitting publication…',
+                    'workflowActivityVNext.publish.accepted',
+                    'Publication accepted',
                   )
-                : publicationPhase === 'accepted' ||
-                    publicationPhase === 'observing'
+                : publicationPhase === 'delayed'
                   ? t(
-                      'workflowActivityVNext.publish.accepted',
-                      'Publication accepted',
+                      'workflowActivityVNext.publish.delayed',
+                      'Publication is taking longer to appear',
                     )
-                  : publicationPhase === 'delayed'
+                  : publicationPhase === 'observed'
                     ? t(
-                        'workflowActivityVNext.publish.delayed',
-                        'Publication is taking longer to appear',
+                        'workflowActivityVNext.publish.observed',
+                        'Workflow published',
                       )
-                    : publicationPhase === 'observed'
+                    : publicationPhase === 'unauthorized'
                       ? t(
-                          'workflowActivityVNext.publish.observed',
-                          'Workflow published',
+                          'workflowActivityVNext.state.unauthorized',
+                          'Sign in to continue',
                         )
-                      : publicationPhase === 'unauthorized'
+                      : publicationPhase === 'forbidden'
                         ? t(
-                            'workflowActivityVNext.state.unauthorized',
-                            'Sign in to continue',
+                            'workflowActivityVNext.state.forbidden',
+                            "You don't have access to this workspace",
                           )
-                        : publicationPhase === 'forbidden'
-                          ? t(
-                              'workflowActivityVNext.state.forbidden',
-                              "You don't have access to this workspace",
-                            )
-                          : t(
-                              'workflowActivityVNext.publish.failed',
-                              "Publication couldn't be confirmed",
-                            )
+                        : t(
+                            'workflowActivityVNext.publish.failed',
+                            "Publication couldn't be confirmed",
+                          )
           }
           id="workflow-publication-status"
           showIcon
@@ -1167,8 +1063,7 @@ const WorkflowEditorPage: React.FC<{
               ? 'success'
               : publicationPhase === 'delayed'
                 ? 'warning'
-                : publicationPhase === 'reviewing' ||
-                    publicationPhase === 'submitting' ||
+                : publicationPhase === 'submitting' ||
                     publicationPhase === 'accepted' ||
                     publicationPhase === 'observing'
                   ? 'info'
@@ -1540,15 +1435,6 @@ const WorkflowEditorPage: React.FC<{
           </section>
         ) : null}
       </WorkflowPublishedRunDrawer>
-      <WorkflowPublishDialog
-        onCancel={clearPublication}
-        onPublish={publishReviewedWorkflow}
-        onReview={reviewPublication}
-        onReturnToSelection={returnPublicationToSelection}
-        open={publishDialogOpen}
-        scopeId={activeScopeId}
-        workflowName={editor.workflowTitle}
-      />
       <Modal
         aria-label={t(
           'workflowActivityVNext.editor.unsavedTitle',
