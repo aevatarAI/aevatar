@@ -51,7 +51,7 @@ internal sealed class ManagedCodexNyxIdCatalogResolver
         }
         if (sandbox.ForwardAccessToken != false ||
             sandbox.InjectDelegationToken != true ||
-            !string.Equals(sandbox.DelegationTokenScope, "proxy:*", StringComparison.Ordinal))
+            !HasExactDelegationScopes(sandbox.DelegationTokenScope))
         {
             throw Failure(
                 "chrono_sandbox_delegation_misconfigured",
@@ -63,6 +63,16 @@ internal sealed class ManagedCodexNyxIdCatalogResolver
 
     private static bool IsUsable(ManagedCodexNyxIdService service) =>
         service.IsActive && service.CredentialSourceAllowed != false;
+
+    private static bool HasExactDelegationScopes(string? value)
+    {
+        var scopes = value?.Split(
+            (char[]?)null,
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? [];
+        return scopes.Length == 2 &&
+               scopes.Contains("proxy:*", StringComparer.Ordinal) &&
+               scopes.Contains("sandbox:execute", StringComparer.Ordinal);
+    }
 
     private static ManagedCodexCredentialLifecycleException Failure(
         string code,
