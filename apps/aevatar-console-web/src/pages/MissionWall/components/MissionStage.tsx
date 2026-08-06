@@ -1,5 +1,6 @@
 import React from "react";
 import { t } from "@/shared/i18n/messages";
+import AevatarContentSkeleton from "@/shared/ui/AevatarContentSkeleton";
 import type { MissionWallRun, MissionWallSnapshot } from "../models";
 import { WorkflowReplayCanvas } from "./WorkflowReplayCanvas";
 
@@ -55,33 +56,35 @@ export function MissionStage({
           </div>
         </div>
       </header>
-      {isRuntimeLoading || !focusRun || !graphHasNodes ? (
+      {isRuntimeLoading ? (
+        <AevatarContentSkeleton
+          ariaLabel={t(
+            "pages.missionwall.state.loadingTitle",
+            "Loading workflow runs",
+          )}
+          className="mission-wall-stage-skeleton"
+          variant="canvas"
+        />
+      ) : !focusRun || !graphHasNodes ? (
         <div className="mission-wall-state-panel">
           <div className="mission-wall-state-panel__kicker">
-            {isRuntimeLoading
-              ? t("pages.missionwall.state.loadingKicker", "Loading runtime")
-              : t("pages.missionwall.state.emptyKicker", "Waiting for runs")}
+            {t("pages.missionwall.state.emptyKicker", "Waiting for runs")}
           </div>
           <div className="mission-wall-state-panel__title">
-            {isRuntimeLoading
-              ? t(
-                  "pages.missionwall.state.loadingTitle",
-                  "Loading workflow runs",
-                )
-              : focusRun
-                ? selectedPublishedWorkflowWithoutRun
-                  ? t(
-                      "pages.missionwall.state.publishedWorkflowTitle",
-                      "No visible run",
-                    )
-                  : t(
-                      "pages.missionwall.state.auditPendingTitle",
-                      "No step flow for this run yet",
-                    )
+            {focusRun
+              ? selectedPublishedWorkflowWithoutRun
+                ? t(
+                    "pages.missionwall.state.publishedWorkflowTitle",
+                    "No visible run",
+                  )
                 : t(
-                    "pages.missionwall.state.emptyTitle",
-                    "No published workflows are visible",
-                  )}
+                    "pages.missionwall.state.auditPendingTitle",
+                    "No step flow for this run yet",
+                  )
+              : t(
+                  "pages.missionwall.state.emptyTitle",
+                  "No published workflows are visible",
+                )}
           </div>
         </div>
       ) : (

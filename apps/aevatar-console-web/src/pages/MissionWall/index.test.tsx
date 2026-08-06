@@ -281,6 +281,22 @@ describe("MissionWallPage", () => {
     clearStoredAuthSession();
   });
 
+  it("renders a dark canvas skeleton while runtime data is loading", async () => {
+    (studioApi.getAuthSession as jest.Mock).mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+
+    renderWithQueryClient(React.createElement(MissionWallPage));
+
+    const loadingStage = await screen.findByRole("status");
+    expect(loadingStage).toHaveAttribute("data-variant", "canvas");
+    expect(loadingStage).toHaveClass("mission-wall-stage-skeleton");
+    expect(screen.getByText("Loading workflow runs")).toHaveClass(
+      "aevatar-loading-visually-hidden",
+    );
+    expect(screen.queryByText("Loading runtime")).toBeNull();
+  });
+
   it("renders the shared language switch and authenticated user entry in fullscreen mode", async () => {
     persistAuthSession({
       tokens: {
