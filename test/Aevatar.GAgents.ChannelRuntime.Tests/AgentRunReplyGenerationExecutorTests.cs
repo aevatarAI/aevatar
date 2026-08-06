@@ -114,6 +114,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         execution.Continuation.LlmStepResult.HasStreamedTextContent.Should().BeFalse();
         execution.Continuation.LlmStepResult.ToolCalls.Should().ContainSingle()
             .Which.Name.Should().Be(tool.Name);
+        execution.Continuation.LlmStepResult.ToolRequestId.Should().Be("activity-1");
         execution.AuthorizedToolCallSafeties.Should().ContainSingle()
             .Which.CallSafety.RequiresApproval.Should().BeTrue();
         execution.AuthorizedToolStep.Should().NotBeNull();

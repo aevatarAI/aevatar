@@ -1125,10 +1125,12 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             if (!IsCurrentStepResult(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
                 return;
 
-            if (TryBuildPendingToolApproval(
-                    State.GenerationStep!,
-                    command.ToolStepResult!,
-                    out var pendingApproval))
+            var hasPendingApproval = TryBuildPendingToolApproval(
+                State.GenerationStep!,
+                command.ToolStepResult!,
+                out var pendingApproval,
+                out var identityFailure);
+            if (hasPendingApproval)
             {
                 if (State.PendingToolApproval is { Decision: not AgentRunToolApprovalDecision.Unspecified })
                 {
@@ -1148,6 +1150,9 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             if (command.ToolStepResult!.ToolReceipts.Any(static receipt =>
                     receipt.Status == AgentToolReceiptStatus.ApprovalRequired))
             {
+                _logger.LogWarning(
+                    "AgentRun tool approval identity could not be persisted: reason={Reason}",
+                    identityFailure);
                 await ProduceApprovalContinuationFailureAsync(
                     command.Request?.Clone() ?? BuildStepRequest(command),
                     "agent_run_tool_approval_identity_invalid",
@@ -1317,16 +1322,24 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     private bool TryBuildPendingToolApproval(
         AgentRunReplyStepState stepState,
         AgentRunToolStepResult result,
-        out AgentRunPendingToolApprovalState pending)
+        out AgentRunPendingToolApprovalState pending,
+        out ToolApprovalIdentityFailure failure)
     {
         pending = new AgentRunPendingToolApprovalState();
+        failure = ToolApprovalIdentityFailure.None;
         var approvalReceipts = result.ToolReceipts
             .Where(static receipt => receipt.Status == AgentToolReceiptStatus.ApprovalRequired)
             .ToArray();
         if (approvalReceipts.Length == 0)
+        {
+            failure = ToolApprovalIdentityFailure.ApprovalReceiptMissing;
             return false;
+        }
         if (approvalReceipts.Length != 1 || stepState.PendingToolCalls.Count != 1)
+        {
+            failure = ToolApprovalIdentityFailure.CardinalityMismatch;
             return false;
+        }
 
         var receipt = approvalReceipts[0];
         var call = stepState.PendingToolCalls[0];
@@ -1336,18 +1349,34 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             string.Equals(candidate.Call.Name, call.Name, StringComparison.Ordinal) &&
             string.Equals(candidate.Call.ArgumentsJson, call.ArgumentsJson, StringComparison.Ordinal));
         var toolContext = AgentToolExecutionContextMapper.FromPayload(stepState.ToolContext);
-        if (authorization is null ||
-            string.IsNullOrWhiteSpace(receipt.ApprovalRequestId) ||
-            string.IsNullOrWhiteSpace(toolContext.Request.RequestId) ||
-            string.IsNullOrWhiteSpace(call.Id) ||
-            string.IsNullOrWhiteSpace(call.Name) ||
-            !string.Equals(receipt.CallId, call.Id, StringComparison.Ordinal) ||
-            !string.Equals(receipt.ToolName, call.Name, StringComparison.Ordinal) ||
-            string.IsNullOrWhiteSpace(toolContext.Channel.SenderId) ||
-            string.IsNullOrWhiteSpace(toolContext.Channel.RegistrationScopeId))
-        {
+        var approvalRequestId = NormalizeOptional(receipt.ApprovalRequestId);
+        var toolRequestId = NormalizeOptional(toolContext.Request.RequestId);
+        var toolCallId = NormalizeOptional(call.Id);
+        var toolName = NormalizeOptional(call.Name);
+        var senderId = NormalizeOptional(toolContext.Channel.SenderId);
+        var registrationScopeId = NormalizeOptional(toolContext.Channel.RegistrationScopeId);
+        failure = authorization is null
+            ? ToolApprovalIdentityFailure.AuthorizationMissing
+            : approvalRequestId is null
+                ? ToolApprovalIdentityFailure.ApprovalRequestIdMissing
+                : toolRequestId is null
+                    ? ToolApprovalIdentityFailure.ToolRequestIdMissing
+                    : toolCallId is null
+                        ? ToolApprovalIdentityFailure.ToolCallIdMissing
+                        : toolName is null
+                            ? ToolApprovalIdentityFailure.ToolNameMissing
+                            : !string.Equals(receipt.CallId, toolCallId, StringComparison.Ordinal)
+                                ? ToolApprovalIdentityFailure.ReceiptCallMismatch
+                                : !string.Equals(receipt.ToolName, toolName, StringComparison.Ordinal)
+                                    ? ToolApprovalIdentityFailure.ReceiptToolMismatch
+                                    : senderId is null
+                                        ? ToolApprovalIdentityFailure.SenderIdMissing
+                                        : registrationScopeId is null
+                                            ? ToolApprovalIdentityFailure.RegistrationScopeIdMissing
+                                            : ToolApprovalIdentityFailure.None;
+        if (failure != ToolApprovalIdentityFailure.None)
             return false;
-        }
+        var matchedAuthorization = authorization!;
 
         // The canonical conversation key is not part of AgentToolChannelContext.
         // It is supplied by the transient request in SuspendForToolApprovalAsync.
@@ -1357,22 +1386,38 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             CorrelationId = stepState.CorrelationId,
             Attempt = stepState.Attempt,
             StepIndex = stepState.NextStepIndex,
-            ApprovalRequestId = receipt.ApprovalRequestId.Trim(),
-            ToolRequestId = toolContext.Request.RequestId!.Trim(),
-            ToolCallId = call.Id.Trim(),
-            ToolName = call.Name.Trim(),
+            ApprovalRequestId = approvalRequestId!,
+            ToolRequestId = toolRequestId!,
+            ToolCallId = toolCallId!,
+            ToolName = toolName!,
             ArgumentsSha256 = AgentToolArgumentsDigest.ComputeSha256(call.ArgumentsJson ?? string.Empty),
-            IsDestructive = receipt.IsDestructive || authorization.IsDestructive,
-            SideEffectKind = NormalizeOptional(receipt.SideEffectKind) ?? authorization.SideEffectKind ?? string.Empty,
+            IsDestructive = receipt.IsDestructive || matchedAuthorization.IsDestructive,
+            SideEffectKind = NormalizeOptional(receipt.SideEffectKind) ?? matchedAuthorization.SideEffectKind ?? string.Empty,
             SubjectKind = receipt.SubjectKind ?? string.Empty,
             SubjectId = receipt.SubjectId ?? string.Empty,
-            SenderId = toolContext.Channel.SenderId!.Trim(),
-            RegistrationScopeId = toolContext.Channel.RegistrationScopeId!.Trim(),
+            SenderId = senderId!,
+            RegistrationScopeId = registrationScopeId!,
             ConversationKey = string.Empty,
             RequestedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
             Decision = AgentRunToolApprovalDecision.Unspecified,
         };
         return true;
+    }
+
+    private enum ToolApprovalIdentityFailure
+    {
+        None = 0,
+        ApprovalReceiptMissing,
+        CardinalityMismatch,
+        AuthorizationMissing,
+        ApprovalRequestIdMissing,
+        ToolRequestIdMissing,
+        ToolCallIdMissing,
+        ToolNameMissing,
+        ReceiptCallMismatch,
+        ReceiptToolMismatch,
+        SenderIdMissing,
+        RegistrationScopeIdMissing,
     }
 
     private async Task SuspendForToolApprovalAsync(
@@ -1655,6 +1700,12 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (result.PendingToolAuthorizations.Count > 0)
             next.PendingToolAuthorizations.AddRange(result.PendingToolAuthorizations.Select(authorization => authorization.Clone()));
         next.PendingToolAuthorizationConsumed = false;
+        if (result.ToolCalls.Count > 0 && !string.IsNullOrWhiteSpace(result.ToolRequestId))
+        {
+            next.ToolContext ??= new AgentToolExecutionContextPayload();
+            next.ToolContext.Request ??= new AgentToolRequestIdentityPayload();
+            next.ToolContext.Request.RequestId = result.ToolRequestId.Trim();
+        }
 
         if (!string.IsNullOrEmpty(result.Content) ||
             !string.IsNullOrEmpty(result.ReasoningContent) ||

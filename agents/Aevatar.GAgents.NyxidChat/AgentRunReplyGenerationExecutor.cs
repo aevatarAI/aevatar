@@ -336,6 +336,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             ReasoningContent = llmResult.ReasoningContent ?? string.Empty,
             FinishReason = llmResult.FinishReason ?? string.Empty,
             HasStreamedTextContent = !approvalRequired && !string.IsNullOrEmpty(llmResult.Content),
+            ToolRequestId = llmRequest.ToolContext?.Request.RequestId ?? string.Empty,
         };
         if (AgentRunReplyStepMappers.ToProto(llmResult.Usage) is { } usage)
             result.Usage = usage;

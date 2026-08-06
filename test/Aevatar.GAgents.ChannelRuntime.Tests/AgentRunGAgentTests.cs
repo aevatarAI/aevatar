@@ -192,6 +192,121 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task ToolApprovalLifecycle_ShouldPersistLlmToolRequestIdentityBeforeSuspending()
+    {
+        var interactiveDispatcher = Substitute.For<IInteractiveReplyDispatcher>();
+        interactiveDispatcher.DispatchAsync(
+                Arg.Any<ChannelId>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MessageContent>(),
+                Arg.Any<ComposeContext>(),
+                Arg.Any<CancellationToken>())
+            .Returns(new InteractiveReplyDispatchResult(
+                Succeeded: true,
+                MessageId: "approval-card-lifecycle-1",
+                PlatformMessageId: "om-approval-card-lifecycle-1",
+                Capability: ComposeCapability.Exact,
+                FellBackToText: false,
+                Detail: null));
+        var executor = new PausedReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            new DispatchingActorRuntime(),
+            executor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions(),
+            interactiveReplyDispatcher: interactiveDispatcher);
+        var state = BuildPendingApprovalState();
+        state.PendingToolApproval = null;
+        state.GenerationStep!.NextStepIndex = 1;
+        state.GenerationStep.PendingToolCalls.Clear();
+        state.GenerationStep.PendingToolAuthorizations.Clear();
+        state.GenerationStep.PendingToolAuthorizationConsumed = false;
+        state.GenerationStep.ToolContext!.Request = new AgentToolRequestIdentityPayload();
+        SetState(runtime, state);
+        var request = BuildApprovalDecisionCommand(approved: true).Request!;
+
+        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = state.RunId,
+            CorrelationId = state.CorrelationId,
+            TargetActorId = state.TargetActorId,
+            Attempt = state.GenerationAttempt,
+            StepIndex = 2,
+            Request = request.Clone(),
+            LlmStepResult = new AgentRunLlmStepResult
+            {
+                ToolRequestId = "tool-request-1",
+                ToolCalls =
+                {
+                    new AgentRunToolCall
+                    {
+                        Id = "call-approval-1",
+                        Name = "use_skill",
+                        ArgumentsJson = "{\"skill\":\"lark-contact-batch-resolution\"}",
+                    },
+                },
+                PendingToolAuthorizations =
+                {
+                    new AgentRunPendingToolAuthorization
+                    {
+                        Call = new AgentRunToolCall
+                        {
+                            Id = "call-approval-1",
+                            Name = "use_skill",
+                            ArgumentsJson = "{\"skill\":\"lark-contact-batch-resolution\"}",
+                        },
+                        HasRequiresApproval = true,
+                        RequiresApproval = true,
+                        IsDestructive = true,
+                        SideEffectKind = "skill.mount",
+                    },
+                },
+            },
+        });
+
+        runtime.State.GenerationStep!.ToolContext!.Request!.RequestId.Should().Be("tool-request-1");
+        executor.ToolStepExecutions.Should().ContainSingle();
+
+        await runtime.HandleNextToolStepAsync(new AgentRunNextToolStepRequestedEvent
+        {
+            RunId = state.RunId,
+            CorrelationId = state.CorrelationId,
+            TargetActorId = state.TargetActorId,
+            Attempt = state.GenerationAttempt,
+            StepIndex = 3,
+            Request = request.Clone(),
+            ToolStepResult = new AgentRunToolStepResult
+            {
+                ToolReceipts =
+                {
+                    new AgentToolReceipt
+                    {
+                        CallId = "call-approval-1",
+                        ToolName = "use_skill",
+                        Status = AgentToolReceiptStatus.ApprovalRequired,
+                        ApprovalRequestId = "tool-approval-1",
+                        IsDestructive = true,
+                        SideEffectKind = "skill.mount",
+                        SubjectKind = "skill",
+                        SubjectId = "lark-contact-batch-resolution",
+                    },
+                },
+            },
+        });
+
+        runtime.State.PendingToolApproval.Should().NotBeNull();
+        runtime.State.PendingToolApproval!.ToolRequestId.Should().Be("tool-request-1");
+        runtime.State.PendingToolApproval.NotificationDispatchedAtUnixMs.Should().BeGreaterThan(0);
+        await interactiveDispatcher.Received(1).DispatchAsync(
+            Arg.Is<ChannelId>(channel => channel.Value == "lark"),
+            Arg.Any<string>(),
+            Arg.Any<string>(),
+            Arg.Any<MessageContent>(),
+            Arg.Any<ComposeContext>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task HandleNextToolStepAsync_WhenApprovalDispatcherIsActorService_ShouldDeliverCard()
     {
         var interactiveDispatcher = Substitute.For<IInteractiveReplyDispatcher>();

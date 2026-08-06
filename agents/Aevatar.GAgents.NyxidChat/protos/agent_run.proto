@@ -353,6 +353,10 @@ message AgentRunLlmStepResult {
   aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 7;
   bool has_streamed_text_content = 8;
   repeated AgentRunPendingToolAuthorization pending_tool_authorizations = 10;
+  // Exact request identity used to authorize this LLM step's tool calls. The
+  // initial step context predates BuildLlmStepRequest and therefore cannot
+  // supply this value to a later approval continuation on its own.
+  string tool_request_id = 11;
 }
 
 // Typed tool IO facts returned after the run actor has reconciled and persisted
