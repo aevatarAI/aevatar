@@ -14,6 +14,7 @@ using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
 
@@ -1417,7 +1418,9 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             return;
         }
 
-        if (_interactiveReplyDispatcher is null)
+        var interactiveReplyDispatcher = _interactiveReplyDispatcher
+                                         ?? Services.GetService<IInteractiveReplyDispatcher>();
+        if (interactiveReplyDispatcher is null)
         {
             await ProduceApprovalContinuationFailureAsync(
                 request,
@@ -1426,7 +1429,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             return;
         }
 
-        var result = await _interactiveReplyDispatcher.DispatchAsync(
+        var result = await interactiveReplyDispatcher.DispatchAsync(
             channel,
             messageId,
             relayToken,
@@ -1592,7 +1595,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         await ProduceAndDispatchAsync(
             request,
             State.RunId,
-            "The tool approval could not be continued safely. Please retry the command.",
+            $"The tool approval could not be continued safely. Please retry the command. Error code: {errorCode}",
             null,
             LlmReplyTerminalState.Failed,
             errorCode,
@@ -1617,7 +1620,9 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         channel = request.Activity?.ChannelId?.Clone()
                   ?? request.Activity?.Conversation?.Channel?.Clone()
                   ?? new ChannelId();
-        messageId = NormalizeOptional(request.Activity?.OutboundDelivery?.ReplyMessageId) ?? string.Empty;
+        messageId = NormalizeOptional(request.Activity?.OutboundDelivery?.ReplyMessageId)
+                    ?? NormalizeOptional(request.Activity?.TransportExtras?.NyxMessageId)
+                    ?? string.Empty;
         relayToken = NormalizeOptional(request.ReplyToken) ?? string.Empty;
         return !string.IsNullOrWhiteSpace(channel.Value) &&
                messageId.Length > 0 &&

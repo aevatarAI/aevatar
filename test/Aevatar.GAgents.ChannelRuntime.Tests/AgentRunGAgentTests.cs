@@ -192,6 +192,77 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleNextToolStepAsync_WhenApprovalDispatcherIsActorService_ShouldDeliverCard()
+    {
+        var interactiveDispatcher = Substitute.For<IInteractiveReplyDispatcher>();
+        interactiveDispatcher.DispatchAsync(
+                Arg.Any<ChannelId>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MessageContent>(),
+                Arg.Any<ComposeContext>(),
+                Arg.Any<CancellationToken>())
+            .Returns(new InteractiveReplyDispatchResult(
+                Succeeded: true,
+                MessageId: "approval-card-service-1",
+                PlatformMessageId: "om-approval-card-service-1",
+                Capability: ComposeCapability.Exact,
+                FellBackToText: false,
+                Detail: null));
+        var runtime = CreateRunAgentWithExecutor(
+            new DispatchingActorRuntime(),
+            new PausedReplyGenerationExecutor(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(interactiveDispatcher)
+            .BuildServiceProvider();
+        runtime.Services = serviceProvider;
+        var state = BuildPendingApprovalState();
+        state.PendingToolApproval = null;
+        SetState(runtime, state);
+        var request = BuildApprovalDecisionCommand(approved: true).Request;
+        request.Activity.OutboundDelivery = null;
+        request.Activity.TransportExtras ??= new TransportExtras();
+        request.Activity.TransportExtras.NyxMessageId = "relay-msg-1";
+
+        await runtime.HandleNextToolStepAsync(new AgentRunNextToolStepRequestedEvent
+        {
+            RunId = state.RunId,
+            CorrelationId = state.CorrelationId,
+            TargetActorId = state.TargetActorId,
+            Attempt = state.GenerationAttempt,
+            StepIndex = state.GenerationStep.NextStepIndex + 1,
+            Request = request,
+            ToolStepResult = new AgentRunToolStepResult
+            {
+                ToolReceipts =
+                {
+                    new AgentToolReceipt
+                    {
+                        CallId = "call-approval-1",
+                        ToolName = "use_skill",
+                        Status = AgentToolReceiptStatus.ApprovalRequired,
+                        ApprovalRequestId = "tool-approval-1",
+                        SideEffectKind = "skill.mount",
+                        SubjectKind = "skill",
+                        SubjectId = "lark-contact-batch-resolution",
+                    },
+                },
+            },
+        });
+
+        runtime.State.PendingToolApproval.Should().NotBeNull();
+        runtime.State.PendingToolApproval!.NotificationDispatchedAtUnixMs.Should().BeGreaterThan(0);
+        await interactiveDispatcher.Received(1).DispatchAsync(
+            Arg.Is<ChannelId>(channel => channel.Value == "lark"),
+            "relay-msg-1",
+            "relay-token-callback-1",
+            Arg.Any<MessageContent>(),
+            Arg.Any<ComposeContext>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task HandleNextToolStepAsync_WhenWorkflowDeliveryIsRegistered_ShouldHandOffWithoutAnotherLlmStep()
     {
         var target = Substitute.For<IActor>();
