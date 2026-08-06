@@ -17,6 +17,11 @@ import { studioApi } from '@/shared/studio/api';
 import { createWorkflowRevisionIdentityCandidate } from '@/shared/studio/explicitRequestConfirmation';
 import type { StudioExplicitRequestPreview } from '@/shared/studio/models';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
+import {
+  getRunStatusPresentation,
+  isRunStatusInProgress,
+  isRunStatusTerminal,
+} from '../activity/runPresentation';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
 import { useWorkflowEditor } from '../hooks/useWorkflowEditor';
 import {
@@ -579,6 +584,22 @@ const WorkflowEditorPage: React.FC<{
     editor.runPhase === 'accepted' ||
     editor.runObservationUnresolved ||
     editor.runAwaitingIdentification;
+  const observedRun = editor.runObservation.run;
+  const observedStatus = observedRun
+    ? getRunStatusPresentation(observedRun.summary.status)
+    : null;
+  const observedRunInProgress = observedRun
+    ? isRunStatusInProgress(observedRun.summary.status)
+    : false;
+  const observedRunTerminal = observedRun
+    ? isRunStatusTerminal(observedRun.summary.status)
+    : false;
+  const currentStep = observedRun?.steps.find(
+    (step) => step.requestedAtUtc && !step.completedAtUtc,
+  );
+  const runDetailsHref = editor.sseRunId
+    ? buildWorkflowActivityRunHref(activeScopeId, editor.sseRunId)
+    : '';
   const publicationPhase = publicationReceipt
     ? publication.phase
     : publicationStage;
@@ -1056,19 +1077,56 @@ const WorkflowEditorPage: React.FC<{
             <strong>
               {t('workflowActivityVNext.editor.runPanel', 'Test run')}
             </strong>
-            <Input.TextArea
-              aria-label={t(
-                'workflowActivityVNext.editor.runInput',
-                'Test input',
-              )}
-              disabled={runBusy || editorWriteLocked}
-              onChange={(event) => editor.setRunInput(event.target.value)}
-              rows={4}
-              value={editor.runInput}
-            />
+            <div className="wa-vnext__run-input-field">
+              <div className="wa-vnext__run-input-heading">
+                <label htmlFor="wa-vnext-run-input">
+                  {t('workflowActivityVNext.editor.runInput', 'Input')}
+                </label>
+                <span>
+                  {t(
+                    'workflowActivityVNext.editor.runInputRequiredTag',
+                    'Required',
+                  )}
+                </span>
+              </div>
+              <p id="wa-vnext-run-input-help">
+                {t(
+                  'workflowActivityVNext.editor.runInputHelp',
+                  'This workflow accepts one text input. For example: Review order 42.',
+                )}
+              </p>
+              <Input.TextArea
+                aria-describedby="wa-vnext-run-input-help wa-vnext-run-input-error"
+                aria-invalid={Boolean(editor.runInputError)}
+                aria-label={t('workflowActivityVNext.editor.runInput', 'Input')}
+                disabled={runBusy || editorWriteLocked || observedRunInProgress}
+                id="wa-vnext-run-input"
+                onChange={(event) => editor.setRunInput(event.target.value)}
+                placeholder={t(
+                  'workflowActivityVNext.editor.runInputExample',
+                  'For example: Review order 42',
+                )}
+                rows={4}
+                value={editor.runInput}
+              />
+              {editor.runInputError ? (
+                <p
+                  className="wa-vnext__field-error"
+                  id="wa-vnext-run-input-error"
+                >
+                  {editor.runInputError}
+                </p>
+              ) : null}
+            </div>
             <Space>
               <Button
-                disabled={runBusy || !editor.canRun || editorWriteLocked}
+                disabled={
+                  runBusy ||
+                  observedRunInProgress ||
+                  !editor.canRun ||
+                  !editor.runInput.trim() ||
+                  editorWriteLocked
+                }
                 loading={editor.runPhase === 'submitting'}
                 onClick={() => void editor.run()}
                 type="primary"
@@ -1091,7 +1149,7 @@ const WorkflowEditorPage: React.FC<{
                 )}
               </Button>
             </Space>
-            {editor.runPhase !== 'idle' ? (
+            {editor.runPhase !== 'idle' && !observedRun ? (
               <Alert
                 message={
                   editor.runPhase === 'submitting'
@@ -1102,7 +1160,7 @@ const WorkflowEditorPage: React.FC<{
                     : editor.runPhase === 'accepted'
                       ? t(
                           'workflowActivityVNext.editor.runAccepted',
-                          'Preparing run…',
+                          'Run accepted',
                         )
                       : editor.runPhase === 'stream_ended'
                         ? t(
@@ -1126,29 +1184,46 @@ const WorkflowEditorPage: React.FC<{
             {editor.sseRunId ? (
               <Alert
                 action={
-                  editor.runObservation.phase === 'observed' ? (
+                  <Space wrap>
                     <Button
-                      onClick={() =>
-                        requestNavigation(
-                          buildWorkflowActivityRunHref(
-                            activeScopeId,
-                            editor.sseRunId,
-                          ),
-                        )
+                      href={runDetailsHref}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        requestNavigation(runDetailsHref);
+                      }}
+                      type={
+                        editor.runObservation.phase === 'observed'
+                          ? 'primary'
+                          : 'default'
                       }
-                      type="primary"
                     >
-                      {t('workflowActivityVNext.editor.viewRun', 'View run')}
-                    </Button>
-                  ) : editor.runObservation.phase ===
-                    'observing' ? undefined : (
-                    <Button onClick={() => void editor.runObservation.retry()}>
                       {t(
-                        'workflowActivityVNext.editor.retryActivityObservation',
-                        'Check again',
+                        'workflowActivityVNext.editor.openRunDetails',
+                        'Open run details',
                       )}
                     </Button>
-                  )
+                    {editor.runObservation.phase === 'observed' &&
+                    observedRunInProgress ? (
+                      <Button
+                        onClick={() => void editor.runObservation.retry()}
+                      >
+                        {t(
+                          'workflowActivityVNext.editor.checkLatestStatus',
+                          'Check latest status',
+                        )}
+                      </Button>
+                    ) : editor.runObservation.phase !== 'observing' &&
+                      editor.runObservation.phase !== 'observed' ? (
+                      <Button
+                        onClick={() => void editor.runObservation.retry()}
+                      >
+                        {t(
+                          'workflowActivityVNext.editor.retryActivityObservation',
+                          'Check again',
+                        )}
+                      </Button>
+                    ) : null}
+                  </Space>
                 }
                 description={
                   <>
@@ -1230,6 +1305,90 @@ const WorkflowEditorPage: React.FC<{
                         : 'error'
                 }
               />
+            ) : null}
+            {observedRun && observedStatus ? (
+              <section
+                aria-label={t(
+                  'workflowActivityVNext.editor.runResult',
+                  'Run result',
+                )}
+                className="wa-vnext__run-result"
+              >
+                <div className="wa-vnext__run-result-heading">
+                  <span
+                    className={`wa-vnext__status wa-vnext__status--${observedStatus.className}`}
+                  >
+                    {observedStatus.label}
+                  </span>
+                  <code className="wa-vnext__mono">
+                    {observedRun.summary.runId}
+                  </code>
+                </div>
+                {currentStep ? (
+                  <p>
+                    <strong>
+                      {t(
+                        'workflowActivityVNext.editor.currentStep',
+                        'Current step',
+                      )}
+                    </strong>{' '}
+                    <code className="wa-vnext__mono">{currentStep.stepId}</code>
+                  </p>
+                ) : null}
+                {editor.lastRunSnapshot ? (
+                  <div className="wa-vnext__run-snapshot">
+                    <strong>
+                      {t(
+                        'workflowActivityVNext.editor.submittedInput',
+                        'Submitted input',
+                      )}
+                    </strong>
+                    <span>{editor.lastRunSnapshot.input}</span>
+                    <small>
+                      {t(
+                        'workflowActivityVNext.editor.snapshotNotice',
+                        'Run again uses this exact input and workflow snapshot.',
+                      )}
+                    </small>
+                  </div>
+                ) : null}
+                {observedRun.finalOutput ? (
+                  <div className="wa-vnext__run-outcome">
+                    <strong>
+                      {t(
+                        'workflowActivityVNext.editor.outputSummary',
+                        'Output summary',
+                      )}
+                    </strong>
+                    <p>{observedRun.finalOutput}</p>
+                  </div>
+                ) : null}
+                {observedRun.finalError ? (
+                  <div className="wa-vnext__run-outcome">
+                    <strong>
+                      {t(
+                        'workflowActivityVNext.editor.failureSummary',
+                        'Failure summary',
+                      )}
+                    </strong>
+                    <p>{observedRun.finalError}</p>
+                  </div>
+                ) : null}
+                {observedRunTerminal ? (
+                  <Button
+                    disabled={runBusy || editorWriteLocked}
+                    onClick={() => void editor.runAgain()}
+                  >
+                    {t('workflowActivityVNext.editor.runAgain', 'Run again')}
+                  </Button>
+                ) : null}
+                <p className="wa-vnext__run-details-note">
+                  {t(
+                    'workflowActivityVNext.editor.fullDetailsNotice',
+                    'Open run details for the full timeline, diagnostics, and recovery actions.',
+                  )}
+                </p>
+              </section>
             ) : null}
           </Space>
         </section>

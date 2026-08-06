@@ -1,4 +1,3 @@
-import { type RuntimeRunsApiError, runtimeRunsApi } from "./runtimeRunsApi";
 import {
   encodeAppScriptCommandBase64,
   encodeStringValueBase64,
@@ -6,6 +5,7 @@ import {
   getAppScriptCommandTypeUrl,
   getStringValueTypeUrl,
 } from "@/shared/runs/protobufPayload";
+import { type RuntimeRunsApiError, runtimeRunsApi } from "./runtimeRunsApi";
 
 describe("runtimeRunsApi", () => {
   const originalFetch = global.fetch;
@@ -437,6 +437,32 @@ describe("runtimeRunsApi", () => {
         method: "POST",
       })
     );
+  });
+
+  it("preserves structured draft-run validation errors for the owning input", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      statusText: "Unprocessable Content",
+      text: async () =>
+        JSON.stringify({
+          title: "Validation failed",
+          errors: { Prompt: ["Use at least three characters."] },
+        }),
+    } satisfies Partial<Response>);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    const request = runtimeRunsApi.streamDraftRun(
+      "scope-1",
+      { prompt: "x", workflowYamls: ["name: draft"] },
+      new AbortController().signal,
+    );
+
+    await expect(request).rejects.toMatchObject({
+      fieldErrors: { Prompt: ["Use at least three characters."] },
+      message: "Validation failed: Prompt: Use at least three characters.",
+      status: 422,
+    });
   });
 
   it("sends draft run file inputs as multipart form data", async () => {
