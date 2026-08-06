@@ -11,7 +11,7 @@ describe('Workflow Activity run failure presentation', () => {
       { status: 401, message: 'Your session expired.' },
       'session_expired',
       'error',
-      0,
+      8,
     ],
     [
       {
@@ -21,13 +21,13 @@ describe('Workflow Activity run failure presentation', () => {
       },
       'access_denied',
       'error',
-      0,
+      8,
     ],
     [
       { status: 429, message: 'Too many requests.', retryAfterSeconds: 12 },
       'rate_limited',
       'warning',
-      0,
+      8,
     ],
     [
       {
@@ -37,13 +37,13 @@ describe('Workflow Activity run failure presentation', () => {
       },
       'invalid_input',
       'warning',
-      0,
+      8,
     ],
     [
       { status: 404, message: 'The run was not found.' },
       'resource_missing',
       'error',
-      5,
+      8,
     ],
     [
       {
@@ -53,13 +53,13 @@ describe('Workflow Activity run failure presentation', () => {
       },
       'state_conflict',
       'warning',
-      0,
+      8,
     ],
     [
       { status: 504, message: 'The provider timed out.' },
       'timeout_or_offline',
       'warning',
-      5,
+      8,
     ],
     [
       {
@@ -69,13 +69,13 @@ describe('Workflow Activity run failure presentation', () => {
       },
       'upstream_unavailable',
       'error',
-      5,
+      8,
     ],
     [
       { code: 'RUN_CANCELLED', message: 'Cancelled by the user.' },
       'cancelled',
       'info',
-      3,
+      8,
     ],
     [
       {
@@ -85,13 +85,13 @@ describe('Workflow Activity run failure presentation', () => {
       },
       'internal_failure',
       'error',
-      0,
+      8,
     ],
     [
       { status: 418, code: 'UNRECOGNIZED_CODE', message: '' },
       'internal_failure',
       'error',
-      0,
+      8,
     ],
   ] as const)('classifies %p as %s', (evidence, category, intent, duration) => {
     expect(classifyRunFailure(evidence)).toMatchObject({
@@ -116,9 +116,15 @@ describe('Workflow Activity run failure presentation', () => {
       />,
     );
 
-    expect(
-      screen.getByText('Try again after the quota window resets.'),
-    ).toBeVisible();
+    const message = screen.getByText(
+      'Try again after the quota window resets.',
+    );
+    const guidance = screen.getByText(
+      'Wait for the quota window to reset before trying again.',
+    );
+    expect(message).toBeVisible();
+    expect(message.closest('.ant-typography')).toBeVisible();
+    expect(guidance).toHaveClass('ant-typography-secondary');
     expect(screen.getByText('Try again in 12 seconds.')).toBeVisible();
     const action = screen.getByRole('button', { name: 'Retry' });
     action.focus();
