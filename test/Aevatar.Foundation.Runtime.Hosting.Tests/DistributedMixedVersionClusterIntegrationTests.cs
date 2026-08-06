@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text.Json;
 using FluentAssertions;
 
@@ -16,7 +17,7 @@ public sealed class DistributedMixedVersionClusterIntegrationTests
     [DistributedClusterIntegrationFact]
     public async Task AgentsEndpoint_ShouldBeReachableAcrossConfiguredMixedNodes()
     {
-        using var client = new HttpClient();
+        using var client = CreateAuthenticatedClient();
         var nodes = GetClusterNodeBaseUrls();
         nodes.Count.Should().Be(GetExpectedNodeCount());
 
@@ -34,7 +35,7 @@ public sealed class DistributedMixedVersionClusterIntegrationTests
     [DistributedClusterIntegrationFact]
     public async Task WorkflowsEndpoint_ShouldBeReachableAcrossConfiguredMixedNodes()
     {
-        using var client = new HttpClient();
+        using var client = CreateAuthenticatedClient();
         var nodes = GetClusterNodeBaseUrls();
         nodes.Count.Should().Be(GetExpectedNodeCount());
 
@@ -103,6 +104,15 @@ public sealed class DistributedMixedVersionClusterIntegrationTests
         if (int.TryParse(rawValue, out var value) && value > 0)
             return value;
         return 6;
+    }
+
+    private static HttpClient CreateAuthenticatedClient()
+    {
+        var client = new HttpClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            GetRequiredEnvironmentVariable("AEVATAR_TEST_CLUSTER_BEARER_TOKEN"));
+        return client;
     }
 
     private static async Task<bool> WaitUntilAsync(Func<Task<bool>> probe)
