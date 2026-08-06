@@ -264,6 +264,8 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.new.name': 'Workflow name',
   'workflowActivityVNext.new.noDirectories':
     'No save location is available. Try again later or contact your administrator.',
+  'workflowActivityVNext.new.noDirectoriesDescription':
+    'A save location is required to own the workflow. You can prepare your input here while access is restored.',
   'workflowActivityVNext.new.observationFailed': "Workflow couldn't be opened",
   'workflowActivityVNext.new.observing': 'Creating workflow…',
   'workflowActivityVNext.new.projectionDelayed':
@@ -271,6 +273,9 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.new.retryDescription':
     'Your work is safe. Try again to finish opening the workflow.',
   'workflowActivityVNext.new.retryObservation': 'Try again',
+  'workflowActivityVNext.new.reviewAccess': 'Review access',
+  'workflowActivityVNext.new.saveTargetRequired':
+    'Choose an available save location before creating the workflow.',
   'workflowActivityVNext.new.template': 'Template',
   'workflowActivityVNext.new.templateDescription.incidentTriage':
     'Classify an incident, prepare a response, and request human approval.',
@@ -278,8 +283,12 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.new.title': 'New workflow',
   'workflowActivityVNext.new.validateCreate': 'Validate and create',
   'workflowActivityVNext.new.workspaceLoading': 'Loading save locations…',
+  'workflowActivityVNext.new.workspaceLoadingDescription':
+    'Choose a creation method now. Your input stays on this page while the current workspace save location loads.',
   'workflowActivityVNext.new.workspaceUnavailable':
     'Save locations unavailable',
+  'workflowActivityVNext.new.workspaceUnavailableDescription':
+    'Choose a creation method now. Your input stays on this page while you restore access.',
   'workflowActivityVNext.new.yaml': 'Workflow YAML',
   'workflowActivityVNext.run.backAria': 'Back to Activity',
   'workflowActivityVNext.run.commandId': 'Request ID',

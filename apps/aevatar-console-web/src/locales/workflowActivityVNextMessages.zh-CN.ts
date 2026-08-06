@@ -251,12 +251,17 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.new.name': '工作流名称',
     'workflowActivityVNext.new.noDirectories':
       '没有可用的保存位置，请稍后重试或联系管理员。',
+    'workflowActivityVNext.new.noDirectoriesDescription':
+      '工作流需要明确的保存位置来确定归属；恢复访问权限期间，你可以先在此准备输入。',
     'workflowActivityVNext.new.observationFailed': '无法打开工作流',
     'workflowActivityVNext.new.observing': '正在创建工作流…',
     'workflowActivityVNext.new.projectionDelayed': '所需时间比预期更长',
     'workflowActivityVNext.new.retryDescription':
       '你的内容已保留，请重试以完成打开工作流。',
     'workflowActivityVNext.new.retryObservation': '重试',
+    'workflowActivityVNext.new.reviewAccess': '检查访问权限',
+    'workflowActivityVNext.new.saveTargetRequired':
+      '请先选择可用的保存位置，再创建工作流。',
     'workflowActivityVNext.new.template': '模板',
     'workflowActivityVNext.new.templateDescription.incidentTriage':
       '对事件分类、准备响应并请求人工审批。',
@@ -264,7 +269,11 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.new.title': '新建工作流',
     'workflowActivityVNext.new.validateCreate': '验证并创建',
     'workflowActivityVNext.new.workspaceLoading': '正在加载保存位置…',
+    'workflowActivityVNext.new.workspaceLoadingDescription':
+      '现在可以先选择创建方式；当前工作区的保存位置加载期间，你的输入会保留在此页面。',
     'workflowActivityVNext.new.workspaceUnavailable': '保存位置不可用',
+    'workflowActivityVNext.new.workspaceUnavailableDescription':
+      '现在可以先选择创建方式；恢复访问权限期间，你的输入会保留在此页面。',
     'workflowActivityVNext.new.yaml': '工作流 YAML',
     'workflowActivityVNext.run.backAria': '返回活动列表',
     'workflowActivityVNext.run.commandId': '请求 ID',
