@@ -14,7 +14,7 @@ The editor must treat Run as an invocation of a published workflow service. Draf
 
 Keep the existing publication observation and Activity run observation, but connect them through a publication-aware run contract. Publish produces a receipt containing the three identities. The editor enables Run only after that exact receipt is observed as the active serving workflow revision. Run opens a fixed Ant Design Drawer and invokes the published service through the existing service-scoped chat Invoke API.
 
-The editor records the saved workflow timestamp captured by the publication review. A local edit or a later save makes the current publication stale for the visible editor document. Run remains disabled until the latest saved workflow is published again, so the canvas and the executed revision cannot silently diverge.
+The editor records the local document version captured by the publication review. A local edit or a later save makes the current publication stale for the visible editor document. Run remains disabled until the latest saved workflow is published again, so the canvas and the executed revision cannot silently diverge.
 
 ## User Flow
 
@@ -35,9 +35,9 @@ Run is disabled when any of the following is true:
 - publication has not reached `observed` active-serving state;
 - the editor contains unapplied, unsaved, or saved-after-publication changes;
 - the workflow is structurally invalid;
-- a save, structural mutation, Invoke submission, or unresolved run observation is active.
+- a save or structural mutation is active.
 
-The disabled button remains a real disabled control. Its title explains the first recovery action: publish first, wait for publication, apply/save/publish the latest changes, or wait for the current run.
+The disabled button remains a real disabled control. Its title explains the first recovery action: publish first, wait for publication, apply/save/publish the latest changes, or wait for the current editor update. After a run is accepted, the toolbar Run action can reopen the same drawer and result, while Start run remains disabled until the current submission or unresolved observation finishes.
 
 ## Component Boundaries
 
@@ -49,7 +49,7 @@ The vNext editor removes its Draft Run submission path. Other Draft Run consumer
 
 - Empty input is rejected locally and never dispatched.
 - Backend prompt field errors stay attached to Input without clearing its value.
-- Invoke transport and API errors are shown in the existing run result state and console toast path.
+- Invoke transport and API errors are shown in the run drawer; structured prompt validation remains attached to Input without replacing the backend message.
 - A stream ending without a run ID remains an unresolved observation and cannot be submitted again accidentally.
 - A route change aborts the previous stream and clears its publication target so an old service can never receive the new workflow's input.
 
