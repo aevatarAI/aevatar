@@ -28,6 +28,9 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { nyxIdChatApi } from "@/shared/api/nyxIdChatApi";
+import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
+import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
 import { studioApi } from "@/shared/studio/api";
 import { AevatarPageShell } from "@/shared/ui/aevatarPageShells";
 import { resolveStudioScopeContext } from "../scopes/components/resolvedScope";
@@ -45,6 +48,10 @@ import {
 } from "./chatApi";
 import { ChatHistoryApiError, chatHistoryApi } from "./chatHistoryApi";
 import { ChatInput, ChatMessageBubble } from "./chatPresentation";
+import {
+  ChatRunLifecycleCard,
+  resolveChatRunLifecycle,
+} from "./chatRunLifecycle";
 import type {
   ChatMessage,
   ChatSessionState,
@@ -53,6 +60,7 @@ import type {
   ChatCreateRecovery,
   ConversationMeta,
   LocalChatStatus,
+  PendingRunInterventionInfo,
   RuntimeEvent,
   StepInfo,
   StoredChatMessage,
@@ -71,6 +79,7 @@ type ConversationState = {
   createCommandId?: string;
   createRequestPrompt?: string;
   expectedTurnCount: number;
+  failureCode?: string;
   latestTurnId?: string;
   messages: ChatMessage[];
   sessionId: string;
@@ -109,6 +118,12 @@ type StudioJump = {
   href: string;
   label: string;
 };
+
+type RunInterventionAction = Parameters<
+  NonNullable<
+    React.ComponentProps<typeof ChatMessageBubble>["onRunInterventionAction"]
+  >
+>[2];
 
 function readChatQueryValue(
   key: string,
@@ -171,9 +186,26 @@ function resolveStoredConversationStatus(
     : "completed_text";
 }
 
-function ChatMessageEntry({ message }: { message: ChatMessage }): React.ReactElement {
+function ChatMessageEntry({
+  activeApprovalRequestId,
+  activeRunInterventionKey,
+  message,
+  onApprovalDecision,
+  onRunInterventionAction,
+}: {
+  activeApprovalRequestId?: string | null;
+  activeRunInterventionKey?: string | null;
+  message: ChatMessage;
+  onApprovalDecision?: (requestId: string, approved: boolean) => void;
+  onRunInterventionAction?: (
+    messageId: string,
+    intervention: PendingRunInterventionInfo,
+    action: RunInterventionAction
+  ) => void;
+}): React.ReactElement {
   const authorName = message.authorName?.trim() || "";
-  const isStandardRole = message.role === "user" || message.role === "assistant";
+  const isStandardRole =
+    message.role === "user" || message.role === "assistant";
 
   if (isStandardRole) {
     return (
@@ -191,7 +223,13 @@ function ChatMessageEntry({ message }: { message: ChatMessage }): React.ReactEle
             {authorName}
           </Typography.Text>
         ) : null}
-        <ChatMessageBubble message={message} />
+        <ChatMessageBubble
+          activeApprovalRequestId={activeApprovalRequestId}
+          activeRunInterventionKey={activeRunInterventionKey}
+          message={message}
+          onApprovalDecision={onApprovalDecision}
+          onRunInterventionAction={onRunInterventionAction}
+        />
       </div>
     );
   }
@@ -262,6 +300,32 @@ function ChatMessageEntry({ message }: { message: ChatMessage }): React.ReactEle
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function structuredErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && code.trim() ? code.trim() : undefined;
+}
+
+function mergeRuntimeTarget(
+  current: ChatStudioTarget | undefined,
+  scopeId: string,
+  accumulator: ReturnType<typeof createRuntimeEventAccumulator>
+): ChatStudioTarget | undefined {
+  if (!accumulator.actorId && !accumulator.runId) {
+    return current;
+  }
+
+  return {
+    ...current,
+    actorId: accumulator.actorId || current?.actorId,
+    runId: accumulator.runId || current?.runId,
+    scopeId: current?.scopeId || scopeId,
+  };
 }
 
 function abortableDelay(delayMs: number, signal: AbortSignal): Promise<void> {
@@ -349,7 +413,9 @@ function cloneStepInfo(steps?: readonly StepInfo[]): StepInfo[] {
   return (steps ?? []).map((step) => ({ ...step }));
 }
 
-function cloneToolCallInfo(toolCalls?: readonly ToolCallInfo[]): ToolCallInfo[] {
+function cloneToolCallInfo(
+  toolCalls?: readonly ToolCallInfo[]
+): ToolCallInfo[] {
   return (toolCalls ?? []).map((toolCall) => ({ ...toolCall }));
 }
 
@@ -381,9 +447,7 @@ function hydrateAuthoritativeMessages(
 
     return {
       ...authoritativeMessage,
-      ...(localMessage.events
-        ? { events: [...localMessage.events] }
-        : {}),
+      ...(localMessage.events ? { events: [...localMessage.events] } : {}),
       ...(localMessage.pendingApproval
         ? { pendingApproval: { ...localMessage.pendingApproval } }
         : {}),
@@ -467,13 +531,18 @@ function formatStatusLabel(status: LocalChatStatus): string {
     case "streaming":
       return t("pages.chat.index.status.streaming", "Streaming");
     case "needs_confirmation":
-      return t("pages.chat.index.status.needsConfirmation", "Needs confirmation");
+      return t(
+        "pages.chat.index.status.needsConfirmation",
+        "Needs confirmation"
+      );
     case "creating":
       return t("pages.chat.index.status.creating", "Creating");
     case "completed_with_studio_target":
       return t("pages.chat.index.status.studioReady", "Studio ready");
     case "completed_text":
       return t("pages.chat.index.status.completed", "Completed");
+    case "stopped":
+      return t("pages.chat.index.status.stopped", "Stopped");
     case "error":
       return t("pages.chat.index.status.error", "Error");
     default:
@@ -495,6 +564,8 @@ function resolveStatusTone(
       return "success";
     case "error":
       return "error";
+    case "stopped":
+      return "default";
     default:
       return "default";
   }
@@ -515,7 +586,9 @@ function shouldAskForConfirmation(content: string): boolean {
   );
 }
 
-function resolveStudioJump(target: ChatStudioTarget | undefined): StudioJump | null {
+function resolveStudioJump(
+  target: ChatStudioTarget | undefined
+): StudioJump | null {
   if (!target) {
     return null;
   }
@@ -618,13 +691,16 @@ const ChatPage: React.FC = () => {
   const reconciliationControllersRef = useRef(
     new Map<string, AbortController>()
   );
+  const pendingActionKeysRef = useRef(new Set<string>());
   const scopeEpochRef = useRef(0);
   const scopeIdentityRef = useRef("");
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
   const [storedActiveConversation, setActiveConversation] =
     useState<ConversationState | null>(null);
   const [conversationStateScopeId, setConversationStateScopeId] = useState("");
-  const [deleteTarget, setDeleteTarget] = useState<ConversationMeta | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ConversationMeta | null>(
+    null
+  );
   const [deletingConversation, setDeletingConversation] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [deletedConversationIds, setDeletedConversationIds] = useState<
@@ -638,14 +714,21 @@ const ChatPage: React.FC = () => {
   });
   const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
-  const [, setSession] = useState<ChatSessionState>(createIdleSession());
+  const [session, setSession] = useState<ChatSessionState>(createIdleSession());
+  const [activeApprovalRequestId, setActiveApprovalRequestId] = useState<
+    string | null
+  >(null);
+  const [activeRunInterventionKey, setActiveRunInterventionKey] = useState<
+    string | null
+  >(null);
 
   const authSessionQuery = useQuery({
     queryKey: ["chat", "auth-session"],
     queryFn: () => studioApi.getAuthSession(),
     retry: false,
   });
-  const routeSearch = typeof window === "undefined" ? "" : window.location.search;
+  const routeSearch =
+    typeof window === "undefined" ? "" : window.location.search;
   const routeScopeId = useMemo(
     () => readChatQueryValue("scopeId", routeSearch),
     [routeSearch]
@@ -702,6 +785,29 @@ const ChatPage: React.FC = () => {
     activeConversation?.status === "streaming" ||
     activeConversation?.status === "creating";
   const studioJump = resolveStudioJump(activeConversation?.target);
+  const activeRunId = activeConversation?.target?.runId || session.runId;
+  const activeRunActorId =
+    activeConversation?.target?.actorId || session.actorId;
+  const runSummaryQuery = useQuery({
+    enabled: Boolean(scopeId && activeRunId && !isStreaming),
+    queryFn: () =>
+      runtimeRunsApi.getRunSummary(scopeId, activeRunId, {
+        actorId: activeRunActorId || undefined,
+      }),
+    queryKey: ["chat-run", scopeId, activeRunId, activeRunActorId],
+    retry: false,
+  });
+  const runLifecycle = activeConversation
+    ? resolveChatRunLifecycle({
+        completionStatus: runSummaryQuery.data?.completionStatus,
+        failureCode: activeConversation.failureCode,
+        messages: activeConversation.messages,
+        reconciliationFailed: runSummaryQuery.isError,
+        runId: activeRunId,
+        session,
+        status: activeConversation.status,
+      })
+    : null;
   const visibleConversations = useMemo<ConversationListItem[]>(() => {
     const activeConversationId = activeConversation?.conversationId;
     const liveConversations = [
@@ -723,7 +829,9 @@ const ChatPage: React.FC = () => {
           : []
       )
     );
-    const serverIds = new Set(conversations.map((conversation) => conversation.id));
+    const serverIds = new Set(
+      conversations.map((conversation) => conversation.id)
+    );
     const serverItems = conversations.map((conversation) => {
       const pending = scopedPendingConversations.get(conversation.id);
       return {
@@ -741,7 +849,9 @@ const ChatPage: React.FC = () => {
           return [];
         }
 
-        const timestamps = conversation.messages.map((message) => message.timestamp);
+        const timestamps = conversation.messages.map(
+          (message) => message.timestamp
+        );
         return [
           {
             createdAt: new Date(timestamps[0] ?? Date.now()).toISOString(),
@@ -993,7 +1103,9 @@ const ChatPage: React.FC = () => {
         setSession(createIdleSession(scopeId));
       }
       setDeleteTarget(null);
-      await queryClient.invalidateQueries({ queryKey: ["chat-history", scopeId] });
+      await queryClient.invalidateQueries({
+        queryKey: ["chat-history", scopeId],
+      });
     } catch (error) {
       if (scopeEpochRef.current !== deleteScopeEpoch) {
         return;
@@ -1148,7 +1260,8 @@ const ChatPage: React.FC = () => {
         });
       })().finally(() => {
         if (
-          reconciliationControllersRef.current.get(conversationId) === controller
+          reconciliationControllersRef.current.get(conversationId) ===
+          controller
         ) {
           reconciliationControllersRef.current.delete(conversationId);
         }
@@ -1233,7 +1346,7 @@ const ChatPage: React.FC = () => {
         ? undefined
         : !conversation.createRequestPrompt ||
             conversation.createRequestPrompt === trimmedInput
-          ? conversation.createCommandId ?? conversation.clientId
+          ? (conversation.createCommandId ?? conversation.clientId)
           : createClientId();
       const startedConversation: ConversationState = {
         ...conversation,
@@ -1241,6 +1354,7 @@ const ChatPage: React.FC = () => {
         createRequestPrompt: conversation.conversationId
           ? undefined
           : trimmedInput,
+        failureCode: undefined,
         latestTurnId: undefined,
         messages: [...conversation.messages, userMessage, assistantMessage],
         status: nextStatus,
@@ -1265,7 +1379,9 @@ const ChatPage: React.FC = () => {
         reconciliationControllersRef.current
           .get(conversation.conversationId)
           ?.abort();
-        reconciliationControllersRef.current.delete(conversation.conversationId);
+        reconciliationControllersRef.current.delete(
+          conversation.conversationId
+        );
       }
       const controller = new AbortController();
       abortControllerRef.current = controller;
@@ -1301,7 +1417,8 @@ const ChatPage: React.FC = () => {
                     signal
                   );
                   if (
-                    detail.stateVersion >= (conversation.stateVersion as number) &&
+                    detail.stateVersion >=
+                      (conversation.stateVersion as number) &&
                     (!latestRefreshedDetail ||
                       detail.stateVersion > latestRefreshedDetail.stateVersion)
                   ) {
@@ -1324,13 +1441,17 @@ const ChatPage: React.FC = () => {
           const chatHistoryContext = extractChatHistoryContext(frame.raw);
           if (chatHistoryContext) {
             if (chatHistoryContext.scopeId !== scopeId) {
-              throw new Error("Chat History context does not match the active scope.");
+              throw new Error(
+                "Chat History context does not match the active scope."
+              );
             }
             if (
               conversation.conversationId &&
               chatHistoryContext.conversationId !== conversation.conversationId
             ) {
-              throw new Error("Chat History returned a different conversation identity.");
+              throw new Error(
+                "Chat History returned a different conversation identity."
+              );
             }
             if (
               acceptedChatHistoryContext &&
@@ -1343,7 +1464,9 @@ const ChatPage: React.FC = () => {
                 chatHistoryContext.stateVersion !==
                   acceptedChatHistoryContext.stateVersion)
             ) {
-              throw new Error("Chat History context changed during the stream.");
+              throw new Error(
+                "Chat History context changed during the stream."
+              );
             }
             if (!acceptedChatHistoryContext) {
               acceptedChatHistoryContext = chatHistoryContext;
@@ -1385,10 +1508,16 @@ const ChatPage: React.FC = () => {
           );
           const patchedConversation: ConversationState = {
             ...streamingConversation,
+            failureCode: accumulator.errorCode || undefined,
             messages: streamingConversation.messages.map((message) =>
               message.id === assistantMessageId
                 ? { ...message, ...patch }
                 : message
+            ),
+            target: mergeRuntimeTarget(
+              streamingConversation.target,
+              scopeId,
+              accumulator
             ),
           };
           streamingConversation = patchedConversation;
@@ -1446,12 +1575,19 @@ const ChatPage: React.FC = () => {
         }
 
         const artifacts = extractChatStreamArtifacts(rawFrames);
-        const finalAssistantStatus: ChatMessage["status"] = accumulator.errorText
-          ? "error"
-          : "complete";
-        const finalTarget = artifacts.target || streamingConversation.target;
+        const finalAssistantStatus: ChatMessage["status"] =
+          accumulator.errorText ? "error" : "complete";
+        const artifactTarget = artifacts.target
+          ? { ...streamingConversation.target, ...artifacts.target }
+          : streamingConversation.target;
+        const finalTarget = mergeRuntimeTarget(
+          artifactTarget,
+          scopeId,
+          accumulator
+        );
         const finalUsage = artifacts.usage || streamingConversation.usage;
-        const finalContent = accumulator.finalOutput || accumulator.assistantText;
+        const finalContent =
+          accumulator.finalOutput || accumulator.assistantText;
         const finalStatus: LocalChatStatus = accumulator.errorText
           ? "error"
           : resolveStudioJump(finalTarget)
@@ -1461,6 +1597,7 @@ const ChatPage: React.FC = () => {
               : "completed_text";
         const finalConversation: ConversationState = {
           ...streamingConversation,
+          failureCode: accumulator.errorCode || undefined,
           messages: streamingConversation.messages.map((message) =>
             message.id === assistantMessageId
               ? {
@@ -1478,7 +1615,9 @@ const ChatPage: React.FC = () => {
         };
         activeConversationRef.current = finalConversation;
         setActiveConversation((current) =>
-          current?.clientId === conversation.clientId ? finalConversation : current
+          current?.clientId === conversation.clientId
+            ? finalConversation
+            : current
         );
         setSession(
           buildSessionFromAccumulator(
@@ -1559,6 +1698,8 @@ const ChatPage: React.FC = () => {
         );
         const failedConversation: ConversationState = {
           ...streamingConversation,
+          failureCode:
+            accumulator.errorCode || structuredErrorCode(error) || undefined,
           ...(refreshedDetail
             ? {
                 ...(receivedChatHistoryContext
@@ -1573,17 +1714,24 @@ const ChatPage: React.FC = () => {
           messages: authoritativeMessages
             ? [...authoritativeMessages, ...failedAttemptMessages]
             : failedMessages,
-          status: "error",
+          status:
+            controller.signal.aborted && !accumulator.errorCode
+              ? "stopped"
+              : "error",
+          target: mergeRuntimeTarget(
+            streamingConversation.target,
+            scopeId,
+            accumulator
+          ),
         };
         activeConversationRef.current = failedConversation;
         setActiveConversation((current) =>
-          current?.clientId === conversation.clientId ? failedConversation : current
+          current?.clientId === conversation.clientId
+            ? failedConversation
+            : current
         );
         setSession(buildSessionFromAccumulator(scopeId, accumulator, "error"));
-        if (
-          failedConversation.conversationId &&
-          receivedChatHistoryContext
-        ) {
+        if (failedConversation.conversationId && receivedChatHistoryContext) {
           reconcileConversation(failedConversation);
         } else if (
           failedConversation.conversationId &&
@@ -1630,7 +1778,10 @@ const ChatPage: React.FC = () => {
                 return;
               }
 
-              const recoveredConversation = bindCreateRecovery(current, recovery);
+              const recoveredConversation = bindCreateRecovery(
+                current,
+                recovery
+              );
               activeConversationRef.current = recoveredConversation;
               setActiveConversation(recoveredConversation);
               reconcileConversation(recoveredConversation);
@@ -1675,6 +1826,268 @@ const ChatPage: React.FC = () => {
     );
   }, [activeConversation, runChat]);
 
+  const handleApprovalDecision = useCallback(
+    async (requestId: string, approved: boolean) => {
+      const actionKey = `tool:${requestId}`;
+      if (!scopeId || pendingActionKeysRef.current.has(actionKey)) {
+        return;
+      }
+
+      const conversation = activeConversationRef.current;
+      const targetMessage = conversation?.messages.find(
+        (message) => message.pendingApproval?.requestId === requestId
+      );
+      const actorId = conversation?.target?.actorId || session.actorId;
+      if (!conversation || !targetMessage || !actorId) {
+        setSession((current) => ({
+          ...current,
+          error: t(
+            "pages.chat.index.approvalContextMissing",
+            "Run context is unavailable. Reload the conversation before retrying this approval."
+          ),
+          status: "error",
+          updatedAt: Date.now(),
+        }));
+        return;
+      }
+
+      pendingActionKeysRef.current.add(actionKey);
+      setActiveApprovalRequestId(requestId);
+      const controller = new AbortController();
+      const accumulator = createRuntimeEventAccumulator({ actorId });
+      accumulator.assistantText = targetMessage.content;
+      accumulator.commandId = session.commandId;
+      accumulator.events = [...(targetMessage.events ?? [])];
+      accumulator.runId = conversation.target?.runId || session.runId;
+      accumulator.steps = cloneStepInfo(targetMessage.steps);
+      accumulator.thinking = targetMessage.thinking ?? "";
+      accumulator.toolCalls = cloneToolCallInfo(targetMessage.toolCalls);
+
+      try {
+        const response = await nyxIdChatApi.approveToolCall(
+          scopeId,
+          actorId,
+          {
+            approved,
+            reason: approved ? undefined : "Rejected by console operator.",
+            requestId,
+            sessionId: conversation.sessionId,
+          },
+          controller.signal
+        );
+
+        for await (const frame of readChatStreamFrames(response, {
+          signal: controller.signal,
+        })) {
+          if (!frame.event) {
+            continue;
+          }
+          applyRuntimeEvent(accumulator, frame.event);
+          if (isRawObserved(frame.event)) {
+            continue;
+          }
+
+          setActiveConversation((current) => {
+            if (!current || current.clientId !== conversation.clientId) {
+              return current;
+            }
+            const next: ConversationState = {
+              ...current,
+              failureCode: accumulator.errorCode || undefined,
+              messages: current.messages.map((message) =>
+                message.id === targetMessage.id
+                  ? {
+                      ...message,
+                      ...buildAssistantMessagePatch(
+                        accumulator,
+                        accumulator.errorText ? "error" : "streaming"
+                      ),
+                    }
+                  : message
+              ),
+              status: accumulator.errorText ? "error" : "creating",
+              target: mergeRuntimeTarget(current.target, scopeId, accumulator),
+            };
+            activeConversationRef.current = next;
+            return next;
+          });
+          setSession(
+            buildSessionFromAccumulator(
+              scopeId,
+              accumulator,
+              accumulator.errorText ? "error" : "running"
+            )
+          );
+        }
+
+        setActiveConversation((current) => {
+          if (!current || current.clientId !== conversation.clientId) {
+            return current;
+          }
+          const next: ConversationState = {
+            ...current,
+            failureCode: accumulator.errorCode || undefined,
+            messages: current.messages.map((message) =>
+              message.id === targetMessage.id
+                ? {
+                    ...message,
+                    ...buildAssistantMessagePatch(
+                      accumulator,
+                      accumulator.errorText ? "error" : "complete"
+                    ),
+                    pendingApproval: undefined,
+                  }
+                : message
+            ),
+            status: accumulator.errorText ? "error" : "completed_text",
+            target: mergeRuntimeTarget(current.target, scopeId, accumulator),
+          };
+          activeConversationRef.current = next;
+          reconcileConversation(next);
+          return next;
+        });
+      } catch (error) {
+        setActiveConversation((current) => {
+          if (!current || current.clientId !== conversation.clientId) {
+            return current;
+          }
+          const next = {
+            ...current,
+            failureCode: structuredErrorCode(error),
+            status: "error" as const,
+          };
+          activeConversationRef.current = next;
+          return next;
+        });
+        setSession((current) => ({
+          ...current,
+          error: errorMessage(error),
+          status: "error",
+          updatedAt: Date.now(),
+        }));
+      } finally {
+        pendingActionKeysRef.current.delete(actionKey);
+        setActiveApprovalRequestId((current) =>
+          current === requestId ? null : current
+        );
+      }
+    },
+    [reconcileConversation, scopeId, session]
+  );
+
+  const handleRunInterventionAction = useCallback(
+    async (
+      messageId: string,
+      intervention: PendingRunInterventionInfo,
+      action: RunInterventionAction
+    ) => {
+      const actionKey = `run:${intervention.key}`;
+      if (!scopeId || pendingActionKeysRef.current.has(actionKey)) {
+        return;
+      }
+      const actorId = intervention.actorId || session.actorId;
+      const runId = intervention.runId || session.runId;
+      if (!actorId || !runId || !intervention.stepId) {
+        setSession((current) => ({
+          ...current,
+          error: t(
+            "pages.chat.index.interventionContextMissing",
+            "Run context is incomplete. Open Run Detail or reload before retrying."
+          ),
+          status: "error",
+          updatedAt: Date.now(),
+        }));
+        return;
+      }
+
+      pendingActionKeysRef.current.add(actionKey);
+      setActiveRunInterventionKey(intervention.key);
+      try {
+        const result =
+          action.kind === "signal"
+            ? await runtimeRunsApi.signal(scopeId, {
+                actorId,
+                payload: action.value?.trim() || undefined,
+                runId,
+                signalName: intervention.signalName || "continue",
+                stepId: intervention.stepId,
+              })
+            : await runtimeRunsApi.resume(scopeId, {
+                actorId,
+                approved: action.kind !== "reject",
+                runId,
+                stepId: intervention.stepId,
+                userInput: action.value?.trim() || undefined,
+              });
+        if (!result.accepted) {
+          throw new Error("Runtime did not accept the intervention command.");
+        }
+
+        setActiveConversation((current) => {
+          if (!current) {
+            return current;
+          }
+          const next: ConversationState = {
+            ...current,
+            failureCode: undefined,
+            messages: current.messages.map((message) =>
+              message.id === messageId
+                ? { ...message, pendingRunIntervention: undefined }
+                : message
+            ),
+            status: "completed_text",
+            target: {
+              ...current.target,
+              actorId: result.actorId || actorId,
+              runId: result.runId || runId,
+              scopeId,
+            },
+          };
+          activeConversationRef.current = next;
+          return next;
+        });
+        setSession((current) => ({
+          ...current,
+          actorId: result.actorId || actorId,
+          commandId: result.commandId || current.commandId,
+          error: undefined,
+          runId: result.runId || runId,
+          scopeId,
+          status: "running",
+          updatedAt: Date.now(),
+        }));
+        await queryClient.invalidateQueries({
+          queryKey: ["chat-run", scopeId, runId],
+        });
+      } catch (error) {
+        setActiveConversation((current) => {
+          if (!current) {
+            return current;
+          }
+          const next = {
+            ...current,
+            failureCode: structuredErrorCode(error),
+            status: "error" as const,
+          };
+          activeConversationRef.current = next;
+          return next;
+        });
+        setSession((current) => ({
+          ...current,
+          error: errorMessage(error),
+          status: "error",
+          updatedAt: Date.now(),
+        }));
+      } finally {
+        pendingActionKeysRef.current.delete(actionKey);
+        setActiveRunInterventionKey((current) =>
+          current === intervention.key ? null : current
+        );
+      }
+    },
+    [queryClient, scopeId, session]
+  );
+
   const handleStop = useCallback(() => {
     abortControllerRef.current?.abort();
   }, []);
@@ -1686,6 +2099,24 @@ const ChatPage: React.FC = () => {
 
     history.push(studioJump.href);
   }, [studioJump]);
+
+  const handleOpenRun = useCallback(() => {
+    if (!scopeId || !activeRunId) {
+      return;
+    }
+
+    history.push(
+      buildRuntimeRunsHref({
+        actorId: activeRunActorId || undefined,
+        runId: activeRunId,
+        scopeId,
+      })
+    );
+  }, [activeRunActorId, activeRunId, scopeId]);
+
+  const handleReviewAccess = useCallback(() => {
+    history.push("/settings?section=account");
+  }, []);
 
   const messageCount = activeConversation?.messages.length ?? 0;
   const historyRail = (
@@ -1709,7 +2140,9 @@ const ChatPage: React.FC = () => {
         >
           {t("pages.chat.index.newChatAction", "New Chat")}
         </Button>
-        <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 12 }}>
+        <Typography.Text
+          style={{ color: token.colorTextTertiary, fontSize: 12 }}
+        >
           {hasFailedHistoryReconciliation
             ? t(
                 "pages.chat.index.historySaveNeedsAttention",
@@ -1757,7 +2190,10 @@ const ChatPage: React.FC = () => {
           <Alert
             action={
               <Button
-                aria-label={t("pages.chat.index.retryHistory", "Retry chat history")}
+                aria-label={t(
+                  "pages.chat.index.retryHistory",
+                  "Retry chat history"
+                )}
                 icon={<ReloadOutlined />}
                 onClick={() => void conversationsQuery.refetch()}
                 size="small"
@@ -1807,7 +2243,9 @@ const ChatPage: React.FC = () => {
                     aria-label={conversation.title}
                     className="aevatar-chat-history-select"
                     disabled={isStreaming}
-                    onClick={() => void handleSelectConversation(conversation.id)}
+                    onClick={() =>
+                      void handleSelectConversation(conversation.id)
+                    }
                     style={{
                       alignItems: "flex-start",
                       background: "transparent",
@@ -1866,17 +2304,19 @@ const ChatPage: React.FC = () => {
                                 "Save not confirmed"
                               )
                             : conversation.historyReconciliation?.status ===
-                              "pending"
-                            ? t(
-                                "pages.chat.index.historySavePendingShort",
-                                "Saving history"
-                              )
-                            : conversation.liveStatus === "streaming" ||
-                              conversation.liveStatus === "creating"
-                            ? formatStatusLabel(conversation.liveStatus)
-                            : formatTurnCount(conversation.messageCount)}
+                                "pending"
+                              ? t(
+                                  "pages.chat.index.historySavePendingShort",
+                                  "Saving history"
+                                )
+                              : conversation.liveStatus === "streaming" ||
+                                  conversation.liveStatus === "creating"
+                                ? formatStatusLabel(conversation.liveStatus)
+                                : formatTurnCount(conversation.messageCount)}
                         </span>
-                        <span>{formatRelativeTime(conversation.updatedAt)}</span>
+                        <span>
+                          {formatRelativeTime(conversation.updatedAt)}
+                        </span>
                       </span>
                     </span>
                   </button>
@@ -1911,9 +2351,13 @@ const ChatPage: React.FC = () => {
                     })}
                   >
                     <Button
-                      aria-label={t("pages.chat.index.deleteChat", "Delete {title}", {
-                        title: conversation.title,
-                      })}
+                      aria-label={t(
+                        "pages.chat.index.deleteChat",
+                        "Delete {title}",
+                        {
+                          title: conversation.title,
+                        }
+                      )}
                       danger
                       disabled={isStreaming}
                       icon={<DeleteOutlined />}
@@ -1992,7 +2436,10 @@ const ChatPage: React.FC = () => {
               title={t("pages.chat.index.openHistory", "Open chat history")}
             >
               <Button
-                aria-label={t("pages.chat.index.openHistory", "Open chat history")}
+                aria-label={t(
+                  "pages.chat.index.openHistory",
+                  "Open chat history"
+                )}
                 className="aevatar-chat-history-trigger"
                 icon={<HistoryOutlined />}
                 onClick={() => setHistoryDrawerOpen(true)}
@@ -2013,7 +2460,8 @@ const ChatPage: React.FC = () => {
                   whiteSpace: "nowrap",
                 }}
               >
-                {activeConversation?.title || t("pages.chat.index.title", "Chat")}
+                {activeConversation?.title ||
+                  t("pages.chat.index.title", "Chat")}
               </Typography.Text>
               <Typography.Text
                 style={{
@@ -2201,49 +2649,84 @@ const ChatPage: React.FC = () => {
                 </Typography.Text>
               </div>
             ) : (
-              <Space
-                className="aevatar-chat-message-list"
-                direction="vertical"
-                size={14}
-                style={{
-                  marginInline: "auto",
-                  maxWidth: 1440,
-                  width: "100%",
-                }}
-              >
-                {activeConversation?.messages.map((message) => (
-                  <ChatMessageEntry key={message.id} message={message} />
-                ))}
-                {activeConversation?.status === "needs_confirmation" ? (
-                  <div
-                    style={{
-                      background: token.colorWarningBg,
-                      border: `1px solid ${token.colorWarningBorder}`,
-                      borderRadius: token.borderRadius,
-                      marginLeft: 34,
-                      maxWidth: 760,
-                      padding: 12,
-                    }}
-                  >
-                    <Space direction="vertical" size={10}>
-                      <Typography.Text strong>
-                        {t(
-                          "pages.chat.index.reviewPlan",
-                          "Review the plan before creating resources."
-                        )}
-                      </Typography.Text>
-                      <Button
-                        disabled={isConversationActionDisabled}
-                        icon={<SendOutlined />}
-                        onClick={handleConfirmCreate}
-                        type="primary"
-                      >
-                        {t("pages.chat.index.confirmAndCreate", "Confirm and create")}
-                      </Button>
-                    </Space>
-                  </div>
+              <>
+                {runLifecycle ? (
+                  <ChatRunLifecycleCard
+                    onOpenRun={activeRunId ? handleOpenRun : undefined}
+                    onReviewAccess={
+                      runLifecycle.permissionCode
+                        ? handleReviewAccess
+                        : undefined
+                    }
+                    view={runLifecycle}
+                  />
                 ) : null}
-              </Space>
+                <Space
+                  className="aevatar-chat-message-list"
+                  direction="vertical"
+                  size={14}
+                  style={{
+                    marginInline: "auto",
+                    maxWidth: 1440,
+                    width: "100%",
+                  }}
+                >
+                  {activeConversation?.messages.map((message) => (
+                    <ChatMessageEntry
+                      activeApprovalRequestId={activeApprovalRequestId}
+                      activeRunInterventionKey={activeRunInterventionKey}
+                      key={message.id}
+                      message={message}
+                      onApprovalDecision={(requestId, approved) => {
+                        void handleApprovalDecision(requestId, approved);
+                      }}
+                      onRunInterventionAction={(
+                        messageId,
+                        intervention,
+                        action
+                      ) => {
+                        void handleRunInterventionAction(
+                          messageId,
+                          intervention,
+                          action
+                        );
+                      }}
+                    />
+                  ))}
+                  {activeConversation?.status === "needs_confirmation" ? (
+                    <div
+                      style={{
+                        background: token.colorWarningBg,
+                        border: `1px solid ${token.colorWarningBorder}`,
+                        borderRadius: token.borderRadius,
+                        marginLeft: 34,
+                        maxWidth: 760,
+                        padding: 12,
+                      }}
+                    >
+                      <Space direction="vertical" size={10}>
+                        <Typography.Text strong>
+                          {t(
+                            "pages.chat.index.reviewPlan",
+                            "Review the plan before creating resources."
+                          )}
+                        </Typography.Text>
+                        <Button
+                          disabled={isConversationActionDisabled}
+                          icon={<SendOutlined />}
+                          onClick={handleConfirmCreate}
+                          type="primary"
+                        >
+                          {t(
+                            "pages.chat.index.confirmAndCreate",
+                            "Confirm and create"
+                          )}
+                        </Button>
+                      </Space>
+                    </div>
+                  ) : null}
+                </Space>
+              </>
             )}
             <div ref={scrollAnchorRef} />
           </div>
@@ -2260,17 +2743,23 @@ const ChatPage: React.FC = () => {
                 {activeConversation?.usage?.totalTokens !== undefined ? (
                   <Tag>
                     {t("pages.chat.index.totalTokens", "{count} tokens", {
-                      count: activeConversation.usage.totalTokens.toLocaleString(),
+                      count:
+                        activeConversation.usage.totalTokens.toLocaleString(),
                     })}
                   </Tag>
                 ) : null}
                 {activeConversation?.usage?.promptTokens !== undefined ||
                 activeConversation?.usage?.completionTokens !== undefined ? (
                   <Tag>
-                    {t("pages.chat.index.tokenSplit", "{input} in / {output} out", {
-                      input: activeConversation.usage?.promptTokens ?? 0,
-                      output: activeConversation?.usage?.completionTokens ?? 0,
-                    })}
+                    {t(
+                      "pages.chat.index.tokenSplit",
+                      "{input} in / {output} out",
+                      {
+                        input: activeConversation.usage?.promptTokens ?? 0,
+                        output:
+                          activeConversation?.usage?.completionTokens ?? 0,
+                      }
+                    )}
                   </Tag>
                 ) : null}
                 {activeConversation?.usage?.model ? (

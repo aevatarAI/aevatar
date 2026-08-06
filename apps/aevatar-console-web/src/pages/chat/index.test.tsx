@@ -2,6 +2,8 @@ import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
 import { authFetch } from "@/shared/auth/fetch";
 import { history } from "@/shared/navigation/history";
+import { nyxIdChatApi } from "@/shared/api/nyxIdChatApi";
+import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { studioApi } from "@/shared/studio/api";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import { chatHistoryApi } from "./chatHistoryApi";
@@ -9,6 +11,20 @@ import ChatPage, { hydrateStoredMessages } from "./index";
 
 jest.mock("@/shared/auth/fetch", () => ({
   authFetch: jest.fn(),
+}));
+
+jest.mock("@/shared/api/nyxIdChatApi", () => ({
+  nyxIdChatApi: {
+    approveToolCall: jest.fn(),
+  },
+}));
+
+jest.mock("@/shared/api/runtimeRunsApi", () => ({
+  runtimeRunsApi: {
+    getRunSummary: jest.fn(),
+    resume: jest.fn(),
+    signal: jest.fn(),
+  },
 }));
 
 jest.mock("./chatHistoryApi", () => ({
@@ -27,7 +43,9 @@ jest.mock("./chatHistoryApi", () => ({
     path: string;
 
     constructor(path: string, expectation: string) {
-      super(`Invalid Chat History response at ${path}: expected ${expectation}.`);
+      super(
+        `Invalid Chat History response at ${path}: expected ${expectation}.`
+      );
       this.path = path;
     }
   },
@@ -180,7 +198,8 @@ function createControlledSseResponse(): {
   response: Response;
 } {
   const encoder = new TextEncoder();
-  let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+  let streamController: ReadableStreamDefaultController<Uint8Array> | null =
+    null;
   const response = {
     body: new ReadableStream({
       start(controller) {
@@ -270,6 +289,38 @@ describe("ChatPage server-backed history", () => {
     (chatHistoryApi.deleteConversation as jest.Mock).mockResolvedValue(
       undefined
     );
+    (runtimeRunsApi.getRunSummary as jest.Mock).mockResolvedValue({
+      actorId: "actor-alpha",
+      completionStatus: "running",
+      runId: "run-alpha",
+      scopeId: "scope-a",
+    });
+    (runtimeRunsApi.resume as jest.Mock).mockResolvedValue({
+      accepted: true,
+      actorId: "actor-alpha",
+      commandId: "cmd-resume-alpha",
+      runId: "run-alpha",
+      stepId: "approval-alpha",
+    });
+    (runtimeRunsApi.signal as jest.Mock).mockResolvedValue({
+      accepted: true,
+      actorId: "actor-alpha",
+      commandId: "cmd-signal-alpha",
+      runId: "run-alpha",
+      signalName: "continue",
+      stepId: "approval-alpha",
+    });
+    (nyxIdChatApi.approveToolCall as jest.Mock).mockResolvedValue(
+      createSseResponse([
+        chatContextFrame(),
+        {
+          runFinished: {
+            result: { output: "Tool decision accepted." },
+            runId: "run-alpha",
+          },
+        },
+      ])
+    );
     const { ChatHistoryApiError } = jest.requireMock("./chatHistoryApi");
     (chatHistoryApi.recoverCreate as jest.Mock).mockRejectedValue(
       new ChatHistoryApiError("Recovery is not materialized.", 404)
@@ -292,7 +343,10 @@ describe("ChatPage server-backed history", () => {
       await screen.findByRole("button", { name: "Server conversation" })
     );
 
-    expect(await screen.findByText("The support workflow is ready.")).toBeTruthy();
+    expect(
+      await screen.findByText("The support workflow is ready.")
+    ).toBeTruthy();
+    expect(screen.getByText("Run context unavailable")).toBeTruthy();
     const messageList = document.querySelector<HTMLElement>(
       ".aevatar-chat-message-list"
     );
@@ -459,7 +513,9 @@ describe("ChatPage server-backed history", () => {
       )
     ).toBeTruthy();
     await waitFor(() =>
-      expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledWith("scope-a")
+      expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledWith(
+        "scope-a"
+      )
     );
     expect(screen.getByRole("textbox")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
@@ -480,30 +536,30 @@ describe("ChatPage server-backed history", () => {
   it("preserves open history roles, statuses, authors, and stopped errors", async () => {
     expect(
       hydrateStoredMessages([
-      {
-        authorId: "automation-1",
-        authorName: "Release automation",
-        content: "Queued for review",
-        id: "turn-open:observer",
-        role: "observer",
-        status: "archived",
-        timestamp: 1784255700000,
-      },
-      {
-        content: "Review recorded",
-        id: "turn-open:auditor",
-        role: "auditor",
-        status: "complete",
-        timestamp: 1784255701000,
-      },
-      {
-        content: "",
-        error: "Workflow stopped before completion.",
-        id: "turn-open:assistant",
-        role: "assistant",
-        status: "complete",
-        timestamp: 1784255702000,
-      },
+        {
+          authorId: "automation-1",
+          authorName: "Release automation",
+          content: "Queued for review",
+          id: "turn-open:observer",
+          role: "observer",
+          status: "archived",
+          timestamp: 1784255700000,
+        },
+        {
+          content: "Review recorded",
+          id: "turn-open:auditor",
+          role: "auditor",
+          status: "complete",
+          timestamp: 1784255701000,
+        },
+        {
+          content: "",
+          error: "Workflow stopped before completion.",
+          id: "turn-open:assistant",
+          role: "assistant",
+          status: "complete",
+          timestamp: 1784255702000,
+        },
       ])
     ).toEqual([
       expect.objectContaining({
@@ -631,7 +687,9 @@ describe("ChatPage server-backed history", () => {
     expect(body).not.toHaveProperty("scopeId");
     expect(body).not.toHaveProperty("chatHistory");
     expect(window.localStorage.length).toBe(0);
-    expect(screen.getByRole("button", { name: "Create a support team" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Create a support team" })
+    ).toBeTruthy();
   });
 
   it("fails a completed stream that never establishes conversation context", async () => {
@@ -674,8 +732,11 @@ describe("ChatPage server-backed history", () => {
     const [firstBody, retryBody] = chatRequestBodies();
     expect(retryBody.commandId).toBe(firstBody.commandId);
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument(),
+    await waitFor(
+      () =>
+        expect(
+          screen.getByRole("button", { name: "Send" })
+        ).toBeInTheDocument(),
       { timeout: 5_000 }
     );
     await sendPrompt("Changed create request");
@@ -971,7 +1032,9 @@ describe("ChatPage server-backed history", () => {
     await sendPrompt("Continue after refreshing history");
     await waitFor(() => expect(chatRequestBodies()).toHaveLength(2));
     act(() => {
-      stream.enqueue(chatContextFrame("conversation-a", "turn-c", "scope-a", 8));
+      stream.enqueue(
+        chatContextFrame("conversation-a", "turn-c", "scope-a", 8)
+      );
       stream.enqueue({
         textMessageContent: {
           delta: "Partial continuation",
@@ -1062,7 +1125,9 @@ describe("ChatPage server-backed history", () => {
     await waitFor(() => expect(chatRequestBodies()).toHaveLength(2), {
       timeout: 4_000,
     });
-    expect(await screen.findByText("Answer committed in another tab")).toBeTruthy();
+    expect(
+      await screen.findByText("Answer committed in another tab")
+    ).toBeTruthy();
     expect(screen.getByText("Question accepted in another tab")).toBeTruthy();
     expect(screen.getByRole("textbox")).toBeEnabled();
 
@@ -1124,7 +1189,9 @@ describe("ChatPage server-backed history", () => {
       ok: false,
       status: 409,
       statusText: "Conflict",
-      text: jest.fn().mockRejectedValue(new Error("Response body disconnected")),
+      text: jest
+        .fn()
+        .mockRejectedValue(new Error("Response body disconnected")),
     } as unknown as Response);
 
     renderWithQueryClient(<ChatPage />);
@@ -1309,12 +1376,12 @@ describe("ChatPage server-backed history", () => {
 
     const missingContextMessage =
       "The continuation may have been accepted, but its turn identity was not received. Reload this page before continuing.";
-    expect(await screen.findAllByText(missingContextMessage)).not.toHaveLength(0);
+    expect(await screen.findAllByText(missingContextMessage)).not.toHaveLength(
+      0
+    );
     expect(screen.getByRole("textbox")).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: /Retry saving/ })
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /Retry saving/ })).toBeNull();
     expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledTimes(1);
     expect(chatHistoryApi.loadConversation).toHaveBeenCalledTimes(1);
     expect(chatHistoryApi.recoverCreate).not.toHaveBeenCalled();
@@ -1372,7 +1439,9 @@ describe("ChatPage server-backed history", () => {
     });
 
     expect(await screen.findByText("Draft plan in progress")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Stream a draft plan" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Stream a draft plan" })
+    ).toBeTruthy();
     expect(screen.getAllByText("Streaming")).toHaveLength(2);
     expect(window.localStorage.length).toBe(0);
 
@@ -1440,7 +1509,9 @@ describe("ChatPage server-backed history", () => {
       },
       { timeout: 2_500 }
     );
-    expect(screen.queryByRole("button", { name: "Projection-safe prompt" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Projection-safe prompt" })
+    ).toBeNull();
     expect(screen.getByText("Live response")).toBeTruthy();
     expect(chatHistoryApi.loadConversation).toHaveBeenCalledWith(
       "scope-a",
@@ -1525,7 +1596,9 @@ describe("ChatPage server-backed history", () => {
     renderWithQueryClient(<ChatPage />);
     await screen.findByText("No chat history");
     await sendPrompt("Stop after context");
-    act(() => stream.enqueue(chatContextFrame("server-stopped", "turn-stopped")));
+    act(() =>
+      stream.enqueue(chatContextFrame("server-stopped", "turn-stopped"))
+    );
     await screen.findByRole("button", { name: "Stop after context" });
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     act(() => stream.close());
@@ -1568,11 +1641,7 @@ describe("ChatPage server-backed history", () => {
       }
     );
     (chatHistoryApi.loadConversation as jest.Mock).mockImplementation(
-      (
-        _scopeId: string,
-        _conversationId: string,
-        signal?: AbortSignal
-      ) => {
+      (_scopeId: string, _conversationId: string, signal?: AbortSignal) => {
         reconciliationDetailSignal = signal;
         return new Promise(() => undefined);
       }
@@ -1651,7 +1720,8 @@ describe("ChatPage server-backed history", () => {
     await sendPrompt("Late projection prompt");
     expect(await screen.findByText("Optimistic response")).toBeTruthy();
     await waitFor(
-      () => expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledTimes(5),
+      () =>
+        expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledTimes(5),
       { timeout: 4_500 }
     );
     expect(chatHistoryApi.loadConversation).not.toHaveBeenCalled();
@@ -1710,13 +1780,13 @@ describe("ChatPage server-backed history", () => {
 
     renderWithQueryClient(<ChatPage />);
 
-    expect(await screen.findByText("Chat history could not be loaded")).toBeTruthy();
+    expect(
+      await screen.findByText("Chat history could not be loaded")
+    ).toBeTruthy();
     expect(screen.getByText("History service is offline")).toBeTruthy();
     expect(screen.getByRole("textbox")).toBeEnabled();
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Retry chat history" })
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry chat history" }));
     expect(await screen.findByText("No chat history")).toBeTruthy();
     expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledTimes(2);
   });
@@ -1734,9 +1804,13 @@ describe("ChatPage server-backed history", () => {
       await screen.findByRole("button", { name: "Server conversation" })
     );
 
-    expect(await screen.findByText("Conversation could not be loaded")).toBeTruthy();
+    expect(
+      await screen.findByText("Conversation could not be loaded")
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByText("The support workflow is ready.")).toBeTruthy();
+    expect(
+      await screen.findByText("The support workflow is ready.")
+    ).toBeTruthy();
     expect(chatHistoryApi.loadConversation).toHaveBeenCalledTimes(2);
   });
 
@@ -1751,7 +1825,9 @@ describe("ChatPage server-backed history", () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       serverConversation,
     ]);
-    (chatHistoryApi.loadConversation as jest.Mock).mockReturnValue(detailPromise);
+    (chatHistoryApi.loadConversation as jest.Mock).mockReturnValue(
+      detailPromise
+    );
 
     renderWithQueryClient(<ChatPage />);
     fireEvent.click(
@@ -1890,7 +1966,9 @@ describe("ChatPage server-backed history", () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       sharedConversation,
     ]);
-    (chatHistoryApi.deleteConversation as jest.Mock).mockReturnValue(deletePromise);
+    (chatHistoryApi.deleteConversation as jest.Mock).mockReturnValue(
+      deletePromise
+    );
 
     const view = renderScopeSwitchableChat("scope-a");
     await screen.findByRole("button", { name: "Shared conversation" });
@@ -1937,9 +2015,13 @@ describe("ChatPage server-backed history", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
 
-    expect(await screen.findByText("Conversation could not be deleted")).toBeTruthy();
+    expect(
+      await screen.findByText("Conversation could not be deleted")
+    ).toBeTruthy();
     expect(screen.getByText("Delete request failed")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Server conversation" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Server conversation" })
+    ).toBeTruthy();
   });
 
   it("opens Workflow Studio only for structured target identifiers", async () => {
@@ -1969,5 +2051,149 @@ describe("ChatPage server-backed history", () => {
     expect(history.push).toHaveBeenCalledWith(
       "/scopes/scope-a/teams/team-a/members/member-a/workflow?workflowId=workflow-a"
     );
+  });
+
+  it("renders the active run and current step from structured stream events", async () => {
+    const stream = createControlledSseResponse();
+    (authFetch as jest.Mock).mockResolvedValue(stream.response);
+
+    renderWithQueryClient(<ChatPage />);
+    await sendPrompt("Run the release workflow");
+    act(() => {
+      stream.enqueue(chatContextFrame());
+      stream.enqueue({
+        runStarted: {
+          actorId: "actor-alpha",
+          commandId: "cmd-alpha",
+          runId: "run-alpha",
+        },
+        timestamp: 1,
+      });
+      stream.enqueue({
+        stepStarted: { stepName: "Validate release" },
+        timestamp: 2,
+      });
+    });
+
+    expect(await screen.findByText("Run in progress")).toBeTruthy();
+    expect(screen.getByText("Current step: Validate release")).toBeTruthy();
+    expect(screen.getByText("Run run-alpha")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open Run Detail" }));
+    expect(history.push).toHaveBeenCalledWith(
+      "/runtime/runs?runId=run-alpha&scopeId=scope-a&actorId=actor-alpha"
+    );
+
+    act(() => stream.close());
+  });
+
+  it("submits a structured tool approval once and disables duplicate decisions", async () => {
+    (authFetch as jest.Mock).mockResolvedValue(
+      createSseResponse([
+        chatContextFrame(),
+        {
+          runStarted: { actorId: "actor-alpha", runId: "run-alpha" },
+        },
+        {
+          toolApprovalRequest: {
+            argumentsJson: "{}",
+            isDestructive: false,
+            requestId: "approval-alpha",
+            timeoutSeconds: 30,
+            toolCallId: "tool-alpha",
+            toolName: "release.validate",
+          },
+          type: "TOOL_APPROVAL_REQUEST",
+        },
+      ])
+    );
+
+    renderWithQueryClient(<ChatPage />);
+    await sendPrompt("Validate the release");
+    const approve = await screen.findByRole("button", { name: "Approve" });
+    fireEvent.click(approve);
+
+    await waitFor(() => expect(approve).toBeDisabled());
+    expect(nyxIdChatApi.approveToolCall).toHaveBeenCalledTimes(1);
+    expect(nyxIdChatApi.approveToolCall).toHaveBeenCalledWith(
+      "scope-a",
+      "actor-alpha",
+      expect.objectContaining({
+        approved: true,
+        requestId: "approval-alpha",
+      }),
+      expect.any(AbortSignal)
+    );
+  });
+
+  it("keeps a run intervention idempotent while its command is pending", async () => {
+    let resolveResume = (_value: Record<string, unknown>): void => undefined;
+    (runtimeRunsApi.resume as jest.Mock).mockReturnValue(
+      new Promise((resolve) => {
+        resolveResume = resolve;
+      })
+    );
+    (authFetch as jest.Mock).mockResolvedValue(
+      createSseResponse([
+        chatContextFrame(),
+        {
+          runStarted: { actorId: "actor-alpha", runId: "run-alpha" },
+        },
+        {
+          humanInputRequest: {
+            prompt: "Approve the release gate.",
+            runId: "run-alpha",
+            stepId: "approval-alpha",
+            suspensionType: "human_approval",
+          },
+          type: "HUMAN_INPUT_REQUEST",
+        },
+      ])
+    );
+
+    renderWithQueryClient(<ChatPage />);
+    await sendPrompt("Prepare the release");
+    const approve = await screen.findByRole("button", { name: "Approve" });
+    fireEvent.click(approve);
+
+    await waitFor(() => expect(approve).toBeDisabled());
+    fireEvent.click(approve);
+    expect(runtimeRunsApi.resume).toHaveBeenCalledTimes(1);
+    expect(runtimeRunsApi.resume).toHaveBeenCalledWith("scope-a", {
+      actorId: "actor-alpha",
+      approved: true,
+      runId: "run-alpha",
+      stepId: "approval-alpha",
+      userInput: undefined,
+    });
+
+    await act(async () => {
+      resolveResume({
+        accepted: true,
+        actorId: "actor-alpha",
+        runId: "run-alpha",
+      });
+    });
+  });
+
+  it("uses structured permission codes for remediation without parsing provider text", async () => {
+    (authFetch as jest.Mock).mockResolvedValue({
+      ok: false,
+      status: 409,
+      statusText: "Conflict",
+      text: jest.fn().mockResolvedValue(
+        JSON.stringify({
+          code: "SERVICE_ACCESS_REVIEW_REQUIRED",
+          message: "Opaque provider failure text",
+        })
+      ),
+    } as unknown as Response);
+
+    renderWithQueryClient(<ChatPage />);
+    await sendPrompt("Run a connected-service action");
+
+    expect(await screen.findByText("Permission required")).toBeTruthy();
+    expect(screen.getByText("SERVICE_ACCESS_REVIEW_REQUIRED")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Review access" }));
+    expect(history.push).toHaveBeenCalledWith("/settings?section=account");
   });
 });

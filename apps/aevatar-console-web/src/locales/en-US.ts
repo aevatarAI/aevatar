@@ -56,7 +56,8 @@ const enUSMessages = {
   'pages.chat.index.deleteChatTitle': 'Delete conversation?',
   'pages.chat.index.emptyDescription':
     'Describe the Team, Member, or Workflow you want to create.',
-  'pages.chat.index.failedToLoadConversation': 'Conversation could not be loaded',
+  'pages.chat.index.failedToLoadConversation':
+    'Conversation could not be loaded',
   'pages.chat.index.failedToLoadHistory': 'Chat history could not be loaded',
   'pages.chat.index.historyStoredInWorkspace':
     'History is saved to this workspace.',
@@ -90,7 +91,38 @@ const enUSMessages = {
   'pages.chat.index.status.error': 'Error',
   'pages.chat.index.status.needsConfirmation': 'Needs confirmation',
   'pages.chat.index.status.streaming': 'Streaming',
+  'pages.chat.index.status.stopped': 'Stopped',
   'pages.chat.index.status.studioReady': 'Studio ready',
+  'pages.chat.index.approvalContextMissing':
+    'Run context is unavailable. Reload the conversation before retrying this approval.',
+  'pages.chat.index.interventionContextMissing':
+    'Run context is incomplete. Open Run Detail or reload before retrying.',
+  'pages.chat.runLifecycle.completed': 'Run completed',
+  'pages.chat.runLifecycle.contextMissing': 'Run context unavailable',
+  'pages.chat.runLifecycle.contextUnavailable':
+    'This history entry has no durable Run identity. Start a new turn or open Runs to recover context.',
+  'pages.chat.runLifecycle.currentStep': 'Current step: {step}',
+  'pages.chat.runLifecycle.failed': 'Run failed',
+  'pages.chat.runLifecycle.label': 'Run lifecycle',
+  'pages.chat.runLifecycle.needsYou': 'Run needs you',
+  'pages.chat.runLifecycle.openRun': 'Open Run Detail',
+  'pages.chat.runLifecycle.pending': 'Run pending',
+  'pages.chat.runLifecycle.permissionRequired': 'Permission required',
+  'pages.chat.runLifecycle.refreshFailed':
+    'Durable Run state could not be refreshed. Open Run Detail or retry the conversation to recover.',
+  'pages.chat.runLifecycle.refreshFailedTitle': 'Run state unavailable',
+  'pages.chat.runLifecycle.reviewAccess': 'Review access',
+  'pages.chat.runLifecycle.run': 'Run {runId}',
+  'pages.chat.runLifecycle.running': 'Run in progress',
+  'pages.chat.runLifecycle.runningTool': 'Running tool: {tool}',
+  'pages.chat.runLifecycle.state.completed': 'Completed',
+  'pages.chat.runLifecycle.state.failed': 'Failed',
+  'pages.chat.runLifecycle.state.needsYou': 'Needs you',
+  'pages.chat.runLifecycle.state.pending': 'Pending',
+  'pages.chat.runLifecycle.state.recovery': 'Recovery',
+  'pages.chat.runLifecycle.state.running': 'Running',
+  'pages.chat.runLifecycle.state.stopped': 'Stopped',
+  'pages.chat.runLifecycle.stopped': 'Run stopped',
   'pages.chat.index.time.daysAgo': '{count}d ago',
   'pages.chat.index.time.hoursAgo': '{count}h ago',
   'pages.chat.index.time.justNow': 'just now',
@@ -171,14 +203,12 @@ const enUSMessages = {
   'pages.missionwall.status.unknown': 'UNKNOWN',
   'pages.missionwall.status.waiting': 'WAIT',
   'pages.missionwall.state.auditLoading': 'Loading selected run',
-  'pages.missionwall.state.auditPendingTitle':
-    'No step flow for this run yet',
+  'pages.missionwall.state.auditPendingTitle': 'No step flow for this run yet',
   'pages.missionwall.state.emptyKicker': 'Waiting for runs',
   'pages.missionwall.state.emptyTitle': 'No published workflows are visible',
   'pages.missionwall.state.loadingKicker': 'Loading runtime',
   'pages.missionwall.state.loadingTitle': 'Loading workflow runs',
-  'pages.missionwall.state.publishedWorkflowTitle':
-    'No visible run',
+  'pages.missionwall.state.publishedWorkflowTitle': 'No visible run',
   'pages.missionwall.stageSubtitle': 'Team {teamName} · {memberName}',
   'pages.missionwall.stageTitle': '{workflowName} · Step Flow',
   'pages.missionwall.stepStatus.active': 'ACTIVE',
@@ -808,8 +838,10 @@ const enUSMessages = {
   'teams.automations.authorization.error': 'Authorization could not continue',
   'teams.automations.authorization.exactAccess': 'Exact access',
   'teams.automations.authorization.expiry': 'Credential expiry',
-  'teams.automations.authorization.noExternalGrants': 'No external NyxID service or owner LLM model grant is required.',
-  'teams.automations.authorization.noOwnerLLMGrant': 'No owner LLM model grant is required for this workflow.',
+  'teams.automations.authorization.noExternalGrants':
+    'No external NyxID service or owner LLM model grant is required.',
+  'teams.automations.authorization.noOwnerLLMGrant':
+    'No owner LLM model grant is required for this workflow.',
   'teams.automations.authorization.preparing': 'Preparing authorization review',
   'teams.automations.authorization.review': 'Review authorization',
   'teams.automations.authorization.reviewAgain': 'Review again',
@@ -818,10 +850,14 @@ const enUSMessages = {
   'teams.automations.authorizationStatus.active': 'Credential active',
   'teams.automations.authorizationStatus.deleting': 'Deleting',
   'teams.automations.authorizationStatus.failed': 'Authorization failed',
-  'teams.automations.authorizationStatus.needs_authorization': 'Authorization required',
-  'teams.automations.authorizationStatus.provisioning_pending': 'Preparing authorization',
-  'teams.automations.authorizationStatus.replacement_pending': 'Replacing authorization',
-  'teams.automations.authorizationStatus.revocation_pending': 'Revocation pending',
+  'teams.automations.authorizationStatus.needs_authorization':
+    'Authorization required',
+  'teams.automations.authorizationStatus.provisioning_pending':
+    'Preparing authorization',
+  'teams.automations.authorizationStatus.replacement_pending':
+    'Replacing authorization',
+  'teams.automations.authorizationStatus.revocation_pending':
+    'Revocation pending',
   'teams.automations.columns.actions': 'Actions',
   'teams.automations.columns.automation': 'Automation',
   'teams.automations.columns.member': 'Member',
@@ -914,8 +950,7 @@ const enUSMessages = {
   'teams.automations.loading': 'Loading automations',
   'teams.automations.member.publishFirst':
     'Publish this member before adding recurring work.',
-  'teams.automations.member.publishedServiceReady':
-    'Published service ready',
+  'teams.automations.member.publishedServiceReady': 'Published service ready',
   'teams.automations.member.unknown': 'Unknown member',
   'teams.automations.memberDescription':
     'Dedicated Agent Keys are authorized per schedule and held by Aevatar.',
@@ -925,7 +960,8 @@ const enUSMessages = {
   'teams.automations.memberTitle': '{memberName} automations',
   'teams.automations.memberUnavailable.description':
     'This member is not part of the current Team. Choose another member.',
-  'teams.automations.memberUnavailable.title': 'Member unavailable for automation',
+  'teams.automations.memberUnavailable.title':
+    'Member unavailable for automation',
   'teams.automations.member.workflowOnly':
     'Only workflow members can have recurring work.',
   'teams.automations.schedule.next': 'Next {time}',
@@ -1217,10 +1253,8 @@ const enUSMessages = {
     'No safely scoped executions are available for this workflow member.',
   'teamMemberWorkflowStudio.executionsPanel.fallbackName': 'Workflow execution',
   'teamMemberWorkflowStudio.executionsPanel.inspect': 'Inspect',
-  'teamMemberWorkflowStudio.executionsPanel.sectionAria':
-    'Workflow executions',
-  'teamMemberWorkflowStudio.executionsPanel.serviceMeta':
-    'Service ready',
+  'teamMemberWorkflowStudio.executionsPanel.sectionAria': 'Workflow executions',
+  'teamMemberWorkflowStudio.executionsPanel.serviceMeta': 'Service ready',
   'teamMemberWorkflowStudio.executionsPanel.title': 'Executions',
   'teamMemberWorkflowStudio.executionsPanel.unknownStatus': 'unknown',
   'teamMemberWorkflowStudio.graph.branchCount.one': '1 branch',
@@ -1529,7 +1563,8 @@ const enUSMessages = {
   'pages.scopes.invoke.selected.service': 'the selected service',
   'pages.scopes.invoke.service': 'Service',
   'pages.scopes.invoke.version.ready': 'Version ready',
-  'pages.scopes.scopeserviceruntimeworkbench.actor.available': 'Actor available',
+  'pages.scopes.scopeserviceruntimeworkbench.actor.available':
+    'Actor available',
   'pages.scopes.scopeserviceruntimeworkbench.binding': 'Binding',
   'pages.scopes.scopeserviceruntimeworkbench.binding.accepted.for.retirement':
     'Binding was accepted for retirement.',
@@ -1611,8 +1646,7 @@ const enUSMessages = {
   'pages.studio.studioinvokediagnosticsdrawer.endpoint.ready': 'Endpoint ready',
   'pages.studio.studiomemberinvokeinspector.service.ready': 'Service ready',
   'pages.studio.studiomemberinvokeinspector.version.ready': 'Version ready',
-  'pages.studio.studioworkbenchsections.runtime.available':
-    'Runtime available',
+  'pages.studio.studioworkbenchsections.runtime.available': 'Runtime available',
   'pages.studio.studioworkbenchsections.runtime.available.2':
     'Runtime available',
   'pages.studio.studioworkbenchsections.runtime.available.3':

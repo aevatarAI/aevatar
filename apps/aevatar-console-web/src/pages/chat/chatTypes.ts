@@ -45,6 +45,7 @@ export type ChatUsageSummary = {
 };
 
 export type ChatStudioTarget = {
+  actorId?: string;
   memberId?: string;
   runId?: string;
   scopeId?: string;
@@ -60,6 +61,7 @@ export type LocalChatStatus =
   | "creating"
   | "completed_text"
   | "completed_with_studio_target"
+  | "stopped"
   | "error";
 
 export type StepInfo = RuntimeStepInfo;
