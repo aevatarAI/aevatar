@@ -4099,6 +4099,130 @@ describe('Workflow Activity vNext editor', () => {
     );
   });
 
+  it('adds a node after the final step and materializes the existing implicit chain', async () => {
+    const document = {
+      name: 'committed_source',
+      roles: [],
+      steps: [
+        {
+          id: 'draft_step',
+          type: 'llm_call',
+          next: null,
+          branches: {},
+        },
+        {
+          id: 'review_step',
+          type: 'human_approval',
+          next: null,
+          branches: {},
+        },
+      ],
+    };
+    mockStudioApi.getWorkflow.mockResolvedValue({
+      workflowId: 'wf-committed-source',
+      name: 'Committed source',
+      fileName: 'committed-source.yaml',
+      filePath: '',
+      directoryId: '',
+      directoryLabel: '',
+      yaml: 'name: committed_source\nroles: []\nsteps: []\n',
+      updatedAtUtc: '2026-08-04T10:00:00Z',
+      document,
+      draftExists: false,
+      findings: [],
+    });
+    mockStudioApi.serializeYaml.mockImplementation(
+      async ({ document: submittedDocument }) => ({
+        yaml: 'serialized',
+        document: submittedDocument,
+        findings: [],
+      }),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add node' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Insert Assign node' }),
+    );
+
+    await waitFor(() =>
+      expect(mockStudioApi.serializeYaml).toHaveBeenCalledTimes(1),
+    );
+    expect(mockStudioApi.serializeYaml.mock.calls[0][0].document.steps).toEqual([
+      expect.objectContaining({ id: 'draft_step', next: 'review_step' }),
+      expect.objectContaining({ id: 'review_step', next: 'assign_step' }),
+      expect.objectContaining({ id: 'assign_step', next: null }),
+    ]);
+  });
+
+  it('inserts a node after the selected middle step and preserves its successor', async () => {
+    const document = {
+      name: 'committed_source',
+      roles: [],
+      steps: [
+        {
+          id: 'draft_step',
+          type: 'llm_call',
+          next: 'review_step',
+          branches: {},
+        },
+        {
+          id: 'review_step',
+          type: 'human_approval',
+          next: 'publish_step',
+          branches: {},
+        },
+        {
+          id: 'publish_step',
+          type: 'emit',
+          next: null,
+          branches: {},
+        },
+      ],
+    };
+    mockStudioApi.getWorkflow.mockResolvedValue({
+      workflowId: 'wf-committed-source',
+      name: 'Committed source',
+      fileName: 'committed-source.yaml',
+      filePath: '',
+      directoryId: '',
+      directoryLabel: '',
+      yaml: 'name: committed_source\nroles: []\nsteps: []\n',
+      updatedAtUtc: '2026-08-04T10:00:00Z',
+      document,
+      draftExists: false,
+      findings: [],
+    });
+    mockStudioApi.serializeYaml.mockImplementation(
+      async ({ document: submittedDocument }) => ({
+        yaml: 'serialized',
+        document: submittedDocument,
+        findings: [],
+      }),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Select step:review_step' }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Add node' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Insert Assign node' }),
+    );
+
+    await waitFor(() =>
+      expect(mockStudioApi.serializeYaml).toHaveBeenCalledTimes(1),
+    );
+    expect(mockStudioApi.serializeYaml.mock.calls[0][0].document.steps).toEqual([
+      expect.objectContaining({ id: 'draft_step', next: 'review_step' }),
+      expect.objectContaining({ id: 'review_step', next: 'assign_step' }),
+      expect.objectContaining({ id: 'assign_step', next: 'publish_step' }),
+      expect.objectContaining({ id: 'publish_step', next: null }),
+    ]);
+  });
+
   it('locks structural editing while a save is still in flight', async () => {
     let resolveSave: ((result: unknown) => void) | undefined;
     mockStudioApi.saveWorkflow.mockImplementationOnce(
