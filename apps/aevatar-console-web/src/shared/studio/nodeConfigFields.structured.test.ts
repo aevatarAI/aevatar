@@ -7,6 +7,7 @@ import {
   getStudioNodeConfigurationSchema,
   hasStudioNodeConfigurationSchema,
   readStudioNodeConfigurationValues,
+  shouldShowRawStudioNodeConfiguration,
 } from './nodeConfigFields';
 import { STUDIO_GRAPH_CATEGORIES } from './graph';
 
@@ -270,6 +271,30 @@ describe('studio node configuration semantics', () => {
     expect(
       applyRawStudioNodeConfiguration('transform', '{ "op": "lowercase" }'),
     ).toEqual({ op: 'lowercase' });
+  });
+
+  it('shows raw configuration only for unknown nodes or uncovered parameters', () => {
+    expect(
+      shouldShowRawStudioNodeConfiguration('llm_call', {
+        prompt_prefix: 'Classify the request.',
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowRawStudioNodeConfiguration('llm_call', {
+        prompt: 'Legacy instruction',
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowRawStudioNodeConfiguration('llm_call', {
+        llm_timeout_ms: '120000',
+        prompt_prefix: 'Classify the request.',
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowRawStudioNodeConfiguration('custom_step', {
+        title: 'Draft',
+      }),
+    ).toBe(true);
   });
 
   it('infers typed fields for unknown node parameters from the workflow document', () => {
