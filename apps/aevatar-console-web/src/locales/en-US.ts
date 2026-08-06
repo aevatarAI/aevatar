@@ -9,6 +9,7 @@ const enUSMessages = {
   'common.language.label': 'Language',
   'common.language.switch': 'Switch language',
   'common.language.zhCN': '中文',
+  'common.user.account': 'Account',
   'common.user.logout': 'Logout',
   'common.user.settings': 'Settings',
   'common.user.signIn': 'Sign in',

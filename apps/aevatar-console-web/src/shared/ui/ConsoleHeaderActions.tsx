@@ -5,31 +5,31 @@ import {
   LogoutOutlined,
   SettingOutlined,
   UserOutlined,
-} from "@ant-design/icons";
-import { getLocale, setLocale, useIntl } from "@umijs/max";
-import { Avatar, Button, Dropdown, Typography } from "antd";
-import React from "react";
+} from '@ant-design/icons';
+import { getLocale, setLocale, useIntl } from '@umijs/max';
+import { Avatar, Button, Dropdown, Typography } from 'antd';
+import React from 'react';
 import {
   clearStoredAuthSession,
   loadRestorableAuthSession,
   sanitizeReturnTo,
-} from "@/shared/auth/session";
-import { normalizeConsoleLocale } from "@/shared/i18n/localeProvider";
-import { history } from "@/shared/navigation/history";
+} from '@/shared/auth/session';
+import { normalizeConsoleLocale } from '@/shared/i18n/localeProvider';
+import { history } from '@/shared/navigation/history';
 
 type ConsoleLocaleOption = {
-  readonly key: "zh-CN" | "en-US";
-  readonly messageId: "common.language.zhCN" | "common.language.english";
+  readonly key: 'zh-CN' | 'en-US';
+  readonly messageId: 'common.language.zhCN' | 'common.language.english';
 };
 
 const CONSOLE_LOCALE_OPTIONS: readonly ConsoleLocaleOption[] = [
-  { key: "zh-CN", messageId: "common.language.zhCN" },
-  { key: "en-US", messageId: "common.language.english" },
+  { key: 'zh-CN', messageId: 'common.language.zhCN' },
+  { key: 'en-US', messageId: 'common.language.english' },
 ];
 
 function getCurrentReturnTo(): string {
-  if (typeof window === "undefined") {
-    return "/";
+  if (typeof window === 'undefined') {
+    return '/';
   }
 
   return `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -78,7 +78,7 @@ export const ConsoleLanguageSwitch: React.FC<ConsoleHeaderActionThemeProps> = ({
           label: intl.formatMessage({ id: option.messageId }),
         })),
         onClick: ({ key }) => {
-          const nextLocale = key === "en-US" ? "en-US" : "zh-CN";
+          const nextLocale = key === 'en-US' ? 'en-US' : 'zh-CN';
           if (nextLocale === selectedLocale) {
             return;
           }
@@ -88,15 +88,15 @@ export const ConsoleLanguageSwitch: React.FC<ConsoleHeaderActionThemeProps> = ({
         selectedKeys: [selectedLocale],
       }}
       placement="bottomRight"
-      trigger={["click"]}
+      trigger={['click']}
     >
       <Button
-        aria-label={intl.formatMessage({ id: "common.language.switch" })}
+        aria-label={intl.formatMessage({ id: 'common.language.switch' })}
         className="console-header-actions__language"
         icon={<GlobalOutlined />}
         style={{
-          alignItems: "center",
-          display: "inline-flex",
+          alignItems: 'center',
+          display: 'inline-flex',
           height: 36,
         }}
         type="text"
@@ -128,8 +128,8 @@ export const ConsoleAuthActions: React.FC<ConsoleAuthActionsProps> = ({
         type="link"
       >
         {intl.formatMessage({
-          defaultMessage: "Sign in",
-          id: "common.user.signIn",
+          defaultMessage: 'Sign in',
+          id: 'common.user.signIn',
         })}
       </Button>
     );
@@ -138,15 +138,15 @@ export const ConsoleAuthActions: React.FC<ConsoleAuthActionsProps> = ({
   const displayName = hasAuthoritativePrincipal
     ? principal?.displayName ||
       intl.formatMessage({
-        defaultMessage: "Account",
-        id: "common.user.account",
+        defaultMessage: 'Account',
+        id: 'common.user.account',
       })
     : storedSession?.user.name ||
       storedSession?.user.email ||
       storedSession?.user.sub ||
       intl.formatMessage({
-        defaultMessage: "Account",
-        id: "common.user.account",
+        defaultMessage: 'Account',
+        id: 'common.user.account',
       });
   const picture = hasAuthoritativePrincipal
     ? principal?.picture
@@ -164,44 +164,44 @@ export const ConsoleAuthActions: React.FC<ConsoleAuthActionsProps> = ({
       menu={{
         items: [
           {
-            key: "settings",
+            key: 'settings',
             icon: <SettingOutlined />,
-            label: intl.formatMessage({ id: "common.user.settings" }),
+            label: intl.formatMessage({ id: 'common.user.settings' }),
           },
           {
-            key: "logout",
+            key: 'logout',
             icon: <LogoutOutlined />,
-            label: intl.formatMessage({ id: "common.user.logout" }),
+            label: intl.formatMessage({ id: 'common.user.logout' }),
           },
         ],
         onClick: ({ key }) => {
-          if (key === "settings") {
-            history.push("/settings");
+          if (key === 'settings') {
+            history.push('/settings');
             return;
           }
 
-          if (key === "logout") {
+          if (key === 'logout') {
             clearStoredAuthSession();
-            window.location.replace("/login");
+            window.location.replace('/login');
           }
         },
       }}
       placement="bottomRight"
-      trigger={["click"]}
+      trigger={['click']}
     >
       <span
         className="console-header-actions__user"
         style={{
-          alignItems: "center",
-          background: "var(--ant-color-fill-tertiary)",
-          border: "1px solid var(--ant-color-border-secondary)",
+          alignItems: 'center',
+          background: 'var(--ant-color-fill-tertiary)',
+          border: '1px solid var(--ant-color-border-secondary)',
           borderRadius: 999,
-          cursor: "pointer",
-          display: "inline-flex",
+          cursor: 'pointer',
+          display: 'inline-flex',
           gap: 8,
           height: 36,
           maxWidth: 220,
-          padding: "0 10px 0 6px",
+          padding: '0 10px 0 6px',
         }}
         title={displayName}
       >
@@ -210,12 +210,12 @@ export const ConsoleAuthActions: React.FC<ConsoleAuthActionsProps> = ({
           className="console-header-actions__user-name"
           style={{
             flex: 1,
-            color: "var(--ant-color-text)",
-            lineHeight: "20px",
+            color: 'var(--ant-color-text)',
+            lineHeight: '20px',
             marginBottom: 0,
             maxWidth: 160,
             minWidth: 0,
-            whiteSpace: "nowrap",
+            whiteSpace: 'nowrap',
           }}
           ellipsis={{ tooltip: displayName }}
         >
@@ -224,7 +224,7 @@ export const ConsoleAuthActions: React.FC<ConsoleAuthActionsProps> = ({
         <DownOutlined
           className="console-header-actions__user-caret"
           style={{
-            color: "var(--ant-color-text-tertiary)",
+            color: 'var(--ant-color-text-tertiary)',
             fontSize: 11,
           }}
         />
@@ -237,9 +237,9 @@ export const ConsoleHeaderActions: React.FC<{
   readonly className?: string;
   readonly dropdownRootClassName?: string;
 }> = ({ className, dropdownRootClassName }) => {
-  const rootClassName = ["console-header-actions", className]
+  const rootClassName = ['console-header-actions', className]
     .filter(Boolean)
-    .join(" ");
+    .join(' ');
 
   return (
     <div

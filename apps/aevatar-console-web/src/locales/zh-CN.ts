@@ -9,6 +9,7 @@ const zhCNMessages = {
   'common.language.label': '语言',
   'common.language.switch': '切换语言',
   'common.language.zhCN': '中文',
+  'common.user.account': '账户',
   'common.user.logout': '退出登录',
   'common.user.settings': '设置',
   'common.user.signIn': '登录',

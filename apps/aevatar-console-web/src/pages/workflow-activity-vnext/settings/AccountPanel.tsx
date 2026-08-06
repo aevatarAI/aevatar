@@ -194,9 +194,7 @@ const AccountPanel: React.FC<AccountPanelProps> = ({
               ),
               children:
                 identity.provider.kind === 'value' ? (
-                  <Typography.Text
-                    copyable={{ text: identity.provider.value }}
-                  >
+                  <Typography.Text copyable={{ text: identity.provider.value }}>
                     {identity.provider.value}
                   </Typography.Text>
                 ) : (
