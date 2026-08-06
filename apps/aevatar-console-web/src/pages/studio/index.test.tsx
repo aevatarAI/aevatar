@@ -8967,11 +8967,13 @@ describe('StudioPage', () => {
       expect(screen.getByText('services:member-script-member')).toBeTruthy();
       expect(screen.getByText('candidate:none')).toBeTruthy();
     });
-    const searchParams = new URLSearchParams(window.location.search);
-    expect(searchParams.get('member')).toBe('member:script-member');
-    expect(searchParams.get('focus')).toBe('script:script-alpha');
-    expect(searchParams.get('step')).toBe('bind');
-    expect(searchParams.get('tab')).toBe('bindings');
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get('member')).toBe('member:script-member');
+      expect(searchParams.get('focus')).toBe('script:script-alpha');
+      expect(searchParams.get('step')).toBe('bind');
+      expect(searchParams.get('tab')).toBe('bindings');
+    });
   });
 
   it('keeps a saved Script member on the pending bind panel until a published contract exists', async () => {

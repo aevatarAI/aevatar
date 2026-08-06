@@ -245,7 +245,7 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             sample,
           ),
       });
-      if (token !== saveTokenRef.current) return;
+      if (token !== saveTokenRef.current) return false;
       if (observation.phase === 'observed') {
         setBaseline(submitted ? cloneUserLlmSelection(submitted) : undefined);
         setSavePhase('observed');

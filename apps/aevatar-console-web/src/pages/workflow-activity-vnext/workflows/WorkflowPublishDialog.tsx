@@ -378,7 +378,6 @@ const WorkflowPublishDialog: React.FC<WorkflowPublishDialogProps> = ({
               </Button>
               <Button
                 disabled={!canReview}
-                loading={stage === 'reviewing'}
                 onClick={() => void handleReview()}
                 type="primary"
               >

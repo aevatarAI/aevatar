@@ -5422,6 +5422,7 @@ const StudioPage: React.FC = () => {
         }),
       );
     }
+    return undefined;
   }, [
     activeBuildFocusKey,
     buildPendingMemberSummary,
@@ -7753,9 +7754,15 @@ const StudioPage: React.FC = () => {
         : pinnedRouteBackendMemberKey ||
           trimOptional(lifecycleSurfaceMemberKey) ||
           undefined);
+    const activeScriptFocus = activeBuildFocusKey.startsWith('script:')
+      ? activeBuildFocusKey
+      : '';
     const persistedLifecycleFocus =
-      studioSurface === 'bind' && routeBuildFocus.kind === 'script'
-        ? (`script:${routeBuildFocus.value}` as const)
+      studioSurface === 'bind' &&
+      (routeBuildFocus.kind === 'script' || activeScriptFocus)
+        ? routeBuildFocus.kind === 'script'
+          ? (`script:${routeBuildFocus.value}` as const)
+          : activeScriptFocus
         : studioSurface === 'bind' &&
             routeBuildFocus.kind === 'workflow' &&
             !selectedWorkflowRepresentsPublishedMember

@@ -1098,11 +1098,12 @@ const ScopeServiceRuntimeWorkbench: React.FC<
     if (action.target.kind !== 'binding-retired') {
       return;
     }
+    const bindingId = action.target.bindingId;
 
     setRetiringBinding((current) =>
       current?.scopeId === action.scopeId &&
       current.serviceId === action.serviceId &&
-      current.bindingId === action.target.bindingId
+      current.bindingId === bindingId
         ? null
         : current,
     );
