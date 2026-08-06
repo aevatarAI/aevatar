@@ -12,6 +12,7 @@ import { scopesApi } from '@/shared/api/scopesApi';
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
 import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
+import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import type {
   StudioValidationFinding,
   StudioWorkflowSaveResult,
@@ -94,6 +95,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
   >([]);
   const [submitting, setSubmitting] = React.useState(false);
   const [failure, setFailure] = React.useState('');
+  const toast = useConsoleToast();
   const materialization = useDraftMaterialization(scopeId);
   const workspace = useQuery({
     queryKey: ['workflow-activity-vnext', 'workspace', scopeId],
@@ -123,6 +125,16 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
     }
     setDirectoryId(workspace.data.directories[0]?.directoryId ?? '');
   }, [directoryId, workspace.data]);
+
+  React.useEffect(() => {
+    if (!failure) return;
+    toast.error(
+      t(
+        'workflowActivityVNext.new.createFailed',
+        "Workflow couldn't be created",
+      ),
+    );
+  }, [failure, toast]);
 
   const navigateToWorkflow = React.useCallback(
     (workflowId: string) =>
@@ -614,17 +626,6 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                   />
                 ))}
               </div>
-            ) : null}
-            {failure ? (
-              <Alert
-                description={<TechnicalDetails>{failure}</TechnicalDetails>}
-                message={t(
-                  'workflowActivityVNext.new.createFailed',
-                  "Workflow couldn't be created",
-                )}
-                showIcon
-                type="error"
-              />
             ) : null}
             {materialization.phase !== 'idle' && materialization.receipt ? (
               <div

@@ -309,19 +309,6 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
           type="error"
         />
       ) : null}
-      {studio.workflowActionError ? (
-        <Alert
-          banner
-          closable
-          description={studio.workflowActionError}
-          message={t(
-            'teamMemberWorkflowStudio.alerts.actionError.title',
-            'Workflow changes need attention',
-          )}
-          onClose={studio.clearWorkflowActionError}
-          type="error"
-        />
-      ) : null}
       <section
         ref={editorRegionRef}
         style={{

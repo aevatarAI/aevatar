@@ -308,7 +308,9 @@ describe('New workflow save-target recovery', () => {
     expect(
       await screen.findByText("Workflow couldn't be created"),
     ).toBeVisible();
-    expect(screen.getByText('Generation unavailable')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Generation unavailable'),
+    ).not.toBeInTheDocument();
     expect(workflowName).toHaveValue('Weekly review');
     expect(description).toHaveValue('Summarize this week');
     expect(mockStudioApi.createWorkflowDraft).not.toHaveBeenCalled();

@@ -1,6 +1,7 @@
 import {
   act,
   fireEvent,
+  render,
   screen,
   waitFor,
   within,
@@ -2251,6 +2252,17 @@ describe('Workflow Activity vNext editor', () => {
 
   afterEach(() => cleanupTestQueryClients());
 
+  it('keeps the editor header focused on the workflow name', async () => {
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(
+      await screen.findByDisplayValue('Committed source'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('Build, test, and refine this workflow.'),
+    ).not.toBeInTheDocument();
+  });
+
   it('requires an explicitly selected real scope service before publishing a saved workflow', async () => {
     mockLocation =
       '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha';
@@ -3847,7 +3859,7 @@ describe('Workflow Activity vNext editor', () => {
     expect(mockRuntimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
   });
 
-  it("keeps a save failure's server detail out of the primary editor message", async () => {
+  it('reports a save failure with a toast instead of a page alert', async () => {
     mockStudioApi.saveWorkflow.mockRejectedValue(
       new Error('PUT /api/studio/workflows/wf-committed-source returned 500'),
     );
@@ -3862,14 +3874,19 @@ describe('Workflow Activity vNext editor', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
 
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Workflow couldn't be saved",
+      ),
+    );
     expect(
-      await screen.findByText("Workflow couldn't be saved"),
-    ).toBeInTheDocument();
+      screen.queryByText("Workflow couldn't be saved"),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByText(
         'PUT /api/studio/workflows/wf-committed-source returned 500',
       ),
-    ).not.toBeVisible();
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole('status', { name: 'Workflow save status' }),
     ).toHaveTextContent('Save failed');
@@ -4151,7 +4168,7 @@ describe('Workflow Activity vNext editor', () => {
     );
   });
 
-  it('keeps a failed node insertion visible and retryable', async () => {
+  it('reports a failed node insertion with a retryable toast', async () => {
     const serializeFailure = new Error(
       'POST /api/editor/serialize-yaml returned 500',
     );
@@ -4170,17 +4187,25 @@ describe('Workflow Activity vNext editor', () => {
       await screen.findByRole('button', { name: 'Insert LLM call node' }),
     );
 
-    expect(await screen.findByText("Couldn't add node")).toBeVisible();
-    expect(screen.getByText(serializeFailure.message)).not.toBeVisible();
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledTimes(1),
+    );
+    expect(screen.queryByText("Couldn't add node")).not.toBeInTheDocument();
+    expect(screen.queryByText(serializeFailure.message)).not.toBeInTheDocument();
+    const [content] = mockConsoleToast.error.mock.calls[0];
+    const toastContent = render(content).container;
+    expect(
+      within(toastContent).getByText("Couldn't add node"),
+    ).toBeVisible();
+    const retryButton = within(toastContent).getByRole('button', {
+      name: 'Retry',
+    });
+    expect(retryButton).toBeEnabled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(retryButton);
 
     await waitFor(() =>
       expect(mockStudioApi.serializeYaml).toHaveBeenCalledTimes(2),
-    );
-    await waitFor(() =>
-      expect(screen.queryByText("Couldn't add node")).not.toBeInTheDocument(),
     );
   });
 
@@ -5156,7 +5181,7 @@ describe('Workflow Activity vNext creation', () => {
     expect(screen.queryByText('scope-alpha')).not.toBeInTheDocument();
   });
 
-  it('clears a submission failure when changing creation methods', async () => {
+  it('reports a submission failure with a toast and keeps method changes usable', async () => {
     mockStudioApi.authorWorkflow.mockRejectedValue(
       new Error('LLM service rejected the request'),
     );
@@ -5175,9 +5200,17 @@ describe('Workflow Activity vNext creation', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Generate and open' }));
 
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Workflow couldn't be created",
+      ),
+    );
     expect(
-      await screen.findByText("Workflow couldn't be created"),
-    ).toBeInTheDocument();
+      screen.queryByText("Workflow couldn't be created"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('LLM service rejected the request'),
+    ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Change method' }));
     fireEvent.click(screen.getByRole('button', { name: 'Start blank' }));
 

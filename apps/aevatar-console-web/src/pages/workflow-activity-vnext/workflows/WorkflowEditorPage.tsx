@@ -17,6 +17,7 @@ import { getLocationSnapshot, history } from '@/shared/navigation/history';
 import { studioApi } from '@/shared/studio/api';
 import { createWorkflowRevisionIdentityCandidate } from '@/shared/studio/explicitRequestConfirmation';
 import type { StudioExplicitRequestPreview } from '@/shared/studio/models';
+import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import {
   getRunStatusPresentation,
   isRunStatusInProgress,
@@ -124,6 +125,7 @@ const WorkflowEditorPage: React.FC<{
   const activeScopeId = activeEditorRoute.scopeId;
   const activeWorkflowId = activeEditorRoute.workflowId;
   const editor = useWorkflowEditor(activeScopeId, activeWorkflowId);
+  const toast = useConsoleToast();
   const [mode, setMode] = React.useState<'canvas' | 'yaml'>('canvas');
   const [nodeLibraryOpen, setNodeLibraryOpen] = React.useState(false);
   const [publishDialogOpen, setPublishDialogOpen] = React.useState(false);
@@ -298,6 +300,37 @@ const WorkflowEditorPage: React.FC<{
   const saveWorkflow = React.useCallback(async () => {
     return editor.save();
   }, [editor.save]);
+
+  React.useEffect(() => {
+    if (!editor.saveError) return;
+    toast.error(
+      t(
+        'workflowActivityVNext.editor.saveFailed',
+        "Workflow couldn't be saved",
+      ),
+    );
+  }, [editor.saveError, toast]);
+
+  React.useEffect(() => {
+    if (!editor.nodeInsertionError) return;
+    toast.error(
+      <Space size="small">
+        <span>
+          {t(
+            'workflowActivityVNext.editor.addNodeFailed',
+            "Couldn't add node",
+          )}
+        </span>
+        <Button
+          onClick={() => void editor.retryNodeInsertion()}
+          size="small"
+          type="link"
+        >
+          {t('workflowActivityVNext.common.retry', 'Retry')}
+        </Button>
+      </Space>,
+    );
+  }, [editor.nodeInsertionError, editor.retryNodeInsertion, toast]);
 
   const retryMaterialization = React.useCallback(async () => {
     await editor.retryMaterialization();
@@ -761,10 +794,6 @@ const WorkflowEditorPage: React.FC<{
   return (
     <WorkflowActivityVNextShell
       activeSection="workflows"
-      description={t(
-        'workflowActivityVNext.editor.description',
-        'Build, test, and refine this workflow.',
-      )}
       headerActions={
         <>
           <Button
@@ -911,38 +940,6 @@ const WorkflowEditorPage: React.FC<{
           />
         </div>
       </div>
-      {editor.saveError ? (
-        <Alert
-          description={<TechnicalDetails>{editor.saveError}</TechnicalDetails>}
-          message={t(
-            'workflowActivityVNext.editor.saveFailed',
-            "Workflow couldn't be saved",
-          )}
-          showIcon
-          type="error"
-        />
-      ) : null}
-      {editor.nodeInsertionError ? (
-        <Alert
-          action={
-            <Button
-              disabled={editorWriteLocked}
-              onClick={() => void editor.retryNodeInsertion()}
-            >
-              {t('workflowActivityVNext.common.retry', 'Retry')}
-            </Button>
-          }
-          description={
-            <TechnicalDetails>{editor.nodeInsertionError}</TechnicalDetails>
-          }
-          message={t(
-            'workflowActivityVNext.editor.addNodeFailed',
-            "Couldn't add node",
-          )}
-          showIcon
-          type="error"
-        />
-      ) : null}
       {editor.materialization.phase !== 'idle' &&
       editor.materialization.receipt ? (
         <Alert

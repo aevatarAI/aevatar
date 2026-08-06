@@ -46,6 +46,7 @@ import {
 import { AevatarCompactText } from "@/shared/ui/compactText";
 import type { AevatarBreadcrumbItem } from "@/shared/ui/aevatarPageShells";
 import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
+import ConsoleOperationNotice from "@/shared/ui/ConsoleOperationNotice";
 import GovernanceAuditTimeline, {
   type GovernanceAuditEvent,
 } from "./GovernanceAuditTimeline";
@@ -1992,15 +1993,16 @@ const GovernanceWorkbench: React.FC = () => {
       title="Governance"
     >
       <div style={buildAevatarViewportStyle(surfaceToken)}>
-        {notice ? (
-          <Alert
-            closable
-            message={notice.message}
-            showIcon
-            type={notice.tone}
-            onClose={() => setNotice(null)}
-          />
-        ) : null}
+        <ConsoleOperationNotice
+          errorMessage={t(
+            "pages.governance.governanceworkbench.actionFailed",
+            "Governance action could not be completed. Try again.",
+          )}
+          notice={
+            notice ? { message: notice.message, type: notice.tone } : null
+          }
+          onClose={() => setNotice(null)}
+        />
         {commandReceipt && commandReceiptObservation ? (
           <Alert
             closable
