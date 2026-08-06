@@ -177,9 +177,20 @@ public static class NyxIdLlmServiceCatalogParser
         if (diagnostic?.ModelCatalog.Certainty == LLMModelCatalogCertainty.Unavailable)
             return diagnostic.ModelCatalog.Clone();
 
-        IReadOnlyList<string> models = diagnostic?.ModelCatalog.Certainty == LLMModelCatalogCertainty.Enumerated
-            ? diagnostic.ModelCatalog.ModelIds
-            : [inventoryService.DefaultModel];
+        IReadOnlyList<string> models;
+        if (diagnostic?.ModelCatalog.Certainty == LLMModelCatalogCertainty.Enumerated)
+        {
+            var reconciledModels = new SortedSet<string>(diagnostic.ModelCatalog.ModelIds, StringComparer.Ordinal)
+            {
+                inventoryService.DefaultModel,
+            };
+            models = reconciledModels.ToArray();
+        }
+        else
+        {
+            models = [inventoryService.DefaultModel];
+        }
+
         return BuildModelCatalog(models, inventoryService.DefaultModel, ReadyStatus, true);
     }
 

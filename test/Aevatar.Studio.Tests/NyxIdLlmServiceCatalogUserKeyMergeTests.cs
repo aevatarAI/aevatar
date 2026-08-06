@@ -184,6 +184,28 @@ public sealed class NyxIdLlmServiceCatalogUserKeyMergeTests
     }
 
     [Fact]
+    public void ComposeUserServiceInventory_WithInventoryDefaultOutsideDiagnosticModels_ShouldReconcileModelCatalog()
+    {
+        var diagnostic = Diagnostic("diag-alpha", "chrono-llm") with
+        {
+            ModelCatalog = new LLMModelCatalog
+            {
+                Certainty = LLMModelCatalogCertainty.Enumerated,
+                DefaultModelId = "gpt-5.4",
+                ModelIds = { "gpt-5.4" },
+            },
+        };
+        var result = NyxIdLlmServiceCatalogParser.ComposeUserServiceInventory(
+            new NyxIdLlmServicesResult([diagnostic], null),
+            new NyxIdUserServices([Inventory("us-alpha", "chrono-llm", defaultModel: "gpt-5.5")]));
+
+        var catalog = result.Services.Should().ContainSingle().Subject.ModelCatalog;
+        catalog.Certainty.Should().Be(LLMModelCatalogCertainty.Enumerated);
+        catalog.DefaultModelId.Should().Be("gpt-5.5");
+        catalog.ModelIds.Should().Equal("gpt-5.4", "gpt-5.5");
+    }
+
+    [Fact]
     public void ComposeUserServiceInventory_WithUnavailableDiagnostic_ShouldNotExposeInventoryDefault()
     {
         var result = NyxIdLlmServiceCatalogParser.ComposeUserServiceInventory(
