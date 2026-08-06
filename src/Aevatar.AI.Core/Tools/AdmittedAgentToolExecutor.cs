@@ -11,6 +11,8 @@ using Aevatar.AI.Core.Observability;
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Ports;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.Core.Tools;
 
@@ -19,15 +21,18 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
     private readonly IAgentToolAdmissionLedger _admissionLedger;
     private readonly IAuditTrailAppender _auditTrailAppender;
     private readonly ToolAuditRecordFactory _auditRecordFactory;
+    private readonly ILogger<AdmittedAgentToolExecutor> _logger;
 
     public AdmittedAgentToolExecutor(
         IAgentToolAdmissionLedger admissionLedger,
         IAuditTrailAppender auditTrailAppender,
         IAuditActorIdentityHasher identityHasher,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ILogger<AdmittedAgentToolExecutor>? logger = null)
     {
         _admissionLedger = admissionLedger ?? throw new ArgumentNullException(nameof(admissionLedger));
         _auditTrailAppender = auditTrailAppender ?? throw new ArgumentNullException(nameof(auditTrailAppender));
+        _logger = logger ?? NullLogger<AdmittedAgentToolExecutor>.Instance;
         _auditRecordFactory = new ToolAuditRecordFactory(
             identityHasher ?? throw new ArgumentNullException(nameof(identityHasher)),
             timeProvider);
@@ -442,6 +447,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         }
         catch (Exception ex)
         {
+            LogCodexExecutionFailure(ex, credentialDecision.ExecutionContext.WorkflowRuntime);
             outcome = CreateFailure(
                 tool,
                 toolName,
@@ -1069,6 +1075,42 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         JsonSerializer.Serialize(new { error = code, code, message, tool_name = toolName });
 
     private static string SafeExceptionClass(Exception ex) => ex.GetType().Name;
+
+    private void LogCodexExecutionFailure(
+        Exception exception,
+        AgentWorkflowRuntimeContext workflowRuntime)
+    {
+        if (exception is not CodexExecutionException codexException)
+            return;
+
+        var runId = NormalizeIdentity(workflowRuntime.RootRunId) ??
+                    NormalizeIdentity(workflowRuntime.ParentRunId);
+        var runHash = runId is null
+            ? "none"
+            : Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(runId)))[..12];
+        _logger.LogWarning(
+            "Codex execution failed inside admitted tool execution. " +
+            "failureKind={CodexFailureKind} failureCode={CodexFailureCode} runHash={WorkflowRunHash}",
+            codexException.Failure.Kind,
+            SafeDiagnosticCode(codexException.Failure.Code),
+            runHash);
+    }
+
+    private static string SafeDiagnosticCode(string? value)
+    {
+        var normalized = value?.Trim();
+        if (string.IsNullOrEmpty(normalized) || normalized.Length > 96 ||
+            !char.IsAsciiLetterLower(normalized[0]) ||
+            normalized.Any(character =>
+                !char.IsAsciiLetterLower(character) &&
+                !char.IsAsciiDigit(character) &&
+                character != '_'))
+        {
+            return "unclassified";
+        }
+
+        return normalized;
+    }
 
     private static bool IsAuditRecorded(AuditTrailAppendResult append) =>
         append.Status is AuditTrailAppendStatus.Appended or AuditTrailAppendStatus.Duplicate;
