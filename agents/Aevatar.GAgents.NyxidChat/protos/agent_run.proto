@@ -90,6 +90,10 @@ message AgentRunGAgentState {
   AgentRunPendingToolApprovalState pending_tool_approval = 29;
   AgentRunToolApprovalResolutionState last_tool_approval_resolution = 30;
   bool produced_use_source_activity_delivery_context = 31;
+  // Typed ownership handoff to WorkflowRunDeliveryGAgent. When present, the
+  // produced reply is intentionally invisible: output retries re-dispatch this
+  // receipt to ConversationGAgent instead of re-running the LLM/tool chain.
+  aevatar.ai.WorkflowRunBackgroundDeliveryReceipt produced_workflow_run_delivery = 32;
 }
 
 enum AgentRunToolApprovalDecision {
@@ -431,6 +435,9 @@ message AgentRunReplyProducedEvent {
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 10;
   repeated aevatar.ai.AgentToolReceipt tool_receipts = 11;
   bool use_source_activity_delivery_context = 12;
+  // Successful background-delivery registration transfers all user-visible
+  // approval and terminal output ownership away from AgentRunGAgent.
+  aevatar.ai.WorkflowRunBackgroundDeliveryReceipt workflow_run_delivery = 13;
 }
 
 message AgentRunToolApprovalRequestedEvent {

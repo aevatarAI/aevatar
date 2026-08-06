@@ -966,6 +966,16 @@ public sealed partial class ConversationGAgent :
             return;
         }
 
+        if (IsWorkflowRunDeliveryDelegation(evt.WorkflowRunDelivery))
+        {
+            await CompleteWorkflowRunDeliveryDelegationAsync(
+                evt,
+                commandId,
+                pendingRequest,
+                pendingWorkflowRequest);
+            return;
+        }
+
         var referenceActivity = evt.UseSourceActivityDeliveryContext
             ? evt.Activity
             : pendingRequest?.Activity ?? pendingWorkflowRequest?.Activity ?? evt.Activity;
@@ -1100,6 +1110,52 @@ public sealed partial class ConversationGAgent :
             result.ErrorCode,
             result.FailureKind);
     }
+
+    private async Task CompleteWorkflowRunDeliveryDelegationAsync(
+        LlmReplyReadyEvent evt,
+        string commandId,
+        NeedsLlmReplyEvent? pendingRequest,
+        NeedsWorkflowDraftRunEvent? pendingWorkflowRequest)
+    {
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var referenceActivity = pendingRequest?.Activity ?? pendingWorkflowRequest?.Activity ?? evt.Activity;
+        var completed = new ConversationTurnCompletedEvent
+        {
+            ProcessedActivityId = string.Empty,
+            CausationCommandId = commandId,
+            SentActivityId = string.Empty,
+            AuthPrincipal = "workflow-run-delivery",
+            Conversation = referenceActivity?.Conversation?.Clone()
+                           ?? State.Conversation?.Clone()
+                           ?? new ConversationReference(),
+            CompletedAtUnixMs = nowMs,
+            WorkflowRunDelivery = evt.WorkflowRunDelivery.Clone(),
+        };
+        completed.AppendedHistory.AddRange(evt.AppendedHistory.Select(entry => entry.Clone()));
+
+        await PersistReplyReadyEventsWithLocalRetryAsync(
+            evt.CorrelationId,
+            "workflow-run-delivery-delegated",
+            [completed],
+            CancellationToken.None);
+        await ClearReplyLifecyclesAsync(
+            evt.CorrelationId,
+            pendingRequest?.Activity ?? evt.Activity,
+            "workflow_run_delivery_delegated");
+        Logger.LogInformation(
+            "Completed deferred LLM turn by transferring visible reply ownership: correlation={CorrelationId} deliveryActorId={DeliveryActorId} workflowCommandId={WorkflowCommandId} conversation={Key}",
+            evt.CorrelationId,
+            evt.WorkflowRunDelivery.DeliveryActorId,
+            evt.WorkflowRunDelivery.WorkflowCommandId,
+            completed.Conversation?.CanonicalKey);
+    }
+
+    private static bool IsWorkflowRunDeliveryDelegation(
+        Aevatar.AI.Abstractions.WorkflowRunBackgroundDeliveryReceipt? delivery) =>
+        delivery is not null &&
+        !string.IsNullOrWhiteSpace(delivery.DeliveryActorId) &&
+        !string.IsNullOrWhiteSpace(delivery.WorkflowActorId) &&
+        !string.IsNullOrWhiteSpace(delivery.WorkflowCommandId);
 
     [EventHandler]
     public async Task HandleLarkCardDeliveryCompletedAsync(LarkCardDeliveryCompletedEvent evt)

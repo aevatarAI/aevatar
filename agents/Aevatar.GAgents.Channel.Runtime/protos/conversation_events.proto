@@ -27,6 +27,9 @@ message ConversationTurnCompletedEvent {
   // History entries to append to the conversation-owned transcript window
   // after this turn is terminal. Non-LLM turns leave this empty.
   repeated ConversationHistoryEntry appended_history = 9;
+  // Records that this conversation turn completed by transferring visible
+  // reply ownership to the workflow run background delivery actor.
+  aevatar.ai.WorkflowRunBackgroundDeliveryReceipt workflow_run_delivery = 10;
 }
 
 // Committed domain event: the conversation cleared its retained transcript window
@@ -219,6 +222,10 @@ message LlmReplyReadyEvent {
   // callback. When true, delivery uses this event's activity rather than the
   // original pending turn activity while correlation still closes that turn.
   bool use_source_activity_delivery_context = 16;
+  // When present, ConversationGAgent completes the pending turn without
+  // invoking a channel runner. WorkflowRunDeliveryGAgent exclusively owns the
+  // approval card and terminal workflow result for this run.
+  aevatar.ai.WorkflowRunBackgroundDeliveryReceipt workflow_run_delivery = 17;
 }
 
 enum ConversationReplyLifecycleMode {

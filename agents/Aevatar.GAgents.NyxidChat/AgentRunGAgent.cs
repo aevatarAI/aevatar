@@ -1118,6 +1118,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
         ArgumentNullException.ThrowIfNull(command);
         var hasResult = command.ToolStepResult is not null;
+        WorkflowRunBackgroundDeliveryReceipt? workflowRunDelivery = null;
         if (hasResult)
         {
             if (!IsCurrentStepResult(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
@@ -1153,6 +1154,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 return;
             }
 
+            workflowRunDelivery = TryResolveWorkflowRunDelivery(command.ToolStepResult!);
             await PersistStepStateAsync(ApplyToolStepResult(State.GenerationStep!, command.ToolStepResult!, command.StepIndex));
         }
         else if (!IsCurrentStepRequest(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
@@ -1166,6 +1168,26 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var stepState = State.GenerationStep;
         if (stepState is null)
             return;
+
+        if (workflowRunDelivery is not null)
+        {
+            try
+            {
+                await ProduceWorkflowRunDeliveryDelegationAsync(request, stepState, workflowRunDelivery);
+            }
+            catch (AgentRunOutputDispatchException ex)
+            {
+                if (await TryHandleOutputDispatchFailureAsync(request, stepState.RunId, ex))
+                    return;
+
+                await PersistFailedAsync(
+                    request,
+                    stepState.RunId,
+                    "agent_run_output_dispatch_failed",
+                    ex.Message);
+            }
+            return;
+        }
 
         if (!hasResult)
         {
@@ -1698,6 +1720,42 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         return next;
     }
 
+    private WorkflowRunBackgroundDeliveryReceipt? TryResolveWorkflowRunDelivery(
+        AgentRunToolStepResult result)
+    {
+        var candidates = result.ToolReceipts
+            .Where(static receipt => receipt.WorkflowRunDelivery is not null)
+            .ToArray();
+        if (candidates.Length == 0)
+            return null;
+
+        if (candidates.Length != 1)
+        {
+            _logger.LogWarning(
+                "Agent run received an ambiguous workflow background delivery handoff: runId={RunId} candidateCount={CandidateCount}",
+                State.RunId,
+                candidates.Length);
+            return null;
+        }
+
+        var candidate = candidates[0];
+        var delivery = candidate.WorkflowRunDelivery;
+        if (candidate.Status != AgentToolReceiptStatus.Success ||
+            string.IsNullOrWhiteSpace(delivery.DeliveryActorId) ||
+            string.IsNullOrWhiteSpace(delivery.WorkflowActorId) ||
+            string.IsNullOrWhiteSpace(delivery.WorkflowCommandId))
+        {
+            _logger.LogWarning(
+                "Agent run rejected an incomplete workflow background delivery handoff: runId={RunId} callId={CallId} status={Status}",
+                State.RunId,
+                candidate.CallId,
+                candidate.Status);
+            return null;
+        }
+
+        return delivery.Clone();
+    }
+
     private static AgentRunReplyStepState BuildOwnerFallbackStepState(
         AgentRunReplyStepState current,
         int nextStepIndex)
@@ -1913,6 +1971,44 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         await TryFinalizeAfterDispatchAsync(request, runId);
     }
 
+    private async Task ProduceWorkflowRunDeliveryDelegationAsync(
+        NeedsLlmReplyEvent request,
+        AgentRunReplyStepState stepState,
+        WorkflowRunBackgroundDeliveryReceipt workflowRunDelivery)
+    {
+        _logger.LogInformation(
+            "Agent run transferring visible reply ownership to workflow background delivery: runId={RunId} correlation={CorrelationId} deliveryActorId={DeliveryActorId} workflowCommandId={WorkflowCommandId}",
+            stepState.RunId,
+            stepState.CorrelationId,
+            workflowRunDelivery.DeliveryActorId,
+            workflowRunDelivery.WorkflowCommandId);
+
+        await PersistReplyProducedAsync(
+            request,
+            stepState.RunId,
+            string.Empty,
+            null,
+            LlmReplyTerminalState.Completed,
+            string.Empty,
+            string.Empty,
+            stepState.AppendedHistory.ToArray(),
+            stepState.ToolReceipts.ToArray(),
+            workflowRunDelivery);
+
+        await DispatchReadyEventAsync(
+            request,
+            stepState.RunId,
+            string.Empty,
+            null,
+            LlmReplyTerminalState.Completed,
+            string.Empty,
+            string.Empty,
+            stepState.AppendedHistory.ToArray(),
+            workflowRunDelivery);
+
+        await TryFinalizeAfterDispatchAsync(request, stepState.RunId);
+    }
+
     /// <summary>
     /// Output-dispatch retry path: re-deliver the produced payload from state without
     /// re-running the LLM. Triggered when <see cref="HandleStartAsync"/> sees
@@ -1921,7 +2017,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     private async Task ReDispatchProducedReplyAsync(NeedsLlmReplyEvent request, string runId)
     {
         var outbound = State.ProducedOutbound;
-        if (await TryCompleteCardStreamedReplyAsync(
+        if (State.ProducedWorkflowRunDelivery is null &&
+            await TryCompleteCardStreamedReplyAsync(
                 request,
                 runId,
                 State.ProducedReplyText ?? string.Empty,
@@ -1939,7 +2036,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             State.ProducedTerminalState,
             State.ErrorCode ?? string.Empty,
             State.ErrorSummary ?? string.Empty,
-            State.ProducedAppendedHistory.ToArray());
+            State.ProducedAppendedHistory.ToArray(),
+            State.ProducedWorkflowRunDelivery);
 
         // Past the point of user-visible delivery — swallow persistence/cleanup errors so
         // they don't escalate to a duplicate fallback dispatch. See ProduceAndDispatchAsync
@@ -2026,7 +2124,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         string errorCode,
         string errorSummary,
         IReadOnlyList<ConversationHistoryEntry>? appendedHistory,
-        IReadOnlyList<Aevatar.AI.Abstractions.AgentToolReceipt>? toolReceipts)
+        IReadOnlyList<Aevatar.AI.Abstractions.AgentToolReceipt>? toolReceipts,
+        WorkflowRunBackgroundDeliveryReceipt? workflowRunDelivery = null)
     {
         var evt = new AgentRunReplyProducedEvent
         {
@@ -2042,6 +2141,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         };
         if (outbound is not null)
             evt.Outbound = outbound.Clone();
+        if (workflowRunDelivery is not null)
+            evt.WorkflowRunDelivery = workflowRunDelivery.Clone();
         evt.AppendedHistory.AddRange((appendedHistory ?? []).Select(entry => entry.Clone()));
         evt.ToolReceipts.AddRange((toolReceipts ?? []).Select(receipt => receipt.Clone()));
         await PersistDomainEventAsync(evt);
@@ -2080,6 +2181,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         // been committed. ApplyReplyProduced overwrites State.ToolReceipts from the event,
         // so carry the committed receipts forward or this second event wipes them.
         produced.ToolReceipts.AddRange(State.ToolReceipts.Select(receipt => receipt.Clone()));
+        if (State.ProducedWorkflowRunDelivery is not null)
+            produced.WorkflowRunDelivery = State.ProducedWorkflowRunDelivery.Clone();
 
         var deliveryProduced = BuildDeliveryProducedEvent(
             DeliveryKind.StreamingCard,
@@ -2204,7 +2307,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         LlmReplyTerminalState terminalState,
         string errorCode,
         string errorSummary,
-        IReadOnlyList<ConversationHistoryEntry>? appendedHistory = null)
+        IReadOnlyList<ConversationHistoryEntry>? appendedHistory = null,
+        WorkflowRunBackgroundDeliveryReceipt? workflowRunDelivery = null)
     {
         if (string.IsNullOrWhiteSpace(request.TargetActorId))
             return;
@@ -2228,6 +2332,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             RunId = runId,
             UseSourceActivityDeliveryContext = State.ProducedUseSourceActivityDeliveryContext,
         };
+        if (workflowRunDelivery is not null)
+            ready.WorkflowRunDelivery = workflowRunDelivery.Clone();
         ready.AppendedHistory.AddRange((appendedHistory ?? []).Select(entry => entry.Clone()));
         try
         {
@@ -2361,7 +2467,9 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                         Generation = Math.Max(1, State.GenerationAttempt),
                         RequestedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
                         RequiresRuntimeReplyToken =
-                            IsRelayRequest(request) && !HasPendingCardDeliveryCompletion(),
+                            IsRelayRequest(request) &&
+                            !HasPendingCardDeliveryCompletion() &&
+                            State.ProducedWorkflowRunDelivery is null,
                     }),
                 ct: CancellationToken.None);
             return true;
@@ -2837,6 +2945,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.ToolReceipts.Clear();
         next.ToolReceipts.AddRange(evt.ToolReceipts.Select(receipt => receipt.Clone()));
         next.ProducedUseSourceActivityDeliveryContext = evt.UseSourceActivityDeliveryContext;
+        next.ProducedWorkflowRunDelivery = evt.WorkflowRunDelivery?.Clone();
         next.PendingToolApproval = null;
         // Backward-compat: AgentRunReplyProducedEvents persisted by the pre-refactor
         // codepath have no reply_text / outbound / terminal_state fields (proto3 defaults
@@ -2848,12 +2957,15 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         //      (would surface as a blank reply / structural error to the user).
         //   2. HandleCleanupAsync recognizes them as terminal so the actor can be destroyed.
         //
-        // Discriminator: legacy events have BOTH an empty reply_text AND a null outbound.
+        // Discriminator: legacy events have an empty reply_text, a null outbound,
+        // and no typed workflow delivery handoff.
         // The empty-text-alone check is not enough — interactive-only turns
         // (reply_with_interaction etc.) legitimately produce empty reply_text + non-null
         // outbound (card / button intent). Misclassifying those as "historical" would skip
         // the dispatch retry on failure and silently drop the user's interactive reply.
-        if (string.IsNullOrEmpty(evt.ReplyText) && evt.Outbound is null)
+        if (string.IsNullOrEmpty(evt.ReplyText) &&
+            evt.Outbound is null &&
+            evt.WorkflowRunDelivery is null)
             next.Status = AgentRunStatus.ReplyHandedOff;
         // For new events, Status stays at REPLY_PRODUCED here; promoted to REPLY_HANDED_OFF
         // by ApplyReplyDispatched once the LlmReplyReadyEvent is accepted by the

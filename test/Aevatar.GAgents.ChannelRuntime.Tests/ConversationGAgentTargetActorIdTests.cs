@@ -1,4 +1,5 @@
 using System.Reflection;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
@@ -83,6 +84,75 @@ public sealed class ConversationGAgentTargetActorIdTests
         context.NyxRelayReplyToken.Should().NotBeNull();
         context.NyxRelayReplyToken!.ReplyToken.Should().Be("callback-reply-token-1");
         context.NyxRelayReplyToken.ReplyMessageId.Should().Be(expectedReplyMessageId);
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_WithWorkflowDeliveryDelegation_ShouldCompleteWithoutVisibleReply()
+    {
+        var actorId = ConversationGAgent.BuildActorId("lark:group:oc_group_chat_1");
+        var eventStore = new InMemoryEventStore();
+        var runner = new DeferredReplyTurnRunner();
+        var agent = await CreateAgentAsync(
+            actorId,
+            runner,
+            new RecordingLlmReplyRunDispatcher(),
+            eventStore: eventStore);
+        await agent.HandleInboundActivityAsync(BuildInboundActivity("msg-target-1"));
+        agent.State.PendingLlmReplyRequests.Should().ContainSingle();
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = runner.Request.CorrelationId,
+            RunId = runner.Request.RunId,
+            RegistrationId = runner.Request.RegistrationId,
+            SourceActorId = "channel-agent-run:agent-run-target-1",
+            Activity = BuildInboundActivity("msg-target-1"),
+            Outbound = new MessageContent
+            {
+                Text = "{\"status\":\"pending\",\"reason\":\"AwaitingToolApproval\",\"success\":false}",
+            },
+            TerminalState = LlmReplyTerminalState.Completed,
+            WorkflowRunDelivery = new WorkflowRunBackgroundDeliveryReceipt
+            {
+                DeliveryActorId = "workflow-delivery-actor-1",
+                WorkflowActorId = "workflow-actor-1",
+                WorkflowRunId = "workflow-run-1",
+                WorkflowCommandId = "workflow-command-1",
+                WorkflowCorrelationId = "workflow-correlation-1",
+                StreamTopic = "aevatar://actors/workflow-actor-1/runs/workflow-command-1",
+                ChannelPlatform = "lark",
+                ReplyMessageId = "reply-message-1",
+                PlatformMessageId = "platform-message-1",
+                RegistrationScopeId = "registration-scope-1",
+            },
+            AppendedHistory =
+            {
+                new ConversationHistoryEntry
+                {
+                    Role = "tool",
+                    ToolCallId = "call-start-workflow-1",
+                    Content = "{\"status\":\"accepted\"}",
+                },
+            },
+        });
+
+        runner.ReplyRuntimeContexts.Should().BeEmpty();
+        agent.State.PendingLlmReplyRequests.Should().BeEmpty();
+        agent.State.ProcessedCommandIds.Should().Contain("llm:msg-target-1");
+
+        var events = await eventStore.GetEventsAsync(actorId);
+        var completed = events
+            .Where(x => x.EventData.Is(ConversationTurnCompletedEvent.Descriptor))
+            .Select(x => x.EventData.Unpack<ConversationTurnCompletedEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        completed.WorkflowRunDelivery.DeliveryActorId.Should().Be("workflow-delivery-actor-1");
+        completed.AppendedHistory.Should().ContainSingle(entry =>
+            entry.Role == "tool" && entry.ToolCallId == "call-start-workflow-1");
+        completed.Outbound.Should().BeNull();
+        events.Should().NotContain(x => x.EventData.Is(LlmReplyDeliveredEvent.Descriptor));
+        events.Should().NotContain(x => x.EventData.Is(DeliveryProducedEvent.Descriptor));
     }
 
     [Fact]

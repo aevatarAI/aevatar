@@ -192,6 +192,85 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleNextToolStepAsync_WhenWorkflowDeliveryIsRegistered_ShouldHandOffWithoutAnotherLlmStep()
+    {
+        var target = Substitute.For<IActor>();
+        target.Id.Returns("conversation-actor-1");
+        var handled = new List<EventEnvelope>();
+        target.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("conversation-actor-1", target));
+        var executor = new PausedReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            executor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
+        SetState(runtime, BuildWorkflowDeliveryStepState());
+
+        await runtime.HandleNextToolStepAsync(BuildWorkflowDeliveryToolResult());
+
+        executor.LlmStepExecutions.Should().BeEmpty();
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        runtime.State.ProducedReplyText.Should().BeEmpty();
+        runtime.State.ProducedOutbound.Should().BeNull();
+        runtime.State.ProducedWorkflowRunDelivery.Should().NotBeNull();
+        runtime.State.ProducedWorkflowRunDelivery.DeliveryActorId.Should().Be("workflow-delivery-actor-1");
+        runtime.State.GenerationStep!.ToolReceipts.Should().ContainSingle();
+
+        var ready = handled.Should().ContainSingle().Subject.Payload.Unpack<LlmReplyReadyEvent>();
+        ready.Outbound.Text.Should().BeEmpty();
+        ready.WorkflowRunDelivery.DeliveryActorId.Should().Be("workflow-delivery-actor-1");
+        ready.WorkflowRunDelivery.WorkflowCommandId.Should().Be("workflow-command-1");
+    }
+
+    [Fact]
+    public async Task HandleOutputDispatchRetryAsync_ForWorkflowDelivery_ReplaysTypedHandoffWithoutRuntimeTokenOrLlmStep()
+    {
+        var target = Substitute.For<IActor>();
+        target.Id.Returns("conversation-actor-1");
+        var handled = new List<EventEnvelope>();
+        target.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("conversation-actor-1", target));
+        var scheduler = new RecordingCallbackScheduler();
+        var firstPublisher = new DispatchingEventPublisher(actorRuntime) { FailNextSend = true };
+        var firstExecutor = new PausedReplyGenerationExecutor();
+        var first = CreateRunAgentWithExecutor(
+            actorRuntime,
+            firstExecutor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions(),
+            firstPublisher,
+            scheduler);
+        SetState(first, BuildWorkflowDeliveryStepState());
+
+        await first.HandleNextToolStepAsync(BuildWorkflowDeliveryToolResult());
+
+        first.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        first.State.ProducedWorkflowRunDelivery.Should().NotBeNull();
+        firstExecutor.LlmStepExecutions.Should().BeEmpty();
+        handled.Should().BeEmpty();
+        var retry = scheduler.Timeouts.Should().ContainSingle(
+                timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunOutputDispatchRetryRequested.Descriptor))
+            .Subject.TriggerEnvelope.Payload.Unpack<AgentRunOutputDispatchRetryRequested>();
+        retry.RequiresRuntimeReplyToken.Should().BeFalse();
+
+        var recoveredExecutor = new PausedReplyGenerationExecutor();
+        var recovered = CreateRunAgentWithExecutor(
+            actorRuntime,
+            recoveredExecutor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
+        SetState(recovered, RoundTrip(first.State));
+
+        await recovered.HandleOutputDispatchRetryAsync(retry);
+
+        recovered.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        recoveredExecutor.LlmStepExecutions.Should().BeEmpty();
+        var ready = handled.Should().ContainSingle().Subject.Payload.Unpack<LlmReplyReadyEvent>();
+        ready.WorkflowRunDelivery.DeliveryActorId.Should().Be("workflow-delivery-actor-1");
+        ready.Outbound.Text.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleToolApprovalDecisionAsync_ShouldExecuteOnceAndResumeAfterActorRecovery()
     {
         var publisher = new RecordingSelfEventPublisher();
@@ -1073,6 +1152,33 @@ public sealed class AgentRunGAgentTests
         next.ProducedReplyText.Should().BeEmpty();
         next.ProducedOutbound.Should().NotBeNull();
         next.ProducedOutbound!.Actions.Should().ContainSingle(a => a.ActionId == "confirm");
+    }
+
+    [Fact]
+    public void ApplyReplyProduced_WorkflowDeliveryWithNoVisiblePayload_IsNotMisclassifiedAsHistorical()
+    {
+        var runtime = CreateRunAgent(
+            new DispatchingActorRuntime(),
+            new RecordingReplyGenerator(() => false),
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+        var produced = new AgentRunReplyProducedEvent
+        {
+            RunId = "run-workflow-delivery",
+            CorrelationId = "corr-workflow-delivery",
+            TargetActorId = "conversation-actor-1",
+            ProducedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            TerminalState = LlmReplyTerminalState.Completed,
+            WorkflowRunDelivery = BuildWorkflowRunDeliveryReceipt(),
+        };
+
+        var next = InvokeAgentTransition(runtime, new AgentRunGAgentState(), produced);
+
+        next.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        next.ProducedReplyText.Should().BeEmpty();
+        next.ProducedOutbound.Should().BeNull();
+        next.ProducedWorkflowRunDelivery.Should().NotBeNull();
+        next.ProducedWorkflowRunDelivery.WorkflowCommandId.Should().Be("workflow-command-1");
     }
 
     [Fact]
@@ -3901,6 +4007,83 @@ public sealed class AgentRunGAgentTests
         agent.EventPublisher = publisher;
         return agent;
     }
+
+    private static AgentRunGAgentState BuildWorkflowDeliveryStepState() =>
+        new()
+        {
+            RunId = "agent-run-workflow-delivery-1",
+            CorrelationId = "corr-workflow-delivery-1",
+            TargetActorId = "conversation-actor-1",
+            Status = AgentRunStatus.ReplyGenerationRequested,
+            GenerationAttempt = 1,
+            GenerationStep = new AgentRunReplyStepState
+            {
+                RunId = "agent-run-workflow-delivery-1",
+                CorrelationId = "corr-workflow-delivery-1",
+                TargetActorId = "conversation-actor-1",
+                Attempt = 1,
+                NextStepIndex = 1,
+                MaxToolRounds = 4,
+            },
+        };
+
+    private static AgentRunNextToolStepRequestedEvent BuildWorkflowDeliveryToolResult() =>
+        new()
+        {
+            RunId = "agent-run-workflow-delivery-1",
+            CorrelationId = "corr-workflow-delivery-1",
+            TargetActorId = "conversation-actor-1",
+            Attempt = 1,
+            StepIndex = 2,
+            Request = new NeedsLlmReplyEvent
+            {
+                RunId = "agent-run-workflow-delivery-1",
+                CorrelationId = "corr-workflow-delivery-1",
+                TargetActorId = "conversation-actor-1",
+                RegistrationId = "reg-1",
+                Activity = BuildRelayActivity(),
+                ReplyToken = "runtime-reply-token",
+                ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            },
+            ToolStepResult = new AgentRunToolStepResult
+            {
+                AdvanceRound = true,
+                ResultMessages =
+                {
+                    new AgentRunChatMessage
+                    {
+                        Role = "tool",
+                        ToolCallId = "call-start-workflow-1",
+                        Content = "{\"status\":\"accepted\"}",
+                    },
+                },
+                ToolReceipts =
+                {
+                    new AgentToolReceipt
+                    {
+                        CallId = "call-start-workflow-1",
+                        ToolName = "aevatar_start_workflow",
+                        Status = AgentToolReceiptStatus.Success,
+                        WorkflowRunDelivery = BuildWorkflowRunDeliveryReceipt(),
+                    },
+                },
+            },
+        };
+
+    private static WorkflowRunBackgroundDeliveryReceipt BuildWorkflowRunDeliveryReceipt() =>
+        new()
+        {
+            DeliveryActorId = "workflow-delivery-actor-1",
+            WorkflowActorId = "workflow-actor-1",
+            WorkflowRunId = "workflow-run-1",
+            WorkflowCommandId = "workflow-command-1",
+            WorkflowCorrelationId = "workflow-correlation-1",
+            StreamTopic = "aevatar://actors/workflow-actor-1/runs/workflow-command-1",
+            ChannelPlatform = "lark",
+            ReplyMessageId = "relay-msg-1",
+            PlatformMessageId = "om-1",
+            RegistrationScopeId = "scope-1",
+        };
 
     private static AgentRunGAgentState BuildPendingApprovalState()
     {
