@@ -11,7 +11,9 @@ using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Abstractions;
@@ -534,6 +536,150 @@ public sealed class ScopeWorkflowEndpointsTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         body.Should().Contain("\"workflowId\":\"approval\"");
         body.Should().Contain("\"source\":{\"workflowYaml\":\"name: approval\\nsteps: []\\n\"");
+    }
+
+    [Fact]
+    public async Task HandleQueryWorkflowCatalogueAsync_ShouldDelegateServerSideFilterQuery()
+    {
+        var http = CreateHttpContext();
+        var catalogueService = new RecordingWorkflowCatalogueService
+        {
+            Response = new ScopeWorkflowCatalogueResponse(
+                [
+                    new ScopeWorkflowCatalogueRow(
+                        "user-1",
+                        "wf-alpha",
+                        "审批 Workflow",
+                        "draft description",
+                        true,
+                        false,
+                        DateTimeOffset.Parse("2026-08-04T00:00:00Z"),
+                        "draft",
+                        new ScopeWorkflowCatalogueRowCapabilities(
+                            new ScopeWorkflowCatalogueActionCapability(true),
+                            new ScopeWorkflowCatalogueActionCapability(false, "No committed workflow source."),
+                            new ScopeWorkflowCatalogueActionCapability(true),
+                            new ScopeWorkflowCatalogueActionCapability(true)),
+                        DateTimeOffset.Parse("2026-08-04T00:00:00Z")),
+                ],
+                "next-token",
+                new ScopeWorkflowCatalogueFreshness(
+                    DateTimeOffset.Parse("2026-08-04T00:00:00Z"),
+                    "max_source_updated_at_utc"),
+                new ScopeWorkflowCatalogueSearchContract(
+                    ["workflowId", "name", "description"],
+                    "ordinal_ignore_case",
+                    "FormKC",
+                    128,
+                    "matches_all_after_view_filter",
+                    "exact_or_prefix")),
+        };
+
+        var result = await ScopeWorkflowEndpoints.HandleQueryWorkflowCatalogueAsync(
+            http,
+            "user-1",
+            view: "drafts",
+            query: "审批",
+            cursor: "2",
+            take: 25,
+            catalogueService,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        catalogueService.Query.Should().NotBeNull();
+        catalogueService.Query!.ScopeId.Should().Be("user-1");
+        catalogueService.Query.View.Should().Be(ScopeWorkflowCatalogueView.Drafts);
+        catalogueService.Query.Query.Should().Be("审批");
+        catalogueService.Query.Cursor.Should().Be("2");
+        catalogueService.Query.Take.Should().Be(25);
+        body.Should().Contain("\"workflowId\":\"wf-alpha\"");
+        body.Should().Contain("\"nextPageToken\":\"next-token\"");
+    }
+
+    [Fact]
+    public async Task HandleQueryWorkflowCatalogueAsync_ShouldUseDefaultTakeWhenQueryOmitsTake()
+    {
+        var http = CreateHttpContext();
+        var catalogueService = new RecordingWorkflowCatalogueService();
+
+        var result = await ScopeWorkflowEndpoints.HandleQueryWorkflowCatalogueAsync(
+            http,
+            "user-1",
+            view: null,
+            query: null,
+            cursor: null,
+            take: null,
+            catalogueService,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        catalogueService.Query.Should().NotBeNull();
+        catalogueService.Query!.Take.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ListCatalogueAsync_ShouldRequestUncappedCommittedSourceRows()
+    {
+        var queryPort = new FakeServiceLifecycleQueryPort
+        {
+            ListServicesResult =
+            [
+                new ServiceCatalogSnapshot(
+                    "tenant-a:workflow-app:user:token:approval",
+                    "tenant-a",
+                    "workflow-app",
+                    "user:user-1-token",
+                    "approval",
+                    "Approval",
+                    "rev-1",
+                    "rev-1",
+                    "dep-1",
+                    "definition-actor-1",
+                    "active",
+                    [],
+                    [],
+                    DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
+                new ServiceCatalogSnapshot(
+                    "tenant-a:workflow-app:user:token:billing",
+                    "tenant-a",
+                    "workflow-app",
+                    "user:user-1-token",
+                    "billing",
+                    "Billing",
+                    "rev-2",
+                    "rev-2",
+                    "dep-2",
+                    "definition-actor-2",
+                    "active",
+                    [],
+                    [],
+                    DateTimeOffset.Parse("2026-08-02T00:00:00Z")),
+            ],
+        };
+        var service = new ScopeWorkflowQueryApplicationService(
+            queryPort,
+            new FakeWorkflowActorBindingReader(),
+            Options.Create(new ScopeWorkflowCapabilityOptions
+            {
+                ServiceAppId = "default",
+                ServiceNamespace = "default",
+                DefinitionActorIdPrefix = "scope-workflow",
+                ListTake = 1,
+            }));
+
+        var legacyList = await service.ListAsync("user-1", CancellationToken.None);
+        queryPort.LastListRequest!.Take.Should().Be(1);
+        legacyList.Should().ContainSingle();
+
+        var catalogueList = await service.ListCatalogueAsync("user-1", CancellationToken.None);
+
+        queryPort.LastListRequest!.Take.Should().Be(int.MaxValue);
+        catalogueList.Select(static item => item.WorkflowId).Should().Equal("billing", "approval");
     }
 
     [Fact]
@@ -1395,6 +1541,31 @@ public sealed class ScopeWorkflowEndpointsTests
         public Task<UserConfig> GetAsync(UserConfigResourceKey resource, CancellationToken ct = default) => GetAsync(ct);
     }
 
+    private sealed class RecordingWorkflowCatalogueService : IAppScopedWorkflowCatalogueService
+    {
+        public ScopeWorkflowCatalogueQuery? Query { get; private set; }
+
+        public ScopeWorkflowCatalogueResponse Response { get; init; } = new(
+            [],
+            null,
+            new ScopeWorkflowCatalogueFreshness(null, "max_source_updated_at_utc"),
+            new ScopeWorkflowCatalogueSearchContract(
+                ["workflowId", "name", "description"],
+                "ordinal_ignore_case",
+                "FormKC",
+                128,
+                "matches_all_after_view_filter",
+                "exact_or_prefix"));
+
+        public Task<ScopeWorkflowCatalogueResponse> QueryAsync(
+            ScopeWorkflowCatalogueQuery query,
+            CancellationToken ct = default)
+        {
+            Query = query;
+            return Task.FromResult(Response);
+        }
+    }
+
     private sealed class ThrowingUserConfigStore : IUserConfigQueryPort
     {
         public Task<UserConfig> GetAsync(CancellationToken ct = default) => throw new HttpRequestException("config backend unavailable");
@@ -1480,7 +1651,7 @@ public sealed class ScopeWorkflowEndpointsTests
         public Dictionary<string, WorkflowActorBinding> Bindings { get; } = new(StringComparer.Ordinal);
 
         public Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default) =>
-            Task.FromResult(Bindings.TryGetValue(actorId, out var binding)
+            Task.FromResult<WorkflowActorBinding?>(Bindings.TryGetValue(actorId, out var binding)
                 ? binding
                 : new WorkflowActorBinding(
                     WorkflowActorKind.Definition,
