@@ -187,7 +187,22 @@ internal sealed class FileBackedWorkflowCatalogPort
         CancellationToken ct)
     {
         var commandId = bindEnvelope.Propagation.CorrelationId;
-        var preparation = await _observationPreparation.PrepareAsync(actorId, commandId, ct);
+        WorkflowDefinitionBindObservationScopeLeasePreparation? preparation;
+        try
+        {
+            preparation = await _observationPreparation.PrepareAsync(actorId, commandId, ct);
+        }
+        catch (TimeoutException ex)
+        {
+            throw new WorkflowDefinitionMaterializationException(
+                WorkflowDefinitionMaterializationException.ObservationUnavailableCode,
+                definition.WorkflowName,
+                actorId,
+                executionMode,
+                $"Workflow definition bind observation did not become ready for actor '{actorId}'.",
+                ex);
+        }
+
         if (preparation == null)
         {
             throw new WorkflowDefinitionMaterializationException(

@@ -544,6 +544,53 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
         }
     }
 
+    [Fact]
+    public async Task Bootstrap_StartedAsync_ShouldRetryTransientObservationPreparationTimeout()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "wf-bootstrap-observation-retry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "review.yaml"), "name: review");
+            var registry = new WorkflowDefinitionCatalog();
+            var options = new WorkflowDefinitionFileSourceOptions
+            {
+                DuplicatePolicy = WorkflowDefinitionDuplicatePolicy.Override,
+                BindCommitMaxAttempts = 2,
+                BindCommitRetryDelay = TimeSpan.Zero,
+            };
+            options.WorkflowDirectories.Add(tempDir);
+            var observations = new RecordingWorkflowDefinitionBindObservationRuntime
+            {
+                PrepareException = new TimeoutException("projection observation relay pending"),
+            };
+            var dispatch = new RecordingActorDispatchPort(observations);
+            var service = new WorkflowDefinitionBootstrapHostedService(
+                registry,
+                new WorkflowDefinitionFileLoader(),
+                new FileBackedWorkflowCatalogPort(
+                    new RecordingActorRuntime(),
+                    dispatch,
+                    observations,
+                    observations,
+                    new RecordingWorkflowCapabilityAdmissionService(),
+                    Options.Create(options),
+                    NullLogger<FileBackedWorkflowCatalogPort>.Instance),
+                Options.Create(options),
+                NullLogger<WorkflowDefinitionBootstrapHostedService>.Instance);
+
+            await service.StartAsync(CancellationToken.None);
+            await service.StartedAsync(CancellationToken.None);
+
+            observations.PrepareCallCount.Should().Be(2);
+            dispatch.Envelopes.Should().ContainSingle();
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     private static ServiceProvider CreateLocalRuntimeProvider(TimeSpan bindCommitTimeout)
     {
         var services = new ServiceCollection();
@@ -736,12 +783,23 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
 
         public bool PublishCommittedBinds { get; set; } = true;
 
+        public Exception? PrepareException { get; set; }
+
+        public int PrepareCallCount { get; private set; }
+
         public Task<WorkflowDefinitionBindObservationScopeLeasePreparation?> PrepareAsync(
             string actorId,
             string commandId,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            PrepareCallCount++;
+            if (PrepareException is { } exception)
+            {
+                PrepareException = null;
+                throw exception;
+            }
+
             _actorId = actorId;
             _commandId = commandId;
             return Task.FromResult<WorkflowDefinitionBindObservationScopeLeasePreparation?>(
