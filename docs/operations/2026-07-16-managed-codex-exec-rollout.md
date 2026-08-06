@@ -8,9 +8,7 @@ Aevatar owns the typed tool contract, Application readiness coordinator,
 per-user credential actor/projection, `ISecretVault` storage, diagnostic
 lifecycle API, fixed NyxID proxy request, and sanitized failure mapping.
 
-NyxID owns agent-key scope enforcement and the temporary five-minute
-`proxy:* sandbox:execute` delegation token injected into internal-canary calls
-to `chrono-sandbox`.
+NyxID owns agent-key scope enforcement and the temporary five-minute `proxy:*` delegation token injected into internal-canary calls to `chrono-sandbox`.
 
 Chrono-sandbox owns the deployed OpenSandbox control plane, immutable runner image, fixed Codex command, request-local delegation-token environment mapping, resource limits, output bounds, cancellation, cleanup, and live execution proof. Operations owns the gVisor tenant and its IP-level egress NetworkPolicy (ADR-0044), deploys and configures NyxID and chrono-sandbox, and does not receive or store users' agent keys.
 
@@ -25,8 +23,7 @@ Before enabling Aevatar, operations must confirm:
 - the `chrono-sandbox` service is deployed from commit `1e8134d` or a
   descendant and exposes `POST /codex/execute`
 - its NyxID service definition is active with `forward_access_token=false`
-- `inject_delegation_token=true` and the exact delegation scope token set
-  `proxy:* sandbox:execute`
+- `inject_delegation_token=true` and `delegation_token_scope=proxy:*`
 - each canary user directly owns an active `chrono-sandbox` UserService
 - each canary user has a usable `chrono-llm-public` route
 - chrono-sandbox sets `NYXID_LLM_PROXY_URL=https://nyx-api.chrono-ai.fun/api/v1/proxy/s/chrono-llm-public`; it does not use `/api/v1/llm/gateway/v1` or `/api/v1/llm/chrono-llm-public/v1`
@@ -43,11 +40,10 @@ fronting Aevatar temporarily forwards the interactive access token so the same
 authenticated user can call the explicit lifecycle API, which confirms
 `/users/me` before creating or repairing that user's Agent Key. The user's
 `chrono-sandbox` UserService must instead keep
-`forward_access_token=false`, `inject_delegation_token=true`, and the exact
-delegation scope token set `proxy:* sandbox:execute`; Aevatar treats token order
-and whitespace as insignificant, rejects missing or extra scopes, and validates
-that chrono policy during explicit provisioning, reconciliation, and rotation,
-but cannot prevent the service owner from changing it later.
+`forward_access_token=false`, `inject_delegation_token=true`, and exact
+`proxy:*` delegation; Aevatar validates that chrono policy during explicit
+provisioning, reconciliation, and rotation, but cannot prevent the service owner
+from changing it later.
 
 The five-minute runner token can access other NyxID REST proxy services
 available to the same user, and Aevatar ingress temporarily handles the
@@ -86,7 +82,7 @@ NyxID UserServices: each user must already have a personal active
 `chrono-sandbox` UserService and a usable `chrono-llm-public` route.
 Keep `RolloutBoundary=InternalOnly`; startup rejects any enabled configuration
 without that explicit boundary, and no public boundary is supported while
-delegation scope includes broad `proxy:*` authority.
+delegation scope remains `proxy:*`.
 
 Do not configure an OpenSandbox URL/API key, runner image, model, provider URL,
 or delegation token in Aevatar. Those belong to chrono-sandbox and NyxID.
@@ -267,8 +263,4 @@ revocation remain available so each provisioned canary can revoke its key.
 
 If chrono-sandbox itself is unhealthy, operations rolls back or disables that service independently. Private SSH `codex_exec` remains controlled by its existing NyxID settings.
 
-If the NyxID UserService forwarding or delegation policy drifts, disable managed
-execution immediately, restore `forward_access_token=false` and the exact
-`proxy:* sandbox:execute` scope set, inspect downstream logs for exposure,
-rotate affected invocation keys, and keep the feature disabled until the
-incident is resolved.
+If the NyxID UserService forwarding policy drifts, disable managed execution immediately, restore the required policy, inspect downstream logs for exposure, rotate affected invocation keys, and keep the feature disabled until the incident is resolved.

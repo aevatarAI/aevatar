@@ -23,13 +23,11 @@ used for the chrono request. The token being protected no longer justifies the s
 protect it.
 
 The 2026-07-24 internal-canary correction established that `chrono-llm-public` is exposed at
-NyxID's REST proxy path, not as a provider in the generic LLM gateway. NyxID grants that route
-through `proxy:*`, while chrono-sandbox independently requires `sandbox:execute` before it
-creates a sandbox. NyxID #1337 made `sandbox:execute` available to service-issued UserService
-delegation. The canary therefore requires the exact token set `proxy:* sandbox:execute`: the
-first scope reaches the fixed LLM proxy from the runner and the second admits the outer
-chrono-sandbox execution request. This amendment narrows the decision's rollout eligibility;
-it does not approve the broad proxy scope for general availability.
+NyxID's REST proxy path, not as a provider in the generic LLM gateway. NyxID currently grants
+that route only to `proxy` or `proxy:*`; injected UserService delegation supports `proxy:*` but
+not a service-specific proxy scope. The canary therefore temporarily widens the five-minute
+token from `llm:proxy` to exact `proxy:*`. This amendment narrows the decision's rollout
+eligibility: it does not approve the widened scope for general availability.
 
 Issue #2921 requested a decision between keeping runc + Landlock + Vault (option A) and
 switching to gVisor with the token injected directly (option B). PR #2924 demonstrated the
@@ -46,7 +44,7 @@ Credential-Proxy MITM CA trust are removed. Codex executes with its inner sandbo
 the non-root `codex` user; escape isolation is the gVisor boundary, and runner pods must be
 scheduled under the `gvisor` RuntimeClass.
 
-The five-minute `proxy:* sandbox:execute` delegation token is injected directly as request-local
+The five-minute `proxy:*` delegation token is injected directly as request-local
 `NYXID_LLM_TOKEN` through execd's native environment map. There is no sandbox-side Credential
 Vault, no placeholder substitution, and no TLS-intercepting credential proxy. The sandbox
 create call requests no `networkPolicy` and no `credentialProxy`.
@@ -68,10 +66,9 @@ materially stronger escape isolation and sheds four moving parts.
 The managed credential boundary in `docs/canon/managed-codex-execution.md` is otherwise
 unchanged: the per-user agent key stays only in `ISecretVault`, is resolved immediately
 before the NyxID request, and is used only as that request's Authorization value. The NyxID
-UserService gate (`forward_access_token=false`, `inject_delegation_token=true`, and exact
-delegation scope set `proxy:* sandbox:execute`) remains validated at provisioning and rotation
-for the internal canary. Scope token order and whitespace are not semantic; missing or extra
-scope tokens fail closed.
+UserService gate (`forward_access_token=false`, `inject_delegation_token=true`,
+`delegation_token_scope=proxy:*`) remains validated at provisioning and rotation for the
+internal canary.
 
 Issue #2899 includes replacing the persistent invocation key with a short-lived caller
 capability, making caller-credential non-forwarding immutable or request-level fail-closed,

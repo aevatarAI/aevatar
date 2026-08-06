@@ -22,7 +22,7 @@ workflow codex_exec
   -> read per-user ManagedCodexCredential current-state projection
   -> resolve raw invocation key from ISecretVault just in time
   -> NyxID proxy /s/chrono-sandbox/codex/execute?_nyxid_via=<personal-service-id>
-  -> NyxID injects a five-minute proxy:* sandbox:execute delegation token
+  -> NyxID injects a five-minute proxy:* delegation token for the internal canary
   -> chrono-sandbox owns OpenSandbox and the fixed codex-runner profile
   -> codex-runner calls https://nyx-api.chrono-ai.fun/api/v1/proxy/s/chrono-llm-public
 ```
@@ -32,11 +32,8 @@ in `X-API-Key` on the Aevatar-to-NyxID request, deliberately leaving
 `Authorization` absent, and never serializes it into the chrono request body.
 This prevents `forward_access_token` policy drift from forwarding the key to
 chrono-sandbox. NyxID service configuration should still keep
-`forward_access_token=false`, `inject_delegation_token=true`, and the temporary
-exact delegation scope set `proxy:* sandbox:execute`. The first scope permits
-the fixed runner-to-LLM REST proxy call; the second admits chrono-sandbox
-execution. Aevatar treats whitespace and token order as insignificant while
-rejecting missing or extra scopes.
+`forward_access_token=false`, `inject_delegation_token=true`, and temporary
+`delegation_token_scope=proxy:*`.
 
 The widened delegation scope belongs only to the five-minute runner token; the
 persistent agent key remains restricted to the exact `chrono-sandbox`

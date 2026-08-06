@@ -98,7 +98,7 @@ IDs. `All` admits native NyxID users whose personal `chrono-sandbox` and usable
 `chrono-llm-public` UserServices already exist; Aevatar does not create missing
 UserServices. Enabling managed Codex also requires the explicit typed
 `RolloutBoundary=InternalOnly` startup acknowledgement. No public rollout
-boundary is supported while delegation still includes broad `proxy:*` authority.
+boundary is supported while delegation still uses `proxy:*`.
 
 The issued key must have exactly:
 
@@ -111,12 +111,9 @@ The issued key must have exactly:
 - a finite configured expiry
 
 No extra service grant is accepted. NyxID's `chrono-sandbox` UserService must
-set `forward_access_token=false`, `inject_delegation_token=true`, and the exact
-temporary internal-canary delegation scope set `proxy:* sandbox:execute`.
-`proxy:*` authorizes the runner's fixed LLM REST proxy call and
-`sandbox:execute` authorizes chrono-sandbox execution. Aevatar compares
-whitespace-delimited scope tokens order-independently and rejects missing or
-additional tokens during explicit provisioning, reconciliation, and rotation.
+set `forward_access_token=false`, `inject_delegation_token=true`, and the
+temporary internal-canary `delegation_token_scope=proxy:*`. Aevatar validates
+these settings during explicit provisioning, reconciliation, and rotation.
 
 The only persistent raw-key copy is stored in `ISecretVault`. Actor state, events, read models, APIs, logs, workflow state, and chrono request bodies contain only typed non-secret facts such as the key ID and `SecretReference`. Execution resolves the raw value immediately before the NyxID request and uses it only as that request's Authorization value. Aevatar never intentionally serializes or forwards it to chrono-sandbox or codex-runner.
 
@@ -143,7 +140,7 @@ The JSON body contains only:
 }
 ```
 
-The interactive workflow bearer is not used for the chrono request. Under the validated UserService policy, NyxID validates the agent key without forwarding it and injects a five-minute `proxy:* sandbox:execute` delegation token for chrono-sandbox. Chrono-sandbox requires `sandbox:execute` before sandbox creation and passes the same token to the one-shot Codex process only as request-local `NYXID_LLM_TOKEN` through execd's native environment map. Codex uses `proxy:*` against the fixed `https://nyx-api.chrono-ai.fun/api/v1/proxy/s/chrono-llm-public` Responses base URL. Per ADR-0044 (#2921), direct injection of this short-lived token is the decided credential model: there is no sandbox-side credential vault, no placeholder substitution, and no TLS-intercepting credential proxy. Chrono-sandbox owns OpenSandbox, the immutable runner image, Codex provider configuration, resource limits, output bounds, cancellation, and cleanup.
+The interactive workflow bearer is not used for the chrono request. Under the validated UserService policy, NyxID validates the agent key without forwarding it and injects a five-minute `proxy:*` delegation token for chrono-sandbox. Chrono-sandbox validates that exact token scope before sandbox creation and passes it to the one-shot Codex process only as request-local `NYXID_LLM_TOKEN` through execd's native environment map. Codex uses the fixed `https://nyx-api.chrono-ai.fun/api/v1/proxy/s/chrono-llm-public` Responses base URL. Per ADR-0044 (#2921), direct injection of this short-lived token is the decided credential model: there is no sandbox-side credential vault, no placeholder substitution, and no TLS-intercepting credential proxy. Chrono-sandbox owns OpenSandbox, the immutable runner image, Codex provider configuration, resource limits, output bounds, cancellation, and cleanup.
 
 The managed runtime is a gVisor tenant. The runner executes Codex with its inner sandbox disabled; escape isolation is the gVisor boundary, and there is no fail-closed Landlock preflight. Egress scoping is an IP-level Kubernetes NetworkPolicy owned by operations — coarser than an FQDN allow-list because the NyxID gateway sits behind a shared CDN range — with no egress sidecar. The sandbox create call requests no `networkPolicy` and no `credentialProxy`.
 
@@ -297,4 +294,4 @@ The immutable runner image remains built from `containers/codex-runner`, but it 
 
 This internal-only design intentionally uses a persistent per-user invocation key and trusts mutable NyxID forwarding policy. Issue #2899's remaining scope replaces the key with a short-lived caller capability and adds immutable or request-level caller-credential non-forwarding, without changing workflow arguments.
 
-The delegation token deliberately lives in the sandbox environment for the run (ADR-0044, #2921). It is single-user and expires in five minutes. `sandbox:execute` is limited to the chrono execution boundary, but the accompanying `proxy:*` scope is not service-scoped: runner code can use it against other NyxID REST proxy services available to that user during the token lifetime. This is accepted only for eligible, trusted internal users. Broad rollout remains blocked until NyxID either authorizes `llm:proxy` for the fixed `chrono-llm-public` proxy route or enforces a service-specific delegation scope, after which chrono-sandbox and Aevatar must reject `proxy:*`. The formerly planned OpenSandbox Credential Vault substitution is rejected, not deferred: satisfying it forces the weaker-isolation runc runtime.
+The delegation token deliberately lives in the sandbox environment for the run (ADR-0044, #2921). It is single-user and expires in five minutes, but the current `proxy:*` scope is not service-scoped: runner code can use it against other NyxID REST proxy services available to that user during the token lifetime. This is accepted only for eligible, trusted internal users. Broad rollout remains blocked until NyxID either authorizes `llm:proxy` for the fixed `chrono-llm-public` proxy route or enforces a service-specific delegation scope, after which chrono-sandbox and Aevatar must reject `proxy:*`. The formerly planned OpenSandbox Credential Vault substitution is rejected, not deferred: satisfying it forces the weaker-isolation runc runtime.
