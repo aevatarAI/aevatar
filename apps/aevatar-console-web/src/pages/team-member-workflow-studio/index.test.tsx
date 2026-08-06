@@ -3391,21 +3391,16 @@ describe('TeamMemberWorkflowStudioPage', () => {
     );
     expect(screen.queryByText('Parameters')).toBeNull();
     expect(screen.queryByLabelText('Raw node configuration')).toBeNull();
+    expect(screen.queryByText('Advanced raw configuration')).toBeNull();
     expect(screen.queryByText(/prompt_prefix/)).toBeNull();
     expect(screen.queryByText('Output')).toBeNull();
-    fireEvent.click(screen.getByText('Advanced raw configuration'));
-    expect(
-      (screen.getByLabelText('Raw node configuration') as HTMLTextAreaElement)
-        .value,
-    ).toContain('"prompt_prefix": "Triage the request"');
 
     fireEvent.change(screen.getByLabelText('Instruction'), {
       target: { value: 'Updated instruction' },
     });
-    expect(
-      (screen.getByLabelText('Raw node configuration') as HTMLTextAreaElement)
-        .value,
-    ).toContain('"prompt_prefix": "Updated instruction"');
+    expect(screen.getByLabelText('Instruction')).toHaveValue(
+      'Updated instruction',
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Update node' }));
     expect(screen.getByText('Unsaved changes')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -3634,7 +3629,7 @@ describe('TeamMemberWorkflowStudioPage', () => {
     expect(document.body.style.userSelect).toBe('text');
   });
 
-  it('shows a node detail error for invalid parameter JSON', async () => {
+  it('shows a raw configuration error for an unknown node', async () => {
     window.history.replaceState(
       {},
       '',
@@ -3670,7 +3665,19 @@ describe('TeamMemberWorkflowStudioPage', () => {
       name: 'Workflow Alpha',
       workflowId: 'workflow-alpha',
       yaml: 'name: Workflow Alpha\nsteps: []\n',
-      document: mockWorkflowDocument,
+      document: {
+        ...mockWorkflowDocument,
+        steps: [
+          {
+            id: 'custom_step',
+            type: 'custom_node',
+            targetRole: null,
+            parameters: { title: 'Draft' },
+            next: null,
+            branches: {},
+          },
+        ],
+      },
       updatedAtUtc: '2026-06-08T00:00:00Z',
     });
 
@@ -3679,7 +3686,9 @@ describe('TeamMemberWorkflowStudioPage', () => {
     await waitFor(() => {
       expect(screen.getByTestId('graph-canvas')).toHaveTextContent('nodes:1');
     });
-    fireEvent.click(screen.getByRole('button', { name: 'node:step:triage' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'node:step:custom_step' }),
+    );
     expect(screen.queryByLabelText('Raw node configuration')).toBeNull();
     fireEvent.click(screen.getByText('Advanced raw configuration'));
     fireEvent.change(screen.getByLabelText('Raw node configuration'), {
@@ -3852,6 +3861,7 @@ describe('TeamMemberWorkflowStudioPage', () => {
     expect(screen.getByText('LLM call')).toBeTruthy();
     expect(screen.queryByText('llm_call')).toBeNull();
     expect(screen.queryByLabelText('Raw node configuration')).toBeNull();
+    expect(screen.queryByText('Advanced raw configuration')).toBeNull();
 
     fireEvent.change(screen.getByLabelText('TTL seconds'), {
       target: { value: '900' },
@@ -3878,11 +3888,6 @@ describe('TeamMemberWorkflowStudioPage', () => {
     });
 
     expect(screen.queryByText('llm_call')).toBeNull();
-    fireEvent.click(screen.getByText('Advanced raw configuration'));
-    expect(
-      (screen.getByLabelText('Raw node configuration') as HTMLTextAreaElement)
-        .value,
-    ).toContain('"child_step_type": "llm_call"');
   });
 
   it('infers typed configuration fields for unknown node parameters and writes them through raw JSON', async () => {
