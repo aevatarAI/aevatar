@@ -1648,11 +1648,13 @@ function openSettings() {
   if (!dom.settingsDialog.open) dom.settingsDialog.showModal();
   if (state.auth.authenticated) void loadServices();
   closeMobilePanels();
+  setStudioTab("services");
   refreshIcons(dom.settingsDialog);
 }
 
 function closeSettings() {
   if (dom.settingsDialog.open) dom.settingsDialog.close();
+  setStudioTab("assistant");
 }
 
 function applyConfigToForm(config) {
@@ -2943,6 +2945,7 @@ function scheduleHistoryRefresh() {
 
 function focusCurrentConversation() {
   closeMobilePanels();
+  setStudioTab("assistant");
   dom.threadViewport.scrollTo({ top: dom.threadViewport.scrollHeight, behavior: "smooth" });
   dom.promptInput.focus();
 }
@@ -4378,12 +4381,27 @@ function openMobilePanel(panel) {
   dom.sidebar.classList.toggle("open", panel === "sidebar");
   dom.inspector.classList.toggle("open", panel === "inspector");
   dom.mobileBackdrop.classList.remove("hidden");
+  setStudioTab(panel === "inspector" ? "inspector" : "assistant");
 }
 
 function closeMobilePanels() {
   dom.sidebar.classList.remove("open");
   dom.inspector.classList.remove("open");
   dom.mobileBackdrop.classList.add("hidden");
+  setStudioTab("assistant");
+}
+
+function setStudioTab(tab) {
+  const tabs = [
+    [dom.assistantNavButton, "assistant"],
+    [dom.openSettingsNav, "services"],
+    [dom.mobileInspectorButton, "inspector"],
+  ];
+  for (const [button, value] of tabs) {
+    const selected = value === tab;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-selected", String(selected));
+  }
 }
 
 function iconNode(name) {

@@ -12,7 +12,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
 {
     [Theory]
     [InlineData("admin-observatory", "Workflow Run Observatory")]
-    [InlineData("studio", "Aevatar Studio Assistant")]
+    [InlineData("studio", "Aevatar Studio · 工作流实录")]
     public async Task WorkflowStaticShellEndpoints_ShouldRenderInjectedEmbeddedAssets(string endpoint, string marker)
     {
         var http = new DefaultHttpContext
@@ -62,8 +62,10 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             html.Should().Contain("/workflow/studio/assets/app.js");
             html.Should().Contain("globalThis.__AEVATAR_ASSISTANT_CONFIG__");
             html.Should().Contain("Aevatar Studio");
-            html.Should().Contain("<span>工作台</span>");
-            html.Should().Contain("<div class=\"group-label\">工作台</div>");
+            html.Should().Contain("class=\"site-header\"");
+            html.Should().Contain("id=\"studioTitle\"");
+            html.Should().Contain("class=\"studio-tabs\"");
+            html.Should().Contain("<div class=\"group-label\">当前实录</div>");
             html.Should().Contain("name=\"color-scheme\" content=\"only light\"");
             html.Should().NotContain("themeButton");
             html.Should().NotContain("workflow: \"studio\"");
@@ -200,14 +202,16 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         styles.Should().Contain(".actor-task.collapsed");
         styles.Should().Contain(".cc-progress");
         styles.Should().Contain(".activity-card.collapsed");
-        styles.Should().Contain("--assistant-card-max-width: 560px");
-        styles.Should().Contain("--assistant-card-inline-gutter: 24px");
+        styles.Should().Contain("--assistant-card-max-width: 728px");
+        styles.Should().Contain("--assistant-card-inline-gutter: 30px");
         styles.Should().Contain("width: min(448px, calc(100% - 48px))");
+        styles.Should().Contain("grid-template-columns: 236px minmax(0, 1fr)");
         app.Should().Contain("展开计划详情");
         app.Should().Contain("cc-progress-step");
+        app.Should().Contain("function setStudioTab(tab)");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("v=20260805-card-gutters");
+        html.Should().Contain("v=20260806-transcript");
         styles.Should().Contain("color-scheme: only light");
         styles.Should().NotContain("color-scheme: dark");
         styles.Should().NotContain("prefers-color-scheme");

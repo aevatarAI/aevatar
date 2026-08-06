@@ -1,56 +1,79 @@
 <!doctype html>
-<html lang="zh-CN" style="color-scheme: only light; background: #f4f5f7">
+<html lang="zh-CN" style="color-scheme: only light; background: #fafafa">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="only light" />
     <meta name="supported-color-schemes" content="light" />
-    <title>Aevatar Studio Assistant</title>
+    <title>Aevatar Studio · 工作流实录</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;family=Mona+Sans:wght@400;500;600;700&amp;display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260805-card-gutters" />
+    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260806-transcript" />
     <script defer src="https://unpkg.com/lucide@0.563.0/dist/umd/lucide.min.js"></script>
     <script defer src="https://unpkg.com/marked@15.0.12/marked.min.js"></script>
     <script defer src="https://unpkg.com/dompurify@3.2.6/dist/purify.min.js"></script>
     <script>globalThis.__AEVATAR_ASSISTANT_CONFIG__ = __BACKEND_CONSOLE_CONFIG__;</script>
-    <script type="module" src="/workflow/studio/assets/app.js?v=20260805-card-gutters"></script>
+    <script type="module" src="/workflow/studio/assets/app.js?v=20260806-transcript"></script>
   </head>
   <body>
     <div class="app-shell">
-      <header class="topbar">
-        <button class="icon-button mobile-only" id="mobileMenuButton" type="button" aria-label="打开导航" title="导航">
-          <i data-lucide="menu"></i>
-        </button>
-        <div class="brand-zone">
-          <div class="brand-mark" aria-hidden="true">A</div>
-          <span class="brand-name">Aevatar</span>
+      <header class="site-header">
+        <div class="topbar">
+          <button class="icon-button mobile-only" id="mobileMenuButton" type="button" aria-label="打开导航" title="导航">
+            <i data-lucide="menu"></i>
+          </button>
+          <div class="brand-zone">
+            <div class="brand-mark" aria-hidden="true"><span></span></div>
+            <span class="brand-name">Aevatar</span>
+          </div>
+          <div class="breadcrumbs" aria-label="当前位置">
+            <span>assistant</span>
+            <span>/</span>
+            <strong id="conversationTitle">新会话</strong>
+          </div>
+          <div class="topbar-actions">
+            <button class="toolbar-button" id="servicesButton" type="button" aria-label="管理 NyxID services">
+              <i data-lucide="boxes"></i>
+              <span>Services</span>
+              <strong id="servicesCount">0</strong>
+            </button>
+            <button class="connection-pill" id="connectionButton" type="button" aria-label="查看连接设置">
+              <span class="status-dot idle" id="connectionDot"></span>
+              <span id="connectionText">正在检查</span>
+            </button>
+            <button class="icon-button" id="settingsButton" type="button" aria-label="账户与 Services" title="账户与 Services">
+              <i data-lucide="user-round-cog"></i>
+            </button>
+          </div>
         </div>
-        <div class="breadcrumbs" aria-label="当前位置">
-          <span>工作台</span>
-          <i data-lucide="chevron-right"></i>
-          <strong id="conversationTitle">新会话</strong>
-        </div>
-        <div class="topbar-actions">
-          <button class="toolbar-button" id="servicesButton" type="button" aria-label="管理 NyxID services">
-            <i data-lucide="boxes"></i>
-            <span>Services</span>
-            <strong id="servicesCount">0</strong>
-          </button>
-          <button class="connection-pill" id="connectionButton" type="button" aria-label="查看连接设置">
-            <span class="status-dot idle" id="connectionDot"></span>
-            <span id="connectionText">正在检查</span>
-          </button>
-          <button class="icon-button mobile-only" id="mobileInspectorButton" type="button" aria-label="打开运行面板" title="运行面板">
-            <i data-lucide="panel-right"></i>
-          </button>
-          <button class="icon-button" id="settingsButton" type="button" aria-label="账户与 Services" title="账户与 Services">
-            <i data-lucide="user-round-cog"></i>
-          </button>
-        </div>
+
+        <section class="workflow-nav" aria-labelledby="studioTitle">
+          <div class="header-inner">
+            <div class="title-row">
+              <h1 id="studioTitle">Aevatar Studio · 工作流实录</h1>
+              <span class="target-badge">生产</span>
+            </div>
+            <p class="framing">从意图到交付的真实对话。计划、工具调用、人工决策与校验结果沿同一条 Actor 工作流呈现。</p>
+            <nav class="studio-tabs" aria-label="Studio 工作面" role="tablist">
+              <button class="studio-tab active" id="assistantNavButton" type="button" role="tab" aria-selected="true">
+                <i data-lucide="message-square"></i>
+                <span>Assistant</span>
+              </button>
+              <button class="studio-tab" id="openSettingsNav" type="button" role="tab" aria-selected="false">
+                <i data-lucide="boxes"></i>
+                <span>Services</span>
+              </button>
+              <button class="studio-tab" id="mobileInspectorButton" type="button" role="tab" aria-selected="false">
+                <i data-lucide="panel-right"></i>
+                <span>运行详情</span>
+              </button>
+            </nav>
+          </div>
+        </section>
       </header>
 
       <div class="workspace">
@@ -60,20 +83,8 @@
             <span>新会话</span>
           </button>
 
-          <div class="sidebar-group">
-            <div class="group-label">工作台</div>
-            <button class="nav-item active" id="assistantNavButton" type="button">
-              <i data-lucide="message-square"></i>
-              <span>Assistant</span>
-            </button>
-            <button class="nav-item" id="openSettingsNav" type="button">
-              <i data-lucide="boxes"></i>
-              <span>Services</span>
-            </button>
-          </div>
-
           <div class="sidebar-group session-group">
-            <div class="group-label">Current</div>
+            <div class="group-label">当前实录</div>
             <button class="session-item active" id="currentSessionButton" type="button">
               <span class="session-icon"><i data-lucide="message-circle"></i></span>
               <span class="session-copy">
@@ -85,7 +96,7 @@
 
           <div class="sidebar-group recent-group" id="recentGroup">
             <div class="group-label history-heading">
-              <span>Recent</span>
+              <span>最近实录</span>
               <button class="history-filter" id="needsYouFilterButton" type="button" aria-pressed="false">
                 <i data-lucide="circle-alert"></i>
                 <span>Needs you</span>
