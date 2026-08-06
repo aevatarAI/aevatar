@@ -296,9 +296,10 @@ const WorkflowEditorPage: React.FC<{
 
   const requestNodeSelect = React.useCallback(
     (nodeId: string) => {
+      if (nodeId === editor.selectedNodeId) return;
       requestInspectorDiscard(() => editor.selectNode(nodeId));
     },
-    [editor.selectNode, requestInspectorDiscard],
+    [editor.selectNode, editor.selectedNodeId, requestInspectorDiscard],
   );
 
   const requestEditorMode = React.useCallback(
@@ -338,10 +339,7 @@ const WorkflowEditorPage: React.FC<{
     toast.error(
       <Space size="small">
         <span>
-          {t(
-            'workflowActivityVNext.editor.addNodeFailed',
-            "Couldn't add node",
-          )}
+          {t('workflowActivityVNext.editor.addNodeFailed', "Couldn't add node")}
         </span>
         <Button
           onClick={() => void editor.retryNodeInsertion()}

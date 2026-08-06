@@ -27,6 +27,7 @@ import AevatarContentSkeleton from '@/shared/ui/AevatarContentSkeleton';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
+import { observeDraftMaterialization } from '../hooks/useDraftMaterialization';
 import {
   buildWorkflowActivityEditorHref,
   buildWorkflowActivityNewHref,
@@ -320,6 +321,15 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         renameTarget.workflowId,
         scopeId,
       );
+      const parsed = await studioApi.parseYaml({ yaml: draft.yaml });
+      if (!parsed.document)
+        throw new Error('Workflow YAML could not be parsed');
+      const serialized = await studioApi.serializeYaml({
+        document: {
+          ...parsed.document,
+          name: workflowName,
+        },
+      });
       await studioApi.updateWorkflowDraft({
         directoryId: draft.directoryId,
         fileName: draft.fileName,
@@ -327,8 +337,17 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         scopeId,
         workflowId: renameTarget.workflowId,
         workflowName,
-        yaml: draft.yaml,
+        yaml: serialized.yaml,
       });
+      const observation = await observeDraftMaterialization({
+        workflowId: renameTarget.workflowId,
+        read: (workflowId) => studioApi.getWorkflowDraft(workflowId, scopeId),
+        isNotFound: (candidate) => isStudioApiStatus(candidate, 404),
+        isObserved: (candidate) => candidate.name.trim() === workflowName,
+      });
+      if (observation.kind === 'delayed') {
+        throw new Error('Workflow rename was not observed');
+      }
       const refreshed = await drafts.refetch();
       if (refreshed.isError) throw refreshed.error;
       setRenameTarget(null);
