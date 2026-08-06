@@ -7,16 +7,16 @@ import {
   RocketOutlined,
   SaveOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Input, Modal, Segmented, Space } from 'antd';
+import { Alert, Button, Input, Modal, Popover, Segmented, Space } from 'antd';
 import React from 'react';
 import WorkflowStudioCanvasRegion from '@/pages/team-member-workflow-studio/components/WorkflowStudioCanvasRegion';
 import WorkflowStudioNodeLibrary from '@/pages/team-member-workflow-studio/components/WorkflowStudioNodeLibrary';
+import { formatUtcDateTime } from '@/shared/datetime/dateTime';
 import { t } from '@/shared/i18n/messages';
 import { getLocationSnapshot, history } from '@/shared/navigation/history';
 import { studioApi } from '@/shared/studio/api';
 import { createWorkflowRevisionIdentityCandidate } from '@/shared/studio/explicitRequestConfirmation';
 import type { StudioExplicitRequestPreview } from '@/shared/studio/models';
-import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import {
   getRunStatusPresentation,
   isRunStatusInProgress,
@@ -73,6 +73,12 @@ type PendingWorkflowPublication = {
   readonly workflowYaml: string;
 };
 
+type PublishReadinessIssue = {
+  readonly id: string;
+  readonly message: string;
+  readonly resolve: () => void;
+};
+
 function hasNonBlankIdentifier(value: unknown): value is string {
   return typeof value === 'string' && Boolean(value.trim());
 }
@@ -118,7 +124,6 @@ const WorkflowEditorPage: React.FC<{
   const activeScopeId = activeEditorRoute.scopeId;
   const activeWorkflowId = activeEditorRoute.workflowId;
   const editor = useWorkflowEditor(activeScopeId, activeWorkflowId);
-  const toast = useConsoleToast();
   const [mode, setMode] = React.useState<'canvas' | 'yaml'>('canvas');
   const [nodeLibraryOpen, setNodeLibraryOpen] = React.useState(false);
   const [publishDialogOpen, setPublishDialogOpen] = React.useState(false);
@@ -134,9 +139,10 @@ const WorkflowEditorPage: React.FC<{
     React.useState<PendingNavigation | null>(null);
   const [hasUnappliedNodeChanges, setHasUnappliedNodeChanges] =
     React.useState(false);
+  const workflowNameRef = React.useRef<React.ElementRef<typeof Input>>(null);
+  const saveStatusRef = React.useRef<HTMLSpanElement>(null);
   const inspectorRef = React.useRef<WorkflowNodeInspectorHandle>(null);
   const publicationReviewGenerationRef = React.useRef(0);
-  const publicationToastRef = React.useRef('');
   const runRequested = new URLSearchParams(location.search).get('run') === '1';
   const editorWriteLocked = editor.saving || editor.structuralMutationPending;
   const publication = useWorkflowPublication(publicationReceipt);
@@ -185,21 +191,6 @@ const WorkflowEditorPage: React.FC<{
     previousPublicationRouteRef.current = publicationRouteKey;
     clearPublication();
   }, [clearPublication, publicationRouteKey]);
-
-  React.useEffect(() => {
-    if (publication.phase !== 'observed' || !publicationReceipt) return;
-    const receiptKey = [
-      publicationReceipt.scopeId,
-      publicationReceipt.workflowId,
-      publicationReceipt.revisionId,
-      publicationReceipt.serviceId,
-    ].join('\u0000');
-    if (publicationToastRef.current === receiptKey) return;
-    publicationToastRef.current = receiptKey;
-    toast.success(
-      t('workflowActivityVNext.publish.observed', 'Workflow published'),
-    );
-  }, [publication.phase, publicationReceipt, toast]);
 
   React.useEffect(() => {
     const incomingRouteTarget =
@@ -305,22 +296,12 @@ const WorkflowEditorPage: React.FC<{
   }, [editorWriteLocked, hasUnappliedNodeChanges]);
 
   const saveWorkflow = React.useCallback(async () => {
-    const saved = await editor.save();
-    if (saved) {
-      toast.success(
-        t('workflowActivityVNext.editor.saveSuccess', 'Workflow saved'),
-      );
-    }
-    return saved;
-  }, [editor.save, toast]);
+    return editor.save();
+  }, [editor.save]);
 
   const retryMaterialization = React.useCallback(async () => {
-    if (await editor.retryMaterialization()) {
-      toast.success(
-        t('workflowActivityVNext.editor.saveSuccess', 'Workflow saved'),
-      );
-    }
-  }, [editor.retryMaterialization, toast]);
+    await editor.retryMaterialization();
+  }, [editor.retryMaterialization]);
 
   const reviewPublication = React.useCallback(
     async (
@@ -443,8 +424,8 @@ const WorkflowEditorPage: React.FC<{
         }
 
         setPublicationReceipt({
+          publishedServiceId: binding.serviceId,
           scopeId: result.scopeId,
-          serviceId: binding.serviceId,
           revisionId: result.revisionId,
           workflowId: result.workflowId,
         });
@@ -608,21 +589,175 @@ const WorkflowEditorPage: React.FC<{
   const publicationActionPending =
     publicationStage === 'reviewing' ||
     publicationStage === 'submitting' ||
-    publicationObservationPending;
+    publication.phase === 'observing';
   const canRetryPublicationObservation =
     publicationReceipt !== null &&
     (publication.phase === 'delayed' ||
       publication.phase === 'failed' ||
       publication.phase === 'unauthorized' ||
       publication.phase === 'forbidden');
+  const revealPublicationStatus = () => {
+    document
+      .getElementById('workflow-publication-status')
+      ?.scrollIntoView?.({ block: 'nearest' });
+  };
+  const blockingFindings = editor.findings.filter(
+    (finding) => String(finding.level).toLowerCase() === 'error',
+  );
+  const publishReadinessIssues: PublishReadinessIssue[] = [];
+  if (!editor.workflow.draftExists) {
+    publishReadinessIssues.push({
+      id: 'draft',
+      message: t(
+        'workflowActivityVNext.publish.saveBeforePublishing',
+        'Save this workflow before publishing.',
+      ),
+      resolve: () => void saveWorkflow(),
+    });
+  }
+  if (editor.dirty) {
+    publishReadinessIssues.push({
+      id: 'dirty',
+      message: t(
+        'workflowActivityVNext.publish.saveChangesBeforePublishing',
+        'Save your changes before publishing.',
+      ),
+      resolve: () => void saveWorkflow(),
+    });
+  }
+  if (hasUnappliedNodeChanges) {
+    publishReadinessIssues.push({
+      id: 'node-configuration',
+      message: t(
+        'workflowActivityVNext.publish.applyNodeChanges',
+        'Apply or discard node configuration before publishing.',
+      ),
+      resolve: () => setMode('canvas'),
+    });
+  }
+  for (const [findingIndex, finding] of blockingFindings.entries()) {
+    const stepMatch = finding.path?.match(/^\/steps\/(\d+)(?:\/|$)/);
+    const stepId = stepMatch
+      ? editor.document?.steps?.[Number(stepMatch[1])]?.id
+      : undefined;
+    publishReadinessIssues.push({
+      id: `finding-${finding.code}-${finding.path ?? findingIndex}`,
+      message: finding.message,
+      resolve: () => {
+        if (finding.path === '/name') {
+          workflowNameRef.current?.focus();
+          return;
+        }
+        if (stepId) {
+          setMode('canvas');
+          editor.selectNode(`step:${stepId}`);
+          return;
+        }
+        setMode('yaml');
+      },
+    });
+  }
+  if (!editor.document?.steps?.length && blockingFindings.length === 0) {
+    publishReadinessIssues.push({
+      id: 'steps',
+      message: t(
+        'workflowActivityVNext.publish.addExecutableStep',
+        'Add at least one executable step before publishing.',
+      ),
+      resolve: () => {
+        setMode('canvas');
+        setNodeLibraryOpen(true);
+      },
+    });
+  }
+  if (editor.validating || editor.saving) {
+    publishReadinessIssues.push({
+      id: 'save-in-progress',
+      message: t(
+        'workflowActivityVNext.publish.waitForSave',
+        'Wait for workflow validation and saving to finish.',
+      ),
+      resolve: () => saveStatusRef.current?.focus(),
+    });
+  } else if (editor.structuralMutationPending) {
+    publishReadinessIssues.push({
+      id: 'editor-update-in-progress',
+      message: t(
+        'workflowActivityVNext.publish.waitForEditorUpdate',
+        'Wait for the workflow step update to finish.',
+      ),
+      resolve: () => setMode('canvas'),
+    });
+  } else if (editor.receiptPending) {
+    publishReadinessIssues.push({
+      id: 'save-observation',
+      message: t(
+        'workflowActivityVNext.publish.waitForSavedDraft',
+        'Wait for the saved draft to become readable.',
+      ),
+      resolve: () => saveStatusRef.current?.focus(),
+    });
+  }
+  if (publicationActionPending) {
+    publishReadinessIssues.push({
+      id: 'publication-in-progress',
+      message: t(
+        'workflowActivityVNext.publish.waitForPublication',
+        'Wait for the current publication to finish.',
+      ),
+      resolve: revealPublicationStatus,
+    });
+  } else if (publicationObservationPending) {
+    publishReadinessIssues.push({
+      id: 'publication-unresolved',
+      message: t(
+        'workflowActivityVNext.publish.resolvePublication',
+        'Resolve the current publication status before publishing again.',
+      ),
+      resolve: revealPublicationStatus,
+    });
+  }
+  const publicationObserved = publication.phase === 'observed';
   const canPublish =
-    Boolean(editor.workflow.draftExists) &&
-    editor.canRun &&
-    !editor.dirty &&
-    !editorWriteLocked &&
-    !editor.receiptPending &&
-    !hasUnappliedNodeChanges &&
-    !publicationActionPending;
+    publishReadinessIssues.length === 0 && !publicationObserved;
+  const publishLabel = publicationObserved
+    ? t('workflowActivityVNext.publish.published', 'Published')
+    : publicationActionPending
+      ? t('workflowActivityVNext.publish.publishing', 'Publishing')
+      : publishReadinessIssues.length > 0
+        ? publishReadinessIssues.length === 1
+          ? t(
+              'workflowActivityVNext.publish.blockedOne',
+              'Publish blocked · 1 issue',
+            )
+          : t(
+              'workflowActivityVNext.publish.blocked',
+              'Publish blocked · {count} issues',
+              { count: publishReadinessIssues.length },
+            )
+        : t('workflowActivityVNext.editor.publish', 'Publish');
+  const saveStatus = editor.validating
+    ? t('workflowActivityVNext.editor.validating', 'Validating workflow…')
+    : editor.saving || editor.receiptPending
+      ? t('workflowActivityVNext.editor.savingProgress', 'Saving workflow…')
+      : editor.saveError
+        ? t('workflowActivityVNext.editor.saveStatusFailed', 'Save failed')
+        : editor.dirty
+          ? t('workflowActivityVNext.editor.unsavedChanges', 'Unsaved changes')
+          : t('workflowActivityVNext.editor.savedAt', 'Saved at {updatedAt}', {
+              updatedAt: formatUtcDateTime(editor.workflow.updatedAtUtc),
+            });
+  const publishButton = (
+    <Button
+      aria-disabled={!canPublish}
+      icon={<RocketOutlined />}
+      onClick={() => {
+        if (canPublish) setPublishDialogOpen(true);
+      }}
+    >
+      {publishLabel}
+    </Button>
+  );
   return (
     <WorkflowActivityVNextShell
       activeSection="workflows"
@@ -691,31 +826,34 @@ const WorkflowEditorPage: React.FC<{
           >
             {t('workflowActivityVNext.common.run', 'Run')}
           </Button>
-          <Button
-            disabled={!canPublish}
-            icon={<RocketOutlined />}
-            onClick={() => setPublishDialogOpen(true)}
-            title={
-              !editor.workflow.draftExists
-                ? t(
-                    'workflowActivityVNext.publish.saveBeforePublishing',
-                    'Save this workflow before publishing.',
-                  )
-                : editor.dirty
-                  ? t(
-                      'workflowActivityVNext.publish.saveChangesBeforePublishing',
-                      'Save your changes before publishing.',
-                    )
-                  : !editor.canRun
-                    ? t(
-                        'workflowActivityVNext.editor.runUnavailable',
-                        'Add at least one valid step before running.',
-                      )
-                    : undefined
-            }
-          >
-            {t('workflowActivityVNext.editor.publish', 'Publish')}
-          </Button>
+          {publishReadinessIssues.length > 0 ? (
+            <Popover
+              content={
+                <section
+                  aria-label={t(
+                    'workflowActivityVNext.publish.readinessIssues',
+                    'Publish readiness issues',
+                  )}
+                  className="wa-vnext__publish-readiness"
+                >
+                  <ul>
+                    {publishReadinessIssues.map((issue) => (
+                      <li key={issue.id}>
+                        <Button onClick={issue.resolve} type="link">
+                          {issue.message}
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              }
+              trigger={['hover', 'focus', 'click']}
+            >
+              {publishButton}
+            </Popover>
+          ) : (
+            publishButton
+          )}
         </>
       }
       onNavigate={requestNavigation}
@@ -731,17 +869,23 @@ const WorkflowEditorPage: React.FC<{
           className="wa-vnext__editor-name"
           disabled={editorWriteLocked}
           onChange={(event) => editor.updateTitle(event.target.value)}
+          ref={workflowNameRef}
           value={editor.workflowTitle}
         />
         <div className="wa-vnext__editor-toolbar-meta">
           <span
-            className={`wa-vnext__status wa-vnext__status--${editor.dirty ? 'pending' : 'succeeded'}`}
+            aria-atomic="true"
+            aria-label={t(
+              'workflowActivityVNext.editor.saveStatusAria',
+              'Workflow save status',
+            )}
+            aria-live="polite"
+            className={`wa-vnext__status wa-vnext__status--${editor.saveError ? 'failed' : editor.dirty || editor.validating || editor.saving || editor.receiptPending ? 'pending' : 'succeeded'}`}
+            ref={saveStatusRef}
+            role="status"
+            tabIndex={-1}
           >
-            {editor.structuralMutationPending
-              ? t('workflowActivityVNext.editor.updatingNode', 'Updating node…')
-              : editor.dirty
-                ? t('workflowActivityVNext.editor.unsaved', 'Unsaved')
-                : t('workflowActivityVNext.editor.saved', 'Saved')}
+            {saveStatus}
           </span>
           <Segmented
             aria-label={`${t('workflowActivityVNext.editor.canvas', 'Canvas')} / ${t(
@@ -909,6 +1053,28 @@ const WorkflowEditorPage: React.FC<{
                                 'workflowActivityVNext.publish.failedDescription',
                                 'Review the workflow or try publishing again.',
                               )}
+              {publicationPhase === 'observed' && publicationReceipt ? (
+                <dl className="wa-vnext__publication-identities">
+                  <div>
+                    <dt>
+                      {t(
+                        'workflowActivityVNext.publish.workflowId',
+                        'Workflow ID',
+                      )}
+                    </dt>
+                    <dd>{publicationReceipt.workflowId}</dd>
+                  </div>
+                  <div>
+                    <dt>
+                      {t(
+                        'workflowActivityVNext.publish.publishedServiceId',
+                        'Published service ID',
+                      )}
+                    </dt>
+                    <dd>{publicationReceipt.publishedServiceId}</dd>
+                  </div>
+                </dl>
+              ) : null}
               {publicationError || publication.error ? (
                 <TechnicalDetails>
                   {errorMessage(publicationError ?? publication.error)}
@@ -958,6 +1124,7 @@ const WorkflowEditorPage: React.FC<{
                               "Publication couldn't be confirmed",
                             )
           }
+          id="workflow-publication-status"
           showIcon
           type={
             publicationPhase === 'observed'

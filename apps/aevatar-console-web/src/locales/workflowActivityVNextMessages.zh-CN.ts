@@ -87,7 +87,13 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.publish.accepted': '发布请求已接受',
     'workflowActivityVNext.publish.approvalNotRequired': '此请求无需额外审批。',
     'workflowActivityVNext.publish.approvalRequired': '此请求运行前需要审批。',
+    'workflowActivityVNext.publish.addExecutableStep':
+      '发布前请至少添加一个可执行步骤。',
+    'workflowActivityVNext.publish.applyNodeChanges':
+      '发布前请应用或放弃节点配置更改。',
     'workflowActivityVNext.publish.backToService': '返回',
+    'workflowActivityVNext.publish.blocked': '发布受阻 · {count} 个问题',
+    'workflowActivityVNext.publish.blockedOne': '发布受阻 · 1 个问题',
     'workflowActivityVNext.publish.checkAgain': '再次检查',
     'workflowActivityVNext.publish.delayed': '发布状态显示所需时间较长',
     'workflowActivityVNext.publish.delayedDescription':
@@ -108,6 +114,9 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '所选服务现在正在使用此工作流。',
     'workflowActivityVNext.publish.observingDescription':
       '正在检查所选服务是否已准备就绪。',
+    'workflowActivityVNext.publish.published': '已发布',
+    'workflowActivityVNext.publish.publishedServiceId': '已发布服务 ID',
+    'workflowActivityVNext.publish.publishing': '正在发布',
     'workflowActivityVNext.publish.publishingTo': '正在发布到 {service}',
     'workflowActivityVNext.publish.reviewAgain': '再次审核',
     'workflowActivityVNext.publish.reviewAndPublish': '审核并发布',
@@ -118,6 +127,9 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '正在准备此工作流以供审核。',
     'workflowActivityVNext.publish.reviewUnavailable':
       '暂时无法准备此工作流以供发布。',
+    'workflowActivityVNext.publish.readinessIssues': '发布就绪问题',
+    'workflowActivityVNext.publish.resolvePublication':
+      '再次发布前请先处理当前发布状态。',
     'workflowActivityVNext.publish.risk': '影响',
     'workflowActivityVNext.publish.risk.destructive':
       '可能删除数据或造成永久性更改',
@@ -134,6 +146,14 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.publish.submittingDescription':
       '正在将此工作流发送到所选服务。',
     'workflowActivityVNext.publish.title': '发布工作流',
+    'workflowActivityVNext.publish.waitForPublication':
+      '请等待当前发布流程完成。',
+    'workflowActivityVNext.publish.waitForEditorUpdate':
+      '请等待工作流步骤更新完成。',
+    'workflowActivityVNext.publish.waitForSave': '请等待工作流验证和保存完成。',
+    'workflowActivityVNext.publish.waitForSavedDraft':
+      '请等待已保存草稿变为可读取状态。',
+    'workflowActivityVNext.publish.workflowId': '工作流 ID',
     'workflowActivityVNext.publish.unauthorizedDescription':
       '请重新登录后检查此发布状态。',
     'workflowActivityVNext.editor.checkLatestStatus': '检查最新状态',
@@ -159,6 +179,8 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.editor.retryActivityObservation': '再次检查',
     'workflowActivityVNext.editor.saveDelayed': '保存时间比预期更长',
     'workflowActivityVNext.editor.saveFailed': '无法保存工作流',
+    'workflowActivityVNext.editor.saveStatusAria': '工作流保存状态',
+    'workflowActivityVNext.editor.saveStatusFailed': '保存失败',
     'workflowActivityVNext.editor.saveOpenFailed':
       '工作流已保存，但暂时无法重新打开',
     'workflowActivityVNext.editor.savingProgress': '正在保存工作流…',
@@ -166,6 +188,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.editor.saveLeave': '保存并离开',
     'workflowActivityVNext.editor.saveSuccess': '工作流已保存',
     'workflowActivityVNext.editor.saved': '已保存',
+    'workflowActivityVNext.editor.savedAt': '已保存于 {updatedAt}',
     'workflowActivityVNext.editor.stay': '留在此处',
     'workflowActivityVNext.editor.streamEnded':
       '实时更新已结束，请打开活动记录查看最新状态。',
@@ -177,7 +200,9 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.editor.unavailableDescription': '无法加载此工作流。',
     'workflowActivityVNext.editor.unavailableGuidance': '请重试打开此工作流。',
     'workflowActivityVNext.editor.unsaved': '未保存',
+    'workflowActivityVNext.editor.unsavedChanges': '有未保存的更改',
     'workflowActivityVNext.editor.updatingNode': '正在更新节点…',
+    'workflowActivityVNext.editor.validating': '正在验证工作流…',
     'workflowActivityVNext.editor.unsavedDescription':
       '保存更改、放弃更改，或留在编辑器。',
     'workflowActivityVNext.editor.unsavedTitle': '工作流有未保存更改',

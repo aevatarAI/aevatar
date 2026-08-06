@@ -87,7 +87,13 @@ const workflowActivityVNextMessages = {
     'No additional approval is required.',
   'workflowActivityVNext.publish.approvalRequired':
     'Approval is required before this request can run.',
+  'workflowActivityVNext.publish.addExecutableStep':
+    'Add at least one executable step before publishing.',
+  'workflowActivityVNext.publish.applyNodeChanges':
+    'Apply or discard node configuration before publishing.',
   'workflowActivityVNext.publish.backToService': 'Back',
+  'workflowActivityVNext.publish.blocked': 'Publish blocked · {count} issues',
+  'workflowActivityVNext.publish.blockedOne': 'Publish blocked · 1 issue',
   'workflowActivityVNext.publish.checkAgain': 'Check again',
   'workflowActivityVNext.publish.delayed':
     'Publication is taking longer to appear',
@@ -110,6 +116,9 @@ const workflowActivityVNextMessages = {
     'The selected service is now using this workflow.',
   'workflowActivityVNext.publish.observingDescription':
     'Checking whether the selected service is ready.',
+  'workflowActivityVNext.publish.published': 'Published',
+  'workflowActivityVNext.publish.publishedServiceId': 'Published service ID',
+  'workflowActivityVNext.publish.publishing': 'Publishing',
   'workflowActivityVNext.publish.publishingTo': 'Publishing to {service}',
   'workflowActivityVNext.publish.reviewAgain': 'Review again',
   'workflowActivityVNext.publish.reviewAndPublish': 'Review and publish',
@@ -120,6 +129,9 @@ const workflowActivityVNextMessages = {
     'Preparing this workflow for review.',
   'workflowActivityVNext.publish.reviewUnavailable':
     "We couldn't prepare this workflow for publishing.",
+  'workflowActivityVNext.publish.readinessIssues': 'Publish readiness issues',
+  'workflowActivityVNext.publish.resolvePublication':
+    'Resolve the current publication status before publishing again.',
   'workflowActivityVNext.publish.risk': 'Impact',
   'workflowActivityVNext.publish.risk.destructive':
     'May delete or permanently change data',
@@ -137,6 +149,15 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.publish.submittingDescription':
     'Sending this workflow to the selected service.',
   'workflowActivityVNext.publish.title': 'Publish workflow',
+  'workflowActivityVNext.publish.waitForPublication':
+    'Wait for the current publication to finish.',
+  'workflowActivityVNext.publish.waitForEditorUpdate':
+    'Wait for the workflow step update to finish.',
+  'workflowActivityVNext.publish.waitForSave':
+    'Wait for workflow validation and saving to finish.',
+  'workflowActivityVNext.publish.waitForSavedDraft':
+    'Wait for the saved draft to become readable.',
+  'workflowActivityVNext.publish.workflowId': 'Workflow ID',
   'workflowActivityVNext.publish.unauthorizedDescription':
     'Sign in again to check this publication.',
   'workflowActivityVNext.editor.checkLatestStatus': 'Check latest status',
@@ -165,6 +186,8 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.saveDelayed':
     'Save is taking longer than expected',
   'workflowActivityVNext.editor.saveFailed': "Workflow couldn't be saved",
+  'workflowActivityVNext.editor.saveStatusAria': 'Workflow save status',
+  'workflowActivityVNext.editor.saveStatusFailed': 'Save failed',
   'workflowActivityVNext.editor.saveOpenFailed':
     "Workflow was saved but couldn't be reopened",
   'workflowActivityVNext.editor.savingProgress': 'Saving workflow…',
@@ -172,6 +195,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.saveLeave': 'Save and leave',
   'workflowActivityVNext.editor.saveSuccess': 'Workflow saved',
   'workflowActivityVNext.editor.saved': 'Saved',
+  'workflowActivityVNext.editor.savedAt': 'Saved at {updatedAt}',
   'workflowActivityVNext.editor.stay': 'Stay',
   'workflowActivityVNext.editor.streamEnded':
     'Live updates ended. Open Activity to check the latest status.',
@@ -185,7 +209,9 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.unavailableGuidance':
     'Try again to reopen the workflow.',
   'workflowActivityVNext.editor.unsaved': 'Unsaved',
+  'workflowActivityVNext.editor.unsavedChanges': 'Unsaved changes',
   'workflowActivityVNext.editor.updatingNode': 'Updating node…',
+  'workflowActivityVNext.editor.validating': 'Validating workflow…',
   'workflowActivityVNext.editor.unsavedDescription':
     'Save your changes, discard them, or stay in the editor.',
   'workflowActivityVNext.editor.unsavedTitle': 'Unsaved workflow changes',

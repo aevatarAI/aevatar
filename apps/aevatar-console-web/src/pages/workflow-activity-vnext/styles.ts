@@ -185,6 +185,13 @@ export const workflowActivityVNextCss = `
 .wa-vnext__editor-toolbar > * { flex: 0 1 auto; min-width: 0; }
 .wa-vnext__editor-name { flex: 1 1 220px !important; max-width: 420px; min-width: 0; }
 .wa-vnext__editor-toolbar-meta { align-items: center; display: flex; flex: 0 1 auto; gap: 8px; min-width: 0; }
+.wa-vnext__publish-readiness { max-width: min(360px, calc(100vw - 32px)); }
+.wa-vnext__publish-readiness ul { display: grid; gap: 4px; list-style: none; margin: 0; padding: 0; }
+.wa-vnext__publish-readiness .ant-btn { height: auto; line-height: 1.35; padding: 4px 0; text-align: left; white-space: normal; }
+.wa-vnext__publication-identities { display: grid; gap: 6px; margin: 12px 0 0; }
+.wa-vnext__publication-identities > div { display: grid; gap: 2px; grid-template-columns: minmax(116px, max-content) minmax(0, 1fr); }
+.wa-vnext__publication-identities dt { color: var(--wa-muted); font-size: 11px; font-weight: 700; }
+.wa-vnext__publication-identities dd { font-family: var(--wa-font-mono); margin: 0; overflow-wrap: anywhere; }
 .wa-vnext__editor-mode-control { flex: 0 1 auto; min-width: 0; }
 .wa-vnext__editor-alerts { display: grid; gap: 6px; margin-bottom: 12px; }
 .wa-vnext__publish-review-item {
