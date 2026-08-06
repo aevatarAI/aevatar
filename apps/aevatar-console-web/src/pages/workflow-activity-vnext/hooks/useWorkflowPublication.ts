@@ -16,10 +16,10 @@ const DELAYED_WORKFLOW_CONFLICT_CODES = new Set([
 ]);
 
 export type WorkflowPublicationReceipt = {
+  readonly publishedServiceId: string;
   readonly scopeId: string;
   readonly workflowId: string;
   readonly revisionId: string;
-  readonly serviceId: string;
 };
 
 export type WorkflowPublicationObservationInput = {
@@ -126,7 +126,7 @@ function assertAcceptedCatalogIdentity(
 ): void {
   if (
     catalog.scopeId !== receipt.scopeId ||
-    catalog.serviceId !== receipt.serviceId
+    catalog.serviceId !== receipt.publishedServiceId
   ) {
     throw new Error(
       'The observed service catalog does not match the accepted service.',
@@ -160,7 +160,7 @@ function matchesAcceptedPublication(
     workflow.workflow?.scopeId === receipt.scopeId &&
     workflow.workflow?.workflowId === receipt.workflowId &&
     catalog.scopeId === receipt.scopeId &&
-    catalog.serviceId === receipt.serviceId &&
+    catalog.serviceId === receipt.publishedServiceId &&
     catalog.activeServingRevisionId === receipt.revisionId &&
     revision.revisionId === receipt.revisionId &&
     revision.implementationKind === 'workflow' &&
@@ -235,7 +235,10 @@ export async function observeWorkflowPublication(
 
     const [workflowResult, catalogResult] = await Promise.allSettled([
       input.readWorkflow(input.receipt.scopeId, input.receipt.workflowId),
-      input.readRevisions(input.receipt.scopeId, input.receipt.serviceId),
+      input.readRevisions(
+        input.receipt.scopeId,
+        input.receipt.publishedServiceId,
+      ),
     ]);
     const error = observationError(workflowResult, catalogResult);
     if (error) throw error;
@@ -319,7 +322,7 @@ export function useWorkflowPublication(
       receipt?.scopeId ?? '',
       receipt?.workflowId ?? '',
       receipt?.revisionId ?? '',
-      receipt?.serviceId ?? '',
+      receipt?.publishedServiceId ?? '',
     ],
     queryFn: () => {
       if (!receipt) {

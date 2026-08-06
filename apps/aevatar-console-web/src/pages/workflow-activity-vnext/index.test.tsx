@@ -1930,6 +1930,17 @@ describe('Workflow Activity vNext editor', () => {
       ),
     );
     expect(await screen.findByText('Workflow published')).toBeInTheDocument();
+    expect(screen.getByText('Workflow ID')).toBeInTheDocument();
+    expect(screen.getByText('wf-draft-alpha')).toBeInTheDocument();
+    expect(screen.getByText('Published service ID')).toBeInTheDocument();
+    expect(screen.getByText('svc-alpha')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Published' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    expect(mockConsoleToast.success).not.toHaveBeenCalledWith(
+      'Workflow published',
+    );
   });
 
   it.each([
@@ -2141,6 +2152,77 @@ describe('Workflow Activity vNext editor', () => {
     });
   }
 
+  it('keeps every publish blocker focusable and links validation issues to their fields and steps', async () => {
+    mockStudioApi.getWorkflow.mockResolvedValue({
+      workflowId: 'wf-committed-source',
+      name: 'Committed source',
+      fileName: 'committed-source.yaml',
+      filePath: '',
+      directoryId: '',
+      directoryLabel: '',
+      yaml: 'name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n',
+      updatedAtUtc: '2026-08-04T10:00:00Z',
+      document: {
+        name: 'committed_source',
+        roles: [],
+        steps: [{ id: 'step-root', type: 'llm_call' }],
+      },
+      draftExists: false,
+      findings: [
+        {
+          code: 'WORKFLOW_NAME_REQUIRED',
+          level: 'error',
+          message: 'Workflow name is required.',
+          path: '/name',
+        },
+        {
+          code: 'STEP_INSTRUCTION_REQUIRED',
+          level: 'error',
+          message: 'Step instruction is required.',
+          path: '/steps/0/parameters/prompt_prefix',
+        },
+      ],
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const publish = await screen.findByRole('button', {
+      name: 'Publish blocked · 3 issues',
+    });
+    expect(publish).toHaveAttribute('aria-disabled', 'true');
+    expect(publish).toBeEnabled();
+
+    fireEvent.click(publish);
+    expect(
+      screen.queryByRole('dialog', { name: 'Publish workflow' }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.focus(publish);
+    const checklist = await screen.findByRole('region', {
+      name: 'Publish readiness issues',
+    });
+    expect(within(checklist).getAllByRole('listitem')).toHaveLength(3);
+
+    fireEvent.click(
+      within(checklist).getByRole('button', {
+        name: 'Workflow name is required.',
+      }),
+    );
+    expect(
+      screen.getByRole('textbox', { name: 'Workflow name' }),
+    ).toHaveFocus();
+
+    fireEvent.click(
+      within(checklist).getByRole('button', {
+        name: 'Step instruction is required.',
+      }),
+    );
+    expect(
+      await screen.findByRole('complementary', { name: 'Configure step-root' }),
+    ).toBeVisible();
+    expect(mockStudioApi.previewExplicitRequests).not.toHaveBeenCalled();
+  });
+
   it('retries a failed publication observation without sending a second POST', async () => {
     arrangeSavedDraftPublication();
     mockScopesApi.getWorkflowDetail
@@ -2228,7 +2310,9 @@ describe('Workflow Activity vNext editor', () => {
     expect(
       await screen.findByText("Publication couldn't be confirmed"),
     ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Publish blocked · 1 issue' }),
+    ).toHaveAttribute('aria-disabled', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
 
     await waitFor(() =>
@@ -2275,7 +2359,9 @@ describe('Workflow Activity vNext editor', () => {
     );
 
     expect(await screen.findByText(message)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Publish blocked · 1 issue' }),
+    ).toHaveAttribute('aria-disabled', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
 
     await waitFor(() =>
@@ -2835,10 +2921,88 @@ describe('Workflow Activity vNext editor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
 
     await waitFor(() =>
-      expect(mockConsoleToast.success).toHaveBeenCalledWith('Workflow saved'),
+      expect(
+        screen.getByRole('status', { name: 'Workflow save status' }),
+      ).toHaveTextContent(/^Saved at /),
     );
-    expect(screen.queryByText('Workflow saved')).not.toBeInTheDocument();
+    expect(mockConsoleToast.success).not.toHaveBeenCalledWith('Workflow saved');
     expect(mockStudioApi.saveWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it('announces one persistent save lifecycle without implying publication', async () => {
+    const parsedDocument = {
+      name: 'committed_source',
+      roles: [],
+      steps: [{ id: 'step-root', type: 'llm_call' }],
+    };
+    let resolveParse: (() => void) | undefined;
+    let resolveSave: (() => void) | undefined;
+    mockStudioApi.parseYaml.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveParse = () =>
+            resolve({ document: parsedDocument, findings: [] });
+        }),
+    );
+    mockStudioApi.serializeYaml.mockResolvedValue({
+      yaml: 'name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n',
+      document: parsedDocument,
+      findings: [],
+    });
+    mockStudioApi.saveWorkflow.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = () =>
+            resolve({
+              kind: 'materialized',
+              workflow: {
+                workflowId: 'wf-draft-saved',
+                name: 'Updated source',
+                fileName: 'committed-source.yaml',
+                filePath: '/workflows/committed-source.yaml',
+                directoryId: 'directory-alpha',
+                directoryLabel: 'Workflows',
+                yaml: 'name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n',
+                updatedAtUtc: '2026-08-04T10:05:00Z',
+                document: parsedDocument,
+                draftExists: true,
+                findings: [],
+              },
+            });
+        }),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const saveStatus = await screen.findByRole('status', {
+      name: 'Workflow save status',
+    });
+    expect(saveStatus).toHaveTextContent('Saved at 2026-08-04 10:00:00 UTC');
+    expect(saveStatus).not.toHaveTextContent('Published');
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Workflow name' }), {
+      target: { value: 'Updated source' },
+    });
+    expect(saveStatus).toHaveTextContent('Unsaved changes');
+    fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
+    expect(saveStatus).toHaveTextContent('Validating workflow…');
+
+    await act(async () => {
+      resolveParse?.();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(mockStudioApi.saveWorkflow).toHaveBeenCalled());
+    expect(saveStatus).toHaveTextContent('Saving workflow…');
+
+    await act(async () => {
+      resolveSave?.();
+      await Promise.resolve();
+    });
+    expect(
+      await screen.findByText('Saved at 2026-08-04 10:05:00 UTC'),
+    ).toBeInTheDocument();
+    expect(mockConsoleToast.success).not.toHaveBeenCalledWith('Workflow saved');
+    expect(screen.queryByText('Published')).not.toBeInTheDocument();
   });
 
   it('keeps later edits while retrying a failed create receipt', async () => {
@@ -3118,6 +3282,9 @@ describe('Workflow Activity vNext editor', () => {
         'PUT /api/studio/workflows/wf-committed-source returned 500',
       ),
     ).not.toBeVisible();
+    expect(
+      screen.getByRole('status', { name: 'Workflow save status' }),
+    ).toHaveTextContent('Save failed');
   });
 
   it('puts editable node configuration first and keeps raw JSON advanced', async () => {

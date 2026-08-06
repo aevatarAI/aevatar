@@ -137,6 +137,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
   >([]);
   const [dirty, setDirty] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  const [validating, setValidating] = React.useState(false);
   const [structuralMutationPending, setStructuralMutationPending] =
     React.useState(false);
   const [structuralMutationError, setStructuralMutationError] =
@@ -360,6 +361,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       setFindings([]);
       setDirty(false);
       setSaving(false);
+      setValidating(false);
       setStructuralMutationPending(false);
       setStructuralMutationError('');
       setFailedNodeType(null);
@@ -405,6 +407,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       return false;
     savingRef.current = true;
     setSaving(true);
+    setValidating(true);
     setSaveError('');
     try {
       const parsedDocument = await parseCurrentYaml();
@@ -415,6 +418,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       setFindings(serialized.findings);
       if (hasBlockingFindings(serialized.document, serialized.findings))
         return false;
+      setValidating(false);
       const directoryId =
         workflow.directoryId ||
         workspace.data?.directories[0]?.directoryId ||
@@ -464,6 +468,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     } finally {
       savingRef.current = false;
       setSaving(false);
+      setValidating(false);
     }
   }, [
     adoptReadableWorkflow,
@@ -782,6 +787,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     save,
     saveError,
     saving,
+    validating,
     structuralMutationPending,
     sseRunId,
     selectedNodeId,
