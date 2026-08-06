@@ -138,13 +138,15 @@ export const workflowActivityVNextCss = `
 }
 .wa-vnext__table th:first-child { border-top-left-radius: 7px; }
 .wa-vnext__table th:last-child { border-top-right-radius: 7px; }
-.wa-vnext__table td { border-bottom: 1px solid var(--wa-line); height: 56px; overflow-wrap: anywhere; padding: 10px 12px; vertical-align: middle; }
+.wa-vnext__table td { border-bottom: 1px solid var(--wa-line); height: 76px; overflow-wrap: anywhere; padding: 10px 12px; vertical-align: middle; }
 .wa-vnext__table tr:last-child td { border-bottom: 0; }
 .wa-vnext__table tbody tr:hover { background: #f9fafb; }
 .wa-vnext__table pre { margin: 0; max-width: 100%; white-space: pre-wrap; word-break: break-word; }
 .wa-vnext__run-link { max-width: 100%; min-width: 0; overflow: hidden; }
 .wa-vnext__title { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wa-vnext__sub { color: var(--wa-muted); display: block; font-size: 12px; line-height: 17px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wa-vnext__workflow-context { align-items: center; color: var(--wa-muted); display: flex; flex-wrap: wrap; font-size: 11px; gap: 4px 7px; line-height: 16px; margin-top: 7px; }
+.wa-vnext__workflow-context .wa-vnext__status { min-height: 20px; }
 .wa-vnext__status { align-items: center; border: 1px solid currentColor; border-radius: 5px; display: inline-flex; font-size: 11px; font-weight: 600; gap: 6px; min-height: 24px; padding: 0 8px; white-space: nowrap; }
 .wa-vnext__status::before { background: currentColor; border-radius: 50%; content: ""; height: 6px; width: 6px; }
 .wa-vnext__status--draft { background: #f4f3ff; color: #6941c6; }
@@ -165,6 +167,8 @@ export const workflowActivityVNextCss = `
 .wa-vnext__form > div > span:first-child { font-size: 12px; font-weight: 600; }
 .wa-vnext__form-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .wa-vnext__field-control { display: block; margin-top: 6px; width: 100%; }
+.wa-vnext__duplicate-warning { color: var(--wa-amber); font-size: 12px; line-height: 17px; margin: 6px 0 0; }
+.wa-vnext__modal-field { display: grid; font-size: 12px; font-weight: 600; gap: 6px; }
 .wa-vnext__mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
 .wa-vnext__split { display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr) minmax(280px, 34%); }
 .wa-vnext__creation-options { border: 0; display: grid; gap: 12px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; min-width: 0; padding: 0; }

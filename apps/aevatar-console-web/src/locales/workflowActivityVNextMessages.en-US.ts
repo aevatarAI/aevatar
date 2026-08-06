@@ -402,8 +402,8 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.workflows.allView': 'All workflows',
   'workflowActivityVNext.workflows.clearFilters': 'Clear filters',
   'workflowActivityVNext.workflows.columnActions': 'Actions',
-  'workflowActivityVNext.workflows.columnUpdated': 'Updated',
   'workflowActivityVNext.workflows.columnWorkflow': 'Workflow',
+  'workflowActivityVNext.workflows.copyReference': 'Copy workflow reference',
   'workflowActivityVNext.workflows.description':
     'Create, edit, and run your workflows.',
   'workflowActivityVNext.workflows.draftsUnavailable':
@@ -411,6 +411,9 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.workflows.draftsUnavailableDescription':
     'Try again to load draft workflows.',
   'workflowActivityVNext.workflows.draftsView': 'Drafts',
+  'workflowActivityVNext.workflows.draftStatus': 'Draft',
+  'workflowActivityVNext.workflows.duplicateNameWarning':
+    'Another workflow already uses this name. Duplicate names are allowed.',
   'workflowActivityVNext.workflows.deleteDescription':
     'This deletes only the editable draft. Published versions and run history remain available.',
   'workflowActivityVNext.workflows.deleteAria': 'Delete {name}',
@@ -448,7 +451,20 @@ const workflowActivityVNextMessages = {
     "Activity couldn't be opened for this workflow",
   'workflowActivityVNext.workflows.partialUnavailable':
     "Some workflows couldn't be loaded",
+  'workflowActivityVNext.workflows.publishedRevision': 'Published {revision}',
+  'workflowActivityVNext.workflows.referenceCopied':
+    'Workflow reference copied',
+  'workflowActivityVNext.workflows.referenceCopyFailed':
+    "Workflow reference couldn't be copied",
+  'workflowActivityVNext.workflows.rename': 'Rename',
+  'workflowActivityVNext.workflows.renameFailed':
+    "Workflow couldn't be renamed",
+  'workflowActivityVNext.workflows.renameSave': 'Save name',
+  'workflowActivityVNext.workflows.renameSuccess': 'Workflow renamed',
+  'workflowActivityVNext.workflows.renameTitle': 'Rename workflow',
+  'workflowActivityVNext.workflows.updatedContext': 'Updated {updatedAt}',
   'workflowActivityVNext.workflows.viewActivity': 'Activity',
+  'workflowActivityVNext.workflows.workspaceOwner': 'Workspace',
 } as const;
 
 export default workflowActivityVNextMessages;

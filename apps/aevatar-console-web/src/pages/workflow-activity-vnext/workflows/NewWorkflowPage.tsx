@@ -8,6 +8,7 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Input, Select, Space, Typography } from 'antd';
 import React from 'react';
+import { scopesApi } from '@/shared/api/scopesApi';
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
 import { studioApi } from '@/shared/studio/api';
@@ -99,6 +100,16 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
   const workspace = useQuery({
     queryKey: ['workflow-activity-vnext', 'workspace', scopeId],
     queryFn: () => studioApi.getWorkspaceSettings(scopeId),
+    retry: false,
+  });
+  const existingWorkflows = useQuery({
+    queryKey: ['workflow-activity-vnext', 'drafts', scopeId],
+    queryFn: () => studioApi.listWorkflowDrafts(scopeId),
+    retry: false,
+  });
+  const existingCommittedWorkflows = useQuery({
+    queryKey: ['workflow-activity-vnext', 'committed', scopeId],
+    queryFn: () => scopesApi.listWorkflows(scopeId),
     retry: false,
   });
 
@@ -199,6 +210,20 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
 
   const selectedTemplate = BUNDLED_WORKFLOW_TEMPLATES.find(
     (item) => item.id === templateId,
+  );
+  const normalizedName = name.trim().toLocaleLowerCase();
+  const duplicateName = Boolean(
+    normalizedName &&
+      (existingWorkflows.data?.some(
+        (workflow) =>
+          workflow.name.trim().toLocaleLowerCase() === normalizedName,
+      ) ||
+        existingCommittedWorkflows.data?.some(
+          (workflow) =>
+            (workflow.displayName || workflow.workflowName)
+              .trim()
+              .toLocaleLowerCase() === normalizedName,
+        )),
   );
   const templateName = t(
     'workflowActivityVNext.new.templateName.incidentTriage',
@@ -355,6 +380,14 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                 className="wa-vnext__field-control"
                 value={name}
               />
+              {duplicateName ? (
+                <p className="wa-vnext__duplicate-warning" role="status">
+                  {t(
+                    'workflowActivityVNext.workflows.duplicateNameWarning',
+                    'Another workflow already uses this name. Duplicate names are allowed.',
+                  )}
+                </p>
+              ) : null}
             </div>
 
             {mode === 'describe' ? (

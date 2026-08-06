@@ -375,14 +375,17 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.workflows.allView': '全部工作流',
     'workflowActivityVNext.workflows.clearFilters': '清除筛选',
     'workflowActivityVNext.workflows.columnActions': '操作',
-    'workflowActivityVNext.workflows.columnUpdated': '更新时间',
     'workflowActivityVNext.workflows.columnWorkflow': '工作流',
+    'workflowActivityVNext.workflows.copyReference': '复制工作流引用',
     'workflowActivityVNext.workflows.description':
       '创建、编辑并运行你的工作流。',
     'workflowActivityVNext.workflows.draftsUnavailable': '草稿工作流不可用',
     'workflowActivityVNext.workflows.draftsUnavailableDescription':
       '请重试加载草稿工作流。',
     'workflowActivityVNext.workflows.draftsView': '草稿',
+    'workflowActivityVNext.workflows.draftStatus': '草稿',
+    'workflowActivityVNext.workflows.duplicateNameWarning':
+      '另一个工作流已使用此名称。允许使用重复名称。',
     'workflowActivityVNext.workflows.deleteDescription':
       '此操作只删除可编辑草稿，已发布版本和运行历史会继续保留。',
     'workflowActivityVNext.workflows.deleteAria': '删除 {name}',
@@ -419,7 +422,17 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.workflows.activityResolutionFailed':
       '无法打开此工作流的活动记录',
     'workflowActivityVNext.workflows.partialUnavailable': '部分工作流无法加载',
+    'workflowActivityVNext.workflows.publishedRevision': '已发布 {revision}',
+    'workflowActivityVNext.workflows.referenceCopied': '已复制工作流引用',
+    'workflowActivityVNext.workflows.referenceCopyFailed': '无法复制工作流引用',
+    'workflowActivityVNext.workflows.rename': '重命名',
+    'workflowActivityVNext.workflows.renameFailed': '无法重命名工作流',
+    'workflowActivityVNext.workflows.renameSave': '保存名称',
+    'workflowActivityVNext.workflows.renameSuccess': '工作流已重命名',
+    'workflowActivityVNext.workflows.renameTitle': '重命名工作流',
+    'workflowActivityVNext.workflows.updatedContext': '更新于 {updatedAt}',
     'workflowActivityVNext.workflows.viewActivity': '活动',
+    'workflowActivityVNext.workflows.workspaceOwner': '工作区',
   };
 
 export default workflowActivityVNextMessages;

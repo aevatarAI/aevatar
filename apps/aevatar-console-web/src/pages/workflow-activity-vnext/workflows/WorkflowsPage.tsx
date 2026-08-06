@@ -1,11 +1,14 @@
 import {
+  CopyOutlined,
   DeleteOutlined,
+  EditOutlined,
+  MoreOutlined,
   PlusOutlined,
   ReloadOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Input, Modal, Select, Space, Tooltip } from 'antd';
+import { Button, Dropdown, Input, Modal, Select, Space, Tooltip } from 'antd';
 import React from 'react';
 import { scopesApi } from '@/shared/api/scopesApi';
 import { t } from '@/shared/i18n/messages';
@@ -24,10 +27,12 @@ import TableScrollRegion from '../TableScrollRegion';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 
 type WorkflowRow = {
+  readonly activeRevisionId: string;
   readonly description: string;
   readonly hasCommittedSource: boolean;
   readonly hasDraftSource: boolean;
   readonly name: string;
+  readonly ownershipLabel: string;
   readonly stepCount?: number;
   readonly updatedAtUtc: string | null;
   readonly workflowId: string;
@@ -38,10 +43,15 @@ function toDraftRow(
   committed?: WorkflowRow,
 ): WorkflowRow {
   return {
+    activeRevisionId:
+      item.activeRevisionId?.trim() || committed?.activeRevisionId || '',
     description: item.description,
     hasCommittedSource: Boolean(committed),
     hasDraftSource: true,
     name: item.name,
+    ownershipLabel:
+      item.directoryLabel.trim() ||
+      t('workflowActivityVNext.workflows.workspaceOwner', 'Workspace'),
     stepCount: item.stepCount,
     updatedAtUtc: item.updatedAtUtc,
     workflowId: item.workflowId,
@@ -50,10 +60,15 @@ function toDraftRow(
 
 function toCommittedRow(item: ScopeWorkflowSummary): WorkflowRow {
   return {
+    activeRevisionId: item.activeRevisionId.trim(),
     description: '',
     hasCommittedSource: true,
     hasDraftSource: false,
     name: item.displayName || item.workflowName,
+    ownershipLabel: t(
+      'workflowActivityVNext.workflows.workspaceOwner',
+      'Workspace',
+    ),
     updatedAtUtc: item.updatedAt,
     workflowId: item.workflowId,
   };
@@ -77,6 +92,10 @@ function formatDate(value: string | null): string {
       }).format(date);
 }
 
+function normalizeWorkflowName(value: string): string {
+  return value.trim().toLocaleLowerCase();
+}
+
 const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const location = useConsoleLocation();
   const toast = useConsoleToast();
@@ -91,6 +110,11 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     readWorkflowView(initialParams),
   );
   const [activityWorkflowId, setActivityWorkflowId] = React.useState('');
+  const [renameTarget, setRenameTarget] = React.useState<WorkflowRow | null>(
+    null,
+  );
+  const [renameName, setRenameName] = React.useState('');
+  const [renaming, setRenaming] = React.useState(false);
   const [deleteTarget, setDeleteTarget] = React.useState<WorkflowRow | null>(
     null,
   );
@@ -156,6 +180,18 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   }, [committed.data, draftWorkflowIds, drafts.data, query, view]);
   const totalFailure = drafts.isError && committed.isError;
   const filtersActive = Boolean(query.trim()) || view === 'drafts';
+  const renameDuplicates = React.useMemo(() => {
+    if (!renameTarget) return false;
+    const normalizedName = normalizeWorkflowName(renameName);
+    return Boolean(
+      normalizedName &&
+        rows.some(
+          (row) =>
+            row.workflowId !== renameTarget.workflowId &&
+            normalizeWorkflowName(row.name) === normalizedName,
+        ),
+    );
+  }, [renameName, renameTarget, rows]);
 
   React.useEffect(() => {
     if (loading || (!drafts.isError && !committed.isError)) return;
@@ -219,6 +255,75 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       );
     } finally {
       setActivityWorkflowId('');
+    }
+  };
+
+  const copyWorkflowReference = async (row: WorkflowRow) => {
+    try {
+      if (!navigator.clipboard?.writeText)
+        throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(row.workflowId);
+      toast.success(
+        t(
+          'workflowActivityVNext.workflows.referenceCopied',
+          'Workflow reference copied',
+        ),
+      );
+    } catch {
+      toast.error(
+        t(
+          'workflowActivityVNext.workflows.referenceCopyFailed',
+          "Workflow reference couldn't be copied",
+        ),
+      );
+    }
+  };
+
+  const openRename = (row: WorkflowRow) => {
+    setRenameTarget(row);
+    setRenameName(row.name);
+  };
+
+  const closeRename = () => {
+    if (renaming) return;
+    setRenameTarget(null);
+    setRenameName('');
+  };
+
+  const confirmRename = async () => {
+    const workflowName = renameName.trim();
+    if (!renameTarget || !workflowName || renaming) return;
+    setRenaming(true);
+    try {
+      const draft = await studioApi.getWorkflowDraft(
+        renameTarget.workflowId,
+        scopeId,
+      );
+      await studioApi.updateWorkflowDraft({
+        directoryId: draft.directoryId,
+        fileName: draft.fileName,
+        layout: draft.layout,
+        scopeId,
+        workflowId: renameTarget.workflowId,
+        workflowName,
+        yaml: draft.yaml,
+      });
+      const refreshed = await drafts.refetch();
+      if (refreshed.isError) throw refreshed.error;
+      setRenameTarget(null);
+      setRenameName('');
+      toast.success(
+        t('workflowActivityVNext.workflows.renameSuccess', 'Workflow renamed'),
+      );
+    } catch {
+      toast.error(
+        t(
+          'workflowActivityVNext.workflows.renameFailed',
+          "Workflow couldn't be renamed",
+        ),
+      );
+    } finally {
+      setRenaming(false);
     }
   };
 
@@ -474,12 +579,6 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                 </th>
                 <th>
                   {t(
-                    'workflowActivityVNext.workflows.columnUpdated',
-                    'Updated',
-                  )}
-                </th>
-                <th>
-                  {t(
                     'workflowActivityVNext.workflows.columnActions',
                     'Actions',
                   )}
@@ -499,14 +598,36 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                     {row.description ? (
                       <span className="wa-vnext__sub">{row.description}</span>
                     ) : null}
-                  </td>
-                  <td
-                    data-label={t(
-                      'workflowActivityVNext.workflows.columnUpdated',
-                      'Updated',
-                    )}
-                  >
-                    {formatDate(row.updatedAtUtc)}
+                    <span className="wa-vnext__workflow-context">
+                      <span
+                        className={`wa-vnext__status ${
+                          row.activeRevisionId
+                            ? 'wa-vnext__status--committed'
+                            : 'wa-vnext__status--draft'
+                        }`}
+                      >
+                        {row.activeRevisionId
+                          ? t(
+                              'workflowActivityVNext.workflows.publishedRevision',
+                              'Published {revision}',
+                              { revision: row.activeRevisionId },
+                            )
+                          : t(
+                              'workflowActivityVNext.workflows.draftStatus',
+                              'Draft',
+                            )}
+                      </span>
+                      <span aria-hidden="true">·</span>
+                      <span>{row.ownershipLabel}</span>
+                      <span aria-hidden="true">·</span>
+                      <span>
+                        {t(
+                          'workflowActivityVNext.workflows.updatedContext',
+                          'Updated {updatedAt}',
+                          { updatedAt: formatDate(row.updatedAtUtc) },
+                        )}
+                      </span>
+                    </span>
                   </td>
                   <td
                     data-label={t(
@@ -573,6 +694,49 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                           />
                         </Tooltip>
                       ) : null}
+                      <Dropdown
+                        menu={{
+                          items: [
+                            ...(row.hasDraftSource
+                              ? [
+                                  {
+                                    icon: <EditOutlined />,
+                                    key: 'rename',
+                                    label: t(
+                                      'workflowActivityVNext.workflows.rename',
+                                      'Rename',
+                                    ),
+                                  },
+                                ]
+                              : []),
+                            {
+                              icon: <CopyOutlined />,
+                              key: 'copy-reference',
+                              label: t(
+                                'workflowActivityVNext.workflows.copyReference',
+                                'Copy workflow reference',
+                              ),
+                            },
+                          ],
+                          onClick: ({ key }) => {
+                            if (key === 'rename') openRename(row);
+                            if (key === 'copy-reference')
+                              void copyWorkflowReference(row);
+                          },
+                        }}
+                        placement="bottomRight"
+                        trigger={['click']}
+                      >
+                        <Button
+                          aria-label={t(
+                            'workflowActivityVNext.workflows.moreActionsAria',
+                            'More actions for {name}',
+                            { name: row.name },
+                          )}
+                          icon={<MoreOutlined />}
+                          type="text"
+                        />
+                      </Dropdown>
                     </Space>
                   </td>
                 </tr>
@@ -581,6 +745,42 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           </table>
         </TableScrollRegion>
       )}
+      <Modal
+        cancelText={t('workflowActivityVNext.common.cancel', 'Cancel')}
+        closable={!renaming}
+        confirmLoading={renaming}
+        mask={{ closable: false }}
+        okButtonProps={{ disabled: !renameName.trim() }}
+        okText={t('workflowActivityVNext.workflows.renameSave', 'Save name')}
+        onCancel={closeRename}
+        onOk={() => void confirmRename()}
+        open={Boolean(renameTarget)}
+        title={t(
+          'workflowActivityVNext.workflows.renameTitle',
+          'Rename workflow',
+        )}
+      >
+        <div className="wa-vnext__modal-field">
+          <label htmlFor="wa-vnext-rename-name">
+            {t('workflowActivityVNext.new.name', 'Workflow name')}
+          </label>
+          <Input
+            aria-label={t('workflowActivityVNext.new.name', 'Workflow name')}
+            autoFocus
+            id="wa-vnext-rename-name"
+            onChange={(event) => setRenameName(event.target.value)}
+            value={renameName}
+          />
+        </div>
+        {renameDuplicates ? (
+          <p className="wa-vnext__duplicate-warning" role="status">
+            {t(
+              'workflowActivityVNext.workflows.duplicateNameWarning',
+              'Another workflow already uses this name. Duplicate names are allowed.',
+            )}
+          </p>
+        ) : null}
+      </Modal>
       <Modal
         cancelText={t('workflowActivityVNext.common.cancel', 'Cancel')}
         closable={!deleting}
