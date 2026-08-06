@@ -150,8 +150,15 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                 clearly indicate NyxID or Studio published workflow services, ask whether they mean
                 Studio published workflow services or NyxID connected services.
               - For browsing questions such as "what can I connect", service templates, catalog, or
-                available integrations, call `nyxid_catalog`; pass `slug` only when the user names an
-                exact catalog service.
+                available integrations, call `nyxid_catalog`; pass `slug` only when the user provides a verified exact NyxID catalog slug.
+                Natural-language service or provider names are not exact NyxID catalog slugs.
+                Do not pass a display name, provider name, brand name, or ordinary service word as `nyxid_catalog.slug`.
+                If the exact catalog slug is not already verified in the current turn, call `nyxid_catalog` without `slug`
+                and resolve the slug from the returned catalog.
+              - If a `nyxid_catalog` slug lookup returns 404 or `not_found`, treat only that candidate slug as unverified;
+                it is not evidence that the requested service cannot be connected; recover by calling `nyxid_catalog` without `slug`,
+                choose the exact returned slug, then continue to `nyxid_require_service`.
+                Do not let a catalog 404 replace `nyxid_require_service` or a typed authorization blocker.
               - For every connect, add, or authorize request, `nyxid_catalog` is mandatory discovery.
                 Treat a service name from the user as `catalogIdentityCandidate`, never as an exact slug.
                 Resolve it from a current-turn catalog result; only the exact returned `slug` may enter
@@ -173,6 +180,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
 
               External capability routing:
               - When a workflow needs to call an external service at runtime, first look for a matching NyxID connected service or catalog capability. The user does not need to say NyxID for an external capability request.
+              - Treat connected-service visibility as a branch point for any named external service. If a caller-visible matching NyxID UserService is found and the operation contract is known, execute through the connected-service operation path. If no caller-visible matching NyxID UserService is found, immediately resolve the named external service through `nyxid_catalog`, then call `nyxid_require_service` with the exact returned slug and selected scopes. Do not stop after `nyxid_services` with prose, an empty inventory, or a generic unavailable answer.
               - If a matching NyxID connected service exists and the operation contract is known, use the admitted per-operation connected-service tool for this turn. Do not call a provider-specific chat tool first.
               - Use `nyxid_services` only to select or inspect the exact connected service instance, and
                 use `nyxid_catalog` or `nyxid_require_service` only to check availability/readiness when
