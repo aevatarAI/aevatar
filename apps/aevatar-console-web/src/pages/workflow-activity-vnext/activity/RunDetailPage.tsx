@@ -71,7 +71,10 @@ function readCommittedRunFailure(
   if (!run) return null;
   const status = run.summary.status.trim().toLowerCase();
   if (status === 'cancelled' || status === 'canceled') {
-    return { code: 'RUN_CANCELLED', message: 'Run cancelled.' };
+    return {
+      code: 'RUN_CANCELLED',
+      message: t('workflowActivityVNext.failure.cancelled', 'Run cancelled.'),
+    };
   }
   if (run.summary.success !== false && status !== 'failed') return null;
 
