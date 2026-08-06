@@ -232,6 +232,8 @@ PY
 import json
 import os
 import socket
+import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -245,42 +247,61 @@ payload = json.dumps(
         "workflow": workflow_name,
     }
 ).encode("utf-8")
-request = urllib.request.Request(
-    f"http://127.0.0.1:{port}/api/chat",
-    data=payload,
-    headers={
-        "Authorization": f"Bearer {bearer_token}",
-        "Content-Type": "application/json",
-    },
-    method="POST",
-)
-
 def write_log(content: str) -> None:
     with open(probe_log_file, "w", encoding="utf-8") as handle:
         handle.write(content)
 
-try:
-    with urllib.request.urlopen(request, timeout=40) as response:
-        with open(probe_log_file, "w", encoding="utf-8") as handle:
-            while True:
-                line = response.readline()
-                if not line:
-                    break
+max_attempts = 5
+retryable_status_codes = {502, 503, 504}
+for attempt in range(1, max_attempts + 1):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/chat",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {bearer_token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
 
-                text = line.decode("utf-8", errors="replace")
-                handle.write(text)
-                handle.flush()
+    try:
+        with urllib.request.urlopen(request, timeout=40) as response:
+            with open(probe_log_file, "w", encoding="utf-8") as handle:
+                while True:
+                    line = response.readline()
+                    if not line:
+                        break
 
-                if text.startswith("data:"):
-                    break
+                    text = line.decode("utf-8", errors="replace")
+                    handle.write(text)
+                    handle.flush()
 
-        print(response.status)
-except urllib.error.HTTPError as error:
-    write_log(error.read().decode("utf-8", errors="replace"))
-    print(error.code)
-except (urllib.error.URLError, TimeoutError, socket.timeout):
-    write_log("")
-    print("000")
+                    if text.startswith("data:"):
+                        break
+
+            print(response.status)
+            break
+    except urllib.error.HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        if error.code not in retryable_status_codes or attempt == max_attempts:
+            write_log(body)
+            print(error.code)
+            break
+        print(
+            f"Event-path probe attempt {attempt}/{max_attempts} returned HTTP {error.code}; retrying.",
+            file=sys.stderr,
+        )
+    except (ConnectionError, urllib.error.URLError, TimeoutError, socket.timeout) as error:
+        if attempt == max_attempts:
+            write_log("")
+            print("000")
+            break
+        print(
+            f"Event-path probe attempt {attempt}/{max_attempts} failed with {type(error).__name__}; retrying.",
+            file=sys.stderr,
+        )
+
+    time.sleep(attempt)
 PY
   )"
 

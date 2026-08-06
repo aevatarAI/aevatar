@@ -250,6 +250,26 @@ public class CiTestAuthorityContractTests
         Assert.Contains("ChannelIdentity__OAuthClient__Bootstrap__Enabled=false", script, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void DistributedMixedVersionSmoke_ShouldRetryOnlyTransientEventProbeFailures()
+    {
+        var scriptPath = Path.Combine(
+            TemporaryCiRepo.FindRepositoryRoot(),
+            "tools",
+            "ci",
+            "distributed_mixed_version_smoke.sh");
+        var script = File.ReadAllText(scriptPath);
+
+        Assert.Contains("max_attempts = 5", script, StringComparison.Ordinal);
+        Assert.Contains("retryable_status_codes = {502, 503, 504}", script, StringComparison.Ordinal);
+        Assert.Contains(
+            "except (ConnectionError, urllib.error.URLError, TimeoutError, socket.timeout)",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains("error.code not in retryable_status_codes", script, StringComparison.Ordinal);
+        Assert.Contains("file=sys.stderr", script, StringComparison.Ordinal);
+    }
+
     private static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
 
     private sealed class TemporaryCiRepo : IDisposable
