@@ -213,6 +213,7 @@ public sealed class StudioMemberWorkflowDurableAdmissionPort :
             {
                 WorkflowId = resolved.WorkflowId,
                 RevisionId = targetRevisionId,
+                InlineWorkflowYamls = workflowPlan.InlineWorkflowYamls,
                 CapabilityAdmission = bindingContext,
             },
             ct);

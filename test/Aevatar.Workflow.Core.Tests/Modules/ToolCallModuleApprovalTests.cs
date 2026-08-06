@@ -288,9 +288,12 @@ public sealed class ToolCallModuleApprovalTests
             CancellationToken.None);
 
         tool.Requests.Should().ContainSingle();
-        ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallCompletedEvent>().Single().Success.Should().BeFalse();
+        var toolCompleted = ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallCompletedEvent>().Single();
+        toolCompleted.Success.Should().BeFalse();
+        toolCompleted.Error.Should().Contain("approval_denied");
         var completed = ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Single();
         completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("approval_denied");
         completed.Error.Should().Contain("approval rejected");
         completed.Error.Should().Contain("blocked");
         ctx.LoadState<ToolCallModuleState>("tool_call").PendingApprovals.Should().BeEmpty();

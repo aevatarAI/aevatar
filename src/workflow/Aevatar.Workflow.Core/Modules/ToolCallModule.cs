@@ -257,8 +257,12 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             await SaveStateAsync(state, ctx, ct);
             await PublishToolFailureAsync(
                 ctx,
-                pending,
+                ToStepRequest(pending),
+                pending.ToolName,
                 BuildRejectedApprovalError(resumed),
+                "approval_denied",
+                string.Empty,
+                pending.ToolCallId,
                 ct);
             return;
         }

@@ -631,7 +631,8 @@ steps:
 ### `parallel`（别名：`parallel_fanout`、`fan_out`）
 
 - 作用：并行扇出到多个 worker，收敛合并，可选接投票步骤。
-- 常用参数：`workers`、`parallel_count`、`vote_step_type`、`vote_param_{key}`、`min_concurrent_workers`、`max_concurrent_workers`。
+- 常用参数：`workers`、`parallel_count`、`sub_step_type`、`sub_target_role`、`sub_param_{key}`、`vote_step_type`、`vote_param_{key}`、`min_concurrent_workers`、`max_concurrent_workers`。
+- `sub_step_type` 默认是 `llm_call`；确定性探针可改用 `assign`、`transform` 等原语。`sub_param_{key}` 支持 `${input}`、`${index}` 和 `${worker}`，扇入结果始终按 dispatch index 合并，不受完成先后影响。
 - `vote_step_type=vote` 时，`vote_param_{key}` 会在扇入时解析为 typed agreement rule；worker 完成态会作为 `VoteAgreementCandidateSet` 传给 vote step，不再把拼接文本当作权威候选结构。
 - 并发口径：`max_concurrent_workers` 默认安全值为 `20`，显式参数可提升到 `200`；若设置 `min_concurrent_workers`，运行时会保留队列并持续补位到该 floor，适合长尾 worker 任务。
 
@@ -640,7 +641,9 @@ steps:
   - id: fanout_analyze
     type: parallel
     parameters:
-      workers: "agent_a,agent_b,agent_c"
+      parallel_count: "3"
+      sub_step_type: "assign"
+      sub_param_value: "worker-${index}"
       min_concurrent_workers: "2"
       max_concurrent_workers: "8"
       vote_step_type: "vote"
@@ -652,15 +655,17 @@ steps:
 ### `race`（别名：`select`）
 
 - 作用：并行发送到多个 worker，返回最先完成的结果。
-- 常用参数：`workers`、`count`。
+- 常用参数：`workers`、`count`、`sub_step_type`、`sub_target_role`、`sub_param_{key}`。
+- `sub_step_type` 默认是 `llm_call`；确定性原语不要求 worker role。`sub_param_{key}` 支持 `${input}`、`${index}` 和 `${worker}`，父步骤只采用首个成功结果，后续完成仅用于清理 race 状态。
 
 ```yaml
 steps:
   - id: first_answer_wins
     type: race
     parameters:
-      workers: "fast_model,cheap_model"
       count: "2"
+      sub_step_type: "assign"
+      sub_param_value: "candidate-${index}"
 ```
 
 ### `map_reduce`（别名：`mapreduce`、`map_reduce_llm`）

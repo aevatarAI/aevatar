@@ -37,6 +37,7 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
         ArgumentNullException.ThrowIfNull(request);
 
         var workflowId = ResolveWorkflowId(request);
+        var inlineWorkflowYamls = request.InlineWorkflowYamls ?? new Dictionary<string, string>();
         var revisionId = NormalizeOptional(request.RevisionId);
         var suppliedAdmission = request.CapabilityAdmission;
         var callerId = suppliedAdmission?.CallerId ?? string.Empty;
@@ -51,7 +52,7 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
                 new PersistedWorkflowCapabilityAdmissionRequest(
                     existingPlan,
                     request.WorkflowYaml,
-                    new Dictionary<string, string>(),
+                    inlineWorkflowYamls,
                     "studio_member_workflow_binding",
                     executionMode,
                     workflowId,
@@ -65,7 +66,7 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
                     callerCredential,
                     organizationBearerToken),
                 request.WorkflowYaml,
-                new Dictionary<string, string>(),
+                inlineWorkflowYamls,
                 "studio_member_workflow_binding",
                 executionMode,
                 explicitRequestConfirmations,
@@ -104,7 +105,9 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
                 RevisionId: NormalizeOptional(request.RevisionId),
                 Workflow: new StudioMemberWorkflowBindingSpec(
                     workflowId,
-                    [request.WorkflowYaml])
+                    [request.WorkflowYaml, .. (request.InlineWorkflowYamls ?? new Dictionary<string, string>())
+                        .OrderBy(static item => item.Key, StringComparer.Ordinal)
+                        .Select(static item => item.Value)])
                 {
                     CapabilityAdmissionPlan = capabilityAdmissionPlan,
                 })
@@ -152,7 +155,7 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
                 request.WorkflowYaml,
                 WorkflowName: null,
                 DisplayName: member.Summary.DisplayName,
-                InlineWorkflowYamls: null,
+                InlineWorkflowYamls: request.InlineWorkflowYamls,
                 AppId: StudioMemberPublishedServiceIdentity.AppId,
                 ServiceId: publishedServiceId,
                 ExposureDesired: true,

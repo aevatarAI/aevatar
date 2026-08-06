@@ -1523,6 +1523,43 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_ChangedInlineWorkflowSpec_KeepsWorkflowIdentityAndAdvancesRevision()
+    {
+        var originalMember = NewMemberService();
+        var changedMember = NewMemberService();
+        const string rootYaml = "name: root\nsteps: []";
+
+        await NewService(originalMember, new RecordingScheduleService()).ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", rootYaml, RunImmediately: false)
+            {
+                TeamId = TeamId,
+                InlineWorkflowYamls = new Dictionary<string, string>
+                {
+                    ["child"] = "name: child\nsteps: []",
+                },
+            });
+        await NewService(changedMember, new RecordingScheduleService()).ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", rootYaml, RunImmediately: false)
+            {
+                TeamId = TeamId,
+                InlineWorkflowYamls = new Dictionary<string, string>
+                {
+                    ["child"] = "name: child\nsteps:\n  - id: changed\n    type: assign",
+                },
+            });
+
+        originalMember.BindRequest!.Workflow!.WorkflowId.Should().Be(
+            changedMember.BindRequest!.Workflow!.WorkflowId);
+        originalMember.BindRequest.RevisionId.Should().NotBe(changedMember.BindRequest.RevisionId);
+        originalMember.BindRequest.Workflow.WorkflowYamls.Should().HaveCount(2);
+        changedMember.BindRequest.Workflow.WorkflowYamls.Should().HaveCount(2);
+    }
+
+    [Fact]
     public async Task ProvisionAsync_ChangedExecutionMode_AdvancesRevision()
     {
         var scheduledMember = NewMemberService();
@@ -2046,7 +2083,9 @@ public sealed class StudioWorkflowProvisioningServiceTests
                     RevisionId: request.RevisionId,
                     Workflow: new StudioMemberWorkflowBindingSpec(
                         request.WorkflowId ?? "workflow-test",
-                        [request.WorkflowYaml])
+                        [request.WorkflowYaml, .. (request.InlineWorkflowYamls ?? new Dictionary<string, string>())
+                            .OrderBy(static item => item.Key, StringComparer.Ordinal)
+                            .Select(static item => item.Value)])
                     {
                         CapabilityAdmissionPlan = request.CapabilityAdmission?.ExistingPlan,
                     })

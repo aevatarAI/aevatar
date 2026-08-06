@@ -79,6 +79,12 @@ public sealed record ProvisionWorkflowRequest(
     string? Timezone = null,
     ProvisionWorkflowCallerCredential? Caller = null)
 {
+    /// <summary>
+    /// Additional named workflow definitions referenced by the entry workflow.
+    /// Each dictionary key is the stable definition name used by workflow_call.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? InlineWorkflowYamls { get; init; }
+
     public IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations { get; init; }
 
     [JsonIgnore]

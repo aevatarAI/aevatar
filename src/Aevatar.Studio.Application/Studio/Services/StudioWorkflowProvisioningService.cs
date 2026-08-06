@@ -112,6 +112,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         var teamId = NormalizeRequired(request.TeamId, "teamId");
         var displayName = NormalizeRequired(request.DisplayName, nameof(request.DisplayName));
         var workflowYaml = NormalizeRequired(request.WorkflowYaml, nameof(request.WorkflowYaml));
+        var inlineWorkflowYamls = SnapshotInlineWorkflowYamls(request.InlineWorkflowYamls);
         var provisionKey = BuildProvisionKey(normalizedScopeId, teamId, displayName);
         var workflowId = $"workflow-{provisionKey}";
         var executionMode = ShouldSchedule(request)
@@ -129,6 +130,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             provisionKey,
             workflowId,
             workflowYaml,
+            inlineWorkflowYamls,
             executionMode,
             callerId,
             nyxIdCallerCredentialSelection,
@@ -168,6 +170,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             {
                 WorkflowId = workflowId,
                 RevisionId = revisionId,
+                InlineWorkflowYamls = inlineWorkflowYamls,
                 CapabilityAdmission = trustedAdmission,
             },
             ct);
@@ -246,6 +249,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         string provisionKey,
         string workflowId,
         string workflowYaml,
+        IReadOnlyDictionary<string, string> inlineWorkflowYamls,
         ExternalCapabilityExecutionMode executionMode,
         string callerId,
         NyxIdCallerCredentialSelection? nyxIdCallerCredentialSelection,
@@ -259,7 +263,8 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             provisionKey,
             workflowId,
             workflowYaml,
-            executionMode);
+            executionMode,
+            inlineWorkflowYamls: inlineWorkflowYamls);
         var mayBindResolvedRevision = existingPlan is null &&
                                       CanBindProvisionedConfirmationIdentity(suppliedConfirmations);
 
@@ -274,7 +279,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 nyxIdCallerCredentialSelection,
                 organizationBearerToken),
             workflowYaml,
-            new Dictionary<string, string>(),
+            inlineWorkflowYamls,
             "studio_workflow_provisioning",
             executionMode,
             explicitRequestConfirmations,
@@ -290,7 +295,8 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             workflowId,
             workflowYaml,
             executionMode,
-            capabilityAdmissionPlan);
+            capabilityAdmissionPlan,
+            inlineWorkflowYamls);
 
         if (string.Equals(resolvedRevisionId, revisionId, StringComparison.Ordinal) ||
             !WorkflowCapabilityAdmissionPlanIntegrity.RequiresExplicitRequestBindingIdentity(
@@ -309,6 +315,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         var reboundPlan = BindProvisionedAdmissionPlanRevision(
             capabilityAdmissionPlan,
             workflowYaml,
+            inlineWorkflowYamls,
             workflowId,
             resolvedRevisionId);
         var reboundRevisionId = BuildProvisionRevisionId(
@@ -316,7 +323,8 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             workflowId,
             workflowYaml,
             executionMode,
-            reboundPlan);
+            reboundPlan,
+            inlineWorkflowYamls);
         if (!string.Equals(reboundRevisionId, resolvedRevisionId, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
@@ -351,6 +359,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     private static WorkflowCapabilityAdmissionPlan BindProvisionedAdmissionPlanRevision(
         WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan,
         string workflowYaml,
+        IReadOnlyDictionary<string, string> inlineWorkflowYamls,
         string workflowId,
         string revisionId)
     {
@@ -375,7 +384,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
 
         rebound.DefinitionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeDefinitionDigest(
             workflowYaml,
-            new Dictionary<string, string>(),
+            inlineWorkflowYamls,
             workflowId,
             revisionId);
         rebound.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(rebound);
@@ -563,19 +572,36 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         string workflowId,
         string workflowYaml,
         ExternalCapabilityExecutionMode executionMode,
-        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null)
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null)
     {
         var admissionDiscriminator = BuildAdmissionRevisionDiscriminator(capabilityAdmissionPlan);
-        var canonicalSpec = Encoding.UTF8.GetBytes(string.Join('\n',
-            admissionDiscriminator.Length == 0
-                ? "studio-workflow-provision-revision/v2"
-                : "studio-workflow-provision-revision/v3",
+        var hasInlineWorkflowYamls = inlineWorkflowYamls is { Count: > 0 };
+        var contractVersion = (hasInlineWorkflowYamls, admissionDiscriminator.Length > 0) switch
+        {
+            (false, false) => "studio-workflow-provision-revision/v2",
+            (false, true) => "studio-workflow-provision-revision/v3",
+            (true, false) => "studio-workflow-provision-revision/v4",
+            (true, true) => "studio-workflow-provision-revision/v5",
+        };
+        var components = new List<string>
+        {
+            contractVersion,
             provisionKey,
             workflowId,
             "workflow-name=yaml",
             ((int)executionMode).ToString(),
             workflowYaml,
-            admissionDiscriminator));
+            admissionDiscriminator,
+        };
+        if (hasInlineWorkflowYamls)
+        {
+            components.Add(WorkflowCapabilityAdmissionPlanIntegrity.ComputeDefinitionDigest(
+                workflowYaml,
+                inlineWorkflowYamls));
+        }
+
+        var canonicalSpec = Encoding.UTF8.GetBytes(string.Join('\n', components));
         var hash = SHA256.HashData(canonicalSpec);
         return $"revision-{Convert.ToHexString(hash.AsSpan(0, 16)).ToLowerInvariant()}";
     }
@@ -625,6 +651,20 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     {
         var normalized = value?.Trim() ?? string.Empty;
         return normalized.Length == 0 ? null : normalized;
+    }
+
+    private static IReadOnlyDictionary<string, string> SnapshotInlineWorkflowYamls(
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls)
+    {
+        if (inlineWorkflowYamls is null || inlineWorkflowYamls.Count == 0)
+            return new Dictionary<string, string>();
+
+        return inlineWorkflowYamls
+            .OrderBy(static item => item.Key, StringComparer.Ordinal)
+            .ToDictionary(
+                static item => item.Key,
+                static item => item.Value,
+                StringComparer.Ordinal);
     }
 
 }

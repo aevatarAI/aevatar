@@ -7,8 +7,10 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Agreement;
+using Aevatar.Workflow.Core.Expressions;
 using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
+using System.Globalization;
 
 namespace Aevatar.Workflow.Core.Modules;
 
@@ -20,6 +22,7 @@ namespace Aevatar.Workflow.Core.Modules;
 public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContext>
 {
     private const string ModuleStateKey = "parallel_fanout";
+    private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
 
     /// <summary>
     /// 模块名称。
@@ -67,7 +70,21 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                 count = workerRoles.Count;
             }
 
-            if (workerRoles.Count == 0 && string.IsNullOrWhiteSpace(evt.TargetRole))
+            var subStepType = WorkflowPrimitiveCatalog.ToCanonicalType(
+                WorkflowParameterValueParser.GetString(
+                    evt.Parameters,
+                    "llm_call",
+                    "sub_step_type",
+                    "child_step_type"));
+            var subTargetRole = WorkflowParameterValueParser.GetString(
+                evt.Parameters,
+                evt.TargetRole,
+                "sub_target_role",
+                "child_target_role");
+
+            if (workerRoles.Count == 0 &&
+                string.IsNullOrWhiteSpace(subTargetRole) &&
+                string.Equals(subStepType, "llm_call", StringComparison.Ordinal))
             {
                 ctx.Logger.LogWarning(
                     "ParallelFanOut: step={StepId} missing workers and target_role; cannot fan-out.",
@@ -79,7 +96,7 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                     StepId = evt.StepId,
                     RunId = runId,
                     Success = false,
-                    Error = "parallel requires parameters.workers (CSV/JSON list) or target_role",
+                    Error = "parallel requires parameters.workers (CSV/JSON list) or target_role for llm_call workers",
                 }, TopologyAudience.Self, ct);
                 return;
             }
@@ -148,9 +165,16 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
             var bpApplied = false;
             for (var i = 0; i < count; i++)
             {
-                var role = i < workerRoles.Count ? workerRoles[i] : evt.TargetRole;
+                var role = i < workerRoles.Count ? workerRoles[i] : subTargetRole;
+                var subParameters = ResolveSubStepParameters(evt.Parameters, evt.Input, role, i);
                 var entry = BackpressureHelper.ToQueueEntry(
-                    $"{evt.StepId}_sub_{i}", "llm_call", runId, evt.Input, role ?? "", null);
+                    $"{evt.StepId}_sub_{i}",
+                    subStepType,
+                    runId,
+                    evt.Input,
+                    role ?? "",
+                    subParameters,
+                    externalInvocation: evt.ExternalInvocation);
                 if (BackpressureHelper.TryAdmit(state.Backpressure, entry))
                 {
                     await ctx.PublishAsync(BackpressureHelper.ToStepRequest(entry), TopologyAudience.Self, ct);
@@ -230,7 +254,7 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                 evt.StepId, parentState.Collected.Count, parentState.Expected);
             if (parentState.Collected.Count >= parentState.Expected)
             {
-                var results = parentState.Collected;
+                var results = OrderCollectedResults(parentState);
                 var allSuccess = results.All(r => r.Success);
                 var merged = string.Join("\n---\n", results.Select(r => r.Output));
                 ctx.Logger.LogInformation("ParallelFanOut: step={StepId} all {Count} workers done, merged=({Len} chars)",
@@ -302,6 +326,57 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
         }
 
         return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+    }
+
+    private Dictionary<string, string> ResolveSubStepParameters(
+        IReadOnlyDictionary<string, string> parameters,
+        string input,
+        string? worker,
+        int index)
+    {
+        var variables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["input"] = input,
+            ["output"] = input,
+            ["index"] = index.ToString(CultureInfo.InvariantCulture),
+            ["worker"] = worker ?? string.Empty,
+        };
+        var resolved = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in parameters)
+        {
+            if (key.StartsWith("sub_param_", StringComparison.OrdinalIgnoreCase))
+                resolved[key["sub_param_".Length..]] = _expressionEvaluator.Evaluate(value, variables);
+        }
+
+        return resolved;
+    }
+
+    private static IReadOnlyList<ParallelItemResult> OrderCollectedResults(ParallelParentState parentState) =>
+        parentState.Collected
+            .Select((result, position) => new
+            {
+                Result = result,
+                Position = position,
+                WorkerIndex = position < parentState.CollectedStepIds.Count
+                    ? ExtractSubStepIndex(parentState.CollectedStepIds[position])
+                    : int.MaxValue,
+            })
+            .OrderBy(static item => item.WorkerIndex)
+            .ThenBy(static item => item.Position)
+            .Select(static item => item.Result)
+            .ToArray();
+
+    private static int ExtractSubStepIndex(string stepId)
+    {
+        var markerIndex = stepId.LastIndexOf("_sub_", StringComparison.Ordinal);
+        return markerIndex > 0 &&
+               int.TryParse(
+                   stepId[(markerIndex + "_sub_".Length)..],
+                   NumberStyles.None,
+                   CultureInfo.InvariantCulture,
+                   out var index)
+            ? index
+            : int.MaxValue;
     }
 
     private static VoteAgreementCandidateSet BuildVoteAgreementCandidateSet(
