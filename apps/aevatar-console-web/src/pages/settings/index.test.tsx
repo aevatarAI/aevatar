@@ -7,6 +7,13 @@ import {
 } from "../../../tests/reactQueryTestUtils";
 import SettingsPage from "./index";
 
+const mockConsoleToast = {
+  error: jest.fn(),
+  info: jest.fn(),
+  success: jest.fn(),
+  warning: jest.fn(),
+};
+
 jest.mock("@/shared/studio/api", () => ({
   studioApi: {
     getAuthSession: jest.fn(),
@@ -14,6 +21,10 @@ jest.mock("@/shared/studio/api", () => ({
     getUserLlmSettings: jest.fn(),
     saveUserLlmSettings: jest.fn(),
   },
+}));
+
+jest.mock("@/shared/ui/ConsoleToast", () => ({
+  useConsoleToast: () => mockConsoleToast,
 }));
 
 const { studioApi: mockStudioApi } = jest.requireMock(
@@ -446,7 +457,7 @@ describe("SettingsPage", () => {
     );
   });
 
-  it("keeps service access review retryable when redirect setup fails", async () => {
+  it("reports service access review failures with a toast and keeps retry available", async () => {
     persistAuthSession({
       tokens: { accessToken: "token", tokenType: "Bearer", expiresIn: 3600, expiresAt: Date.now() + 60_000 },
       user: { sub: "user-123", name: "Ada Lovelace" },
@@ -463,12 +474,38 @@ describe("SettingsPage", () => {
     renderWithQueryClient(React.createElement(SettingsPage));
     const manageButton = await screen.findByRole("button", { name: "Manage service access" });
     fireEvent.click(manageButton);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Could not start service access review. Try again.");
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Could not start service access review. Try again.",
+      ),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
     await waitFor(() => expect(manageButton).not.toHaveClass("ant-btn-loading"));
     fireEvent.click(manageButton);
     await waitFor(() => expect(assign).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole("alert")).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports a current settings save failure with a toast", async () => {
+    mockStudioApi.saveUserLlmSettings.mockRejectedValue(
+      new Error("PUT /api/settings returned 500"),
+    );
+    renderWithQueryClient(React.createElement(SettingsPage));
+
+    fireEvent.mouseDown(
+      await screen.findByRole("combobox", { name: "Default model" }),
+    );
+    fireEvent.click(screen.getByRole("option", { name: "gpt-4o" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save config" }));
+
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Settings could not be saved. Try again.",
+      ),
+    );
+    expect(screen.queryByText("Save failed")).toBeNull();
+    expect(screen.queryByText("PUT /api/settings returned 500")).toBeNull();
   });
 
   it("hides service access review when the user is signed out", async () => {

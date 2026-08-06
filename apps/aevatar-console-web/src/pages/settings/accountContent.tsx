@@ -4,7 +4,7 @@ import {
   UserOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Avatar, Button, Empty, Space, Typography, theme } from "antd";
+import { Avatar, Button, Empty, Space, Typography, theme } from "antd";
 import React, { useMemo, useState } from "react";
 import {
   NyxIDAuthClient,
@@ -18,6 +18,7 @@ import {
 import { studioApi } from "@/shared/studio/api";
 import { AevatarCompactText } from "@/shared/ui/compactText";
 import { AevatarPanel } from "@/shared/ui/aevatarPageShells";
+import { useConsoleToast } from "@/shared/ui/ConsoleToast";
 import {
   summaryFieldGridStyle,
   summaryMetricGridStyle,
@@ -60,11 +61,9 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
   const settingsPanelStyle = buildSettingsPanelStyle(token);
   const authSession = useMemo(() => loadRestorableAuthSession(), []);
   const authConfig = useMemo(() => getNyxIDRuntimeConfig(), []);
+  const toast = useConsoleToast();
   const [serviceAccessReviewPending, setServiceAccessReviewPending] =
     useState(false);
-  const [serviceAccessReviewError, setServiceAccessReviewError] = useState<
-    string | undefined
-  >(undefined);
   const authMeQuery = useQuery({
     queryKey: ["settings", "auth-me"],
     queryFn: () => studioApi.getAuthSession(),
@@ -116,7 +115,6 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
   const startServiceAccessReview = async () => {
     try {
       setServiceAccessReviewPending(true);
-      setServiceAccessReviewError(undefined);
       const client = new NyxIDAuthClient(authConfig);
       await client.loginWithRedirect({
         flow: "serviceAccessReview",
@@ -124,7 +122,12 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
       });
     } catch {
       setServiceAccessReviewPending(false);
-      setServiceAccessReviewError(t("pages.settings.accountcontent.service.access.review.start.failed", "Could not start service access review. Try again."));
+      toast.error(
+        t(
+          "pages.settings.accountcontent.service.access.review.start.failed",
+          "Could not start service access review. Try again.",
+        ),
+      );
     }
   };
 
@@ -246,9 +249,6 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
               value={t("pages.settings.accountcontent.browser.token.refresh.disabled", "Disabled")}
             />
           </div>
-          {serviceAccessReviewError ? (
-            <Alert message={serviceAccessReviewError} role="alert" showIcon type="error" />
-          ) : null}
         </Space>
       </AevatarPanel>
     </>

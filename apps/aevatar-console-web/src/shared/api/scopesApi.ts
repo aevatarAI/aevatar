@@ -1,14 +1,3 @@
-import {
-  expectArray,
-  expectRecord,
-  readBoolean,
-  readOptionalRecord,
-  readString,
-  readStringArray,
-  readStringRecord,
-  type Decoder,
-} from "./http/decoders";
-import { requestJson } from "./http/client";
 import type {
   ScopeScriptCatalog,
   ScopeScriptDetail,
@@ -17,86 +6,97 @@ import type {
   ScopeWorkflowDetail,
   ScopeWorkflowSource,
   ScopeWorkflowSummary,
-} from "@/shared/models/scopes";
+} from '@/shared/models/scopes';
+import { requestJson } from './http/client';
+import {
+  type Decoder,
+  expectArray,
+  expectRecord,
+  readBoolean,
+  readOptionalRecord,
+  readString,
+  readStringArray,
+  readStringRecord,
+} from './http/decoders';
 
 function decodeScopeWorkflowSummary(
   value: unknown,
-  label = "ScopeWorkflowSummary"
+  label = 'ScopeWorkflowSummary',
 ): ScopeWorkflowSummary {
   const record = expectRecord(value, label);
   return {
-    scopeId: readString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
+    scopeId: readString(record, ['scopeId', 'ScopeId'], `${label}.scopeId`),
     workflowId: readString(
       record,
-      ["workflowId", "WorkflowId"],
-      `${label}.workflowId`
+      ['workflowId', 'WorkflowId'],
+      `${label}.workflowId`,
     ),
     displayName: readString(
       record,
-      ["displayName", "DisplayName"],
-      `${label}.displayName`
+      ['displayName', 'DisplayName'],
+      `${label}.displayName`,
     ),
     serviceKey: readString(
       record,
-      ["serviceKey", "ServiceKey"],
-      `${label}.serviceKey`
+      ['serviceKey', 'ServiceKey'],
+      `${label}.serviceKey`,
     ),
     workflowName: readString(
       record,
-      ["workflowName", "WorkflowName"],
-      `${label}.workflowName`
+      ['workflowName', 'WorkflowName'],
+      `${label}.workflowName`,
     ),
-    actorId: readString(record, ["actorId", "ActorId"], `${label}.actorId`),
+    actorId: readString(record, ['actorId', 'ActorId'], `${label}.actorId`),
     activeRevisionId: readString(
       record,
-      ["activeRevisionId", "ActiveRevisionId"],
-      `${label}.activeRevisionId`
+      ['activeRevisionId', 'ActiveRevisionId'],
+      `${label}.activeRevisionId`,
     ),
     deploymentId: readString(
       record,
-      ["deploymentId", "DeploymentId"],
-      `${label}.deploymentId`
+      ['deploymentId', 'DeploymentId'],
+      `${label}.deploymentId`,
     ),
     deploymentStatus: readString(
       record,
-      ["deploymentStatus", "DeploymentStatus"],
-      `${label}.deploymentStatus`
+      ['deploymentStatus', 'DeploymentStatus'],
+      `${label}.deploymentStatus`,
     ),
     updatedAt: readString(
       record,
-      ["updatedAt", "UpdatedAt"],
-      `${label}.updatedAt`
+      ['updatedAt', 'UpdatedAt'],
+      `${label}.updatedAt`,
     ),
   };
 }
 
 function decodeScopeWorkflowSource(
   value: unknown,
-  label = "ScopeWorkflowSource"
+  label = 'ScopeWorkflowSource',
 ): ScopeWorkflowSource {
   const record = expectRecord(value, label);
   const inlineWorkflowYamls = readOptionalRecord(
     record,
-    ["inlineWorkflowYamls", "InlineWorkflowYamls"],
-    `${label}.inlineWorkflowYamls`
+    ['inlineWorkflowYamls', 'InlineWorkflowYamls'],
+    `${label}.inlineWorkflowYamls`,
   );
 
   return {
     workflowYaml: readString(
       record,
-      ["workflowYaml", "WorkflowYaml"],
-      `${label}.workflowYaml`
+      ['workflowYaml', 'WorkflowYaml'],
+      `${label}.workflowYaml`,
     ),
     definitionActorId: readString(
       record,
-      ["definitionActorId", "DefinitionActorId"],
-      `${label}.definitionActorId`
+      ['definitionActorId', 'DefinitionActorId'],
+      `${label}.definitionActorId`,
     ),
     inlineWorkflowYamls: inlineWorkflowYamls
       ? readStringRecord(
           { inlineWorkflowYamls },
-          "inlineWorkflowYamls",
-          `${label}.inlineWorkflowYamls`
+          'inlineWorkflowYamls',
+          `${label}.inlineWorkflowYamls`,
         )
       : null,
   };
@@ -104,7 +104,7 @@ function decodeScopeWorkflowSource(
 
 function decodeScopeWorkflowDetail(
   value: unknown,
-  label = "ScopeWorkflowDetail"
+  label = 'ScopeWorkflowDetail',
 ): ScopeWorkflowDetail {
   const record = expectRecord(value, label);
   const workflowValue = record.workflow ?? record.Workflow;
@@ -113,10 +113,10 @@ function decodeScopeWorkflowDetail(
   return {
     available: readBoolean(
       record,
-      ["available", "Available"],
-      `${label}.available`
+      ['available', 'Available'],
+      `${label}.available`,
     ),
-    scopeId: readString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
+    scopeId: readString(record, ['scopeId', 'ScopeId'], `${label}.scopeId`),
     workflow:
       workflowValue === null || workflowValue === undefined
         ? null
@@ -130,68 +130,68 @@ function decodeScopeWorkflowDetail(
 
 function decodeScopeScriptSummary(
   value: unknown,
-  label = "ScopeScriptSummary"
+  label = 'ScopeScriptSummary',
 ): ScopeScriptSummary {
   const record = expectRecord(value, label);
   return {
-    scopeId: readString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
-    scriptId: readString(record, ["scriptId", "ScriptId"], `${label}.scriptId`),
+    scopeId: readString(record, ['scopeId', 'ScopeId'], `${label}.scopeId`),
+    scriptId: readString(record, ['scriptId', 'ScriptId'], `${label}.scriptId`),
     catalogActorId: readString(
       record,
-      ["catalogActorId", "CatalogActorId"],
-      `${label}.catalogActorId`
+      ['catalogActorId', 'CatalogActorId'],
+      `${label}.catalogActorId`,
     ),
     definitionActorId: readString(
       record,
-      ["definitionActorId", "DefinitionActorId"],
-      `${label}.definitionActorId`
+      ['definitionActorId', 'DefinitionActorId'],
+      `${label}.definitionActorId`,
     ),
     activeRevision: readString(
       record,
-      ["activeRevision", "ActiveRevision"],
-      `${label}.activeRevision`
+      ['activeRevision', 'ActiveRevision'],
+      `${label}.activeRevision`,
     ),
     activeSourceHash: readString(
       record,
-      ["activeSourceHash", "ActiveSourceHash"],
-      `${label}.activeSourceHash`
+      ['activeSourceHash', 'ActiveSourceHash'],
+      `${label}.activeSourceHash`,
     ),
     updatedAt: readString(
       record,
-      ["updatedAt", "UpdatedAt"],
-      `${label}.updatedAt`
+      ['updatedAt', 'UpdatedAt'],
+      `${label}.updatedAt`,
     ),
   };
 }
 
 function decodeScopeScriptSource(
   value: unknown,
-  label = "ScopeScriptSource"
+  label = 'ScopeScriptSource',
 ): ScopeScriptSource {
   const record = expectRecord(value, label);
   return {
     sourceText: readString(
       record,
-      ["sourceText", "SourceText"],
-      `${label}.sourceText`
+      ['sourceText', 'SourceText'],
+      `${label}.sourceText`,
     ),
     definitionActorId: readString(
       record,
-      ["definitionActorId", "DefinitionActorId"],
-      `${label}.definitionActorId`
+      ['definitionActorId', 'DefinitionActorId'],
+      `${label}.definitionActorId`,
     ),
-    revision: readString(record, ["revision", "Revision"], `${label}.revision`),
+    revision: readString(record, ['revision', 'Revision'], `${label}.revision`),
     sourceHash: readString(
       record,
-      ["sourceHash", "SourceHash"],
-      `${label}.sourceHash`
+      ['sourceHash', 'SourceHash'],
+      `${label}.sourceHash`,
     ),
   };
 }
 
 function decodeScopeScriptDetail(
   value: unknown,
-  label = "ScopeScriptDetail"
+  label = 'ScopeScriptDetail',
 ): ScopeScriptDetail {
   const record = expectRecord(value, label);
   const scriptValue = record.script ?? record.Script;
@@ -200,10 +200,10 @@ function decodeScopeScriptDetail(
   return {
     available: readBoolean(
       record,
-      ["available", "Available"],
-      `${label}.available`
+      ['available', 'Available'],
+      `${label}.available`,
     ),
-    scopeId: readString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
+    scopeId: readString(record, ['scopeId', 'ScopeId'], `${label}.scopeId`),
     script:
       scriptValue === null || scriptValue === undefined
         ? null
@@ -217,109 +217,119 @@ function decodeScopeScriptDetail(
 
 function decodeScopeScriptCatalog(
   value: unknown,
-  label = "ScopeScriptCatalog"
+  label = 'ScopeScriptCatalog',
 ): ScopeScriptCatalog {
   const record = expectRecord(value, label);
   return {
-    scriptId: readString(record, ["scriptId", "ScriptId"], `${label}.scriptId`),
+    scriptId: readString(record, ['scriptId', 'ScriptId'], `${label}.scriptId`),
     activeRevision: readString(
       record,
-      ["activeRevision", "ActiveRevision"],
-      `${label}.activeRevision`
+      ['activeRevision', 'ActiveRevision'],
+      `${label}.activeRevision`,
     ),
     activeDefinitionActorId: readString(
       record,
-      ["activeDefinitionActorId", "ActiveDefinitionActorId"],
-      `${label}.activeDefinitionActorId`
+      ['activeDefinitionActorId', 'ActiveDefinitionActorId'],
+      `${label}.activeDefinitionActorId`,
     ),
     activeSourceHash: readString(
       record,
-      ["activeSourceHash", "ActiveSourceHash"],
-      `${label}.activeSourceHash`
+      ['activeSourceHash', 'ActiveSourceHash'],
+      `${label}.activeSourceHash`,
     ),
     previousRevision: readString(
       record,
-      ["previousRevision", "PreviousRevision"],
-      `${label}.previousRevision`
+      ['previousRevision', 'PreviousRevision'],
+      `${label}.previousRevision`,
     ),
     revisionHistory: readStringArray(
       record,
-      ["revisionHistory", "RevisionHistory"],
-      `${label}.revisionHistory`
+      ['revisionHistory', 'RevisionHistory'],
+      `${label}.revisionHistory`,
     ),
     lastProposalId: readString(
       record,
-      ["lastProposalId", "LastProposalId"],
-      `${label}.lastProposalId`
+      ['lastProposalId', 'LastProposalId'],
+      `${label}.lastProposalId`,
     ),
     catalogActorId: readString(
       record,
-      ["catalogActorId", "CatalogActorId"],
-      `${label}.catalogActorId`
+      ['catalogActorId', 'CatalogActorId'],
+      `${label}.catalogActorId`,
     ),
-    scopeId: readString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
+    scopeId: readString(record, ['scopeId', 'ScopeId'], `${label}.scopeId`),
     updatedAt: readString(
       record,
-      ["updatedAt", "UpdatedAt"],
-      `${label}.updatedAt`
+      ['updatedAt', 'UpdatedAt'],
+      `${label}.updatedAt`,
     ),
   };
 }
 
 const decodeScopeWorkflowSummaries: Decoder<ScopeWorkflowSummary[]> = (value) =>
-  expectArray(value, "ScopeWorkflowSummary[]", decodeScopeWorkflowSummary);
+  expectArray(value, 'ScopeWorkflowSummary[]', decodeScopeWorkflowSummary);
+
+const decodeScopeWorkflowDetails: Decoder<ScopeWorkflowDetail[]> = (value) =>
+  expectArray(value, 'ScopeWorkflowDetail[]', decodeScopeWorkflowDetail);
 
 const decodeScopeScriptSummaries: Decoder<ScopeScriptSummary[]> = (value) =>
-  expectArray(value, "ScopeScriptSummary[]", decodeScopeScriptSummary);
+  expectArray(value, 'ScopeScriptSummary[]', decodeScopeScriptSummary);
 
 export const scopesApi = {
   listWorkflows(scopeId: string): Promise<ScopeWorkflowSummary[]> {
     return requestJson(
       `/api/scopes/${encodeURIComponent(scopeId)}/workflows?includeSource=false`,
-      decodeScopeWorkflowSummaries
+      decodeScopeWorkflowSummaries,
+    );
+  },
+
+  listWorkflowDetails(scopeId: string): Promise<ScopeWorkflowDetail[]> {
+    return requestJson(
+      `/api/scopes/${encodeURIComponent(scopeId)}/workflows?includeSource=true`,
+      decodeScopeWorkflowDetails,
     );
   },
 
   getWorkflowDetail(
     scopeId: string,
-    workflowId: string
+    workflowId: string,
   ): Promise<ScopeWorkflowDetail> {
     return requestJson(
       `/api/scopes/${encodeURIComponent(
-        scopeId
+        scopeId,
       )}/workflows/${encodeURIComponent(workflowId)}`,
-      decodeScopeWorkflowDetail
+      decodeScopeWorkflowDetail,
     );
   },
 
   listScripts(scopeId: string): Promise<ScopeScriptSummary[]> {
     return requestJson(
       `/api/scopes/${encodeURIComponent(scopeId)}/scripts?includeSource=false`,
-      decodeScopeScriptSummaries
+      decodeScopeScriptSummaries,
     );
   },
 
   getScriptDetail(
     scopeId: string,
-    scriptId: string
+    scriptId: string,
   ): Promise<ScopeScriptDetail> {
     return requestJson(
       `/api/scopes/${encodeURIComponent(scopeId)}/scripts/${encodeURIComponent(
-        scriptId
+        scriptId,
       )}`,
-      decodeScopeScriptDetail
+      decodeScopeScriptDetail,
     );
   },
 
   getScriptCatalog(
     scopeId: string,
-    scriptId: string
+    scriptId: string,
   ): Promise<ScopeScriptCatalog> {
     return requestJson(
       `/api/scopes/${encodeURIComponent(scopeId)}/scripts/${encodeURIComponent(
-        scriptId
+        scriptId,
       )}/catalog`,
-      decodeScopeScriptCatalog
+      decodeScopeScriptCatalog,
     );
   },
 };
