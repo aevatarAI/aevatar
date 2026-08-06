@@ -121,6 +121,48 @@ public class WorkflowLoopModuleExpressionEvaluationTests
         request.Parameters["sub_param_arguments"].Should().Be(argumentsTemplate);
     }
 
+    [Theory]
+    [InlineData("parallel")]
+    [InlineData("race")]
+    public async Task DispatchStep_CompositionWorkerShouldDeferIndexedSubParametersUntilWorkerDispatch(
+        string stepType)
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = $"wf-{stepType}",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "dispatch_workers",
+                    Type = stepType,
+                    Parameters = new Dictionary<string, string>
+                    {
+                        [stepType == "parallel" ? "parallel_count" : "count"] = "3",
+                        ["sub_step_type"] = "assign",
+                        ["sub_param_target"] = "worker_${index}",
+                        ["sub_param_value"] = "result-${index}",
+                    },
+                },
+            ],
+        };
+        var ctx = new CapturingContext();
+        var module = new WorkflowExecutionKernel(workflow, (IWorkflowExecutionStateHost)ctx.Agent);
+
+        await module.HandleAsync(Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = workflow.Name,
+            RunId = $"run-{stepType}",
+            Input = "synthetic",
+        }), ctx, CancellationToken.None);
+
+        var request = ctx.Published.Single(x => x.Event is StepRequestEvent).Event
+            .Should().BeOfType<StepRequestEvent>().Subject;
+        request.Parameters["sub_param_target"].Should().Be("worker_${index}");
+        request.Parameters["sub_param_value"].Should().Be("result-${index}");
+    }
+
     [Fact]
     public async Task DispatchStep_ShouldPreserveEscapedExpressionOpenInParameters()
     {

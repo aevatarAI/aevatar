@@ -662,8 +662,8 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         return inlineWorkflowYamls
             .OrderBy(static item => item.Key, StringComparer.Ordinal)
             .ToDictionary(
-                static item => item.Key,
-                static item => item.Value,
+                static item => NormalizeRequired(item.Key, "inlineWorkflowYamls key"),
+                static item => NormalizeRequired(item.Value, "inlineWorkflowYamls value"),
                 StringComparer.Ordinal);
     }
 

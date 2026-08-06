@@ -1560,6 +1560,36 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_InlineWorkflowYaml_ShouldUseOneCanonicalBundleForAdmissionAndBinding()
+    {
+        var member = NewMemberService();
+        var sut = NewService(
+            member,
+            new RecordingScheduleService(),
+            out var bindingPort,
+            out _);
+        const string rootYaml = "name: root\nsteps: []\n";
+        const string childYaml = "name: child\nsteps: []\n";
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", rootYaml, RunImmediately: false)
+            {
+                TeamId = TeamId,
+                InlineWorkflowYamls = new Dictionary<string, string>
+                {
+                    ["child"] = childYaml,
+                },
+            });
+
+        bindingPort.LastRequest.Should().NotBeNull();
+        bindingPort.LastRequest!.WorkflowYaml.Should().Be(rootYaml.Trim());
+        bindingPort.LastRequest.InlineWorkflowYamls.Should()
+            .Contain("child", childYaml.Trim());
+    }
+
+    [Fact]
     public async Task ProvisionAsync_ChangedExecutionMode_AdvancesRevision()
     {
         var scheduledMember = NewMemberService();
