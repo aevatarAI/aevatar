@@ -1813,8 +1813,9 @@ public sealed class NyxIdChatConversationGAgentTests
         stateObservedAtDispatch!.ActiveTurn.TurnId.Should().Be("turn-action-alpha");
         stateObservedAtDispatch.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
         var postcondition = stateObservedAtDispatch.ActiveTask.Steps.Should()
-            .ContainSingle().Which;
-        postcondition.Kind.Should().Be(NyxIdChatStepKind.Postcondition);
+            .ContainSingle(step => step.Kind == NyxIdChatStepKind.Postcondition).Which;
+        stateObservedAtDispatch.ActiveTask.Steps.Should().Contain(step =>
+            step.StepId == "step-tool-alpha");
         postcondition.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Requested);
         stateObservedAtDispatch.HistoryDeliveryReservation.DeliveryId.Should().Be(
             reservation.DeliveryId);
@@ -1830,7 +1831,8 @@ public sealed class NyxIdChatConversationGAgentTests
 
         var all = await eventStore.GetEventsAsync(conversationActorId);
         all[^1].EventData.Is(NyxIdChatOperationDispatchedEvent.Descriptor).Should().BeTrue();
-        agent.State.ActiveTask.Steps.Single().Operation.Phase.Should().Be(
+        agent.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition).Operation.Phase.Should().Be(
             NyxIdChatOperationPhase.Dispatched);
 
         await agent.HandleEventAsync(CreateEnvelope(conversationActorId, command.Clone()));
@@ -1984,7 +1986,10 @@ public sealed class NyxIdChatConversationGAgentTests
         operations.Should().Equal(expectedOperations.Split(','));
         agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Failed);
         agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Failed);
-        var step = agent.State.ActiveTask.Steps.Should().ContainSingle().Which;
+        var step = agent.State.ActiveTask.Steps.Should()
+            .ContainSingle(candidate => candidate.Kind == NyxIdChatStepKind.Postcondition).Which;
+        agent.State.ActiveTask.Steps.Should().Contain(candidate =>
+            candidate.StepId == "step-tool-alpha");
         step.Status.Should().Be(NyxIdChatStepStatus.Failed);
         step.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Failed);
         step.FailureCode.Should().Be(expectedFailureCode);
@@ -2167,7 +2172,8 @@ public sealed class NyxIdChatConversationGAgentTests
             blocked.PendingActions.Single().ActionRequestId);
         await agent.HandleEventAsync(CreateEnvelope(conversationActorId, command));
         var deliveryId = history.Reservations.Should().ContainSingle().Which.DeliveryId;
-        var postconditionKey = agent.State.ActiveTask.Steps.Single().Operation.Key.Clone();
+        var postconditionKey = agent.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition).Operation.Key.Clone();
 
         await agent.HandleEventAsync(CreateEnvelope(
             conversationActorId,
@@ -3016,6 +3022,8 @@ public sealed class NyxIdChatConversationGAgentTests
         await agent.ActivateAsync();
         await agent.HandleEventAsync(CreateEnvelope(conversationActorId, CreateStartTurnCommand()));
         var afterStart = await eventStore.GetEventsAsync(conversationActorId);
+        var taskId = agent.State.ActiveTask.TaskId;
+        var planRevision = agent.State.ActiveTask.PlanRevision;
         var oldKey = agent.State.ActiveTask.Steps.Single().Operation.Key.Clone();
         var steering = CreateSteeringCommand(afterStart[^1].Version);
 
@@ -3063,6 +3071,9 @@ public sealed class NyxIdChatConversationGAgentTests
         var continuationStart = selfDispatch.Envelope.Payload
             .Unpack<NyxIdChatStartTurnCommand>();
         continuationStart.TurnId.Should().Be(continuationTurnId);
+        continuationStart.TaskId.Should().Be(taskId);
+        continuationStart.PlanRevision.Should().Be(planRevision + 1);
+        continuationStart.AddedBy.Should().Be(NyxIdChatStepAddedBy.Steering);
         continuationStart.CommandId.Should().Be(selfDispatch.Envelope.Id);
         continuationStart.CommandId.Should().NotBe(steering.CommandId,
             "the self continuation has its own stable inbox identity");
@@ -3074,6 +3085,19 @@ public sealed class NyxIdChatConversationGAgentTests
 
         agent.State.ActiveTurn.TurnId.Should().Be(continuationTurnId);
         agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
+        agent.State.ActiveTask.TaskId.Should().Be(taskId);
+        agent.State.ActiveTask.PlanRevision.Should().Be(planRevision + 1);
+        agent.State.ActiveTask.Steps.Should().HaveCount(2);
+        agent.State.ActiveTask.Steps.Should().Contain(step =>
+            step.Operation != null &&
+            step.Operation.Key != null &&
+            step.Operation.Key.TurnId == "turn-alpha" &&
+            step.Status == NyxIdChatStepStatus.Cancelled);
+        agent.State.ActiveTask.Steps.Should().Contain(step =>
+            step.Operation != null &&
+            step.Operation.Key != null &&
+            step.Operation.Key.TurnId == continuationTurnId &&
+            step.AddedBy == NyxIdChatStepAddedBy.Steering);
         agent.State.ContinuationAdmission.Status.Should().Be(
             NyxIdChatContinuationAdmissionStatus.Started);
         dispatch.OperationCalls.Should().HaveCount(2);

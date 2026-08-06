@@ -19,6 +19,7 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     [Theory]
     [InlineData(nameof(StudioMemberBindingRunGAgent.HandleAdmissionWatchdogFired))]
     [InlineData(nameof(StudioMemberBindingRunGAgent.HandlePlatformBindingWatchdogFired))]
+    [InlineData(nameof(StudioMemberBindingRunGAgent.HandlePlatformBindingReadinessTimedOut))]
     [InlineData(nameof(StudioMemberBindingRunGAgent.HandlePlatformBindingFailed))]
     public void PlatformBindingContinuationHandlers_ShouldAllowSelfHandling(string handlerName)
     {
@@ -450,6 +451,66 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         publisher.SentMessages.Should().BeEmpty();
         scheduler.Timeouts.Should().ContainSingle(request =>
             request.CallbackId == "studio-member-binding-watchdog:bind-1:platform-1");
+    }
+
+    [Fact]
+    public async Task HandlePlatformBindingReadinessTimedOut_ShouldRemainPendingAndScheduleWatchdog()
+    {
+        var state = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
+        var timedOutAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1));
+        var afterTimeout = _agent.Apply(state, new StudioMemberPlatformBindingReadinessTimedOut
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            ReadinessStatus = StudioMemberPlatformBindingReadinessStatus.ServingSetMissing,
+            TimedOutAtUtc = timedOutAt,
+        });
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = NewHandlerAgent(state, publisher, scheduler);
+
+        await agent.HandlePlatformBindingReadinessTimedOut(new StudioMemberPlatformBindingReadinessTimedOut
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            ReadinessStatus = StudioMemberPlatformBindingReadinessStatus.ServingSetMissing,
+            TimedOutAtUtc = timedOutAt,
+        });
+
+        afterTimeout.Status.Should().Be(StudioMemberBindingRunStatus.PlatformBindingPending);
+        afterTimeout.PlatformExecutionInFlight.Should().BeFalse();
+        afterTimeout.PlatformExecutionStartedAtUtc.Should().BeNull();
+        afterTimeout.UpdatedAtUtc.Should().Be(timedOutAt);
+        publisher.SentMessages.Should().BeEmpty();
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-watchdog:bind-1:platform-1");
+    }
+
+    [Fact]
+    public async Task HandlePlatformBindingWatchdogFired_AfterReadinessTimeout_ShouldRetryExecution()
+    {
+        var state = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
+        var afterTimeout = _agent.Apply(state, new StudioMemberPlatformBindingReadinessTimedOut
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            ReadinessStatus = StudioMemberPlatformBindingReadinessStatus.ServingSetMissing,
+            TimedOutAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(afterTimeout, publisher);
+
+        await agent.HandlePlatformBindingWatchdogFired(new StudioMemberPlatformBindingWatchdogFired
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+        });
+
+        var retry = publisher.SentMessages.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<StudioMemberPlatformBindingExecuteRequested>().Subject;
+        retry.BindingRunId.Should().Be("bind-1");
+        retry.PlatformBindingCommandId.Should().Be("platform-1");
+        retry.RecoveryExecution.Should().BeFalse();
     }
 
     [Fact]

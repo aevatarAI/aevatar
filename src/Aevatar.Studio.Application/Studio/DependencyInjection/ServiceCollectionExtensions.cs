@@ -1,5 +1,5 @@
-using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgents.WorkOrder;
+using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Authoring;
@@ -41,6 +41,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStudioMemberInvocationReadinessQueryPort,
             StudioMemberInvocationReadinessQueryPort>();
         services.TryAddSingleton<IStudioWorkflowProvisioningService, StudioWorkflowProvisioningService>();
+        services.TryAddSingleton<
+            IStudioWorkflowScheduleProvisioningExecutor,
+            StudioWorkflowScheduleProvisioningExecutor>();
         // Narrow, tool-facing port (Abstractions) adapting IStudioWorkflowProvisioningService so the
         // aevatar_provision_workflow_schedule agent tool can depend only on Aevatar.Studio.Application.Abstractions.
         services.TryAddSingleton<IWorkflowScheduleProvisioningPort, WorkflowScheduleProvisioningPort>();
@@ -58,6 +61,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStudioTeamProvisioningPort, StudioTeamProvisioningPort>();
         services.TryAddSingleton<IStudioMemberProvisioningPort, StudioMemberProvisioningPort>();
         services.TryAddSingleton<IStudioMemberWorkflowBindingPort, StudioMemberWorkflowBindingPort>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IScopeWorkflowPublishedServiceDescriptorSource,
+            StudioMemberScopeWorkflowDescriptorSource>());
         services.TryAddSingleton<IStudioMemberWorkflowDurableAdmissionPort,
             StudioMemberWorkflowDurableAdmissionPort>();
         services.TryAddSingleton(new StudioMemberWorkflowSchedulePolicy());

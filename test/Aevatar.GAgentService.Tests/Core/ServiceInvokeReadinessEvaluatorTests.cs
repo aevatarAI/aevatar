@@ -133,6 +133,29 @@ public sealed class ServiceInvokeReadinessEvaluatorTests
     }
 
     [Fact]
+    public void Evaluate_ShouldReturnPreparedArtifactIncompatible_WhenWorkflowAdmissionPlanRequiresRebind()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revision = PreparedWorkflowRevision(identity, "r1", "chat");
+        revision.PreparedArtifact.DeploymentPlan.WorkflowPlan.CapabilityAdmissionPlan.SchemaVersion =
+            WorkflowCapabilityAdmissionPlanIntegrity.LegacySchemaVersion;
+
+        var entries = _evaluator.Evaluate(
+            [GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")],
+            [Target("dep-1", "r1", "actor-1", "chat")],
+            new Dictionary<string, ServiceRevisionRecordState>(StringComparer.Ordinal)
+            {
+                ["r1"] = revision,
+            });
+
+        entries.Should().ContainSingle();
+        entries[0].ReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unavailable);
+        entries[0].UnavailableReason.Should()
+            .Be(ServiceInvokeUnavailableReason.PreparedArtifactIncompatible);
+        entries[0].SelectedRevisionId.Should().Be("r1");
+    }
+
+    [Fact]
     public void Evaluate_ShouldOnlyUseCanonicalStatusesAndReasons()
     {
         var statuses = Enum.GetNames<ServiceInvokeReadinessStatus>();
@@ -219,6 +242,7 @@ public sealed class ServiceInvokeReadinessEvaluatorTests
                         ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
                         CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
                         {
+                            SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
                             ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
                         },
                     },

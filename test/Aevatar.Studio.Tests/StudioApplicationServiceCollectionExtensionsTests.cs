@@ -1,8 +1,8 @@
 using System.Reflection;
+using Aevatar.GAgents.WorkOrder;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
-using Aevatar.GAgents.WorkOrder;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
@@ -84,6 +84,27 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
         services.Should().ContainSingle(x => x.ServiceType == typeof(IWorkflowBoardClock));
         services.Should().ContainSingle(x => x.ServiceType == typeof(IUserConfigService))
             .Which.ImplementationType.Should().Be(typeof(UserConfigService));
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(IScopeWorkflowPublishedServiceDescriptorSource) &&
+            x.ImplementationType == typeof(StudioMemberScopeWorkflowDescriptorSource) &&
+            x.Lifetime == ServiceLifetime.Singleton);
+    }
+
+    [Fact]
+    public void AddStudioApplication_ShouldRegisterActorOwnedWorkflowScheduleProvisioningServices()
+    {
+        var services = new ServiceCollection();
+
+        services.AddStudioApplication();
+
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(IStudioWorkflowScheduleProvisioningExecutor) &&
+            x.ImplementationType == typeof(StudioWorkflowScheduleProvisioningExecutor) &&
+            x.Lifetime == ServiceLifetime.Singleton);
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(IWorkflowScheduleProvisioningPort) &&
+            x.ImplementationType == typeof(WorkflowScheduleProvisioningPort) &&
+            x.Lifetime == ServiceLifetime.Singleton);
     }
 
     [Fact]

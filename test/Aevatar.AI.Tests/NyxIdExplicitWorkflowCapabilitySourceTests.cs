@@ -171,6 +171,46 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
     }
 
     [Fact]
+    public async Task InspectAsync_WhenTargetedServiceIsFreshAndCatalogIncludesGatewayLLMTarget_ShouldAdmitDurableGrant()
+    {
+        var snapshot = ReadyCatalogSnapshot();
+        var service = snapshot.Services.Single().Clone();
+        var serviceObservedAt = new DateTimeOffset(2026, 7, 30, 7, 59, 30, TimeSpan.Zero);
+        service.ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(serviceObservedAt);
+        service.FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+            serviceObservedAt.AddMinutes(15));
+        service.EvaluatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+            serviceObservedAt.AddSeconds(-1));
+        service.AuthorityContractVersion = "scope-plan-contract/v1";
+        service.AuthorityPolicyVersion = "scope-plan-policy/v1";
+        NyxIdAuthorizationServiceEvidence[] services = [service];
+        var gatewayLLMTarget = new NyxIdAuthorizationLLMTargetEvidence
+        {
+            RouteValue = "/api/v1/llm/gateway/v1",
+        };
+        snapshot = snapshot with
+        {
+            FreshUntilUtc = new DateTimeOffset(2026, 7, 30, 7, 55, 0, TimeSpan.Zero),
+            GatewayLLMTarget = gatewayLLMTarget,
+            ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+                snapshot.Owner,
+                services,
+                gatewayLLMTarget),
+            Services = services,
+        };
+        var source = CreateSource(
+            new InventoryHandler(UserServiceKeys(Service())),
+            new RecordingCatalogQueryPort(snapshot));
+
+        var result = await source.InspectAsync(
+            Access(), Selector(), ExternalCapabilityExecutionMode.Durable, CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
+        result.Sources.Should().ContainSingle(static sourceStamp =>
+            sourceStamp.SourceKind == ExternalCapabilitySourceKind.DurableAuthorizationCatalog);
+    }
+
+    [Fact]
     public async Task InspectAsync_WhenServiceAuthorityStampIsPartial_ShouldFailClosedWithoutOwnerFallback()
     {
         var snapshot = ReadyCatalogSnapshot();

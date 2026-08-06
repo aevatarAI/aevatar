@@ -320,6 +320,22 @@ public sealed class NyxIdChatConversationGAgent
             Status = NyxIdChatTaskStatus.Active,
             CreatedAt = now.Clone(),
             UpdatedAt = now.Clone(),
+            SchemaVersion = 4,
+            ActorId = Id,
+            PlanId = wireRequest.TaskId,
+            PlanRevision = 1,
+            Title = "Complete the requested NyxID action",
+            Gate = new NyxIdChatPlanGate
+            {
+                Mode = validated.Definition.AdvisoryRisk is
+                    NyxIdAssistantActionRisk.Grant or NyxIdAssistantActionRisk.Destructive
+                        ? NyxIdChatPlanGateMode.Confirm
+                        : NyxIdChatPlanGateMode.Auto,
+                Reason = validated.Definition.AdvisoryRisk is
+                    NyxIdAssistantActionRisk.Grant or NyxIdAssistantActionRisk.Destructive
+                        ? "This plan contains a browser-owned NyxID action that requires confirmation."
+                        : string.Empty,
+            },
         };
         actionBase.ProgressSequence = Math.Max(1, State.ProgressSequence + 1);
         actionBase.UpdatedAt = now.Clone();
@@ -1462,6 +1478,14 @@ public sealed class NyxIdChatConversationGAgent
         AgentProfileTurnAuthorityState? turnAuthority,
         Timestamp now)
     {
+        var previousTask = command.AddedBy != NyxIdChatStepAddedBy.Initial &&
+                           State.ActiveTask is not null &&
+                           string.Equals(
+                               State.ActiveTask.TaskId,
+                               command.TaskId.Trim(),
+                               StringComparison.Ordinal)
+            ? State.ActiveTask
+            : null;
         var turn = new NyxIdChatTurnState
         {
             TurnId = command.TurnId.Trim(),
@@ -1478,7 +1502,9 @@ public sealed class NyxIdChatConversationGAgent
         var step = new NyxIdChatTaskStepState
         {
             StepId = operationKey.StepId,
-            Order = 1,
+            Order = previousTask?.Steps.Count > 0
+                ? previousTask.Steps.Max(static item => item.Order) + 1
+                : 1,
             Kind = NyxIdChatStepKind.Llm,
             Status = NyxIdChatStepStatus.Running,
             Required = true,
@@ -1492,6 +1518,9 @@ public sealed class NyxIdChatConversationGAgent
             },
             ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
             RetryInputRebuildable = true,
+            AddedBy = command.AddedBy == NyxIdChatStepAddedBy.Unspecified
+                ? NyxIdChatStepAddedBy.Initial
+                : command.AddedBy,
             Operation = new NyxIdChatOperationState
             {
                 Key = operationKey.Clone(),
@@ -1510,9 +1539,24 @@ public sealed class NyxIdChatConversationGAgent
             Status = NyxIdChatTaskStatus.Active,
             ActiveStepId = step.StepId,
             ActiveOperationId = operationKey.OperationId,
-            CreatedAt = now.Clone(),
+            CreatedAt = previousTask?.CreatedAt?.Clone() ?? now.Clone(),
             UpdatedAt = now.Clone(),
+            SchemaVersion = 4,
+            ActorId = Id,
+            PlanId = string.IsNullOrWhiteSpace(command.PlanId)
+                ? previousTask?.PlanId ?? command.TaskId.Trim()
+                : command.PlanId.Trim(),
+            PlanRevision = Math.Max(1, command.PlanRevision),
+            Title = string.IsNullOrWhiteSpace(previousTask?.Title)
+                ? "Complete the requested assistant task"
+                : previousTask.Title,
+            Gate = previousTask?.Gate?.Clone() ?? new NyxIdChatPlanGate
+            {
+                Mode = NyxIdChatPlanGateMode.Auto,
+            },
         };
+        if (previousTask is not null)
+            task.Steps.AddRange(previousTask.Steps.Select(static item => item.Clone()));
         task.Steps.Add(step);
 
         var next = new NyxIdChatConversationGAgentState
@@ -2697,11 +2741,13 @@ public sealed class NyxIdChatConversationGAgent
         NyxIdChatSteeringCommand command,
         NyxIdChatContinuationAdmissionState admission)
     {
-        var taskId = BuildStableIdentity(
-            "task",
-            Id,
-            admission.ContinuationTurnId,
-            admission.RequestId);
+        var taskId = string.IsNullOrWhiteSpace(State.ActiveTask?.TaskId)
+            ? BuildStableIdentity(
+                "task",
+                Id,
+                admission.OriginTurnId,
+                admission.RequestId)
+            : State.ActiveTask.TaskId;
         var continuationCommandId = BuildStableIdentity(
             "command",
             Id,
@@ -2714,6 +2760,9 @@ public sealed class NyxIdChatConversationGAgent
             ConversationActorId = Id,
             TurnId = admission.ContinuationTurnId,
             TaskId = taskId,
+            PlanId = State.ActiveTask?.PlanId ?? taskId,
+            PlanRevision = Math.Max(1, (State.ActiveTask?.PlanRevision ?? 0) + 1),
+            AddedBy = NyxIdChatStepAddedBy.Steering,
             ClientRequestId = command.ClientRequestId.Trim(),
             CommandId = continuationCommandId,
             CorrelationId = command.CorrelationId.Trim(),

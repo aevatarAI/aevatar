@@ -100,6 +100,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly INyxIdCurrentUserResolver? _nyxIdCurrentUserResolver;
     private readonly IChannelRelayTailTextSender? _relayTailTextSender;
     private readonly IChannelRelayProxyResponseClassifier? _relayProxyResponseClassifier;
+    private readonly IAgentRunToolApprovalDecisionDispatcher? _agentRunToolApprovalDecisionDispatcher;
 
     public ChannelConversationTurnRunner(
         IServiceProvider services,
@@ -127,7 +128,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ILarkBotIdentityResolver? botIdentityResolver = null,
         INyxIdCurrentUserResolver? nyxIdCurrentUserResolver = null,
         IChannelRelayTailTextSender? relayTailTextSender = null,
-        IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null)
+        IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null,
+        IAgentRunToolApprovalDecisionDispatcher? agentRunToolApprovalDecisionDispatcher = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
         _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
@@ -155,6 +157,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _nyxIdCurrentUserResolver = nyxIdCurrentUserResolver;
         _relayTailTextSender = relayTailTextSender;
         _relayProxyResponseClassifier = relayProxyResponseClassifier;
+        _agentRunToolApprovalDecisionDispatcher = agentRunToolApprovalDecisionDispatcher;
     }
 
     public async Task<ConversationTurnResult> RunInboundAsync(
@@ -201,6 +204,17 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // that looks like /init is still a card-action. (deepseek-v4-pro L65)
         if (await TryHandleWorkflowResumeAsync(inbound, ct) is { } workflowResumeResult)
             return workflowResumeResult;
+
+        if (await TryHandleAgentRunToolApprovalCardActionAsync(
+                    activity,
+                    inbound,
+                    registration,
+                    runtimeContext,
+                    ct)
+                .ConfigureAwait(false) is { } agentRunApprovalResult)
+        {
+            return agentRunApprovalResult;
+        }
 
         if (await TryHandleNyxIdApprovalCardActionAsync(activity, inbound, registration, runtimeContext, ct)
                 .ConfigureAwait(false) is { } nyxIdApprovalResult)
@@ -909,6 +923,110 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             return new MessageContent { Text = ex.Message };
         }
+    }
+
+    private async Task<ConversationTurnResult?> TryHandleAgentRunToolApprovalCardActionAsync(
+        ChatActivity activity,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        if (activity.Type != ActivityType.CardAction)
+            return null;
+
+        var payload = activity.Content?.CardAction?.AgentRunApproval;
+        if (payload is null)
+            return null;
+
+        if (!AgentRunId.TryParse(payload.RunId, out _) ||
+            string.IsNullOrWhiteSpace(payload.ApprovalRequestId) ||
+            string.IsNullOrWhiteSpace(payload.ToolCallId) ||
+            string.IsNullOrWhiteSpace(payload.ToolName) ||
+            string.IsNullOrWhiteSpace(payload.ArgumentsSha256) ||
+            string.IsNullOrWhiteSpace(inbound.SenderId) ||
+            string.IsNullOrWhiteSpace(registration.ScopeId) ||
+            string.IsNullOrWhiteSpace(activity.Conversation?.CanonicalKey))
+        {
+            return ConversationTurnResult.PermanentFailure(
+                "agent_run_tool_approval_callback_invalid",
+                "The AgentRun tool approval callback is missing an exact typed identity.");
+        }
+
+        var relayDelivery = activity.OutboundDelivery;
+        var replyToken = relayDelivery is null
+            ? null
+            : ResolveRelayReplyToken(relayDelivery, runtimeContext);
+        if (replyToken is null)
+        {
+            return ConversationTurnResult.PermanentFailure(
+                "agent_run_tool_approval_reply_token_missing",
+                "The AgentRun tool approval callback reply credential is missing or expired.");
+        }
+
+        var dispatcher = _agentRunToolApprovalDecisionDispatcher;
+        if (dispatcher is null)
+        {
+            return ConversationTurnResult.PermanentFailure(
+                "agent_run_tool_approval_dispatcher_unavailable",
+                "The AgentRun tool approval decision dispatcher is unavailable.");
+        }
+
+        var callbackActivity = activity.Clone();
+        callbackActivity.TransportExtras ??= new TransportExtras();
+        callbackActivity.TransportExtras.NyxRegistrationScopeId = registration.ScopeId.Trim();
+        var userAccessToken = ResolveUserAccessToken(activity, runtimeContext);
+        if (userAccessToken is not null)
+            callbackActivity.TransportExtras.NyxUserAccessToken = userAccessToken;
+
+        var request = new NeedsLlmReplyEvent
+        {
+            RunId = payload.RunId.Trim(),
+            CorrelationId = activity.Id,
+            RegistrationId = registration.Id,
+            Activity = callbackActivity,
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            ReplyToken = replyToken,
+            ReplyTokenExpiresAtUnixMs = runtimeContext.NyxRelayReplyToken?.ExpiresAtUtc.ToUnixTimeMilliseconds() ?? 0,
+        };
+        var command = new AgentRunToolApprovalDecisionRequested
+        {
+            RunId = payload.RunId.Trim(),
+            ApprovalRequestId = payload.ApprovalRequestId.Trim(),
+            ToolCallId = payload.ToolCallId.Trim(),
+            ToolName = payload.ToolName.Trim(),
+            ArgumentsSha256 = payload.ArgumentsSha256.Trim(),
+            Approved = payload.Approved,
+            SenderId = inbound.SenderId.Trim(),
+            RegistrationScopeId = registration.ScopeId.Trim(),
+            ConversationKey = activity.Conversation!.CanonicalKey.Trim(),
+            Request = request,
+        };
+
+        try
+        {
+            await dispatcher.DispatchAsync(command, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "AgentRun tool approval callback dispatch failed: runId={RunId} approvalRequest={ApprovalRequestId} approved={Approved}",
+                command.RunId,
+                command.ApprovalRequestId,
+                command.Approved);
+            return ConversationTurnResult.TransientFailure(
+                "agent_run_tool_approval_dispatch_failed",
+                "The AgentRun tool approval decision could not be dispatched.");
+        }
+
+        return ConversationTurnResult.Ignored(
+            "agent_run_tool_approval_decision_dispatched",
+            activity.Id);
     }
 
     private async Task<ConversationTurnResult?> TryHandleNyxIdApprovalCardActionAsync(
@@ -2367,7 +2485,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // would bypass the typed contract.
         if (cardAction.WorkflowResume is not null ||
             cardAction.LlmSelection is not null ||
-            cardAction.NyxIdApproval is not null)
+            cardAction.NyxIdApproval is not null ||
+            cardAction.AgentRunApproval is not null)
         {
             return false;
         }

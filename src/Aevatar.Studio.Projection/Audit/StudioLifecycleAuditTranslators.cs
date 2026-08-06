@@ -31,8 +31,8 @@ public sealed class StudioMemberImplementationUpdatedAuditTranslator
         StudioSeed(
             "studio.member.implementation.updated",
             "studio_member",
-            context.OriginActorId,
-            "",
+            evt.MemberId,
+            evt.ScopeId,
             "Studio member implementation updated.",
             Annotations: new Dictionary<string, string>(StringComparer.Ordinal)
             {
@@ -135,8 +135,8 @@ public sealed class StudioMemberRenamedAuditTranslator : StudioAuditTranslatorBa
         StudioSeed(
             "studio.member.renamed",
             "studio_member",
-            context.OriginActorId,
-            "",
+            evt.MemberId,
+            evt.ScopeId,
             "Studio member display name updated.",
             Annotations: new Dictionary<string, string>(StringComparer.Ordinal)
             {
@@ -156,8 +156,8 @@ public sealed class StudioMemberBindingCompletedAuditTranslator
         StudioSeed(
             "studio.member.binding.completed",
             "studio_member",
-            context.OriginActorId,
-            "",
+            evt.MemberId,
+            evt.ScopeId,
             "Studio member binding completed.",
             Annotations: new Dictionary<string, string>(StringComparer.Ordinal)
             {
@@ -180,8 +180,8 @@ public sealed class StudioMemberBindingFailedAuditTranslator
         StudioSeed(
             "studio.member.binding.failed",
             "studio_member",
-            context.OriginActorId,
-            "",
+            evt.MemberId,
+            evt.ScopeId,
             "Studio member binding failed.",
             Annotations: new Dictionary<string, string>(StringComparer.Ordinal)
             {

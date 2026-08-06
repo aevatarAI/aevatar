@@ -35,7 +35,8 @@ internal static class BindingToolResultReceipts
             "external_capability_readiness_failed",
             static root =>
                 TryGetString(root, "status", out var status) &&
-                string.Equals(status, ReadyStatus, StringComparison.Ordinal));
+                string.Equals(status, ReadyStatus, StringComparison.Ordinal),
+            readReadinessStatus: true);
 
     public static AgentToolReceipt? CreateExplicitRequestPreview(
         string defaultToolName,
@@ -55,13 +56,56 @@ internal static class BindingToolResultReceipts
                 HasProperty(root, "confirmations", JsonValueKind.Array) &&
                 HasProperty(root, "requests", JsonValueKind.Array));
 
+    public static AgentToolReceipt? CreateScopeWorkflowList(
+        string defaultToolName,
+        string callId,
+        string toolName,
+        string resultJson) =>
+        CreateReadOnly(
+            defaultToolName,
+            callId,
+            toolName,
+            resultJson,
+            "scope_workflow_list_failed",
+            static root =>
+                HasNonEmptyString(root, "scope_id") &&
+                HasProperty(root, "workflows", JsonValueKind.Array));
+
+    public static AgentToolReceipt? CreateScopeWorkflowGet(
+        string defaultToolName,
+        string callId,
+        string toolName,
+        string resultJson) =>
+        CreateReadOnly(
+            defaultToolName,
+            callId,
+            toolName,
+            resultJson,
+            "scope_workflow_get_failed",
+            static root =>
+            {
+                if (!HasProperty(root, "available", JsonValueKind.True) &&
+                    !HasProperty(root, "available", JsonValueKind.False))
+                {
+                    return false;
+                }
+
+                if (!HasNonEmptyString(root, "scope_id"))
+                    return false;
+
+                return root.GetProperty("available").GetBoolean()
+                    ? HasProperty(root, "workflow", JsonValueKind.Object)
+                    : HasNonEmptyString(root, "workflow_id") && HasNonEmptyString(root, "status");
+            });
+
     private static AgentToolReceipt? CreateReadOnly(
         string defaultToolName,
         string callId,
         string toolName,
         string resultJson,
         string defaultErrorCode,
-        Func<JsonElement, bool> isVerifiedSuccess)
+        Func<JsonElement, bool> isVerifiedSuccess,
+        bool readReadinessStatus = false)
     {
         if (!TryParseObject(resultJson, out var document))
             return null;
@@ -70,7 +114,7 @@ internal static class BindingToolResultReceipts
         {
             var root = document.RootElement;
             if (TryReadError(root, defaultErrorCode, out var errorCode, out var errorMessage) ||
-                TryReadReadinessError(root, out errorCode, out errorMessage))
+                (readReadinessStatus && TryReadReadinessError(root, out errorCode, out errorMessage)))
             {
                 return Receipt(
                     defaultToolName,

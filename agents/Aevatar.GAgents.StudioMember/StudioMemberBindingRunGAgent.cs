@@ -223,6 +223,16 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         await SchedulePlatformBindingWatchdogAsync();
     }
 
+    [EventHandler(EndpointName = "platformBindingReadinessTimedOut", AllowSelfHandling = true)]
+    public async Task HandlePlatformBindingReadinessTimedOut(StudioMemberPlatformBindingReadinessTimedOut evt)
+    {
+        if (!CanAcceptPlatformBindingCommand(evt.BindingRunId, evt.PlatformBindingCommandId))
+            return;
+
+        await PersistDomainEventAsync(evt);
+        await SchedulePlatformBindingWatchdogAsync();
+    }
+
     [EventHandler(EndpointName = "completePlatformBinding")]
     public async Task HandlePlatformBindingSucceeded(StudioMemberPlatformBindingSucceeded evt)
     {
@@ -264,6 +274,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             .On<StudioMemberPlatformBindingStartRequested>(ApplyPlatformBindingStartRequested)
             .On<StudioMemberPlatformBindingAccepted>(ApplyPlatformBindingAccepted)
             .On<StudioMemberPlatformBindingExecutionStarted>(ApplyPlatformBindingExecutionStarted)
+            .On<StudioMemberPlatformBindingReadinessTimedOut>(ApplyPlatformBindingReadinessTimedOut)
             .On<StudioMemberPlatformBindingSucceeded>(ApplyPlatformBindingSucceeded)
             .On<StudioMemberPlatformBindingFailed>(ApplyPlatformBindingFailed)
             .On<StudioMemberBindingTerminalAcknowledged>(ApplyMemberBindingTerminalAcknowledged)
@@ -386,6 +397,21 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         next.PlatformExecutionInFlight = true;
         next.PlatformExecutionStartedAtUtc = evt.StartedAtUtc;
         next.UpdatedAtUtc = evt.StartedAtUtc;
+        return next;
+    }
+
+    private static StudioMemberBindingRunState ApplyPlatformBindingReadinessTimedOut(
+        StudioMemberBindingRunState state,
+        StudioMemberPlatformBindingReadinessTimedOut evt)
+    {
+        if (!CanApplyPlatformBindingResult(state, evt.BindingRunId, evt.PlatformBindingCommandId))
+            return state;
+
+        var next = state.Clone();
+        next.Status = StudioMemberBindingRunStatus.PlatformBindingPending;
+        next.PlatformExecutionInFlight = false;
+        next.PlatformExecutionStartedAtUtc = null;
+        next.UpdatedAtUtc = evt.TimedOutAtUtc;
         return next;
     }
 
@@ -644,6 +670,8 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
                 new StudioMemberBindingCompletedEvent
                 {
                     BindingRunId = State.BindingRunId,
+                    MemberId = State.MemberId,
+                    ScopeId = State.ScopeId,
                     PublishedServiceId = State.PlatformResult.PublishedServiceId,
                     RevisionId = State.PlatformResult.RevisionId,
                     ImplementationKind = State.PlatformResult.ImplementationKind,
@@ -661,6 +689,8 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
                 new StudioMemberBindingFailedEvent
                 {
                     BindingRunId = State.BindingRunId,
+                    MemberId = State.MemberId,
+                    ScopeId = State.ScopeId,
                     Failure = State.Failure.Clone(),
                 },
                 ct);

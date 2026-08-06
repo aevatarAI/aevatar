@@ -1372,6 +1372,95 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         commandPort.Calls.Should().Contain(call => call.Method == "ActivateServiceRevisionAsync");
     }
 
+    [Theory]
+    [InlineData(
+        WorkflowCapabilityAdmissionPlanIntegrity.LegacySchemaVersion,
+        ExternalCapabilityExecutionMode.Interactive,
+        ExternalCapabilityExecutionMode.Interactive)]
+    [InlineData(
+        WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+        ExternalCapabilityExecutionMode.Interactive,
+        ExternalCapabilityExecutionMode.Durable)]
+    public async Task UpsertAsync_ShouldRejectExistingWorkflowReplay_WhenPreparedArtifactRequiresCapabilityAdmissionRebind(
+        string admissionSchemaVersion,
+        ExternalCapabilityExecutionMode workflowExecutionMode,
+        ExternalCapabilityExecutionMode admissionExecutionMode)
+    {
+        const string revisionId = "rev-platform-bind-1";
+        const string workflowYaml = "name: main\nsteps:\n  - run: echo hello";
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(
+            new ServiceCatalogSnapshot(
+                "scope-a:default:default:default",
+                ScopeId,
+                DefaultOptions.ServiceAppId,
+                DefaultOptions.ServiceNamespace,
+                DefaultOptions.DefaultServiceId,
+                "main",
+                revisionId,
+                revisionId,
+                "dep-1",
+                "actor-1",
+                "Active",
+                [
+                    new ServiceEndpointSnapshot(
+                        "chat",
+                        "chat",
+                        ServiceEndpointKind.Chat.ToString(),
+                        GetTypeUrl(ChatRequestEvent.Descriptor),
+                        GetTypeUrl(ChatResponseEvent.Descriptor),
+                        "Workflow chat endpoint."),
+                ],
+                [],
+                DateTimeOffset.UtcNow),
+            new ServiceRevisionCatalogSnapshot(
+                "scope-a:default:default:default",
+                [
+                    new ServiceRevisionSnapshot(
+                        revisionId,
+                        ServiceImplementationKind.Workflow.ToString(),
+                        ServiceRevisionStatus.Published.ToString(),
+                        string.Empty,
+                        string.Empty,
+                        [],
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        null,
+                        null,
+                        CreateWorkflowArtifact(
+                            revisionId,
+                            "main",
+                            workflowYaml,
+                            admissionSchemaVersion,
+                            workflowExecutionMode,
+                            admissionExecutionMode)),
+                ],
+                DateTimeOffset.UtcNow));
+        var service = CreateService(
+            commandPort,
+            lifecyclePort,
+            new FakeScopeScriptQueryPort(),
+            new FakeScriptDefinitionSnapshotPort(),
+            new FakeWorkflowRunActorPort());
+
+        var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                workflowYaml,
+            ]),
+            RevisionId: revisionId,
+            AllowExistingRevisionReplay: true,
+            ReplayRevisionId: revisionId));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*requires rebind*new revision id*");
+        commandPort.Calls.Should().ContainSingle(call => call.Method == "UpdateServiceAsync");
+        commandPort.Calls.Should().NotContain(call => call.Method == "PrepareRevisionAsync");
+        commandPort.Calls.Should().NotContain(call => call.Method == "PublishRevisionAsync");
+    }
+
     [Fact]
     public async Task UpsertAsync_ShouldReplayExistingWorkflowRevision_WhenRevisionIsUnprepared()
     {
@@ -2170,6 +2259,49 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             .Assemble(artifact)
             .ArtifactHash;
     }
+
+    private static PreparedServiceRevisionArtifact CreateWorkflowArtifact(
+        string revisionId,
+        string workflowName,
+        string workflowYaml,
+        string admissionSchemaVersion,
+        ExternalCapabilityExecutionMode workflowExecutionMode,
+        ExternalCapabilityExecutionMode admissionExecutionMode) =>
+        new()
+        {
+            Identity = DefaultServiceIdentity(),
+            RevisionId = revisionId,
+            ImplementationKind = ServiceImplementationKind.Workflow,
+            Endpoints =
+            {
+                new ServiceEndpointDescriptor
+                {
+                    EndpointId = "chat",
+                    DisplayName = "chat",
+                    Kind = ServiceEndpointKind.Chat,
+                    RequestTypeUrl = GetTypeUrl(ChatRequestEvent.Descriptor),
+                    ResponseTypeUrl = GetTypeUrl(ChatResponseEvent.Descriptor),
+                    Description = "Workflow chat endpoint.",
+                },
+            },
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                WorkflowPlan = new WorkflowServiceDeploymentPlan
+                {
+                    WorkflowName = workflowName,
+                    WorkflowYaml = workflowYaml,
+                    ExecutionMode = workflowExecutionMode,
+                    DefinitionActorId = DefaultOptions.BuildDefinitionActorIdPrefix(
+                        ScopeId,
+                        DefaultOptions.DefaultServiceId),
+                    CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+                    {
+                        SchemaVersion = admissionSchemaVersion,
+                        ExecutionMode = admissionExecutionMode,
+                    },
+                },
+            },
+        };
 
     private static string CreateStaticArtifactHash(
         string revisionId,

@@ -406,9 +406,22 @@ internal static class NyxIdChatConversationAguiFrameBuilder
             Custom(TaskSnapshotEventName, task, sequence),
         };
         frames.AddRange(changedSteps.Select(step =>
-            Custom(TaskStepChangedEventName, step, sequence)));
+            Custom(TaskStepChangedEventName, BuildStepChanged(task, step), sequence)));
         return frames;
     }
+
+    private static NyxIdChatTaskStepChanged BuildStepChanged(
+        NyxIdChatTaskState task,
+        NyxIdChatTaskStepState step) =>
+        new()
+        {
+            TaskId = task.TaskId,
+            PlanRevision = task.PlanRevision,
+            Step = step.Clone(),
+            ChangeKind = step.Status == NyxIdChatStepStatus.Cancelled
+                ? NyxIdChatStepChangeKind.Cancelled
+                : NyxIdChatStepChangeKind.Status,
+        };
 
     private static IEnumerable<NyxIdChatTaskStepState> ResolveChangedSteps(
         NyxIdChatTaskState task,

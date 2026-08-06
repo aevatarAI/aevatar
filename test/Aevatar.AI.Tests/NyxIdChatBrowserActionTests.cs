@@ -163,13 +163,18 @@ public sealed class NyxIdChatBrowserActionTests
             NyxIdChatContinuationAdmissionStatus.Accepted);
         decision.State.ActiveTurn.TurnId.Should().Be("turn-action-alpha");
         decision.State.ActiveTurn.TurnId.Should().NotBe("turn-alpha");
-        decision.State.ActiveTask.TaskId.Should().NotBe("task-alpha");
+        decision.State.ActiveTask.TaskId.Should().Be("task-alpha",
+            "one goal keeps the same task identity across continuation turns");
         decision.State.ActiveTask.TurnId.Should().Be("turn-action-alpha");
+        decision.State.ActiveTask.PlanRevision.Should().Be(2);
         decision.State.RecentTerminalTurns.Should().Contain(summary =>
             summary.TurnId == "turn-alpha" &&
             summary.Status == NyxIdChatTurnStatus.Blocked);
+        decision.State.ActiveTask.Steps.Should().Contain(step =>
+            step.StepId == blocked.PendingActions.Single().StepId &&
+            step.Status == NyxIdChatStepStatus.Waiting);
         var postconditionStep = decision.State.ActiveTask.Steps.Should()
-            .ContainSingle().Which;
+            .ContainSingle(step => step.Kind == NyxIdChatStepKind.Postcondition).Which;
         postconditionStep.Kind.Should().Be(NyxIdChatStepKind.Postcondition);
         postconditionStep.Status.Should().Be(NyxIdChatStepStatus.Running);
         postconditionStep.Source.Postcondition.ActionRequestId.Should().Be(
@@ -369,10 +374,10 @@ public sealed class NyxIdChatBrowserActionTests
         decision.ShouldDispatch.Should().BeFalse();
         decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Blocked);
         decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Blocked);
-        decision.State.ActiveTask.Steps.Single().Status.Should().Be(
-            NyxIdChatStepStatus.Waiting);
-        decision.State.ActiveTask.Steps.Single().Status.Should().NotBe(
-            NyxIdChatStepStatus.Done);
+        var postcondition = decision.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition);
+        postcondition.Status.Should().Be(NyxIdChatStepStatus.Waiting);
+        postcondition.Status.Should().NotBe(NyxIdChatStepStatus.Done);
         decision.State.PendingActions.Single().PostconditionResult.Verified.Should().BeFalse();
     }
 
@@ -416,6 +421,14 @@ public sealed class NyxIdChatBrowserActionTests
             summary.TurnId == "turn-alpha" &&
             summary.Status == NyxIdChatTurnStatus.Blocked);
         decision.State.PendingActions.Should().BeEmpty();
+        decision.State.ActiveTask.Steps.Single(step =>
+                step.StepId == blocked.PendingActions.Single().StepId)
+            .Should().Match<NyxIdChatTaskStepState>(step =>
+                step.Status == NyxIdChatStepStatus.Done &&
+                step.ExternalEffect == NyxIdChatEffectEvidence.Confirmed);
+        decision.State.ActiveTask.Steps.Single(step =>
+                step.Kind == NyxIdChatStepKind.Postcondition)
+            .Status.Should().Be(NyxIdChatStepStatus.Done);
         decision.State.RecentActions.Should().ContainSingle(action =>
             action.PostconditionResult.Verified);
     }
@@ -506,7 +519,10 @@ public sealed class NyxIdChatBrowserActionTests
         admitted.ShouldCommit.Should().BeTrue();
         admitted.Admission.ActionReports.Select(static report => report.ActionRequestId)
             .Should().Equal(firstId, secondId);
-        admitted.State.ActiveTask.Steps.Should().HaveCount(2);
+        admitted.State.ActiveTask.Steps.Should().Contain(step =>
+            step.StepId == "step-tool-alpha");
+        admitted.State.ActiveTask.Steps.Count(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition).Should().Be(2);
         admitted.State.PendingActions.Single(action => action.ActionRequestId == firstId)
             .Reports.Should().ContainSingle();
 

@@ -104,6 +104,7 @@ public static class ServiceCollectionExtensions
 
         // ─── Channel LLM reply run dispatch ───
         services.TryAddSingleton<IChannelLlmReplyRunDispatcher, AgentRunDispatcher>();
+        services.TryAddSingleton<IAgentRunToolApprovalDecisionDispatcher, AgentRunToolApprovalDecisionDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, ChannelWorkflowDraftRunSlashCommandHandler>());
         services.TryAddSingleton<ChannelSlashCommandRegistry>();
         services.TryAddSingleton<ChannelWorkflowDraftRunIntentParser>();

@@ -7,7 +7,7 @@ public static class SkillInvocationTriggerParser
     private static readonly Regex[] ExplicitNamedSkillPatterns =
     [
         new(
-            "(?:使用|加载|挂载)\\s*(?:精确名称为|名称为|名为|名叫)?\\s*[`'\"]?(?<name>[a-z0-9]+(?:-[a-z0-9]+)+)[`'\"]?\\s*(?:的\\s*)?(?:skill|技能)",
+            "(?:使用|加载|挂载)\\s*(?:(?:已(?:经)?(?:挂载|加载)的)|(?:精确名称为|名称为|名为|名叫))?\\s*[`'\"]?(?<name>[a-z0-9]+(?:-[a-z0-9]+)+)[`'\"]?\\s*(?:(?:的\\s*)?(?:skill|技能))?",
             RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase),
         new(
             "(?:use|load|mount)\\s+(?:(?:the\\s+)?(?:exact\\s+)?skill\\s+(?:named\\s+)?[`'\"]?(?<name>[a-z0-9]+(?:-[a-z0-9]+)+)[`'\"]?|(?:the\\s+)?(?:exact\\s+)?[`'\"]?(?<name>[a-z0-9]+(?:-[a-z0-9]+)+)[`'\"]?\\s+skill)",

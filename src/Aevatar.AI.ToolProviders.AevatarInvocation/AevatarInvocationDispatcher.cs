@@ -704,6 +704,7 @@ public sealed class AevatarInvocationDispatcher
         var streamTopic = wait == InvocationWaitMode.Stream
             ? AevatarInvocationStreamTopics.ForActorRun(receipt.ActorId, receipt.CommandId)
             : string.Empty;
+        LogWorkflowStartAccepted(command, receipt, wait);
         WorkflowRunBackgroundDeliveryReceipt? workflowRunDeliveryReceipt = null;
         if (deliveryReservation != null)
         {
@@ -718,7 +719,7 @@ public sealed class AevatarInvocationDispatcher
 
         return ToChatRunRequest(chatRunRequest, new InvocationToolResult
         {
-            RunId = receipt.CommandId,
+            RunId = receipt.ActorId,
             Status = wait == InvocationWaitMode.Ack ? "accepted" : "streaming",
             StreamTopic = streamTopic,
             ActorId = receipt.ActorId,
@@ -2344,6 +2345,32 @@ public sealed class AevatarInvocationDispatcher
         Normalize(AgentToolRequestContext.CallId)
         ?? Normalize(AgentToolRequestContext.RequestId)
         ?? Guid.NewGuid().ToString("N");
+
+    private void LogWorkflowStartAccepted(
+        WorkflowChatRunRequest command,
+        WorkflowChatRunAcceptedReceipt receipt,
+        InvocationWaitMode wait)
+    {
+        var inputFileRefs = command.InputParts?
+            .Where(static part => part.FileRef is not null)
+            .Select(static part => part.FileRef!)
+            .ToArray() ?? [];
+        var firstFileRef = inputFileRefs.FirstOrDefault();
+
+        _logger.LogWarning(
+            "Aevatar workflow start accepted. workflowId={WorkflowId} workflowRunId={WorkflowRunId} workflowCommandId={WorkflowCommandId} correlationId={CorrelationId} wait={Wait} scopeId={ScopeId} inputPartCount={InputPartCount} inputFileRefCount={InputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+            command.Source.WorkflowName ?? string.Empty,
+            receipt.ActorId,
+            receipt.CommandId,
+            receipt.CorrelationId,
+            wait.ToString(),
+            command.ScopeId ?? string.Empty,
+            command.InputParts?.Count ?? 0,
+            inputFileRefs.Length,
+            firstFileRef?.FileId ?? string.Empty,
+            firstFileRef?.ArtifactId ?? string.Empty,
+            firstFileRef?.MediaType ?? string.Empty);
+    }
 
     private static string ResolveWorkflowCorrelationId(string commandId) =>
         new[]

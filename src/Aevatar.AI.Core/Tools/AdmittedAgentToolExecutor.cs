@@ -830,6 +830,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                     NyxIdAccessToken = senderToken,
                     NyxIdOrgToken = senderToken,
                     SenderNyxIdAccessToken = senderToken,
+                    NyxIdCredentialKind = AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
                 },
             };
             return new CredentialDecision(

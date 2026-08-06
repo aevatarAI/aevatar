@@ -82,6 +82,8 @@ public sealed class WorkflowScheduleProvisioningPort : IWorkflowScheduleProvisio
         {
             ScheduleId = response.ScheduleId,
             BindingRunId = response.BindingRunId,
+            ScheduleProvisioningId = response.ScheduleProvisioningId,
+            ScheduleProvisioningStatus = response.ScheduleProvisioningStatus,
         };
     }
 }

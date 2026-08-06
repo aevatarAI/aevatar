@@ -62,6 +62,8 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             html.Should().Contain("/workflow/studio/assets/app.js");
             html.Should().Contain("globalThis.__AEVATAR_ASSISTANT_CONFIG__");
             html.Should().Contain("Aevatar Studio");
+            html.Should().Contain("<span>工作台</span>");
+            html.Should().Contain("<div class=\"group-label\">工作台</div>");
             html.Should().Contain("name=\"color-scheme\" content=\"only light\"");
             html.Should().NotContain("themeButton");
             html.Should().NotContain("workflow: \"studio\"");
@@ -177,6 +179,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         protocol.Should().Contain("schemaVersion !== 4");
         protocol.Should().Contain("\"nyxid.input.request\": \"input_requested\"");
         protocol.Should().Contain("\"nyxid.approval.request\": \"approval_requested\"");
+        protocol.Should().Contain("value.step = normalizeStep(value.step)");
         actorState.Should().Contain("export function reduceActorEvent(");
         actorState.Should().Contain("export function applyCurrentStateResult(");
         actorState.Should().Contain("pendingInput: null");
@@ -192,15 +195,71 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         styles.Should().Contain(".readiness-panel");
         styles.Should().Contain(".needs-you-panel");
         styles.Should().Contain(".history-filter");
+        styles.Should().Contain(".actor-plan-meta");
+        styles.Should().Contain(".actor-substeps");
+        styles.Should().Contain(".actor-task.collapsed");
+        styles.Should().Contain(".cc-progress");
+        styles.Should().Contain(".activity-card.collapsed");
+        styles.Should().Contain("--assistant-card-max-width: 560px");
+        styles.Should().Contain("--assistant-card-inline-gutter: 24px");
+        styles.Should().Contain("width: min(448px, calc(100% - 48px))");
+        app.Should().Contain("展开计划详情");
+        app.Should().Contain("cc-progress-step");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("v=20260805-light-only");
+        html.Should().Contain("v=20260805-card-gutters");
         styles.Should().Contain("color-scheme: only light");
         styles.Should().NotContain("color-scheme: dark");
         styles.Should().NotContain("prefers-color-scheme");
-        styles.Should().Contain("--bg: #f4f5f7");
-        styles.Should().Contain("--accent: #2563eb");
+        styles.Should().Contain("--bg: #fafafa");
+        styles.Should().Contain("--accent: #5a2af1");
         styles.Should().NotContain("data-theme");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_TaskStepProtocol_ShouldDecodeWrappedV4PlanChange()
+    {
+        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
+            const context = { structuredClone, TextDecoder, URL, console };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            const event = context.normalizeFrame({
+              type:'CUSTOM', sequence:41, custom:{name:'nyxid.task.step.changed', payload:{
+                taskId:'task-alpha', planRevision:2,
+                changeKind:'NYX_ID_CHAT_STEP_CHANGE_KIND_ADDED',
+                step:{
+                  stepId:'step-tool', order:2, kind:'NYX_ID_CHAT_STEP_KIND_TOOL',
+                  status:'NYX_ID_CHAT_STEP_STATUS_RUNNING',
+                  externalEffect:'NYX_ID_CHAT_EFFECT_EVIDENCE_NOT_STARTED',
+                  addedBy:'NYX_ID_CHAT_STEP_ADDED_BY_REPLAN', dependsOn:['step-plan'],
+                  estimate:{kind:'NYX_ID_CHAT_STEP_ESTIMATE_KIND_DURATION',seconds:20},
+                  substeps:[{substepId:'substep-alpha',title:'Validate repository',
+                    status:'NYX_ID_CHAT_SUBSTEP_STATUS_DONE'}]
+                }
+              }}
+            });
+
+            assert.equal(event.type, 'task_step_changed');
+            assert.equal(event.sequence, 41);
+            assert.equal(event.payload.taskId, 'task-alpha');
+            assert.equal(event.payload.planRevision, 2);
+            assert.equal(event.payload.changeKind, 'added');
+            assert.equal(event.payload.step.kind, 'tool');
+            assert.equal(event.payload.step.status, 'running');
+            assert.equal(event.payload.step.addedBy, 'replan');
+            assert.deepEqual(JSON.parse(JSON.stringify(event.payload.step.dependsOn)), ['step-plan']);
+            assert.equal(event.payload.step.estimate.kind, 'duration');
+            assert.equal(event.payload.step.substeps[0].status, 'done');
+            """;
+
+        var result = await RunNodeAsync(script, protocol);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     [Fact]
@@ -256,6 +315,25 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             vm.runInContext(source, context);
 
             let live = context.createActorProjection('conversation-alpha');
+            live = context.reduceActorEvent(live, {type:'task_snapshot', sequence:20, payload:{
+              schemaVersion:4, actorId:'conversation-alpha', turnId:'turn-alpha',
+              taskId:'task-alpha', planId:'plan-alpha', planRevision:1,
+              title:'Update GitHub safely', status:'active', gate:{mode:'auto',reason:null},
+              steps:[{stepId:'step-plan',order:1,kind:'llm',status:'done',
+                externalEffect:'not_started',addedBy:'initial'}]
+            }});
+            live = context.reduceActorEvent(live, {type:'task_step_changed', sequence:21, payload:{
+              taskId:'task-alpha', planRevision:2, changeKind:'added', step:{
+                stepId:'step-tool',order:2,kind:'tool',status:'running',
+                externalEffect:'not_started',addedBy:'replan',dependsOn:['step-plan'],
+                estimate:{kind:'duration',seconds:20},substeps:[{
+                  substepId:'substep-alpha',title:'Validate repository',status:'done'}]
+              }
+            }});
+            assert.equal(live.task.planId, 'plan-alpha');
+            assert.equal(live.task.planRevision, 2);
+            assert.equal(live.steps.size, 2);
+            assert.deepEqual(live.steps.get('step-tool').dependsOn, ['step-plan']);
             live = context.reduceActorEvent(live, {type:'input_requested', sequence:23, payload:{
               requestId:'input-alpha', turnId:'turn-alpha', taskId:'task-alpha', stepId:'step-input',
               prompt:'Select regions', options:[{optionId:'option-sg',label:'Singapore'}],
@@ -272,7 +350,14 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             let current = context.createActorProjection('conversation-alpha');
             const applied = context.applyCurrentStateResult(current, {status:'current', stateVersion:31, snapshot:{
               actorId:'conversation-alpha', scopeId:'scope-alpha', stateVersion:31, progressSequence:31,
-              activeTurn:null, latestTurn:null, recentTerminalTurns:[], activeTask:null,
+              activeTurn:null, latestTurn:null, recentTerminalTurns:[], activeTask:{
+                schemaVersion:4, actorId:'conversation-alpha', turnId:'turn-alpha',
+                taskId:'task-alpha', planId:'plan-alpha', planRevision:2,
+                title:'Update GitHub safely', status:'active', gate:{mode:'confirm',reason:'Effect'},
+                steps:[{stepId:'step-tool',order:2,kind:'tool',status:'waiting',
+                  externalEffect:'not_started',addedBy:'replan',dependsOn:['step-plan'],
+                  substeps:[{substepId:'substep-alpha',title:'Validate repository',status:'done'}]}]
+              },
               pendingInput:null, pendingApproval:{
                 approvalRequestId:'approval-alpha', turnId:'turn-alpha', taskId:'task-alpha',
                 stepId:'step-tool', toolName:'repository_delete', action:'repository.delete',
@@ -285,6 +370,9 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             assert.equal(applied.projection.pendingApproval.approvalRequestId, 'approval-alpha');
             assert.equal(applied.projection.pendingApproval.reversibility, 'irreversible');
             assert.equal(applied.projection.attentionKind, 'approval');
+            assert.equal(applied.projection.task.planId, 'plan-alpha');
+            assert.equal(applied.projection.task.planRevision, 2);
+            assert.equal(applied.projection.steps.get('step-tool').substeps[0].status, 'done');
             assert.equal(applied.reloadWithoutCursor, false);
             """;
 

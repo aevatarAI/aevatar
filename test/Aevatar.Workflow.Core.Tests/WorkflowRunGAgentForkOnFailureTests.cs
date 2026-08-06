@@ -8,10 +8,10 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
-using Aevatar.Workflow.Abstractions.Execution;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -320,6 +320,47 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
         harness.Agent.State.LastCommandId.Should().Be("work-order-dispatch-command-1");
     }
 
+    [Fact]
+    public async Task ChatRequest_ConcurrentRedeliveryWithSameCommandId_ShouldStartRunOnlyOnce()
+    {
+        var runId = "work-order-run-" + Guid.NewGuid().ToString("N");
+        var ownershipPort = new BlockingWorkflowFileArtifactOwnershipPort();
+        var harness = await CreateRunAsync(runId, WorkflowYaml(onFailure: false), ownershipPort);
+        var envelope = EnvelopeFrom("work-order", new WorkflowChatRequestEvent
+        {
+            Prompt = "hello",
+            ScopeId = "scope-1",
+            InputParts =
+            {
+                new WorkflowChatInputPartPayload
+                {
+                    Kind = WorkflowChatInputPartKind.File,
+                    FileRef = new WorkflowFileRef
+                    {
+                        FileId = "wf-file-concurrent-123",
+                        SourceKind = WorkflowFileSourceKind.ChatInput,
+                        FileName = "invoice.txt",
+                        MediaType = "text/plain",
+                    },
+                },
+            },
+        });
+        envelope.Id = "work-order-dispatch-command-concurrent";
+        envelope.Propagation.CorrelationId = "work-order-dispatch-command-concurrent";
+
+        var first = harness.Agent.HandleEventAsync(envelope);
+        await ownershipPort.FirstBindingStarted;
+        var redelivery = harness.Agent.HandleEventAsync(envelope.Clone());
+        ownershipPort.Release();
+        await Task.WhenAll(first, redelivery);
+
+        ownershipPort.BindingCount.Should().Be(1);
+        CommittedEvents<WorkflowRunExecutionStartedEvent>(harness.CommittedPublisher)
+            .Should().ContainSingle();
+        harness.Publisher.Published.Count(item => item.Event is StartWorkflowEvent)
+            .Should().Be(1);
+    }
+
     private static async Task<RunHarness> CreateStartedRunAsync(string workflowYaml, int attempt)
     {
         var runId = "run-1859-" + Guid.NewGuid().ToString("N");
@@ -348,7 +389,7 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
     private static async Task<RunHarness> CreateRunAsync(
         string runId,
         string workflowYaml,
-        RecordingWorkflowFileArtifactOwnershipPort? fileOwnershipPort = null)
+        Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactOwnershipPort? fileOwnershipPort = null)
     {
         var eventStore = new RecordingEventStore();
         var committedHook = new RecordingCommittedStatePublicationHook();
@@ -482,6 +523,36 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
                 ownerScopeId));
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class BlockingWorkflowFileArtifactOwnershipPort :
+        Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactOwnershipPort
+    {
+        private readonly TaskCompletionSource _firstBindingStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _bindingCount;
+
+        public Task FirstBindingStarted => _firstBindingStarted.Task;
+
+        public int BindingCount => Volatile.Read(ref _bindingCount);
+
+        public async ValueTask BindOwnerAsync(
+            Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef fileRef,
+            string ownerRunId,
+            string? ownerScopeId,
+            CancellationToken cancellationToken = default)
+        {
+            _ = fileRef;
+            _ = ownerRunId;
+            _ = ownerScopeId;
+            Interlocked.Increment(ref _bindingCount);
+            _firstBindingStarted.TrySetResult();
+            await _release.Task.WaitAsync(cancellationToken);
+        }
+
+        public void Release() => _release.TrySetResult();
     }
 
     private sealed class EmptyWorkflowModulePack : IWorkflowModulePack

@@ -76,14 +76,8 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         if (!IsValidExecutionPolicy(policy))
             return new AgentToolCallSafety(null, false, false);
 
-        // Binder admission authorizes this exact workflow call site. NyxID remains the authority
-        // for downstream operation approval after the request reaches its proxy.
-        var proofBoundWorkflowCall =
-            context!.InvocationSurface == AgentToolInvocationSurface.WorkflowToolCall;
         return new AgentToolCallSafety(
-            proofBoundWorkflowCall
-                ? false
-                : policy!.Approval == AgentToolOperationApproval.Required,
+            policy!.Approval == AgentToolOperationApproval.Required,
             policy!.Risk == AgentToolOperationRisk.ReadOnly,
             policy.Risk == AgentToolOperationRisk.Destructive);
     }

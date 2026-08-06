@@ -74,7 +74,14 @@ const ENUMS = Object.freeze({
     "planned", "waiting", "running", "done", "failed", "skipped", "cancelled", "uncertain",
   ]),
   stepKind: enumDefinition("NYX_ID_CHAT_STEP_KIND_", [
-    "llm", "tool", "browser_action", "postcondition", "input",
+    "llm", "tool", "browser_action", "postcondition", "input", "approval", "web",
+  ]),
+  planGateMode: enumDefinition("NYX_ID_CHAT_PLAN_GATE_MODE_", ["auto", "confirm"]),
+  stepAddedBy: enumDefinition("NYX_ID_CHAT_STEP_ADDED_BY_", ["initial", "replan", "steering"]),
+  estimateKind: enumDefinition("NYX_ID_CHAT_STEP_ESTIMATE_KIND_", ["duration"]),
+  substepStatus: enumDefinition("NYX_ID_CHAT_SUBSTEP_STATUS_", ["running", "done", "failed"]),
+  stepChangeKind: enumDefinition("NYX_ID_CHAT_STEP_CHANGE_KIND_", [
+    "status", "substep", "added", "cancelled",
   ]),
   effect: enumDefinition("NYX_ID_CHAT_EFFECT_EVIDENCE_", [
     "not_started", "not_applied", "confirmed", "may_have_changed",
@@ -693,11 +700,23 @@ function safeActorSequence(raw) {
 function normalizeActorPayload(type, payload) {
   const value = cloneJsonObject(payload);
   if (type === "task_snapshot") {
+    normalizeIntegerProperty(value, "schemaVersion");
+    normalizeIntegerProperty(value, "planRevision");
     normalizeEnumProperty(value, "status", ENUMS.taskStatus);
+    if (value.gate && typeof value.gate === "object") {
+      value.gate = cloneJsonObject(value.gate);
+      normalizeEnumProperty(value.gate, "mode", ENUMS.planGateMode);
+    }
     if (Array.isArray(value.steps)) value.steps = value.steps.map(normalizeStep);
     return value;
   }
-  if (type === "task_step_changed") return normalizeStep(value);
+  if (type === "task_step_changed") {
+    value.taskId = validateIdentity(value.taskId);
+    normalizeIntegerProperty(value, "planRevision");
+    normalizeEnumProperty(value, "changeKind", ENUMS.stepChangeKind);
+    value.step = normalizeStep(value.step);
+    return value;
+  }
   if (type === "control_changed") {
     normalizeEnumProperty(value, "kind", ENUMS.controlKind);
     normalizeEnumProperty(value, "outcome", ENUMS.controlOutcome);
@@ -785,6 +804,25 @@ function normalizeStep(input) {
   normalizeEnumProperty(step, "kind", ENUMS.stepKind);
   normalizeEnumProperty(step, "status", ENUMS.stepStatus);
   normalizeEnumProperty(step, "externalEffect", ENUMS.effect);
+  normalizeEnumProperty(step, "addedBy", ENUMS.stepAddedBy);
+  if (Array.isArray(step.dependsOn)) step.dependsOn = step.dependsOn.map(validateIdentity);
+  if (step.estimate && typeof step.estimate === "object") {
+    step.estimate = cloneJsonObject(step.estimate);
+    normalizeEnumProperty(step.estimate, "kind", ENUMS.estimateKind);
+    normalizeIntegerProperty(step.estimate, "seconds");
+  }
+  if (Array.isArray(step.substeps)) {
+    step.substeps = step.substeps.map((input) => {
+      const substep = cloneJsonObject(input);
+      substep.substepId = validateIdentity(substep.substepId);
+      normalizeEnumProperty(substep, "status", ENUMS.substepStatus);
+      if (typeof substep.title !== "string" || !substep.title.trim()) {
+        throw new ProtocolValidationError("Actor substep title is invalid.");
+      }
+      substep.title = substep.title.trim().slice(0, 400);
+      return substep;
+    });
+  }
   if (step.operation && typeof step.operation === "object") {
     step.operation = cloneJsonObject(step.operation);
     normalizeEnumProperty(step.operation, "kind", ENUMS.stepKind);

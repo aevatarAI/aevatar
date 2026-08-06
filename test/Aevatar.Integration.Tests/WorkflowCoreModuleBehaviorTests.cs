@@ -390,11 +390,14 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
                 ctx,
                 CancellationToken.None);
 
-            var firstDispatch = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+            var firstDispatchEntry = ctx.Published.Single(x => x.evt is StepRequestEvent);
+            var firstDispatch = firstDispatchEntry.evt.Should().BeOfType<StepRequestEvent>().Subject;
             firstDispatch.StepId.Should().Be("while-1_iter_0");
             firstDispatch.StepType.Should().Be("transform");
             firstDispatch.TargetRole.Should().Be("worker");
             firstDispatch.Input.Should().Be("initial");
+            // 迭代子步骤必须回到本 run 的模块管线；投递到 Children 会让 while 永远挂起。
+            firstDispatchEntry.direction.Should().Be(TopologyAudience.Self);
 
             var countAfterStart = ctx.Published.Count;
             await module.HandleAsync(
@@ -417,7 +420,7 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             secondDispatch.StepId.Should().Be("while-1_iter_1");
             secondDispatch.StepType.Should().Be("transform");
             secondDispatch.Input.Should().Be("continue");
-            deltaEvents[0].direction.Should().Be(TopologyAudience.Children);
+            deltaEvents[0].direction.Should().Be(TopologyAudience.Self);
 
             var completed = deltaEvents[1].evt.Should().BeOfType<StepCompletedEvent>().Subject;
             completed.StepId.Should().Be("while-1");

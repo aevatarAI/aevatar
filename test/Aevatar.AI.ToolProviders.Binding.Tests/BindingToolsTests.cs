@@ -958,6 +958,39 @@ public class BindingToolsTests
     }
 
     [Fact]
+    public async Task ScopeWorkflowsListTool_ShouldEmitTypedResultReceipt()
+    {
+        IAgentTool tool = new ScopeWorkflowsListTool(
+            new StubScopeWorkflowQueryPort(listResult:
+            [
+                BuildWorkflowSummary("scope-workflows", "wf-1"),
+            ]),
+            new BindingToolOptions());
+
+        AgentToolRequestContext.Current = OwnerContext("scope-workflows");
+
+        try
+        {
+            var result = await tool.ExecuteAsync("{}");
+            var receipt = tool.CreateResultReceipt(
+                "call-scope-workflows-list",
+                tool.Name,
+                "{}",
+                result);
+
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+            receipt.CallId.Should().Be("call-scope-workflows-list");
+            receipt.ToolName.Should().Be("scope_workflows_list");
+            receipt.ResultJson.Should().Be(result);
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task ScopeWorkflowsListTool_ValidatesScopeContext()
     {
         var tool = new ScopeWorkflowsListTool(
@@ -1017,6 +1050,89 @@ public class BindingToolsTests
     }
 
     [Fact]
+    public async Task ScopeWorkflowsGetTool_ShouldEmitTypedResultReceipt()
+    {
+        IAgentTool tool = new ScopeWorkflowsGetTool(new StubScopeWorkflowQueryPort(
+            getResult: BuildWorkflowSummary("scope-workflows", "wf-1")));
+
+        AgentToolRequestContext.Current = OwnerContext("scope-workflows");
+
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"workflow_id":"wf-1"}""");
+            var receipt = tool.CreateResultReceipt(
+                "call-scope-workflows-get",
+                tool.Name,
+                """{"workflow_id":"wf-1"}""",
+                result);
+
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+            receipt.CallId.Should().Be("call-scope-workflows-get");
+            receipt.ToolName.Should().Be("scope_workflows_get");
+            receipt.ResultJson.Should().Be(result);
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ScopeWorkflowsGetTool_ShouldKeepVerifiedReadOnlySuccessThroughStreamingExecutor()
+    {
+        var tool = new ScopeWorkflowsGetTool(new StubScopeWorkflowQueryPort(
+            getResult: BuildWorkflowSummary("scope-workflows", "wf-1")));
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var executionContext = OwnerContext("scope-workflows") with
+        {
+            Request = new AgentToolRequestIdentity("scope-workflows-get-request", "tc-scope-workflows-get"),
+            ExecutionOwner = AgentToolExecutionOwners.HostService(nameof(BindingToolsTests)),
+        };
+        var executor = new StreamingToolExecutor(
+            tools,
+            toolContext: executionContext,
+            toolExecutionPort: CreateToolExecutionPort());
+        using var executionState = executor.CreateExecutionState();
+
+        AgentToolRequestContext.Current = executionContext;
+
+        try
+        {
+            var prepared = await executor.PrepareBatchAsync(
+                "binding-tools-test:tc-scope-workflows-get",
+                round: 0,
+                [new ToolCall
+                {
+                    Id = "tc-scope-workflows-get",
+                    Name = tool.Name,
+                    ArgumentsJson = """{"workflow_id":"wf-1"}""",
+                }]);
+            executor.AddTool(executionState, prepared.Single());
+
+            var results = new List<ToolExecutionResult>();
+            await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+                results.Add(result);
+
+            var toolResult = results.Should().ContainSingle().Which;
+            toolResult.IsError.Should().BeFalse();
+            toolResult.Result.Should().Contain("\"workflow\"");
+            toolResult.Result.Should().NotBe("""{"status":"unknown","message":"The tool outcome could not be verified."}""");
+            var receipt = toolResult.Receipt;
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+            receipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.NeverRequire);
+            receipt.SideEffectKind.Should().BeEmpty();
+            receipt.ResultJson.Should().Be(toolResult.Result);
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task ScopeWorkflowsGetTool_ValidatesWorkflowId()
     {
         var tool = new ScopeWorkflowsGetTool(new StubScopeWorkflowQueryPort());
@@ -1049,6 +1165,46 @@ public class BindingToolsTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("available").GetBoolean().Should().BeFalse();
             doc.RootElement.GetProperty("workflow_id").GetString().Should().Be("missing");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ScopeWorkflowsGetTool_ShouldVerifyUnavailableAndErrorResults()
+    {
+        IAgentTool missingTool = new ScopeWorkflowsGetTool(new StubScopeWorkflowQueryPort(getResult: null));
+
+        AgentToolRequestContext.Current = OwnerContext("scope-workflows");
+
+        try
+        {
+            var missingResult = await missingTool.ExecuteAsync("""{"workflow_id":"missing"}""");
+            var missingReceipt = missingTool.CreateResultReceipt(
+                "call-scope-workflows-missing",
+                missingTool.Name,
+                """{"workflow_id":"missing"}""",
+                missingResult);
+
+            missingReceipt.Should().NotBeNull();
+            missingReceipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+            missingReceipt.ErrorCode.Should().Be("scope_workflow_get_failed");
+            missingReceipt.ResultJson.Should().Be(missingResult);
+
+            IAgentTool invalidTool = new ScopeWorkflowsGetTool(new StubScopeWorkflowQueryPort());
+            var invalidResult = await invalidTool.ExecuteAsync("{}");
+            var invalidReceipt = invalidTool.CreateResultReceipt(
+                "call-scope-workflows-invalid",
+                invalidTool.Name,
+                "{}",
+                invalidResult);
+
+            invalidReceipt.Should().NotBeNull();
+            invalidReceipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+            invalidReceipt.ErrorCode.Should().Be("scope_workflow_get_failed");
+            invalidReceipt.ResultJson.Should().Be(invalidResult);
         }
         finally
         {

@@ -50,6 +50,7 @@ public sealed partial class WorkflowRunGAgent
     private const string StoppedStatus = "stopped";
     private static readonly TimeSpan ScheduledCallerCredentialCleanupTimeout = TimeSpan.FromSeconds(5);
     private const string StartedNotificationDispatchOperationPrefix = "workflow-started-notification";
+    private const string ToolApprovalNotificationDispatchOperationPrefix = "workflow-tool-approval-notification";
     private const string TerminalNotificationDispatchOperationPrefix = "workflow-terminal-notification";
     private const string TerminalNotificationRetryCallbackPrefix = "workflow-terminal-notification-retry";
     private const int TerminalNotificationInitialRetryDelayMs = 250;
@@ -73,6 +74,7 @@ public sealed partial class WorkflowRunGAgent
     private readonly ApplicationWorkflowFileArtifactOwnershipPort? _fileArtifactOwnership;
     private readonly ISecretVault? _secretVault;
     private readonly TimeProvider _timeProvider;
+    private string? _inFlightChatCommandId;
 
     public WorkflowRunGAgent(
         IActorRuntime runtime,
@@ -490,6 +492,29 @@ public sealed partial class WorkflowRunGAgent
         ArgumentNullException.ThrowIfNull(request);
         var commandId = ActiveInboundEnvelope?.Id?.Trim() ?? string.Empty;
         var correlationId = ActiveInboundEnvelope?.Propagation?.CorrelationId?.Trim() ?? string.Empty;
+        if (!TryAcquireChatCommandExecutionLease(commandId))
+            return;
+
+        try
+        {
+            var start = await PrepareChatRequestStartAsync(request, commandId, correlationId);
+            if (start == null)
+                return;
+
+            await PublishStartWorkflowOrTerminalFailureAsync(start, request.SessionId, CancellationToken.None);
+            await SendWorkflowRunStartedNotificationAsync(CancellationToken.None);
+        }
+        finally
+        {
+            ReleaseChatCommandExecutionLease(commandId);
+        }
+    }
+
+    private async Task<StartWorkflowEvent?> PrepareChatRequestStartAsync(
+        WorkflowChatRequestEvent request,
+        string commandId,
+        string correlationId)
+    {
         if (!string.IsNullOrWhiteSpace(State.LastCommandId))
         {
             if (!string.Equals(State.LastCommandId, commandId, StringComparison.Ordinal))
@@ -505,7 +530,7 @@ public sealed partial class WorkflowRunGAgent
             if (!string.Equals(State.Status, "bound", StringComparison.OrdinalIgnoreCase))
             {
                 await SendWorkflowRunStartedNotificationAsync(CancellationToken.None);
-                return;
+                return null;
             }
         }
         var runId = string.IsNullOrWhiteSpace(State.RunId)
@@ -540,7 +565,7 @@ public sealed partial class WorkflowRunGAgent
                 Success = false,
                 Error = WorkflowNotExecutableError,
             }, request.SessionId);
-            return;
+            return null;
         }
 
         // Refactor (iter163/cluster-002-first):
@@ -556,8 +581,23 @@ public sealed partial class WorkflowRunGAgent
         _runtimeContext.ApplySenderNyxIdAccessToken(request.LlmControl?.SenderNyxIdAccessToken);
         var llmControlDelta = WorkflowRunExecutionContextStateAccess.BuildLlmControlDelta(request.LlmControl);
         var inputFileRefs = ExtractInputFileRefs(request.InputParts);
+        LogWorkflowChatRequestStartBoundary(request, runId, commandId, correlationId, scopeId, inputFileRefs);
 
+        Logger.LogWarning(
+            "Workflow run agent tree ensure starting. workflowName={WorkflowName} runId={RunId} commandId={CommandId} linkedRoleActorCount={LinkedRoleActorCount} effectiveRoleCount={EffectiveRoleCount} effectiveRoles={EffectiveRoles}",
+            _compiledWorkflow.Name,
+            runId,
+            commandId,
+            _childAgentIds.Count,
+            WorkflowImplicitLlmRolePolicy.GetEffectiveRoles(_compiledWorkflow).Count(),
+            FormatWorkflowRoles(_compiledWorkflow));
         await EnsureAgentTreeAsync();
+        Logger.LogWarning(
+            "Workflow run agent tree ensure completed. workflowName={WorkflowName} runId={RunId} commandId={CommandId} linkedRoleActorCount={LinkedRoleActorCount}",
+            _compiledWorkflow.Name,
+            runId,
+            commandId,
+            _childAgentIds.Count);
 
         inputFileRefs = StampInputFileRefs(inputFileRefs, runId, scopeId);
         var firstInputFileRef = inputFileRefs.FirstOrDefault();
@@ -582,7 +622,7 @@ public sealed partial class WorkflowRunGAgent
                 Success = false,
                 Error = InputFileBindingError,
             }, request.SessionId);
-            return;
+            return null;
         }
 
         var executionContextDelta = MergeExecutionContextDeltas(
@@ -620,8 +660,27 @@ public sealed partial class WorkflowRunGAgent
             ForkSeed = request.ForkSeed,
         };
         start.InputFileRefs.Add(inputFileRefs.Select(static fileRef => fileRef.Clone()));
-        await PublishStartWorkflowOrTerminalFailureAsync(start, request.SessionId, CancellationToken.None);
-        await SendWorkflowRunStartedNotificationAsync(CancellationToken.None);
+        return start;
+    }
+
+    private bool TryAcquireChatCommandExecutionLease(string commandId)
+    {
+        if (_inFlightChatCommandId == null)
+        {
+            _inFlightChatCommandId = commandId;
+            return true;
+        }
+
+        if (string.Equals(_inFlightChatCommandId, commandId, StringComparison.Ordinal))
+            return false;
+
+        throw new InvalidOperationException("workflow run is already processing another command");
+    }
+
+    private void ReleaseChatCommandExecutionLease(string commandId)
+    {
+        if (string.Equals(_inFlightChatCommandId, commandId, StringComparison.Ordinal))
+            _inFlightChatCommandId = null;
     }
 
     [EventHandler]
@@ -1241,6 +1300,48 @@ public sealed partial class WorkflowRunGAgent
     }
 
     [AllEventHandler(Priority = 50, AllowSelfHandling = true)]
+    public async Task HandleWorkflowToolApprovalSuspendedEnvelope(EventEnvelope envelope)
+    {
+        if (envelope.Payload?.Is(WorkflowSuspendedEvent.Descriptor) != true)
+            return;
+
+        var suspended = envelope.Payload.Unpack<WorkflowSuspendedEvent>();
+        var publisherActorId = envelope.Route?.PublisherActorId ?? string.Empty;
+        var target = State.CompletionNotificationTarget;
+        if (!string.Equals(publisherActorId, Id, StringComparison.Ordinal) ||
+            !string.Equals(suspended.RunId, RunId, StringComparison.Ordinal) ||
+            !string.Equals(suspended.SuspensionType, "tool_approval", StringComparison.Ordinal) ||
+            !HasCompletionNotificationTarget(target) ||
+            target!.ExpiresAtUnixMs <= _timeProvider.GetUtcNow().ToUnixTimeMilliseconds() ||
+            string.IsNullOrWhiteSpace(State.LastCommandId) ||
+            !HasToolApprovalIdentity(suspended))
+        {
+            return;
+        }
+
+        var notification = new WorkflowRunToolApprovalNotification
+        {
+            DeliveryId = target.DeliveryId.Trim(),
+            WorkflowActorId = Id,
+            WorkflowRunId = RunId,
+            WorkflowCommandId = State.LastCommandId.Trim(),
+            WorkflowCorrelationId = State.WorkflowCorrelationId?.Trim() ?? string.Empty,
+            StepId = suspended.StepId.Trim(),
+            ExecutionId = suspended.ToolApproval.ExecutionId.Trim(),
+            ToolName = suspended.ToolApproval.ToolName.Trim(),
+            ToolCallId = suspended.ToolApproval.ToolCallId.Trim(),
+            ApprovalRequestId = suspended.ToolApproval.ApprovalRequestId.Trim(),
+            Prompt = suspended.Prompt?.Trim() ?? string.Empty,
+            RequestedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+        };
+        await SendToAsync(
+            target.ActorId.Trim(),
+            notification,
+            CancellationToken.None,
+            BuildToolApprovalNotificationDispatchOptions(notification));
+    }
+
+    [AllEventHandler(Priority = 50, AllowSelfHandling = true)]
     public async Task HandleWorkflowCompletionEnvelope(EventEnvelope envelope)
     {
         if (envelope.Payload?.Is(WorkflowCompletedEvent.Descriptor) != true)
@@ -1697,6 +1798,65 @@ public sealed partial class WorkflowRunGAgent
         return roleActorIds.ToList();
     }
 
+    private void LogWorkflowChatRequestStartBoundary(
+        WorkflowChatRequestEvent request,
+        string runId,
+        string commandId,
+        string correlationId,
+        string? scopeId,
+        IReadOnlyList<WorkflowFileRef> inputFileRefs)
+    {
+        if (_compiledWorkflow == null)
+            return;
+
+        var firstInputFileRef = inputFileRefs.FirstOrDefault();
+        Logger.LogWarning(
+            "Workflow chat request start boundary. workflowName={WorkflowName} runId={RunId} commandId={CommandId} correlationId={CorrelationId} scopeId={ScopeId} requestInputPartCount={RequestInputPartCount} rawInputFileRefCount={RawInputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType} compiledStepCount={CompiledStepCount} compiledSteps={CompiledSteps} requiredModules={RequiredModules} effectiveRoleCount={EffectiveRoleCount} effectiveRoles={EffectiveRoles}",
+            _compiledWorkflow.Name,
+            runId,
+            commandId,
+            correlationId,
+            scopeId ?? string.Empty,
+            request.InputParts.Count,
+            inputFileRefs.Count,
+            firstInputFileRef?.FileId ?? string.Empty,
+            firstInputFileRef?.ArtifactId ?? string.Empty,
+            firstInputFileRef?.MediaType ?? string.Empty,
+            _compiledWorkflow.Steps.Count,
+            FormatWorkflowSteps(_compiledWorkflow),
+            FormatRequiredModules(),
+            WorkflowImplicitLlmRolePolicy.GetEffectiveRoles(_compiledWorkflow).Count(),
+            FormatWorkflowRoles(_compiledWorkflow));
+    }
+
+    private string FormatRequiredModules()
+    {
+        if (_compiledWorkflow == null)
+            return string.Empty;
+
+        var needed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var expander in _moduleDependencyExpanders)
+            expander.Expand(_compiledWorkflow, needed);
+
+        return string.Join(',', needed.Order(StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static string FormatWorkflowSteps(WorkflowDefinition workflow) =>
+        string.Join(';', workflow.Steps.Select(step =>
+        {
+            var stepId = NormalizeLogValue(step.Id) ?? "(none)";
+            var stepType = NormalizeLogValue(WorkflowPrimitiveCatalog.ToCanonicalType(step.Type)) ?? "(none)";
+            var targetRole = NormalizeLogValue(WorkflowImplicitLlmRolePolicy.ResolveEffectiveTargetRole(workflow, step)) ?? "(none)";
+            return $"{stepId}:{stepType}:{targetRole}";
+        }));
+
+    private static string FormatWorkflowRoles(WorkflowDefinition workflow) =>
+        string.Join(',', WorkflowImplicitLlmRolePolicy.GetEffectiveRoles(workflow)
+            .Select(static role => NormalizeLogValue(role.Id) ?? "(none)"));
+
+    private static string? NormalizeLogValue(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
     private async Task EnsureAgentTreeAsync()
     {
         if (_childAgentIds.Count > 0 || _compiledWorkflow == null)
@@ -1706,11 +1866,23 @@ public sealed partial class WorkflowRunGAgent
         {
             var roleId = role.Id;
             var childActorId = BuildChildActorId(roleId);
+            Logger.LogWarning(
+                "Workflow role actor initialization starting. workflowName={WorkflowName} runActorId={RunActorId} roleId={RoleId} childActorId={ChildActorId}",
+                _compiledWorkflow.Name,
+                Id,
+                roleId,
+                childActorId);
             var actor = await _runtime.GetAsync(childActorId)
                         ?? await CreateRoleActorAsync(role, childActorId);
             await _runtime.LinkAsync(Id, actor.Id);
 
             await DispatchRoleInitializationAsync(actor.Id, WorkflowRoleAgentEnvelopeFactory.CreateInitializeEnvelope(role, Id, actor.Id));
+            Logger.LogWarning(
+                "Workflow role actor initialization dispatched. workflowName={WorkflowName} runActorId={RunActorId} roleId={RoleId} childActorId={ChildActorId}",
+                _compiledWorkflow.Name,
+                Id,
+                roleId,
+                actor.Id);
             _childAgentIds.Add(actor.Id);
             await PersistDomainEventAsync(new WorkflowRoleActorLinkedEvent
             {
@@ -1722,7 +1894,11 @@ public sealed partial class WorkflowRunGAgent
             });
         }
 
-        Logger.LogInformation("Workflow run actor tree created: {Count} role agents", _childAgentIds.Count);
+        Logger.LogWarning(
+            "Workflow run actor tree created. workflowName={WorkflowName} runActorId={RunActorId} linkedRoleActorCount={LinkedRoleActorCount}",
+            _compiledWorkflow.Name,
+            Id,
+            _childAgentIds.Count);
     }
 
     private Task<DispatchAdmission> DispatchRoleInitializationAsync(string actorId, EventEnvelope envelope) =>
@@ -2769,6 +2945,14 @@ public sealed partial class WorkflowRunGAgent
         !string.IsNullOrWhiteSpace(target.ActorId) &&
         !string.IsNullOrWhiteSpace(target.DeliveryId);
 
+    private static bool HasToolApprovalIdentity(WorkflowSuspendedEvent suspended) =>
+        !string.IsNullOrWhiteSpace(suspended.StepId) &&
+        suspended.ToolApproval != null &&
+        !string.IsNullOrWhiteSpace(suspended.ToolApproval.ExecutionId) &&
+        !string.IsNullOrWhiteSpace(suspended.ToolApproval.ToolName) &&
+        !string.IsNullOrWhiteSpace(suspended.ToolApproval.ToolCallId) &&
+        !string.IsNullOrWhiteSpace(suspended.ToolApproval.ApprovalRequestId);
+
     private async Task SendWorkflowRunStartedNotificationAsync(CancellationToken ct)
     {
         var target = State.CompletionNotificationTarget;
@@ -2829,6 +3013,20 @@ public sealed partial class WorkflowRunGAgent
                     StartedNotificationDispatchOperationPrefix,
                     notification.DeliveryId,
                     notification.WorkflowCommandId),
+            },
+        };
+
+    private static EventEnvelopePublishOptions BuildToolApprovalNotificationDispatchOptions(
+        WorkflowRunToolApprovalNotification notification) =>
+        new()
+        {
+            Delivery = new EventEnvelopeDeliveryOptions
+            {
+                OperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
+                    ToolApprovalNotificationDispatchOperationPrefix,
+                    notification.DeliveryId,
+                    notification.WorkflowCommandId,
+                    notification.ApprovalRequestId),
             },
         };
 

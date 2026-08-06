@@ -2470,6 +2470,31 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task CreateResultReceipt_WithPendingScheduleProvisioning_ShouldUseProvisioningIntentAsSubject()
+    {
+        var tool = await DiscoverToolAsync(new RecordingProvisioningPort());
+        var resultJson = JsonSerializer.Serialize(new
+        {
+            status = "accepted",
+            member_id = "member-1",
+            scope_id = "scope-1",
+            team_id = "team-alpha",
+            schedule_provisioning_id = "schedule-provisioning-1",
+            schedule_provisioning_status = "pending_binding",
+            studio_url = "/scopes/scope-1/teams/team-alpha/members/member-1/workflow",
+            observatory_url = "/admin#/observatory",
+        });
+
+        var receipt = tool.CreateResultReceipt("call-1", ScheduleToolName, "{}", resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.SubjectKind.Should().Be("studio_member_workflow_schedule_provisioning");
+        receipt.SubjectId.Should().Be("schedule-provisioning-1");
+        receipt.ResultJson.Should().Be(resultJson);
+    }
+
+    [Fact]
     public async Task CreateResultReceipt_WithToolError_ShouldReturnErrorReceipt()
     {
         var tool = await DiscoverToolAsync(new RecordingProvisioningPort());
@@ -2556,6 +2581,47 @@ public sealed class ProvisionWorkflowScheduleToolTests
         root.GetProperty("studio_url").GetString().Should()
             .Be("/scopes/scope-1/teams/team-alpha/members/member-1/workflow");
         root.GetProperty("observatory_url").GetString().Should().Be("/admin#/observatory");
+    }
+
+    [Fact]
+    public async Task Execute_WhenScheduleProvisioningIsPending_ShouldSurfaceIntentWithoutScheduleIdentity()
+    {
+        var port = new RecordingProvisioningPort(new WorkflowScheduleProvisioningResult(
+            MemberId: "member-1",
+            ScopeId: "scope-1",
+            TeamId: "team-alpha",
+            BindingStatus: "accepted",
+            ObservatoryUrl: "/admin#/observatory",
+            StudioUrl: "/scopes/scope-1/teams/team-alpha/members/member-1/workflow")
+        {
+            ScheduleProvisioningId = "schedule-provisioning-1",
+            ScheduleProvisioningStatus = "pending_binding",
+            BindingRunId = "bind-run-1",
+        });
+        var tool = await DiscoverToolAsync(port);
+
+        using var _ = PushContext(
+            scopeId: "scope-1",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", string.Empty, "owner-1"));
+        var output = await tool.ExecuteAsync("""
+            {
+              "team_id": "team-alpha",
+              "workflow_yaml": "name: demo\n",
+              "display_name": "Demo"
+            }
+            """);
+
+        using var document = JsonDocument.Parse(output);
+        var root = document.RootElement;
+        root.TryGetProperty("schedule_id", out var ignoredScheduleId).Should().BeFalse();
+        ignoredScheduleId.ValueKind.Should().Be(JsonValueKind.Undefined);
+        root.GetProperty("schedule_provisioning_id").GetString().Should()
+            .Be("schedule-provisioning-1");
+        root.GetProperty("schedule_provisioning_status").GetString().Should()
+            .Be("pending_binding");
+        root.GetProperty("binding_run_id").GetString().Should().Be("bind-run-1");
     }
 
     [Theory]
@@ -3636,6 +3702,12 @@ public sealed class ProvisionWorkflowScheduleToolTests
             CompleteAsync(request, confirmedPermissionDigest);
 
         public Task<StudioMemberWorkflowScheduleResult> ReauthorizeAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest,
+            CancellationToken ct = default) =>
+            CompleteAsync(request, confirmedPermissionDigest);
+
+        public Task<StudioMemberWorkflowScheduleResult> ReplaceAsync(
             StudioMemberWorkflowScheduleRequest request,
             string confirmedPermissionDigest,
             CancellationToken ct = default) =>

@@ -848,6 +848,38 @@ public sealed class NyxIdRelayTransportTests
     }
 
     [Fact]
+    public void Parse_ShouldMapAgentRunApprovalFields_ToTypedPayloadAndRemoveAuthorityKeys()
+    {
+        var body = """
+            {
+              "message_id": "msg-card-agent-run-approval",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_chat_1", "type": "private" },
+              "sender": { "platform_id": "ou_1", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": "{\"value\":{\"action_id\":\"agent-run-approval-approve\",\"action_kind\":\"button\",\"agent_run_id\":\"agent-run-approval-1\",\"agent_run_approval_request_id\":\"tool-approval-1\",\"agent_run_tool_call_id\":\"call-approval-1\",\"agent_run_tool_name\":\"use_skill\",\"agent_run_arguments_sha256\":\"sha256-approval-1\",\"agent_run_approved\":true,\"external_note\":\"kept\"}}"
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        var cardAction = parsed.Activity!.Content.CardAction;
+        cardAction.Should().NotBeNull();
+        cardAction!.AgentRunApproval.RunId.Should().Be("agent-run-approval-1");
+        cardAction.AgentRunApproval.ApprovalRequestId.Should().Be("tool-approval-1");
+        cardAction.AgentRunApproval.ToolCallId.Should().Be("call-approval-1");
+        cardAction.AgentRunApproval.ToolName.Should().Be("use_skill");
+        cardAction.AgentRunApproval.ArgumentsSha256.Should().Be("sha256-approval-1");
+        cardAction.AgentRunApproval.Approved.Should().BeTrue();
+        cardAction.Arguments.Keys.Should().NotContain(key => key.StartsWith("agent_run_", StringComparison.Ordinal));
+        cardAction.Arguments.Should().ContainKey("external_note").WhoseValue.Should().Be("kept");
+    }
+
+    [Fact]
     public void Parse_ShouldMapKnownWorkflowCallbackFields_ToTypedPayload()
     {
         var body = """

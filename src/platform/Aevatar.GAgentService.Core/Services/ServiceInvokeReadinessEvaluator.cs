@@ -55,9 +55,10 @@ public sealed class ServiceInvokeReadinessEvaluator
         }
 
         if (revision.Spec?.ImplementationKind == ServiceImplementationKind.Workflow &&
-            !WorkflowServiceDeploymentPlanIntegrity.IsCompatible(
-                artifact,
-                selectedTarget.RevisionId))
+            (!WorkflowServiceDeploymentPlanIntegrity.IsCompatible(
+                 artifact,
+                 selectedTarget.RevisionId) ||
+             WorkflowServiceArtifactReadiness.RequiresCapabilityAdmissionRebind(artifact)))
         {
             return Unavailable(
                 endpointId,

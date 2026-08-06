@@ -524,6 +524,7 @@ public sealed class StudioMemberWorkflowDurableAdmissionPortTests
                         NyxIdRequestResponseMode.Text,
                         NyxIdOperationRisk.ReadOnly,
                         false,
+                        WorkflowExplicitRequestApprovalEnforcement.None,
                         [
                             ExternalCapabilityExecutionMode.Interactive,
                             ExternalCapabilityExecutionMode.Durable,

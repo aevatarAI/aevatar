@@ -19,6 +19,13 @@ public interface IAgentRunReplyGenerationExecutorPort
         AgentRunReplyStepExecutionRequest request,
         AgentRunAuthorizedToolStep? authorizedToolStep,
         CancellationToken ct);
+
+    Task<AgentRunNextToolStepRequestedEvent> BuildApprovedToolStepContinuationAsync(
+        AgentRunReplyStepExecutionRequest request,
+        AgentRunPendingToolApprovalState pendingApproval,
+        CancellationToken ct) =>
+        Task.FromException<AgentRunNextToolStepRequestedEvent>(
+            new NotSupportedException("Approved AgentRun tool continuation is not supported by this executor."));
 }
 
 public sealed record AgentRunLlmStepExecution(

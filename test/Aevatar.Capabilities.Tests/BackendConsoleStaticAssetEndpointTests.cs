@@ -56,6 +56,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("'/admin/workflow-observatory'");
             html.Should().NotContain("'/workflow/observatory'");
             html.Should().NotContain("function bindObservatory(");
+            html.Should().Contain("studio:{name:'工作台'");
+            html.Should().Contain("suiteFrame('/workflow/studio','工作台')");
         }
         else if (path == "/auto/callback")
         {

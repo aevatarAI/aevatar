@@ -235,13 +235,34 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         StudioMemberWorkflowScheduleRequest request,
         string confirmedPermissionDigest,
         CancellationToken ct = default) =>
-        ApplyAsync(request, confirmedPermissionDigest, TeamAutomationOperationKind.Create, ct);
+        ApplyAsync(
+            request,
+            confirmedPermissionDigest,
+            TeamAutomationOperationKind.Create,
+            preserveExistingRevision: false,
+            ct);
 
     public Task<StudioMemberWorkflowScheduleResult> ReauthorizeAsync(
         StudioMemberWorkflowScheduleRequest request,
         string confirmedPermissionDigest,
         CancellationToken ct = default) =>
-        ApplyAsync(request, confirmedPermissionDigest, TeamAutomationOperationKind.Reauthorize, ct);
+        ApplyAsync(
+            request,
+            confirmedPermissionDigest,
+            TeamAutomationOperationKind.Reauthorize,
+            preserveExistingRevision: true,
+            ct);
+
+    public Task<StudioMemberWorkflowScheduleResult> ReplaceAsync(
+        StudioMemberWorkflowScheduleRequest request,
+        string confirmedPermissionDigest,
+        CancellationToken ct = default) =>
+        ApplyAsync(
+            request,
+            confirmedPermissionDigest,
+            TeamAutomationOperationKind.Reauthorize,
+            preserveExistingRevision: false,
+            ct);
 
     public async Task<StudioMemberAutomationListResponse> ListAsync(
         string scopeId,
@@ -487,6 +508,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         StudioMemberWorkflowScheduleRequest request,
         string confirmedPermissionDigest,
         TeamAutomationOperationKind operationKind,
+        bool preserveExistingRevision,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -506,7 +528,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 existingOwner,
                 ct) ?? throw new ScheduledDispatchNotFoundException(existingScheduleId);
             EnsureExistingCredentialOwnerMatches(request.AuthenticatedOwner, existingAutomation.Schedule);
-            resolved = RebindToExistingScheduleTarget(resolved, existingAutomation.Schedule);
+            resolved = preserveExistingRevision
+                ? RebindToExistingScheduleTarget(resolved, existingAutomation.Schedule)
+                : ValidateExistingScheduleTarget(resolved, existingAutomation.Schedule);
         }
         var confirmation = BuildConfirmation(
             resolved.AuthorizationRequest,
@@ -1055,6 +1079,13 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         {
             throw new StudioMemberAutomationNotFoundException();
         }
+        var resolvedMemberScopeId = NormalizeRequired(member.Summary.ScopeId, nameof(member.Summary.ScopeId));
+        var resolvedMemberId = NormalizeRequired(member.Summary.MemberId, nameof(member.Summary.MemberId));
+        if (!string.Equals(resolvedMemberScopeId, scopeId, StringComparison.Ordinal) ||
+            !string.Equals(resolvedMemberId, memberId, StringComparison.Ordinal))
+        {
+            throw new StudioMemberAutomationNotFoundException();
+        }
         if (!string.Equals(member.Summary.ImplementationKind, MemberImplementationKindNames.Workflow, StringComparison.Ordinal))
             throw new InvalidOperationException($"member_id '{memberId}' is not a workflow member and cannot be scheduled as a workflow.");
 
@@ -1066,6 +1097,23 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             !string.Equals(teamId, request.TeamId.Trim(), StringComparison.Ordinal))
         {
             throw new StudioMemberAutomationNotFoundException();
+        }
+
+        if (request.AcceptedBinding is { } acceptedBinding)
+        {
+            var acceptedTarget = ResolveAcceptedWorkflowTarget(
+                acceptedBinding,
+                teamId,
+                memberPublishedServiceId);
+            return BuildResolvedAuthorizationRequest(
+                request,
+                scopeId,
+                teamId,
+                memberId,
+                memberPublishedServiceId,
+                acceptedTarget.WorkflowId,
+                acceptedTarget.WorkflowRevisionId,
+                credentialExpiresAtUtc);
         }
 
         EnsureWorkflowBindingCanBeScheduled(member, memberId, memberPublishedServiceId);
@@ -1081,12 +1129,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         var workflowRevision = NormalizeRequired(
             endpointContract.RevisionId,
             nameof(endpointContract.RevisionId));
-        var workflowId = ResolveWorkflowTargetId(
-            request,
-            member,
-            teamId,
-            publishedServiceId,
-            workflowRevision);
+        var workflowId = NormalizeRequired(member.ImplementationRef?.WorkflowId, "workflowId");
         return BuildResolvedAuthorizationRequest(
             request,
             scopeId,
@@ -1140,16 +1183,11 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         return contract;
     }
 
-    private static string ResolveWorkflowTargetId(
-        StudioMemberWorkflowScheduleRequest request,
-        StudioMemberDetailResponse member,
+    private static AcceptedWorkflowTarget ResolveAcceptedWorkflowTarget(
+        StudioMemberWorkflowAcceptedBindingContext acceptedBinding,
         string resolvedTeamId,
-        string resolvedPublishedServiceId,
-        string resolvedWorkflowRevision)
+        string resolvedPublishedServiceId)
     {
-        if (request.AcceptedBinding is not { } acceptedBinding)
-            return NormalizeRequired(member.ImplementationRef?.WorkflowId, "workflowId");
-
         var acceptedTeamId = NormalizeRequired(
             acceptedBinding.TeamId,
             nameof(acceptedBinding.TeamId));
@@ -1162,19 +1200,11 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         if (!string.Equals(acceptedPublishedServiceId, resolvedPublishedServiceId, StringComparison.Ordinal))
             throw new StudioMemberAutomationNotFoundException();
 
-        var acceptedWorkflowRevision = NormalizeRequired(
-            acceptedBinding.WorkflowRevisionId,
-            nameof(acceptedBinding.WorkflowRevisionId));
-        if (!string.Equals(acceptedWorkflowRevision, resolvedWorkflowRevision, StringComparison.Ordinal))
-        {
-            throw new StudioMemberAutomationPlanConflictException(
-                "serving_target_changed",
-                "The accepted workflow binding target no longer matches the invoke-ready serving revision.");
-        }
-
-        return NormalizeRequired(
-            acceptedBinding.WorkflowId,
-            nameof(acceptedBinding.WorkflowId));
+        return new AcceptedWorkflowTarget(
+            NormalizeRequired(acceptedBinding.WorkflowId, nameof(acceptedBinding.WorkflowId)),
+            NormalizeRequired(
+                acceptedBinding.WorkflowRevisionId,
+                nameof(acceptedBinding.WorkflowRevisionId)));
     }
 
     private ResolvedStudioAuthorizationRequest BuildResolvedAuthorizationRequest(
@@ -1219,6 +1249,31 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         ResolvedStudioAuthorizationRequest current,
         ScheduledDispatchSummary schedule)
     {
+        current = ValidateExistingScheduleTarget(current, schedule);
+        var targetRevisionId = NormalizeOptional(schedule.ServiceRevisionId);
+        if (targetRevisionId is null)
+        {
+            throw new StudioMemberAutomationPlanConflictException(
+                "schedule_target_revision_unavailable",
+                "The stored schedule does not expose the pinned service revision required for authorization.");
+        }
+
+        var invocationTarget = current.AuthorizationRequest.InvocationTarget.Clone();
+        invocationTarget.StudioMember!.WorkflowRevisionId = targetRevisionId;
+        return current with
+        {
+            TargetRevisionId = targetRevisionId,
+            AuthorizationRequest = current.AuthorizationRequest with
+            {
+                InvocationTarget = invocationTarget,
+            },
+        };
+    }
+
+    private static ResolvedStudioAuthorizationRequest ValidateExistingScheduleTarget(
+        ResolvedStudioAuthorizationRequest current,
+        ScheduledDispatchSummary schedule)
+    {
         if (schedule.TargetKind != ScheduledDispatchTargetKind.ServiceInvocation ||
             schedule.ScheduleKind != ScheduledDispatchScheduleKind.Workflow ||
             !string.Equals(schedule.ServiceId, current.PublishedServiceId, StringComparison.Ordinal) ||
@@ -1229,16 +1284,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 "The stored schedule target no longer matches the workflow member service identity.");
         }
 
-        var targetRevisionId = NormalizeOptional(schedule.ServiceRevisionId);
-        if (targetRevisionId is null)
-        {
-            throw new StudioMemberAutomationPlanConflictException(
-                "schedule_target_revision_unavailable",
-                "The stored schedule does not expose the pinned service revision required for authorization.");
-        }
-
-        var invocationTarget = current.AuthorizationRequest.InvocationTarget.Clone();
-        var studioMember = invocationTarget.StudioMember;
+        var studioMember = current.AuthorizationRequest.InvocationTarget.StudioMember;
         if (studioMember == null ||
             !string.Equals(studioMember.ScopeId, current.ScopeId, StringComparison.Ordinal) ||
             !string.Equals(studioMember.TeamId, current.TeamId, StringComparison.Ordinal) ||
@@ -1250,15 +1296,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 "The workflow member identity changed while resolving the stored schedule target.");
         }
 
-        studioMember.WorkflowRevisionId = targetRevisionId;
-        return current with
-        {
-            TargetRevisionId = targetRevisionId,
-            AuthorizationRequest = current.AuthorizationRequest with
-            {
-                InvocationTarget = invocationTarget,
-            },
-        };
+        return current;
     }
 
     private async Task<string> ResolveProvisioningBearerTokenAsync(
@@ -1368,6 +1406,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             OwnerLLMUserServiceId = schedule.OwnerLLMUserServiceId,
             OwnerLLMServiceSlug = schedule.OwnerLLMServiceSlug,
             OwnerLLMModel = schedule.OwnerLLMModel,
+            TargetRevisionId = schedule.ServiceRevisionId,
             NyxIdRevocationStatus = schedule.NyxIdRevocationStatus,
             VaultRevocationStatus = schedule.VaultRevocationStatus,
         };
@@ -1401,6 +1440,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             OwnerLLMUserServiceId = schedule.OwnerLLMUserServiceId,
             OwnerLLMServiceSlug = schedule.OwnerLLMServiceSlug,
             OwnerLLMModel = schedule.OwnerLLMModel,
+            TargetRevisionId = schedule.ServiceRevisionId,
             NyxIdRevocationStatus = schedule.NyxIdRevocationStatus,
             VaultRevocationStatus = schedule.VaultRevocationStatus,
         };
@@ -2118,6 +2158,10 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         string PublishedServiceId,
         string TargetRevisionId,
         ScheduledInvocationAuthorizationRequest AuthorizationRequest);
+
+    private sealed record AcceptedWorkflowTarget(
+        string WorkflowId,
+        string WorkflowRevisionId);
 
     private sealed record ResolvedTeamMember(
         string ScopeId,

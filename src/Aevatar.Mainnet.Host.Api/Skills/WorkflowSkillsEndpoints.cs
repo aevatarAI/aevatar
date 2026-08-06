@@ -59,7 +59,7 @@ internal static class WorkflowSkillsEndpoints
 
         data.MapPost("/{guid}/schedule", ScheduleSkill)
             .WithName("ScheduleWorkflowSkill")
-            .WithSummary("Provision a recurring (cron) schedule for a skill; runs surface in the observatory.")
+            .WithSummary("Accept recurring skill schedule provisioning; poll the returned Location for completion.")
             .RequireAuthorization();
 
         return app;
@@ -276,8 +276,12 @@ internal static class WorkflowSkillsEndpoints
             body.TeamId!,
             body.WorkflowConfirmationToken ?? string.Empty,
             ct);
-        if (outcome.Succeeded)
-            return Results.Json(outcome.Receipt);
+        if (outcome.Succeeded && outcome.Receipt is { } receipt)
+        {
+            return Results.Accepted(
+                BuildSkillScheduleLocation(receipt),
+                receipt);
+        }
         if (outcome.Confirmation is not null)
         {
             logger?.LogInformation(
@@ -298,6 +302,11 @@ internal static class WorkflowSkillsEndpoints
         var scheduleStatus = ResolveScheduleFailureStatus(outcome.ErrorCode);
         return Results.Json(new { code = outcome.ErrorCode, message = outcome.ErrorMessage }, statusCode: scheduleStatus);
     }
+
+    private static string BuildSkillScheduleLocation(SkillScheduleReceipt receipt) =>
+        string.IsNullOrWhiteSpace(receipt.ScheduleId)
+            ? $"/api/scopes/{Uri.EscapeDataString(receipt.ScopeId)}/members/{Uri.EscapeDataString(receipt.MemberId)}"
+            : $"/api/schedules/{Uri.EscapeDataString(receipt.ScheduleId)}";
 
     private static int ResolveScheduleFailureStatus(string? errorCode) => errorCode switch
     {

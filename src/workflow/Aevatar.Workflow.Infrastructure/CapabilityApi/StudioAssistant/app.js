@@ -1305,32 +1305,34 @@ function renderConnectCard(card) {
   head.append(brand, connectCardPill(card));
   card.root.append(head);
 
-  const steps = el("div", "cc-steps");
+  const progress = el("div", "cc-progress");
   const journeyReported = ["reporting", "awaiting_verification", "reported", "verified"]
     .includes(card.status);
   const verified = card.status === "verified";
   block.steps.forEach((step, index) => {
     const done = index < 2 ? journeyReported : verified;
     const active = index === (journeyReported ? 2 : 0) && !verified;
-    const row = el("div", `cc-step${done ? " done" : active ? " active" : ""}`);
-    row.append(el("span", "cc-num", done ? "" : String(index + 1)));
-    const body = el("div", "cc-step-body");
-    body.append(el("div", "cc-step-title", step.title), el("div", "cc-step-desc", step.body));
-    if (index === 0 && !journeyReported) body.append(renderConnectCardActions(card));
-    if (index === 2 && journeyReported) {
-      const success = el("div", "cc-success");
-      success.classList.toggle("pending", !verified);
-      success.append(iconNode(verified ? "check" : "loader-circle"), el(
-        "span",
-        "",
-        verified ? card.note || "已验证" : card.note || "等待 actor 验证",
-      ));
-      body.append(success);
-    }
-    row.append(body);
-    steps.append(row);
+    const item = el("div", `cc-progress-step${done ? " done" : active ? " active" : ""}`);
+    item.title = step.body || step.title;
+    const marker = el("span", "cc-progress-marker");
+    if (done) marker.append(iconNode("check"));
+    else if (active) marker.append(iconNode("loader-circle"));
+    else marker.textContent = String(index + 1);
+    item.append(marker, el("span", "cc-progress-label", step.title));
+    progress.append(item);
   });
-  card.root.append(steps);
+  card.root.append(progress);
+
+  if (!journeyReported) {
+    card.root.append(renderConnectCardActions(card));
+  } else {
+    const verification = el("div", `cc-verification${verified ? " verified" : ""}`);
+    verification.append(
+      iconNode(verified ? "badge-check" : "loader-circle"),
+      el("span", "", verified ? card.note || "已验证" : card.note || "等待 Actor 验证"),
+    );
+    card.root.append(verification);
+  }
 
   if (card.error) {
     const error = el("div", "cc-error");
@@ -2170,6 +2172,31 @@ function actorStepManagementCapability(step) {
     capability.managementUrl) || null;
 }
 
+function actorStepSourceLabel(step) {
+  const source = step?.source || {};
+  if (source.llm) return source.llm.model ? `LLM · ${source.llm.model}` : "LLM";
+  if (source.tool) {
+    return [source.tool.serviceSlug || source.tool.serviceId, source.tool.toolName]
+      .filter(Boolean).join(" · ") || "工具";
+  }
+  if (source.browserAction) return `NyxID Action · ${source.browserAction.action || "browser"}`;
+  if (source.postcondition) {
+    return `验证 · ${source.postcondition.postconditionKind || "postcondition"}`;
+  }
+  if (source.input) return "用户输入";
+  if (source.approval) return "审批";
+  if (source.web) return "Web";
+  return step?.kind || "步骤";
+}
+
+function actorAddedByLabel(addedBy) {
+  return {
+    initial: "初始计划",
+    replan: "重新规划",
+    steering: "用户调整",
+  }[addedBy] || "计划步骤";
+}
+
 function renderActorRecovery(projection) {
   const steps = [...projection.steps.values()];
   const hasFailure = steps.some((step) =>
@@ -2475,24 +2502,90 @@ function renderActorProjection(entry) {
 
   const root = entry.actorTaskElement || el("section", "actor-task");
   entry.actorTaskElement = root;
+  if (root.dataset.collapsed !== "true" && root.dataset.collapsed !== "false") {
+    root.dataset.collapsed = "true";
+  }
   root.replaceChildren();
   const task = projection.task;
   const status = String(
     task?.status || projection.taskStatus || projection.latestTurn?.status || "unknown",
   ).toLowerCase();
   root.className = `actor-task ${status}`;
+  root.classList.toggle("collapsed", root.dataset.collapsed === "true");
   root.dataset.actorId = projection.actorId || entry.actorId || "";
   if (task?.taskId) root.dataset.taskId = task.taskId;
   if (task?.turnId) root.dataset.turnId = task.turnId;
+  if (task?.planId) root.dataset.planId = task.planId;
+
+  const taskSteps = [...projection.steps.values()];
+  const completedSteps = taskSteps.filter((step) =>
+    ["done", "skipped", "cancelled"].includes(String(step.status || "").toLowerCase()));
+  const currentStep = taskSteps.find((step) =>
+    ["running", "waiting"].includes(String(step.status || "").toLowerCase())) ||
+    taskSteps.find((step) => String(step.status || "").toLowerCase() === "planned");
 
   const header = el("header", "actor-task-header");
   const title = el("div", "actor-task-title");
   title.append(
-    el("span", "actor-task-eyebrow", "Actor task"),
-    el("strong", "", actorStatusCopy(status)),
+    el("span", "actor-task-eyebrow", `计划 · Revision ${task?.planRevision || 1}`),
+    el("strong", "", task?.title || actorStatusCopy(status)),
   );
-  header.append(title, el("span", `actor-task-status ${status}`, status));
+  if (currentStep) {
+    title.append(el(
+      "small",
+      "actor-task-current",
+      `${actorStatusCopy(currentStep.status)} · ${currentStep.description || currentStep.stepId}`,
+    ));
+  }
+  const summary = el("div", "actor-task-summary");
+  if (taskSteps.length) {
+    summary.append(el(
+      "span",
+      "actor-task-progress mono",
+      `${completedSteps.length}/${taskSteps.length}`,
+    ));
+  }
+  summary.append(el("span", `actor-task-status ${status}`, actorStatusCopy(status)));
+  const toggle = el("button", "actor-task-toggle");
+  toggle.type = "button";
+  const syncCollapsedState = () => {
+    const collapsed = root.dataset.collapsed === "true";
+    root.classList.toggle("collapsed", collapsed);
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+    toggle.title = collapsed ? "展开计划详情" : "收起计划详情";
+    toggle.setAttribute("aria-label", toggle.title);
+    toggle.replaceChildren(iconNode(collapsed ? "chevron-right" : "chevron-down"));
+    refreshIcons(toggle);
+  };
+  toggle.addEventListener("click", () => {
+    root.dataset.collapsed = root.dataset.collapsed === "true" ? "false" : "true";
+    syncCollapsedState();
+  });
+  summary.append(toggle);
+  header.append(title, summary);
   root.append(header);
+  syncCollapsedState();
+
+  if (task) {
+    const meta = el("div", "actor-plan-meta");
+    const revision = Number.isSafeInteger(task.planRevision) ? task.planRevision : 1;
+    meta.append(el("span", "actor-plan-revision", `Revision ${revision}`));
+    if (task.planId) {
+      const planId = el("span", "actor-plan-id mono", task.planId);
+      planId.title = task.planId;
+      meta.append(planId);
+    }
+    const gateMode = String(task.gate?.mode || "auto").toLowerCase();
+    const gate = el(
+      "span",
+      `actor-plan-gate ${gateMode}`,
+      gateMode === "confirm" ? "需确认" : "自动执行",
+    );
+    if (task.gate?.reason) gate.title = task.gate.reason;
+    meta.append(gate);
+    root.append(meta);
+    if (task.gate?.reason) root.append(el("p", "actor-plan-gate-reason", task.gate.reason));
+  }
 
   pruneNeedsYouState(entry, projection);
   const pendingInput = renderPendingInput(entry, projection);
@@ -2509,11 +2602,36 @@ function renderActorProjection(entry) {
       const stepStatus = String(step.status || "unknown").toLowerCase();
       const row = el("article", `actor-step ${stepStatus}`);
       row.dataset.stepId = step.stepId || "";
+      row.dataset.stepKind = step.kind || "";
       const copy = el("div", "actor-step-copy");
       copy.append(
         el("strong", "", step.description || step.stepId || "Actor step"),
-        el("small", "", `${actorStatusCopy(stepStatus)} · ${step.kind || "step"}`),
+        el("small", "actor-step-source", `${actorStatusCopy(stepStatus)} · ${actorStepSourceLabel(step)}`),
       );
+      const annotations = el("div", "actor-step-annotations");
+      annotations.append(el("span", `actor-added-by ${step.addedBy || "initial"}`,
+        actorAddedByLabel(step.addedBy)));
+      const estimateSeconds = Number(step.estimate?.seconds);
+      if (step.estimate?.kind === "duration" && Number.isSafeInteger(estimateSeconds) && estimateSeconds > 0) {
+        annotations.append(el("span", "actor-estimate", `预计 ${estimateSeconds} 秒`));
+      }
+      if (Array.isArray(step.dependsOn) && step.dependsOn.length) {
+        const dependencies = el("span", "actor-dependencies mono", `依赖 ${step.dependsOn.join(", ")}`);
+        dependencies.title = step.dependsOn.join(", ");
+        annotations.append(dependencies);
+      }
+      copy.append(annotations);
+      if (Array.isArray(step.substeps) && step.substeps.length) {
+        const substeps = el("div", "actor-substeps");
+        for (const substep of step.substeps) {
+          substeps.append(el(
+            "div",
+            `actor-substep ${String(substep.status || "running").toLowerCase()}`,
+            `${actorStatusCopy(substep.status)} · ${substep.title}`,
+          ));
+        }
+        copy.append(substeps);
+      }
       const facts = el("div", "actor-step-facts");
       const effect = actorEffectCopy[step.externalEffect];
       if (effect) {
@@ -3251,12 +3369,26 @@ function ensureAssistantBody() {
 function ensureActivityCard() {
   if (state.run.activityCard?.isConnected) return state.run.activityCard;
   const card = el("div", "activity-card");
-  const header = el("div", "activity-header");
+  const header = el("button", "activity-header");
+  header.type = "button";
+  header.setAttribute("aria-expanded", "true");
+  header.setAttribute("aria-label", "收起工具运行详情");
+  const disclosure = iconNode("chevron-down");
+  disclosure.classList.add("activity-disclosure");
   const icon = document.createElement("i");
   icon.dataset.lucide = "workflow";
   const label = el("span", "", "Run");
   const status = el("span", "", "Running");
-  header.append(icon, label, status);
+  header.append(disclosure, icon, label, status);
+  header.addEventListener("click", () => {
+    const collapsed = card.classList.toggle("collapsed");
+    header.setAttribute("aria-expanded", String(!collapsed));
+    header.setAttribute("aria-label", collapsed ? "展开工具运行详情" : "收起工具运行详情");
+    const nextDisclosure = iconNode(collapsed ? "chevron-right" : "chevron-down");
+    nextDisclosure.classList.add("activity-disclosure");
+    header.querySelector(".activity-disclosure")?.replaceWith(nextDisclosure);
+    refreshIcons(header);
+  });
   card.append(header);
   ensureAssistantBody().append(card);
   state.run.activityCard = card;

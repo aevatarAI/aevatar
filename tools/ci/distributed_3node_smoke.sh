@@ -41,6 +41,7 @@ cluster_id="aevatar-mainnet-ci-cluster-${timestamp}"
 service_id="aevatar-mainnet-host-api"
 kafka_consumer_group="aevatar-mainnet-ci-group-${timestamp}"
 log_dir="/tmp/aevatar-distributed-smoke-${timestamp}"
+secret_store_keyring_path="${log_dir}/secret-store-keyring.json"
 mkdir -p "${log_dir}"
 
 declare -a pids=()
@@ -63,9 +64,13 @@ cleanup() {
   if [[ "${STARTED_DOCKER_INFRA}" == "1" ]]; then
     docker compose "${COMPOSE_ARGS[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
   fi
+  rm -f "${secret_store_keyring_path}"
   release_distributed_smoke_lock
 }
 trap cleanup EXIT INT TERM
+
+create_synthetic_secret_store_keyring "${secret_store_keyring_path}"
+create_synthetic_scope_service_token
 
 start_node() {
   local node="$1"
@@ -78,10 +83,19 @@ start_node() {
   (
     ASPNETCORE_ENVIRONMENT=Distributed \
     ASPNETCORE_URLS="http://127.0.0.1:${http_port}" \
+    Aevatar__Authentication__Authority="" \
+    Aevatar__Authentication__ScopeServiceTokens__Enabled=true \
+    Aevatar__Authentication__ScopeServiceTokens__Issuer="${DISTRIBUTED_SMOKE_SCOPE_TOKEN_ISSUER}" \
+    Aevatar__Authentication__ScopeServiceTokens__Audience="${DISTRIBUTED_SMOKE_SCOPE_TOKEN_AUDIENCE}" \
+    Aevatar__Authentication__ScopeServiceTokens__SigningKeys__0__Kid="${DISTRIBUTED_SMOKE_SCOPE_TOKEN_KID}" \
+    Aevatar__Authentication__ScopeServiceTokens__SigningKeys__0__Algorithm=HS256 \
+    Aevatar__Authentication__ScopeServiceTokens__SigningKeys__0__KeyBase64="${DISTRIBUTED_SMOKE_SCOPE_TOKEN_KEY_BASE64}" \
     AEVATAR_ActorRuntime__Provider=Orleans \
     AEVATAR_ActorRuntime__OrleansStreamBackend="${STREAM_BACKEND}" \
     AEVATAR_ActorRuntime__OrleansPersistenceBackend=Garnet \
     AEVATAR_ActorRuntime__OrleansGarnetConnectionString="${GARNET_HOST}:${GARNET_PORT}" \
+    AEVATAR_ActorRuntime__SecretStoreBackend=Garnet \
+    AEVATAR_ActorRuntime__SecretStoreKeyringPath="${secret_store_keyring_path}" \
     AEVATAR_ActorRuntime__KafkaBootstrapServers="${KAFKA_BOOTSTRAP_SERVERS}" \
     AEVATAR_ActorRuntime__KafkaTopicName=aevatar-mainnet-agent-events \
     AEVATAR_ActorRuntime__KafkaConsumerGroup="${kafka_consumer_group}" \
@@ -102,6 +116,10 @@ start_node() {
     Projection__Graph__Providers__Neo4j__Username="${NEO4J_USERNAME}" \
     Projection__Graph__Providers__Neo4j__Password="${NEO4J_PASSWORD}" \
     Projection__Graph__Providers__InMemory__Enabled=false \
+    Audit__ActorIdentityHasher__ActiveKeyId=distributed-smoke-key \
+    Audit__ActorIdentityHasher__Keys__0__KeyId=distributed-smoke-key \
+    Audit__ActorIdentityHasher__Keys__0__Key="distributed-smoke-audit-identity-key-0001" \
+    ChannelIdentity__OAuthClient__Bootstrap__Enabled=false \
     dotnet "${APP_DLL}" >"${log_file}" 2>&1
   ) &
 
@@ -171,6 +189,15 @@ if [[ ! -f "${APP_DLL}" ]]; then
   exit 1
 fi
 
+echo "Building distributed integration tests before starting the cluster..."
+dotnet build test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj \
+  -c Release \
+  --nologo \
+  --tl:off \
+  -m:1 \
+  -p:UseSharedCompilation=false \
+  -p:NuGetAudit=false
+
 echo "Starting 3-node cluster..."
 start_node 1 "${HTTP_PORTS[0]}" "${SILO_PORTS[0]}" "${GATEWAY_PORTS[0]}" "127.0.0.1:${SILO_PORTS[0]}"
 sleep 3
@@ -184,8 +211,8 @@ for _ in $(seq 1 "${WAIT_SECONDS}"); do
   healthy=0
 
   for port in "${HTTP_PORTS[@]}"; do
-    code="$(curl --max-time 1 -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${port}/api/agents" || true)"
-    if [[ "${code}" == "200" || "${code}" == "204" ]]; then
+    code="$(curl --max-time 1 -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${port}/health/ready" || true)"
+    if [[ "${code}" == "200" ]]; then
       healthy=$((healthy + 1))
     fi
   done
@@ -200,7 +227,7 @@ done
 
 echo "READY=${ready}"
 for port in "${HTTP_PORTS[@]}"; do
-  code="$(curl --max-time 1 -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${port}/api/agents" || true)"
+  code="$(curl --max-time 1 -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${port}/health/ready" || true)"
   echo "HTTP_${port}=${code}"
 done
 
@@ -234,8 +261,12 @@ echo "Running distributed cluster consistency integration tests..."
 AEVATAR_TEST_CLUSTER_NODE1_BASE_URL="http://127.0.0.1:${HTTP_PORTS[0]}" \
 AEVATAR_TEST_CLUSTER_NODE2_BASE_URL="http://127.0.0.1:${HTTP_PORTS[1]}" \
 AEVATAR_TEST_CLUSTER_NODE3_BASE_URL="http://127.0.0.1:${HTTP_PORTS[2]}" \
+AEVATAR_TEST_CLUSTER_BEARER_TOKEN="${DISTRIBUTED_SMOKE_BEARER_TOKEN}" \
 dotnet test test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj \
+  -c Release \
   --nologo \
+  --no-build \
+  --no-restore \
   --filter "FullyQualifiedName~DistributedClusterConsistencyIntegrationTests"
 
 echo "Distributed 3-node smoke test passed."

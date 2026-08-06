@@ -1072,6 +1072,12 @@ public sealed class StudioMemberAutomationEndpointsTests
             CancellationToken ct = default) =>
             CreateAsync(request, confirmedPermissionDigest, ct);
 
+        public Task<StudioMemberWorkflowScheduleResult> ReplaceAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest,
+            CancellationToken ct = default) =>
+            CreateAsync(request, confirmedPermissionDigest, ct);
+
         public Task<StudioMemberAutomationListResponse> ListAsync(
             string scopeId,
             string teamId,

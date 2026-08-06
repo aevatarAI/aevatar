@@ -8,6 +8,29 @@ namespace Aevatar.AI.Tests;
 public sealed class NyxIdApiClientBoundedProxyTests
 {
     [Fact]
+    public async Task ProxyRequestBoundedWithApiKeyAsync_UsesOnlyApiKeyForNyxIdAuthentication()
+    {
+        const string apiKey = "nyx_k_managed-agent-key";
+        var handler = new RecordingHandler();
+        var client = CreateClient(handler);
+
+        var response = await client.ProxyRequestBoundedWithApiKeyAsync(
+            apiKey,
+            slug: "chrono-sandbox",
+            userServiceId: "us-sandbox",
+            path: "/codex/execute",
+            method: "POST",
+            body: """{"prompt":"ready"}""",
+            maxBytes: 1024,
+            ct: CancellationToken.None);
+
+        response.Succeeded.Should().BeTrue();
+        handler.Authorization.Should().BeNull();
+        handler.ApiKeys.Should().Equal(apiKey);
+        handler.Body.Should().NotContain(apiKey);
+    }
+
+    [Fact]
     public async Task ProxyRequestBoundedAsync_WhenContentLengthExceedsLimit_DoesNotReadBody()
     {
         var content = new ThrowOnReadContent(contentLength: 4);
@@ -68,6 +91,30 @@ public sealed class NyxIdApiClientBoundedProxyTests
             {
                 Content = content,
             });
+    }
+
+    private sealed class RecordingHandler : HttpMessageHandler
+    {
+        public string? Authorization { get; private set; }
+        public IReadOnlyList<string> ApiKeys { get; private set; } = [];
+        public string? Body { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Authorization = request.Headers.Authorization?.ToString();
+            ApiKeys = request.Headers.TryGetValues("X-API-Key", out var apiKeys)
+                ? apiKeys.ToArray()
+                : [];
+            Body = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+            };
+        }
     }
 
     private sealed class ThrowOnReadContent : HttpContent

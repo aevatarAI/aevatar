@@ -138,7 +138,35 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
         return new StudioMemberDetailResponse(summary, summary.ImplementationRef, lastBinding)
         {
             CurrentBindingRun = ToBindingRunStatusResponse(document),
+            ScheduleProvisioning = ToScheduleProvisioningStatusResponse(document),
         };
+    }
+
+    private static StudioMemberWorkflowScheduleProvisioningStatusResponse? ToScheduleProvisioningStatusResponse(
+        StudioMemberCurrentStateDocument document)
+    {
+        if (string.IsNullOrEmpty(document.ScheduleProvisioningId))
+            return null;
+
+        return new StudioMemberWorkflowScheduleProvisioningStatusResponse(
+            document.ScheduleProvisioningId,
+            document.ScheduleProvisioningStatus,
+            document.ScheduleProvisioningRevisionId,
+            string.IsNullOrEmpty(document.ScheduleProvisioningScheduleId)
+                ? null
+                : document.ScheduleProvisioningScheduleId,
+            string.IsNullOrEmpty(document.ScheduleProvisioningOperationId)
+                ? null
+                : document.ScheduleProvisioningOperationId,
+            document.ScheduleProvisioningAttemptCount,
+            document.StateVersion,
+            string.IsNullOrEmpty(document.ScheduleProvisioningFailureCode)
+                ? null
+                : document.ScheduleProvisioningFailureCode,
+            string.IsNullOrEmpty(document.ScheduleProvisioningFailureMessage)
+                ? null
+                : document.ScheduleProvisioningFailureMessage,
+            document.ScheduleProvisioningUpdatedAt?.ToDateTimeOffset());
     }
 
     private static StudioMemberImplementationRefResponse? ToImplementationRefResponse(

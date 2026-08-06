@@ -338,6 +338,47 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
     }
 
     [Fact]
+    public async Task SelfOwnedToolApprovalSuspension_WithNotificationTarget_ShouldNotifyDeliveryActor()
+    {
+        var harness = await CreateStartedRunAsync(includeCompletionNotificationTarget: true);
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom(harness.RunId, ToolApprovalSuspension(harness.RunId)));
+
+        var sent = harness.Publisher.SuccessfulSends
+            .Should()
+            .ContainSingle(x => x.Event is WorkflowRunToolApprovalNotification)
+            .Subject;
+        sent.TargetActorId.Should().Be("delivery-actor-1");
+        var notification = sent.Event.Should().BeOfType<WorkflowRunToolApprovalNotification>().Subject;
+        notification.DeliveryId.Should().Be("delivery-1");
+        notification.WorkflowActorId.Should().Be(harness.RunId);
+        notification.WorkflowRunId.Should().Be(harness.RunId);
+        notification.WorkflowCommandId.Should().Be("command-1");
+        notification.WorkflowCorrelationId.Should().Be("correlation-1");
+        notification.StepId.Should().Be("tool-step-1");
+        notification.ExecutionId.Should().Be("execution-1");
+        notification.ToolName.Should().Be("lark_contact_batch_resolution");
+        notification.ToolCallId.Should().Be("tool-call-1");
+        notification.ApprovalRequestId.Should().Be("approval-request-1");
+        notification.RequestedAt.Should().NotBeNull();
+        sent.Options?.Delivery?.OperationId.Should().Contain("approval-request-1");
+    }
+
+    [Fact]
+    public async Task ExternalToolApprovalSuspension_ShouldNotNotifyDeliveryActor()
+    {
+        var harness = await CreateStartedRunAsync(includeCompletionNotificationTarget: true);
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom("external-workflow-actor", ToolApprovalSuspension(harness.RunId)));
+
+        harness.Publisher.SuccessfulSends
+            .Select(x => x.Event)
+            .OfType<WorkflowRunToolApprovalNotification>()
+            .Should()
+            .BeEmpty();
+    }
+
+    [Fact]
     public async Task StoppedRun_WithNotificationTarget_ShouldDispatchTypedStoppedTerminal()
     {
         var harness = await CreateStartedRunAsync(includeCompletionNotificationTarget: true);
@@ -1092,6 +1133,22 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
             ActorId = "delivery-actor-1",
             DeliveryId = "delivery-1",
             ExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        };
+
+    private static WorkflowSuspendedEvent ToolApprovalSuspension(string runId) =>
+        new()
+        {
+            RunId = runId,
+            StepId = "tool-step-1",
+            SuspensionType = "tool_approval",
+            Prompt = "Approve contact resolution?",
+            ToolApproval = new WorkflowToolApprovalSuspension
+            {
+                ExecutionId = "execution-1",
+                ToolName = "lark_contact_batch_resolution",
+                ToolCallId = "tool-call-1",
+                ApprovalRequestId = "approval-request-1",
+            },
         };
 
     // Seed a recoverable pending sub-workflow invocation directly into the run's committed event stream.

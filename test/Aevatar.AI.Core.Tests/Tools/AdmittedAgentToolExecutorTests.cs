@@ -278,6 +278,10 @@ public sealed class AdmittedAgentToolExecutorTests
         executedContext.Credentials.NyxIdAccessToken.Should().Be("sender-token");
         executedContext.Credentials.NyxIdOrgToken.Should().Be("sender-token");
         executedContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
+        executedContext.Credentials.NyxIdCredentialKind
+            .Should().Be(AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
+        AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(executedContext.Credentials)
+            .Should().Be("sender-token");
         appender.Records.Single(record => record.ToolExecution.ExecutionPhase == AuditToolExecutionPhase.Terminal)
             .CredentialSource.Should().Be(AuditCredentialSource.ChannelRegistration);
     }

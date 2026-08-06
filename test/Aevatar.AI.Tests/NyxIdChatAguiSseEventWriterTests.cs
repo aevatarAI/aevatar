@@ -181,7 +181,24 @@ public class NyxIdChatAguiSseEventWriterTests
             Kind = NyxIdChatStepKind.Tool,
             Status = NyxIdChatStepStatus.Failed,
             Required = true,
+            Description = "Update the repository.",
             ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+            AddedBy = NyxIdChatStepAddedBy.Replan,
+            DependsOn = { "step-plan" },
+            Estimate = new NyxIdChatStepEstimate
+            {
+                Kind = NyxIdChatStepEstimateKind.Duration,
+                Seconds = 30,
+            },
+            Substeps =
+            {
+                new NyxIdChatSubstepState
+                {
+                    SubstepId = "substep-alpha",
+                    Title = "Validate the target",
+                    Status = NyxIdChatSubstepStatus.Done,
+                },
+            },
             Source = new NyxIdChatStepSource
             {
                 Tool = new NyxIdChatToolStepSource
@@ -218,6 +235,16 @@ public class NyxIdChatAguiSseEventWriterTests
             Status = NyxIdChatTaskStatus.Active,
             ActiveStepId = "step-alpha",
             ActiveOperationId = "operation-alpha",
+            SchemaVersion = 4,
+            ActorId = "conversation-alpha",
+            PlanId = "plan-alpha",
+            PlanRevision = 2,
+            Title = "Update the repository safely",
+            Gate = new NyxIdChatPlanGate
+            {
+                Mode = NyxIdChatPlanGateMode.Confirm,
+                Reason = "The plan contains an effect-capable operation.",
+            },
             Steps =
             {
                 taskStep,
@@ -239,7 +266,13 @@ public class NyxIdChatAguiSseEventWriterTests
             Custom = new CustomEvent
             {
                 Name = "nyxid.task.step.changed",
-                Payload = Any.Pack(taskStep),
+                Payload = Any.Pack(new NyxIdChatTaskStepChanged
+                {
+                    TaskId = task.TaskId,
+                    PlanRevision = task.PlanRevision,
+                    Step = taskStep,
+                    ChangeKind = NyxIdChatStepChangeKind.Status,
+                }),
             },
         }, "turn-alpha");
 
@@ -254,10 +287,17 @@ public class NyxIdChatAguiSseEventWriterTests
         payload.GetProperty("taskId").GetString().Should().Be("task-alpha");
         payload.GetProperty("turnId").GetString().Should().Be("turn-alpha");
         payload.GetProperty("status").GetString().Should().Be("active");
+        payload.GetProperty("planId").GetString().Should().Be("plan-alpha");
+        payload.GetProperty("planRevision").GetInt32().Should().Be(2);
+        payload.GetProperty("gate").GetProperty("mode").GetString().Should().Be("confirm");
         var step = payload.GetProperty("steps")[0];
         step.GetProperty("kind").GetString().Should().Be("tool");
         step.GetProperty("status").GetString().Should().Be("failed");
         step.GetProperty("externalEffect").GetString().Should().Be("not_applied");
+        step.GetProperty("addedBy").GetString().Should().Be("replan");
+        step.GetProperty("dependsOn")[0].GetString().Should().Be("step-plan");
+        step.GetProperty("estimate").GetProperty("seconds").GetInt32().Should().Be(30);
+        step.GetProperty("substeps")[0].GetProperty("status").GetString().Should().Be("done");
         step.GetProperty("availableActions").GetProperty("retry").GetBoolean().Should().BeTrue();
         step.GetProperty("operation").GetProperty("phase").GetString().Should().Be("failed");
         step.GetProperty("source").GetProperty("tool")
@@ -265,7 +305,11 @@ public class NyxIdChatAguiSseEventWriterTests
             .Be("readiness-capability-alpha");
         var changed = frames[1].GetProperty("custom");
         changed.GetProperty("name").GetString().Should().Be("nyxid.task.step.changed");
-        changed.GetProperty("payload").GetProperty("source").GetProperty("tool")
+        var changedPayload = changed.GetProperty("payload");
+        changedPayload.GetProperty("taskId").GetString().Should().Be("task-alpha");
+        changedPayload.GetProperty("planRevision").GetInt32().Should().Be(2);
+        changedPayload.GetProperty("changeKind").GetString().Should().Be("status");
+        changedPayload.GetProperty("step").GetProperty("source").GetProperty("tool")
             .GetProperty("readinessCapabilityId").GetString().Should()
             .Be("readiness-capability-alpha");
         frame.GetRawText().Should().NotContain("@type");
