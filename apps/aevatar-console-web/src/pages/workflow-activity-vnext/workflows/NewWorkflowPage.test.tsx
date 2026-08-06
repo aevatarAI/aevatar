@@ -246,19 +246,25 @@ describe('New workflow save-target recovery', () => {
     renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Describe' }));
-    expect(screen.queryByLabelText('Workflow name')).not.toBeInTheDocument();
+    const workflowName = screen.getByLabelText('Workflow name');
     expect(screen.queryByLabelText('Generated YAML')).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('What should this workflow do?'), {
       target: { value: 'Summarize this week' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Generate and open' }));
+    const generateAndOpen = screen.getByRole('button', {
+      name: 'Generate and open',
+    });
+    expect(generateAndOpen).toBeDisabled();
+    fireEvent.change(workflowName, { target: { value: 'Weekly review' } });
+    expect(generateAndOpen).toBeEnabled();
+    fireEvent.click(generateAndOpen);
 
     await waitFor(() =>
       expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledWith({
         directoryId: 'directory-alpha',
         fileName: 'weekly-review.yaml',
         scopeId: 'scope-alpha',
-        workflowName: 'weekly_review',
+        workflowName: 'Weekly review',
         yaml: generatedYaml,
       }),
     );
@@ -274,7 +280,7 @@ describe('New workflow save-target recovery', () => {
     );
   });
 
-  it('preserves the description and retries generation without an earlier save', async () => {
+  it('preserves the name and description and retries generation without an earlier save', async () => {
     const generatedYaml = 'name: weekly_review\nroles: []\nsteps: []\n';
     mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
     mockStudioApi.authorWorkflow
@@ -289,7 +295,11 @@ describe('New workflow save-target recovery', () => {
     renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Describe' }));
+    const workflowName = screen.getByLabelText('Workflow name');
     const description = screen.getByLabelText('What should this workflow do?');
+    fireEvent.change(workflowName, {
+      target: { value: 'Weekly review' },
+    });
     fireEvent.change(description, {
       target: { value: 'Summarize this week' },
     });
@@ -299,12 +309,16 @@ describe('New workflow save-target recovery', () => {
       await screen.findByText("Workflow couldn't be created"),
     ).toBeVisible();
     expect(screen.getByText('Generation unavailable')).toBeInTheDocument();
+    expect(workflowName).toHaveValue('Weekly review');
     expect(description).toHaveValue('Summarize this week');
     expect(mockStudioApi.createWorkflowDraft).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Generate and open' }));
     await waitFor(() =>
       expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledTimes(1),
+    );
+    expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ workflowName: 'Weekly review' }),
     );
   });
 

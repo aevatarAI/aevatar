@@ -4726,6 +4726,9 @@ describe('Workflow Activity vNext creation', () => {
     });
     await waitFor(() => expect(describeButton).toBeEnabled());
     fireEvent.click(describeButton);
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Weekly review' },
+    });
     fireEvent.change(screen.getByLabelText('What should this workflow do?'), {
       target: { value: 'Summarize this week' },
     });
@@ -4740,7 +4743,7 @@ describe('Workflow Activity vNext creation', () => {
     expect(
       screen.queryByText("Workflow couldn't be created"),
     ).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Workflow name')).toHaveValue('');
+    expect(screen.getByLabelText('Workflow name')).toHaveValue('Weekly review');
   });
 
   it('keeps bundled template version metadata out of the primary interface', async () => {
