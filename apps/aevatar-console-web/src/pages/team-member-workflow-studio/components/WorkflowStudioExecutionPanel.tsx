@@ -6,24 +6,28 @@ import {
   CopyOutlined,
   LoadingOutlined,
   PauseCircleOutlined,
-} from "@ant-design/icons";
-import { Alert, Button, message, Segmented, Tag, Tooltip, Typography } from "antd";
-import React from "react";
-import { t } from "@/shared/i18n/messages";
+} from '@ant-design/icons';
+import { Alert, Button, Segmented, Tag, Tooltip, Typography } from 'antd';
+import React from 'react';
+import { t } from '@/shared/i18n/messages';
 import {
   buildExecutionTrace,
   type ExecutionLogItem,
   type ExecutionLogStatus,
-  type WorkflowExecutionNodeSnapshot,
   formatDurationBetween,
   formatExecutionLogsClipboard,
   normalizeExecutionLogStatus,
-} from "@/shared/studio/execution";
-import type { StudioExecutionDetail } from "@/shared/studio/models";
+  type WorkflowExecutionNodeSnapshot,
+} from '@/shared/studio/execution';
+import type { StudioExecutionDetail } from '@/shared/studio/models';
+import {
+  type ConsoleToastApi,
+  useConsoleToast,
+} from '@/shared/ui/ConsoleToast';
 import {
   getUserFacingIdentifierLabel,
   sanitizeUserFacingText,
-} from "@/shared/ui/userFacingIdentifiers";
+} from '@/shared/ui/userFacingIdentifiers';
 
 type WorkflowStudioExecutionPanelProps = {
   readonly activeLogIndex?: number | null;
@@ -36,13 +40,13 @@ type WorkflowStudioExecutionPanelProps = {
   readonly workflowNodes?: readonly WorkflowExecutionNodeSnapshot[];
 };
 
-type OverviewMode = "nodes" | "events";
-type DetailPanelState = "both" | "input" | "output";
-type OverviewEntryType = "node" | "run" | "event";
-type ExecutionOverviewStatus = ExecutionLogStatus | "pending";
+type OverviewMode = 'nodes' | 'events';
+type DetailPanelState = 'both' | 'input' | 'output';
+type OverviewEntryType = 'node' | 'run' | 'event';
+type ExecutionOverviewStatus = ExecutionLogStatus | 'pending';
 
 type ExecutionOverviewEntry = {
-  readonly category: NonNullable<ExecutionLogItem["category"]>;
+  readonly category: NonNullable<ExecutionLogItem['category']>;
   readonly completedAt: string;
   readonly entryId: string;
   readonly eventCount: number;
@@ -67,7 +71,7 @@ type ExecutionOverviewEntry = {
 };
 
 type MutableExecutionOverviewEntry = {
-  category: NonNullable<ExecutionLogItem["category"]>;
+  category: NonNullable<ExecutionLogItem['category']>;
   completedAt: string;
   entryId: string;
   eventCount: number;
@@ -100,33 +104,39 @@ type ExecutionTokenUsage = {
 type ExecutionPanelCssVariables = React.CSSProperties &
   Record<`--${string}`, string | number>;
 
-const categoryLabels: Record<NonNullable<ExecutionLogItem["category"]>, string> = {
-  custom: "Custom",
-  lifecycle: "Run",
-  output: "Output",
-  raw: "Raw",
-  snapshot: "Snapshot",
-  step: "Step",
-  usage: "Usage",
+const categoryLabels: Record<
+  NonNullable<ExecutionLogItem['category']>,
+  string
+> = {
+  custom: 'Custom',
+  lifecycle: 'Run',
+  output: 'Output',
+  raw: 'Raw',
+  snapshot: 'Snapshot',
+  step: 'Step',
+  usage: 'Usage',
 };
 
-const categoryColors: Record<NonNullable<ExecutionLogItem["category"]>, string> = {
-  custom: "default",
-  lifecycle: "blue",
-  output: "green",
-  raw: "volcano",
-  snapshot: "geekblue",
-  step: "cyan",
-  usage: "gold",
+const categoryColors: Record<
+  NonNullable<ExecutionLogItem['category']>,
+  string
+> = {
+  custom: 'default',
+  lifecycle: 'blue',
+  output: 'green',
+  raw: 'volcano',
+  snapshot: 'geekblue',
+  step: 'cyan',
+  usage: 'gold',
 };
 
 const statusColors: Record<ExecutionOverviewStatus, string> = {
-  error: "red",
-  pending: "default",
-  recorded: "default",
-  running: "processing",
-  success: "green",
-  waiting: "orange",
+  error: 'red',
+  pending: 'default',
+  recorded: 'default',
+  running: 'processing',
+  success: 'green',
+  waiting: 'orange',
 };
 
 const nodeDetailBlockHeight = 230;
@@ -163,7 +173,7 @@ const workflowStudioExecutionPanelCss = `
 
 function formatConsoleDateTime(value: string | null | undefined): string {
   if (!value) {
-    return "";
+    return '';
   }
 
   const date = new Date(value);
@@ -172,72 +182,84 @@ function formatConsoleDateTime(value: string | null | undefined): string {
   }
 
   return date.toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
   });
 }
 
 function sanitizeVisibleText(value: string | null | undefined): string {
-  return sanitizeUserFacingText(value) || "";
+  return sanitizeUserFacingText(value) || '';
 }
 
 function isDetailPaneVisible(
   state: DetailPanelState,
-  pane: "input" | "output",
+  pane: 'input' | 'output',
 ): boolean {
-  return state === "both" || state === pane;
+  return state === 'both' || state === pane;
 }
 
 function toggleDetailPanelState(
   state: DetailPanelState,
-  pane: "input" | "output",
+  pane: 'input' | 'output',
 ): DetailPanelState {
-  if (pane === "input") {
-    return state === "output" ? "both" : state === "both" ? "output" : "input";
+  if (pane === 'input') {
+    return state === 'output' ? 'both' : state === 'both' ? 'output' : 'input';
   }
 
-  return state === "input" ? "both" : state === "both" ? "input" : "output";
+  return state === 'input' ? 'both' : state === 'both' ? 'input' : 'output';
 }
 
 function isTerminalStepLog(log: ExecutionLogItem | undefined): boolean {
-  return log?.tone === "completed" || log?.tone === "failed";
+  return log?.tone === 'completed' || log?.tone === 'failed';
 }
 
 function readStatusLabel(status: ExecutionOverviewStatus): string {
   switch (status) {
-    case "error":
-      return t("teamMemberWorkflowStudio.executionPanel.status.error", "Error");
-    case "recorded":
+    case 'error':
+      return t('teamMemberWorkflowStudio.executionPanel.status.error', 'Error');
+    case 'recorded':
       return t(
-        "teamMemberWorkflowStudio.executionPanel.status.recorded",
-        "Recorded",
+        'teamMemberWorkflowStudio.executionPanel.status.recorded',
+        'Recorded',
       );
-    case "pending":
-      return t("teamMemberWorkflowStudio.executionPanel.status.pending", "Pending");
-    case "success":
-      return t("teamMemberWorkflowStudio.executionPanel.status.success", "Success");
-    case "waiting":
-      return t("teamMemberWorkflowStudio.executionPanel.status.waiting", "Waiting");
+    case 'pending':
+      return t(
+        'teamMemberWorkflowStudio.executionPanel.status.pending',
+        'Pending',
+      );
+    case 'success':
+      return t(
+        'teamMemberWorkflowStudio.executionPanel.status.success',
+        'Success',
+      );
+    case 'waiting':
+      return t(
+        'teamMemberWorkflowStudio.executionPanel.status.waiting',
+        'Waiting',
+      );
     default:
-      return t("teamMemberWorkflowStudio.executionPanel.status.running", "Running");
+      return t(
+        'teamMemberWorkflowStudio.executionPanel.status.running',
+        'Running',
+      );
   }
 }
 
 function renderStatusIcon(status: ExecutionOverviewStatus): React.ReactNode {
   switch (status) {
-    case "error":
-      return <CloseCircleOutlined style={{ color: "#dc2626" }} />;
-    case "recorded":
-      return <CheckCircleOutlined style={{ color: "#64748b" }} />;
-    case "pending":
-      return <ClockCircleOutlined style={{ color: "#94a3b8" }} />;
-    case "success":
-      return <CheckCircleOutlined style={{ color: "#16a34a" }} />;
-    case "waiting":
-      return <PauseCircleOutlined style={{ color: "#d97706" }} />;
+    case 'error':
+      return <CloseCircleOutlined style={{ color: '#dc2626' }} />;
+    case 'recorded':
+      return <CheckCircleOutlined style={{ color: '#64748b' }} />;
+    case 'pending':
+      return <ClockCircleOutlined style={{ color: '#94a3b8' }} />;
+    case 'success':
+      return <CheckCircleOutlined style={{ color: '#16a34a' }} />;
+    case 'waiting':
+      return <PauseCircleOutlined style={{ color: '#d97706' }} />;
     default:
-      return <LoadingOutlined style={{ color: "#2563eb" }} />;
+      return <LoadingOutlined style={{ color: '#2563eb' }} />;
   }
 }
 
@@ -245,21 +267,21 @@ function buildOutputText(
   detail: StudioExecutionDetail,
   logs: readonly ExecutionLogItem[],
 ): string {
-  const explicitOutput = String(detail.output || "").trim();
+  const explicitOutput = String(detail.output || '').trim();
   if (explicitOutput) {
     return explicitOutput;
   }
 
   const finishedLog = [...logs]
     .reverse()
-    .find((log) => log.category === "output" && log.clipboardText.trim());
-  return finishedLog?.clipboardText.trim() || "";
+    .find((log) => log.category === 'output' && log.clipboardText.trim());
+  return finishedLog?.clipboardText.trim() || '';
 }
 
 function readJsonObject(text: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(text);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>)
       : null;
   } catch {
@@ -273,11 +295,11 @@ function readTokenNumber(
 ): number {
   for (const key of keys) {
     const value = record[key];
-    if (typeof value === "number" && Number.isFinite(value)) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
       return value;
     }
 
-    if (typeof value === "string") {
+    if (typeof value === 'string') {
       const parsed = Number(value);
       if (Number.isFinite(parsed)) {
         return parsed;
@@ -292,10 +314,10 @@ function buildTokenUsage(
   logs: readonly ExecutionLogItem[],
 ): ExecutionTokenUsage {
   return logs
-    .filter((log) => log.category === "usage" && log.payloadText)
+    .filter((log) => log.category === 'usage' && log.payloadText)
     .reduce(
       (total, log) => {
-        const payload = readJsonObject(log.payloadText || "");
+        const payload = readJsonObject(log.payloadText || '');
         if (!payload) {
           return total;
         }
@@ -303,13 +325,13 @@ function buildTokenUsage(
         return {
           completionTokens:
             total.completionTokens +
-            readTokenNumber(payload, "completionTokens", "completion_tokens"),
+            readTokenNumber(payload, 'completionTokens', 'completion_tokens'),
           promptTokens:
             total.promptTokens +
-            readTokenNumber(payload, "promptTokens", "prompt_tokens"),
+            readTokenNumber(payload, 'promptTokens', 'prompt_tokens'),
           totalTokens:
             total.totalTokens +
-            readTokenNumber(payload, "totalTokens", "total_tokens"),
+            readTokenNumber(payload, 'totalTokens', 'total_tokens'),
         };
       },
       {
@@ -327,70 +349,73 @@ function buildOverviewEntries(
   const entries: MutableExecutionOverviewEntry[] = [];
 
   logs.forEach((log, logIndex) => {
-    const category = log.category || "custom";
+    const category = log.category || 'custom';
     const status = normalizeExecutionLogStatus(log);
 
-    if (category !== "step" || !log.stepId) {
+    if (category !== 'step' || !log.stepId) {
       const eventStatus: ExecutionLogStatus =
-        status === "error" ? "error" : "recorded";
+        status === 'error' ? 'error' : 'recorded';
       entries.push({
         category,
         completedAt:
-          eventStatus === "recorded" || eventStatus === "error"
+          eventStatus === 'recorded' || eventStatus === 'error'
             ? log.timestamp
-            : "",
+            : '',
         entryId: `event:${logIndex}:${log.eventType || log.title}`,
         eventCount: 1,
-        eventType: log.eventType || "",
-        inputText: "",
-        interactionText: "",
+        eventType: log.eventType || '',
+        inputText: '',
+        interactionText: '',
         logIndex,
         logIndexes: [logIndex],
         meta: log.meta,
-        outputText: category === "output" ? log.clipboardText.trim() : "",
-        payloadText: (log.payloadText || log.clipboardText || "").trim(),
-        pendingText: "",
+        outputText: category === 'output' ? log.clipboardText.trim() : '',
+        payloadText: (log.payloadText || log.clipboardText || '').trim(),
+        pendingText: '',
         previewText: log.previewText,
-        rawText: (log.rawText || "").trim(),
-        rowType: category === "lifecycle" ? "run" : "event",
+        rawText: (log.rawText || '').trim(),
+        rowType: category === 'lifecycle' ? 'run' : 'event',
         startedAt: log.timestamp,
         status: eventStatus,
         statusLog: log,
-        stepId: "",
+        stepId: '',
         subtitle: sanitizeVisibleText(log.meta) || categoryLabels[category],
-        title: getUserFacingIdentifierLabel(log.title, categoryLabels[category]),
+        title: getUserFacingIdentifierLabel(
+          log.title,
+          categoryLabels[category],
+        ),
       });
       return;
     }
 
     const activeIndex = activeEntryIndexByStepId.get(log.stepId);
     const activeEntry =
-      typeof activeIndex === "number" ? entries[activeIndex] : undefined;
+      typeof activeIndex === 'number' ? entries[activeIndex] : undefined;
 
     const createNodeEntry = (): MutableExecutionOverviewEntry => ({
       category,
-      completedAt: "",
+      completedAt: '',
       entryId: `node:${log.stepId}:${logIndex}`,
       eventCount: 1,
-      eventType: log.eventType || "",
-      inputText: log.tone === "started" ? log.clipboardText.trim() : "",
-      interactionText: log.tone === "run" ? log.clipboardText.trim() : "",
+      eventType: log.eventType || '',
+      inputText: log.tone === 'started' ? log.clipboardText.trim() : '',
+      interactionText: log.tone === 'run' ? log.clipboardText.trim() : '',
       logIndex,
       logIndexes: [logIndex],
       meta: log.meta,
       outputText:
-        log.tone === "completed" || log.tone === "failed"
+        log.tone === 'completed' || log.tone === 'failed'
           ? log.clipboardText.trim()
-          : "",
-      payloadText: (log.payloadText || "").trim(),
-      pendingText: log.tone === "pending" ? log.clipboardText.trim() : "",
+          : '',
+      payloadText: (log.payloadText || '').trim(),
+      pendingText: log.tone === 'pending' ? log.clipboardText.trim() : '',
       previewText: log.previewText,
-      rawText: (log.rawText || "").trim(),
-      rowType: "node",
+      rawText: (log.rawText || '').trim(),
+      rowType: 'node',
       startedAt: log.timestamp,
       status,
       statusLog: log,
-      stepId: log.stepId || "",
+      stepId: log.stepId || '',
       subtitle: sanitizeVisibleText(log.meta) || categoryLabels[category],
       title: getUserFacingIdentifierLabel(
         log.stepId,
@@ -398,7 +423,7 @@ function buildOverviewEntries(
       ),
     });
 
-    if (log.tone === "started") {
+    if (log.tone === 'started') {
       entries.push(createNodeEntry());
       activeEntryIndexByStepId.set(log.stepId, entries.length - 1);
       return;
@@ -410,22 +435,25 @@ function buildOverviewEntries(
       activeEntry.logIndex = logIndex;
       activeEntry.logIndexes.push(logIndex);
       activeEntry.meta = log.meta || activeEntry.meta;
-      activeEntry.payloadText = (log.payloadText || activeEntry.payloadText).trim();
+      activeEntry.payloadText = (
+        log.payloadText || activeEntry.payloadText
+      ).trim();
       activeEntry.previewText = log.previewText || activeEntry.previewText;
       activeEntry.rawText = (log.rawText || activeEntry.rawText).trim();
       activeEntry.status = status;
       activeEntry.statusLog = log;
-      activeEntry.subtitle = sanitizeVisibleText(log.meta) || activeEntry.subtitle;
+      activeEntry.subtitle =
+        sanitizeVisibleText(log.meta) || activeEntry.subtitle;
 
-      if (log.tone === "pending") {
+      if (log.tone === 'pending') {
         activeEntry.pendingText = log.clipboardText.trim();
       }
 
-      if (log.tone === "run") {
+      if (log.tone === 'run') {
         activeEntry.interactionText = log.clipboardText.trim();
       }
 
-      if (log.tone === "completed" || log.tone === "failed") {
+      if (log.tone === 'completed' || log.tone === 'failed') {
         activeEntry.completedAt = log.timestamp;
         activeEntry.outputText = log.clipboardText.trim();
         activeEntryIndexByStepId.delete(log.stepId);
@@ -434,7 +462,7 @@ function buildOverviewEntries(
     }
 
     const nextEntry = createNodeEntry();
-    if (log.tone === "completed" || log.tone === "failed") {
+    if (log.tone === 'completed' || log.tone === 'failed') {
       nextEntry.completedAt = log.timestamp;
     } else {
       activeEntryIndexByStepId.set(log.stepId, entries.length);
@@ -447,9 +475,9 @@ function buildOverviewEntries(
 
 function buildNodeOverviewEntries(
   entries: readonly ExecutionOverviewEntry[],
-  workflowNodes: WorkflowStudioExecutionPanelProps["workflowNodes"],
+  workflowNodes: WorkflowStudioExecutionPanelProps['workflowNodes'],
 ): ExecutionOverviewEntry[] {
-  const loggedNodeEntries = entries.filter((entry) => entry.rowType === "node");
+  const loggedNodeEntries = entries.filter((entry) => entry.rowType === 'node');
   if (!workflowNodes?.length) {
     return loggedNodeEntries;
   }
@@ -477,32 +505,34 @@ function buildNodeOverviewEntries(
     }
 
     orderedEntries.push({
-      category: "step",
-      completedAt: "",
+      category: 'step',
+      completedAt: '',
       entryId: `node:${stepId}:pending`,
       eventCount: 0,
-      eventType: "",
-      inputText: "",
-      interactionText: "",
+      eventType: '',
+      inputText: '',
+      interactionText: '',
       logIndex: -1,
       logIndexes: [],
-      meta: [node.stepType, node.targetRole].filter(Boolean).join(" · "),
-      outputText: "",
-      payloadText: "",
-      pendingText: "",
-      previewText: "",
-      rawText: "",
-      rowType: "node",
-      startedAt: "",
-      status: "pending",
+      meta: [node.stepType, node.targetRole].filter(Boolean).join(' · '),
+      outputText: '',
+      payloadText: '',
+      pendingText: '',
+      previewText: '',
+      rawText: '',
+      rowType: 'node',
+      startedAt: '',
+      status: 'pending',
       stepId,
-      subtitle: [node.subtitle, node.targetRole].filter(Boolean).join(" · "),
+      subtitle: [node.subtitle, node.targetRole].filter(Boolean).join(' · '),
       title: node.title || stepId,
     });
   });
 
   orderedEntries.push(
-    ...loggedNodeEntries.filter((entry) => !definitionStepIds.has(entry.stepId)),
+    ...loggedNodeEntries.filter(
+      (entry) => !definitionStepIds.has(entry.stepId),
+    ),
   );
   return orderedEntries;
 }
@@ -511,11 +541,13 @@ function findSelectedEntry(
   entries: readonly ExecutionOverviewEntry[],
   activeLogIndex: number | null | undefined,
 ): ExecutionOverviewEntry | null {
-  if (typeof activeLogIndex !== "number") {
+  if (typeof activeLogIndex !== 'number') {
     return null;
   }
 
-  const direct = entries.find((entry) => entry.logIndexes.includes(activeLogIndex));
+  const direct = entries.find((entry) =>
+    entry.logIndexes.includes(activeLogIndex),
+  );
   if (direct) {
     return direct;
   }
@@ -533,16 +565,16 @@ function renderMetric(label: string, value: React.ReactNode): React.ReactNode {
   return (
     <span
       style={{
-        alignItems: "baseline",
-        display: "inline-flex",
+        alignItems: 'baseline',
+        display: 'inline-flex',
         gap: 5,
-        whiteSpace: "nowrap",
+        whiteSpace: 'nowrap',
       }}
     >
-      <Typography.Text style={{ color: "#64748b", fontSize: 11 }}>
+      <Typography.Text style={{ color: '#64748b', fontSize: 11 }}>
         {label}
       </Typography.Text>
-      <Typography.Text strong style={{ color: "#111827", fontSize: 12 }}>
+      <Typography.Text strong style={{ color: '#111827', fontSize: 12 }}>
         {value}
       </Typography.Text>
     </span>
@@ -566,8 +598,8 @@ function renderDataBlock(
   return (
     <div
       style={{
-        alignContent: "start",
-        display: "grid",
+        alignContent: 'start',
+        display: 'grid',
         gap: 6,
         minHeight: 0,
         minWidth: 0,
@@ -575,10 +607,10 @@ function renderDataBlock(
     >
       <Typography.Text
         style={{
-          color: options.danger ? "#b91c1c" : "#64748b",
+          color: options.danger ? '#b91c1c' : '#64748b',
           fontSize: 11,
           fontWeight: 700,
-          textTransform: "uppercase",
+          textTransform: 'uppercase',
         }}
       >
         {label}
@@ -586,22 +618,22 @@ function renderDataBlock(
       <pre
         data-testid={options.testId}
         style={{
-          background: text ? "#f8fafc" : "#ffffff",
-          border: `1px solid ${options.danger ? "#fecaca" : "#e5e7eb"}`,
+          background: text ? '#f8fafc' : '#ffffff',
+          border: `1px solid ${options.danger ? '#fecaca' : '#e5e7eb'}`,
           borderRadius: 6,
-          color: text ? (options.danger ? "#991b1b" : "#334155") : "#94a3b8",
+          color: text ? (options.danger ? '#991b1b' : '#334155') : '#94a3b8',
           fontFamily:
-            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
           fontSize: 12,
           height: blockHeight,
-          lineHeight: "18px",
+          lineHeight: '18px',
           margin: 0,
-          maxHeight: blockHeight ? undefined : options.maxHeight ?? 180,
+          maxHeight: blockHeight ? undefined : (options.maxHeight ?? 180),
           minHeight: 50,
-          overflow: "auto",
-          padding: "9px 10px",
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
+          overflow: 'auto',
+          padding: '9px 10px',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
         }}
       >
         {text || emptyText}
@@ -614,23 +646,38 @@ function formatEntryClipboard(entry: ExecutionOverviewEntry): string {
   const lines = [
     `[${entry.startedAt}] ${entry.title}`,
     entry.subtitle,
-    entry.inputText ? `Input:\n${entry.inputText}` : "",
-    entry.pendingText ? `Prompt:\n${entry.pendingText}` : "",
-    entry.interactionText ? `Interaction:\n${entry.interactionText}` : "",
-    entry.outputText ? `Output:\n${entry.outputText}` : "",
-    entry.payloadText ? `Payload:\n${entry.payloadText}` : "",
+    entry.inputText ? `Input:\n${entry.inputText}` : '',
+    entry.pendingText ? `Prompt:\n${entry.pendingText}` : '',
+    entry.interactionText ? `Interaction:\n${entry.interactionText}` : '',
+    entry.outputText ? `Output:\n${entry.outputText}` : '',
+    entry.payloadText ? `Payload:\n${entry.payloadText}` : '',
   ].filter(Boolean);
 
-  return lines.join("\n\n");
+  return lines.join('\n\n');
 }
 
-async function copyToClipboard(text: string, successText: string): Promise<void> {
+async function copyToClipboard(
+  text: string,
+  successText: string,
+  failureText: string,
+  toast: ConsoleToastApi,
+): Promise<void> {
   if (!text.trim()) {
     return;
   }
 
-  await navigator.clipboard?.writeText(text);
-  void message.success(successText);
+  const clipboard = globalThis.navigator?.clipboard;
+  if (!clipboard?.writeText) {
+    toast.error(failureText);
+    return;
+  }
+
+  try {
+    await clipboard.writeText(text);
+    toast.success(successText);
+  } catch {
+    toast.error(failureText);
+  }
 }
 
 function renderOverviewRow(
@@ -642,7 +689,7 @@ function renderOverviewRow(
   const duration =
     entry.startedAt && entry.completedAt
       ? formatDurationBetween(entry.startedAt, entry.completedAt)
-      : "";
+      : '';
 
   return (
     <button
@@ -656,37 +703,37 @@ function renderOverviewRow(
         }
       }}
       style={{
-        appearance: "none",
-        background: selected ? "#eef4ff" : "#ffffff",
-        border: `1px solid ${selected ? "#b7cdfd" : "#e5e7eb"}`,
+        appearance: 'none',
+        background: selected ? '#eef4ff' : '#ffffff',
+        border: `1px solid ${selected ? '#b7cdfd' : '#e5e7eb'}`,
         borderRadius: 6,
-        boxSizing: "border-box",
-        color: "inherit",
-        cursor: selectable ? "pointer" : "default",
-        display: "grid",
+        boxSizing: 'border-box',
+        color: 'inherit',
+        cursor: selectable ? 'pointer' : 'default',
+        display: 'grid',
         gap: 6,
         height: overviewRowHeight,
         minHeight: overviewRowHeight,
-        overflow: "hidden",
-        padding: "8px 10px",
-        textAlign: "left",
-        width: "100%",
+        overflow: 'hidden',
+        padding: '8px 10px',
+        textAlign: 'left',
+        width: '100%',
       }}
       type="button"
     >
       <span
         style={{
-          alignItems: "center",
-          display: "grid",
+          alignItems: 'center',
+          display: 'grid',
           gap: 8,
-          gridTemplateColumns: "18px minmax(0, 1fr) max-content",
+          gridTemplateColumns: '18px minmax(0, 1fr) max-content',
           minWidth: 0,
         }}
       >
         {renderStatusIcon(entry.status)}
         <span
           style={{
-            display: "grid",
+            display: 'grid',
             gap: 1,
             minWidth: 0,
           }}
@@ -694,60 +741,63 @@ function renderOverviewRow(
           <Typography.Text
             strong
             style={{
-              color: "#111827",
-              display: "block",
+              color: '#111827',
+              display: 'block',
               fontSize: 12,
-              lineHeight: "17px",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
+              lineHeight: '17px',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
             }}
           >
             {entry.title}
           </Typography.Text>
           <Typography.Text
             style={{
-              color: "#64748b",
+              color: '#64748b',
               fontSize: 11,
-              lineHeight: "15px",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
+              lineHeight: '15px',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
             }}
           >
             {entry.subtitle || categoryLabels[entry.category]}
           </Typography.Text>
         </span>
-        <Typography.Text style={{ color: "#94a3b8", fontSize: 11 }}>
+        <Typography.Text style={{ color: '#94a3b8', fontSize: 11 }}>
           {formatConsoleDateTime(entry.startedAt)}
         </Typography.Text>
       </span>
       <span
         style={{
-          alignItems: "center",
-          display: "flex",
-          flexWrap: "nowrap",
+          alignItems: 'center',
+          display: 'flex',
+          flexWrap: 'nowrap',
           gap: 5,
           minWidth: 0,
-          overflow: "hidden",
+          overflow: 'hidden',
         }}
       >
         <Tag color={statusColors[entry.status]} style={{ marginInlineEnd: 0 }}>
           {readStatusLabel(entry.status)}
         </Tag>
-        <Tag color={categoryColors[entry.category]} style={{ marginInlineEnd: 0 }}>
+        <Tag
+          color={categoryColors[entry.category]}
+          style={{ marginInlineEnd: 0 }}
+        >
           {categoryLabels[entry.category]}
         </Tag>
         {duration ? (
-          <Typography.Text style={{ color: "#64748b", fontSize: 11 }}>
+          <Typography.Text style={{ color: '#64748b', fontSize: 11 }}>
             {duration}
           </Typography.Text>
         ) : null}
         {entry.eventCount > 1 ? (
-          <Typography.Text style={{ color: "#64748b", fontSize: 11 }}>
+          <Typography.Text style={{ color: '#64748b', fontSize: 11 }}>
             {t(
-              "teamMemberWorkflowStudio.executionPanel.eventCount",
-              "{count} events",
+              'teamMemberWorkflowStudio.executionPanel.eventCount',
+              '{count} events',
               { count: entry.eventCount },
             )}
           </Typography.Text>
@@ -766,41 +816,43 @@ function renderNodeInputPane(
   return (
     <div
       style={{
-        alignContent: "start",
-        alignSelf: "start",
-        display: "grid",
+        alignContent: 'start',
+        alignSelf: 'start',
+        display: 'grid',
         gap: 10,
         minHeight: 0,
         minWidth: 0,
       }}
     >
       {renderDataBlock(
-        t("teamMemberWorkflowStudio.executionPanel.nodeInput", "Input"),
+        t('teamMemberWorkflowStudio.executionPanel.nodeInput', 'Input'),
         entry.inputText,
         t(
-          "teamMemberWorkflowStudio.executionPanel.emptyNodeInput",
-          "No input captured for this node.",
+          'teamMemberWorkflowStudio.executionPanel.emptyNodeInput',
+          'No input captured for this node.',
         ),
-        { height: blockHeight, testId: "workflow-execution-node-input-block" },
+        { height: blockHeight, testId: 'workflow-execution-node-input-block' },
       )}
       {entry.pendingText
         ? renderDataBlock(
-            t("teamMemberWorkflowStudio.executionPanel.nodePrompt", "Prompt"),
-            [interactionContext, entry.pendingText].filter(Boolean).join("\n\n"),
-            "",
+            t('teamMemberWorkflowStudio.executionPanel.nodePrompt', 'Prompt'),
+            [interactionContext, entry.pendingText]
+              .filter(Boolean)
+              .join('\n\n'),
+            '',
             { maxHeight: Math.max(90, Math.floor(blockHeight / 2)) },
           )
         : null}
       {entry.interactionText
         ? renderDataBlock(
             t(
-              "teamMemberWorkflowStudio.executionPanel.nodeInteraction",
-              "Interaction",
+              'teamMemberWorkflowStudio.executionPanel.nodeInteraction',
+              'Interaction',
             ),
             [interactionContext, entry.interactionText]
               .filter(Boolean)
-              .join("\n\n"),
-            "",
+              .join('\n\n'),
+            '',
             { maxHeight: Math.max(90, Math.floor(blockHeight / 2)) },
           )
         : null}
@@ -812,21 +864,21 @@ function renderNodeOutputPane(
   entry: ExecutionOverviewEntry,
   blockHeight = nodeDetailBlockHeight,
 ): React.ReactNode {
-  const outputIsError = entry.status === "error";
+  const outputIsError = entry.status === 'error';
 
   return renderDataBlock(
     outputIsError
-      ? t("teamMemberWorkflowStudio.executionPanel.error", "Error")
-      : t("teamMemberWorkflowStudio.executionPanel.nodeOutput", "Output"),
+      ? t('teamMemberWorkflowStudio.executionPanel.error', 'Error')
+      : t('teamMemberWorkflowStudio.executionPanel.nodeOutput', 'Output'),
     entry.outputText,
     t(
-      "teamMemberWorkflowStudio.executionPanel.emptyNodeOutput",
-      "No output captured for this node.",
+      'teamMemberWorkflowStudio.executionPanel.emptyNodeOutput',
+      'No output captured for this node.',
     ),
     {
       danger: outputIsError,
       height: blockHeight,
-      testId: "workflow-execution-node-output-block",
+      testId: 'workflow-execution-node-output-block',
     },
   );
 }
@@ -839,56 +891,59 @@ function renderSelectedDetails(
     return (
       <div
         style={{
-          alignItems: "center",
-          color: "#64748b",
-          display: "flex",
+          alignItems: 'center',
+          color: '#64748b',
+          display: 'flex',
           fontSize: 12,
-          justifyContent: "center",
+          justifyContent: 'center',
           minHeight: 0,
           padding: 16,
-          textAlign: "center",
+          textAlign: 'center',
         }}
       >
         {t(
-          "teamMemberWorkflowStudio.executionPanel.selectLog",
-          "Select a log entry to inspect its input, output, and raw event data.",
+          'teamMemberWorkflowStudio.executionPanel.selectLog',
+          'Select a log entry to inspect its input, output, and raw event data.',
         )}
       </div>
     );
   }
 
   const jsonText = [
-    entry.eventType ? `eventType: ${entry.eventType}` : "",
+    entry.eventType ? `eventType: ${entry.eventType}` : '',
     entry.payloadText || entry.rawText,
   ]
     .filter(Boolean)
-    .join("\n\n");
+    .join('\n\n');
 
-  if (entry.rowType !== "node") {
+  if (entry.rowType !== 'node') {
     return renderDataBlock(
-      t("teamMemberWorkflowStudio.executionPanel.eventPayload", "Event payload"),
+      t(
+        'teamMemberWorkflowStudio.executionPanel.eventPayload',
+        'Event payload',
+      ),
       jsonText || sanitizeVisibleText(entry.previewText),
       t(
-        "teamMemberWorkflowStudio.executionPanel.emptyEventPayload",
-        "No event payload was captured.",
+        'teamMemberWorkflowStudio.executionPanel.emptyEventPayload',
+        'No event payload was captured.',
       ),
       { maxHeight: 260 },
     );
   }
 
-  const showInput = isDetailPaneVisible(detailPanelState, "input");
-  const showOutput = isDetailPaneVisible(detailPanelState, "output");
+  const showInput = isDetailPaneVisible(detailPanelState, 'input');
+  const showOutput = isDetailPaneVisible(detailPanelState, 'output');
 
   return (
     <div
       style={{
-        alignItems: "start",
-        display: "grid",
+        alignItems: 'start',
+        display: 'grid',
         gap: 10,
         gridTemplateColumns:
           showInput && showOutput
-            ? "minmax(0, 1fr) minmax(0, 1fr)"
-            : "minmax(0, 1fr)",
+            ? 'minmax(0, 1fr) minmax(0, 1fr)'
+            : 'minmax(0, 1fr)',
         minHeight: 0,
         minWidth: 0,
       }}
@@ -899,7 +954,9 @@ function renderSelectedDetails(
   );
 }
 
-const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> = ({
+const WorkflowStudioExecutionPanel: React.FC<
+  WorkflowStudioExecutionPanelProps
+> = ({
   activeLogIndex,
   clearDisabled = false,
   detail,
@@ -909,9 +966,10 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
   onSelectLog,
   workflowNodes,
 }) => {
-  const [overviewMode, setOverviewMode] = React.useState<OverviewMode>("nodes");
+  const toast = useConsoleToast();
+  const [overviewMode, setOverviewMode] = React.useState<OverviewMode>('nodes');
   const [detailPanelState, setDetailPanelState] =
-    React.useState<DetailPanelState>("both");
+    React.useState<DetailPanelState>('both');
   const trace = React.useMemo(() => buildExecutionTrace(detail), [detail]);
   const logs = trace?.logs ?? [];
   const entries = React.useMemo(() => buildOverviewEntries(logs), [logs]);
@@ -919,23 +977,23 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
     () => buildNodeOverviewEntries(entries, workflowNodes),
     [entries, workflowNodes],
   );
-  const eventEntries = entries.filter((entry) => entry.rowType !== "node");
+  const eventEntries = entries.filter((entry) => entry.rowType !== 'node');
   const baseSelectedEntry =
     findSelectedEntry(entries, activeLogIndex) ||
-    entries.find((entry) => entry.status === "error") ||
+    entries.find((entry) => entry.status === 'error') ||
     nodeEntries.find((entry) => entry.logIndex >= 0) ||
     entries.find((entry) => entry.logIndex >= 0) ||
     null;
   const rawFrames = detail?.frames ?? [];
   const hasExecutionContent = Boolean(error || detail);
-  const outputText = detail ? buildOutputText(detail, logs) : "";
+  const outputText = detail ? buildOutputText(detail, logs) : '';
   const tokenUsage = React.useMemo(() => buildTokenUsage(logs), [logs]);
   const duration = detail
     ? formatDurationBetween(detail.startedAtUtc, detail.completedAtUtc)
-    : "";
+    : '';
   const totalStepCount = new Set(nodeEntries.map((entry) => entry.stepId)).size;
   const visibleEntries =
-    overviewMode === "nodes"
+    overviewMode === 'nodes'
       ? nodeEntries.length
         ? nodeEntries
         : eventEntries
@@ -943,21 +1001,23 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
   const selectedEntry =
     visibleEntries.find((entry) => isEntrySelected(entry, baseSelectedEntry)) ||
     visibleEntries.find((entry) => entry.logIndex >= 0) ||
-    (baseSelectedEntry?.status === "error" ? baseSelectedEntry : null);
-  const selectableEntries = visibleEntries.filter((entry) => entry.logIndex >= 0);
+    (baseSelectedEntry?.status === 'error' ? baseSelectedEntry : null);
+  const selectableEntries = visibleEntries.filter(
+    (entry) => entry.logIndex >= 0,
+  );
   const runStatus: ExecutionLogStatus =
-    detail?.status === "failed"
-      ? "error"
-      : detail?.status === "succeeded"
-        ? "success"
-        : "running";
+    detail?.status === 'failed'
+      ? 'error'
+      : detail?.status === 'succeeded'
+        ? 'success'
+        : 'running';
   const handleOverviewKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLElement>) => {
       if (!selectableEntries.length || !onSelectLog) {
         return;
       }
 
-      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') {
         return;
       }
 
@@ -965,11 +1025,12 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
       const selectedVisibleIndex = selectableEntries.findIndex((entry) =>
         isEntrySelected(entry, selectedEntry),
       );
-      const fallbackIndex = event.key === "ArrowDown" ? -1 : selectableEntries.length;
+      const fallbackIndex =
+        event.key === 'ArrowDown' ? -1 : selectableEntries.length;
       const currentIndex =
         selectedVisibleIndex >= 0 ? selectedVisibleIndex : fallbackIndex;
       const nextIndex =
-        event.key === "ArrowDown"
+        event.key === 'ArrowDown'
           ? Math.min(currentIndex + 1, selectableEntries.length - 1)
           : Math.max(currentIndex - 1, 0);
 
@@ -985,74 +1046,80 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
   return (
     <aside
       aria-label={t(
-        "teamMemberWorkflowStudio.executionPanel.consoleAria",
-        "Draft run console",
+        'teamMemberWorkflowStudio.executionPanel.consoleAria',
+        'Draft run console',
       )}
       style={{
-        background: "#ffffff",
-        borderTop: "1px solid #dbe3ee",
-        display: "grid",
+        background: '#ffffff',
+        borderTop: '1px solid #dbe3ee',
+        display: 'grid',
         flex: `0 0 ${height}px`,
-        gridTemplateRows: "min-content minmax(0, 1fr)",
+        gridTemplateRows: 'min-content minmax(0, 1fr)',
         minHeight: 0,
       }}
     >
       <section
         data-testid="member-run-result-panel"
         style={{
-          display: "contents",
+          display: 'contents',
         }}
       >
         {error ? (
-          <div style={{ padding: "10px 14px" }}>
+          <div style={{ padding: '10px 14px' }}>
             <Alert message={error} showIcon type="error" />
           </div>
         ) : detail ? (
           <>
             <div
               style={{
-                alignItems: "center",
-                borderBottom: "1px solid #edf2f7",
-                display: "flex",
-                flexWrap: "wrap",
+                alignItems: 'center',
+                borderBottom: '1px solid #edf2f7',
+                display: 'flex',
+                flexWrap: 'wrap',
                 gap: 12,
-                justifyContent: "space-between",
+                justifyContent: 'space-between',
                 minHeight: 42,
-                padding: "7px 14px",
+                padding: '7px 14px',
               }}
             >
               <div
                 style={{
-                  alignItems: "center",
-                  display: "flex",
-                  flexWrap: "wrap",
+                  alignItems: 'center',
+                  display: 'flex',
+                  flexWrap: 'wrap',
                   gap: 9,
                   minWidth: 0,
                 }}
               >
-                <Typography.Text strong style={{ color: "#111827", fontSize: 13 }}>
-                  {t("teamMemberWorkflowStudio.executionPanel.logs", "Logs")}
+                <Typography.Text
+                  strong
+                  style={{ color: '#111827', fontSize: 13 }}
+                >
+                  {t('teamMemberWorkflowStudio.executionPanel.logs', 'Logs')}
                 </Typography.Text>
                 <Typography.Text
                   style={{
-                    color: "#64748b",
+                    color: '#64748b',
                     fontSize: 12,
                     maxWidth: 240,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
                   }}
                 >
                   {detail.workflowName}
                 </Typography.Text>
-                <Tag color={statusColors[runStatus]} style={{ marginInlineEnd: 0 }}>
+                <Tag
+                  color={statusColors[runStatus]}
+                  style={{ marginInlineEnd: 0 }}
+                >
                   {detail.status}
                 </Tag>
                 {duration
                   ? renderMetric(
                       t(
-                        "teamMemberWorkflowStudio.executionPanel.duration",
-                        "Duration",
+                        'teamMemberWorkflowStudio.executionPanel.duration',
+                        'Duration',
                       ),
                       duration,
                     )
@@ -1060,52 +1127,57 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
               </div>
               <div
                 style={{
-                  alignItems: "center",
-                  display: "flex",
-                  flexWrap: "wrap",
+                  alignItems: 'center',
+                  display: 'flex',
+                  flexWrap: 'wrap',
                   gap: 10,
                 }}
               >
                 {renderMetric(
-                  t("teamMemberWorkflowStudio.executionPanel.events", "Events"),
+                  t('teamMemberWorkflowStudio.executionPanel.events', 'Events'),
                   rawFrames.length,
                 )}
                 {renderMetric(
-                  t("teamMemberWorkflowStudio.executionPanel.steps", "Steps"),
+                  t('teamMemberWorkflowStudio.executionPanel.steps', 'Steps'),
                   totalStepCount,
                 )}
                 {renderMetric(
-                  t("teamMemberWorkflowStudio.executionPanel.output", "Output"),
-                  outputText ? "1" : "0",
+                  t('teamMemberWorkflowStudio.executionPanel.output', 'Output'),
+                  outputText ? '1' : '0',
                 )}
                 {tokenUsage.totalTokens > 0
                   ? renderMetric(
                       t(
-                        "teamMemberWorkflowStudio.executionPanel.tokens",
-                        "Tokens",
+                        'teamMemberWorkflowStudio.executionPanel.tokens',
+                        'Tokens',
                       ),
                       tokenUsage.totalTokens,
                     )
                   : null}
                 <Tooltip
                   title={t(
-                    "teamMemberWorkflowStudio.executionPanel.copyAll",
-                    "Copy all logs",
+                    'teamMemberWorkflowStudio.executionPanel.copyAll',
+                    'Copy all logs',
                   )}
                 >
                   <Button
                     aria-label={t(
-                      "teamMemberWorkflowStudio.executionPanel.copyAll",
-                      "Copy all logs",
+                      'teamMemberWorkflowStudio.executionPanel.copyAll',
+                      'Copy all logs',
                     )}
                     icon={<CopyOutlined />}
                     onClick={() =>
                       void copyToClipboard(
                         formatExecutionLogsClipboard(trace),
                         t(
-                          "teamMemberWorkflowStudio.executionPanel.copyAllDone",
-                          "Copied all logs.",
+                          'teamMemberWorkflowStudio.executionPanel.copyAllDone',
+                          'Copied all logs.',
                         ),
+                        t(
+                          'teamMemberWorkflowStudio.executionPanel.copyFailed',
+                          'Could not copy logs.',
+                        ),
+                        toast,
                       )
                     }
                     size="small"
@@ -1114,14 +1186,14 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                 </Tooltip>
                 <Tooltip
                   title={t(
-                    "teamMemberWorkflowStudio.executionPanel.clear",
-                    "Clear logs",
+                    'teamMemberWorkflowStudio.executionPanel.clear',
+                    'Clear logs',
                   )}
                 >
                   <Button
                     aria-label={t(
-                      "teamMemberWorkflowStudio.executionPanel.clear",
-                      "Clear logs",
+                      'teamMemberWorkflowStudio.executionPanel.clear',
+                      'Clear logs',
                     )}
                     disabled={clearDisabled}
                     icon={<CloseOutlined />}
@@ -1137,10 +1209,10 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
               className="workflow-studio-execution-panel__body"
               style={
                 {
-                  "--workflow-execution-panel-columns": visibleEntries.length
-                    ? "minmax(300px, 0.82fr) minmax(420px, 1.18fr)"
-                    : "minmax(420px, 1fr)",
-                  display: "grid",
+                  '--workflow-execution-panel-columns': visibleEntries.length
+                    ? 'minmax(300px, 0.82fr) minmax(420px, 1.18fr)'
+                    : 'minmax(420px, 1fr)',
+                  display: 'grid',
                   gap: 0,
                   minHeight: 0,
                   minWidth: 0,
@@ -1151,40 +1223,38 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                 className="workflow-studio-execution-panel__overview"
                 style={
                   {
-                    "--workflow-execution-panel-overview-border-right":
-                      visibleEntries.length
-                        ? "1px solid #edf2f7"
-                        : "0",
-                    display: "grid",
+                    '--workflow-execution-panel-overview-border-right':
+                      visibleEntries.length ? '1px solid #edf2f7' : '0',
+                    display: 'grid',
                     minHeight: 0,
                     minWidth: 0,
-                    padding: "10px 12px 12px",
+                    padding: '10px 12px 12px',
                   } as ExecutionPanelCssVariables
                 }
               >
                 <div
                   style={{
-                    alignItems: "center",
-                    display: "flex",
+                    alignItems: 'center',
+                    display: 'flex',
                     gap: 8,
-                    justifyContent: "space-between",
+                    justifyContent: 'space-between',
                     marginBottom: 8,
                     minWidth: 0,
                   }}
                 >
                   <div
                     style={{
-                      alignItems: "center",
-                      display: "flex",
+                      alignItems: 'center',
+                      display: 'flex',
                       gap: 7,
                       minWidth: 0,
                     }}
                   >
-                    <ClockCircleOutlined style={{ color: "#64748b" }} />
+                    <ClockCircleOutlined style={{ color: '#64748b' }} />
                     <Typography.Text strong style={{ fontSize: 13 }}>
                       {t(
-                        "teamMemberWorkflowStudio.executionPanel.overview",
-                        "Overview",
+                        'teamMemberWorkflowStudio.executionPanel.overview',
+                        'Overview',
                       )}
                     </Typography.Text>
                   </div>
@@ -1193,17 +1263,17 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                     options={[
                       {
                         label: t(
-                          "teamMemberWorkflowStudio.executionPanel.nodes",
-                          "Nodes",
+                          'teamMemberWorkflowStudio.executionPanel.nodes',
+                          'Nodes',
                         ),
-                        value: "nodes",
+                        value: 'nodes',
                       },
                       {
                         label: t(
-                          "teamMemberWorkflowStudio.executionPanel.events",
-                          "Events",
+                          'teamMemberWorkflowStudio.executionPanel.events',
+                          'Events',
                         ),
-                        value: "events",
+                        value: 'events',
                       },
                     ]}
                     size="small"
@@ -1212,19 +1282,19 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                 </div>
                 <div
                   aria-label={t(
-                    "teamMemberWorkflowStudio.executionPanel.logsOverview",
-                    "Logs overview",
+                    'teamMemberWorkflowStudio.executionPanel.logsOverview',
+                    'Logs overview',
                   )}
                   onKeyDown={handleOverviewKeyDown}
                   role="listbox"
                   tabIndex={0}
                   style={{
-                    display: "grid",
+                    display: 'grid',
                     gap: 8,
-                    alignContent: "start",
+                    alignContent: 'start',
                     gridAutoRows: `${overviewRowHeight}px`,
                     minHeight: 0,
-                    overflow: "auto",
+                    overflow: 'auto',
                     paddingRight: 3,
                   }}
                 >
@@ -1237,21 +1307,21 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                       ),
                     )
                   ) : (
-                    <Typography.Text style={{ color: "#64748b", fontSize: 12 }}>
-                      {overviewMode === "nodes"
+                    <Typography.Text style={{ color: '#64748b', fontSize: 12 }}>
+                      {overviewMode === 'nodes'
                         ? rawFrames.length
                           ? t(
-                              "teamMemberWorkflowStudio.executionPanel.rawFrames",
-                              "{count} run event(s) received, but no node output is available yet.",
+                              'teamMemberWorkflowStudio.executionPanel.rawFrames',
+                              '{count} run event(s) received, but no node output is available yet.',
                               { count: rawFrames.length },
                             )
                           : t(
-                              "teamMemberWorkflowStudio.executionPanel.emptyLogs",
-                              "Node logs will appear after the workflow draft runs.",
+                              'teamMemberWorkflowStudio.executionPanel.emptyLogs',
+                              'Node logs will appear after the workflow draft runs.',
                             )
                         : t(
-                            "teamMemberWorkflowStudio.executionPanel.emptyEvidence",
-                            "Runtime events will appear here when the backend emits them.",
+                            'teamMemberWorkflowStudio.executionPanel.emptyEvidence',
+                            'Runtime events will appear here when the backend emits them.',
                           )}
                     </Typography.Text>
                   )}
@@ -1261,33 +1331,33 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
               {visibleEntries.length ? (
                 <section
                   aria-label={t(
-                    "teamMemberWorkflowStudio.executionPanel.logDetails",
-                    "Log details",
+                    'teamMemberWorkflowStudio.executionPanel.logDetails',
+                    'Log details',
                   )}
                   className="workflow-studio-execution-panel__details"
                   style={{
-                    display: "grid",
-                    gridTemplateRows: "min-content minmax(0, 1fr)",
+                    display: 'grid',
+                    gridTemplateRows: 'min-content minmax(0, 1fr)',
                     minHeight: 0,
                     minWidth: 0,
-                    padding: "10px 14px 12px",
+                    padding: '10px 14px 12px',
                   }}
                 >
                   <div
                     style={{
-                      alignItems: "center",
-                      display: "flex",
-                      flexWrap: "wrap",
+                      alignItems: 'center',
+                      display: 'flex',
+                      flexWrap: 'wrap',
                       gap: 8,
-                      justifyContent: "space-between",
+                      justifyContent: 'space-between',
                       marginBottom: 8,
                       minWidth: 0,
                     }}
                   >
                     <div
                       style={{
-                        alignItems: "center",
-                        display: "flex",
+                        alignItems: 'center',
+                        display: 'flex',
                         gap: 8,
                         minWidth: 0,
                       }}
@@ -1299,9 +1369,9 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                             strong
                             style={{
                               fontSize: 13,
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
                             }}
                           >
                             {selectedEntry.title}
@@ -1317,38 +1387,38 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                     </div>
                     <div
                       style={{
-                        alignItems: "center",
-                        display: "flex",
-                        flexWrap: "wrap",
+                        alignItems: 'center',
+                        display: 'flex',
+                        flexWrap: 'wrap',
                         gap: 8,
                       }}
                     >
-                      {selectedEntry?.rowType === "node" ? (
+                      {selectedEntry?.rowType === 'node' ? (
                         <div
                           style={{
-                            alignItems: "center",
-                            background: "#f8fafc",
-                            border: "1px solid #e5e7eb",
+                            alignItems: 'center',
+                            background: '#f8fafc',
+                            border: '1px solid #e5e7eb',
                             borderRadius: 6,
-                            display: "inline-flex",
+                            display: 'inline-flex',
                             gap: 2,
                             padding: 2,
                           }}
                         >
-                          {(["input", "output"] as const).map((pane) => {
+                          {(['input', 'output'] as const).map((pane) => {
                             const active = isDetailPaneVisible(
                               detailPanelState,
                               pane,
                             );
                             const label =
-                              pane === "input"
+                              pane === 'input'
                                 ? t(
-                                    "teamMemberWorkflowStudio.executionPanel.nodeInput",
-                                    "Input",
+                                    'teamMemberWorkflowStudio.executionPanel.nodeInput',
+                                    'Input',
                                   )
                                 : t(
-                                    "teamMemberWorkflowStudio.executionPanel.nodeOutput",
-                                    "Output",
+                                    'teamMemberWorkflowStudio.executionPanel.nodeOutput',
+                                    'Output',
                                   );
 
                             return (
@@ -1362,12 +1432,16 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                                 }
                                 size="small"
                                 style={{
-                                  background: active ? "#ffffff" : "transparent",
-                                  borderColor: active ? "#dbe3ee" : "transparent",
+                                  background: active
+                                    ? '#ffffff'
+                                    : 'transparent',
+                                  borderColor: active
+                                    ? '#dbe3ee'
+                                    : 'transparent',
                                   boxShadow: active
-                                    ? "0 1px 2px rgba(15, 23, 42, 0.06)"
-                                    : "none",
-                                  color: active ? "#111827" : "#64748b",
+                                    ? '0 1px 2px rgba(15, 23, 42, 0.06)'
+                                    : 'none',
+                                  color: active ? '#111827' : '#64748b',
                                   fontWeight: active ? 600 : 400,
                                 }}
                                 type="text"
@@ -1378,26 +1452,31 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                           })}
                         </div>
                       ) : null}
-                      {overviewMode === "events" && selectedEntry ? (
+                      {overviewMode === 'events' && selectedEntry ? (
                         <Tooltip
                           title={t(
-                            "teamMemberWorkflowStudio.executionPanel.copySelected",
-                            "Copy selected log",
+                            'teamMemberWorkflowStudio.executionPanel.copySelected',
+                            'Copy selected log',
                           )}
                         >
                           <Button
                             aria-label={t(
-                              "teamMemberWorkflowStudio.executionPanel.copySelected",
-                              "Copy selected log",
+                              'teamMemberWorkflowStudio.executionPanel.copySelected',
+                              'Copy selected log',
                             )}
                             icon={<CopyOutlined />}
                             onClick={() =>
                               void copyToClipboard(
                                 formatEntryClipboard(selectedEntry),
                                 t(
-                                  "teamMemberWorkflowStudio.executionPanel.copySelectedDone",
-                                  "Copied selected log.",
+                                  'teamMemberWorkflowStudio.executionPanel.copySelectedDone',
+                                  'Copied selected log.',
                                 ),
+                                t(
+                                  'teamMemberWorkflowStudio.executionPanel.copyFailed',
+                                  'Could not copy logs.',
+                                ),
+                                toast,
                               )
                             }
                             size="small"
@@ -1410,7 +1489,7 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                   <div
                     style={{
                       minHeight: 0,
-                      overflow: "auto",
+                      overflow: 'auto',
                       paddingRight: 2,
                     }}
                   >

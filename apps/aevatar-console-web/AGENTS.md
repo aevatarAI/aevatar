@@ -200,6 +200,17 @@ pnpm --dir apps/aevatar-console-web build
   magic values.
 - Treat the console as an operational tool: prioritize scannability, clear
   hierarchy, predictable navigation, and efficient repeated actions.
+- Default user-facing surfaces must show only information needed to understand
+  the current task, result, or next action. Do not expose backend architecture,
+  transport, storage, or consistency terminology such as `read model`,
+  `projection`, `materialization`, `receipt`, raw actor/command/correlation
+  identifiers, state versions/watermarks, DTO or endpoint names, or query
+  sampling limits in page titles, descriptions, helper copy, primary tables,
+  empty states, or primary error messages. Preserve truthful loading, accepted,
+  delayed, and failed semantics in plain product language. When raw values are
+  genuinely useful for support or debugging, place them behind an explicit,
+  user-opened technical-details disclosure instead of making them the default
+  interface.
 - Preserve responsive behavior, keyboard access, focus visibility, semantic
   controls, and readable contrast. Verify dense real content and narrow mobile
   widths without overlap, clipping, or inaccessible actions.
@@ -208,6 +219,34 @@ pnpm --dir apps/aevatar-console-web build
   system applies.
 - Use established icon libraries and control patterns. Add accessible names or
   tooltips for icon-only or unfamiliar actions.
+
+### Action Feedback and Toasts
+
+- Use the shared `ConsoleToastProvider` and `useConsoleToast` from
+  `src/shared/ui/ConsoleToast.tsx` for transient user-action feedback. Do not
+  introduce new direct `antd` `message` or `notification` calls inside React
+  product surfaces. Non-React transport error boundaries retain their existing
+  handling unless the boundary receives a deliberate React-safe migration.
+- A success toast is evidence of a completed user-visible action, not of a
+  click, request dispatch, `202 Accepted` response, local optimistic update,
+  or background observation still in progress. Show it only after the API
+  contract has reached the state the copy claims.
+- Keep a toast short, localized, and action-oriented. Do not put endpoint
+  names, DTO fields, request IDs, raw backend errors, or recovery diagnostics
+  in it; expose those through the surface's existing technical-details path.
+- Report transient API request failures through the shared error toast. Do not
+  add page-wide warning or error banners above otherwise usable content, and
+  do not render an error while another request required to classify the same
+  state is still pending.
+- Use persistent inline state, alerts, or panels for loading, accepted,
+  observing, delayed, retryable, authorization, forbidden, and primary-content
+  failures where the user needs a durable next step. A toast must not be the
+  only evidence of a durable status or recovery action.
+- Emit at most one toast for one user action. Avoid success toasts for local
+  form edits that still require an explicit page-level save. Migrate touched
+  user-feedback paths to the shared abstraction while preserving legacy
+  behavior outside the requested surface unless a deliberate migration is in
+  scope.
 
 ## Change and Review Hygiene
 
