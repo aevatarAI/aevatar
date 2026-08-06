@@ -2,8 +2,8 @@
 
 ## Status
 
-Visual direction approved by the user on 2026-08-06. This written contract is
-ready for final review before implementation.
+Visual direction and the written contract were approved by the user on
+2026-08-06. Implementation is authorized.
 
 This specification applies only to the Workflow Activity vNext catalogue row
 actions on `feat/2026-08-04_workflow-activity-vnext`. It does not change any
