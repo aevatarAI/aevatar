@@ -473,43 +473,6 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           </div>
         )}
       </div>
-      {dirty ? (
-        <div className="wa-vnext__settings-savebar" role="status">
-          <div>
-            <strong>
-              {t('workflowActivityVNext.settings.unsaved', 'Unsaved changes')}
-            </strong>
-            <span>
-              {t(
-                'workflowActivityVNext.settings.unsavedDescription',
-                'Your AI defaults have not been saved.',
-              )}
-            </span>
-          </div>
-          <Space wrap>
-            <Button
-              disabled={savePhase === 'saving' || savePhase === 'accepted'}
-              onClick={discard}
-            >
-              {t(
-                'workflowActivityVNext.settings.discard',
-                'Restore saved settings',
-              )}
-            </Button>
-            <Button
-              disabled={
-                !llm.data?.capabilities.canSave || savePhase === 'accepted'
-              }
-              icon={<SaveOutlined />}
-              loading={savePhase === 'saving'}
-              onClick={() => void save()}
-              type="primary"
-            >
-              {t('workflowActivityVNext.settings.save', 'Save changes')}
-            </Button>
-          </Space>
-        </div>
-      ) : null}
       {savePhase !== 'idle' ? (
         <Alert
           message={
@@ -726,6 +689,55 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     },
   ];
   const active = sections.find((item) => item.key === section) ?? sections[0];
+  const settingsFooter = (
+    <>
+      {dirty ? (
+        <div className="wa-vnext__settings-footer">
+          <section
+            aria-label={t(
+              'workflowActivityVNext.settings.unsavedActionsAria',
+              'Unsaved settings actions',
+            )}
+            className="wa-vnext__settings-savebar"
+          >
+            <div aria-live="polite" role="status">
+              <strong>
+                {t('workflowActivityVNext.settings.unsaved', 'Unsaved changes')}
+              </strong>
+              <span>
+                {t(
+                  'workflowActivityVNext.settings.unsavedDescription',
+                  'Your AI defaults have not been saved.',
+                )}
+              </span>
+            </div>
+            <Space className="wa-vnext__settings-actions" wrap>
+              <Button
+                disabled={savePhase === 'saving' || savePhase === 'accepted'}
+                onClick={discard}
+              >
+                {t(
+                  'workflowActivityVNext.settings.discard',
+                  'Restore saved settings',
+                )}
+              </Button>
+              <Button
+                disabled={
+                  !llm.data?.capabilities.canSave || savePhase === 'accepted'
+                }
+                icon={<SaveOutlined />}
+                loading={savePhase === 'saving'}
+                onClick={() => void save()}
+                type="primary"
+              >
+                {t('workflowActivityVNext.settings.save', 'Save changes')}
+              </Button>
+            </Space>
+          </section>
+        </div>
+      ) : null}
+    </>
+  );
 
   return (
     <WorkflowActivityVNextShell
@@ -734,6 +746,7 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         'workflowActivityVNext.settings.description',
         'Personal defaults and access.',
       )}
+      footer={settingsFooter}
       scopeId={scopeId}
       title={t('workflowActivityVNext.settings.title', 'Settings')}
       onNavigate={requestNavigation}

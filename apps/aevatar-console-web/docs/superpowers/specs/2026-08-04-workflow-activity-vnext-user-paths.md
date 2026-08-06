@@ -671,8 +671,8 @@ PUT /api/user-config/llm
 1. Settings opens AI defaults and loads the current real selection and
    available connected-service/model catalogue through existing adapters.
 2. Changing Preferred service updates valid model choices without saving.
-3. Changing either value makes the page dirty and reveals the sticky Discard
-   and Save changes bar.
+3. Changing either value makes the page dirty and reveals the shell-fixed
+   Restore and Save changes dock without remounting the edited form control.
 4. Discard restores the last authoritative values.
 5. Save sends the selected intent and receives an accepted receipt.
 6. The UI says `Confirming saved values`, not Saved.
@@ -758,7 +758,7 @@ the mobile editor references in the baseline directory.
   remain available without desktop-only hover.
 - Run detail: failure, output, step trace, Retry, and Run again eligibility
   remain accessible.
-- Settings: section navigation, dirty save bar, save observation, Account
+- Settings: section navigation, shell-fixed dirty save dock, save observation, Account
   actions, and Advanced values remain operable.
 - Login and callback: the existing NyxID flow remains usable at mobile width,
   and the existing language switch remains reachable without desktop chrome.

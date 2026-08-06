@@ -22,6 +22,7 @@ type ShellProps = {
   readonly activeSection: WorkflowActivitySection;
   readonly children: React.ReactNode;
   readonly description: string;
+  readonly footer?: React.ReactNode;
   readonly headerActions?: React.ReactNode;
   readonly onNavigate?: (target: string) => void;
   readonly scopeId: string;
@@ -103,6 +104,7 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
   activeSection,
   children,
   description,
+  footer,
   headerActions,
   onNavigate,
   scopeId,
@@ -113,6 +115,20 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
   const activeLabel = activeItem
     ? t(`workflowActivityVNext.nav.${activeItem.labelKey}`, activeItem.fallback)
     : title;
+  const mainBody = (
+    <>
+      <header className="wa-vnext__header">
+        <div className="wa-vnext__heading-copy">
+          <h1>{title}</h1>
+          <p>{description}</p>
+        </div>
+        {headerActions ? (
+          <div className="wa-vnext__header-actions">{headerActions}</div>
+        ) : null}
+      </header>
+      <div className="wa-vnext__content">{children}</div>
+    </>
+  );
 
   return (
     <div className="wa-vnext">
@@ -160,17 +176,15 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
           scopeId={scopeId}
         />
       </aside>
-      <main className="wa-vnext__main">
-        <header className="wa-vnext__header">
-          <div className="wa-vnext__heading-copy">
-            <h1>{title}</h1>
-            <p>{description}</p>
-          </div>
-          {headerActions ? (
-            <div className="wa-vnext__header-actions">{headerActions}</div>
-          ) : null}
-        </header>
-        <div className="wa-vnext__content">{children}</div>
+      <main
+        className={`wa-vnext__main${footer ? ' wa-vnext__main--with-footer' : ''}`}
+      >
+        {footer ? (
+          <div className="wa-vnext__main-scroll">{mainBody}</div>
+        ) : (
+          mainBody
+        )}
+        {footer ? <div className="wa-vnext__main-footer">{footer}</div> : null}
       </main>
       <Drawer
         className="wa-vnext__drawer"

@@ -361,6 +361,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '使用系统选择的服务和模型。',
     'workflowActivityVNext.settings.title': '设置',
     'workflowActivityVNext.settings.unsaved': '未保存的更改',
+    'workflowActivityVNext.settings.unsavedActionsAria': '未保存设置操作',
     'workflowActivityVNext.settings.unsavedDescription':
       'AI 默认设置尚未保存。',
     'workflowActivityVNext.settings.unsavedLeaveDescription':
