@@ -2389,6 +2389,41 @@ public sealed class ChannelConversationTurnRunnerTests
         adapter.Replies.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("请使用 lark-contact-batch-resolution 解析 1 个合成联系人标识，并只返回脱敏结果。")]
+    [InlineData("请使用已挂载的 lark-contact-batch-resolution 解析 1 个合成联系人标识，并只返回脱敏结果。")]
+    public async Task RunInboundAsync_ShouldRouteNamedSkillNaturalLanguageRequestThroughSkillRecovery(string message)
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                message,
+                "msg-mounted-skill-natural-language-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Activity.Content.Text.Should().Contain("Ornn skill-backed command");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("use_skill");
+        var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext).SkillRecovery;
+        recovery.RequireInitialOrnnSearch.Should().BeTrue();
+        recovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
+        recovery.CommandName.Should().Be("lark-contact-batch-resolution");
+        recovery.PrimarySkillName.Should().Be("lark-contact-batch-resolution");
+        recovery.CommandArguments.Should().Be(message);
+        recovery.OriginalCommand.Should().Be(message);
+        adapter.Replies.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task RunInboundAsync_ShouldRoutePlainTextThroughDefaultSkillBinding()
     {

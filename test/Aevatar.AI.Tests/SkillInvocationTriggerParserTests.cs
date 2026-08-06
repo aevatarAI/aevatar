@@ -156,6 +156,19 @@ public sealed class SkillInvocationTriggerParserTests
     }
 
     [Theory]
+    [InlineData("请使用 lark-contact-batch-resolution 解析 1 个合成联系人标识，并只返回脱敏结果。")]
+    [InlineData("请使用已挂载的 lark-contact-batch-resolution 解析 1 个合成联系人标识，并只返回脱敏结果。")]
+    public void TryParse_WhenChineseTextUsesNamedSkill_ShouldReturnNaturalLanguageTrigger(string text)
+    {
+        SkillInvocationTriggerParser.TryParse(text, "lark", out var trigger).Should().BeTrue();
+
+        trigger.Name.Should().Be("lark-contact-batch-resolution");
+        trigger.Arguments.Should().Be(text);
+        trigger.OriginalText.Should().Be(text);
+        trigger.TriggerToken.Should().Be("natural-language-skill");
+    }
+
+    [Theory]
     [InlineData("Please use skill invoice-ocr-policy-review for this request.")]
     [InlineData("Please load the exact invoice-ocr-policy-review skill for this request.")]
     public void TryParse_WhenEnglishTextExplicitlyNamesSkill_ShouldReturnNaturalLanguageTrigger(string text)
@@ -171,6 +184,8 @@ public sealed class SkillInvocationTriggerParserTests
     [InlineData("The invoice-ocr-policy-review skill is available.")]
     [InlineData("Do not use skill invoice-ocr-policy-review for this request.")]
     [InlineData("不要使用精确名称为 invoice-ocr-policy-review 的 skill。")]
+    [InlineData("不要使用 lark-contact-batch-resolution。")]
+    [InlineData("不要使用已挂载的 lark-contact-batch-resolution。")]
     public void TryParse_WhenSkillIsOnlyMentionedOrNegated_ShouldIgnoreIt(string text)
     {
         SkillInvocationTriggerParser.TryParse(text, "cli", out _).Should().BeFalse();
