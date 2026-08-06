@@ -1,10 +1,24 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import * as React from 'react';
+import { history } from '@/shared/navigation/history';
 import {
   cleanupTestQueryClients,
   renderWithQueryClient,
 } from '../../../../tests/reactQueryTestUtils';
 import RunDetailPage from './RunDetailPage';
+
+const mockConsoleToast = {
+  error: jest.fn(),
+  info: jest.fn(),
+  success: jest.fn(),
+  warning: jest.fn(),
+};
 
 jest.mock('@umijs/max', () => ({
   getIntl: () => ({
@@ -59,6 +73,10 @@ jest.mock('@/shared/navigation/history', () => ({
 jest.mock('@/shared/ui/ConsoleHeaderActions', () => ({
   ConsoleAuthActions: () => <button type="button">Account</button>,
   ConsoleLanguageSwitch: () => <button type="button">Language</button>,
+}));
+
+jest.mock('@/shared/ui/ConsoleToast', () => ({
+  useConsoleToast: () => mockConsoleToast,
 }));
 
 const mockWorkflowActivityApi = jest.requireMock(
@@ -282,6 +300,64 @@ describe('Workflow Activity vNext run detail recovery', () => {
     for (const rawError of screen.getAllByText('Approval timed out')) {
       expect(rawError).not.toBeVisible();
     }
+  });
+
+  it('shows one actionable toast for repeated GROUP_NOT_ALLOWED evidence', async () => {
+    const run = buildRunDetail();
+    run.finalError = 'This group cannot use the selected model.';
+    run.diagnostics = [
+      {
+        timestampUtc: '2026-08-04T10:01:00Z',
+        severity: 'error',
+        code: 'GROUP_NOT_ALLOWED',
+        source: 'workflow',
+        message: 'This group cannot use the selected model.',
+        hint: 'Choose an allowed model',
+        stepId: 'step-failed',
+        stepType: 'llm_call',
+        targetRole: '',
+      },
+      {
+        timestampUtc: '2026-08-04T10:01:01Z',
+        severity: 'error',
+        code: 'GROUP_NOT_ALLOWED',
+        source: 'final_error',
+        message: 'This group cannot use the selected model.',
+        hint: '',
+        stepId: 'step-failed',
+        stepType: 'llm_call',
+        targetRole: '',
+      },
+    ];
+    run.steps[0].error = 'This group cannot use the selected model.';
+    mockWorkflowActivityApi.getRun.mockResolvedValue(run);
+
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledTimes(1),
+    );
+    const [content, options] = mockConsoleToast.error.mock.calls[0];
+    expect(options).toEqual({
+      duration: 0,
+      key: 'run-failure:run-source-alpha:access_denied',
+    });
+    const toastContent = render(content).container;
+    expect(
+      within(toastContent).getByText(
+        'This group cannot use the selected model.',
+      ),
+    ).toBeVisible();
+    fireEvent.click(
+      within(toastContent).getByRole('button', {
+        name: 'Choose allowed service',
+      }),
+    );
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/settings',
+    );
   });
 
   it('uses a product title instead of a raw run ID when the workflow name is missing', async () => {
