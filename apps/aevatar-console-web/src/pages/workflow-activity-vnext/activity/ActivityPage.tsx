@@ -1,8 +1,13 @@
-import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
+import {
+  CloseOutlined,
+  ReloadOutlined,
+  SearchOutlined,
+} from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { getLocale } from '@umijs/max';
-import { Alert, Button, Input, Select, Space } from 'antd';
+import { Button, Input, Select, Space } from 'antd';
 import React from 'react';
+import { scopesApi } from '@/shared/api/scopesApi';
 import {
   WorkflowActivityApiError,
   workflowActivityApi,
@@ -56,21 +61,67 @@ function failureTitle(error: unknown): string {
 
 const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const location = useConsoleLocation();
-  const initialParams = React.useMemo(
+  const params = React.useMemo(
     () => new URLSearchParams(location.search),
     [location.search],
   );
-  const [status, setStatus] = React.useState(
-    normalizeRunStatusFilter(initialParams.get('status')),
+  const rawStatus = params.get('status');
+  const status = normalizeRunStatusFilter(rawStatus);
+  const origin = params.get('origin') ?? '';
+  const definition = params.get('definition')?.trim() ?? '';
+  const workflowFilterPresent = params.has('workflowId');
+  const workflowId = params.get('workflowId')?.trim() ?? '';
+  const search = params.get('q') ?? '';
+
+  const replaceParams = React.useCallback(
+    (update: (next: URLSearchParams) => void) => {
+      const next = new URLSearchParams(location.search);
+      update(next);
+      const suffix = next.toString();
+      history.replace(`${location.pathname}${suffix ? `?${suffix}` : ''}`);
+    },
+    [location.pathname, location.search],
   );
-  const [origin, setOrigin] = React.useState(initialParams.get('origin') ?? '');
-  const [definition, setDefinition] = React.useState(
-    initialParams.get('definition') ?? '',
+  const replaceParam = React.useCallback(
+    (name: string, value: string) =>
+      replaceParams((next) => {
+        if (value) next.set(name, value);
+        else next.delete(name);
+      }),
+    [replaceParams],
   );
-  const [workflowFilter, setWorkflowFilter] = React.useState(
-    initialParams.get('workflowFilter') ?? '',
+  const clearWorkflowFilter = React.useCallback(
+    () =>
+      replaceParams((next) => {
+        next.delete('workflowId');
+        next.delete('definition');
+      }),
+    [replaceParams],
   );
-  const [search, setSearch] = React.useState(initialParams.get('q') ?? '');
+
+  React.useEffect(() => {
+    if (!rawStatus || status) return;
+    replaceParam('status', '');
+  }, [rawStatus, replaceParam, status]);
+
+  const workflow = useQuery({
+    queryKey: [
+      'workflow-activity-vnext',
+      'activity-workflow',
+      scopeId,
+      workflowId,
+    ],
+    queryFn: () => scopesApi.getWorkflowDetail(scopeId, workflowId),
+    enabled: workflowFilterPresent && Boolean(workflowId),
+    retry: false,
+  });
+  const resolvedDefinition =
+    workflow.data?.source?.definitionActorId.trim() ?? '';
+  const effectiveDefinition = workflowFilterPresent
+    ? resolvedDefinition
+    : definition;
+  const workflowFilterReady =
+    !workflowFilterPresent || Boolean(resolvedDefinition);
   const runs = useQuery({
     queryKey: [
       'workflow-activity-vnext',
@@ -78,37 +129,28 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       scopeId,
       status,
       origin,
-      definition,
+      effectiveDefinition,
     ],
     queryFn: () =>
       workflowActivityApi.listRuns(scopeId, {
         status: status || undefined,
         origins: origin ? [origin] : undefined,
-        definitionActorIds: definition ? [definition] : undefined,
+        definitionActorIds: effectiveDefinition
+          ? [effectiveDefinition]
+          : undefined,
         take: 100,
       }),
+    enabled: workflowFilterReady,
     retry: false,
   });
 
-  React.useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    setSearch(params.get('q') ?? '');
-    setStatus(normalizeRunStatusFilter(params.get('status')));
-    setOrigin(params.get('origin') ?? '');
-    setDefinition(params.get('definition') ?? '');
-    setWorkflowFilter(params.get('workflowFilter') ?? '');
-  }, [location.search]);
-
-  React.useEffect(() => {
-    const params = new URLSearchParams();
-    if (search.trim()) params.set('q', search.trim());
-    if (status) params.set('status', status);
-    if (origin) params.set('origin', origin);
-    if (definition) params.set('definition', definition);
-    if (workflowFilter) params.set('workflowFilter', workflowFilter);
-    const suffix = params.toString();
-    history.replace(`${location.pathname}${suffix ? `?${suffix}` : ''}`);
-  }, [definition, location.pathname, origin, search, status, workflowFilter]);
+  const refresh = () => {
+    if (workflowFilterPresent && !resolvedDefinition) {
+      if (workflowId) void workflow.refetch();
+      return;
+    }
+    void runs.refetch();
+  };
 
   const filtered = (runs.data ?? []).filter((run) => {
     const normalized = search.trim().toLowerCase();
@@ -128,24 +170,31 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         'Review recent workflow runs and open one for details.',
       )}
       headerActions={
-        <Button icon={<ReloadOutlined />} onClick={() => void runs.refetch()}>
+        <Button icon={<ReloadOutlined />} onClick={refresh}>
           {t('workflowActivityVNext.common.refresh', 'Refresh')}
         </Button>
       }
       scopeId={scopeId}
       title={t('workflowActivityVNext.activity.title', 'Activity')}
     >
-      {workflowFilter === 'unavailable' ? (
-        <Alert
-          closable
-          message={t(
-            'workflowActivityVNext.activity.workflowFilterUnavailable',
-            "This workflow can't be filtered yet. Showing all activity.",
-          )}
-          onClose={() => setWorkflowFilter('')}
-          showIcon
-          type="warning"
-        />
+      {workflowFilterPresent ? (
+        <Space wrap>
+          <Button
+            aria-label={t(
+              'workflowActivityVNext.activity.removeWorkflowFilterAria',
+              'Remove workflow filter {workflowId}',
+              { workflowId: workflowId || 'invalid' },
+            )}
+            icon={<CloseOutlined />}
+            onClick={clearWorkflowFilter}
+          >
+            {t(
+              'workflowActivityVNext.activity.workflowFilterLabel',
+              'Workflow: {workflowId}',
+              { workflowId: workflowId || 'Invalid' },
+            )}
+          </Button>
+        </Space>
       ) : null}
       <div className="wa-vnext__toolbar">
         <Input
@@ -155,7 +204,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             'Search runs',
           )}
           className="wa-vnext__toolbar-search"
-          onChange={(event) => setSearch(event.target.value)}
+          onChange={(event) => replaceParam('q', event.target.value)}
           placeholder={t(
             'workflowActivityVNext.activity.search',
             'Search runs',
@@ -170,7 +219,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
               'workflowActivityVNext.activity.statusFilter',
               'Run status',
             )}
-            onChange={setStatus}
+            onChange={(value) => replaceParam('status', value)}
             options={[
               {
                 label: t(
@@ -205,7 +254,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
               'workflowActivityVNext.activity.originFilter',
               'Run source',
             )}
-            onChange={setOrigin}
+            onChange={(value) => replaceParam('origin', value)}
             options={[
               {
                 label: t(
@@ -249,8 +298,8 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             ]}
             value={origin}
           />
-          {definition ? (
-            <Button onClick={() => setDefinition('')}>
+          {definition && !workflowFilterPresent ? (
+            <Button onClick={() => replaceParam('definition', '')}>
               {t(
                 'workflowActivityVNext.activity.clearWorkflowFilter',
                 'Show all workflows',
@@ -259,7 +308,75 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           ) : null}
         </Space>
       </div>
-      {runs.isPending ? (
+      {workflowFilterPresent && !workflowId ? (
+        <div className="wa-vnext__state" role="alert">
+          <div>
+            <h2>
+              {t(
+                'workflowActivityVNext.activity.workflowFilterInvalidTitle',
+                'Choose a workflow to filter Activity',
+              )}
+            </h2>
+            <p>
+              {t(
+                'workflowActivityVNext.activity.workflowFilterInvalidDescription',
+                'This Activity link does not contain a workflow identity.',
+              )}
+            </p>
+          </div>
+        </div>
+      ) : workflowFilterPresent && workflow.isPending ? (
+        <div aria-live="polite" className="wa-vnext__state">
+          <p>
+            {t(
+              'workflowActivityVNext.activity.workflowFilterLoading',
+              'Loading workflow activity…',
+            )}
+          </p>
+        </div>
+      ) : workflowFilterPresent && workflow.isError ? (
+        <div className="wa-vnext__state" role="alert">
+          <div>
+            <h2>
+              {t(
+                'workflowActivityVNext.activity.workflowFilterResolutionFailed',
+                'Workflow activity unavailable',
+              )}
+            </h2>
+            <p>
+              {t(
+                'workflowActivityVNext.activity.workflowFilterResolutionFailedDescription',
+                'Try again or remove the workflow filter.',
+              )}
+            </p>
+            <Button onClick={() => void workflow.refetch()}>
+              {t('workflowActivityVNext.common.retry', 'Retry')}
+            </Button>
+            <TechnicalDetails>
+              {workflow.error instanceof Error
+                ? workflow.error.message
+                : String(workflow.error)}
+            </TechnicalDetails>
+          </div>
+        </div>
+      ) : workflowFilterPresent && !resolvedDefinition ? (
+        <div className="wa-vnext__state">
+          <div>
+            <h2>
+              {t(
+                'workflowActivityVNext.activity.workflowFilterUnavailableTitle',
+                'Activity filtering is unavailable',
+              )}
+            </h2>
+            <p>
+              {t(
+                'workflowActivityVNext.activity.workflowFilterUnavailableDescription',
+                'No runs are shown because this workflow does not expose an Activity filter.',
+              )}
+            </p>
+          </div>
+        </div>
+      ) : runs.isPending ? (
         <div aria-live="polite" className="wa-vnext__state">
           <p>
             {t('workflowActivityVNext.activity.loading', 'Loading activity…')}

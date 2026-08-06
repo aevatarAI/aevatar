@@ -354,7 +354,12 @@ describe('Workflow Activity vNext catalogue', () => {
     expect(history.push).not.toHaveBeenCalled();
   });
 
-  it('renders authoritative draft and committed rows, searches, and navigates by the real workflow id', async () => {
+  it('opens row Activity with only the catalogue workflow id', async () => {
+    const rowIdentities = {
+      memberId: 'm-alpha',
+      publishedServiceId: 'svc-alpha',
+      workflowId: 'wf-alpha',
+    };
     mockStudioApi.listWorkflowDrafts.mockResolvedValue([
       {
         workflowId: 'wf-draft-alpha',
@@ -372,27 +377,17 @@ describe('Workflow Activity vNext catalogue', () => {
     mockScopesApi.listWorkflows.mockResolvedValue([
       {
         scopeId: 'scope-alpha',
-        workflowId: 'wf-committed-beta',
+        workflowId: rowIdentities.workflowId,
         displayName: 'Invoice review',
         serviceKey: '',
         workflowName: 'invoice_review',
-        actorId: 'summary-actor-beta',
-        activeRevisionId: 'revision-beta',
-        deploymentId: 'deployment-beta',
+        actorId: 'summary-actor-alpha',
+        activeRevisionId: 'revision-alpha',
+        deploymentId: 'deployment-alpha',
         deploymentStatus: 'active',
         updatedAt: '2026-08-03T10:00:00Z',
       },
     ]);
-    mockScopesApi.getWorkflowDetail.mockResolvedValue({
-      available: true,
-      scopeId: 'scope-alpha',
-      workflow: null,
-      source: {
-        workflowYaml: '',
-        definitionActorId: 'definition-beta',
-        inlineWorkflowYamls: null,
-      },
-    });
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
@@ -415,21 +410,22 @@ describe('Workflow Activity vNext catalogue', () => {
     expect(screen.queryByText('Support triage')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Activity' }));
-    await waitFor(() => {
-      expect(mockScopesApi.getWorkflowDetail).toHaveBeenCalledWith(
-        'scope-alpha',
-        'wf-committed-beta',
-      );
-      expect(history.push).toHaveBeenCalledWith(
-        '/scopes/scope-alpha/workflow-activity-vnext/activity?definition=definition-beta',
-      );
-    });
+    expect(mockScopesApi.getWorkflowDetail).not.toHaveBeenCalled();
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-alpha',
+    );
+    expect(history.push).not.toHaveBeenCalledWith(
+      expect.stringContaining(rowIdentities.memberId),
+    );
+    expect(history.push).not.toHaveBeenCalledWith(
+      expect.stringContaining(rowIdentities.publishedServiceId),
+    );
 
     fireEvent.click(
       screen.getByRole('button', { name: 'Open Invoice review' }),
     );
     expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-committed-beta',
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-alpha',
     );
   });
 
@@ -623,43 +619,7 @@ describe('Workflow Activity vNext catalogue', () => {
     expect(mockConsoleToast.success).toHaveBeenCalledWith('Workflow renamed');
   });
 
-  it('reports an Activity resolution request failure with a toast instead of a page alert', async () => {
-    mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
-    mockScopesApi.listWorkflows.mockResolvedValue([
-      {
-        scopeId: 'scope-alpha',
-        workflowId: 'wf-committed-beta',
-        displayName: 'Invoice review',
-        serviceKey: '',
-        workflowName: 'invoice_review',
-        actorId: 'summary-actor-beta',
-        activeRevisionId: 'revision-beta',
-        deploymentId: 'deployment-beta',
-        deploymentStatus: 'active',
-        updatedAt: '2026-08-03T10:00:00Z',
-      },
-    ]);
-    mockScopesApi.getWorkflowDetail.mockRejectedValue(
-      new Error('GET returned 503'),
-    );
-
-    renderWithQueryClient(<WorkflowActivityVNextPage />);
-
-    expect(await screen.findByText('Invoice review')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Activity' }));
-
-    await waitFor(() =>
-      expect(mockConsoleToast.error).toHaveBeenCalledWith(
-        "Activity couldn't be opened for this workflow",
-      ),
-    );
-    expect(
-      screen.queryByText("Activity couldn't be opened for this workflow"),
-    ).not.toBeInTheDocument();
-    expect(screen.queryByText('GET returned 503')).not.toBeInTheDocument();
-  });
-
-  it('opens unfiltered Activity with an unavailable notice for a draft-only row', async () => {
+  it('deep-links draft-only row Activity with its workflow id', async () => {
     mockStudioApi.listWorkflowDrafts.mockResolvedValue([
       {
         workflowId: 'wf-draft-alpha',
@@ -675,14 +635,13 @@ describe('Workflow Activity vNext catalogue', () => {
       },
     ]);
     mockScopesApi.listWorkflows.mockResolvedValue([]);
-
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
     expect(await screen.findByText('Support triage')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Activity' }));
     expect(mockScopesApi.getWorkflowDetail).not.toHaveBeenCalled();
     expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowFilter=unavailable',
+      '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-draft-alpha',
     );
   });
 

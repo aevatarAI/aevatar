@@ -109,7 +109,6 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const [view, setView] = React.useState<WorkflowView>(
     readWorkflowView(initialParams),
   );
-  const [activityWorkflowId, setActivityWorkflowId] = React.useState('');
   const [renameTarget, setRenameTarget] = React.useState<WorkflowRow | null>(
     null,
   );
@@ -230,32 +229,11 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     void committed.refetch();
   };
 
-  const openActivity = async (row: WorkflowRow) => {
+  const openActivity = (row: WorkflowRow) => {
     const activityHref = buildWorkflowActivitySectionHref(scopeId, 'activity');
-    if (!row.hasCommittedSource) {
-      history.push(`${activityHref}?workflowFilter=unavailable`);
-      return;
-    }
-
-    setActivityWorkflowId(row.workflowId);
-    try {
-      const detail = await scopesApi.getWorkflowDetail(scopeId, row.workflowId);
-      const definitionActorId = detail.source?.definitionActorId.trim() ?? '';
-      history.push(
-        definitionActorId
-          ? `${activityHref}?definition=${encodeURIComponent(definitionActorId)}`
-          : `${activityHref}?workflowFilter=unavailable`,
-      );
-    } catch {
-      toast.error(
-        t(
-          'workflowActivityVNext.workflows.activityResolutionFailed',
-          "Activity couldn't be opened for this workflow",
-        ),
-      );
-    } finally {
-      setActivityWorkflowId('');
-    }
+    history.push(
+      `${activityHref}?workflowId=${encodeURIComponent(row.workflowId)}`,
+    );
   };
 
   const copyWorkflowReference = async (row: WorkflowRow) => {
@@ -653,18 +631,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                       >
                         {t('workflowActivityVNext.common.open', 'Open')}
                       </Button>
-                      <Button
-                        loading={activityWorkflowId === row.workflowId}
-                        onClick={() => void openActivity(row)}
-                        title={
-                          !row.hasCommittedSource
-                            ? t(
-                                'workflowActivityVNext.workflows.activityFilterUnavailable',
-                                "Activity filtering isn't available for this workflow yet.",
-                              )
-                            : undefined
-                        }
-                      >
+                      <Button onClick={() => openActivity(row)}>
                         {t(
                           'workflowActivityVNext.workflows.viewActivity',
                           'Activity',
