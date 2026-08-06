@@ -163,7 +163,6 @@ public class WorkflowRoleGAgent(
         toolContext = ApplyToolVisibility(intent.AgentToolScope, toolContext);
         toolContext = ApplyRunScopeToCaller(intent.ScopeId, toolContext);
         toolContext = ApplySchedule(intent.ScheduleId, toolContext);
-        toolContext = ApplyIdempotencyKey(intent.IdempotencyKey, toolContext);
 
         var request = new ChatRequestEvent
         {
@@ -272,22 +271,6 @@ public class WorkflowRoleGAgent(
         return normalizedScheduleId is null
             ? toolContext
             : toolContext with { Schedule = new AgentToolScheduleContext(normalizedScheduleId) };
-    }
-
-    private static AgentToolExecutionContext ApplyIdempotencyKey(
-        string? idempotencyKey,
-        AgentToolExecutionContext toolContext)
-    {
-        var normalizedIdempotencyKey = Normalize(idempotencyKey);
-        return normalizedIdempotencyKey is null
-            ? toolContext
-            : toolContext with
-            {
-                Request = toolContext.Request with
-                {
-                    IdempotencyKey = normalizedIdempotencyKey,
-                },
-            };
     }
 
     private static void CopyWorkflowIntentMetadata(

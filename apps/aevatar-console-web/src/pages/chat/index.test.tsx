@@ -268,9 +268,13 @@ describe("ChatPage server-backed history", () => {
 
     expect(await screen.findByText("Recovered response")).toBeTruthy();
     const [body] = chatRequestBodies();
-    expect(body.commandId).toEqual(expect.any(String));
-    expect(body.conversation).toEqual({ conversationId: null });
-    const createIdempotencyKey = String(body.commandId);
+    expect(body.conversation).toEqual({
+      createIdempotencyKey: expect.any(String),
+    });
+    const createIdempotencyKey = String(
+      (body.conversation as { createIdempotencyKey: unknown })
+        .createIdempotencyKey
+    );
     await waitFor(() =>
       expect(chatHistoryApi.recoverCreate).toHaveBeenCalledWith(
         "scope-a",
@@ -482,13 +486,11 @@ describe("ChatPage server-backed history", () => {
     ).toBeTruthy();
     const [body] = chatRequestBodies();
     expect(body).toEqual({
-      commandId: expect.any(String),
-      conversation: { conversationId: null },
+      conversation: { createIdempotencyKey: expect.any(String) },
       prompt: "Create a support team",
       sessionId: expect.any(String),
       workflow: "studio",
     });
-    expect(body.commandId).not.toBe(body.sessionId);
     expect(body).not.toHaveProperty("scopeId");
     expect(body).not.toHaveProperty("chatHistory");
     expect(window.localStorage.length).toBe(0);
@@ -536,15 +538,13 @@ describe("ChatPage server-backed history", () => {
     await screen.findByText("Second answer");
 
     const [firstBody, secondBody] = chatRequestBodies();
-    expect(firstBody.commandId).toEqual(expect.any(String));
-    expect(firstBody.conversation).toEqual({ conversationId: null });
-    expect(secondBody.commandId).toEqual(expect.any(String));
+    expect(firstBody.conversation).toEqual({
+      createIdempotencyKey: expect.any(String),
+    });
     expect(secondBody.conversation).toEqual({
       conversationId: "server-conversation",
     });
     expect(secondBody.sessionId).toBe(firstBody.sessionId);
-    expect(secondBody.commandId).not.toBe(firstBody.commandId);
-    expect(secondBody.commandId).not.toBe(secondBody.sessionId);
     expect(secondBody.prompt).toBe("Second prompt");
     expect(String(secondBody.prompt)).not.toContain("<conversation_history>");
   });

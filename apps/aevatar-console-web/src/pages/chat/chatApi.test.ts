@@ -82,13 +82,12 @@ describe("chatApi", () => {
     );
   });
 
-  it("serializes new and continuing history conversations with operation command ids", async () => {
+  it("serializes new and continuing history conversations independently of sessionId", async () => {
     (authFetch as jest.Mock).mockResolvedValue(successfulStreamResponse());
     const controller = new AbortController();
 
     await startChatStream(
       {
-        commandId: " create-key-a ",
         conversation: {
           conversationId: null,
           createIdempotencyKey: " create-key-a ",
@@ -100,7 +99,6 @@ describe("chatApi", () => {
     );
     await startChatStream(
       {
-        commandId: " turn-command-b ",
         conversation: { conversationId: " conversation-a " },
         prompt: "Continue conversation",
         sessionId: "runtime-session-b",
@@ -111,14 +109,12 @@ describe("chatApi", () => {
     const firstBody = JSON.parse((authFetch as jest.Mock).mock.calls[0][1].body);
     const secondBody = JSON.parse((authFetch as jest.Mock).mock.calls[1][1].body);
     expect(firstBody).toEqual({
-      commandId: "create-key-a",
-      conversation: { conversationId: null },
+      conversation: { createIdempotencyKey: "create-key-a" },
       prompt: "New conversation",
       sessionId: "runtime-session-a",
       workflow: "studio",
     });
     expect(secondBody).toEqual({
-      commandId: "turn-command-b",
       conversation: { conversationId: "conversation-a" },
       prompt: "Continue conversation",
       sessionId: "runtime-session-b",

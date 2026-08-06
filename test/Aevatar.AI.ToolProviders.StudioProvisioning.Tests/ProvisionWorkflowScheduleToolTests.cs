@@ -307,20 +307,14 @@ public sealed class ProvisionWorkflowScheduleToolTests
     {
         var memberPort = new RecordingMemberProvisioningPort();
         var tool = await DiscoverCreateMemberToolAsync(memberPort);
-        var expectedMemberId = WorkflowProvisioningIdentity.BuildMemberId(
-            "scope-current",
-            "agent-tool-idempotency:create-member-alpha");
 
-        using var _ = PushContext(
-            scopeId: "scope-current",
-            ownerSubject: "owner-1",
-            accessToken: "access-token-1",
-            idempotencyKey: "create-member-alpha");
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
         var output = await tool.ExecuteAsync("""
             {
               "display_name": "Alpha Member",
               "implementation_kind": "workflow",
               "description": "Current caller scope member",
+              "member_id": "member-alpha",
               "team_id": "team-alpha"
             }
             """);
@@ -330,17 +324,16 @@ public sealed class ProvisionWorkflowScheduleToolTests
         memberPort.LastRequest.DisplayName.Should().Be("Alpha Member");
         memberPort.LastRequest.ImplementationKind.Should().Be("workflow");
         memberPort.LastRequest.Description.Should().Be("Current caller scope member");
-        memberPort.LastRequest.MemberId.Should().Be(expectedMemberId);
+        memberPort.LastRequest.MemberId.Should().Be("member-alpha");
         memberPort.LastRequest.TeamId.Should().Be("team-alpha");
 
         using var document = JsonDocument.Parse(output);
         var root = document.RootElement;
         root.GetProperty("success").GetBoolean().Should().BeTrue();
         root.GetProperty("scope_id").GetString().Should().Be("scope-current");
-        root.GetProperty("member_id").GetString().Should().Be(expectedMemberId);
+        root.GetProperty("member_id").GetString().Should().Be("member-alpha");
         root.GetProperty("team_id").GetString().Should().Be("team-alpha");
-        root.GetProperty("member_url").GetString().Should()
-            .Be($"/api/scopes/scope-current/members/{expectedMemberId}");
+        root.GetProperty("member_url").GetString().Should().Be("/api/scopes/scope-current/members/member-alpha");
     }
 
     [Fact]
@@ -353,12 +346,12 @@ public sealed class ProvisionWorkflowScheduleToolTests
             scopeId: "registration-scope",
             ownerSubject: "owner-1",
             accessToken: "access-token-1",
-            idempotencyKey: "create-member-owner-alpha",
             ownerScopeId: "owner-scope");
         var output = await tool.ExecuteAsync("""
             {
               "display_name": "Alpha Member",
               "implementation_kind": "workflow",
+              "member_id": "member-alpha",
               "team_id": "team-alpha"
             }
             """);
@@ -421,65 +414,6 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
         ErrorCode(output).Should().Be("invalid_arguments");
         ErrorMessage(output).Should().Be("Unknown argument: scope_id");
-        memberPort.LastRequest.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task CreateMember_ForWorkflowFallback_ShouldUseTrustedProvisioningIdentity()
-    {
-        var memberPort = new RecordingMemberProvisioningPort();
-        var tool = await DiscoverCreateMemberToolAsync(memberPort);
-        var expectedMemberId = WorkflowProvisioningIdentity.BuildMemberId(
-            "scope-current",
-            "agent-tool-idempotency:workflow-create-alpha");
-
-        using var _ = PushContext(
-            scopeId: "scope-current",
-            ownerSubject: "owner-1",
-            accessToken: "access-token-1",
-            requestId: "conversation-session-alpha",
-            callId: "fallback-create-call",
-            idempotencyKey: "workflow-create-alpha");
-        var output = await tool.ExecuteAsync("""
-            {
-              "display_name": "Weekly Report Fallback",
-              "implementation_kind": "workflow",
-              "description": "Fallback member",
-              "team_id": "team-alpha"
-            }
-            """);
-
-        ErrorCode(output).Should().BeNull(output);
-        memberPort.LastRequest.Should().NotBeNull();
-        memberPort.LastRequest!.MemberId.Should().Be(expectedMemberId);
-
-        using var document = JsonDocument.Parse(output);
-        document.RootElement.GetProperty("member_id").GetString().Should().Be(expectedMemberId);
-    }
-
-    [Fact]
-    public async Task CreateMember_ForWorkflowFallback_WhenMemberIdConflictsWithTrustedIdentity_ShouldFailClosed()
-    {
-        var memberPort = new RecordingMemberProvisioningPort();
-        var tool = await DiscoverCreateMemberToolAsync(memberPort);
-
-        using var _ = PushContext(
-            scopeId: "scope-current",
-            ownerSubject: "owner-1",
-            accessToken: "access-token-1",
-            requestId: "conversation-session-alpha",
-            callId: "fallback-create-call",
-            idempotencyKey: "workflow-create-alpha");
-        var output = await tool.ExecuteAsync("""
-            {
-              "display_name": "Weekly Report Fallback",
-              "implementation_kind": "workflow",
-              "member_id": "m-conflicting",
-              "team_id": "team-alpha"
-            }
-            """);
-
-        ErrorCode(output).Should().Be("workflow_provisioning_identity_conflict");
         memberPort.LastRequest.Should().BeNull();
     }
 
@@ -921,68 +855,6 @@ public sealed class ProvisionWorkflowScheduleToolTests
         root.GetProperty("workflow_id").GetString().Should().Be("workflow-alpha");
         root.TryGetProperty("revision_id", out _).Should().BeFalse();
         root.TryGetProperty("service_id", out _).Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task BindMemberWorkflow_ForWorkflowFallback_ShouldUseTrustedWorkflowIdentity()
-    {
-        var bindingPort = new RecordingMemberWorkflowBindingPort();
-        var tool = await DiscoverBindMemberWorkflowToolAsync(bindingPort);
-        var expectedMemberId = WorkflowProvisioningIdentity.BuildMemberId(
-            "scope-current",
-            "agent-tool-idempotency:workflow-create-alpha");
-        var expectedWorkflowId = WorkflowProvisioningIdentity.BuildWorkflowId(
-            "scope-current",
-            "agent-tool-idempotency:workflow-create-alpha");
-
-        using var _ = PushContext(
-            scopeId: "scope-current",
-            ownerSubject: "owner-1",
-            accessToken: "access-token-1",
-            requestId: "conversation-session-alpha",
-            callId: "fallback-bind-call",
-            idempotencyKey: "workflow-create-alpha");
-        var output = await tool.ExecuteAsync($$"""
-            {
-              "member_id": "{{expectedMemberId}}",
-              "workflow_yaml": "name: team_workflow\nsteps: []\n"
-            }
-            """);
-
-        ErrorCode(output).Should().BeNull(output);
-        bindingPort.LastRequest.Should().NotBeNull();
-        bindingPort.LastRequest!.WorkflowId.Should().Be(expectedWorkflowId);
-
-        using var document = JsonDocument.Parse(output);
-        document.RootElement.GetProperty("workflow_id").GetString().Should().Be(expectedWorkflowId);
-    }
-
-    [Fact]
-    public async Task BindMemberWorkflow_ForWorkflowFallback_WhenWorkflowIdConflictsWithTrustedIdentity_ShouldFailClosed()
-    {
-        var bindingPort = new RecordingMemberWorkflowBindingPort();
-        var tool = await DiscoverBindMemberWorkflowToolAsync(bindingPort);
-        var expectedMemberId = WorkflowProvisioningIdentity.BuildMemberId(
-            "scope-current",
-            "agent-tool-idempotency:workflow-create-alpha");
-
-        using var _ = PushContext(
-            scopeId: "scope-current",
-            ownerSubject: "owner-1",
-            accessToken: "access-token-1",
-            requestId: "conversation-session-alpha",
-            callId: "fallback-bind-call",
-            idempotencyKey: "workflow-create-alpha");
-        var output = await tool.ExecuteAsync($$"""
-            {
-              "member_id": "{{expectedMemberId}}",
-              "workflow_yaml": "name: team_workflow\nsteps: []\n",
-              "workflow_id": "workflow-conflicting"
-            }
-            """);
-
-        ErrorCode(output).Should().Be("workflow_provisioning_identity_conflict");
-        bindingPort.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -1465,7 +1337,6 @@ public sealed class ProvisionWorkflowScheduleToolTests
     {
         var port = new RecordingProvisioningPort(new WorkflowScheduleProvisioningResult(
             MemberId: "member-1",
-            WorkflowId: "workflow-1",
             ScopeId: "scope-1",
             TeamId: "team-alpha",
             BindingStatus: "accepted",
@@ -1477,11 +1348,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         });
         var tool = await DiscoverToolAsync(port);
 
-        using var _ = PushContext(
-            scopeId: "scope-1",
-            ownerSubject: "owner-1",
-            accessToken: "access-token-1",
-            idempotencyKey: "workflow-provision-alpha");
+        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
         var output = await tool.ExecuteAsync("""
             {
               "team_id": "team-alpha",
@@ -1504,7 +1371,6 @@ public sealed class ProvisionWorkflowScheduleToolTests
         request.ScheduleCron.Should().Be("0 9 * * *");
         request.ScheduleTimezone.Should().Be("Asia/Shanghai");
         request.RunImmediately.Should().BeFalse();
-        request.IdempotencyKey.Should().Be("agent-tool-idempotency:workflow-provision-alpha");
         // Caller identity is taken from the tool execution context (W1-threaded), not arguments.
         request.CallerSubjectExternalUserId.Should().Be("owner-1");
         request.CapabilityAdmission.Should().NotBeNull();
@@ -1519,70 +1385,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var root = document.RootElement;
         root.GetProperty("status").GetString().Should().Be("accepted");
         root.GetProperty("member_id").GetString().Should().Be("member-1");
-        root.GetProperty("workflow_id").GetString().Should().Be("workflow-1");
         root.GetProperty("team_id").GetString().Should().Be("team-alpha");
         root.GetProperty("schedule_id").GetString().Should().Be("schedule-1");
-        root.GetProperty("provisioning_stage").GetString().Should()
-            .Be(WorkflowScheduleProvisioningStageNames.ScheduleAccepted);
-        root.GetProperty("schedule_status").GetString().Should()
-            .Be(WorkflowScheduleProvisioningScheduleStatusNames.Accepted);
-        root.TryGetProperty("stage_failure", out var stageFailure).Should().BeFalse();
         root.GetProperty("studio_url").GetString().Should()
             .Be("/scopes/scope-1/teams/team-alpha/members/member-1/workflow");
         root.GetProperty("observatory_url").GetString().Should().Be("/workflow/observatory");
-    }
-
-    [Fact]
-    public async Task Execute_WhenScheduleBlockedAfterBind_ShouldReturnReceiptWithoutError()
-    {
-        var port = new RecordingProvisioningPort(new WorkflowScheduleProvisioningResult(
-            MemberId: "m-alpha",
-            WorkflowId: "wf-alpha",
-            ScopeId: "scope-1",
-            TeamId: "team-alpha",
-            BindingStatus: "accepted",
-            ObservatoryUrl: "/workflow/observatory",
-            StudioUrl: "/scopes/scope-1/teams/team-alpha/members/m-alpha/workflow")
-        {
-            BindingRunId = "bind-alpha",
-            ProvisioningStage = WorkflowScheduleProvisioningStageNames.ScheduleBlocked,
-            ScheduleStatus = WorkflowScheduleProvisioningScheduleStatusNames.Blocked,
-            StageFailure = new WorkflowScheduleProvisioningStageFailure(
-                WorkflowScheduleProvisioningStageNames.ScheduleBlocked,
-                "owner_llm_authorization_evidence_not_found",
-                "owner_llm_authorization_evidence_not_found"),
-        });
-        var tool = await DiscoverToolAsync(port);
-
-        using var _ = PushContext(
-            scopeId: "scope-1",
-            ownerSubject: "owner-1",
-            accessToken: "access-token-1",
-            idempotencyKey: "workflow-provision-blocked");
-        var output = await tool.ExecuteAsync("""
-            {
-              "team_id": "team-alpha",
-              "workflow_yaml": "name: demo\n",
-              "display_name": "Weekly Report"
-            }
-            """);
-
-        ErrorCode(output).Should().BeNull(output);
-        using var document = JsonDocument.Parse(output);
-        var root = document.RootElement;
-        root.GetProperty("status").GetString().Should().Be("accepted");
-        root.GetProperty("member_id").GetString().Should().Be("m-alpha");
-        root.GetProperty("workflow_id").GetString().Should().Be("wf-alpha");
-        root.TryGetProperty("schedule_id", out var scheduleId).Should().BeFalse();
-        root.GetProperty("binding_run_id").GetString().Should().Be("bind-alpha");
-        root.GetProperty("provisioning_stage").GetString().Should()
-            .Be(WorkflowScheduleProvisioningStageNames.ScheduleBlocked);
-        root.GetProperty("schedule_status").GetString().Should()
-            .Be(WorkflowScheduleProvisioningScheduleStatusNames.Blocked);
-        var failure = root.GetProperty("stage_failure");
-        failure.GetProperty("stage").GetString().Should().Be(WorkflowScheduleProvisioningStageNames.ScheduleBlocked);
-        failure.GetProperty("code").GetString().Should().Be("owner_llm_authorization_evidence_not_found");
-        failure.GetProperty("message").GetString().Should().Be("owner_llm_authorization_evidence_not_found");
     }
 
     [Fact]
@@ -1590,7 +1397,6 @@ public sealed class ProvisionWorkflowScheduleToolTests
     {
         var port = new RecordingProvisioningPort(new WorkflowScheduleProvisioningResult(
             MemberId: "member-1",
-            WorkflowId: "workflow-1",
             ScopeId: "owner-scope",
             TeamId: "team-alpha",
             BindingStatus: "accepted",
@@ -1602,7 +1408,6 @@ public sealed class ProvisionWorkflowScheduleToolTests
             scopeId: "registration-scope",
             ownerSubject: "owner-1",
             accessToken: "access-token-1",
-            idempotencyKey: "workflow-provision-owner",
             ownerScopeId: "owner-scope");
         var output = await tool.ExecuteAsync("""
             {
@@ -1625,11 +1430,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var port = new RecordingProvisioningPort();
         var tool = await DiscoverToolAsync(port);
 
-        using var _ = PushContext(
-            scopeId: "scope-1",
-            ownerSubject: "owner-1",
-            accessToken: "access-token-1",
-            idempotencyKey: "workflow-provision-default");
+        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
         await tool.ExecuteAsync("""
             {
               "team_id": "team-alpha",
@@ -1640,56 +1441,6 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
         port.LastRequest.Should().NotBeNull();
         port.LastRequest!.RunImmediately.Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task Execute_WhenOnlyRequestIdPresent_ShouldFailBeforeProvisioning()
-    {
-        var port = new RecordingProvisioningPort();
-        var tool = await DiscoverToolAsync(port);
-
-        using var _ = PushContext(
-            scopeId: "scope-1",
-            ownerSubject: "owner-1",
-            accessToken: "access-token-1",
-            requestId: "conversation-session-alpha",
-            callId: "tool-call-alpha",
-            idempotencyKey: null);
-        var output = await tool.ExecuteAsync("""
-            {
-              "team_id": "team-alpha",
-              "workflow_yaml": "name: demo\n",
-              "display_name": "Demo"
-            }
-            """);
-
-        ErrorCode(output).Should().Be("operation_identity_unavailable");
-        port.LastRequest.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task Execute_WhenTrustedOperationIdentityMissing_ShouldFailBeforeProvisioning()
-    {
-        var port = new RecordingProvisioningPort();
-        var tool = await DiscoverToolAsync(port);
-
-        using var _ = PushContext(
-            scopeId: "scope-1",
-            ownerSubject: "owner-1",
-            accessToken: "access-token-1",
-            requestId: null,
-            callId: "call-1",
-            idempotencyKey: null);
-        var output = await tool.ExecuteAsync("""
-            {
-              "team_id": "team-alpha",
-              "workflow_yaml": "name: demo\n",
-              "display_name": "Demo"
-            }
-            """);
-
-        ErrorCode(output).Should().Be("operation_identity_unavailable");
-        port.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -1758,11 +1509,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         };
         var tool = await DiscoverToolAsync(port);
 
-        using var _ = PushContext(
-            scopeId: "scope-1",
-            ownerSubject: "owner-1",
-            accessToken: "access-token-1",
-            idempotencyKey: "workflow-provision-validation-error");
+        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
         var output = await tool.ExecuteAsync("""
             {
               "team_id": "team-alpha",
@@ -1783,7 +1530,6 @@ public sealed class ProvisionWorkflowScheduleToolTests
     {
         var port = new RecordingProvisioningPort(new WorkflowScheduleProvisioningResult(
             MemberId: "member-1",
-            WorkflowId: "workflow-1",
             ScopeId: "scope-1",
             TeamId: "team-alpha",
             BindingStatus: "accepted",
@@ -1794,11 +1540,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         });
         var tool = await DiscoverToolAsync(port);
 
-        using var _ = PushContext(
-            scopeId: "scope-1",
-            ownerSubject: "owner-1",
-            accessToken: "access-token-1",
-            idempotencyKey: "workflow-provision-result");
+        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
         var output = await tool.ExecuteAsync("""
             {
               "team_id": "team-alpha",
@@ -1975,7 +1717,6 @@ public sealed class ProvisionWorkflowScheduleToolTests
         {
             _result = result ?? new WorkflowScheduleProvisioningResult(
                 MemberId: "member-default",
-                WorkflowId: "workflow-default",
                 ScopeId: "scope-default",
                 TeamId: "team-alpha",
                 BindingStatus: "accepted",

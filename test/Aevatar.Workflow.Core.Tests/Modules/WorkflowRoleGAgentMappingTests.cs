@@ -27,7 +27,6 @@ public sealed class WorkflowRoleGAgentMappingTests
             StepId = "reply",
             SessionId = "session-1",
             Prompt = "hello",
-            IdempotencyKey = "chat-command-alpha:reply:1",
             ScheduleId = " schedule-1 ",
             Model = "model-a",
             UserMemoryPrompt = "memory",
@@ -53,8 +52,6 @@ public sealed class WorkflowRoleGAgentMappingTests
         provider.LastRequest.ToolContext.Should().NotBeNull();
         provider.LastRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("raw-token");
         provider.LastRequest.ToolContext.Credentials.NyxIdOrgToken.Should().Be("raw-token");
-        provider.LastRequest.ToolContext.Request.IdempotencyKey.Should()
-            .Be("chat-command-alpha:reply:1");
         provider.LastRequest.ToolContext.Routing.NyxIdRoutePreference.Should().Be("route-a");
         provider.LastRequest.ToolContext.WorkflowRuntime.ParentActorId.Should().Be("parent-actor");
         provider.LastRequest.ToolContext.WorkflowRuntime.ParentRunId.Should().Be("parent-run");

@@ -567,24 +567,10 @@ public sealed partial class WorkflowRunGAgent
             Input = executionInput,
             RunId = runId,
             ForkSeed = request.ForkSeed,
-            CommandId = ResolveStartWorkflowCommandId(commandId),
         };
         start.InputFileRefs.Add(inputFileRefs.Select(static fileRef => fileRef.Clone()));
         await PublishStartWorkflowOrTerminalFailureAsync(start, request.SessionId, CancellationToken.None);
         await SendWorkflowRunStartedNotificationAsync(CancellationToken.None);
-    }
-
-    private string ResolveStartWorkflowCommandId(string commandId) =>
-        !string.IsNullOrWhiteSpace(commandId) &&
-        IsTrustedStartWorkflowCommandEnvelope()
-            ? commandId
-            : string.Empty;
-
-    private bool IsTrustedStartWorkflowCommandEnvelope()
-    {
-        var envelope = ActiveInboundEnvelope;
-        return envelope?.Route.IsDirect() == true ||
-               envelope?.Payload?.Is(EnsureWorkflowRunDefinitionEvent.Descriptor) == true;
     }
 
     [EventHandler]

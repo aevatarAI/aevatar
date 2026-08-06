@@ -397,7 +397,6 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             // fills a caller scope that is otherwise unset.
             ScopeId = Normalize(ctx.ScopeId) ?? string.Empty,
             ScheduleId = Normalize(ctx.ScheduleId) ?? string.Empty,
-            IdempotencyKey = Normalize(request.IdempotencyKey) ?? string.Empty,
         };
         intent.InputFileRefs.Add(request.InputFileRefs.Select(static fileRef => fileRef.Clone()));
         var runtimeContext = WorkflowRunExecutionContextStateAccess.GetWorkflowRuntimeContext(

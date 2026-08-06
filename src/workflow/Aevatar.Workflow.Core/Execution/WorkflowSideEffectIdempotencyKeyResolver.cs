@@ -25,7 +25,7 @@ internal sealed class WorkflowSideEffectIdempotencyKeyResolver
 
         var normalizedIdentity = NormalizeIdentity(identity);
         var key = string.IsNullOrWhiteSpace(step.IdempotencyKey)
-            ? normalizedIdentity.IdempotencyKey
+            ? BuildDefaultKey(normalizedIdentity)
             : _expressionEvaluator.Evaluate(step.IdempotencyKey.Trim(), BuildExpressionVariables(normalizedIdentity, variables)).Trim();
         if (string.IsNullOrWhiteSpace(key))
             key = BuildDefaultKey(normalizedIdentity);

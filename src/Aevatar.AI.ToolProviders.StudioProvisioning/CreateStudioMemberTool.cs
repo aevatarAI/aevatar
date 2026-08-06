@@ -27,7 +27,6 @@ internal sealed class CreateStudioMemberTool : IAgentTool
     public string Description =>
         "Create a Studio member in the caller's current Aevatar scope. " +
         "Supply display_name, implementation_kind, and optional description, member_id, or team_id; team_id is required for workflow members. " +
-        "For workflow members under a trusted Chat request, member_id is derived from the workflow provisioning idempotency key and a conflicting supplied member_id is rejected. " +
         "Do not provide scope_id because scope is taken from the session context.";
 
     public string ParametersSchema => """
@@ -105,32 +104,10 @@ internal sealed class CreateStudioMemberTool : IAgentTool
         if (string.Equals(implementationKind, "workflow", StringComparison.OrdinalIgnoreCase) && teamId is null)
             return ErrorJson("invalid_arguments", "team_id is required for workflow members.");
 
-        var memberId = Normalize(args.MemberId);
-        if (string.Equals(implementationKind, "workflow", StringComparison.OrdinalIgnoreCase))
-        {
-            var idempotencyKey = StudioWorkflowProvisioningToolIdentity.ResolveTrustedIdempotencyKey();
-            if (idempotencyKey is null)
-            {
-                return ErrorJson(
-                    StudioWorkflowProvisioningToolIdentity.MissingIdentityErrorCode,
-                    StudioWorkflowProvisioningToolIdentity.MissingIdentityErrorMessage);
-            }
-
-            var operationMemberId = StudioWorkflowProvisioningToolIdentity.BuildMemberId(scopeId, idempotencyKey);
-            if (memberId is not null && !string.Equals(memberId, operationMemberId, StringComparison.Ordinal))
-            {
-                return ErrorJson(
-                    StudioWorkflowProvisioningToolIdentity.ConflictErrorCode,
-                    "member_id conflicts with the trusted workflow provisioning operation identity.");
-            }
-
-            memberId = operationMemberId;
-        }
-
         var request = new StudioMemberProvisioningRequest(scopeId, displayName, implementationKind)
         {
             Description = Normalize(args.Description),
-            MemberId = memberId,
+            MemberId = Normalize(args.MemberId),
             TeamId = teamId,
         };
 

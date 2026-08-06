@@ -4,7 +4,6 @@ using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Services;
-using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
@@ -138,14 +137,10 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
 
         var subjectRef = BuildSenderNyxIdCredentialSource(callerCredential);
 
-        // Provision identity: the Chat/tool path supplies a trusted idempotency
-        // key so retries and create/bind fallbacks for the same operation converge
-        // even when display text drifts. Direct callers that omit it retain the
-        // older (scope, team, display name) convergence rule.
-        var idempotencyKey = NormalizeOptional(request.IdempotencyKey);
-        var provisionKey = idempotencyKey is null
-            ? BuildProvisionKey(normalizedScopeId, teamId, displayName)
-            : WorkflowProvisioningIdentity.BuildResourceKey(normalizedScopeId, idempotencyKey);
+        // Provision identity: one (scope, team, display name) tuple owns exactly
+        // one member + workflow id + schedule, so retries converge on the same
+        // Team-owned resources instead of leaving an orphan pair per attempt.
+        var provisionKey = BuildProvisionKey(normalizedScopeId, teamId, displayName);
 
         // 1. Resolve the member: reuse the existing one for this (scope, display
         //    name), else create it. The deterministic id is the member's identity;
@@ -161,13 +156,12 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         //    bind contract requires; deriving it from the provision key keeps one
         //    logical workflow identity across re-binds of the same member.
         //    The bind is asynchronous — we do NOT poll it to completion.
-        var workflowId = $"workflow-{provisionKey}";
         var bindReceipt = await _memberService.BindAsync(
             normalizedScopeId,
             memberId,
             new UpdateStudioMemberBindingRequest(
                 Workflow: new StudioMemberWorkflowBindingSpec(
-                    WorkflowId: workflowId,
+                    WorkflowId: $"workflow-{provisionKey}",
                     WorkflowYamls: [workflowYaml])
                 {
                     CapabilityAdmissionPlan = capabilityAdmissionPlan,
@@ -190,31 +184,12 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         //    The schedule id is deterministic (provision-{publishedServiceId}) and
         //    the write goes through EnsureAsync, so a re-provision updates the one
         //    existing schedule instead of stacking a new enabled schedule per retry.
-        var response = new ProvisionWorkflowResponse(
-            MemberId: memberId,
-            WorkflowId: workflowId,
-            ScopeId: normalizedScopeId,
-            TeamId: teamId,
-            BindingStatus: ProvisionWorkflowBindingStatusNames.Accepted,
-            ObservatoryUrl: ObservatoryPath)
+        string? scheduleId = null;
+        if (ShouldSchedule(request))
         {
-            BindingRunId = NormalizeOptional(bindReceipt.BindingRunId),
-            StudioUrl = BuildStudioUrl(normalizedScopeId, teamId, memberId),
-        };
-        if (!ShouldSchedule(request))
-        {
-            return response with
-            {
-                ProvisioningStage = WorkflowScheduleProvisioningStageNames.BindAccepted,
-                ScheduleStatus = WorkflowScheduleProvisioningScheduleStatusNames.NotRequested,
-            };
-        }
-
-        var cronExpression = ResolveCron(request, out var timezone);
-        var auth = BuildScheduleAuth(subjectRef);
-        try
-        {
-            var scheduleId = await EnsureProvisionScheduleAsync(
+            var cronExpression = ResolveCron(request, out var timezone);
+            var auth = BuildScheduleAuth(subjectRef);
+            scheduleId = await EnsureProvisionScheduleAsync(
                 normalizedScopeId,
                 publishedServiceId,
                 request.Prompt ?? string.Empty,
@@ -222,22 +197,19 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 cronExpression,
                 timezone,
                 ct);
-            return response with
-            {
-                ScheduleId = scheduleId,
-                ProvisioningStage = WorkflowScheduleProvisioningStageNames.ScheduleAccepted,
-                ScheduleStatus = WorkflowScheduleProvisioningScheduleStatusNames.Accepted,
-            };
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+
+        return new ProvisionWorkflowResponse(
+            MemberId: memberId,
+            ScopeId: normalizedScopeId,
+            TeamId: teamId,
+            BindingStatus: ProvisionWorkflowBindingStatusNames.Accepted,
+            ObservatoryUrl: ObservatoryPath)
         {
-            return response with
-            {
-                ProvisioningStage = WorkflowScheduleProvisioningStageNames.ScheduleBlocked,
-                ScheduleStatus = WorkflowScheduleProvisioningScheduleStatusNames.Blocked,
-                StageFailure = BuildScheduleStageFailure(ex),
-            };
-        }
+            BindingRunId = NormalizeOptional(bindReceipt.BindingRunId),
+            ScheduleId = scheduleId,
+            StudioUrl = BuildStudioUrl(normalizedScopeId, teamId, memberId),
+        };
     }
 
     /// <summary>
@@ -461,25 +433,5 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         var normalized = value?.Trim() ?? string.Empty;
         return normalized.Length == 0 ? null : normalized;
     }
-
-    private static WorkflowScheduleProvisioningStageFailure BuildScheduleStageFailure(Exception exception) =>
-        new(
-            Stage: WorkflowScheduleProvisioningStageNames.ScheduleBlocked,
-            Code: ResolveScheduleFailureCode(exception),
-            Message: NormalizeOptional(exception.Message) ?? "schedule provisioning failed.");
-
-    private static string ResolveScheduleFailureCode(Exception exception) => exception switch
-    {
-        ScheduledServiceInvocationAuthorizationException authorization => authorization.StableCode,
-        ScheduledDispatchConflictException => "scheduled_dispatch_conflict",
-        ScheduledDispatchApplicationException => "scheduled_dispatch_failed",
-        InvalidOperationException { Message: { Length: > 0 } message }
-            when IsStableFailureCode(message) => message,
-        _ => "schedule_ensure_failed",
-    };
-
-    private static bool IsStableFailureCode(string value) =>
-        value.Length <= 128 && value.All(static c =>
-            char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.');
 
 }

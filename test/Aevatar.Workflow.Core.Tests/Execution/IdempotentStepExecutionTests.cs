@@ -122,37 +122,6 @@ public sealed class IdempotentStepExecutionTests
     }
 
     [Fact]
-    public async Task StepRequest_WithCommandId_ShouldUseProducerCommandIdAsDefaultIdempotencyKey()
-    {
-        var ctx = new RecordingEventHandlerContext();
-        var host = new RecordingStateHost();
-        var kernel = new WorkflowExecutionKernel(SingleStepWorkflow(), host);
-
-        await kernel.HandleAsync(
-            Wrap(new StartWorkflowEvent
-            {
-                RunId = "run-1",
-                Input = "hello",
-                CommandId = "chat-command-alpha",
-            }),
-            ctx,
-            CancellationToken.None);
-
-        var request = StepRequests(ctx).Single();
-        request.IdempotencyKey.Should().Be("chat-command-alpha");
-
-        var state = LoadKernelState(host);
-        state.CommandId.Should().Be("chat-command-alpha");
-        state.IdempotencyByStepId["step-1"].Should().BeEquivalentTo(new
-        {
-            LogicalRunId = "run-1",
-            StepId = "step-1",
-            LogicalAttempt = 1,
-            IdempotencyKey = "chat-command-alpha",
-        });
-    }
-
-    [Fact]
     public async Task StepRequest_ShouldUseAuthorExpressionOverDefaultAndEvaluateVariables()
     {
         var workflow = new WorkflowDefinition

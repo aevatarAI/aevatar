@@ -19,9 +19,9 @@ namespace Aevatar.Studio.Tests;
 /// <list type="bullet">
 ///   <item>the scope-access guard short-circuits with 403 before the service is
 ///   touched (cross-scope / unauthenticated);</item>
-///   <item>a successful provision returns 202 Accepted (the bind + run are
-///   asynchronous) carrying the schedule stage + Observatory link, with the
-///   Location pointing at the created schedule when one was accepted;</item>
+///   <item>a successful provision always returns 202 Accepted (the bind + run are
+///   asynchronous) carrying the schedule id + Observatory link, with the
+///   Location pointing at the created schedule;</item>
 ///   <item>the caller NyxID subject reference is required and threaded into the
 ///   service as an input parameter; a missing subject maps to a stable 400;</item>
 ///   <item>domain validation failures map to a stable 400 code.</item>
@@ -235,7 +235,6 @@ public sealed class StudioProvisioningEndpointsTests
 
     private static ProvisionWorkflowResponse NewResponse() => new(
         MemberId: "member-1",
-        WorkflowId: "workflow-1",
         ScopeId: ScopeId,
         TeamId: TeamId,
         BindingStatus: ProvisionWorkflowBindingStatusNames.Accepted,

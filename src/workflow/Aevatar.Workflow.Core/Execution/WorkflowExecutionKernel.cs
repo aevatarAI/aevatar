@@ -148,7 +148,6 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
 
         state.Active = true;
         state.RunId = runId;
-        state.CommandId = NormalizeOptionalIdentity(evt.CommandId) ?? string.Empty;
         state.CurrentStepId = string.Empty;
         state.CurrentStepInput = string.Empty;
         state.CurrentStepInputFileRefs.Clear();
@@ -1324,7 +1323,6 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             LogicalRunId = state.RunId,
             StepId = step.Id,
             LogicalAttempt = Math.Max(1, state.RetryAttemptsByStepId.GetValueOrDefault(step.Id, 0) + 1),
-            IdempotencyKey = NormalizeOptionalIdentity(state.CommandId) ?? string.Empty,
         };
         var resolved = _idempotencyKeyResolver.Resolve(step, identity, state.Variables);
         state.IdempotencyByStepId[step.Id] = resolved;
@@ -1552,7 +1550,6 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
 
         state.Active = false;
         state.RunId = string.Empty;
-        state.CommandId = string.Empty;
         state.CurrentStepId = terminalStepId;
         state.CurrentStepInput = terminalStepInput;
         state.CurrentStepInputFileRefs.Clear();
@@ -1609,7 +1606,6 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
     {
         if (!state.Active &&
             string.IsNullOrWhiteSpace(state.RunId) &&
-            string.IsNullOrWhiteSpace(state.CommandId) &&
             string.IsNullOrWhiteSpace(state.CurrentStepId) &&
             string.IsNullOrWhiteSpace(state.CurrentStepInput) &&
             !state.CurrentStepDispatchPending &&
@@ -1810,11 +1806,6 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         string.IsNullOrWhiteSpace(runId)
             ? string.Empty
             : WorkflowRunIdNormalizer.Normalize(runId);
-
-    private static string? NormalizeOptionalIdentity(string? value) =>
-        string.IsNullOrWhiteSpace(value)
-            ? null
-            : value.Trim();
 
     private static void MergeStartParametersIntoVariables(
         IDictionary<string, string> variables,
