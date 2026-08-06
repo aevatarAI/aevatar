@@ -247,6 +247,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.new.workspaceUnavailable': '保存位置不可用',
     'workflowActivityVNext.new.yaml': '工作流 YAML',
     'workflowActivityVNext.run.backAria': '返回活动列表',
+    'workflowActivityVNext.run.changeConfiguration': '更改配置',
     'workflowActivityVNext.run.commandId': '请求 ID',
     'workflowActivityVNext.run.code': '代码',
     'workflowActivityVNext.run.completedSteps': '已完成步骤',
@@ -256,12 +257,16 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.run.confirmTitle': '确认新运行',
     'workflowActivityVNext.run.correlationId': '跟踪 ID',
     'workflowActivityVNext.run.cost': '费用',
+    'workflowActivityVNext.run.costWarning':
+      '此操作可能产生新的模型或工具费用。',
+    'workflowActivityVNext.run.definitionRevision': '定义版本',
     'workflowActivityVNext.run.diagnostics': '诊断',
     'workflowActivityVNext.run.error': '最终错误',
     'workflowActivityVNext.run.failedSummary': '此次运行未完成。',
+    'workflowActivityVNext.run.fixAccess': '修复访问权限',
     'workflowActivityVNext.run.description': '查看此次运行的结果、步骤和历史。',
     'workflowActivityVNext.run.title': '运行详情',
-    'workflowActivityVNext.run.forkAccepted': '新运行已开始',
+    'workflowActivityVNext.run.forkAccepted': '新运行已接受',
     'workflowActivityVNext.run.forkAcceptedDescription':
       '打开活动记录查看进度。',
     'workflowActivityVNext.run.graph': '图',
@@ -280,10 +285,18 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.run.promptTokens': '输入 Token',
     'workflowActivityVNext.run.requestedSteps': '已请求步骤',
     'workflowActivityVNext.run.requestParameters': '请求参数',
+    'workflowActivityVNext.run.priorOutputs': '先前输出',
+    'workflowActivityVNext.run.priorOutputsNotReused': '不会复用先前步骤输出。',
+    'workflowActivityVNext.run.priorOutputsReused': '将复用先前步骤输出。',
+    'workflowActivityVNext.run.relatedRuns': '相关运行',
     'workflowActivityVNext.run.retry': '重试失败步骤',
+    'workflowActivityVNext.run.retryAuthorityMissing':
+      '运行服务未提供重试资格。',
     'workflowActivityVNext.run.retryUnavailable':
       '存在一个失败步骤时才能重试。',
     'workflowActivityVNext.run.runAgain': '再次运行',
+    'workflowActivityVNext.run.runAgainAuthorityMissing':
+      '运行服务未提供再次运行资格。',
     'workflowActivityVNext.run.runAgainUnavailable':
       '此次运行暂时无法重新开始。',
     'workflowActivityVNext.run.roleReplies': '角色回复数',

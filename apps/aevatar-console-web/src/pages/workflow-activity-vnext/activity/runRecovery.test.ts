@@ -1,54 +1,48 @@
+import type { WorkflowActivityRunRecovery } from '@/shared/models/workflowActivity';
 import { resolveRunRecovery } from './runRecovery';
 
+function buildRecovery(): WorkflowActivityRunRecovery {
+  return {
+    recommendedAction: 'retry_failed_step',
+    definitionRevision: 'revision-42',
+    retry: {
+      eligible: true,
+      unavailableReason: '',
+      startAtStepId: 'step-failed',
+      reusesPriorStepOutputs: true,
+      mayIncurCost: true,
+    },
+    runAgain: {
+      eligible: false,
+      unavailableReason: 'Run again is not safe for this record.',
+      startAtStepId: null,
+      reusesPriorStepOutputs: false,
+      mayIncurCost: false,
+    },
+    lineage: {
+      parentRunId: null,
+      childRunIds: [],
+    },
+  };
+}
+
 describe('resolveRunRecovery', () => {
-  it('enables retry only for one explicit failed step and run again for an explicit graph root step', () => {
-    expect(
-      resolveRunRecovery(
-        [
-          { stepId: 'step-second', success: false },
-          { stepId: 'step-first', success: true },
-        ],
-        {
-          rootNodeId: 'node-root',
-          nodes: [
-            { nodeId: 'node-root', stepId: 'step-first' },
-            { nodeId: 'node-second', stepId: 'step-second' },
-          ],
-        },
-      ),
-    ).toEqual({ retryStepId: 'step-second', runAgainStepId: 'step-first' });
+  it('exposes only explicitly eligible typed actions', () => {
+    const resolved = resolveRunRecovery(buildRecovery());
+
+    expect(resolved.retryAction?.startAtStepId).toBe('step-failed');
+    expect(resolved.runAgainAction).toBeNull();
+    expect(resolved.runAgainUnavailableReason).toBe(
+      'Run again is not safe for this record.',
+    );
   });
 
-  it('does not guess a failed step or first step from array order', () => {
-    expect(
-      resolveRunRecovery([
-        { stepId: 'step-first', success: false },
-        { stepId: 'step-second', success: false },
-      ]),
-    ).toEqual({ retryStepId: null, runAgainStepId: null });
-  });
-
-  it('does not enable run again when the graph root is missing or lacks an explicit step id', () => {
-    const steps = [{ stepId: 'step-first', success: true }] as const;
-
-    expect(
-      resolveRunRecovery(steps, {
-        rootNodeId: 'node-missing',
-        nodes: [{ nodeId: 'node-first', stepId: 'step-first' }],
-      }),
-    ).toEqual({ retryStepId: null, runAgainStepId: null });
-    expect(
-      resolveRunRecovery(steps, {
-        rootNodeId: 'node-root',
-        nodes: [{ nodeId: 'node-root', stepId: '' }],
-      }),
-    ).toEqual({ retryStepId: null, runAgainStepId: null });
-  });
-
-  it('does not invent a first step for an empty run', () => {
-    expect(resolveRunRecovery([])).toEqual({
-      retryStepId: null,
-      runAgainStepId: null,
+  it('does not invent actions when the recovery contract is absent', () => {
+    expect(resolveRunRecovery(null)).toEqual({
+      retryAction: null,
+      retryUnavailableReason: null,
+      runAgainAction: null,
+      runAgainUnavailableReason: null,
     });
   });
 });

@@ -7,9 +7,15 @@ import {
   workflowActivityApi,
 } from '@/shared/api/workflowActivityApi';
 import { t } from '@/shared/i18n/messages';
-import type { WorkflowRunForkAcceptedReceipt } from '@/shared/models/workflowActivity';
+import type {
+  WorkflowActivityRunRecoveryAction,
+  WorkflowRunForkAcceptedReceipt,
+} from '@/shared/models/workflowActivity';
 import { history } from '@/shared/navigation/history';
-import { buildWorkflowActivitySectionHref } from '../navigation';
+import {
+  buildWorkflowActivityRunHref,
+  buildWorkflowActivitySectionHref,
+} from '../navigation';
 import TableScrollRegion from '../TableScrollRegion';
 import TechnicalDetails from '../TechnicalDetails';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
@@ -82,11 +88,10 @@ const RunDetailPage: React.FC<{
   const [receipt, setReceipt] =
     React.useState<WorkflowRunForkAcceptedReceipt | null>(null);
   const [pendingRecovery, setPendingRecovery] = React.useState<{
+    readonly action: WorkflowActivityRunRecoveryAction;
     readonly kind: 'retry' | 'run_again';
-    readonly stepId: string;
   } | null>(null);
 
-  const recovery = resolveRunRecovery(detail.data?.steps ?? [], graph.data);
   const fork = async (startAtStepId: string): Promise<boolean> => {
     if (forking) return false;
     setForking(true);
@@ -109,8 +114,9 @@ const RunDetailPage: React.FC<{
   };
 
   const confirmFork = async () => {
-    if (!pendingRecovery) return;
-    if (await fork(pendingRecovery.stepId)) setPendingRecovery(null);
+    const startAtStepId = pendingRecovery?.action.startAtStepId;
+    if (!startAtStepId) return;
+    if (await fork(startAtStepId)) setPendingRecovery(null);
   };
 
   if (detail.isPending)
@@ -161,6 +167,28 @@ const RunDetailPage: React.FC<{
     );
 
   const run = detail.data;
+  const recovery = run.recovery;
+  const resolvedRecovery = resolveRunRecovery(recovery);
+  const retryAvailable = Boolean(resolvedRecovery.retryAction);
+  const runAgainAvailable = Boolean(resolvedRecovery.runAgainAction);
+  const retryReason =
+    resolvedRecovery.retryUnavailableReason ||
+    t(
+      'workflowActivityVNext.run.retryAuthorityMissing',
+      'Retry eligibility was not provided by the run service.',
+    );
+  const runAgainReason =
+    resolvedRecovery.runAgainUnavailableReason ||
+    t(
+      'workflowActivityVNext.run.runAgainAuthorityMissing',
+      'Run-again eligibility was not provided by the run service.',
+    );
+  const recommendationHref =
+    recovery?.recommendedAction === 'fix_access'
+      ? `${buildWorkflowActivitySectionHref(scopeId, 'settings')}?section=account`
+      : recovery?.recommendedAction === 'change_configuration'
+        ? `${buildWorkflowActivitySectionHref(scopeId, 'settings')}?section=ai`
+        : null;
   const statusPresentation = getRunStatusPresentation(run.summary.status);
   return (
     <WorkflowActivityVNextShell
@@ -209,51 +237,70 @@ const RunDetailPage: React.FC<{
           </span>
           <span>{getRunOriginLabel(run.summary.runOrigin)}</span>
         </Space>
-        <Space wrap>
-          <Button
-            disabled={!recovery.retryStepId}
-            loading={forking}
-            onClick={() =>
-              recovery.retryStepId &&
-              setPendingRecovery({
-                kind: 'retry',
-                stepId: recovery.retryStepId,
-              })
-            }
-            title={
-              !recovery.retryStepId
-                ? t(
-                    'workflowActivityVNext.run.retryUnavailable',
-                    'Retry is available when one step has failed.',
-                  )
-                : undefined
-            }
-            danger
-          >
-            {t('workflowActivityVNext.run.retry', 'Retry failed step')}
-          </Button>
-          <Button
-            disabled={!recovery.runAgainStepId}
-            loading={forking}
-            onClick={() =>
-              recovery.runAgainStepId &&
-              setPendingRecovery({
-                kind: 'run_again',
-                stepId: recovery.runAgainStepId,
-              })
-            }
-            title={
-              !recovery.runAgainStepId
-                ? t(
-                    'workflowActivityVNext.run.runAgainUnavailable',
-                    "Run again isn't available for this run.",
-                  )
-                : undefined
-            }
-          >
-            {t('workflowActivityVNext.run.runAgain', 'Run again')}
-          </Button>
-        </Space>
+        <div className="wa-vnext__recovery-actions">
+          <Space wrap>
+            {recommendationHref ? (
+              <Button href={recommendationHref} type="primary">
+                {recovery?.recommendedAction === 'fix_access'
+                  ? t('workflowActivityVNext.run.fixAccess', 'Fix access')
+                  : t(
+                      'workflowActivityVNext.run.changeConfiguration',
+                      'Change configuration',
+                    )}
+              </Button>
+            ) : null}
+            <Button
+              aria-describedby={
+                !retryAvailable ? 'run-retry-reason' : undefined
+              }
+              aria-disabled={!retryAvailable}
+              danger={retryAvailable}
+              loading={forking}
+              type={
+                retryAvailable &&
+                recovery?.recommendedAction === 'retry_failed_step'
+                  ? 'primary'
+                  : 'default'
+              }
+              onClick={() => {
+                if (resolvedRecovery.retryAction) {
+                  setPendingRecovery({
+                    action: resolvedRecovery.retryAction,
+                    kind: 'retry',
+                  });
+                }
+              }}
+            >
+              {t('workflowActivityVNext.run.retry', 'Retry failed step')}
+            </Button>
+            <Button
+              aria-describedby={
+                !runAgainAvailable ? 'run-again-reason' : undefined
+              }
+              aria-disabled={!runAgainAvailable}
+              loading={forking}
+              type={
+                runAgainAvailable && recovery?.recommendedAction === 'run_again'
+                  ? 'primary'
+                  : 'default'
+              }
+              onClick={() => {
+                if (resolvedRecovery.runAgainAction) {
+                  setPendingRecovery({
+                    action: resolvedRecovery.runAgainAction,
+                    kind: 'run_again',
+                  });
+                }
+              }}
+            >
+              {t('workflowActivityVNext.run.runAgain', 'Run again')}
+            </Button>
+          </Space>
+          {!retryAvailable ? <p id="run-retry-reason">{retryReason}</p> : null}
+          {!runAgainAvailable ? (
+            <p id="run-again-reason">{runAgainReason}</p>
+          ) : null}
+        </div>
       </div>
       {forkError ? (
         <Alert
@@ -347,7 +394,7 @@ const RunDetailPage: React.FC<{
           }
           message={t(
             'workflowActivityVNext.run.forkAccepted',
-            'New run started',
+            'New run accepted',
           )}
           showIcon
           type="success"
@@ -388,6 +435,34 @@ const RunDetailPage: React.FC<{
           ]}
         />
       </div>
+      {recovery &&
+      (recovery.lineage.parentRunId || recovery.lineage.childRunIds.length) ? (
+        <section aria-labelledby="run-related-title">
+          <h2 id="run-related-title">
+            {t('workflowActivityVNext.run.relatedRuns', 'Related runs')}
+          </h2>
+          <Space direction="vertical" size="small">
+            {recovery.lineage.parentRunId ? (
+              <a
+                href={buildWorkflowActivityRunHref(
+                  scopeId,
+                  recovery.lineage.parentRunId,
+                )}
+              >
+                {recovery.lineage.parentRunId}
+              </a>
+            ) : null}
+            {recovery.lineage.childRunIds.map((childRunId) => (
+              <a
+                href={buildWorkflowActivityRunHref(scopeId, childRunId)}
+                key={childRunId}
+              >
+                {childRunId}
+              </a>
+            ))}
+          </Space>
+        </section>
+      ) : null}
       <Tabs
         className="wa-vnext__run-tabs"
         items={[
@@ -801,11 +876,21 @@ const RunDetailPage: React.FC<{
                 'workflowActivityVNext.run.startingStep',
                 'Starting step',
               ),
-              children: pendingRecovery?.stepId ? (
-                <span className="wa-vnext__mono">{pendingRecovery.stepId}</span>
+              children: pendingRecovery?.action.startAtStepId ? (
+                <span className="wa-vnext__mono">
+                  {pendingRecovery.action.startAtStepId}
+                </span>
               ) : (
                 t('workflowActivityVNext.common.unavailable', 'Unavailable')
               ),
+            },
+            {
+              key: 'revision',
+              label: t(
+                'workflowActivityVNext.run.definitionRevision',
+                'Definition revision',
+              ),
+              children: recovery?.definitionRevision,
             },
             {
               key: 'input',
@@ -813,8 +898,34 @@ const RunDetailPage: React.FC<{
               children:
                 run.input || t('workflowActivityVNext.common.empty', 'Empty'),
             },
+            {
+              key: 'reuse',
+              label: t(
+                'workflowActivityVNext.run.priorOutputs',
+                'Prior outputs',
+              ),
+              children: pendingRecovery?.action.reusesPriorStepOutputs
+                ? t(
+                    'workflowActivityVNext.run.priorOutputsReused',
+                    'Prior step outputs will be reused.',
+                  )
+                : t(
+                    'workflowActivityVNext.run.priorOutputsNotReused',
+                    'Prior step outputs will not be reused.',
+                  ),
+            },
           ]}
         />
+        {pendingRecovery?.action.mayIncurCost ? (
+          <Alert
+            message={t(
+              'workflowActivityVNext.run.costWarning',
+              'This action may incur new model or tool cost.',
+            )}
+            showIcon
+            type="warning"
+          />
+        ) : null}
         {forkError ? (
           <Alert
             description={<TechnicalDetails>{forkError}</TechnicalDetails>}

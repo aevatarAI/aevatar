@@ -261,6 +261,7 @@ const workflowActivityVNextMessages = {
     'Save locations unavailable',
   'workflowActivityVNext.new.yaml': 'Workflow YAML',
   'workflowActivityVNext.run.backAria': 'Back to Activity',
+  'workflowActivityVNext.run.changeConfiguration': 'Change configuration',
   'workflowActivityVNext.run.commandId': 'Request ID',
   'workflowActivityVNext.run.code': 'Code',
   'workflowActivityVNext.run.completedSteps': 'Completed steps',
@@ -270,13 +271,17 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.run.confirmTitle': 'Confirm new run',
   'workflowActivityVNext.run.correlationId': 'Tracking ID',
   'workflowActivityVNext.run.cost': 'Cost',
+  'workflowActivityVNext.run.costWarning':
+    'This action may incur new model or tool cost.',
+  'workflowActivityVNext.run.definitionRevision': 'Definition revision',
   'workflowActivityVNext.run.diagnostics': 'Diagnostics',
   'workflowActivityVNext.run.error': 'Final error',
   'workflowActivityVNext.run.failedSummary': 'The run did not complete.',
+  'workflowActivityVNext.run.fixAccess': 'Fix access',
   'workflowActivityVNext.run.description':
     'Review the result, steps, and history for this run.',
   'workflowActivityVNext.run.title': 'Run details',
-  'workflowActivityVNext.run.forkAccepted': 'New run started',
+  'workflowActivityVNext.run.forkAccepted': 'New run accepted',
   'workflowActivityVNext.run.forkAcceptedDescription':
     'Open Activity to follow its progress.',
   'workflowActivityVNext.run.graph': 'Graph',
@@ -295,10 +300,20 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.run.promptTokens': 'Prompt tokens',
   'workflowActivityVNext.run.requestedSteps': 'Requested steps',
   'workflowActivityVNext.run.requestParameters': 'Request parameters',
+  'workflowActivityVNext.run.priorOutputs': 'Prior outputs',
+  'workflowActivityVNext.run.priorOutputsNotReused':
+    'Prior step outputs will not be reused.',
+  'workflowActivityVNext.run.priorOutputsReused':
+    'Prior step outputs will be reused.',
+  'workflowActivityVNext.run.relatedRuns': 'Related runs',
   'workflowActivityVNext.run.retry': 'Retry failed step',
+  'workflowActivityVNext.run.retryAuthorityMissing':
+    'Retry eligibility was not provided by the run service.',
   'workflowActivityVNext.run.retryUnavailable':
     'Retry is available when one step has failed.',
   'workflowActivityVNext.run.runAgain': 'Run again',
+  'workflowActivityVNext.run.runAgainAuthorityMissing':
+    'Run-again eligibility was not provided by the run service.',
   'workflowActivityVNext.run.runAgainUnavailable':
     "Run again isn't available for this run.",
   'workflowActivityVNext.run.roleReplies': 'Role replies',

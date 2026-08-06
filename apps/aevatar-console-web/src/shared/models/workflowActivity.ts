@@ -97,11 +97,40 @@ export interface WorkflowActivityRunStatistics {
   readonly stepTypeCounts: Readonly<Record<string, number>>;
 }
 
+export type WorkflowActivityRecoveryRecommendation =
+  | 'retry_failed_step'
+  | 'run_again'
+  | 'fix_access'
+  | 'change_configuration'
+  | 'edit_workflow'
+  | 'edit_input'
+  | 'technical_details';
+
+export interface WorkflowActivityRunRecoveryAction {
+  readonly eligible: boolean;
+  readonly unavailableReason: string;
+  readonly startAtStepId: string | null;
+  readonly reusesPriorStepOutputs: boolean;
+  readonly mayIncurCost: boolean;
+}
+
+export interface WorkflowActivityRunRecovery {
+  readonly recommendedAction: WorkflowActivityRecoveryRecommendation;
+  readonly definitionRevision: string;
+  readonly retry: WorkflowActivityRunRecoveryAction;
+  readonly runAgain: WorkflowActivityRunRecoveryAction;
+  readonly lineage: {
+    readonly parentRunId: string | null;
+    readonly childRunIds: readonly string[];
+  };
+}
+
 export interface WorkflowActivityRunDetail {
   readonly summary: WorkflowActivityRunSummary;
   readonly input: string;
   readonly finalOutput: string;
   readonly finalError: string;
+  readonly recovery: WorkflowActivityRunRecovery | null;
   readonly diagnostics: readonly WorkflowActivityDiagnostic[];
   readonly steps: readonly WorkflowActivityStep[];
   readonly timeline: readonly WorkflowActivityTimelineEvent[];

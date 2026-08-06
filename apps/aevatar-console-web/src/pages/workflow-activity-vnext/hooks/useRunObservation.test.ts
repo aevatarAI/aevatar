@@ -20,6 +20,7 @@ function createRun(runId: string): WorkflowActivityRunDetail {
     input: 'Review this order',
     finalOutput: '',
     finalError: '',
+    recovery: null,
     diagnostics: [],
     steps: [],
     timeline: [],

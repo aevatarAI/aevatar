@@ -14,9 +14,12 @@ import type {
   WorkflowActivityDiagnostic,
   WorkflowActivityGraphEdge,
   WorkflowActivityGraphNode,
+  WorkflowActivityRecoveryRecommendation,
   WorkflowActivityRunDetail,
   WorkflowActivityRunFilter,
   WorkflowActivityRunGraph,
+  WorkflowActivityRunRecovery,
+  WorkflowActivityRunRecoveryAction,
   WorkflowActivityRunStatistics,
   WorkflowActivityRunSummary,
   WorkflowActivityStep,
@@ -297,6 +300,100 @@ function decodeStatistics(
   };
 }
 
+const RECOVERY_RECOMMENDATIONS: readonly WorkflowActivityRecoveryRecommendation[] =
+  [
+    'retry_failed_step',
+    'run_again',
+    'fix_access',
+    'change_configuration',
+    'edit_workflow',
+    'edit_input',
+    'technical_details',
+  ];
+
+function isRecoveryRecommendation(
+  value: string,
+): value is WorkflowActivityRecoveryRecommendation {
+  return RECOVERY_RECOMMENDATIONS.some((candidate) => candidate === value);
+}
+
+function decodeRecoveryAction(
+  value: unknown,
+  label: string,
+): WorkflowActivityRunRecoveryAction {
+  const record = expectRecord(value, label);
+  const eligible = readBoolean(record, 'eligible', `${label}.eligible`);
+  const unavailableReason = readString(
+    record,
+    'unavailableReason',
+    `${label}.unavailableReason`,
+  );
+  const startAtStepId = readNullableStringValue(
+    record.startAtStepId,
+    `${label}.startAtStepId`,
+  );
+  if (eligible && !startAtStepId?.trim()) {
+    throw new Error(`${label}.startAtStepId is required when eligible.`);
+  }
+  if (!eligible && !unavailableReason.trim()) {
+    throw new Error(`${label}.unavailableReason is required when ineligible.`);
+  }
+  return {
+    eligible,
+    unavailableReason,
+    startAtStepId: startAtStepId?.trim() || null,
+    reusesPriorStepOutputs: readBoolean(
+      record,
+      'reusesPriorStepOutputs',
+      `${label}.reusesPriorStepOutputs`,
+    ),
+    mayIncurCost: readBoolean(record, 'mayIncurCost', `${label}.mayIncurCost`),
+  };
+}
+
+function decodeRecovery(
+  value: unknown,
+  label: string,
+): WorkflowActivityRunRecovery | null {
+  if (value === null || value === undefined) return null;
+  const record = expectRecord(value, label);
+  const recommendedAction = readString(
+    record,
+    'recommendedAction',
+    `${label}.recommendedAction`,
+  );
+  if (!isRecoveryRecommendation(recommendedAction)) {
+    throw new Error(`${label}.recommendedAction is not supported.`);
+  }
+  const lineage = expectRecord(record.lineage, `${label}.lineage`);
+  return {
+    recommendedAction,
+    definitionRevision: readNonBlank(
+      record,
+      'definitionRevision',
+      `${label}.definitionRevision`,
+    ),
+    retry: decodeRecoveryAction(record.retry, `${label}.retry`),
+    runAgain: decodeRecoveryAction(record.runAgain, `${label}.runAgain`),
+    lineage: {
+      parentRunId:
+        readNullableStringValue(
+          lineage.parentRunId,
+          `${label}.lineage.parentRunId`,
+        )?.trim() || null,
+      childRunIds: expectArray(
+        lineage.childRunIds,
+        `${label}.lineage.childRunIds`,
+        (entry, index) =>
+          requireNonBlank(
+            expectString(entry, `${label}.lineage.childRunIds[${index}]`),
+            `${label}.lineage.childRunIds[${index}]`,
+          ),
+      ),
+    },
+  };
+}
+
 function decodeDetail(value: unknown): WorkflowActivityRunDetail {
   const record = expectRecord(value, 'WorkflowActivityRunDetail');
   return {
@@ -311,6 +408,10 @@ function decodeDetail(value: unknown): WorkflowActivityRunDetail {
       record,
       'finalError',
       'WorkflowActivityRunDetail.finalError',
+    ),
+    recovery: decodeRecovery(
+      record.recovery,
+      'WorkflowActivityRunDetail.recovery',
     ),
     diagnostics: expectArray(
       record.diagnostics,

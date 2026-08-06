@@ -85,6 +85,28 @@ function buildRunDetail() {
     input: 'Investigate checkout latency',
     finalOutput: '',
     finalError: 'Approval timed out',
+    recovery: {
+      recommendedAction: 'retry_failed_step',
+      definitionRevision: 'revision-42',
+      retry: {
+        eligible: true,
+        unavailableReason: '',
+        startAtStepId: 'step-failed',
+        reusesPriorStepOutputs: true,
+        mayIncurCost: true,
+      },
+      runAgain: {
+        eligible: true,
+        unavailableReason: '',
+        startAtStepId: 'step-root',
+        reusesPriorStepOutputs: false,
+        mayIncurCost: true,
+      },
+      lineage: {
+        parentRunId: 'run-parent-beta',
+        childRunIds: ['run-child-gamma'],
+      },
+    },
     diagnostics: [
       {
         timestampUtc: '2026-08-04T10:01:00Z',
@@ -211,6 +233,15 @@ describe('Workflow Activity vNext run detail recovery', () => {
     expect(
       within(confirmation).getByText('Investigate checkout latency'),
     ).toBeInTheDocument();
+    expect(within(confirmation).getByText('revision-42')).toBeInTheDocument();
+    expect(
+      within(confirmation).getByText('Prior step outputs will be reused.'),
+    ).toBeInTheDocument();
+    expect(
+      within(confirmation).getByText(
+        'This action may incur new model or tool cost.',
+      ),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Confirm retry' }));
 
@@ -221,7 +252,7 @@ describe('Workflow Activity vNext run detail recovery', () => {
         input: 'Investigate checkout latency',
       }),
     );
-    expect(await screen.findByText('New run started')).toBeInTheDocument();
+    expect(await screen.findByText('New run accepted')).toBeInTheDocument();
     expect(screen.queryByText('actor-new-alpha')).not.toBeVisible();
     expect(screen.queryByText('command-alpha')).not.toBeVisible();
     expect(screen.queryByText('correlation-alpha')).not.toBeVisible();
@@ -229,6 +260,143 @@ describe('Workflow Activity vNext run detail recovery', () => {
       screen.queryByText('/api/workflow/runs/status/command-alpha'),
     ).not.toBeVisible();
     expect(screen.queryByText(/state version/i)).not.toBeInTheDocument();
+  });
+
+  it('does not infer retry eligibility from failed steps or diagnostic strings', async () => {
+    const run = buildRunDetail();
+    mockWorkflowActivityApi.getRun.mockResolvedValue({
+      ...run,
+      recovery: null,
+      diagnostics: [
+        {
+          ...run.diagnostics[0],
+          code: 'AUTHORIZATION_FAILED',
+          message: 'Access must be restored before another attempt.',
+        },
+      ],
+    });
+
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    const retry = await screen.findByRole('button', {
+      name: 'Retry failed step',
+    });
+    expect(retry).toHaveAttribute('aria-disabled', 'true');
+    expect(retry).not.toBeDisabled();
+    retry.focus();
+    expect(retry).toHaveFocus();
+    const reason = screen.getByText(
+      'Retry eligibility was not provided by the run service.',
+    );
+    expect(reason).toBeVisible();
+    expect(retry).toHaveAttribute('aria-describedby', reason.id);
+
+    fireEvent.click(retry);
+    expect(
+      screen.queryByRole('dialog', { name: 'Confirm new run' }),
+    ).not.toBeInTheDocument();
+    expect(mockWorkflowActivityApi.forkRun).not.toHaveBeenCalled();
+  });
+
+  it('uses the typed access recommendation instead of diagnostic text', async () => {
+    const run = buildRunDetail();
+    mockWorkflowActivityApi.getRun.mockResolvedValue({
+      ...run,
+      recovery: {
+        ...run.recovery,
+        recommendedAction: 'fix_access',
+        retry: {
+          eligible: false,
+          unavailableReason: 'Restore service access before retrying.',
+          startAtStepId: null,
+          reusesPriorStepOutputs: false,
+          mayIncurCost: false,
+        },
+        runAgain: {
+          eligible: false,
+          unavailableReason: 'Restore service access before running again.',
+          startAtStepId: null,
+          reusesPriorStepOutputs: false,
+          mayIncurCost: false,
+        },
+      },
+      diagnostics: [
+        {
+          ...run.diagnostics[0],
+          code: 'RATE_LIMIT_TEXT_ONLY',
+          message: 'Retry this request later.',
+        },
+      ],
+    });
+
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    expect(
+      await screen.findByRole('link', { name: 'Fix access' }),
+    ).toHaveAttribute(
+      'href',
+      '/scopes/scope-alpha/workflow-activity-vnext/settings?section=account',
+    );
+    expect(
+      screen.getByRole('button', { name: 'Retry failed step' }),
+    ).toHaveAttribute('aria-disabled', 'true');
+    expect(
+      screen.getByText('Restore service access before retrying.'),
+    ).toBeVisible();
+  });
+
+  it('does not present an unavailable recommended retry as primary', async () => {
+    const run = buildRunDetail();
+    mockWorkflowActivityApi.getRun.mockResolvedValue({
+      ...run,
+      recovery: {
+        ...run.recovery,
+        recommendedAction: 'retry_failed_step',
+        retry: {
+          eligible: false,
+          unavailableReason: 'This failure cannot be retried safely.',
+          startAtStepId: null,
+          reusesPriorStepOutputs: false,
+          mayIncurCost: false,
+        },
+      },
+    });
+
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    const retry = await screen.findByRole('button', {
+      name: 'Retry failed step',
+    });
+    expect(retry).toHaveAttribute('aria-disabled', 'true');
+    expect(retry).not.toHaveClass('ant-btn-primary');
+  });
+
+  it('renders related runs only from typed lineage run identities', async () => {
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    expect(
+      await screen.findByRole('link', { name: 'run-parent-beta' }),
+    ).toHaveAttribute(
+      'href',
+      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-parent-beta',
+    );
+    expect(
+      screen.getByRole('link', { name: 'run-child-gamma' }),
+    ).toHaveAttribute(
+      'href',
+      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-child-gamma',
+    );
+    expect(
+      screen.queryByRole('link', { name: 'actor-new-alpha' }),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps a retry failure's server detail out of the confirmation message", async () => {
@@ -255,7 +423,7 @@ describe('Workflow Activity vNext run detail recovery', () => {
     }
   });
 
-  it('keeps committed detail visible and disables run again when graph evidence fails', async () => {
+  it('keeps typed run-again eligibility when graph presentation fails', async () => {
     mockWorkflowActivityApi.getRunGraph.mockRejectedValue(
       new Error('graph offline'),
     );
@@ -269,7 +437,10 @@ describe('Workflow Activity vNext run detail recovery', () => {
     expect(
       await screen.findByText('Run graph unavailable'),
     ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Run again' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Run again' })).toHaveAttribute(
+      'aria-disabled',
+      'false',
+    );
   });
 
   it('keeps raw run and step errors behind technical details', async () => {

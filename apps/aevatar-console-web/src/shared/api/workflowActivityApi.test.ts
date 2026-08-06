@@ -81,6 +81,29 @@ describe('workflowActivityApi', () => {
           input: 'ticket-42',
           finalOutput: '',
           finalError: 'Connector unavailable',
+          recovery: {
+            recommendedAction: 'retry_failed_step',
+            definitionRevision: 'revision-42',
+            retry: {
+              eligible: true,
+              unavailableReason: '',
+              startAtStepId: 'step-failed',
+              reusesPriorStepOutputs: true,
+              mayIncurCost: true,
+            },
+            runAgain: {
+              eligible: false,
+              unavailableReason:
+                'The run cannot be started from its first step.',
+              startAtStepId: null,
+              reusesPriorStepOutputs: false,
+              mayIncurCost: false,
+            },
+            lineage: {
+              parentRunId: 'run-parent-beta',
+              childRunIds: ['run-child-gamma'],
+            },
+          },
           diagnostics: [],
           steps: [
             {
@@ -147,6 +170,28 @@ describe('workflowActivityApi', () => {
     );
 
     expect(detail.steps[0]?.stepId).toBe('step-failed');
+    expect(detail.recovery).toEqual({
+      recommendedAction: 'retry_failed_step',
+      definitionRevision: 'revision-42',
+      retry: {
+        eligible: true,
+        unavailableReason: '',
+        startAtStepId: 'step-failed',
+        reusesPriorStepOutputs: true,
+        mayIncurCost: true,
+      },
+      runAgain: {
+        eligible: false,
+        unavailableReason: 'The run cannot be started from its first step.',
+        startAtStepId: null,
+        reusesPriorStepOutputs: false,
+        mayIncurCost: false,
+      },
+      lineage: {
+        parentRunId: 'run-parent-beta',
+        childRunIds: ['run-child-gamma'],
+      },
+    });
     expect(graph.nodes[0]?.stepId).toBe('step-failed');
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       '/api/workflow/observatory/runs/run-alpha?scope=scope-alpha',
