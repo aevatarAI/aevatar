@@ -23,6 +23,7 @@ import {
 } from '@/shared/runs/scopeConsole';
 import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
 import type { StudioWorkflowDraftSummary } from '@/shared/studio/models';
+import AevatarContentSkeleton from '@/shared/ui/AevatarContentSkeleton';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
@@ -557,11 +558,16 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       </div>
 
       {loading ? (
-        <div aria-live="polite" className="wa-vnext__state">
-          <p>
-            {t('workflowActivityVNext.workflows.loading', 'Loading workflows')}
-          </p>
-        </div>
+        <AevatarContentSkeleton
+          ariaLabel={t(
+            'workflowActivityVNext.workflows.loading',
+            'Loading workflows',
+          )}
+          columnWidths={['minmax(240px, 1fr)', 120, 190, 270]}
+          rows={4}
+          tableMinWidth={900}
+          variant="table"
+        />
       ) : view === 'drafts' && drafts.isError ? (
         <div className="wa-vnext__state" role="alert">
           <div>
