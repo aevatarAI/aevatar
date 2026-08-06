@@ -276,6 +276,27 @@ public class CiTestAuthorityContractTests
         Assert.Contains("file=sys.stderr", script, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void DistributedMixedVersionSmoke_ShouldRetryOnlyTransientWorkflowCatalogProbeFailures()
+    {
+        var scriptPath = Path.Combine(
+            TemporaryCiRepo.FindRepositoryRoot(),
+            "tools",
+            "ci",
+            "distributed_mixed_version_smoke.sh");
+        var script = File.ReadAllText(scriptPath);
+
+        Assert.Contains("query_workflow_name()", script, StringComparison.Ordinal);
+        Assert.Contains("method=\"GET\"", script, StringComparison.Ordinal);
+        Assert.Contains("Workflow catalog probe attempt {attempt}/{max_attempts}", script, StringComparison.Ordinal);
+        Assert.Contains("error.code not in retryable_status_codes", script, StringComparison.Ordinal);
+        Assert.Contains(
+            "except (ConnectionError, urllib.error.URLError, TimeoutError, socket.timeout)",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains("Workflow catalog probe returned invalid JSON.", script, StringComparison.Ordinal);
+    }
+
     private static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
 
     private sealed class TemporaryCiRepo : IDisposable

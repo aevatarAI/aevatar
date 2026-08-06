@@ -175,9 +175,86 @@ start_node() {
   pids+=("$!")
 }
 
+query_workflow_name() {
+  local old_node_port="$1"
+
+  OLD_NODE_PORT="${old_node_port}" \
+  AEVATAR_TEST_CLUSTER_BEARER_TOKEN="${DISTRIBUTED_SMOKE_BEARER_TOKEN}" \
+  python3 - <<'PY'
+import json
+import os
+import socket
+import sys
+import time
+import urllib.error
+import urllib.request
+
+port = os.environ["OLD_NODE_PORT"]
+bearer_token = os.environ["AEVATAR_TEST_CLUSTER_BEARER_TOKEN"]
+max_attempts = 5
+retryable_status_codes = {502, 503, 504}
+
+for attempt in range(1, max_attempts + 1):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/workflows",
+        headers={"Authorization": f"Bearer {bearer_token}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as error:
+        if error.code not in retryable_status_codes or attempt == max_attempts:
+            print(f"Workflow catalog probe returned HTTP {error.code}.", file=sys.stderr)
+            raise SystemExit(1)
+        print(
+            f"Workflow catalog probe attempt {attempt}/{max_attempts} returned HTTP {error.code}; retrying.",
+            file=sys.stderr,
+        )
+    except (ConnectionError, urllib.error.URLError, TimeoutError, socket.timeout) as error:
+        if attempt == max_attempts:
+            print(
+                f"Workflow catalog probe failed after {max_attempts} attempts with {type(error).__name__}.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        print(
+            f"Workflow catalog probe attempt {attempt}/{max_attempts} failed with {type(error).__name__}; retrying.",
+            file=sys.stderr,
+        )
+    else:
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            print("Workflow catalog probe returned invalid JSON.", file=sys.stderr)
+            raise SystemExit(1)
+
+        if not isinstance(data, list):
+            print("Workflow catalog probe returned an unexpected payload.", file=sys.stderr)
+            raise SystemExit(1)
+
+        workflow_name = next(
+            (item.strip() for item in data if isinstance(item, str) and item.strip()),
+            "",
+        )
+        if workflow_name:
+            print(workflow_name)
+            raise SystemExit(0)
+
+        if attempt == max_attempts:
+            print("No workflow available for event-path probe.", file=sys.stderr)
+            raise SystemExit(1)
+        print(
+            f"Workflow catalog probe attempt {attempt}/{max_attempts} returned no workflows; retrying.",
+            file=sys.stderr,
+        )
+
+    time.sleep(attempt)
+PY
+}
+
 probe_event_path() {
   local old_node_port="$1"
-  local workflow_payload
   local workflow_name
   local chat_status
   local probe_log_file="${log_dir}/event-probe-response.log"
@@ -188,38 +265,8 @@ probe_event_path() {
   fi
 
   echo "Running event-path probe against old node on port ${old_node_port}..."
-  workflow_payload="$(curl --max-time 3 -sS \
-    -H "Authorization: Bearer ${DISTRIBUTED_SMOKE_BEARER_TOKEN}" \
-    "http://127.0.0.1:${old_node_port}/api/workflows" || true)"
-  if [[ -z "${workflow_payload}" ]]; then
+  if ! workflow_name="$(query_workflow_name "${old_node_port}")"; then
     echo "Unable to query workflows from old node."
-    return 1
-  fi
-
-  workflow_name="$(WORKFLOW_JSON="${workflow_payload}" python3 - <<'PY'
-import json
-import os
-
-raw = os.environ.get("WORKFLOW_JSON", "")
-try:
-    data = json.loads(raw)
-except Exception:
-    print("")
-    raise SystemExit(0)
-
-if isinstance(data, list) and data:
-    first = data[0]
-    if isinstance(first, str):
-        print(first)
-    else:
-        print("")
-else:
-    print("")
-PY
-)"
-
-  if [[ -z "${workflow_name}" ]]; then
-    echo "No workflow available for event-path probe."
     return 1
   fi
 
