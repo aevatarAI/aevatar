@@ -649,6 +649,7 @@ public sealed class SkillWorkflowMountAdapterTests
             NyxIdRequestResponseMode.Text,
             NyxIdOperationRisk.Write,
             true,
+            WorkflowExplicitRequestApprovalEnforcement.BindTimeConfirmation,
             [ExternalCapabilityExecutionMode.Interactive]);
 
     private sealed class RecordingScopeWorkflowCommandPort : IScopeWorkflowCommandPort
