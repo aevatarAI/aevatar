@@ -122,12 +122,12 @@ describe('New workflow save-target recovery', () => {
 
   afterEach(() => cleanupTestQueryClients());
 
-  it('allows method selection and input while save locations are loading', () => {
+  it('keeps the creation chooser quiet and usable while save locations load', () => {
     mockStudioApi.getWorkspaceSettings.mockReturnValue(new Promise(() => {}));
 
     renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
 
-    expect(screen.getByText('Loading save locations…')).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     const importYaml = screen.getByRole('button', { name: 'Import YAML' });
     expect(importYaml).toBeEnabled();
     fireEvent.click(importYaml);
