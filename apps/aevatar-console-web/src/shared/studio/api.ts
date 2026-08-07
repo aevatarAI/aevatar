@@ -59,6 +59,8 @@ import type {
   StudioOrnnHealthResult,
   StudioOrnnSkillSearchResult,
   StudioParseYamlResult,
+  StudioPublishWorkflowAcceptedResult,
+  StudioPublishWorkflowInput,
   StudioRoleCatalog,
   StudioRoleCatalogImportResult,
   StudioRoleDraftResponse,
@@ -1955,6 +1957,45 @@ function decodeStudioSaveAndBindWorkflowResult(
   };
 }
 
+function decodeStudioPublishWorkflowResult(
+  value: unknown,
+): StudioPublishWorkflowAcceptedResult {
+  const record = expectRecord(value, 'StudioPublishWorkflowAcceptedResult');
+  return {
+    scopeId: readString(
+      record,
+      ['scopeId', 'ScopeId'],
+      'StudioPublishWorkflowAcceptedResult.scopeId',
+    ),
+    workflowId: readString(
+      record,
+      ['workflowId', 'WorkflowId'],
+      'StudioPublishWorkflowAcceptedResult.workflowId',
+    ),
+    publishedServiceId: readString(
+      record,
+      ['publishedServiceId', 'PublishedServiceId'],
+      'StudioPublishWorkflowAcceptedResult.publishedServiceId',
+    ),
+    serviceKey: readString(
+      record,
+      ['serviceKey', 'ServiceKey'],
+      'StudioPublishWorkflowAcceptedResult.serviceKey',
+    ),
+    revisionId: readString(
+      record,
+      ['revisionId', 'RevisionId'],
+      'StudioPublishWorkflowAcceptedResult.revisionId',
+    ),
+    acceptanceStage:
+      readOptionalString(record, ['acceptanceStage', 'AcceptanceStage']) ||
+      'accepted',
+    propagationStage:
+      readOptionalString(record, ['propagationStage', 'PropagationStage']) ||
+      'readmodel_propagating',
+  };
+}
+
 function decodeStudioScopeBindingStatus(
   value: unknown,
 ): StudioScopeBindingStatus {
@@ -3301,6 +3342,45 @@ export const studioApi = {
             appId: trimOptional(input.appId),
             serviceId: trimOptional(input.serviceId),
             exposureDesired: input.exposureDesired ?? undefined,
+            explicitRequestConfirmations:
+              input.explicitRequestConfirmations &&
+              input.explicitRequestConfirmations.length > 0
+                ? input.explicitRequestConfirmations.map((confirmation) => ({
+                    workflowId: confirmation.workflowId,
+                    revisionId: confirmation.revisionId,
+                    callSiteId: confirmation.callSiteId,
+                    requestContractDigest: confirmation.requestContractDigest,
+                    attestedRisk: confirmation.attestedRisk,
+                  }))
+                : undefined,
+          }),
+        ),
+      },
+    );
+  },
+
+  publishWorkflow(
+    input: StudioPublishWorkflowInput,
+  ): Promise<StudioPublishWorkflowAcceptedResult> {
+    const scopeId = input.scopeId.trim();
+    const workflowId = input.workflowId.trim();
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId)}/workflows/${encodeURIComponent(workflowId)}`,
+      decodeStudioPublishWorkflowResult,
+      {
+        method: 'PUT',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            revisionId: input.revisionId.trim(),
+            workflowYaml: input.workflowYaml,
+            workflowName: trimOptional(input.workflowName),
+            displayName: trimOptional(input.displayName),
+            inlineWorkflowYamls:
+              input.inlineWorkflowYamls &&
+              Object.keys(input.inlineWorkflowYamls).length > 0
+                ? input.inlineWorkflowYamls
+                : undefined,
             explicitRequestConfirmations:
               input.explicitRequestConfirmations &&
               input.explicitRequestConfirmations.length > 0

@@ -51,6 +51,7 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
         commandPort.Calls[5].Method.Should().Be("ActivateServiceRevisionAsync");
         result.ScopeId.Should().Be(ScopeId);
         result.WorkflowId.Should().Be(WorkflowId);
+        result.PublishedServiceId.Should().Be(WorkflowId);
         result.AcceptanceStage.Should().Be("accepted");
         result.PropagationStage.Should().Be("readmodel_propagating");
         result.ReadModelUrl.Should().Be($"/api/scopes/{ScopeId}/workflows/{WorkflowId}");

@@ -523,29 +523,18 @@ const WorkflowNodeInspector = React.forwardRef<
                 )}
               </Typography.Paragraph>
               <div className="wa-vnext__node-inspector-fields">
-                {schema.fields.length > 0 ? (
-                  schema.fields.map((field) => (
-                    <div
-                      className="wa-vnext__node-inspector-field"
-                      key={field.name}
-                    >
-                      <span>{formatConsoleMessage(field.label)}</span>
-                      {renderFieldControl(field)}
-                      {field.description ? (
-                        <small>{formatConsoleMessage(field.description)}</small>
-                      ) : null}
-                    </div>
-                  ))
-                ) : (
-                  <Alert
-                    message={t(
-                      'workflowActivityVNext.nodeInspector.noGuidedFields',
-                      'Guided options are not available for this step yet.',
-                    )}
-                    showIcon
-                    type="info"
-                  />
-                )}
+                {schema.fields.map((field) => (
+                  <div
+                    className="wa-vnext__node-inspector-field"
+                    key={field.name}
+                  >
+                    <span>{formatConsoleMessage(field.label)}</span>
+                    {renderFieldControl(field)}
+                    {field.description ? (
+                      <small>{formatConsoleMessage(field.description)}</small>
+                    ) : null}
+                  </div>
+                ))}
               </div>
               {validationError ? (
                 <Alert
