@@ -683,7 +683,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
   const moveNodes = React.useCallback(
     (nodes: ReturnType<typeof buildStudioGraphElements>['nodes']) => {
       if (savingRef.current || structuralMutationPendingRef.current) return;
-      setLayout((current) =>
+      setLayout((current: unknown) =>
         buildStudioWorkflowLayout(workflowTitle, nodes, current),
       );
       markLocalEdit();

@@ -16,16 +16,16 @@ function member(
     readonly workflowId?: string;
   },
 ): StudioMemberSummary {
+  const { workflowId, ...summaryChanges } = changes;
   return {
-    memberId: changes.memberId,
     scopeId: 'scope-alpha',
     displayName: 'Approval flow',
     description: '',
     implementationKind: 'workflow',
-    implementationRef: changes.workflowId
+    implementationRef: workflowId
       ? {
           implementationKind: 'workflow',
-          workflowId: changes.workflowId,
+          workflowId,
         }
       : null,
     lifecycleStage: 'created',
@@ -34,7 +34,7 @@ function member(
     teamId: changes.teamId ?? 't-alpha',
     createdAt: '2026-08-07T00:00:00Z',
     updatedAt: '2026-08-07T00:00:00Z',
-    ...changes,
+    ...summaryChanges,
   };
 }
 
@@ -279,9 +279,19 @@ describe('cleanupWorkflowBackingAuthority', () => {
       })),
       deleteMember: jest.fn(async ({ memberId }) => {
         calls.push(`deleteMember:${memberId}`);
+        return {
+          status: 'delete_accepted' as const,
+          scopeId: 'scope-alpha',
+          memberId,
+        };
       }),
       archiveTeam: jest.fn(async (_scopeId, teamId) => {
         calls.push(`archiveTeam:${teamId}`);
+        return {
+          status: 'accepted' as const,
+          scopeId: 'scope-alpha',
+          teamId,
+        };
       }),
       deleteWorkflowDraft: jest.fn(async (workflowId) => {
         calls.push(`deleteWorkflowDraft:${workflowId}`);

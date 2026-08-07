@@ -1,10 +1,12 @@
-import type { ScopeWorkflowSummary } from '@/shared/models/scopes';
-
 export type WorkflowArchivalFacts = {
   readonly activeRevisionId: string;
   readonly deploymentId: string;
   readonly deploymentStatus: string;
   readonly hasCommittedSource: boolean;
+};
+
+export type WorkflowArchivalObservationItem = WorkflowArchivalFacts & {
+  readonly workflowId: string;
 };
 
 export const WORKFLOW_ARCHIVAL_OBSERVATION_DELAYS_MS = [
@@ -14,7 +16,7 @@ export const WORKFLOW_ARCHIVAL_OBSERVATION_DELAYS_MS = [
 export type WorkflowArchivalObservationResult =
   | {
       readonly kind: 'observed';
-      readonly workflows: readonly ScopeWorkflowSummary[];
+      readonly workflows: readonly WorkflowArchivalObservationItem[];
     }
   | { readonly kind: 'delayed' };
 
@@ -46,7 +48,9 @@ function defaultWait(delayMs: number): Promise<void> {
 
 export async function observeWorkflowArchival(input: {
   readonly delaysMs?: readonly number[];
-  readonly readWorkflows: () => Promise<readonly ScopeWorkflowSummary[]>;
+  readonly readWorkflows: () => Promise<
+    readonly WorkflowArchivalObservationItem[]
+  >;
   readonly wait?: (delayMs: number) => Promise<void>;
   readonly workflowId: string;
 }): Promise<WorkflowArchivalObservationResult> {

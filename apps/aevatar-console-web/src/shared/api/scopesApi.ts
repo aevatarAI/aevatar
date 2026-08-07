@@ -3,22 +3,235 @@ import type {
   ScopeScriptDetail,
   ScopeScriptSource,
   ScopeScriptSummary,
+  ScopeWorkflowCatalogueActionCapability,
+  ScopeWorkflowCatalogueCommittedFacts,
+  ScopeWorkflowCatalogueQuery,
+  ScopeWorkflowCatalogueResponse,
+  ScopeWorkflowCatalogueRow,
+  ScopeWorkflowCatalogueRowCapabilities,
   ScopeWorkflowDetail,
   ScopeWorkflowSource,
   ScopeWorkflowSummary,
 } from '@/shared/models/scopes';
-import { requestJson } from './http/client';
+import { requestJson, withQuery } from './http/client';
 import {
   type Decoder,
   expectArray,
   expectRecord,
   readBoolean,
+  readNullableString,
+  readNumber,
   readOptionalRecord,
-  readOptionalString,
   readString,
   readStringArray,
   readStringRecord,
 } from './http/decoders';
+
+function decodeScopeWorkflowCatalogueActionCapability(
+  value: unknown,
+  label: string,
+): ScopeWorkflowCatalogueActionCapability {
+  const record = expectRecord(value, label);
+  return {
+    available: readBoolean(
+      record,
+      ['available', 'Available'],
+      `${label}.available`,
+    ),
+    unavailableReason: readNullableString(
+      record,
+      ['unavailableReason', 'UnavailableReason'],
+      `${label}.unavailableReason`,
+    ),
+  };
+}
+
+function decodeScopeWorkflowCatalogueCapabilities(
+  value: unknown,
+  label: string,
+): ScopeWorkflowCatalogueRowCapabilities {
+  const record = expectRecord(value, label);
+  return {
+    open: decodeScopeWorkflowCatalogueActionCapability(
+      record.open ?? record.Open,
+      `${label}.open`,
+    ),
+    activity: decodeScopeWorkflowCatalogueActionCapability(
+      record.activity ?? record.Activity,
+      `${label}.activity`,
+    ),
+    rename: decodeScopeWorkflowCatalogueActionCapability(
+      record.rename ?? record.Rename,
+      `${label}.rename`,
+    ),
+    delete: decodeScopeWorkflowCatalogueActionCapability(
+      record.delete ?? record.Delete,
+      `${label}.delete`,
+    ),
+  };
+}
+
+function decodeScopeWorkflowCatalogueCommittedFacts(
+  value: unknown,
+  label: string,
+): ScopeWorkflowCatalogueCommittedFacts | null {
+  if (value === null || value === undefined) return null;
+
+  const record = expectRecord(value, label);
+  return {
+    serviceKey: readString(
+      record,
+      ['serviceKey', 'ServiceKey'],
+      `${label}.serviceKey`,
+    ),
+    workflowName: readString(
+      record,
+      ['workflowName', 'WorkflowName'],
+      `${label}.workflowName`,
+    ),
+    actorId: readString(record, ['actorId', 'ActorId'], `${label}.actorId`),
+    activeRevisionId: readString(
+      record,
+      ['activeRevisionId', 'ActiveRevisionId'],
+      `${label}.activeRevisionId`,
+    ),
+    deploymentId: readString(
+      record,
+      ['deploymentId', 'DeploymentId'],
+      `${label}.deploymentId`,
+    ),
+    deploymentStatus: readString(
+      record,
+      ['deploymentStatus', 'DeploymentStatus'],
+      `${label}.deploymentStatus`,
+    ),
+  };
+}
+
+function decodeScopeWorkflowCatalogueRow(
+  value: unknown,
+  label = 'ScopeWorkflowCatalogueRow',
+): ScopeWorkflowCatalogueRow {
+  const record = expectRecord(value, label);
+  return {
+    scopeId: readString(record, ['scopeId', 'ScopeId'], `${label}.scopeId`),
+    workflowId: readString(
+      record,
+      ['workflowId', 'WorkflowId'],
+      `${label}.workflowId`,
+    ),
+    name: readString(record, ['name', 'Name'], `${label}.name`),
+    description: readString(
+      record,
+      ['description', 'Description'],
+      `${label}.description`,
+    ),
+    hasDraftSource: readBoolean(
+      record,
+      ['hasDraftSource', 'HasDraftSource'],
+      `${label}.hasDraftSource`,
+    ),
+    hasCommittedSource: readBoolean(
+      record,
+      ['hasCommittedSource', 'HasCommittedSource'],
+      `${label}.hasCommittedSource`,
+    ),
+    updatedAtUtc: readString(
+      record,
+      ['updatedAtUtc', 'UpdatedAtUtc'],
+      `${label}.updatedAtUtc`,
+    ),
+    updatedAtSource: readString(
+      record,
+      ['updatedAtSource', 'UpdatedAtSource'],
+      `${label}.updatedAtSource`,
+    ),
+    capabilities: decodeScopeWorkflowCatalogueCapabilities(
+      record.capabilities ?? record.Capabilities,
+      `${label}.capabilities`,
+    ),
+    sourceWatermarkUtc: readString(
+      record,
+      ['sourceWatermarkUtc', 'SourceWatermarkUtc'],
+      `${label}.sourceWatermarkUtc`,
+    ),
+    committed: decodeScopeWorkflowCatalogueCommittedFacts(
+      record.committed ?? record.Committed,
+      `${label}.committed`,
+    ),
+  };
+}
+
+const decodeScopeWorkflowCatalogueResponse: Decoder<
+  ScopeWorkflowCatalogueResponse
+> = (value, label = 'ScopeWorkflowCatalogueResponse') => {
+  const record = expectRecord(value, label);
+  const freshness = expectRecord(
+    record.freshness ?? record.Freshness,
+    `${label}.freshness`,
+  );
+  const search = expectRecord(
+    record.search ?? record.Search,
+    `${label}.search`,
+  );
+
+  return {
+    items: expectArray(
+      record.items ?? record.Items,
+      `${label}.items`,
+      decodeScopeWorkflowCatalogueRow,
+    ),
+    nextPageToken: readNullableString(
+      record,
+      ['nextPageToken', 'NextPageToken'],
+      `${label}.nextPageToken`,
+    ),
+    freshness: {
+      refreshWatermarkUtc: readNullableString(
+        freshness,
+        ['refreshWatermarkUtc', 'RefreshWatermarkUtc'],
+        `${label}.freshness.refreshWatermarkUtc`,
+      ),
+      sourceVersionSemantics: readString(
+        freshness,
+        ['sourceVersionSemantics', 'SourceVersionSemantics'],
+        `${label}.freshness.sourceVersionSemantics`,
+      ),
+    },
+    search: {
+      searchableFields: readStringArray(
+        search,
+        ['searchableFields', 'SearchableFields'],
+        `${label}.search.searchableFields`,
+      ),
+      caseSemantics: readString(
+        search,
+        ['caseSemantics', 'CaseSemantics'],
+        `${label}.search.caseSemantics`,
+      ),
+      unicodeNormalization: readString(
+        search,
+        ['unicodeNormalization', 'UnicodeNormalization'],
+        `${label}.search.unicodeNormalization`,
+      ),
+      maximumQueryLength: readNumber(
+        search,
+        ['maximumQueryLength', 'MaximumQueryLength'],
+        `${label}.search.maximumQueryLength`,
+      ),
+      emptyQuerySemantics: readString(
+        search,
+        ['emptyQuerySemantics', 'EmptyQuerySemantics'],
+        `${label}.search.emptyQuerySemantics`,
+      ),
+      workflowIdSemantics: readString(
+        search,
+        ['workflowIdSemantics', 'WorkflowIdSemantics'],
+        `${label}.search.workflowIdSemantics`,
+      ),
+    },
+  };
+};
 
 function decodeScopeWorkflowSummary(
   value: unknown,
@@ -32,12 +245,6 @@ function decodeScopeWorkflowSummary(
       ['workflowId', 'WorkflowId'],
       `${label}.workflowId`,
     ),
-    publishedServiceId:
-      readOptionalString(
-        record,
-        ['publishedServiceId', 'PublishedServiceId'],
-        `${label}.publishedServiceId`,
-      ) ?? '',
     displayName: readString(
       record,
       ['displayName', 'DisplayName'],
@@ -69,6 +276,16 @@ function decodeScopeWorkflowSummary(
       ['deploymentStatus', 'DeploymentStatus'],
       `${label}.deploymentStatus`,
     ),
+    updatedAt: readString(
+      record,
+      ['updatedAt', 'UpdatedAt'],
+      `${label}.updatedAt`,
+    ),
+    publishedServiceId: readString(
+      record,
+      ['publishedServiceId', 'PublishedServiceId'],
+      `${label}.publishedServiceId`,
+    ),
     serviceAppId: readString(
       record,
       ['serviceAppId', 'ServiceAppId'],
@@ -78,16 +295,6 @@ function decodeScopeWorkflowSummary(
       record,
       ['serviceNamespace', 'ServiceNamespace'],
       `${label}.serviceNamespace`,
-    ),
-    publishedServiceId: readString(
-      record,
-      ['publishedServiceId', 'PublishedServiceId'],
-      `${label}.publishedServiceId`,
-    ),
-    updatedAt: readString(
-      record,
-      ['updatedAt', 'UpdatedAt'],
-      `${label}.updatedAt`,
     ),
   };
 }
@@ -298,6 +505,25 @@ const decodeScopeScriptSummaries: Decoder<ScopeScriptSummary[]> = (value) =>
   expectArray(value, 'ScopeScriptSummary[]', decodeScopeScriptSummary);
 
 export const scopesApi = {
+  queryWorkflowCatalogue(
+    input: ScopeWorkflowCatalogueQuery,
+    signal?: AbortSignal,
+  ): Promise<ScopeWorkflowCatalogueResponse> {
+    return requestJson(
+      withQuery(
+        `/api/scopes/${encodeURIComponent(input.scopeId)}/workflow-catalogue`,
+        {
+          view: input.view,
+          query: input.query?.trim() || undefined,
+          cursor: input.cursor,
+          take: input.take,
+        },
+      ),
+      decodeScopeWorkflowCatalogueResponse,
+      { signal },
+    );
+  },
+
   listWorkflows(scopeId: string): Promise<ScopeWorkflowSummary[]> {
     return requestJson(
       `/api/scopes/${encodeURIComponent(scopeId)}/workflows?includeSource=false`,
