@@ -193,8 +193,8 @@ internal sealed partial class ManagedCodexExactOrnnApiSkillVerifier : IExactServ
                 string.IsNullOrWhiteSpace(locator.OperationId) ||
                 !files.TryGetValue(locator.SkillFilePath, out var content) ||
                 string.IsNullOrWhiteSpace(content) ||
-                !content.Contains(locator.Section, StringComparison.Ordinal) ||
-                !content.Contains(locator.OperationId, StringComparison.Ordinal))
+                !TryReadMarkdownSection(content, locator.Section, out var sectionContent) ||
+                !ContainsOperationId(sectionContent, locator.OperationId))
             {
                 return false;
             }
@@ -204,6 +204,90 @@ internal sealed partial class ManagedCodexExactOrnnApiSkillVerifier : IExactServ
 
         return seen;
     }
+
+    private static bool TryReadMarkdownSection(
+        string markdown,
+        string expectedSection,
+        out string sectionContent)
+    {
+        sectionContent = string.Empty;
+        var lines = markdown.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var sectionStart = -1;
+        var sectionLevel = 0;
+
+        for (var index = 0; index < lines.Length; index++)
+        {
+            if (!TryReadMarkdownHeading(lines[index], out var headingLevel, out var heading))
+                continue;
+
+            if (sectionStart < 0)
+            {
+                if (!string.Equals(heading, expectedSection, StringComparison.Ordinal))
+                    continue;
+
+                sectionStart = index + 1;
+                sectionLevel = headingLevel;
+                continue;
+            }
+
+            if (headingLevel <= sectionLevel)
+            {
+                sectionContent = string.Join('\n', lines[sectionStart..index]);
+                return true;
+            }
+        }
+
+        if (sectionStart < 0)
+            return false;
+
+        sectionContent = string.Join('\n', lines[sectionStart..]);
+        return true;
+    }
+
+    private static bool TryReadMarkdownHeading(
+        string line,
+        out int headingLevel,
+        out string heading)
+    {
+        headingLevel = 0;
+        heading = string.Empty;
+        var match = MarkdownHeadingPattern().Match(line);
+        if (!match.Success)
+            return false;
+
+        headingLevel = match.Groups["marks"].Length;
+        heading = match.Groups["title"].Value;
+        return heading.Length > 0;
+    }
+
+    private static bool ContainsOperationId(string sectionContent, string operationId)
+    {
+        var searchIndex = 0;
+        while (searchIndex < sectionContent.Length)
+        {
+            var matchIndex = sectionContent.IndexOf(
+                operationId,
+                searchIndex,
+                StringComparison.Ordinal);
+            if (matchIndex < 0)
+                return false;
+
+            var beforeMatches = matchIndex == 0 ||
+                                !IsOperationIdCharacter(sectionContent[matchIndex - 1]);
+            var afterIndex = matchIndex + operationId.Length;
+            var afterMatches = afterIndex == sectionContent.Length ||
+                               !IsOperationIdCharacter(sectionContent[afterIndex]);
+            if (beforeMatches && afterMatches)
+                return true;
+
+            searchIndex = matchIndex + operationId.Length;
+        }
+
+        return false;
+    }
+
+    private static bool IsOperationIdCharacter(char value) =>
+        char.IsAsciiLetterOrDigit(value) || value is '-' or '_';
 
     private ManagedCodexCredentialDescriptor ValidateCredential(
         ManagedCodexCredentialDescriptor? credential,
@@ -415,6 +499,11 @@ internal sealed partial class ManagedCodexExactOrnnApiSkillVerifier : IExactServ
 
     [GeneratedRegex("^[0-9a-f]{64}$", RegexOptions.CultureInvariant)]
     private static partial Regex Sha256Pattern();
+
+    [GeneratedRegex(
+        "^(?<marks>#{1,6})[ \\t]+(?<title>.*?)(?:[ \\t]+#+)?[ \\t]*$",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex MarkdownHeadingPattern();
 
     private readonly record struct OrnnExactSkillDetail(
         string Guid,

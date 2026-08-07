@@ -128,7 +128,7 @@ Verification checks:
 - canonical name
 - publisher identity
 - full-package SHA-256
-- evidence file, section, and operation locator
+- evidence file, section, and operation locator, verified conjunctively within the declared Markdown section
 - candidate request shape support in that exact package
 
 Only after this verification can the request shape proceed to admission.

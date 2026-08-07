@@ -155,6 +155,28 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
         result.Rejection!.Reason.Should().Be(ServiceApiNoReliableSkillReason.SkillIntegrityMismatch);
     }
 
+    [Fact]
+    public async Task ExactVerifier_ShouldRejectOperationOutsideDeclaredEvidenceSection()
+    {
+        var handler = new OrnnApiHandler(
+            skillMarkdown:
+            "# Example Messaging\n\n## Send a message\noperation_id: other-operation\n\n## Delete a message\noperation_id: send-message");
+        var query = await CredentialQueryAsync();
+        var verifier = new ManagedCodexExactOrnnApiSkillVerifier(
+            query,
+            query.Vault,
+            new TestNyxIdApiClientFactory(handler));
+
+        var result = await verifier.VerifyAsync(
+            new ExactServiceApiSkillVerificationRequest(
+                Access(),
+                Input(),
+                Candidate()));
+
+        result.IsVerified.Should().BeFalse();
+        result.Rejection!.Reason.Should().Be(ServiceApiNoReliableSkillReason.SkillIntegrityMismatch);
+    }
+
     private static ExternalWorkflowCapabilityAccessContext Access() =>
         new(
             "scope-alpha",
