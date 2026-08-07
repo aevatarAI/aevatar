@@ -15,6 +15,7 @@ import {
 import WorkflowActivityVNextPage from './index';
 
 let mockLocation = '/scopes/scope-alpha/workflow-activity-vnext/workflows';
+let mockHistoryMutatesLocation = false;
 const mockLocationSubscribers = new Set<() => void>();
 const mockConsoleToast = {
   error: jest.fn(),
@@ -320,7 +321,14 @@ jest.mock('@/pages/settings/userLlmSaveObservation', () => ({
 jest.mock('@/shared/navigation/history', () => ({
   getLocationSnapshot: () =>
     `${readMockUrl().pathname}${readMockUrl().search}${readMockUrl().hash}`,
-  history: { push: jest.fn(), replace: jest.fn() },
+  history: {
+    push: jest.fn(),
+    replace: jest.fn((target: string) => {
+      if (!mockHistoryMutatesLocation) return;
+      mockLocation = target;
+      for (const listener of mockLocationSubscribers) listener();
+    }),
+  },
   subscribeToLocationChanges: (listener: () => void) => {
     mockLocationSubscribers.add(listener);
     return () => mockLocationSubscribers.delete(listener);
@@ -433,6 +441,7 @@ const mockObserveUserLlmSave = jest.requireMock(
 describe('Workflow Activity vNext catalogue', () => {
   beforeEach(() => {
     mockLocation = '/scopes/scope-alpha/workflow-activity-vnext/workflows';
+    mockHistoryMutatesLocation = false;
     jest.clearAllMocks();
     mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
       createCatalogueResponse([]),
@@ -444,7 +453,10 @@ describe('Workflow Activity vNext catalogue', () => {
     });
   });
 
-  afterEach(() => cleanupTestQueryClients());
+  afterEach(() => {
+    jest.useRealTimers();
+    cleanupTestQueryClients();
+  });
 
   it('uses backend catalogue views and preserves backend row order', async () => {
     mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
@@ -562,7 +574,7 @@ describe('Workflow Activity vNext catalogue', () => {
     );
   });
 
-  it('debounces search and aborts an obsolete catalogue request', async () => {
+  it('debounces search despite URL synchronization and aborts an obsolete request', async () => {
     let supportSignal: AbortSignal | undefined;
     mockScopesApi.queryWorkflowCatalogue.mockImplementation(
       (input: { query?: string }, signal?: AbortSignal) => {
@@ -574,33 +586,44 @@ describe('Workflow Activity vNext catalogue', () => {
       },
     );
 
-    renderWithQueryClient(<WorkflowActivityVNextPage />);
-    expect(await screen.findByText('No workflows yet')).toBeInTheDocument();
+    jest.useFakeTimers();
+    const rendered = renderWithQueryClient(<WorkflowActivityVNextPage />);
+    try {
+      expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledTimes(1);
 
-    const search = screen.getByRole('searchbox', { name: 'Search workflows' });
-    fireEvent.change(search, { target: { value: ' support ' } });
-    expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledTimes(1);
+      mockHistoryMutatesLocation = true;
+      const search = screen.getByRole('searchbox', {
+        name: 'Search workflows',
+      });
+      fireEvent.change(search, { target: { value: ' support ' } });
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(299);
+      });
+      expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledTimes(1);
+      expect(search).toHaveValue(' support ');
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(1);
+      });
+      expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledWith(
+        expect.objectContaining({ query: 'support' }),
+        expect.any(AbortSignal),
+      );
+      expect(supportSignal?.aborted).toBe(false);
 
-    await waitFor(
-      () =>
-        expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledWith(
-          expect.objectContaining({ query: 'support' }),
-          expect.any(AbortSignal),
-        ),
-      { timeout: 1000 },
-    );
-    expect(supportSignal?.aborted).toBe(false);
-
-    fireEvent.change(search, { target: { value: 'billing' } });
-    await waitFor(
-      () =>
-        expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledWith(
-          expect.objectContaining({ query: 'billing' }),
-          expect.any(AbortSignal),
-        ),
-      { timeout: 1000 },
-    );
-    expect(supportSignal?.aborted).toBe(true);
+      fireEvent.change(search, { target: { value: 'billing' } });
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(300);
+      });
+      expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledWith(
+        expect.objectContaining({ query: 'billing' }),
+        expect.any(AbortSignal),
+      );
+      expect(supportSignal?.aborted).toBe(true);
+    } finally {
+      rendered.unmount();
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
   });
 
   it('loads the next backend page and appends it without reordering', async () => {
@@ -642,6 +665,51 @@ describe('Workflow Activity vNext catalogue', () => {
     expect(workflowNames).toEqual(['First page row', 'Second page row']);
   });
 
+  it('keeps loaded rows visible and retries after a next-page failure', async () => {
+    let nextPageAttempts = 0;
+    mockScopesApi.queryWorkflowCatalogue.mockImplementation(
+      (input: { cursor?: string }) => {
+        if (input.cursor !== 'page-2') {
+          return Promise.resolve(
+            createCatalogueResponse(
+              [
+                createCatalogueRow({
+                  workflowId: 'wf-first',
+                  name: 'First page row',
+                }),
+              ],
+              'page-2',
+            ),
+          );
+        }
+        nextPageAttempts += 1;
+        return nextPageAttempts === 1
+          ? Promise.reject(new Error('page unavailable'))
+          : Promise.resolve(
+              createCatalogueResponse([
+                createCatalogueRow({
+                  workflowId: 'wf-second',
+                  name: 'Second page row',
+                }),
+              ]),
+            );
+      },
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(await screen.findByText('First page row')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    expect(
+      await screen.findByText("More workflows couldn't be loaded"),
+    ).toBeInTheDocument();
+    expect(screen.getByText('First page row')).toBeInTheDocument();
+    expect(screen.queryByText('Workflows unavailable')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    expect(await screen.findByText('Second page row')).toBeInTheDocument();
+    expect(nextPageAttempts).toBe(2);
+  });
+
   it('uses backend capabilities and the workflow id for row actions', async () => {
     const identities = {
       memberId: 'm-alpha',
@@ -651,8 +719,8 @@ describe('Workflow Activity vNext catalogue', () => {
     mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
       createCatalogueResponse([
         createCatalogueRow({
-          workflowId: identities.workflowId,
-          name: 'Invoice review',
+          workflowId: 'wf-unavailable',
+          name: 'Unavailable workflow',
           capabilities: {
             open: {
               available: false,
@@ -672,26 +740,40 @@ describe('Workflow Activity vNext catalogue', () => {
             },
           },
         }),
+        createCatalogueRow({
+          workflowId: identities.workflowId,
+          name: 'Invoice review',
+          committed: {
+            serviceKey: 'opaque-service-key',
+            workflowName: 'invoice_review',
+            actorId: identities.memberId,
+            activeRevisionId: 'rev-alpha',
+            deploymentId: identities.publishedServiceId,
+            deploymentStatus: 'Deactivated',
+          },
+        }),
       ]),
     );
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
-    const row = (await screen.findByText('Invoice review')).closest('tr');
-    expect(row).not.toBeNull();
+    const unavailableRow = (
+      await screen.findByText('Unavailable workflow')
+    ).closest('tr');
+    expect(unavailableRow).not.toBeNull();
     expect(
-      within(row as HTMLElement).getByRole('button', {
-        name: 'Open Invoice review in Workspace',
+      within(unavailableRow as HTMLElement).getByRole('button', {
+        name: 'Open Unavailable workflow in Workspace',
       }),
     ).toBeDisabled();
     expect(
-      within(row as HTMLElement).getByRole('button', {
-        name: 'View activity for Invoice review in Workspace',
+      within(unavailableRow as HTMLElement).getByRole('button', {
+        name: 'View activity for Unavailable workflow in Workspace',
       }),
     ).toBeDisabled();
     fireEvent.click(
-      within(row as HTMLElement).getByRole('button', {
-        name: 'More actions for Invoice review in Workspace',
+      within(unavailableRow as HTMLElement).getByRole('button', {
+        name: 'More actions for Unavailable workflow in Workspace',
       }),
     );
     expect(
@@ -701,6 +783,24 @@ describe('Workflow Activity vNext catalogue', () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: 'Rename' })).toBeNull();
     expect(screen.queryByRole('menuitem', { name: 'Delete draft' })).toBeNull();
+
+    const actionableRow = screen.getByText('Invoice review').closest('tr');
+    expect(
+      within(actionableRow as HTMLElement).getByRole('link', {
+        name: 'Open Invoice review in Workspace',
+      }),
+    ).toHaveAttribute(
+      'href',
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-alpha',
+    );
+    expect(
+      within(actionableRow as HTMLElement).getByRole('link', {
+        name: 'View activity for Invoice review in Workspace',
+      }),
+    ).toHaveAttribute(
+      'href',
+      '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-alpha',
+    );
     expect(document.body.textContent).not.toContain(identities.memberId);
     expect(document.body.textContent).not.toContain(
       identities.publishedServiceId,
@@ -806,7 +906,7 @@ describe('Workflow Activity vNext catalogue', () => {
     expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledTimes(2);
   });
 
-  it('observes archive through the backend catalogue and refreshes all rows', async () => {
+  it('resolves archive identity and observes the exact row across catalogue pages', async () => {
     const activeCommitted = {
       serviceKey: 'svc-alpha',
       workflowName: 'workflow_alpha',
@@ -820,20 +920,52 @@ describe('Workflow Activity vNext catalogue', () => {
       deploymentStatus: 'Deactivated',
     };
     let archived = false;
+    mockScopesApi.getWorkflowDetail.mockResolvedValue({
+      available: true,
+      scopeId: 'scope-alpha',
+      workflow: {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-alpha',
+        displayName: 'Workflow Alpha',
+        serviceKey: 'opaque-service-key',
+        workflowName: 'workflow_alpha',
+        actorId: 'actor-alpha',
+        activeRevisionId: 'rev-alpha',
+        deploymentId: 'dep-authoritative',
+        deploymentStatus: 'Active',
+        updatedAt: '2026-08-04T10:00:00Z',
+        publishedServiceId: 'svc-alpha',
+        serviceAppId: 'workflow-app',
+        serviceNamespace: 'workflow-namespace',
+      },
+      source: null,
+    });
     mockScopesApi.queryWorkflowCatalogue.mockImplementation(
-      (input: { query?: string }) =>
-        Promise.resolve(
+      (input: { cursor?: string; query?: string }) => {
+        if (input.query === 'wf-alpha' && input.cursor !== 'archive-page-2') {
+          return Promise.resolve(
+            createCatalogueResponse(
+              [
+                createCatalogueRow({
+                  workflowId: 'wf-alpha-related',
+                  name: 'Prefix match',
+                  committed: archivedCommitted,
+                }),
+              ],
+              'archive-page-2',
+            ),
+          );
+        }
+        return Promise.resolve(
           createCatalogueResponse([
             createCatalogueRow({
               workflowId: 'wf-alpha',
               name: 'Workflow Alpha',
-              committed:
-                archived || input.query === 'wf-alpha'
-                  ? archivedCommitted
-                  : activeCommitted,
+              committed: archived ? archivedCommitted : activeCommitted,
             }),
           ]),
-        ),
+        );
+      },
     );
     mockObserveWorkflowArchival.mockImplementation(
       async (input: { readWorkflows: () => Promise<unknown[]> }) => {
@@ -861,17 +993,25 @@ describe('Workflow Activity vNext catalogue', () => {
         scopeId: 'scope-alpha',
         view: 'all',
         query: 'wf-alpha',
+        cursor: undefined,
         take: 100,
       }),
     );
+    expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledWith({
+      scopeId: 'scope-alpha',
+      view: 'all',
+      query: 'wf-alpha',
+      cursor: 'archive-page-2',
+      take: 100,
+    });
     expect(mockScopesApi.listWorkflows).not.toHaveBeenCalled();
     expect(mockServicesApi.deactivateDeployment).toHaveBeenCalledWith(
-      'wf-alpha',
-      'dep-alpha',
+      'svc-alpha',
+      'dep-authoritative',
       {
         tenantId: 'scope-alpha',
-        appId: 'default',
-        namespace: 'default',
+        appId: 'workflow-app',
+        namespace: 'workflow-namespace',
       },
     );
     expect(await screen.findByText('Archived')).toBeInTheDocument();

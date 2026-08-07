@@ -590,6 +590,9 @@ describe('studioApi host-session requests', () => {
               deploymentId: 'dep-draft',
               deploymentStatus: 'Running',
               updatedAt: '2026-04-15T00:00:00Z',
+              publishedServiceId: 'published-draft',
+              serviceAppId: 'workflow-app',
+              serviceNamespace: 'workflow-namespace',
             },
             {
               scopeId: 'scope-1',
@@ -602,6 +605,9 @@ describe('studioApi host-session requests', () => {
               deploymentId: 'dep-published',
               deploymentStatus: 'Running',
               updatedAt: '2026-04-14T00:00:00Z',
+              publishedServiceId: 'published-workflow',
+              serviceAppId: 'workflow-app',
+              serviceNamespace: 'workflow-namespace',
             },
           ],
         } as Response;
@@ -687,6 +693,9 @@ describe('studioApi host-session requests', () => {
                 deploymentId: 'dep-1',
                 deploymentStatus: 'Pending',
                 updatedAt: '2026-04-16T00:00:00Z',
+                publishedServiceId: 'published-workflow-1',
+                serviceAppId: 'workflow-app',
+                serviceNamespace: 'workflow-namespace',
               },
               source: {
                 workflowYaml: 'name: published-demo\nsteps: []\n',
@@ -753,6 +762,9 @@ describe('studioApi host-session requests', () => {
           deploymentId: 'dep-1',
           deploymentStatus: 'Running',
           updatedAt: '2026-04-17T00:00:00Z',
+          publishedServiceId: 'published-workflow-1',
+          serviceAppId: 'workflow-app',
+          serviceNamespace: 'workflow-namespace',
         },
         source: {
           workflowYaml: 'name: published-demo-v2\nsteps: []\n',

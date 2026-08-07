@@ -21,10 +21,6 @@ import type {
   ScopeWorkflowCatalogueView,
 } from '@/shared/models/scopes';
 import { history } from '@/shared/navigation/history';
-import {
-  scopeServiceAppId,
-  scopeServiceNamespace,
-} from '@/shared/runs/scopeConsole';
 import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
 import AevatarContentSkeleton from '@/shared/ui/AevatarContentSkeleton';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
@@ -75,6 +71,35 @@ function toWorkflowRow(item: ScopeWorkflowCatalogueRow): WorkflowRow {
   };
 }
 
+async function readWorkflowCatalogueMatch(
+  scopeId: string,
+  workflowId: string,
+): Promise<readonly WorkflowRow[]> {
+  let cursor: string | undefined;
+  const visitedCursors = new Set<string>();
+
+  do {
+    const response = await scopesApi.queryWorkflowCatalogue({
+      scopeId,
+      view: 'all',
+      query: workflowId,
+      cursor,
+      take: 100,
+    });
+    const target = response.items.find(
+      (item) => item.workflowId === workflowId,
+    );
+    if (target) return [toWorkflowRow(target)];
+
+    const nextCursor = response.nextPageToken ?? undefined;
+    if (!nextCursor || visitedCursors.has(nextCursor)) return [];
+    visitedCursors.add(nextCursor);
+    cursor = nextCursor;
+  } while (cursor);
+
+  return [];
+}
+
 function readWorkflowView(params: URLSearchParams): ScopeWorkflowCatalogueView {
   const view = params.get('view');
   return view === 'drafts' ? 'drafts' : 'all';
@@ -117,6 +142,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const location = useConsoleLocation();
   const toast = useConsoleToast();
   const lastListErrorSignature = React.useRef('');
+  const selfAuthoredSearch = React.useRef<string | null>(null);
   const initialParams = React.useMemo(
     () => new URLSearchParams(location.search),
     [location.search],
@@ -170,6 +196,11 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   });
 
   React.useEffect(() => {
+    if (selfAuthoredSearch.current === location.search) {
+      selfAuthoredSearch.current = null;
+      return;
+    }
+    selfAuthoredSearch.current = null;
     const params = new URLSearchParams(location.search);
     const routeQuery = params.get('q') ?? '';
     setQuery(routeQuery);
@@ -187,8 +218,11 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     if (query.trim()) params.set('q', query.trim());
     if (view !== 'all') params.set('view', view);
     const suffix = params.toString();
-    history.replace(`${location.pathname}${suffix ? `?${suffix}` : ''}`);
-  }, [location.pathname, query, view]);
+    const nextSearch = suffix ? `?${suffix}` : '';
+    if (nextSearch === location.search) return;
+    selfAuthoredSearch.current = nextSearch;
+    history.replace(`${location.pathname}${nextSearch}`);
+  }, [location.pathname, location.search, query, view]);
 
   const loading = catalogue.isPending;
   const rows = React.useMemo(() => {
@@ -211,7 +245,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   }, [renameName, renameTarget, rows]);
 
   React.useEffect(() => {
-    if (loading || !catalogue.isError) return;
+    if (loading || !catalogue.isLoadingError) return;
 
     const errorSignature = [scopeId, catalogue.errorUpdatedAt].join(':');
     if (lastListErrorSignature.current === errorSignature) return;
@@ -220,7 +254,13 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     toast.error(
       t('workflowActivityVNext.workflows.unavailable', 'Workflows unavailable'),
     );
-  }, [catalogue.errorUpdatedAt, catalogue.isError, loading, scopeId, toast]);
+  }, [
+    catalogue.errorUpdatedAt,
+    catalogue.isLoadingError,
+    loading,
+    scopeId,
+    toast,
+  ]);
 
   const retry = () => {
     void catalogue.refetch();
@@ -335,13 +375,29 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
 
     try {
       if (!accepted) {
-        await servicesApi.deactivateDeployment(
+        const detail = await scopesApi.getWorkflowDetail(
+          scopeId,
           target.workflowId,
-          target.deploymentId,
+        );
+        const published = detail.workflow;
+        if (
+          !detail.available ||
+          !published ||
+          published.workflowId !== target.workflowId ||
+          !published.publishedServiceId.trim() ||
+          !published.serviceAppId.trim() ||
+          !published.serviceNamespace.trim() ||
+          !published.deploymentId.trim()
+        ) {
+          throw new Error('Published workflow identity is unavailable');
+        }
+        await servicesApi.deactivateDeployment(
+          published.publishedServiceId,
+          published.deploymentId,
           {
             tenantId: scopeId,
-            appId: scopeServiceAppId,
-            namespace: scopeServiceNamespace,
+            appId: published.serviceAppId,
+            namespace: published.serviceNamespace,
           },
         );
         accepted = true;
@@ -349,17 +405,8 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       }
 
       const observation = await observeWorkflowArchival({
-        readWorkflows: async () => {
-          const response = await scopesApi.queryWorkflowCatalogue({
-            scopeId,
-            view: 'all',
-            query: target.workflowId,
-            take: 100,
-          });
-          return response.items
-            .filter((item) => item.workflowId === target.workflowId)
-            .map(toWorkflowRow);
-        },
+        readWorkflows: () =>
+          readWorkflowCatalogueMatch(scopeId, target.workflowId),
         workflowId: target.workflowId,
       });
       if (observation.kind === 'delayed') {
@@ -481,6 +528,9 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             'Search workflows',
           )}
           className="wa-vnext__toolbar-search"
+          maxLength={
+            catalogue.data?.pages[0]?.search.maximumQueryLength ?? undefined
+          }
           onChange={(event) => setQuery(event.target.value)}
           placeholder={t(
             'workflowActivityVNext.workflows.search',
@@ -529,7 +579,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           tableMinWidth={900}
           variant="table"
         />
-      ) : catalogue.isError ? (
+      ) : catalogue.isLoadingError ? (
         <div className="wa-vnext__state" role="alert">
           <div>
             <h2>
@@ -878,6 +928,14 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       )}
       {rows.length > 0 && catalogue.hasNextPage ? (
         <div className="wa-vnext__pagination-actions">
+          {catalogue.isFetchNextPageError ? (
+            <p role="alert">
+              {t(
+                'workflowActivityVNext.workflows.loadMoreFailed',
+                "More workflows couldn't be loaded",
+              )}
+            </p>
+          ) : null}
           <Button
             loading={catalogue.isFetchingNextPage}
             onClick={() => void catalogue.fetchNextPage()}

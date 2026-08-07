@@ -50,7 +50,7 @@ The page will map each backend row directly to its presentation model:
 
 `Open`, `Activity`, `Rename`, and `Delete` availability will come from the corresponding backend capability fields. Unavailable primary actions will be disabled rather than inferred from source flags. Rename and Delete menu entries will be present only when their capabilities are available.
 
-Archive is not part of the new catalogue capability contract. The existing archive eligibility policy remains based on committed deployment facts and deployment status. After archive observation succeeds, the catalogue query is invalidated and refreshed.
+Archive is not part of the new catalogue capability contract. The existing archive eligibility policy remains based on committed deployment facts and deployment status. The catalogue does not expose the published service identity needed by the archive command, so confirmation resolves `publishedServiceId`, `serviceAppId`, `serviceNamespace`, and the authoritative `deploymentId` from the workflow detail read model. The frontend must not parse `serviceKey` or substitute `workflowId` for a service identity. Archive observation searches the catalogue in `view=all` and follows every returned cursor until the exact `workflowId` is found or the result is exhausted. After archive observation succeeds, the catalogue query is refreshed.
 
 Rename and Delete continue to use their existing command paths. After successful materialization or deletion, they refresh the catalogue query instead of refreshing the removed draft list query.
 
@@ -58,7 +58,7 @@ Rename and Delete continue to use their existing command paths. After successful
 
 The two-source partial-failure model will be deleted. The first catalogue page has one loading state, one failure state, and one retry action.
 
-Loading another page keeps existing rows visible and disables the Load more command while the request is pending. A next-page failure keeps existing rows visible and allows the same command to retry.
+Loading another page keeps existing rows visible and disables the Load more command while the request is pending. A next-page failure keeps existing rows visible, reports the failure beside the pagination action, and allows the same command to retry.
 
 An empty `items` result is authoritative for the selected backend view and search query.
 
@@ -73,6 +73,7 @@ Focused API tests will verify:
 - cursor and `take` propagation
 - AbortSignal propagation
 - response decoding, including nullable committed facts and capabilities
+- distinct published service identity from the workflow detail contract
 
 Focused Workflow Activity tests will verify:
 
@@ -83,8 +84,9 @@ Focused Workflow Activity tests will verify:
 - Drafts is sent to the server instead of applied in browser memory
 - backend row order is preserved
 - Load more uses `nextPageToken` and appends the next page
+- a failed next page preserves loaded rows and retries the same cursor
 - row actions honor backend capabilities
-- archive, rename, and delete refresh the catalogue query
+- archive resolves its distinct service identity, observes across catalogue pages, and refreshes the catalogue query
 - workflow routes never use member, service, deployment, or actor identities
 
 Local validation will run only directly related Jest files and changed-file static checks. Full frontend tests, typecheck, and production build remain delegated to GitHub CI.

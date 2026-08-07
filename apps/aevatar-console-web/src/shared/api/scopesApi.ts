@@ -22,7 +22,6 @@ import {
   readNullableString,
   readNumber,
   readOptionalRecord,
-  readOptionalString,
   readString,
   readStringArray,
   readStringRecord,
@@ -246,12 +245,6 @@ function decodeScopeWorkflowSummary(
       ['workflowId', 'WorkflowId'],
       `${label}.workflowId`,
     ),
-    publishedServiceId:
-      readOptionalString(
-        record,
-        ['publishedServiceId', 'PublishedServiceId'],
-        `${label}.publishedServiceId`,
-      ) ?? '',
     displayName: readString(
       record,
       ['displayName', 'DisplayName'],
@@ -287,6 +280,21 @@ function decodeScopeWorkflowSummary(
       record,
       ['updatedAt', 'UpdatedAt'],
       `${label}.updatedAt`,
+    ),
+    publishedServiceId: readString(
+      record,
+      ['publishedServiceId', 'PublishedServiceId'],
+      `${label}.publishedServiceId`,
+    ),
+    serviceAppId: readString(
+      record,
+      ['serviceAppId', 'ServiceAppId'],
+      `${label}.serviceAppId`,
+    ),
+    serviceNamespace: readString(
+      record,
+      ['serviceNamespace', 'ServiceNamespace'],
+      `${label}.serviceNamespace`,
     ),
   };
 }

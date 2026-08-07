@@ -1,26 +1,20 @@
-import type { ScopeWorkflowSummary } from '@/shared/models/scopes';
 import {
   canArchiveWorkflow,
   isWorkflowArchived,
   observeWorkflowArchival,
+  type WorkflowArchivalObservationItem,
 } from './workflowArchival';
 
 function workflowSummary(
   workflowId: string,
   deploymentStatus: string,
-): ScopeWorkflowSummary {
+): WorkflowArchivalObservationItem {
   return {
-    scopeId: 'scope-alpha',
     workflowId,
-    publishedServiceId: `svc-${workflowId}`,
-    displayName: 'Workflow',
-    serviceKey: `scope-alpha:default:default:${workflowId}`,
-    workflowName: 'workflow',
-    actorId: `actor-${workflowId}`,
     activeRevisionId: `rev-${workflowId}`,
     deploymentId: `dep-${workflowId}`,
     deploymentStatus,
-    updatedAt: '2026-08-06T10:00:00Z',
+    hasCommittedSource: true,
   };
 }
 

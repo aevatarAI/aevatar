@@ -297,7 +297,7 @@ Run the exact command from Step 2. Expected: PASS.
 
 Use fake timers to type `审批`, assert no second query before 300 ms, advance timers, and assert the new request receives `query: '审批'` plus an AbortSignal.
 
-Return a first page with `nextPageToken: '1'`, click Load more, and assert the next request carries `cursor: '1'`; then resolve the second page and assert both pages render in backend order.
+Return a first page with `nextPageToken: '1'`, click Load more, and assert the next request carries `cursor: '1'`; then resolve the second page and assert both pages render in backend order. Also reject a next-page request, assert the first page remains visible with a local pagination error, then retry the same cursor successfully.
 
 Run:
 
@@ -355,9 +355,10 @@ Expected: FAIL because actions and mutation refreshes still use old source facts
 - Disable Open and Activity when their backend capability is unavailable. Do not construct client navigation for a disabled action.
 - Include Rename and Delete menu entries only when their backend capability is available.
 - Continue deriving Archive only through `canArchiveWorkflow` because the backend catalogue capability set does not define Archive.
+- Resolve the archive command identity from `getWorkflowDetail`: require the exact `workflowId`, then pass the backend-provided `publishedServiceId`, `serviceAppId`, `serviceNamespace`, and `deploymentId`. Never parse `serviceKey` or substitute `workflowId` for `publishedServiceId`.
 - Replace successful `drafts.refetch()` and `committed.refetch()` calls with `catalogue.refetch()`.
 - Remove the old committed query cache write after archive observation.
-- Make archive observation read `view=all` from `queryWorkflowCatalogue`, use the exact workflow ID as `query`, and select the exact `workflowId` from the returned rows. Do not call `listWorkflows` as a fallback.
+- Make archive observation read `view=all` from `queryWorkflowCatalogue`, use the exact workflow ID as `query`, follow `nextPageToken` until exhausted, and select only the exact `workflowId` from the returned rows. Do not call `listWorkflows` as a fallback.
 - Simplify error reporting to one catalogue error signature and one retry handler.
 
 - [ ] **Step 4: Run the focused capability tests to verify GREEN**

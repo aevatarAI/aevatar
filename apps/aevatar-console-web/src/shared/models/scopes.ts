@@ -63,7 +63,6 @@ export interface ScopeWorkflowCatalogueQuery {
 export interface ScopeWorkflowSummary {
   scopeId: string;
   workflowId: string;
-  publishedServiceId: string;
   displayName: string;
   serviceKey: string;
   workflowName: string;
@@ -72,6 +71,9 @@ export interface ScopeWorkflowSummary {
   deploymentId: string;
   deploymentStatus: string;
   updatedAt: string;
+  publishedServiceId: string;
+  serviceAppId: string;
+  serviceNamespace: string;
 }
 
 export interface ScopeWorkflowSource {

@@ -170,4 +170,43 @@ describe('scopesApi workflow catalogue', () => {
     expect(response.freshness.refreshWatermarkUtc).toBe('2026-08-04T10:00:00Z');
     expect(response.search.maximumQueryLength).toBe(128);
   });
+
+  it('preserves distinct published service identity from workflow detail', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        available: true,
+        scopeId: 'scope-alpha',
+        workflow: {
+          scopeId: 'scope-alpha',
+          workflowId: 'wf-alpha',
+          displayName: 'Workflow Alpha',
+          serviceKey: 'opaque-service-key',
+          workflowName: 'workflow_alpha',
+          actorId: 'actor-alpha',
+          activeRevisionId: 'rev-alpha',
+          deploymentId: 'dep-alpha',
+          deploymentStatus: 'Active',
+          updatedAt: '2026-08-04T10:00:00Z',
+          publishedServiceId: 'svc-alpha',
+          serviceAppId: 'workflow-app',
+          serviceNamespace: 'workflow-namespace',
+        },
+        source: null,
+      }),
+    } as Response) as typeof global.fetch;
+
+    const response = await scopesApi.getWorkflowDetail(
+      'scope-alpha',
+      'wf-alpha',
+    );
+
+    expect(response.workflow).toMatchObject({
+      workflowId: 'wf-alpha',
+      publishedServiceId: 'svc-alpha',
+      serviceAppId: 'workflow-app',
+      serviceNamespace: 'workflow-namespace',
+    });
+  });
 });
