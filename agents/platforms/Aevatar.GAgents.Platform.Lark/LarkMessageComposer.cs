@@ -38,7 +38,7 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         var maxMessageLength = context.Capabilities?.MaxMessageLength ?? DefaultCapabilities.MaxMessageLength;
         var jsonPresentation = LarkJsonTableFormatter.Parse(intent.Text);
         var effectiveText = Truncate(
-            jsonPresentation.HasTables ? jsonPresentation.RenderMarkdown() : intent.Text,
+            jsonPresentation.HasTables ? jsonPresentation.RenderKeyValueText() : intent.Text,
             maxMessageLength);
         var effectiveProse = Truncate(
             jsonPresentation.HasTables ? jsonPresentation.RenderProse() : intent.Text,
@@ -305,12 +305,22 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
                     break;
                 }
                 case LarkJsonTablePart tablePart:
+                {
+                    if (remainingTextLength <= 0)
+                        break;
+
+                    var content = Truncate(tablePart.Table.RenderKeyValueText(), remainingTextLength);
+                    if (string.IsNullOrWhiteSpace(content))
+                        break;
+
                     elements.Add(new
                     {
                         tag = "markdown",
-                        content = tablePart.Table.RenderMarkdown(),
+                        content,
                     });
+                    remainingTextLength -= new StringInfo(content).LengthInTextElements;
                     break;
+                }
             }
         }
     }

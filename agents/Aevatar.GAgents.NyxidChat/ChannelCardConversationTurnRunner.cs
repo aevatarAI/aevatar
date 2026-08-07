@@ -125,7 +125,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
                 new LarkCardKitStreamElementContentRequest(
                     CardId: cardId,
                     ElementId: streamingElementId,
-                    Content: LarkJsonTableFormatter.FormatAsMarkdownTable(chunk.AccumulatedText),
+                    Content: LarkJsonTableFormatter.FormatAsKeyValueText(chunk.AccumulatedText),
                     Sequence: 1,
                     IdempotencyKey: $"{chunk.CorrelationId}-1"),
                 ct);
@@ -201,7 +201,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
                 new LarkCardKitStreamElementContentRequest(
                     CardId: cardId,
                     ElementId: elementId,
-                    Content: LarkJsonTableFormatter.FormatAsMarkdownTable(chunk.AccumulatedText),
+                    Content: LarkJsonTableFormatter.FormatAsKeyValueText(chunk.AccumulatedText),
                     Sequence: sequence,
                     IdempotencyKey: $"{chunk.CorrelationId}-{sequence}"),
                 ct);

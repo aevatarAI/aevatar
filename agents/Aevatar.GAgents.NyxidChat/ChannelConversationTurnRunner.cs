@@ -1804,7 +1804,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return null;
 
         var fallbackText = hasJsonTable
-            ? NormalizeReplyText(LarkJsonTableFormatter.FormatAsMarkdownTable(outboundIntent.Text))
+            ? NormalizeReplyText(LarkJsonTableFormatter.FormatAsKeyValueText(outboundIntent.Text))
             : NormalizeReplyText(NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(outboundIntent));
         if (_interactiveReplyDispatcher is null)
         {
@@ -3592,7 +3592,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     private static string FormatReplyTextForPlatform(string? platform, string text) =>
         string.Equals(platform?.Trim(), "lark", StringComparison.OrdinalIgnoreCase)
-            ? LarkJsonTableFormatter.FormatAsMarkdownTable(text)
+            ? LarkJsonTableFormatter.FormatAsKeyValueText(text)
             : text;
 
     private static bool IsLarkChannel(ChannelId channel) =>

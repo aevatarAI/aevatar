@@ -21,10 +21,10 @@ public static class LarkJsonTableFormatter
 
     public static bool ContainsConvertibleJson(string? text) => Parse(text).HasTables;
 
-    public static string FormatAsMarkdownTable(string? text)
+    public static string FormatAsKeyValueText(string? text)
     {
         var presentation = Parse(text);
-        return presentation.HasTables ? presentation.RenderMarkdown() : text ?? string.Empty;
+        return presentation.HasTables ? presentation.RenderKeyValueText() : text ?? string.Empty;
     }
 
     internal static LarkJsonTablePresentation Parse(string? text)
@@ -32,6 +32,14 @@ public static class LarkJsonTableFormatter
         var source = text ?? string.Empty;
         if (source.Length == 0)
             return LarkJsonTablePresentation.TextOnly(source);
+
+        if (TryParseJson(source, requireContainer: true, out var completeJson))
+        {
+            return new LarkJsonTablePresentation(
+            [
+                new LarkJsonTablePart(BuildTable(completeJson), NativeEligible: true),
+            ]);
+        }
 
         var parts = new List<LarkJsonPresentationPart>();
         var textStart = 0;
@@ -43,7 +51,7 @@ public static class LarkJsonTableFormatter
             if (IsFenceStart(source, cursor) &&
                 TryReadFence(source, cursor, out var fenceEnd, out var language, out var fencedContent))
             {
-                if (string.Equals(language, "json", StringComparison.OrdinalIgnoreCase) &&
+                if (IsJsonFenceLanguage(language) &&
                     TryParseJson(fencedContent, requireContainer: false, out var fencedJson))
                 {
                     AppendText(parts, source[textStart..cursor]);
@@ -268,6 +276,12 @@ public static class LarkJsonTableFormatter
                 : $"{prefix}.{property.Name}";
             if (property.Value.ValueKind == JsonValueKind.Object)
                 FlattenObject(property.Value, path, depth + 1, fields);
+            else if (property.Value.ValueKind == JsonValueKind.String &&
+                     TryParseJson(property.Value.GetString() ?? string.Empty, requireContainer: true, out var embeddedJson) &&
+                     embeddedJson.ValueKind == JsonValueKind.Object)
+            {
+                FlattenObject(embeddedJson, path, depth + 1, fields);
+            }
             else
                 fields[path] = FormatValue(property.Value, depth + 1);
         }
@@ -280,7 +294,7 @@ public static class LarkJsonTableFormatter
 
         var formatted = value.ValueKind switch
         {
-            JsonValueKind.String => value.GetString() ?? string.Empty,
+            JsonValueKind.String => FormatStringValue(value, depth),
             JsonValueKind.Number => value.GetRawText(),
             JsonValueKind.True => "true",
             JsonValueKind.False => "false",
@@ -291,6 +305,14 @@ public static class LarkJsonTableFormatter
             _ => string.Empty,
         };
         return TruncateCell(formatted);
+    }
+
+    private static string FormatStringValue(JsonElement value, int depth)
+    {
+        var text = value.GetString() ?? string.Empty;
+        return TryParseJson(text, requireContainer: true, out var embeddedJson)
+            ? FormatValue(embeddedJson, depth + 1)
+            : text;
     }
 
     private static string FormatArrayValue(JsonElement array, int depth)
@@ -390,8 +412,38 @@ public static class LarkJsonTableFormatter
         try
         {
             using var document = JsonDocument.Parse(trimmed);
-            if (requireContainer && document.RootElement.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array))
+            root = document.RootElement.Clone();
+            for (var depth = 0; depth < MaxDepth && root.ValueKind == JsonValueKind.String; depth++)
+            {
+                var encodedValue = root.GetString();
+                if (string.IsNullOrWhiteSpace(encodedValue) ||
+                    !TryParseJsonContainer(encodedValue, out var decodedRoot))
+                {
+                    break;
+                }
+
+                root = decodedRoot;
+            }
+
+            if (requireContainer && root.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array))
                 return false;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryParseJsonContainer(string candidate, out JsonElement root)
+    {
+        root = default;
+        try
+        {
+            using var document = JsonDocument.Parse(candidate.Trim());
+            if (document.RootElement.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array))
+                return false;
+
             root = document.RootElement.Clone();
             return true;
         }
@@ -525,6 +577,11 @@ public static class LarkJsonTableFormatter
         source[index + 1] == '`' &&
         source[index + 2] == '`';
 
+    private static bool IsJsonFenceLanguage(string language) =>
+        string.IsNullOrWhiteSpace(language) ||
+        string.Equals(language, "json", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(language, "application/json", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsMatchingPair(char opening, char closing) =>
         (opening == '{' && closing == '}') || (opening == '[' && closing == ']');
 
@@ -559,7 +616,7 @@ internal sealed record LarkJsonTablePresentation(IReadOnlyList<LarkJsonPresentat
 {
     public bool HasTables => Parts.Any(static part => part is LarkJsonTablePart);
 
-    public string RenderMarkdown()
+    public string RenderKeyValueText()
     {
         var builder = new StringBuilder();
         foreach (var part in Parts)
@@ -570,7 +627,7 @@ internal sealed record LarkJsonTablePresentation(IReadOnlyList<LarkJsonPresentat
                     builder.Append(text.Text);
                     break;
                 case LarkJsonTablePart table:
-                    AppendSeparated(builder, table.Table.RenderMarkdown());
+                    AppendSeparated(builder, table.Table.RenderKeyValueText());
                     break;
             }
         }
@@ -652,37 +709,90 @@ internal sealed record LarkJsonTable(
         };
     }
 
-    public string RenderMarkdown()
+    public string RenderKeyValueText()
     {
         var builder = new StringBuilder();
         if (!string.IsNullOrWhiteSpace(Title))
-            builder.Append("**").Append(Title.Trim()).AppendLine("**").AppendLine();
+            AppendKeyValue(builder, "Section", Title);
 
-        builder.Append("| ")
-            .Append(string.Join(" | ", Columns.Select(static column => EscapeMarkdownCell(column.DisplayName))))
-            .AppendLine(" |");
-        builder.Append("| ")
-            .Append(string.Join(" | ", Columns.Select(static _ => "---")))
-            .AppendLine(" |");
-        foreach (var row in Rows)
+        if (IsFieldValueTable())
         {
-            builder.Append("| ")
-                .Append(string.Join(
-                    " | ",
-                    Columns.Select((_, index) => EscapeMarkdownCell(index < row.Length ? row[index] : string.Empty))))
-                .AppendLine(" |");
+            foreach (var row in Rows)
+                AppendKeyValue(builder, GetCell(row, 0), GetCell(row, 1));
+            return builder.ToString().TrimEnd();
+        }
+
+        if (IsItemFieldValueTable())
+        {
+            string? currentItem = null;
+            foreach (var row in Rows)
+            {
+                var item = GetCell(row, 0);
+                if (!string.Equals(item, currentItem, StringComparison.Ordinal))
+                {
+                    AppendRowSeparator(builder);
+                    AppendKeyValue(builder, "Item", item);
+                    currentItem = item;
+                }
+                AppendKeyValue(builder, GetCell(row, 1), GetCell(row, 2));
+            }
+            return builder.ToString().TrimEnd();
+        }
+
+        var hasItemColumn = Columns.Any(static column =>
+            string.Equals(column.DisplayName, "Item", StringComparison.OrdinalIgnoreCase));
+        for (var rowIndex = 0; rowIndex < Rows.Count; rowIndex++)
+        {
+            if (rowIndex > 0 || (builder.Length > 0 && Rows.Count > 1))
+                AppendRowSeparator(builder);
+            if (Rows.Count > 1 && !hasItemColumn)
+                AppendKeyValue(builder, "Item", (rowIndex + 1).ToString(CultureInfo.InvariantCulture));
+
+            var row = Rows[rowIndex];
+            for (var columnIndex = 0; columnIndex < Columns.Count; columnIndex++)
+                AppendKeyValue(builder, Columns[columnIndex].DisplayName, GetCell(row, columnIndex));
         }
 
         return builder.ToString().TrimEnd();
     }
 
-    private static string EscapeMarkdownCell(string? value) =>
-        (value ?? string.Empty)
-        .Replace("\\", "\\\\", StringComparison.Ordinal)
-        .Replace("|", "\\|", StringComparison.Ordinal)
-        .Replace("\r\n", "<br>", StringComparison.Ordinal)
-        .Replace("\r", "<br>", StringComparison.Ordinal)
-        .Replace("\n", "<br>", StringComparison.Ordinal);
+    private bool IsFieldValueTable() =>
+        Columns.Count == 2 &&
+        string.Equals(Columns[0].DisplayName, "Field", StringComparison.Ordinal) &&
+        string.Equals(Columns[1].DisplayName, "Value", StringComparison.Ordinal);
+
+    private bool IsItemFieldValueTable() =>
+        Columns.Count == 3 &&
+        string.Equals(Columns[0].DisplayName, "Item", StringComparison.Ordinal) &&
+        string.Equals(Columns[1].DisplayName, "Field", StringComparison.Ordinal) &&
+        string.Equals(Columns[2].DisplayName, "Value", StringComparison.Ordinal);
+
+    private static string GetCell(IReadOnlyList<string> row, int index) =>
+        index < row.Count ? row[index] ?? string.Empty : string.Empty;
+
+    private static void AppendKeyValue(StringBuilder builder, string? key, string? value)
+    {
+        builder
+            .Append(NormalizeLineText(key, "Value"))
+            .Append(": ")
+            .AppendLine(NormalizeLineText(value, string.Empty));
+    }
+
+    private static void AppendRowSeparator(StringBuilder builder)
+    {
+        if (builder.Length > 0 && builder[^1] == '\n')
+            builder.AppendLine();
+    }
+
+    private static string NormalizeLineText(string? value, string fallback)
+    {
+        var normalized = (value ?? string.Empty)
+            .Replace("\r\n", "; ", StringComparison.Ordinal)
+            .Replace("\r", "; ", StringComparison.Ordinal)
+            .Replace("\n", "; ", StringComparison.Ordinal)
+            .Trim();
+        return normalized.Length == 0 ? fallback : normalized;
+    }
 }
 
 internal sealed record LarkJsonTableColumn(string Key, string DisplayName);
