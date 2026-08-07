@@ -178,7 +178,13 @@ public sealed partial class ServiceApiWorkflowCapabilityDiscoveryService(
             ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest ||
             readiness.SelectedCapability.NyxIdUserRequest.Request is null)
         {
-            return NoReliable(ServiceApiNoReliableSkillReason.RequestShapeAdmissionRejected);
+            return await ResolveWebFallbackAsync(
+                request,
+                new NoReliableServiceApiSkill
+                {
+                    Reason = ServiceApiNoReliableSkillReason.RequestShapeAdmissionRejected,
+                },
+                cancellationToken);
         }
 
         return new ServiceApiWorkflowCapabilityDiscoveryResult
