@@ -1,0 +1,110 @@
+---
+title: "NyxID Assistant Operation-Class Boundary"
+status: proposed
+owner: eanzhao
+---
+
+# ADR-0048: NyxID Assistant Operation-Class Boundary
+
+## Context
+
+Milestone 40 needs one answer for every supported NyxID intent, but one transport cannot safely describe every authority boundary. Management reads, browser journeys, connected-service effects, local commands, and unsupported intents have different descriptor sources, credentials, approval authorities, and failure semantics.
+
+Treating them as one global MCP-versus-REST choice causes two concrete failures:
+
+1. a generic proxy can become a model-visible capability even though it has no admitted exact operation; and
+2. generic `tool_approval` can be mistaken for authorization to call an exact connected service.
+
+The decision is based on the evidence pinned in the [Milestone 40 Gate 0 inventory](../audit-scorecard/2026-08-07-milestone-40-gate-0-inventory.md), including NyxID `fa157bc4160c27922f49f8f498ccac755843a15a`, assistant registry `nyxid-assistant-actions.v4`, and support-contract gist `f45febb057a7182dab2495d4c739d2bb8d7026f5`.
+
+The deliverable baseline is still unresolved in practice. [#3317](https://github.com/AevatarAI/aevatar/issues/3317) requires `dev`; the requested implementation target is `origin/feature/integrate`. This ADR may guide work on integration, but it does not make that lineage an accepted baseline or close Gate 0.
+
+## Decision
+
+NyxID Assistant uses five operation classes. The class is a semantic and authority boundary, not merely a UI label or transport selection.
+
+| Class | Meaning | Descriptor authority | Credential source | Approval authority | Execution adapter | Failure semantics |
+|---|---|---|---|---|---|---|
+| R | NyxID management and read control plane | Narrow Aevatar typed contract mapped to NyxID REST | Authenticated principal mapped once to typed `NyxIdAuthority` | None for reads; mutations are not Class-R assistant intents | Narrow typed REST adapter | Missing authority, discovery failure, or absent fact returns typed cannot-check; never guess from scope, route, or display IDs |
+| A | Browser-owned NyxID action journey | Pinned assistant action registry descriptor plus its Aevatar producer, wire mapper, and typed postcondition | Authenticated browser/user session at the NyxID boundary | NyxID owns authentication and any journey-local confirmation | Typed browser action/continuation; in M40 only `service.connect` is executable | Missing artifact or unavailable verb becomes honest not-yet-executable; no dark fallback to REST mutation or proxy |
+| P | Exact connected-service operation | NyxID normalized MCP catalog | Current authenticated caller/delegation authority bound to the exact service | NyxID exact-service policy plus Aevatar's independent actor-owned local admission; neither substitutes for the other | Request-local admitted typed operation selected by `user_service_id + endpoint_id + catalog_digest` | Missing/stale selector, digest drift, credential failure, or policy denial fails closed before effect; generic proxy is never model-visible |
+| L | Exact local command handoff | Repository-owned conformance row containing the exact CLI command | User's local NyxID CLI session, outside Aevatar execution | User explicitly chooses to run the command locally | Copyable command plus a precise reason and prerequisites | Report handoff only; never emit an execution receipt or imply verification |
+| X | Honest decline or milestone exclusion | Repository-owned conformance row and availability predicate | None | None | No tool is exposed | State that the intent is unavailable/not yet executable; never fabricate a result or silently choose a broader mechanism |
+
+### R and A collision rule
+
+R is read-only on the NyxID Assistant route. Existing typed connected-service management mutations such as `nyxid_service_update`, `nyxid_service_route`, and `nyxid_service_delete` may remain available to an explicitly authorized administrative surface, but they are not mounted as a second mechanism for Assistant Class-A intents.
+
+Assistant action intents resolve through the pinned Class-A registry. Milestone 40 makes only `service.connect` executable. Other registry verbs, including `service.update`, `service.route`, and `service.delete`, resolve to Class X until their complete descriptor/producer/wire/postcondition artifacts and owning milestone are present. A prompt, display name, REST route, or existing admin tool cannot promote them.
+
+### P exposure rule
+
+The generic `nyxid_proxy` remains excluded from NyxID Assistant. Class-P tools are generated request-locally only from a current, exact MCP catalog observation and admitted as typed operations. Their selector is the complete tuple:
+
+`user_service_id + endpoint_id + catalog_digest`
+
+Slug, HTTP method/path, display name, tool name, or model-supplied metadata cannot replace any member of the tuple. The final typed schema shown to the model and the terminal dispatch must refer to the same frozen admitted operation.
+
+R/A route tools and P admitted operation tools are distinct sets. A host or profile may compose both for one turn, but registration of one set never implies exposure of the other.
+
+### Special controls that are not normal Class-A actions
+
+`mfa verify` is not a separate action-registry row. Verification is absorbed into the NyxID-owned MFA setup/browser journey so the user does not receive two competing continuations for one authentication state machine.
+
+Approval `approve` and `deny` are controls over one exact pending approval fact, not ordinary Class-A registry actions. A decision must bind the pending request identity, owner, expected version/state, and original operation correlation. It cannot authorize another request or service.
+
+## Milestone 40 approval tier
+
+Milestone 40 selects [#3311](https://github.com/AevatarAI/aevatar/issues/3311) Option 2, the no-NyxID-change fallback, as **Tier B**. This is an Aevatar scope decision; it does not claim that the support-contract owner accepted the corresponding gist correction.
+
+At the pinned NyxID revision, two approval mechanisms must remain separate:
+
+1. `POST /api/v1/approvals/requests` creates generic `tool_approval`, hardcoded `PerRequest` with no service grant. Approving it cannot authorize `svc-lark`, `svc-github`, or any other exact service.
+2. Connected-service approvals are created inside effect handlers with the real service and operation, then waited on synchronously. Aevatar does not receive the request identity before the NyxID operation returns.
+
+Tier B therefore has the following binding behavior:
+
+- Aevatar starts the admitted effect as a long-running actor-owned tool operation.
+- Before NyxID returns, Aevatar may show only running/waiting and then threshold-derived stalled. It cannot claim that approval is pending and cannot render a reconstructible pre-effect approval card.
+- A typed approval fact may be committed only after NyxID returns error 7000/7001 with a non-empty `approval_request_id`.
+- A later approve/deny decision and retry are best effort. A grant-mode decision may allow a new retry; a per-request retry may create a new request. The UI and actor protocol promise neither reuse nor successful resumption of the returned request.
+- No synthetic Aevatar approval, advisory card, or generic `tool_approval` decision is represented as NyxID exact-service authorization.
+
+Tier A remains a future cross-repository option. It requires NyxID to expose a non-blocking exact-service approval contract that creates and observes a request bound to the service, endpoint, operation digest, and authorization mode, then honors that decision on the later effect. Tier A acceptance is explicitly not claimed by M40 under this ADR.
+
+## Actor and observation consequences
+
+- The command path remains `Normalize -> Resolve Target -> Build Context -> Build Envelope -> Dispatch -> Receipt -> Observe`.
+- Accepted dispatch is not committed effect and not read-model visibility.
+- Pending action, running/waiting, stalled, post-return approval, and terminal outcome are actor-owned facts published through the existing committed-state projection pipeline.
+- Timers and remote callbacks publish typed internal events carrying the minimum correlation keys; they do not mutate task state directly.
+- Query paths read actor-scoped current-state read models and never prime, replay, or reconstruct an approval from transport text.
+- Tool result text, assistant prose, and Studio card presence are not completion evidence. Typed committed state and its authoritative version are.
+
+## Conformance consequences
+
+The machine-readable matrix owned by [#3313](https://github.com/AevatarAI/aevatar/issues/3313) must give every intent:
+
+- one outcome class;
+- its descriptor and execution mechanism;
+- an availability predicate;
+- its approval authority; and
+- the evidence type needed to claim completion.
+
+At minimum, fixtures must prove:
+
+- generic `tool_approval` approval never authorizes an exact connected service;
+- an admitted Class-P operation cannot be dispatched with a changed selector, digest, or argument set;
+- R cannot-check, L handoff, and X decline never produce an effect receipt;
+- unknown registry verbs and incomplete Class-A artifact sets fail closed; and
+- Tier B never emits a pre-effect exact-approval fact before NyxID returns its request ID.
+
+## Consequences
+
+The hybrid boundary keeps stable control-plane reads on typed REST while using NyxID's authoritative MCP catalog for exact connected-service execution. It prevents a generic proxy, prompt, or management mutation from becoming accidental chat authority.
+
+The cost is explicit composition and tiered product behavior. The profile must mount R/A routes separately from request-local P operations, and Studio must present Tier B as running/waiting/stalled rather than the full prototype approval card. Wave 1 action verbs remain honest exclusions until their external dependencies and artifacts exist.
+
+## Status and rollout
+
+This ADR is `proposed` because the #3317 baseline conflict and #3315 owner correction remain open. Implementation may follow it on the integration lineage, but the decision becomes Milestone 40 acceptance evidence only after it is reviewed and lands on the selected `dev` baseline with the required tests and production evidence.
