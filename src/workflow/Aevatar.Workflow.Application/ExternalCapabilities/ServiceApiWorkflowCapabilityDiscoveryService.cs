@@ -156,10 +156,13 @@ public sealed partial class ServiceApiWorkflowCapabilityDiscoveryService(
                 candidate.Clone()),
             cancellationToken);
         if (!verification.IsVerified)
-            return NoReliable(verification.Rejection ?? new NoReliableServiceApiSkill
-            {
-                Reason = ServiceApiNoReliableSkillReason.SkillIntegrityMismatch,
-            });
+            return await ResolveWebFallbackAsync(
+                request,
+                verification.Rejection ?? new NoReliableServiceApiSkill
+                {
+                    Reason = ServiceApiNoReliableSkillReason.SkillIntegrityMismatch,
+                },
+                cancellationToken);
 
         var readiness = await readinessPort.InspectAsync(
             new InspectExternalWorkflowCapabilityReadinessRequest(

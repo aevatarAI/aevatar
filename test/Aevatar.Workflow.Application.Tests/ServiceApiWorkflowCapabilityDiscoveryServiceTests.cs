@@ -188,27 +188,34 @@ public sealed class ServiceApiWorkflowCapabilityDiscoveryServiceTests
     }
 
     [Fact]
-    public async Task DiscoverAsync_ShouldMapExactVerificationRejectionToNoReliableSkill()
+    public async Task DiscoverAsync_ShouldRouteExactVerificationRejectionToWebFallback()
     {
         var managed = new StubManagedDiscoveryExecutor(ReliableManagedResult());
         var verifier = new StubExactSkillVerifier(ExactServiceApiSkillVerificationResult.Rejected(
             ServiceApiNoReliableSkillReason.SkillIntegrityMismatch));
         var readiness = new StubReadinessPort(ReadyReadiness(NyxIdRequestSelector()));
+        var webFallback = UnusedWebFallback();
         var service = new ServiceApiWorkflowCapabilityDiscoveryService(
             managed,
             verifier,
             readiness,
-            UnusedWebFallback());
+            webFallback);
 
         var result = await service.DiscoverAsync(
             Request(Input([])),
             CancellationToken.None);
 
-        result.ResultCase.Should().Be(ServiceApiWorkflowCapabilityDiscoveryResult.ResultOneofCase.NoReliableApiSkill);
-        result.NoReliableApiSkill.Reason.Should().Be(ServiceApiNoReliableSkillReason.SkillIntegrityMismatch);
+        result.ResultCase.Should().Be(ServiceApiWorkflowCapabilityDiscoveryResult.ResultOneofCase.Resolution);
+        result.Resolution.ResultCase.Should().Be(
+            ServiceApiCapabilityResolution.ResultOneofCase.FallbackExhausted);
+        result.Resolution.FallbackExhausted.Reason.Should().Be(
+            ServiceApiFallbackExhaustedReason.WebResearchFailed);
         managed.Calls.Should().Be(1);
         verifier.Calls.Should().Be(1);
         readiness.Calls.Should().Be(0);
+        webFallback.Calls.Should().Be(1);
+        webFallback.LastRequest!.NoReliableApiSkill.Reason.Should().Be(
+            ServiceApiNoReliableSkillReason.SkillIntegrityMismatch);
     }
 
     [Fact]
