@@ -1,4 +1,4 @@
-import { validateActionRequest } from "./protocol.js?v=20260807-adr18-session-login";
+import { validateActionRequest } from "./protocol.js?v=20260807-actor-task-anchor";
 
 // Assistant prose is always Markdown text. Executable cards are built only
 // from actor-authored, schema-v4 action requests.

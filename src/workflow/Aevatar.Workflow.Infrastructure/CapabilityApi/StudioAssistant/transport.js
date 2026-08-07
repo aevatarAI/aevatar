@@ -1,4 +1,4 @@
-import { normalizeReadinessSnapshot } from "./readiness.js?v=20260807-adr18-session-login";
+import { normalizeReadinessSnapshot } from "./readiness.js?v=20260807-actor-task-anchor";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const backendConfig = globalThis.__AEVATAR_ASSISTANT_CONFIG__ || {};

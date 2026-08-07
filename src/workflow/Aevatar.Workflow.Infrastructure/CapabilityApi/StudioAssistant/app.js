@@ -1,4 +1,4 @@
-import "./transport.js?v=20260807-adr18-session-login";
+import "./transport.js?v=20260807-actor-task-anchor";
 import {
   consumeSse,
   mergeUsage,
@@ -9,21 +9,21 @@ import {
   redact,
   safeJson,
   validateActionContinuation,
-} from "./protocol.js?v=20260807-adr18-session-login";
+} from "./protocol.js?v=20260807-actor-task-anchor";
 import {
   buildConnectCardBlock,
   connectCardSteps,
   connectorInitial,
   splitMessageSegments,
-} from "./blocks.js?v=20260807-adr18-session-login";
+} from "./blocks.js?v=20260807-actor-task-anchor";
 import {
   actorCan,
   applyCurrentStateResult,
   createActorProjection,
   reduceActorEvent,
   restoreCachedAction,
-} from "./actor-state.js?v=20260807-adr18-session-login";
-import { describeReadinessFailure } from "./readiness.js?v=20260807-adr18-session-login";
+} from "./actor-state.js?v=20260807-actor-task-anchor";
+import { describeReadinessFailure } from "./readiness.js?v=20260807-actor-task-anchor";
 
 const PREFERENCES_KEY = "aevatar-studio:assistant-preferences:v4";
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
@@ -2793,11 +2793,24 @@ function renderActorProjection(entry) {
       receipt.message,
     ));
   }
-  if (!root.isConnected) entry.thread.append(root);
+  mountActorTask(entry.thread, root);
   if (entry === state.activeConversation) {
     renderComposerInputRequest(entry, projection);
     renderInspector();
   }
+}
+
+// The plan card narrates the turn the user just opened, so it always sits
+// directly after the newest user message (above the assistant reply). Mounting
+// by arrival order instead would leave its position to an event race and
+// strand the card inside older turns as the conversation grows.
+function mountActorTask(thread, root) {
+  const anchor = [...thread.querySelectorAll(":scope > .message.user")].at(-1);
+  if (!anchor) {
+    if (!root.isConnected) thread.append(root);
+    return;
+  }
+  if (anchor.nextElementSibling !== root) anchor.after(root);
 }
 
 async function submitActorControl(kind, step = null, instruction = null) {

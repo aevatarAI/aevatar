@@ -1,4 +1,4 @@
-import { validateActionRequest } from "./protocol.js?v=20260807-adr18-session-login";
+import { validateActionRequest } from "./protocol.js?v=20260807-actor-task-anchor";
 
 const ACTOR_EVENT_TYPES = new Set([
   "task_snapshot",

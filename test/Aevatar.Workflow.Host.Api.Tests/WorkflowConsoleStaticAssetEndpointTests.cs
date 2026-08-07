@@ -169,7 +169,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
         var styles = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantStyles);
 
-        app.Should().Contain("import \"./transport.js?v=20260807-adr18-session-login\"");
+        app.Should().Contain("import \"./transport.js?v=20260807-actor-task-anchor\"");
         app.Should().Contain("async function sendPrompt(");
         app.Should().Contain("async function loadConversations(");
         app.Should().Contain("async function refreshActorState(");
@@ -241,13 +241,13 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("app.js?v=20260807-adr18-session-login");
-        html.Should().Contain("styles.css?v=20260807-adr18-session-login");
-        app.Should().Contain("transport.js?v=20260807-adr18-session-login");
-        app.Should().Contain("readiness.js?v=20260807-adr18-session-login");
-        transport.Should().Contain("readiness.js?v=20260807-adr18-session-login");
-        actorState.Should().Contain("protocol.js?v=20260807-adr18-session-login");
-        blocks.Should().Contain("protocol.js?v=20260807-adr18-session-login");
+        html.Should().Contain("app.js?v=20260807-actor-task-anchor");
+        html.Should().Contain("styles.css?v=20260807-actor-task-anchor");
+        app.Should().Contain("transport.js?v=20260807-actor-task-anchor");
+        app.Should().Contain("readiness.js?v=20260807-actor-task-anchor");
+        transport.Should().Contain("readiness.js?v=20260807-actor-task-anchor");
+        actorState.Should().Contain("protocol.js?v=20260807-actor-task-anchor");
+        blocks.Should().Contain("protocol.js?v=20260807-actor-task-anchor");
         html.Should().Contain("<span class=\"brand-name\">Aevatar Studio</span>");
         html.Should().NotContain("class=\"brand-mark\"");
         styles.Should().Contain("color-scheme: only light");
@@ -721,6 +721,108 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         var styles = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantStyles);
         styles.Should().Contain(".readiness-row.optional .readiness-status");
         styles.Should().Contain(".readiness-optional > summary");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_ActorTaskCard_ShouldStayAnchoredAfterTheNewestUserMessage()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('function mountActorTask(');
+            const end = source.indexOf('\nasync function submitActorControl(', start);
+            assert.notEqual(start, -1, 'mountActorTask must exist in the served Studio app');
+            assert.notEqual(end, -1, 'submitActorControl must follow mountActorTask');
+
+            const context = {};
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end), context);
+            const mount = vm.runInContext('mountActorTask', context);
+
+            function fakeThread() {
+              const children = [];
+              const thread = {
+                children,
+                querySelectorAll(selector) {
+                  assert.equal(selector, ':scope > .message.user');
+                  return children.filter((child) => child.kind === 'user');
+                },
+                append(node) {
+                  remove(node);
+                  children.push(node);
+                  node.connected = true;
+                },
+              };
+              function remove(node) {
+                const index = children.indexOf(node);
+                if (index >= 0) children.splice(index, 1);
+              }
+              function decorate(node) {
+                Object.defineProperty(node, 'nextElementSibling', {
+                  get() {
+                    const index = children.indexOf(node);
+                    return index >= 0 ? children[index + 1] ?? null : null;
+                  },
+                });
+                node.after = (inserted) => {
+                  remove(inserted);
+                  children.splice(children.indexOf(node) + 1, 0, inserted);
+                  inserted.connected = true;
+                };
+                return node;
+              }
+              thread.add = (kind, name) => {
+                const node = decorate({ kind, name });
+                thread.append(node);
+                return node;
+              };
+              return thread;
+            }
+
+            const thread = fakeThread();
+            const card = { kind: 'actor-task', name: 'card', get isConnected() { return this.connected === true; } };
+            Object.defineProperty(card, 'nextElementSibling', {
+              get() {
+                const index = thread.children.indexOf(card);
+                return index >= 0 ? thread.children[index + 1] ?? null : null;
+              },
+            });
+            card.after = () => { throw new Error('the card itself is never an anchor'); };
+
+            // The assistant shell can arrive before the first actor snapshot; the
+            // card still lands between the user message and the reply.
+            const user1 = thread.add('user', 'user1');
+            const assistant1 = thread.add('assistant', 'assistant1');
+            mount(thread, card);
+            assert.deepEqual(thread.children.map((child) => child.name), ['user1', 'card', 'assistant1']);
+
+            // Re-rendering without new messages keeps the card where it is.
+            mount(thread, card);
+            assert.deepEqual(thread.children.map((child) => child.name), ['user1', 'card', 'assistant1']);
+
+            // A later turn pulls the card down next to the newest user message
+            // instead of stranding it inside history.
+            const user2 = thread.add('user', 'user2');
+            const assistant2 = thread.add('assistant', 'assistant2');
+            mount(thread, card);
+            assert.deepEqual(
+              thread.children.map((child) => child.name),
+              ['user1', 'assistant1', 'user2', 'card', 'assistant2']);
+
+            // Without any user message (restored empty view) the card appends once.
+            const bare = fakeThread();
+            const bareCard = { kind: 'actor-task', name: 'bare-card', get isConnected() { return this.connected === true; } };
+            mount(bare, bareCard);
+            mount(bare, bareCard);
+            assert.deepEqual(bare.children.map((child) => child.name), ['bare-card']);
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        app.Should().NotContain("if (!root.isConnected) entry.thread.append(root);");
     }
 
     [Fact]
