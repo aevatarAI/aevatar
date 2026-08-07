@@ -5088,3 +5088,26 @@ body:has(.settings-dialog[open]) #servicesButton,
     width: 32px;
   }
 }
+
+/* Thread column polish: keep clear air under the topbar, let the plan card
+   share the message rows' column edges at every width, and never render an
+   assistant row whose body has no content yet (orphan avatar). */
+.thread {
+  padding-top: 20px;
+}
+
+.actor-task {
+  width: calc(100% - 48px);
+  max-width: none;
+  margin: 0 auto 32px;
+}
+
+.message.assistant:has(> .message-body:empty) {
+  display: none;
+}
+
+@media (max-width: 620px) {
+  .actor-task {
+    width: calc(100% - 28px);
+  }
+}
