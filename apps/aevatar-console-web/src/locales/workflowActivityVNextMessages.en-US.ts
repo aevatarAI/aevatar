@@ -77,10 +77,6 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.activityObserved': 'Observed in Activity',
   'workflowActivityVNext.editor.activityObservedDescription':
     'You can review its details and progress.',
-  'workflowActivityVNext.editor.activityObserving':
-    'Checking Activity for this run…',
-  'workflowActivityVNext.editor.activityObservingDescription':
-    'Checking for this run now.',
   'workflowActivityVNext.editor.activityUnavailable': 'Activity unavailable',
   'workflowActivityVNext.editor.activityUnavailableDescription':
     'Try again to check the latest status.',
@@ -109,28 +105,17 @@ const workflowActivityVNextMessages = {
     'Wait for the workflow update to finish.',
   'workflowActivityVNext.editor.waitForPublishedRun':
     'Wait for the published revision to become available.',
-  'workflowActivityVNext.publish.accepted': 'Publication accepted',
   'workflowActivityVNext.publish.addExecutableStep':
     'Add at least one executable step before publishing.',
   'workflowActivityVNext.publish.applyNodeChanges':
     'Apply or discard node configuration before publishing.',
   'workflowActivityVNext.publish.blocked': 'Publish blocked · {count} issues',
   'workflowActivityVNext.publish.blockedOne': 'Publish blocked · 1 issue',
-  'workflowActivityVNext.publish.checkAgain': 'Check again',
-  'workflowActivityVNext.publish.delayed':
-    'Publication is taking longer to appear',
-  'workflowActivityVNext.publish.delayedDescription':
-    'Check again for the latest publishing status.',
   'workflowActivityVNext.publish.failed': "Publication couldn't be confirmed",
   'workflowActivityVNext.publish.failedDescription':
     'Resolve the error or try publishing again.',
   'workflowActivityVNext.publish.forbiddenDescription':
     "You don't have access to check this publication.",
-  'workflowActivityVNext.publish.observed': 'Workflow published',
-  'workflowActivityVNext.publish.observedDescription':
-    'The workflow is now published.',
-  'workflowActivityVNext.publish.observingDescription':
-    'Checking whether the published revision is ready.',
   'workflowActivityVNext.publish.published': 'Published',
   'workflowActivityVNext.publish.publishedServiceId': 'Published service ID',
   'workflowActivityVNext.publish.publishing': 'Publishing',
@@ -142,9 +127,6 @@ const workflowActivityVNextMessages = {
     'Save this workflow before publishing.',
   'workflowActivityVNext.publish.saveChangesBeforePublishing':
     'Save your changes before publishing.',
-  'workflowActivityVNext.publish.submitting': 'Submitting publication…',
-  'workflowActivityVNext.publish.submittingDescription':
-    'Publishing this workflow.',
   'workflowActivityVNext.publish.waitForPublication':
     'Wait for the current publication to finish.',
   'workflowActivityVNext.publish.waitForEditorUpdate':
@@ -153,7 +135,6 @@ const workflowActivityVNextMessages = {
     'Wait for workflow validation and saving to finish.',
   'workflowActivityVNext.publish.waitForSavedDraft':
     'Wait for the saved draft to become readable.',
-  'workflowActivityVNext.publish.workflowId': 'Workflow ID',
   'workflowActivityVNext.publish.unauthorizedDescription':
     'Sign in again to check this publication.',
   'workflowActivityVNext.editor.checkLatestStatus': 'Check latest status',
@@ -163,7 +144,6 @@ const workflowActivityVNextMessages = {
     'Open run details for the full timeline, diagnostics, and recovery actions.',
   'workflowActivityVNext.editor.openRunDetails': 'Open run details',
   'workflowActivityVNext.editor.outputSummary': 'Output summary',
-  'workflowActivityVNext.editor.runAccepted': 'Run accepted',
   'workflowActivityVNext.editor.runAgain': 'Run again',
   'workflowActivityVNext.editor.runFailed': 'Run failed',
   'workflowActivityVNext.editor.runInput': 'Input',
@@ -177,7 +157,6 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.runResult': 'Run result',
   'workflowActivityVNext.editor.runUnavailable':
     'Add at least one valid step before running.',
-  'workflowActivityVNext.editor.runSubmitting': 'Starting run…',
   'workflowActivityVNext.editor.retryActivityObservation': 'Check again',
   'workflowActivityVNext.editor.saveDelayed':
     'Save is taking longer than expected',
@@ -193,8 +172,6 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.saved': 'Saved',
   'workflowActivityVNext.editor.savedAt': 'Saved at {updatedAt}',
   'workflowActivityVNext.editor.stay': 'Stay',
-  'workflowActivityVNext.editor.streamEnded':
-    'Live updates ended. Open Activity to check the latest status.',
   'workflowActivityVNext.editor.submitRun': 'Start run',
   'workflowActivityVNext.editor.submittedInput': 'Submitted input',
   'workflowActivityVNext.editor.snapshotNotice':
@@ -239,8 +216,6 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.nodeInspector.discardTitle': 'Discard node changes?',
   'workflowActivityVNext.nodeInspector.nextStep': 'Next step',
   'workflowActivityVNext.nodeInspector.noBranches': 'No branches',
-  'workflowActivityVNext.nodeInspector.noGuidedFields':
-    'Guided options are not available for this step yet.',
   'workflowActivityVNext.nodeInspector.notSet': 'Not set',
   'workflowActivityVNext.nodeInspector.rawConfigurationAria':
     'Raw configuration',
@@ -396,8 +371,6 @@ const workflowActivityVNextMessages = {
     "Run again isn't available for this run.",
   'workflowActivityVNext.run.roleReplies': 'Role replies',
   'workflowActivityVNext.run.severity': 'Severity',
-  'workflowActivityVNext.run.sourceImmutable':
-    "This starts a new run. The original run won't change.",
   'workflowActivityVNext.run.startFailed': "The new run couldn't be started",
   'workflowActivityVNext.run.startingStep': 'Starting step',
   'workflowActivityVNext.run.statusUrl': 'Status URL',
@@ -487,7 +460,6 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.settings.saveObserved': 'Settings saved',
   'workflowActivityVNext.settings.savedModelUnavailable':
     'The saved model is unavailable. Your saved value remains unchanged.',
-  'workflowActivityVNext.settings.saving': 'Saving changes…',
   'workflowActivityVNext.settings.sectionsAria': 'Settings sections',
   'workflowActivityVNext.settings.serviceDefaultModel':
     'Uses the service default model.',
