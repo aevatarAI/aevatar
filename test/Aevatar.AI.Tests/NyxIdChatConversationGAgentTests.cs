@@ -833,6 +833,7 @@ public sealed class NyxIdChatConversationGAgentTests
         const string conversationActorId = "conversation-pinned-class-r";
         const string sourceReadableBearer = "source-readable-bearer";
         string[] expectedToolNames = ["nyxid_account", "nyxid_status", "nyxid_sessions"];
+        string[] activatedToolNames = ["nyxid_developer_apps", "nyxid_oauth_bindings"];
         var handler = new RecordingNyxIdReadHandler();
         var options = new NyxIdToolOptions { BaseUrl = "https://nyxid.test" };
         using var apiClient = new NyxIdApiClient(options, new HttpClient(handler));
@@ -913,8 +914,25 @@ public sealed class NyxIdChatConversationGAgentTests
         firstRequest.Tools.Should().NotBeNull();
         var firstTools = firstRequest.Tools!;
         firstTools.Select(static tool => tool.Name).Should().Contain(expectedToolNames);
+        firstTools.Select(static tool => tool.Name).Should().Contain(activatedToolNames);
         firstTools.Should().NotContain(static tool => tool.Name == "forged_ordinary_tool");
         firstTools.Should().NotContain(static tool => tool.Name == "nyxid_proxy");
+        var activatedTools = firstTools
+            .Where(tool => activatedToolNames.Contains(tool.Name, StringComparer.Ordinal))
+            .ToArray();
+        activatedTools.Should().HaveCount(2);
+        activatedTools.Should().OnlyContain(static tool =>
+            tool.ApprovalMode == ToolApprovalMode.NeverRequire &&
+            tool.IsReadOnly &&
+            !tool.IsDestructive &&
+            tool.GetCallSafety("{}").IsReadOnly &&
+            !tool.GetCallSafety("{}").IsDestructive);
+        foreach (var tool in activatedTools)
+        {
+            tool.Should().BeAssignableTo<IAgentToolCapabilityDescriptor>();
+            ((IAgentToolCapabilityDescriptor)tool).Capabilities.Should()
+                .Contain(AgentToolCapabilities.RequiresHumanSession);
+        }
         var requestedTools = firstTools
             .Where(tool => expectedToolNames.Contains(tool.Name, StringComparer.Ordinal))
             .ToArray();

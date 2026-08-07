@@ -864,6 +864,36 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         return GetAsync(token, $"/api/v1/service-pools/{Uri.EscapeDataString(poolId.Trim())}", ct);
     }
 
+    // ─── Developer apps ───
+
+    public Task<string> ListDeveloperOAuthClientsAsync(
+        string token,
+        string? organizationOwnerId,
+        CancellationToken ct)
+    {
+        var path = "/api/v1/developer/oauth-clients";
+        if (!string.IsNullOrWhiteSpace(organizationOwnerId))
+            path += "?org_id=" + Uri.EscapeDataString(organizationOwnerId.Trim());
+        return GetAsync(token, path, ct);
+    }
+
+    public Task<string> GetDeveloperOAuthClientAsync(
+        string token,
+        string clientId,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(clientId);
+        return GetAsync(
+            token,
+            $"/api/v1/developer/oauth-clients/{Uri.EscapeDataString(clientId.Trim())}",
+            ct);
+    }
+
+    // ─── OAuth broker bindings ───
+
+    public Task<string> ListOAuthBrokerBindingsAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/users/me/broker-bindings", ct);
+
     // ─── Approvals ───
 
     public Task<string> ListApprovalsAsync(string token, CancellationToken ct) =>
