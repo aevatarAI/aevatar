@@ -93,6 +93,7 @@ public static class ServiceCollectionExtensions
             IManagedCodexServiceApiSkillDiscoveryExecutor,
             ManagedCodexServiceApiSkillDiscoveryExecutor>();
         services.TryAddSingleton<IExactServiceApiSkillVerifier, ManagedCodexExactOrnnApiSkillVerifier>();
+        services.TryAddSingleton<IServiceApiWebFallbackPort, NyxIdServiceApiWebFallbackPort>();
         services.TryAddTransient<IServiceApiWorkflowCapabilityDiscoveryPort,
             ServiceApiWorkflowCapabilityDiscoveryService>();
         return services;

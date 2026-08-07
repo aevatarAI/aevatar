@@ -24,7 +24,7 @@ public sealed partial class DiscoverServiceApiWorkflowCapabilityTool : ExternalW
 
     public override string Description =>
         "Resolve a descriptor-miss NyxID UserService API request shape through the Application-owned " +
-        "managed Codex and exact Ornn skill-discovery path. The tool accepts typed discovery inputs, " +
+        "managed Codex, exact Ornn verification, and official Web fallback path. The tool accepts typed discovery inputs, " +
         "returns a typed capability resolution, and never accepts arbitrary prompts or credentials.";
 
     public override string ParametersSchema => """

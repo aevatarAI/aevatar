@@ -24,10 +24,10 @@ The resolution chain is a single authoritative path:
 1. Call `list_external_workflow_capabilities`.
 2. If a matching exact descriptor exists, copy its exact authoring `selector` and produce `capability.nyxid_operation`.
 3. If no matching exact descriptor exists, call `discover_service_api_workflow_capability`.
-4. If that typed Application port returns a reliable admitted Ornn result, author only `capability.nyxid_request`.
-5. If that typed Application port returns a valid `NoReliableServiceApiSkill`, enter the existing `web_search` then `web_fetch` fallback.
-6. If official Web research establishes an HTTP contract, feed the same request-shape admission path and author `capability.nyxid_request`.
-7. If Web fallback cannot establish an admitted request shape, return `ServiceApiFallbackExhausted`.
+4. Application treats a valid `NoReliableServiceApiSkill` as an intermediate state and invokes `IServiceApiWebFallbackPort`.
+5. Infrastructure returns only typed official-Web evidence or a typed fallback failure; it cannot author a workflow capability.
+6. Application feeds any Web candidate through the same request-shape admission path and returns `capability.nyxid_request` only after admission.
+7. Application maps Web failure or admission rejection to `ServiceApiFallbackExhausted`.
 
 Invalid managed output, infrastructure failure, correlation mismatch, or exact verification failure is not `NoReliableServiceApiSkill`. It must stop the managed branch and must not trigger Web fallback.
 
@@ -64,12 +64,12 @@ Stable semantics are Protobuf messages in `workflow_capability_admission.proto`.
 - `ResolvedNyxIdRequest`
 - `ServiceApiFallbackExhausted`
 
-`ServiceApiWorkflowCapabilityDiscoveryResult` is the model-facing Application-port wrapper for the descriptor-miss managed branch:
+`ServiceApiWorkflowCapabilityDiscoveryResult` is the model-facing Application-port wrapper for the complete descriptor-miss branch:
 
 - `resolution`, which contains a `ServiceApiCapabilityResolution`
-- `no_reliable_api_skill`, which contains `NoReliableServiceApiSkill`
+- `no_reliable_api_skill`, retained as the typed intermediate managed-discovery shape but not returned by the complete Application path
 
-This wrapper keeps valid no-match separate from complete fallback exhaustion. It also prevents the tool from pretending that a managed no-match is a final workflow capability result.
+This wrapper prevents the tool from pretending that a managed no-match is a final workflow capability result. The complete Application path returns only `resolution` or throws a typed infrastructure/correlation error.
 
 `ResolvedNyxIdRequest` uses typed provenance:
 
@@ -164,10 +164,10 @@ The only model-facing managed-discovery tool is `discover_service_api_workflow_c
 The tool returns:
 
 - a typed resolution and authoring selector when the Application port resolves a request shape
-- a typed `NoReliableServiceApiSkill` branch without an authoring selector when managed discovery has a valid no-match
+- a typed `ServiceApiFallbackExhausted` resolution when Application-owned Web fallback cannot establish an admitted contract
 - a safe error when input parsing, correlation, infrastructure, or verification fails
 
-Only the valid no-reliable branch may enter Web fallback.
+Only the valid no-reliable branch may cause Application to invoke the Web fallback port.
 
 ## Layer Ownership
 
@@ -186,7 +186,9 @@ Infrastructure owns:
 - managed Codex execution
 - strict stdout decoding
 - Ornn exact-read adapters
-- Web tool adapters
+- Web tool adapters that resolve the selected UserService through live NyxID catalog data, restrict
+  search/fetch to catalog-authorized documentation hosts, bound redirect/retry behavior, and extract
+  only one exact supported OpenAPI 3 operation as typed Web evidence
 
 Host owns only:
 

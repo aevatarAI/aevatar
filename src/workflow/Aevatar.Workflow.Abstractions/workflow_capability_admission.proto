@@ -432,6 +432,18 @@ message OfficialWebContractProvenance {
   string fetched_content_digest = 3;
 }
 
+message ServiceApiWebFallbackResult {
+  oneof result {
+    OfficialWebRequestShapeCandidate request_shape_candidate = 1;
+    ServiceApiFallbackExhausted fallback_exhausted = 2;
+  }
+}
+
+message OfficialWebRequestShapeCandidate {
+  OfficialWebContractProvenance provenance = 1;
+  NyxIdRequestSelector selector = 2;
+}
+
 message ExactOrnnApiSkillEvidence {
   string skill_file_path = 1;
   string section = 2;

@@ -61,6 +61,11 @@ public sealed record ExactServiceApiSkillVerificationRequest(
     ServiceApiSkillDiscoveryInput Input,
     ReliableServiceApiSkillCandidate Candidate);
 
+public sealed record ResolveServiceApiWebFallbackRequest(
+    ExternalWorkflowCapabilityAccessContext Access,
+    ServiceApiSkillDiscoveryInput Input,
+    NoReliableServiceApiSkill NoReliableApiSkill);
+
 public sealed class ExactServiceApiSkillVerificationResult
 {
     private ExactServiceApiSkillVerificationResult(
@@ -295,6 +300,13 @@ public interface IExactServiceApiSkillVerifier
 {
     Task<ExactServiceApiSkillVerificationResult> VerifyAsync(
         ExactServiceApiSkillVerificationRequest request,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IServiceApiWebFallbackPort
+{
+    Task<ServiceApiWebFallbackResult> ResolveAsync(
+        ResolveServiceApiWebFallbackRequest request,
         CancellationToken cancellationToken = default);
 }
 

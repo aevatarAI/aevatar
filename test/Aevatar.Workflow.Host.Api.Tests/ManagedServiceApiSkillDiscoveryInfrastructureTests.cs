@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.Web;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
@@ -43,6 +44,9 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
             descriptor.ServiceType == typeof(IExactServiceApiSkillVerifier) &&
             descriptor.ImplementationType == typeof(ManagedCodexExactOrnnApiSkillVerifier));
         services.Should().Contain(static descriptor =>
+            descriptor.ServiceType == typeof(IServiceApiWebFallbackPort) &&
+            descriptor.ImplementationType == typeof(NyxIdServiceApiWebFallbackPort));
+        services.Should().Contain(static descriptor =>
             descriptor.ServiceType == typeof(IServiceApiWorkflowCapabilityDiscoveryPort) &&
             descriptor.ImplementationType == typeof(ServiceApiWorkflowCapabilityDiscoveryService));
     }
@@ -82,6 +86,32 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
 
         await act.Should().ThrowAsync<ManagedCodexServiceApiSkillDiscoveryOutputException>()
             .WithMessage("*exactly one JSON object*");
+    }
+
+    [Fact]
+    public async Task WebFallback_ShouldSearchAuthorizedHostBeforeFetchingExactOpenApiContract()
+    {
+        var web = new StubWebApiClient();
+        var fallback = new NyxIdServiceApiWebFallbackPort(
+            new TestNyxIdApiClientFactory(new NyxIdCatalogHandler()),
+            web);
+
+        var result = await fallback.ResolveAsync(new ResolveServiceApiWebFallbackRequest(
+            Access(),
+            Input(),
+            new NoReliableServiceApiSkill
+            {
+                Reason = ServiceApiNoReliableSkillReason.NoMatchingSkill,
+            }));
+
+        result.ResultCase.Should().Be(ServiceApiWebFallbackResult.ResultOneofCase.RequestShapeCandidate);
+        result.RequestShapeCandidate.Provenance.CanonicalUrl.Should().StartWith("https://docs.example.com/");
+        result.RequestShapeCandidate.Selector.UserServiceId.Should().Be(TargetUserServiceId);
+        result.RequestShapeCandidate.Selector.Method.Should().Be(NyxIdRequestMethod.Post);
+        result.RequestShapeCandidate.Selector.PathTemplate.Should().Be("/v1/conversations/{conversation_id}/messages");
+        result.RequestShapeCandidate.Selector.BodyMode.Should().Be(NyxIdRequestBodyMode.Json);
+        web.Calls.Should().Equal("search", "fetch");
+        web.LastSearchQuery.Should().StartWith("site:docs.example.com ");
     }
 
     [Fact]
@@ -346,7 +376,71 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
                 null);
     }
 
-    private sealed class OrnnApiHandler(
+    private sealed class NyxIdCatalogHandler : OrnnApiHandler
+    {
+        protected override string ResponseBody(HttpRequestMessage request) =>
+            request.RequestUri!.AbsolutePath.Contains("/api/v1/keys/", StringComparison.Ordinal)
+                ? "{\"data\":{\"id\":\"usvc-alpha\",\"catalog_service_slug\":\"example-messaging\"}}"
+                : "{\"data\":{\"slug\":\"example-messaging\",\"documentation_url\":\"https://docs.example.com/api\",\"openapi_spec_url\":\"https://docs.example.com/openapi.json\"}}";
+    }
+
+    private sealed class StubWebApiClient : IWebApiClient
+    {
+        public List<string> Calls { get; } = [];
+
+        public string LastSearchQuery { get; private set; } = string.Empty;
+
+        public Task<WebSearchResult> SearchAsync(
+            string token,
+            string query,
+            int maxResults,
+            CancellationToken ct)
+        {
+            Calls.Add("search");
+            LastSearchQuery = query;
+            return Task.FromResult(new WebSearchResult([
+                new WebSearchResultItem(
+                    "Messages API",
+                    "https://docs.example.com/openapi.json",
+                    "Official API contract"),
+            ]));
+        }
+
+        public Task<WebFetchResult> FetchUrlAsync(
+            string token,
+            string url,
+            CancellationToken ct)
+        {
+            Calls.Add("fetch");
+            return Task.FromResult(new WebFetchResult(
+                200,
+                "application/json",
+                """
+                {
+                  "openapi": "3.1.0",
+                  "paths": {
+                    "/v1/conversations/{conversation_id}/messages": {
+                      "post": {
+                        "operationId": "sendConversationMessage",
+                        "summary": "Send a message to a conversation",
+                        "parameters": [
+                          { "name": "Accept", "in": "header" }
+                        ],
+                        "requestBody": {
+                          "required": true,
+                          "content": { "application/json": {} }
+                        }
+                      }
+                    }
+                  }
+                }
+                """,
+                null,
+                url));
+        }
+    }
+
+    private class OrnnApiHandler(
         string detailHash = SkillHash,
         string skillMarkdown = "# Example Messaging\n\n## Send a message\noperation_id: send-message")
         : HttpMessageHandler
@@ -358,14 +452,19 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
             CancellationToken cancellationToken)
         {
             Requests.Add(CloneRequest(request));
-            var path = request.RequestUri!.AbsolutePath;
-            var content = path.EndsWith("/json", StringComparison.Ordinal)
-                ? SkillJson(skillMarkdown)
-                : DetailJson(detailHash);
+            var content = ResponseBody(request);
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(content, Encoding.UTF8, "application/json"),
             });
+        }
+
+        protected virtual string ResponseBody(HttpRequestMessage request)
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            return path.EndsWith("/json", StringComparison.Ordinal)
+                ? SkillJson(skillMarkdown)
+                : DetailJson(detailHash);
         }
 
         private static HttpRequestMessage CloneRequest(HttpRequestMessage request)

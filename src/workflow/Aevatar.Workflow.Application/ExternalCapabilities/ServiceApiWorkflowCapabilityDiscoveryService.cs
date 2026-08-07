@@ -7,7 +7,8 @@ namespace Aevatar.Workflow.Application.ExternalCapabilities;
 public sealed partial class ServiceApiWorkflowCapabilityDiscoveryService(
     IManagedCodexServiceApiSkillDiscoveryExecutor managedDiscoveryExecutor,
     IExactServiceApiSkillVerifier exactSkillVerifier,
-    IExternalWorkflowCapabilityReadinessPort readinessPort) :
+    IExternalWorkflowCapabilityReadinessPort readinessPort,
+    IServiceApiWebFallbackPort webFallbackPort) :
     IServiceApiWorkflowCapabilityDiscoveryPort
 {
     public async Task<ServiceApiWorkflowCapabilityDiscoveryResult> DiscoverAsync(
@@ -30,7 +31,10 @@ public sealed partial class ServiceApiWorkflowCapabilityDiscoveryService(
         return managedResult.ResultCase switch
         {
             ManagedCodexServiceApiSkillDiscoveryResult.ResultOneofCase.NoReliableApiSkill =>
-                NoReliable(managedResult.NoReliableApiSkill),
+                await ResolveWebFallbackAsync(
+                    request,
+                    managedResult.NoReliableApiSkill,
+                    cancellationToken),
             ManagedCodexServiceApiSkillDiscoveryResult.ResultOneofCase.ReliableSkill =>
                 await ResolveReliableSkillAsync(
                     request,
@@ -40,6 +44,99 @@ public sealed partial class ServiceApiWorkflowCapabilityDiscoveryService(
                 "Managed service API skill discovery returned no typed result."),
         };
     }
+
+    private async Task<ServiceApiWorkflowCapabilityDiscoveryResult> ResolveWebFallbackAsync(
+        DiscoverServiceApiWorkflowCapabilityRequest request,
+        NoReliableServiceApiSkill noReliableApiSkill,
+        CancellationToken cancellationToken)
+    {
+        var fallbackResult = await webFallbackPort.ResolveAsync(
+            new ResolveServiceApiWebFallbackRequest(
+                request.Access,
+                request.Input.Clone(),
+                noReliableApiSkill.Clone()),
+            cancellationToken);
+
+        if (fallbackResult.ResultCase == ServiceApiWebFallbackResult.ResultOneofCase.FallbackExhausted)
+        {
+            return new ServiceApiWorkflowCapabilityDiscoveryResult
+            {
+                Resolution = new ServiceApiCapabilityResolution
+                {
+                    FallbackExhausted = fallbackResult.FallbackExhausted.Clone(),
+                },
+            };
+        }
+
+        if (fallbackResult.ResultCase != ServiceApiWebFallbackResult.ResultOneofCase.RequestShapeCandidate ||
+            fallbackResult.RequestShapeCandidate?.Selector is null ||
+            fallbackResult.RequestShapeCandidate.Provenance is null)
+        {
+            throw new InvalidOperationException(
+                "Service API Web fallback returned no typed terminal result.");
+        }
+
+        var candidate = fallbackResult.RequestShapeCandidate;
+        if (!string.Equals(
+                candidate.Selector.UserServiceId,
+                request.Input.TargetUserServiceId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Service API Web fallback returned a request shape for a different UserService.");
+        }
+
+        var readiness = await readinessPort.InspectAsync(
+            new InspectExternalWorkflowCapabilityReadinessRequest(
+                request.Access,
+                new ExternalWorkflowCapabilitySelector
+                {
+                    NyxIdRequest = candidate.Selector.Clone(),
+                },
+                ExternalCapabilityExecutionMode.Interactive),
+            cancellationToken);
+        if (readiness.Status != ExternalCapabilityReadinessStatus.Ready ||
+            readiness.SelectedCapability?.CapabilityCase !=
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest ||
+            readiness.SelectedCapability.NyxIdUserRequest.Request is null)
+        {
+            return FallbackExhausted(
+                ServiceApiFallbackExhaustedReason.WebRequestShapeAdmissionRejected,
+                "The official Web request shape was rejected by workflow admission.");
+        }
+
+        return new ServiceApiWorkflowCapabilityDiscoveryResult
+        {
+            Resolution = new ServiceApiCapabilityResolution
+            {
+                NyxidRequest = new ResolvedNyxIdRequest
+                {
+                    OfficialWeb = candidate.Provenance.Clone(),
+                    UserServiceId = request.Input.TargetUserServiceId,
+                    RequestShape = new AdmittedNyxIdRequestShape
+                    {
+                        Selector = readiness.SelectedCapability.NyxIdUserRequest.Request.Clone(),
+                    },
+                    AdmissionPolicyVersion = request.Input.AdmissionPolicyVersion,
+                },
+            },
+        };
+    }
+
+    private static ServiceApiWorkflowCapabilityDiscoveryResult FallbackExhausted(
+        ServiceApiFallbackExhaustedReason reason,
+        string safeMessage) =>
+        new()
+        {
+            Resolution = new ServiceApiCapabilityResolution
+            {
+                FallbackExhausted = new ServiceApiFallbackExhausted
+                {
+                    Reason = reason,
+                    SafeMessage = safeMessage,
+                },
+            },
+        };
 
     private async Task<ServiceApiWorkflowCapabilityDiscoveryResult> ResolveReliableSkillAsync(
         DiscoverServiceApiWorkflowCapabilityRequest request,

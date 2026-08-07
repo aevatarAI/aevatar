@@ -23,7 +23,11 @@ public sealed class ServiceApiWorkflowCapabilityDiscoveryServiceTests
         var managed = new StubManagedDiscoveryExecutor(ReliableManagedResult());
         var verifier = new StubExactSkillVerifier(ExactServiceApiSkillVerificationResult.Verified(OrnnProvenance()));
         var readiness = new StubReadinessPort(ReadyReadiness(NyxIdRequestSelector()));
-        var service = new ServiceApiWorkflowCapabilityDiscoveryService(managed, verifier, readiness);
+        var service = new ServiceApiWorkflowCapabilityDiscoveryService(
+            managed,
+            verifier,
+            readiness,
+            UnusedWebFallback());
         var exactDescriptor = Descriptor(new ExternalWorkflowCapabilitySelector
         {
             NyxIdOperation = new NyxIdOperationSelector
@@ -65,7 +69,11 @@ public sealed class ServiceApiWorkflowCapabilityDiscoveryServiceTests
         var readiness = new StubReadinessPort(ReadyReadiness(admittedSelector));
         var managed = new StubManagedDiscoveryExecutor(ReliableManagedResult(requestSelector));
         var verifier = new StubExactSkillVerifier(ExactServiceApiSkillVerificationResult.Verified(OrnnProvenance()));
-        var service = new ServiceApiWorkflowCapabilityDiscoveryService(managed, verifier, readiness);
+        var service = new ServiceApiWorkflowCapabilityDiscoveryService(
+            managed,
+            verifier,
+            readiness,
+            UnusedWebFallback());
 
         var result = await service.DiscoverAsync(
             Request(Input([])),
@@ -91,7 +99,7 @@ public sealed class ServiceApiWorkflowCapabilityDiscoveryServiceTests
     }
 
     [Fact]
-    public async Task DiscoverAsync_ShouldReturnNoReliableSkillWithoutVerificationOrAdmission()
+    public async Task DiscoverAsync_ShouldDelegateValidNoReliableSkillToApplicationOwnedWebFallback()
     {
         var managed = new StubManagedDiscoveryExecutor(new ManagedCodexServiceApiSkillDiscoveryResult
         {
@@ -102,17 +110,81 @@ public sealed class ServiceApiWorkflowCapabilityDiscoveryServiceTests
         });
         var verifier = new StubExactSkillVerifier(ExactServiceApiSkillVerificationResult.Verified(OrnnProvenance()));
         var readiness = new StubReadinessPort(ReadyReadiness(NyxIdRequestSelector()));
-        var service = new ServiceApiWorkflowCapabilityDiscoveryService(managed, verifier, readiness);
+        var webFallback = new StubWebFallbackPort(new ServiceApiWebFallbackResult
+        {
+            FallbackExhausted = new ServiceApiFallbackExhausted
+            {
+                Reason = ServiceApiFallbackExhaustedReason.OfficialDocumentationNotFound,
+                SafeMessage = "Official API documentation was not found.",
+            },
+        });
+        var service = new ServiceApiWorkflowCapabilityDiscoveryService(
+            managed,
+            verifier,
+            readiness,
+            webFallback);
 
         var result = await service.DiscoverAsync(
             Request(Input([])),
             CancellationToken.None);
 
-        result.ResultCase.Should().Be(ServiceApiWorkflowCapabilityDiscoveryResult.ResultOneofCase.NoReliableApiSkill);
-        result.NoReliableApiSkill.Reason.Should().Be(ServiceApiNoReliableSkillReason.NoMatchingSkill);
+        result.ResultCase.Should().Be(ServiceApiWorkflowCapabilityDiscoveryResult.ResultOneofCase.Resolution);
+        result.Resolution.ResultCase.Should().Be(ServiceApiCapabilityResolution.ResultOneofCase.FallbackExhausted);
+        result.Resolution.FallbackExhausted.Reason.Should().Be(
+            ServiceApiFallbackExhaustedReason.OfficialDocumentationNotFound);
         managed.Calls.Should().Be(1);
         verifier.Calls.Should().Be(0);
         readiness.Calls.Should().Be(0);
+        webFallback.Calls.Should().Be(1);
+        webFallback.LastRequest!.NoReliableApiSkill.Reason.Should().Be(
+            ServiceApiNoReliableSkillReason.NoMatchingSkill);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldAdmitApplicationOwnedWebFallbackCandidate()
+    {
+        var managed = new StubManagedDiscoveryExecutor(new ManagedCodexServiceApiSkillDiscoveryResult
+        {
+            NoReliableApiSkill = new NoReliableServiceApiSkill
+            {
+                Reason = ServiceApiNoReliableSkillReason.NoMatchingSkill,
+            },
+        });
+        var verifier = new StubExactSkillVerifier(ExactServiceApiSkillVerificationResult.Verified(OrnnProvenance()));
+        var admittedSelector = NyxIdRequestSelector();
+        admittedSelector.QueryParameters.Add("conversation_id");
+        var readiness = new StubReadinessPort(ReadyReadiness(admittedSelector));
+        var webFallback = new StubWebFallbackPort(new ServiceApiWebFallbackResult
+        {
+            RequestShapeCandidate = new OfficialWebRequestShapeCandidate
+            {
+                Provenance = new OfficialWebContractProvenance
+                {
+                    CanonicalUrl = "https://docs.example.com/api/messages",
+                    SourceTitle = "Messages API",
+                    FetchedContentDigest = CapabilityFingerprint,
+                },
+                Selector = NyxIdRequestSelector(),
+            },
+        });
+        var service = new ServiceApiWorkflowCapabilityDiscoveryService(
+            managed,
+            verifier,
+            readiness,
+            webFallback);
+
+        var result = await service.DiscoverAsync(Request(Input([])), CancellationToken.None);
+
+        result.Resolution.ResultCase.Should().Be(ServiceApiCapabilityResolution.ResultOneofCase.NyxidRequest);
+        result.Resolution.NyxidRequest.ContractSourceCase.Should().Be(
+            ResolvedNyxIdRequest.ContractSourceOneofCase.OfficialWeb);
+        result.Resolution.NyxidRequest.OfficialWeb.CanonicalUrl.Should().Be(
+            "https://docs.example.com/api/messages");
+        result.Resolution.NyxidRequest.RequestShape.Selector.QueryParameters.Should()
+            .ContainSingle().Which.Should().Be("conversation_id");
+        verifier.Calls.Should().Be(0);
+        readiness.Calls.Should().Be(1);
+        webFallback.Calls.Should().Be(1);
     }
 
     [Fact]
@@ -122,7 +194,11 @@ public sealed class ServiceApiWorkflowCapabilityDiscoveryServiceTests
         var verifier = new StubExactSkillVerifier(ExactServiceApiSkillVerificationResult.Rejected(
             ServiceApiNoReliableSkillReason.SkillIntegrityMismatch));
         var readiness = new StubReadinessPort(ReadyReadiness(NyxIdRequestSelector()));
-        var service = new ServiceApiWorkflowCapabilityDiscoveryService(managed, verifier, readiness);
+        var service = new ServiceApiWorkflowCapabilityDiscoveryService(
+            managed,
+            verifier,
+            readiness,
+            UnusedWebFallback());
 
         var result = await service.DiscoverAsync(
             Request(Input([])),
@@ -146,7 +222,11 @@ public sealed class ServiceApiWorkflowCapabilityDiscoveryServiceTests
             Status = ExternalCapabilityReadinessStatus.CredentialConnectionRequired,
             SelectedSelector = new ExternalWorkflowCapabilitySelector { NyxIdRequest = NyxIdRequestSelector() },
         });
-        var service = new ServiceApiWorkflowCapabilityDiscoveryService(managed, verifier, readiness);
+        var service = new ServiceApiWorkflowCapabilityDiscoveryService(
+            managed,
+            verifier,
+            readiness,
+            UnusedWebFallback());
 
         var result = await service.DiscoverAsync(
             Request(Input([])),
@@ -302,6 +382,16 @@ public sealed class ServiceApiWorkflowCapabilityDiscoveryServiceTests
             },
         };
 
+    private static StubWebFallbackPort UnusedWebFallback() =>
+        new(new ServiceApiWebFallbackResult
+        {
+            FallbackExhausted = new ServiceApiFallbackExhausted
+            {
+                Reason = ServiceApiFallbackExhaustedReason.WebResearchFailed,
+                SafeMessage = "Web fallback should not be called by this test.",
+            },
+        });
+
     private sealed class StubManagedDiscoveryExecutor(
         ManagedCodexServiceApiSkillDiscoveryResult result) : IManagedCodexServiceApiSkillDiscoveryExecutor
     {
@@ -344,6 +434,23 @@ public sealed class ServiceApiWorkflowCapabilityDiscoveryServiceTests
             Calls++;
             LastRequest = request;
             return Task.FromResult(readiness.Clone());
+        }
+    }
+
+    private sealed class StubWebFallbackPort(ServiceApiWebFallbackResult result)
+        : IServiceApiWebFallbackPort
+    {
+        public int Calls { get; private set; }
+
+        public ResolveServiceApiWebFallbackRequest? LastRequest { get; private set; }
+
+        public Task<ServiceApiWebFallbackResult> ResolveAsync(
+            ResolveServiceApiWebFallbackRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            LastRequest = request;
+            return Task.FromResult(result.Clone());
         }
     }
 }

@@ -204,41 +204,19 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                 Application-computed capability fingerprint. This managed discovery operation is the only
                 workflow-authoring Ornn API skill path. It is not `codex_exec`, does not accept a prompt, and
                 does not return credentials or raw Ornn/Codex output.
-                `discover_service_api_workflow_capability` returns `capability.nyxid_request` only after exact Ornn verification and request-shape admission.
-                If `discover_service_api_workflow_capability` returns an error, stop and report that typed blocker; do not call `web_search` or `web_fetch`.
-                Only after a valid `NoReliableServiceApiSkill` from `discover_service_api_workflow_capability` may the workflow enter the web fallback branch.
+                `discover_service_api_workflow_capability` owns the complete descriptor-miss resolution path in Application:
+                exact Ornn verification, official Web fallback routing, request-shape admission, and terminal mapping.
+                It returns only an admitted `capability.nyxid_request`, typed `fallback_exhausted`, or a typed error.
+                Do not call `web_search` or `web_fetch` to resolve this workflow capability, and do not construct
+                `capability.nyxid_request` from model prose or Web tool output.
                 Before capability resolution reaches
                 `exact_operation_resolved`, `fallback_request_resolved`, or `fallback_exhausted`, do not create a Team,
                 member, or workflow draft, and do not produce a final answer.
                 Only after `descriptor_discovery` returns no matching exact descriptor may the workflow enter the `nyxid_request` fallback branch.
-              - In `service_selection`, after a valid `NoReliableServiceApiSkill`, call `nyxid_services` with `action: "list"`,
-                select the matching connected UserService from that list, then call
-                `nyxid_services` with `action: "show"` and that exact service `id`. Do not treat a service label, slug,
-                catalog id, endpoint id, or documentation URL as a UserService id. If several services remain equally
-                plausible, ask the user to choose; do not guess.
-              - After the exact connected UserService is shown, call `web_search` for official documentation for the
-                requested operation. Search snippets and unofficial examples are not an HTTP contract. From the
-                official result, call `web_fetch` to read the documentation. If `web_fetch` returns a redirect, call
-                `web_fetch` again with its exact `redirect_url`. A transient search or fetch failure is not evidence
-                that no contract exists; retry it once before using the unresolved branch.
-              - Only in this descriptor-miss fallback branch, after the exact connected UserService is shown and the
-                official HTTP contract is established, copy the exact UserService id into
-                `capability.nyxid_request.user_service_id` and author step-level
-                `capability.nyxid_request` with the exact `user_service_id` and method, path_template,
-                query_parameters, header_parameters, body_mode, body_required, and response_mode. Use only the
-                supported values declared by the workflow schema, and use empty query/header lists when the operation
-                declares none. Pair the capability with a `tool_call` to `nyxid_proxy`. Runtime arguments may contain
-                only values for the authored request's declared `path_params`, `query`, `headers`, and `body` slots;
-                do not put service identity, method, path_template, credentials, proof fields, or response_mode in
-                runtime arguments. Official documentation is authoring evidence only; it does not provide credentials,
-                admission, operation proof, permission, or authority.
-                Do not invent selector identities, operation proof, credentials, or server-owned proof fields.
-                Then set capability resolution to `fallback_request_resolved`.
-              - Only these outcomes set `fallback_exhausted`: `nyxid_services` list completed and no matching connected
-                UserService exists; the selected connected UserService is unavailable after `show`; or `web_search`
-                and `web_fetch` inspected official documentation but still could not establish the exact HTTP contract.
-                Merely receiving no exact descriptor, omitting `show`, or reading only search snippets does not set
-                `fallback_exhausted`.
+              - For the descriptor-miss branch, use only the typed result from
+                `discover_service_api_workflow_capability`. Copy its admitted selector exactly when it returns
+                `capability.nyxid_request`. If it returns `fallback_exhausted`, report that typed terminal result;
+                the model must not infer or declare exhaustion itself.
               - Exact `capability.nyxid_operation` branch: after Team ownership is resolved and capability resolution is
                 `exact_operation_resolved`, call `aevatar_create_member_workflow_draft` with the authored YAML. Then
                 call `aevatar_bind_member_workflow` with the same workflow YAML, the returned exact `workflow_id`, and

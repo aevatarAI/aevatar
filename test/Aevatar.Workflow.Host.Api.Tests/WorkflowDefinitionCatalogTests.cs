@@ -439,19 +439,9 @@ public class WorkflowDefinitionCatalogTests
             "call `discover_service_api_workflow_capability`",
             discover + 1,
             StringComparison.Ordinal);
-        var selectService = prompt.IndexOf(
-            "`nyxid_services` with `action: \"list\"`",
-            managedDiscovery + 1,
-            StringComparison.Ordinal);
-        var inspectService = prompt.IndexOf(
-            "`nyxid_services` with `action: \"show\"`",
-            selectService + 1,
-            StringComparison.Ordinal);
-        var search = prompt.IndexOf("call `web_search`", inspectService + 1, StringComparison.Ordinal);
-        var fetch = prompt.IndexOf("call `web_fetch`", search + 1, StringComparison.Ordinal);
         var author = prompt.IndexOf(
-            "`capability.nyxid_request` with the exact",
-            fetch + 1,
+            "Copy its admitted selector exactly",
+            managedDiscovery + 1,
             StringComparison.Ordinal);
         var saveDraft = prompt.IndexOf(
             "`aevatar_create_member_workflow_draft`",
@@ -462,33 +452,22 @@ public class WorkflowDefinitionCatalogTests
 
         discover.Should().BeGreaterThanOrEqualTo(0);
         managedDiscovery.Should().BeGreaterThan(discover);
-        selectService.Should().BeGreaterThan(managedDiscovery);
-        inspectService.Should().BeGreaterThan(selectService);
-        search.Should().BeGreaterThan(inspectService);
-        fetch.Should().BeGreaterThan(search);
-        author.Should().BeGreaterThan(fetch);
+        author.Should().BeGreaterThan(managedDiscovery);
         saveDraft.Should().BeGreaterThan(author);
         preview.Should().BeGreaterThan(saveDraft);
         bind.Should().BeGreaterThan(preview);
         prompt.Should().Contain("No matching exact descriptor is a fallback trigger, not a blocker.");
         prompt.Should().Contain(
-            "Only after a valid `NoReliableServiceApiSkill` from `discover_service_api_workflow_capability` may the workflow enter the web fallback branch.");
+            "`discover_service_api_workflow_capability` owns the complete descriptor-miss resolution path in Application");
         prompt.Should().Contain(
-            "`discover_service_api_workflow_capability` returns `capability.nyxid_request` only after exact Ornn verification and request-shape admission.");
+            "It returns only an admitted `capability.nyxid_request`, typed `fallback_exhausted`, or a typed error.");
         prompt.Should().Contain(
-            "If `discover_service_api_workflow_capability` returns an error, stop and report that typed blocker; do not call `web_search` or `web_fetch`.");
-        prompt.Should().Contain(
-            "Only after `descriptor_discovery` returns no matching exact descriptor may the workflow enter the `nyxid_request` fallback branch.");
+            "Do not call `web_search` or `web_fetch` to resolve this workflow capability");
         prompt.Should().Contain("The next tool call MUST be");
         prompt.Should().Contain("Before capability resolution reaches");
         prompt.Should().Contain("`exact_operation_resolved`, `fallback_request_resolved`, or `fallback_exhausted`");
         prompt.Should().Contain("member, or workflow draft, and do not produce a final answer.");
-        prompt.Should().Contain("Only these outcomes set `fallback_exhausted`");
-        prompt.Should().Contain("official documentation");
-        prompt.Should().Contain("exact `user_service_id`");
-        prompt.Should().Contain("method, path_template");
-        prompt.Should().Contain(
-            "query_parameters, header_parameters, body_mode, body_required, and response_mode");
+        prompt.Should().Contain("the model must not infer or declare exhaustion itself");
         prompt.Should().Contain("`tool_call` to `nyxid_proxy`");
         prompt.Should().Contain(
             "Only the descriptor-miss fallback may author `capability.nyxid_request` plus `nyxid_proxy` as the workflow-callable service path.");
@@ -496,7 +475,6 @@ public class WorkflowDefinitionCatalogTests
         prompt.Should().Contain("Only when no matching connected UserService exists or official documentation cannot establish");
         prompt.Should().Contain("`runnable=false`");
         prompt.Should().Contain("NYXID_OPERATION_SELECTION_REQUIRED");
-        prompt.Should().Contain("Do not invent selector identities, operation proof, credentials, or server-owned proof fields");
         prompt.Should().NotContain("When the exact UserService and official HTTP contract are established");
         prompt.Should().NotContain("A canonical `capability.nyxid_request` plus `nyxid_proxy` is a workflow-callable");
         prompt.Should().NotContain("infer the minimal authoring shape");
