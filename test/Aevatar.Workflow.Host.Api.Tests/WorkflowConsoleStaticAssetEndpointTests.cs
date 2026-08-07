@@ -261,8 +261,8 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("app.js?v=20260807-m40-thread-polish");
-        html.Should().Contain("styles.css?v=20260807-m40-thread-polish");
+        html.Should().Contain("app.js?v=20260807-m41-type-rhythm-polish");
+        html.Should().Contain("styles.css?v=20260807-m41-type-rhythm-polish");
         app.Should().Contain("transport.js?v=20260807-m40-thread-polish");
         app.Should().Contain("readiness.js?v=20260807-m40-thread-polish");
         transport.Should().Contain("readiness.js?v=20260807-m40-thread-polish");
@@ -955,7 +955,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
     }
 
     [Fact]
-    public async Task WorkflowStudio_AssetCacheKeys_ShouldStayConsistentAcrossHtmlAndTransitiveImports()
+    public async Task WorkflowStudio_AssetCacheKeys_ShouldTrackChangedEntryAssetsAndStableImports()
     {
         var html = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetStudioPage);
         var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
@@ -963,16 +963,24 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         var actorState = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantActorState);
         var blocks = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantBlocks);
 
-        var versions = new[] { html, app, transport, actorState, blocks }
+        var entryVersions = System.Text.RegularExpressions.Regex.Matches(
+                html,
+                @"\.(?:js|css)\?v=([A-Za-z0-9-]+)")
+            .Select(match => match.Groups[1].Value)
+            .ToList();
+        var transitiveVersions = new[] { app, transport, actorState, blocks }
             .SelectMany(source => System.Text.RegularExpressions.Regex.Matches(
                 source,
                 @"\.(?:js|css)\?v=([A-Za-z0-9-]+)")
                 .Select(match => match.Groups[1].Value))
             .ToList();
 
-        versions.Should().NotBeEmpty();
-        versions.Distinct().Should().ContainSingle(
-            "every stylesheet, module, and transitive import must share one cache key so a stale readiness.js can never pair with a newer page");
+        entryVersions.Should().NotBeEmpty();
+        entryVersions.Should().OnlyContain(static version =>
+            version == "20260807-m41-type-rhythm-polish");
+        transitiveVersions.Should().NotBeEmpty();
+        transitiveVersions.Should().OnlyContain(static version =>
+            version == "20260807-m40-thread-polish");
         html.Should().Contain("styles.css?v=");
         html.Should().Contain("app.js?v=");
         app.Should().Contain("transport.js?v=");
