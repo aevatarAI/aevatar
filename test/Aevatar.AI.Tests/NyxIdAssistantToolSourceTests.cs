@@ -8,6 +8,28 @@ namespace Aevatar.AI.Tests;
 
 public sealed class NyxIdAssistantToolSourceTests
 {
+    private static readonly string[] PinnedAssistantToolNames =
+    [
+        "nyxid_account",
+        "nyxid_status",
+        "nyxid_sessions",
+        "nyxid_catalog",
+        "nyxid_llm_status",
+        "nyxid_require_service",
+        "nyxid_proxy",
+        "nyxid_profile",
+        "nyxid_mfa",
+        "nyxid_services",
+        "nyxid_api_keys",
+        "nyxid_nodes",
+        "nyxid_approvals",
+        "nyxid_endpoints",
+        "nyxid_external_keys",
+        "nyxid_notifications",
+        "nyxid_providers",
+        "nyxid_orgs",
+    ];
+
     private static readonly string[] ManagementReadToolNames =
     [
         "nyxid_profile",
@@ -34,23 +56,15 @@ public sealed class NyxIdAssistantToolSourceTests
         var tools = await source.DiscoverToolsAsync();
         var names = tools.Select(static tool => tool.Name).ToArray();
 
-        names.Should().Contain("nyxid_proxy");
-        names.Should().Contain("nyxid_require_service");
-        names.Should().Contain(ManagementReadToolNames);
-        names.Should().NotContain([
-            "nyxid_admin",
-            "nyxid_code_execute",
-            "nyxid_channel_bots",
-            "nyxid_channel_events",
-            "nyxid_ssh_exec",
-            "codex_exec",
-        ]);
+        names.Should().Equal(PinnedAssistantToolNames);
 
         foreach (var name in ManagementReadToolNames)
         {
             var tool = tools.Single(candidate => candidate.Name == name);
             tool.IsReadOnly.Should().BeTrue();
             tool.IsDestructive.Should().BeFalse();
+            tool.Should().BeAssignableTo<IAgentToolCapabilityDescriptor>()
+                .Which.Capabilities.Should().Contain(AgentToolCapabilities.RequiresHumanSession);
             tool.ParametersSchema.Should()
                 .NotMatchRegex("(?i)(authorization|api[-_]?key|token|secret|password|credential|cookie)");
             using var schema = JsonDocument.Parse(tool.ParametersSchema);

@@ -897,18 +897,26 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task BuildStepPlanAsync_InNyxIdChatTurn_GatesLegacyHumanSessionTools()
+    public async Task BuildStepPlanAsync_InNyxIdChatTurn_UsesPinnedSourceAndAllowsHumanSessionReads()
     {
-        var toolSource = new StubToolSource(
+        var registeredSource = new StubToolSource(
+            new StubTool("newly_registered_tool"));
+        var pinnedSource = new StubToolSource(
             new HumanSessionStubTool("nyxid_services"),
             new HumanSessionStubTool("nyxid_api_keys"),
             new StubTool("nyxid_require_service"));
         IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
             new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
             BuiltInPromptFloorProvider,
-            toolSources: [toolSource]);
+            toolSources: [registeredSource],
+            nyxIdChatToolSources: [pinnedSource]);
         var toolContext = AgentToolExecutionContext.Empty with
         {
+            Credentials = new AgentToolCredentials(
+                "runtime-token",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
             Channel = new AgentToolChannelContext(
                 NyxIdChatServiceDefaults.ServiceId,
                 null,
@@ -933,8 +941,50 @@ public sealed class ConversationReplyGeneratorTests
             CancellationToken.None);
 
         var toolNames = OfferedToolNames(plan);
-        toolNames.Should().Contain("nyxid_require_service");
-        toolNames.Should().NotContain(["nyxid_services", "nyxid_api_keys"]);
+        toolNames.Should().BeEquivalentTo(
+            "nyxid_services",
+            "nyxid_api_keys",
+            "nyxid_require_service");
+        toolNames.Should().NotContain("newly_registered_tool");
+    }
+
+    [Fact]
+    public async Task BuildStepPlanAsync_InNyxIdChatTurnWithoutHumanSession_HidesPinnedReads()
+    {
+        var pinnedSource = new StubToolSource(
+            new HumanSessionStubTool("nyxid_status"),
+            new StubTool("nyxid_require_service"));
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
+            BuiltInPromptFloorProvider,
+            toolSources: [new StubToolSource(new StubTool("newly_registered_tool"))],
+            nyxIdChatToolSources: [pinnedSource]);
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                null,
+                "scope-alpha",
+                null,
+                null),
+        };
+
+        var plan = await generator.BuildStepPlanAsync(
+            new ChatActivity
+            {
+                Id = "turn-no-human-session",
+                Conversation = new ConversationReference { CanonicalKey = "nyxid-chat-alpha" },
+                Content = new MessageContent { Text = "查看状态" },
+            },
+            new Dictionary<string, string>(),
+            Control(),
+            toolContext,
+            priorHistory: null,
+            attachmentContext: null,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        OfferedToolNames(plan).Should().ContainSingle().Which.Should().Be("nyxid_require_service");
     }
 
     [Fact]
@@ -947,7 +997,8 @@ public sealed class ConversationReplyGeneratorTests
         IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
             new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
             BuiltInPromptFloorProvider,
-            toolSources: [new StubToolSource(rawProxy, requireService, typedInventory)]);
+            toolSources: [new StubToolSource(rawProxy)],
+            nyxIdChatToolSources: [new StubToolSource(rawProxy, requireService, typedInventory)]);
         var nyxIdChatContext = AgentToolExecutionContext.Empty with
         {
             Channel = new AgentToolChannelContext(

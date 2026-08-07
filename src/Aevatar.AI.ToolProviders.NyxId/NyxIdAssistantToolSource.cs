@@ -89,7 +89,9 @@ public sealed class NyxIdAssistantToolSource : IAgentToolSource
             allowedParameters);
 }
 
-internal sealed class NyxIdAssistantReadOnlyActionTool : IAgentTool
+internal sealed class NyxIdAssistantReadOnlyActionTool :
+    IAgentTool,
+    IAgentToolCapabilityDescriptor
 {
     private const string RejectedJson =
         "{\"error\":\"This NyxID management action is not callable from the assistant. Use the NyxID browser action instead.\"}";
@@ -141,6 +143,8 @@ internal sealed class NyxIdAssistantReadOnlyActionTool : IAgentTool
         _inner.ResolvePresentation(argumentsJson);
 
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+
+    public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
 
     public bool IsReadOnly => true;
 

@@ -719,6 +719,15 @@ public sealed class MainnetHostCompositionTests
                 source is ChannelNyxIdConnectedServiceInventoryToolSource)
             .Which.Should()
             .BeSameAs(channelInventorySource);
+        var nyxIdChatToolSources = replyGenerator.GetType()
+            .GetField("_nyxIdChatToolSources", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(replyGenerator)
+            .Should()
+            .BeAssignableTo<IReadOnlyList<IAgentToolSource>>()
+            .Subject;
+        nyxIdChatToolSources.Should().ContainSingle().Which.Should()
+            .BeOfType<NyxIdAssistantToolSource>();
+        nyxIdChatToolSources.Should().NotContain(source => source is NyxIdAgentToolSource);
         var scheduleQueries = app.Services.GetRequiredService<IStudioMemberAutomationQueryPort>();
         var scheduleMutations = app.Services.GetRequiredService<IStudioMemberWorkflowSchedulePort>();
         scheduleQueries.Should().BeSameAs(scheduleMutations);
