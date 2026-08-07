@@ -215,6 +215,7 @@ The public skill invoke endpoint uses the same trusted caller-credential extract
 - `managed_proxy_authorization_denied`: inspect the exact agent-key service grant and NyxID proxy policy.
 - `managed_proxy_target_unavailable`: verify the user's `chrono-sandbox` UserService and deployed route.
 - `managed_proxy_timeout` / `managed_proxy_unavailable`: inspect NyxID and chrono-sandbox capacity.
+- `managed_upstream_codex_*`: Aevatar received an explicitly allowlisted stable chrono error code inside a response that passed the configured byte bound. Use the suffix to select the producer-owned sandbox creation, readiness, workspace, command, output, timeout, capacity, or cleanup diagnostic path. Aevatar intentionally discards the upstream message and raw body; this code does not authorize an automatic retry or ordinary `/execute` fallback.
 - `managed_response_invalid` / `managed_response_too_large`: correlate with the sanitized chrono diagnostic ID and treat the contract drift as a rollout blocker.
 
 ### Incident 3d836d6c causal record

@@ -199,6 +199,86 @@ public sealed class NyxIdManagedCodexChronoTransportTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenChronoReturnsKnownFailure_PreservesOnlyStableUpstreamCode()
+    {
+        var handler = new RecordingHandler(
+            $$"""
+            {
+              "success": false,
+              "error": {
+                "code": "CODEX_SANDBOX_CREATION_FAILED",
+                "message": "sensitive {{RawKey}}"
+              }
+            }
+            """,
+            HttpStatusCode.BadGateway);
+        var (transport, _) = CreateTransport(handler);
+
+        var act = () => transport.ExecuteAsync(Request(), Descriptor());
+
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
+        exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.CapacityUnavailable);
+        exception.Failure.Code.Should().Be("managed_upstream_codex_sandbox_creation_failed");
+        exception.Failure.Message.Should().Be("Managed Codex proxy is temporarily unavailable.");
+        exception.Message.Should().NotContain(RawKey);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenNyxIdWrapsKnownChronoFailure_PreservesOnlyStableUpstreamCode()
+    {
+        var chronoBody = $$"""
+                         {
+                           "success": false,
+                           "error": {
+                             "code": "CODEX_WORKSPACE_PREPARATION_FAILED",
+                             "message": "sensitive {{RawKey}}"
+                           }
+                         }
+                         """;
+        var handler = new RecordingHandler(
+            JsonSerializer.Serialize(new
+            {
+                error = "http_error",
+                status = 502,
+                body = chronoBody,
+            }),
+            HttpStatusCode.BadGateway);
+        var (transport, _) = CreateTransport(handler);
+
+        var act = () => transport.ExecuteAsync(Request(), Descriptor());
+
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
+        exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.CapacityUnavailable);
+        exception.Failure.Code.Should().Be("managed_upstream_codex_workspace_preparation_failed");
+        exception.Failure.Message.Should().Be("Managed Codex proxy is temporarily unavailable.");
+        exception.Message.Should().NotContain(RawKey);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenChronoReturnsUnknownFailure_DoesNotExposeUpstreamContent()
+    {
+        var handler = new RecordingHandler(
+            $$"""
+            {
+              "success": false,
+              "error": {
+                "code": "CODEX_SECRET_{{RawKey}}",
+                "message": "sensitive {{RawKey}}"
+              }
+            }
+            """,
+            HttpStatusCode.BadGateway);
+        var (transport, _) = CreateTransport(handler);
+
+        var act = () => transport.ExecuteAsync(Request(), Descriptor());
+
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
+        exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.CapacityUnavailable);
+        exception.Failure.Code.Should().Be("managed_proxy_unavailable");
+        exception.Message.Should().NotContain(RawKey);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_DefensivelyRedactsInvocationKeyFromSuccessfulOutput()
     {
         var handler = new RecordingHandler(

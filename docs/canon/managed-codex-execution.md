@@ -147,12 +147,17 @@ The interactive workflow bearer is not used for the chrono request. Under the va
 
 The managed runtime is a gVisor tenant. The runner executes Codex with its inner sandbox disabled; escape isolation is the gVisor boundary, and there is no fail-closed Landlock preflight. Egress scoping is an IP-level Kubernetes NetworkPolicy owned by operations — coarser than an FQDN allow-list because the NyxID gateway sits behind a shared CDN range — with no egress sidecar. The sandbox create call requests no `networkPolicy` and no `credentialProxy`.
 
-Aevatar reads the fixed terminal response with `ResponseHeadersRead`, rejects
-an oversized `Content-Length`, and stops the response stream as soon as
+Aevatar reads every success or failure response with `ResponseHeadersRead`,
+rejects an oversized `Content-Length`, and stops the response stream as soon as
 `MaxResponseBytes` is exceeded. Only then does it parse success, bounded output,
-exit code, elapsed milliseconds, and a diagnostic ID. Proxy errors and malformed
-chrono responses map to stable typed failures. Raw upstream bodies and
-infrastructure exception text are never returned or logged.
+exit code, elapsed milliseconds, and a diagnostic ID. For a non-2xx response,
+the transport may inspect that bounded content in-process only to extract an
+exact chrono `error.code` from the explicit allowlist. The code is mapped to
+`managed_upstream_codex_*` while the HTTP status continues to determine the
+typed failure kind and safe public message. Unknown codes, upstream messages,
+raw bodies, and infrastructure exception text are never returned, persisted,
+or logged. A failure still performs one managed request only; it does not retry
+or fall back to ordinary `/execute`.
 
 The production deadline chain is ordered outside chrono-sandbox's complete
 180-second execution lifecycle:

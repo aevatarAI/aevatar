@@ -1591,19 +1591,6 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
                 ct);
-            if (!response.IsSuccessStatusCode)
-            {
-                _logger.LogWarning(
-                    "NyxID bounded proxy request failed: {Method} -> {Status}",
-                    request.Method,
-                    (int)response.StatusCode);
-                return new NyxIdProxyTextResponse(
-                    false,
-                    string.Empty,
-                    Detail: "http_error",
-                    HttpStatus: (int)response.StatusCode);
-            }
-
             if (response.Content.Headers.ContentLength is { } contentLength &&
                 contentLength > maxBytes)
             {
@@ -1633,9 +1620,23 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                     HttpStatus: (int)response.StatusCode);
             }
 
+            var text = Encoding.UTF8.GetString(content.Content);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning(
+                    "NyxID bounded proxy request failed: {Method} -> {Status}",
+                    request.Method,
+                    (int)response.StatusCode);
+                return new NyxIdProxyTextResponse(
+                    false,
+                    text,
+                    Detail: "http_error",
+                    HttpStatus: (int)response.StatusCode);
+            }
+
             return new NyxIdProxyTextResponse(
                 true,
-                Encoding.UTF8.GetString(content.Content),
+                text,
                 HttpStatus: (int)response.StatusCode);
         }
         catch (OperationCanceledException)
