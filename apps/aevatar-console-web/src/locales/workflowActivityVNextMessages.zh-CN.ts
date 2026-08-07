@@ -357,9 +357,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.new.templateName.incidentTriage': '事件分流',
     'workflowActivityVNext.new.title': '新建工作流',
     'workflowActivityVNext.new.validateCreate': '导入并打开',
-    'workflowActivityVNext.new.workspaceLoading': '正在加载保存位置…',
-    'workflowActivityVNext.new.workspaceLoadingDescription':
-      '现在可以先选择创建方式；当前工作区的保存位置加载期间，你的输入会保留在此页面。',
     'workflowActivityVNext.new.workspaceUnavailable': '保存位置不可用',
     'workflowActivityVNext.new.workspaceUnavailableDescription':
       '现在可以先选择创建方式；恢复访问权限期间，你的输入会保留在此页面。',
@@ -554,6 +551,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.unavailable.description': '你请求的页面不可用。',
     'workflowActivityVNext.unavailable.title': '不可用',
     'workflowActivityVNext.workflows.activeView': '活跃工作流',
+    'workflowActivityVNext.workflows.allView': '全部工作流',
     'workflowActivityVNext.workflows.archive': '归档',
     'workflowActivityVNext.workflows.archiveCheckAgain': '再次检查',
     'workflowActivityVNext.workflows.archiveConfirm': '归档工作流',
@@ -594,6 +592,8 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.workflows.empty': '暂无工作流',
     'workflowActivityVNext.workflows.emptyDescription':
       '创建一个工作流即可开始。',
+    'workflowActivityVNext.workflows.loadMore': '加载更多',
+    'workflowActivityVNext.workflows.loadMoreFailed': '无法加载更多工作流',
     'workflowActivityVNext.workflows.loading': '正在加载工作流…',
     'workflowActivityVNext.workflows.moreActionsAria':
       '{owner}中{name}的更多操作',
