@@ -127,6 +127,86 @@ public sealed partial class DiscoverServiceApiWorkflowCapabilityTool : ExternalW
         result.TryGetProperty("result", out var typedResult) &&
         typedResult.ValueKind == JsonValueKind.Object;
 
+    protected override AgentToolReceipt? CreateVerifiedResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson,
+        JsonElement result)
+    {
+        if (!result.TryGetProperty("result_kind", out var resultKind) ||
+            !string.Equals(resultKind.GetString(), "readiness_required", StringComparison.Ordinal) ||
+            !result.TryGetProperty("result", out var typedResult) ||
+            !typedResult.TryGetProperty("readiness_required", out var readinessElement))
+        {
+            return null;
+        }
+
+        var args = ToolArgs.Parse(argumentsJson);
+        var serviceSlug = args.Str("service_slug_snapshot")?.Trim();
+        var serviceLabel = args.Str("service_label_snapshot")?.Trim();
+        var targetUserServiceId = args.Str("target_user_service_id")?.Trim();
+        if (args.ParseError is not null ||
+            string.IsNullOrWhiteSpace(serviceSlug) ||
+            string.IsNullOrWhiteSpace(targetUserServiceId))
+        {
+            return null;
+        }
+
+        if (!result.TryGetProperty("target_user_service_id", out var resultTargetUserServiceId) ||
+            !string.Equals(
+                resultTargetUserServiceId.GetString(),
+                targetUserServiceId,
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        ExternalCapabilityReadiness readiness;
+        try
+        {
+            readiness = JsonParser.Default.Parse<ExternalCapabilityReadiness>(readinessElement.GetRawText());
+        }
+        catch (InvalidProtocolBufferException)
+        {
+            return null;
+        }
+
+        var blocker = readiness.Blockers.FirstOrDefault(static candidate =>
+            candidate.Status == ExternalCapabilityReadinessStatus.CredentialConnectionRequired &&
+            !string.IsNullOrWhiteSpace(candidate.Code) &&
+            !string.IsNullOrWhiteSpace(candidate.SafeMessage));
+        if (readiness.Status != ExternalCapabilityReadinessStatus.CredentialConnectionRequired ||
+            blocker is null ||
+            !readiness.Remediations.Any(static remediation =>
+                remediation.ActionKind == ExternalCapabilityRemediationActionKind.ConnectCredential))
+        {
+            return null;
+        }
+
+        var authorizationRequired = new NyxIdAuthorizationRequiredEvent
+        {
+            ServiceSlug = serviceSlug,
+            UserServiceId = targetUserServiceId,
+            ReasonCode = blocker.Code,
+            SafeMessage = blocker.SafeMessage,
+        };
+        if (!string.IsNullOrWhiteSpace(serviceLabel))
+            authorizationRequired.ServiceLabel = serviceLabel;
+
+        return new AgentToolReceipt
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = ResolveToolName(toolName),
+            Status = AgentToolReceiptStatus.AuthorizationRequired,
+            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            ErrorCode = blocker.Code,
+            ErrorMessage = blocker.SafeMessage,
+            ResultJson = resultJson,
+            AuthorizationRequired = authorizationRequired,
+        };
+    }
+
     private static ParsedInput BuildInput(
         ToolArgs args,
         ExternalWorkflowCapabilityAccessContext access)

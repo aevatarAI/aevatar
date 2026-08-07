@@ -854,6 +854,19 @@ public class BindingToolsTests
     {
         var port = new StubServiceApiWorkflowCapabilityDiscoveryPort(ReadinessRequiredResult());
         var tool = new DiscoverServiceApiWorkflowCapabilityTool(port);
+        const string arguments =
+            """
+            {
+              "target_user_service_id": "usvc-alpha",
+              "service_slug_snapshot": "example-service",
+              "service_label_snapshot": "Example Service",
+              "normalized_capability": "send a message",
+              "descriptor_inventory": [],
+              "managed_discovery_policy_version": "service_api_skill_discovery.v1",
+              "admission_policy_version": "nyxid_request_selector.v1",
+              "capability_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+            """;
         AgentToolRequestContext.Current = CapabilityContext(
             "owner-scope-alpha",
             "caller-subject-alpha",
@@ -862,19 +875,8 @@ public class BindingToolsTests
 
         try
         {
-            var result = await tool.ExecuteAsync(
-                """
-                {
-                  "target_user_service_id": "usvc-alpha",
-                  "service_slug_snapshot": "example-service",
-                  "service_label_snapshot": "Example Service",
-                  "normalized_capability": "send a message",
-                  "descriptor_inventory": [],
-                  "managed_discovery_policy_version": "service_api_skill_discovery.v1",
-                  "admission_policy_version": "nyxid_request_selector.v1",
-                  "capability_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                }
-                """);
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-discovery-readiness", tool.Name, arguments, result);
 
             using var document = JsonDocument.Parse(result);
             var root = document.RootElement;
@@ -885,6 +887,17 @@ public class BindingToolsTests
             readiness.GetProperty("remediations")[0].GetProperty("action_kind").GetString().Should()
                 .Be("EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_CONNECT_CREDENTIAL");
             root.TryGetProperty("authoring_selector", out _).Should().BeFalse();
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.AuthorizationRequired);
+            receipt.ErrorCode.Should().Be("USER_SERVICE_CREDENTIAL_NOT_READY");
+            receipt.ErrorMessage.Should().Be("The selected NyxID UserService credential is not ready.");
+            receipt.AuthorizationRequired.Should().NotBeNull();
+            receipt.AuthorizationRequired!.ServiceSlug.Should().Be("example-service");
+            receipt.AuthorizationRequired.ServiceLabel.Should().Be("Example Service");
+            receipt.AuthorizationRequired.UserServiceId.Should().Be("usvc-alpha");
+            receipt.AuthorizationRequired.ReasonCode.Should().Be("USER_SERVICE_CREDENTIAL_NOT_READY");
+            receipt.AuthorizationRequired.SafeMessage.Should()
+                .Be("The selected NyxID UserService credential is not ready.");
         }
         finally
         {
@@ -1821,6 +1834,12 @@ public class BindingToolsTests
             ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             Status = ExternalCapabilityReadinessStatus.CredentialConnectionRequired,
         };
+        readiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = ExternalCapabilityReadinessStatus.CredentialConnectionRequired,
+            Code = "USER_SERVICE_CREDENTIAL_NOT_READY",
+            SafeMessage = "The selected NyxID UserService credential is not ready.",
+        });
         readiness.Remediations.Add(new ExternalCapabilityRemediation
         {
             ActionKind = ExternalCapabilityRemediationActionKind.ConnectCredential,

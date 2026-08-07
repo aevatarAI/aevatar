@@ -52,6 +52,15 @@ public abstract class ExternalWorkflowCapabilityReadOnlyTool : IAgentTool
             if (!IsVerifiedResult(root))
                 return null;
 
+            var verifiedResultReceipt = CreateVerifiedResultReceipt(
+                callId,
+                toolName,
+                argumentsJson,
+                resultJson,
+                root);
+            if (verifiedResultReceipt is not null)
+                return verifiedResultReceipt;
+
             return new AgentToolReceipt
             {
                 CallId = callId ?? string.Empty,
@@ -73,7 +82,15 @@ public abstract class ExternalWorkflowCapabilityReadOnlyTool : IAgentTool
 
     protected abstract bool IsVerifiedResult(JsonElement result);
 
-    private string ResolveToolName(string? toolName) =>
+    protected virtual AgentToolReceipt? CreateVerifiedResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson,
+        JsonElement result) =>
+        null;
+
+    protected string ResolveToolName(string? toolName) =>
         string.IsNullOrWhiteSpace(toolName) ? Name : toolName;
 }
 
