@@ -459,8 +459,9 @@ public static class MainnetHostBuilderExtensions
                 [
                     CreateToolSource<NyxIdAssistantToolSource>,
                     CreateToolSource<AskUserAgentToolSource>,
+                    CreateToolSource<SkillsAgentToolSource>,
                 ],
-                "Pinned NyxID Assistant route: safe management reads, readiness, brokered proxy execution, and typed user input only.");
+                "Pinned NyxID Assistant route: safe management reads, readiness, typed user input, and explicit skill loading only.");
         });
 
         return builder;

@@ -47,6 +47,8 @@ Slug, HTTP method/path, display name, tool name, or model-supplied metadata cann
 
 R/A route tools and P admitted operation tools are distinct sets. A host or profile may compose both for one turn, but registration of one set never implies exposure of the other.
 
+Milestone 40 uses **request-local dynamic operation tools** as the only canonical model-visible Class-P selection contract. For every operation admitted by the server-owned exposure policy, Aevatar generates one bounded tool schema and one opaque request-local tool name. The server resolves that name to the frozen selector, catalog digest, schema, risk, and argument contract before dispatch; the model cannot provide or rewrite any selector member. A fixed `search_connected_service_operations` plus `invoke_connected_service_operation(candidate_ref)` pair is non-canonical for this milestone and must not be added as a parallel selection path.
+
 ### Special controls that are not normal Class-A actions
 
 `mfa verify` is not a separate action-registry row. Verification is absorbed into the NyxID-owned MFA setup/browser journey so the user does not receive two competing continuations for one authentication state machine.

@@ -69,6 +69,8 @@ Aevatar 记录真实 observation time 作为 freshness fact，但不把时间戳
 
 NyxID `contract_version=1.0` 尚未发布等价于历史 `x-aevatar-tool` 的 typed current-turn exposure policy。Aevatar 因此 fail closed：不生成 operation tool，也不暴露 arbitrary method/path surface。生产路径不存在 `nyxid_service_request`、`nyxid_service_operation__*` 或 raw OpenAPI parser。workflow admission 通过不能自动扩大普通 turn exposure。
 
+当 typed exposure policy 落地后，Milestone 40 的唯一 model-visible Class-P contract 是 request-local dynamic operation tools：每个 server-admitted operation 对应一个 bounded schema 和 opaque request-local tool name，并在服务端映射回同一份冻结 selector/digest/risk/argument contract。`search_connected_service_operations + invoke_connected_service_operation(candidate_ref)` 不属于本里程碑，不得作为第二条选择链路并存。
+
 current-turn discovery 仍 request-locally 读取并解析 MCP catalog，以验证 shared adapter 与记录 bounded diagnostics；MCP discovery 不可用时，四个只依赖 `/keys` authority 的管理工具仍可用。`/keys` discovery 本身失败、无 caller token、无有效实例或 identity conflict 时不暴露这些工具。
 
 ## 4. Workflow authoring 与 admission
