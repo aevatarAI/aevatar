@@ -112,6 +112,8 @@ export const workflowActivityVNextCss = `
 .wa-vnext__toolbar-search { flex: 0 1 320px; max-width: 100%; width: 320px; }
 .wa-vnext__toolbar-filters { justify-content: flex-end; }
 .wa-vnext__toolbar-filters .ant-select { min-width: 150px; }
+.wa-vnext__pagination-actions { align-items: center; display: flex; gap: 12px; justify-content: flex-end; min-height: 32px; padding-top: 16px; }
+.wa-vnext__pagination-actions p { color: var(--wa-danger); font-size: 12px; line-height: 17px; margin: 0; }
 .wa-vnext__table-wrap {
   border: 1px solid var(--wa-line);
   border-radius: var(--wa-radius);
@@ -364,6 +366,8 @@ export const workflowActivityVNextCss = `
   .wa-vnext__toolbar-search { flex-basis: auto; width: 100%; }
   .wa-vnext__toolbar-filters { display: grid; grid-template-columns: 1fr; width: 100%; }
   .wa-vnext__toolbar-filters .ant-space-item, .wa-vnext__toolbar-filters .ant-select, .wa-vnext__toolbar-filters .ant-btn { width: 100%; }
+  .wa-vnext__pagination-actions { align-items: stretch; flex-direction: column; }
+  .wa-vnext__pagination-actions .ant-btn { width: 100%; }
   .wa-vnext__creation-options { grid-template-columns: 1fr; }
   .wa-vnext__creation-option { min-height: 118px; }
   .wa-vnext__creation-form { gap: 18px; }
