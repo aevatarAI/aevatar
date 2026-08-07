@@ -76,6 +76,43 @@ message WorkflowExecutionCurrentStateDocument {
   repeated aevatar.workflow.WorkflowExternalActionApprovalSnapshot connector_approval_entries = 33;
   aevatar.workflow.WorkflowCapabilityAdmissionPlan capability_admission_plan = 34;
   aevatar.workflow.ExternalCapabilityExecutionMode expected_execution_mode = 35;
+  string workflow_id = 36;
+  google.protobuf.Timestamp completed_at_utc_value = 37;
+  double duration_ms = 38;
+  WorkflowRunActivityInitiatorReadModel activity_initiator = 39;
+  string input_summary = 40;
+  WorkflowRunActivityStepReadModel activity_current_step = 41;
+  WorkflowRunActivityFailureReadModel activity_first_failure = 42;
+  WorkflowRunActivityWaitingReadModel activity_waiting = 43;
+}
+
+message WorkflowRunActivityInitiatorReadModel {
+  string platform = 1;
+  string tenant = 2;
+  string external_user_id = 3;
+  string scope = 4;
+  string binding_id = 5;
+  string display_value = 6;
+  string availability = 7;
+}
+
+message WorkflowRunActivityStepReadModel {
+  string step_id = 1;
+  string input_summary = 2;
+  string availability = 3;
+}
+
+message WorkflowRunActivityFailureReadModel {
+  string step_id = 1;
+  string message = 2;
+  string availability = 3;
+}
+
+message WorkflowRunActivityWaitingReadModel {
+  string step_id = 1;
+  string waiting_kind = 2;
+  string prompt = 3;
+  string availability = 4;
 }
 
 message WorkflowExternalApprovalContinuationDocument {

@@ -101,6 +101,7 @@ public abstract class WorkflowGAgentTestBase
                 scopeId,
                 runOrigin,
                 scheduleId,
+                workflowId: null,
                 capabilityAdmissionPlan,
                 ExternalCapabilityExecutionMode.Interactive,
                 ct);

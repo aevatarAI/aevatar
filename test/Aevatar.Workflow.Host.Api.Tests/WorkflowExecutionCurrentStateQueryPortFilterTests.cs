@@ -90,9 +90,11 @@ public sealed class WorkflowExecutionCurrentStateQueryPortFilterTests
             new WorkflowActorCurrentStateListQuery { Take = 100, ScopeId = "scope-a" });
 
         reader.LastQuery.Should().NotBeNull();
-        var sort = reader.LastQuery!.Sorts.Should().ContainSingle().Subject;
-        sort.FieldPath.Should().Be(nameof(WorkflowExecutionCurrentStateDocument.UpdatedAtUtcValue));
-        sort.Direction.Should().Be(ProjectionDocumentSortDirection.Desc);
+        reader.LastQuery!.Sorts.Should().HaveCount(2);
+        reader.LastQuery.Sorts[0].FieldPath.Should().Be(nameof(WorkflowExecutionCurrentStateDocument.UpdatedAtUtcValue));
+        reader.LastQuery.Sorts[0].Direction.Should().Be(ProjectionDocumentSortDirection.Desc);
+        reader.LastQuery.Sorts[1].FieldPath.Should().Be(nameof(WorkflowExecutionCurrentStateDocument.RootActorId));
+        reader.LastQuery.Sorts[1].Direction.Should().Be(ProjectionDocumentSortDirection.Asc);
     }
 
     [Fact]

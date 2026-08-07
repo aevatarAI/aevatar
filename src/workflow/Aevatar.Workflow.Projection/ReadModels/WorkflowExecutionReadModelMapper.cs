@@ -10,6 +10,8 @@ public sealed class WorkflowExecutionReadModelMapper
         return new WorkflowActorSnapshot
         {
             ActorId = source.RootActorId,
+            RunId = source.RunId,
+            WorkflowId = source.WorkflowId,
             WorkflowName = source.WorkflowName,
             ScopeId = source.ScopeId,
             RunOrigin = source.RunOrigin,
@@ -19,6 +21,8 @@ public sealed class WorkflowExecutionReadModelMapper
             LastEventId = source.LastEventId,
             LastUpdatedAt = source.UpdatedAt,
             StartedAtUtc = source.StartedAtUtcValue,
+            CompletedAtUtc = source.CompletedAtUtcValue,
+            DurationMs = source.DurationMs,
             LastSuccess = source.Success,
             LastOutput = source.FinalOutput,
             LastError = source.FinalError,
@@ -32,6 +36,11 @@ public sealed class WorkflowExecutionReadModelMapper
             RoleReplyCount = 0,
             InputFileRefs = { source.InputFileRefs.Select(MapInputFileRef) },
             ConnectorApprovals = { source.ConnectorApprovals.Select(static approval => approval.Clone()) },
+            ActivityInitiator = MapActivityInitiator(source.ActivityInitiator),
+            InputSummary = source.InputSummary,
+            ActivityCurrentStep = MapActivityCurrentStep(source.ActivityCurrentStep),
+            ActivityFirstFailure = MapActivityFirstFailure(source.ActivityFirstFailure),
+            ActivityWaiting = MapActivityWaiting(source.ActivityWaiting),
         };
     }
 
@@ -182,6 +191,55 @@ public sealed class WorkflowExecutionReadModelMapper
             OwnerRunId = source.OwnerRunId,
             OwnerScopeId = source.OwnerScopeId,
         };
+
+    private static WorkflowRunActivityInitiatorSnapshot MapActivityInitiator(
+        WorkflowRunActivityInitiatorReadModel? source) =>
+        source == null
+            ? new WorkflowRunActivityInitiatorSnapshot { Availability = "unavailable", DisplayValue = "Unknown" }
+            : new WorkflowRunActivityInitiatorSnapshot
+            {
+                Platform = source.Platform,
+                Tenant = source.Tenant,
+                ExternalUserId = source.ExternalUserId,
+                Scope = source.Scope,
+                BindingId = source.BindingId,
+                DisplayValue = string.IsNullOrWhiteSpace(source.DisplayValue) ? "Unknown" : source.DisplayValue,
+                Availability = string.IsNullOrWhiteSpace(source.Availability) ? "unavailable" : source.Availability,
+            };
+
+    private static WorkflowRunActivityStepSnapshot MapActivityCurrentStep(
+        WorkflowRunActivityStepReadModel? source) =>
+        source == null
+            ? new WorkflowRunActivityStepSnapshot { Availability = "unavailable" }
+            : new WorkflowRunActivityStepSnapshot
+            {
+                StepId = source.StepId,
+                InputSummary = source.InputSummary,
+                Availability = string.IsNullOrWhiteSpace(source.Availability) ? "unavailable" : source.Availability,
+            };
+
+    private static WorkflowRunActivityFailureSnapshot MapActivityFirstFailure(
+        WorkflowRunActivityFailureReadModel? source) =>
+        source == null
+            ? new WorkflowRunActivityFailureSnapshot { Availability = "unavailable" }
+            : new WorkflowRunActivityFailureSnapshot
+            {
+                StepId = source.StepId,
+                Message = source.Message,
+                Availability = string.IsNullOrWhiteSpace(source.Availability) ? "unavailable" : source.Availability,
+            };
+
+    private static WorkflowRunActivityWaitingSnapshot MapActivityWaiting(
+        WorkflowRunActivityWaitingReadModel? source) =>
+        source == null
+            ? new WorkflowRunActivityWaitingSnapshot { Availability = "unavailable" }
+            : new WorkflowRunActivityWaitingSnapshot
+            {
+                StepId = source.StepId,
+                WaitingKind = source.WaitingKind,
+                Prompt = source.Prompt,
+                Availability = string.IsNullOrWhiteSpace(source.Availability) ? "unavailable" : source.Availability,
+            };
 
     private static WorkflowRunCompletionStatus MapCompletionStatus(
         WorkflowExecutionCompletionStatus status)

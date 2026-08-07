@@ -599,6 +599,7 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
                 scopeId: command.ScopeId,
                 runOrigin: null,
                 scheduleId: null,
+                workflowId: null,
                 capabilityAdmissionPlan: null,
                 expectedExecutionMode: command.ExpectedExecutionMode,
                 ct: ct);

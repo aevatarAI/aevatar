@@ -33,6 +33,44 @@ message WorkflowActorSnapshot {
   string scope_id = 21;
   string run_origin = 22;
   repeated aevatar.workflow.WorkflowExternalActionApprovalSnapshot connector_approvals = 23;
+  string workflow_id = 24;
+  google.protobuf.Timestamp completed_at_utc = 25;
+  double duration_ms = 26;
+  WorkflowRunActivityInitiatorSnapshot activity_initiator = 27;
+  string input_summary = 28;
+  WorkflowRunActivityStepSnapshot activity_current_step = 29;
+  WorkflowRunActivityFailureSnapshot activity_first_failure = 30;
+  WorkflowRunActivityWaitingSnapshot activity_waiting = 31;
+  string run_id = 32;
+}
+
+message WorkflowRunActivityInitiatorSnapshot {
+  string platform = 1;
+  string tenant = 2;
+  string external_user_id = 3;
+  string scope = 4;
+  string binding_id = 5;
+  string display_value = 6;
+  string availability = 7;
+}
+
+message WorkflowRunActivityStepSnapshot {
+  string step_id = 1;
+  string input_summary = 2;
+  string availability = 3;
+}
+
+message WorkflowRunActivityFailureSnapshot {
+  string step_id = 1;
+  string message = 2;
+  string availability = 3;
+}
+
+message WorkflowRunActivityWaitingSnapshot {
+  string step_id = 1;
+  string waiting_kind = 2;
+  string prompt = 3;
+  string availability = 4;
 }
 
 message WorkflowRunFileRef {

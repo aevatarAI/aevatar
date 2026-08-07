@@ -59,6 +59,32 @@ public sealed class WorkflowRunObservatoryQueryService
         return summaries;
     }
 
+    public async Task<WorkflowActivityRunFeedPage> ListActivityRunsForScopeAsync(
+        string scopeId,
+        WorkflowActivityRunFeedFilter filter,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+        var normalizedScopeId = scopeId?.Trim() ?? string.Empty;
+        if (normalizedScopeId.Length == 0)
+            return new WorkflowActivityRunFeedPage();
+
+        var page = await PageActivityRunsAsync(filter, normalizedScopeId, ct);
+
+        // Implement (issue #3250):
+        //   Behavior: Activity rows expose backend-owned facts from the materialized current-state document.
+        //   Why this shape: Scope and status are still checked after the store query as a defense-in-depth gate.
+        var statusFilter = filter.Status?.Trim();
+        var rows = page.Items
+            .Where(snapshot => string.Equals(snapshot.ScopeId, normalizedScopeId, StringComparison.Ordinal))
+            .Select(ToActivityRunFeedRow)
+            .Where(row => string.IsNullOrEmpty(statusFilter) ||
+                          string.Equals(row.Status, statusFilter, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        return ToActivityRunFeedPage(page, rows);
+    }
+
     // 06-20-observatory-admin-cross-scope (G3/G4): cross-scope overview. No ScopeId in the query => the projection
     //   returns runs across ALL scopes (recent-N, bounded by Take). No ownership gate. Authorization is enforced
     //   upstream at the endpoint (admin/operator only) BEFORE this is called. Filters are applied by the
@@ -82,6 +108,24 @@ public sealed class WorkflowRunObservatoryQueryService
                               string.Equals(summary.Status, statusFilter, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(summary => summary.StartedAtUtc ?? summary.UpdatedAtUtc)
             .ToList();
+    }
+
+    public async Task<WorkflowActivityRunFeedPage> ListAllActivityRunsAsync(
+        WorkflowActivityRunFeedFilter filter,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+
+        var page = await PageActivityRunsAsync(filter, scopeId: null, ct);
+
+        var statusFilter = filter.Status?.Trim();
+        var rows = page.Items
+            .Select(ToActivityRunFeedRow)
+            .Where(row => string.IsNullOrEmpty(statusFilter) ||
+                          string.Equals(row.Status, statusFilter, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        return ToActivityRunFeedPage(page, rows);
     }
 
     public async Task<ObservatoryRunDetail?> GetRunAsync(
@@ -122,6 +166,41 @@ public sealed class WorkflowRunObservatoryQueryService
             ScheduleIds = filter.ScheduleIds,
             UpdatedFromUtc = filter.FromUtc,
             UpdatedToUtc = filter.ToUtc,
+        };
+
+    private async Task<WorkflowActorCurrentStatePage> PageActivityRunsAsync(
+        WorkflowActivityRunFeedFilter filter,
+        string? scopeId,
+        CancellationToken ct)
+    {
+        var take = Math.Clamp(filter.Take <= 0 ? DefaultRunListTake : filter.Take, 1, MaxRunListTake);
+        return await _currentStateQueryPort.PageWorkflowActorCurrentStatesAsync(
+            new WorkflowActorCurrentStateListQuery
+            {
+                Take = take,
+                ScopeId = scopeId ?? string.Empty,
+                Status = filter.Status?.Trim() ?? string.Empty,
+                RunOrigins = filter.Origins,
+                DefinitionActorIds = filter.DefinitionActorIds,
+                ScheduleIds = filter.ScheduleIds,
+                WorkflowId = filter.WorkflowId?.Trim() ?? string.Empty,
+                UpdatedFromUtc = filter.FromUtc,
+                UpdatedToUtc = filter.ToUtc,
+                Cursor = filter.Cursor,
+                IncludeTotalCount = filter.IncludeTotalCount,
+            },
+            ct);
+    }
+
+    private static WorkflowActivityRunFeedPage ToActivityRunFeedPage(
+        WorkflowActorCurrentStatePage source,
+        IReadOnlyList<WorkflowActivityRunFeedRow> rows) =>
+        new()
+        {
+            Items = rows,
+            NextCursor = string.IsNullOrWhiteSpace(source.NextCursor) ? null : source.NextCursor,
+            HasMore = !string.IsNullOrWhiteSpace(source.NextCursor),
+            TotalCount = source.TotalCount,
         };
 
     public async Task<ObservatoryRunDetail?> GetRunForScopeAsync(
@@ -299,6 +378,81 @@ public sealed class WorkflowRunObservatoryQueryService
             RunOrigin = snapshot.RunOrigin,
         };
     }
+
+    private static WorkflowActivityRunFeedRow ToActivityRunFeedRow(WorkflowActorSnapshot snapshot)
+    {
+        var completedAtUtc = snapshot.CompletedAtUtc?.ToDateTimeOffset();
+        return new WorkflowActivityRunFeedRow
+        {
+            RunId = snapshot.RunId,
+            ActorId = snapshot.ActorId,
+            WorkflowId = snapshot.WorkflowId,
+            WorkflowName = snapshot.WorkflowName,
+            ScopeId = snapshot.ScopeId,
+            Status = MapStatus(snapshot.CompletionStatus),
+            RunOrigin = snapshot.RunOrigin,
+            Success = snapshot.LastSuccess,
+            Initiator = ToActivityInitiatorSummary(snapshot.ActivityInitiator),
+            InputSummary = snapshot.InputSummary,
+            CurrentStep = ToActivityStepSummary(snapshot.ActivityCurrentStep),
+            FirstFailure = ToActivityFailureSummary(snapshot.ActivityFirstFailure),
+            Waiting = ToActivityWaitingSummary(snapshot.ActivityWaiting),
+            StartedAtUtc = snapshot.StartedAtUtc?.ToDateTimeOffset(),
+            CompletedAtUtc = completedAtUtc,
+            UpdatedAtUtc = snapshot.LastUpdatedAt,
+            DurationMs = completedAtUtc == null ? null : snapshot.DurationMs,
+            StateVersion = snapshot.StateVersion,
+        };
+    }
+
+    private static WorkflowActivityRunInitiatorSummary ToActivityInitiatorSummary(
+        WorkflowRunActivityInitiatorSnapshot? source) =>
+        source == null
+            ? new WorkflowActivityRunInitiatorSummary()
+            : new WorkflowActivityRunInitiatorSummary
+            {
+                Platform = source.Platform,
+                Tenant = source.Tenant,
+                ExternalUserId = source.ExternalUserId,
+                Scope = source.Scope,
+                BindingId = source.BindingId,
+                DisplayValue = string.IsNullOrWhiteSpace(source.DisplayValue) ? "Unknown" : source.DisplayValue,
+                Availability = string.IsNullOrWhiteSpace(source.Availability) ? "unavailable" : source.Availability,
+            };
+
+    private static WorkflowActivityRunStepSummary ToActivityStepSummary(
+        WorkflowRunActivityStepSnapshot? source) =>
+        source == null
+            ? new WorkflowActivityRunStepSummary()
+            : new WorkflowActivityRunStepSummary
+            {
+                StepId = source.StepId,
+                InputSummary = source.InputSummary,
+                Availability = string.IsNullOrWhiteSpace(source.Availability) ? "unavailable" : source.Availability,
+            };
+
+    private static WorkflowActivityRunFailureSummary ToActivityFailureSummary(
+        WorkflowRunActivityFailureSnapshot? source) =>
+        source == null
+            ? new WorkflowActivityRunFailureSummary()
+            : new WorkflowActivityRunFailureSummary
+            {
+                StepId = source.StepId,
+                Message = source.Message,
+                Availability = string.IsNullOrWhiteSpace(source.Availability) ? "unavailable" : source.Availability,
+            };
+
+    private static WorkflowActivityRunWaitingSummary ToActivityWaitingSummary(
+        WorkflowRunActivityWaitingSnapshot? source) =>
+        source == null
+            ? new WorkflowActivityRunWaitingSummary()
+            : new WorkflowActivityRunWaitingSummary
+            {
+                StepId = source.StepId,
+                WaitingKind = source.WaitingKind,
+                Prompt = source.Prompt,
+                Availability = string.IsNullOrWhiteSpace(source.Availability) ? "unavailable" : source.Availability,
+            };
 
     // 06-26 detail enrichment: per-step structured trace. OutputPreview is the materialized 240-char preview;
     // the full per-step output is surfaced through the run timeline (role.reply / tool-call), not here.

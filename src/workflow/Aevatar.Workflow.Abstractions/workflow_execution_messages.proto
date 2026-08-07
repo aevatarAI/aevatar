@@ -317,6 +317,9 @@ message BindWorkflowRunDefinitionEvent
   // The Run actor owns this copy for its whole lifetime; runtime never re-reads the Definition.
   WorkflowCapabilityAdmissionPlan capability_admission_plan = 9;
   ExternalCapabilityExecutionMode expected_execution_mode = 10;
+  // Authoritative draft/workspace workflow identity carried from the definition binding.
+  // Empty means the run is legacy or not backed by a draft workflow identity.
+  string workflow_id = 11;
 }
 
 // Idempotent provisioning command for a stable Run actor identity. The first
@@ -407,8 +410,20 @@ message WorkflowExecutionStateUpsertedEvent
   google.protobuf.Any state = 2;
 }
 message WorkflowExecutionStateClearedEvent  { string scope_key = 1; }
-message WorkflowStoppedEvent { string workflow_name = 1; string run_id = 2; string reason = 3; }
-message WorkflowCompletedEvent { string workflow_name = 1; bool success = 2; string output = 3; string error = 4; string run_id = 5; }
+message WorkflowStoppedEvent {
+  string workflow_name = 1;
+  string run_id = 2;
+  string reason = 3;
+  google.protobuf.Timestamp completed_at_utc = 4;
+}
+message WorkflowCompletedEvent {
+  string workflow_name = 1;
+  bool success = 2;
+  string output = 3;
+  string error = 4;
+  string run_id = 5;
+  google.protobuf.Timestamp completed_at_utc = 6;
+}
 
 message WorkflowInteractionNotificationEvent {
   string run_id = 1;
@@ -817,7 +832,11 @@ message SecureValueCapturedEvent {
   string value = 4;
   aevatar.credentials.RuntimeSecretReference value_reference = 5;
 }
-message WorkflowRunStoppedEvent { string run_id = 1; string reason = 2; }
+message WorkflowRunStoppedEvent {
+  string run_id = 1;
+  string reason = 2;
+  google.protobuf.Timestamp completed_at_utc = 3;
+}
 message WorkflowRoleActorLinkedEvent
 {
   string run_id = 1;
