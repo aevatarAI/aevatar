@@ -231,11 +231,22 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
         html.Should().Contain("app.js?v=20260806-studio-sidebar-focus");
+        html.Should().Contain("styles.css?v=20260807-admin-shell-scroll");
+        html.Should().Contain("<span class=\"brand-name\">Aevatar Studio</span>");
+        html.Should().NotContain("class=\"brand-mark\"");
         styles.Should().Contain("color-scheme: only light");
         styles.Should().NotContain("color-scheme: dark");
         styles.Should().NotContain("prefers-color-scheme");
-        styles.Should().Contain("--bg: #f6f8f7");
-        styles.Should().Contain("--accent: #0f766e");
+        styles.Should().Contain("--bg: #f4f5f7");
+        styles.Should().Contain("--accent: #2563eb");
+        styles.Should().Contain("--accent-strong: #1d4ed8");
+        styles.Should().Contain("--success: #15a34a");
+        styles.Should().NotContain("--accent: #0f766e");
+        styles.Should().NotContain("--accent-secondary: #df6b45");
+        styles.Should().Contain("overflow-y: scroll");
+        styles.Should().Contain("scrollbar-gutter: stable");
+        styles.Should().Contain(".thread::-webkit-scrollbar-thumb");
+        styles.Should().Contain("min-height: 480px");
         styles.Should().NotContain("data-theme");
     }
 

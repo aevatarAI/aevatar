@@ -1,32 +1,32 @@
 :root {
   color-scheme: only light;
-  --bg: #f6f8f7;
+  --bg: #f4f5f7;
   --panel: #ffffff;
   --panel-raised: #ffffff;
-  --surface: #eef2f0;
-  --surface-hover: #e5ebe8;
-  --text: #17201d;
-  --text-soft: #28332f;
-  --muted: #52605b;
-  --tertiary: #74807b;
-  --border: #dce4e0;
-  --border-strong: #c8d3ce;
-  --accent: #0f766e;
-  --accent-soft: #e8f4f1;
-  --success: #16875f;
-  --success-soft: #e7f5ef;
-  --warning: #a96817;
-  --warning-soft: #fbf2e5;
-  --error: #c2413b;
-  --error-soft: #fbeceb;
-  --info: #3267a8;
-  --info-soft: #eff6ff;
-  --shadow: 0 16px 42px rgba(24, 24, 27, 0.14);
+  --surface: #f6f7f9;
+  --surface-hover: #eef3ff;
+  --text: #111827;
+  --text-soft: #1f2937;
+  --muted: #4b5563;
+  --tertiary: #6b7280;
+  --border: #e5e7eb;
+  --border-strong: #d8dce2;
+  --accent: #2563eb;
+  --accent-soft: #eef3ff;
+  --success: #15a34a;
+  --success-soft: #eafaf0;
+  --warning: #d97706;
+  --warning-soft: #fdf3e3;
+  --error: #dc2626;
+  --error-soft: #fdeeee;
+  --info: #2563eb;
+  --info-soft: #eef3ff;
+  --shadow: 0 6px 18px rgba(17, 24, 39, 0.1);
   --assistant-card-max-width: 860px;
   --assistant-card-inline-gutter: 48px;
-  --sans: "Mona Sans", "Alibaba PuHuiTi 2.0", "Alibaba PuHuiTi", "PingFang SC",
+  --sans: "Alibaba PuHuiTi 2.0", "Alibaba PuHuiTi", "AlibabaSans", "PingFang SC",
     -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-  --mono: "JetBrains Mono", ui-monospace, monospace;
+  --mono: "JetBrains Mono", "SF Mono", ui-monospace, "Roboto Mono", Menlo, monospace;
   --radius: 6px;
 }
 
@@ -43,7 +43,8 @@ body {
 }
 
 body {
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
@@ -98,7 +99,8 @@ summary:focus-visible {
 .app-shell {
   display: flex;
   height: 100dvh;
-  min-height: 0;
+  min-height: 480px;
+  overflow: hidden;
   flex-direction: column;
 }
 
@@ -120,19 +122,6 @@ summary:focus-visible {
   align-items: center;
   gap: 9px;
   padding-left: 16px;
-}
-
-.brand-mark {
-  display: grid;
-  width: 27px;
-  height: 27px;
-  place-items: center;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  background: var(--accent);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 700;
 }
 
 .brand-name {
@@ -3699,70 +3688,71 @@ summary:focus-visible {
 /* ── Admin Studio transcript layout ─────────────────────────────────────── */
 
 :root {
-  --bg: #f6f8f7;
+  --bg: #f4f5f7;
   --panel: #ffffff;
   --panel-raised: #ffffff;
-  --surface: #eef2f0;
-  --surface-hover: #e5ebe8;
-  --text: #17201d;
-  --text-soft: #28332f;
-  --muted: #52605b;
-  --tertiary: #74807b;
-  --border: #dce4e0;
-  --border-strong: #c8d3ce;
-  --hairline: rgba(23, 32, 29, 0.1);
-  --hairline-strong: rgba(23, 32, 29, 0.18);
-  --overlay: rgba(23, 32, 29, 0.04);
-  --overlay-strong: rgba(23, 32, 29, 0.07);
-  --accent: #0f766e;
-  --accent-strong: #0b5d57;
-  --accent-secondary: #df6b45;
-  --accent-soft: rgba(15, 118, 110, 0.09);
-  --success: #16875f;
-  --success-soft: rgba(22, 135, 95, 0.09);
-  --warning: #a96817;
-  --warning-soft: rgba(169, 104, 23, 0.09);
-  --error: #c2413b;
-  --error-soft: rgba(194, 65, 59, 0.09);
-  --info: #3267a8;
-  --info-soft: rgba(50, 103, 168, 0.09);
-  --shadow: 0 18px 38px rgba(23, 32, 29, 0.14), 0 3px 10px rgba(23, 32, 29, 0.07);
+  --surface: #f6f7f9;
+  --surface-hover: #eef3ff;
+  --text: #111827;
+  --text-soft: #1f2937;
+  --muted: #4b5563;
+  --tertiary: #6b7280;
+  --border: #e5e7eb;
+  --border-strong: #d8dce2;
+  --hairline: rgba(17, 24, 39, 0.1);
+  --hairline-strong: rgba(17, 24, 39, 0.18);
+  --overlay: rgba(17, 24, 39, 0.04);
+  --overlay-strong: rgba(17, 24, 39, 0.07);
+  --accent: #2563eb;
+  --accent-strong: #1d4ed8;
+  --accent-secondary: #2563eb;
+  --accent-soft: #eef3ff;
+  --success: #15a34a;
+  --success-soft: #eafaf0;
+  --warning: #d97706;
+  --warning-soft: #fdf3e3;
+  --error: #dc2626;
+  --error-soft: #fdeeee;
+  --info: #2563eb;
+  --info-soft: #eef3ff;
+  --shadow: 0 6px 18px rgba(17, 24, 39, 0.1);
   --assistant-card-max-width: 860px;
   --assistant-card-inline-gutter: 48px;
   --workspace-max-width: 1400px;
   --sidebar-width: 264px;
   --conversation-max-width: 900px;
   --conversation-inline-gutter: 48px;
-  --topbar-h: 60px;
-  --radius: 8px;
-  --radius-lg: 10px;
-  --radius-xl: 12px;
+  --topbar-h: 56px;
+  --radius: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 8px;
 }
 
 body {
   background: var(--bg);
-  font-family: "Mona Sans", ui-sans-serif, system-ui;
+  font-family: var(--sans);
   font-size: 15px;
   line-height: 1.5;
 }
 
 .app-shell {
-  min-height: 100dvh;
+  height: 100dvh;
+  min-height: 480px;
+  overflow: hidden;
 }
 
 .site-header {
   position: relative;
   z-index: 30;
   flex: 0 0 auto;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-  background: color-mix(in srgb, var(--bg) 94%, transparent);
-  backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
 }
 
 .topbar {
   height: var(--topbar-h);
   flex-basis: var(--topbar-h);
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-bottom: 0;
   background: transparent;
   padding: 0 max(24px, calc((100% - var(--workspace-max-width)) / 2));
 }
@@ -3774,48 +3764,10 @@ body {
   padding: 0;
 }
 
-.brand-mark {
-  position: relative;
-  display: block;
-  width: 32px;
-  height: 32px;
-  overflow: hidden;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-
-.brand-mark::before,
-.brand-mark::after,
-.brand-mark span {
-  position: absolute;
-  top: 3px;
-  width: 8px;
-  height: 26px;
-  border-radius: 2px;
-  background: linear-gradient(180deg, var(--accent-secondary), var(--accent));
-  content: "";
-  transform: skew(-14deg);
-}
-
-.brand-mark::before {
-  left: 4px;
-}
-
-.brand-mark span {
-  left: 14px;
-  height: 19px;
-}
-
-.brand-mark::after {
-  right: 1px;
-  height: 12px;
-}
-
 .brand-name {
   color: var(--text);
-  font-size: 17px;
-  font-weight: 700;
+  font-size: 14px;
+  font-weight: 590;
 }
 
 .breadcrumbs {
@@ -3865,6 +3817,7 @@ body:has(.settings-dialog[open]) #servicesButton,
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   gap: 36px;
   margin: 0 auto;
+  overflow: hidden;
   padding: 28px 0 0;
 }
 
@@ -4002,8 +3955,63 @@ body:has(.settings-dialog[open]) #servicesButton,
 }
 
 .thread {
+  overflow-y: scroll;
   padding: 0 0 28px;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
   scrollbar-color: var(--border-strong) transparent;
+}
+
+.thread,
+.recent-session-list,
+.composer-service-list,
+.inspector-body,
+.dialog-body,
+.service-access-list {
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.thread::-webkit-scrollbar,
+.recent-session-list::-webkit-scrollbar,
+.composer-service-list::-webkit-scrollbar,
+.inspector-body::-webkit-scrollbar,
+.dialog-body::-webkit-scrollbar,
+.service-access-list::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.thread::-webkit-scrollbar-track,
+.recent-session-list::-webkit-scrollbar-track,
+.composer-service-list::-webkit-scrollbar-track,
+.inspector-body::-webkit-scrollbar-track,
+.dialog-body::-webkit-scrollbar-track,
+.service-access-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.thread::-webkit-scrollbar-thumb,
+.recent-session-list::-webkit-scrollbar-thumb,
+.composer-service-list::-webkit-scrollbar-thumb,
+.inspector-body::-webkit-scrollbar-thumb,
+.dialog-body::-webkit-scrollbar-thumb,
+.service-access-list::-webkit-scrollbar-thumb {
+  min-height: 44px;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: var(--border-strong);
+  background-clip: content-box;
+}
+
+.thread::-webkit-scrollbar-thumb:hover,
+.recent-session-list::-webkit-scrollbar-thumb:hover,
+.composer-service-list::-webkit-scrollbar-thumb:hover,
+.inspector-body::-webkit-scrollbar-thumb:hover,
+.dialog-body::-webkit-scrollbar-thumb:hover,
+.service-access-list::-webkit-scrollbar-thumb:hover {
+  background: var(--tertiary);
+  background-clip: content-box;
 }
 
 .conversation-view {
