@@ -123,6 +123,7 @@ public sealed class KafkaProviderTransportTests
         var options = new AevatarOrleansRuntimeOptions();
 
         options.QueueCacheSize.Should().BeGreaterThanOrEqualTo(32 * 1024);
+        options.MaxEventDeliveryTime.Should().BeGreaterThan(TimeSpan.FromMinutes(2));
     }
 
     [Fact]

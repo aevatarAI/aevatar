@@ -1168,6 +1168,87 @@ public class RoleGAgentReplayContractTests
     }
 
     [Fact]
+    public async Task StreamingChat_ShouldBoundCommittedProgressForProviderTokenFragments()
+    {
+        const string actorId = "role-bounded-stream-progress";
+        const string sessionId = "turn-bounded-stream-progress";
+        const int textChunkCount = 4_097;
+        const int reasoningChunkCount = 2_049;
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
+        var provider = new FragmentedLlmProviderFactory(textChunkCount, reasoningChunkCount);
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(services, actorId, provider);
+        agent.EventPublisher = publisher;
+        await agent.ActivateAsync();
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "stream many token fragments",
+            SessionId = sessionId,
+        });
+
+        var progress = (await store.GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>())
+            .ToArray();
+        var textDeltas = progress
+            .Where(evt => evt.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.TextDelta)
+            .Select(evt => evt.TextDelta.Delta)
+            .ToArray();
+        var reasoningDeltas = progress
+            .Where(evt => evt.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.ReasoningDelta)
+            .Select(evt => evt.ReasoningDelta.Delta)
+            .ToArray();
+
+        textDeltas.Should().HaveCount(5);
+        reasoningDeltas.Should().HaveCount(3);
+        string.Concat(textDeltas).Should().Be(new string('t', textChunkCount));
+        string.Concat(reasoningDeltas).Should().Be(new string('r', reasoningChunkCount));
+        publisher.Published.OfType<TextMessageContentEvent>()
+            .Select(evt => evt.Delta)
+            .Should().Equal(textDeltas);
+        publisher.Published.OfType<TextMessageReasoningEvent>()
+            .Select(evt => evt.Delta)
+            .Should().Equal(reasoningDeltas);
+        agent.State.Sessions[sessionId].FinalContent.Should().Be(new string('t', textChunkCount));
+        agent.State.Sessions[sessionId].FinalReasoningContent.Should().Be(new string('r', reasoningChunkCount));
+    }
+
+    [Fact]
+    public async Task StreamingChat_ShouldFlushSmallDeltasAtInteractionCadence()
+    {
+        const string actorId = "role-paced-stream-progress";
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
+        var timeProvider = new ManualDeadlineTimeProvider();
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(
+            services,
+            actorId,
+            new PacedLlmProviderFactory(timeProvider),
+            timeProvider);
+        agent.EventPublisher = publisher;
+        await agent.ActivateAsync();
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "stream paced fragments",
+            SessionId = "turn-paced-stream-progress",
+        });
+
+        publisher.Published.OfType<TextMessageContentEvent>()
+            .Select(evt => evt.Delta)
+            .Should().Equal("a", "b", "c");
+        (await store.GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>())
+            .Where(progress => progress.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.TextDelta)
+            .Select(progress => progress.TextDelta.Delta)
+            .Should().Equal("a", "b", "c");
+    }
+
+    [Fact]
     public async Task CompletedConversationHistory_ShouldBeRestoredAfterActorReactivation()
     {
         var store = new InMemoryEventStoreForTests();
@@ -3020,6 +3101,72 @@ public class RoleGAgentReplayContractTests
                 IsLast = true,
                 Usage = new TokenUsage(1, 1, 2),
             };
+        }
+    }
+
+    private sealed class FragmentedLlmProviderFactory(
+        int textChunkCount,
+        int reasoningChunkCount) : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "fragmented";
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            _ = request;
+            for (var i = 0; i < textChunkCount; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                yield return new LLMStreamChunk { DeltaContent = "t" };
+            }
+
+            for (var i = 0; i < reasoningChunkCount; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                yield return new LLMStreamChunk { DeltaReasoningContent = "r" };
+            }
+
+            await Task.CompletedTask;
+            yield return new LLMStreamChunk
+            {
+                IsLast = true,
+                Usage = new TokenUsage(1, 1, 2),
+            };
+        }
+    }
+
+    private sealed class PacedLlmProviderFactory(
+        ManualDeadlineTimeProvider timeProvider) : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "paced";
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            yield return new LLMStreamChunk { DeltaContent = "a" };
+            timeProvider.Advance(TimeSpan.FromMilliseconds(250));
+            ct.ThrowIfCancellationRequested();
+            yield return new LLMStreamChunk { DeltaContent = "b" };
+            timeProvider.Advance(TimeSpan.FromMilliseconds(250));
+            ct.ThrowIfCancellationRequested();
+            yield return new LLMStreamChunk { DeltaContent = "c" };
+            await Task.CompletedTask;
         }
     }
 

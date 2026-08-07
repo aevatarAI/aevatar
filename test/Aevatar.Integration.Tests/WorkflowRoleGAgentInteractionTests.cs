@@ -377,6 +377,60 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
         }
 
         [Fact]
+        public async Task WorkflowRoleGAgent_WhenProviderStreamsTokenFragments_ShouldBoundCommittedProgress()
+        {
+            const int textChunkCount = 4_097;
+            const int reasoningChunkCount = 2_049;
+            var eventStore = new InMemoryEventStore();
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new FragmentedWorkflowIntentLlmProvider(textChunkCount, reasoningChunkCount),
+                "workflow-role-agent-bounded-progress");
+
+            await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = "run-bounded-progress",
+                StepId = "step-bounded-progress",
+                SessionId = "session-bounded-progress",
+                Prompt = "stream many token fragments",
+            });
+
+            var persisted = await eventStore.GetEventsAsync(agent.Id);
+            var progress = persisted
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>())
+                .ToArray();
+            var textDeltas = progress
+                .Where(item => item.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.TextDelta)
+                .Select(item => item.TextDelta.Delta)
+                .ToArray();
+            var reasoningDeltas = progress
+                .Where(item => item.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.ReasoningDelta)
+                .Select(item => item.ReasoningDelta.Delta)
+                .ToArray();
+
+            textDeltas.Should().HaveCount(5);
+            reasoningDeltas.Should().HaveCount(3);
+            textDeltas.Should().OnlyContain(delta => delta.Length <= 1_024);
+            reasoningDeltas.Should().OnlyContain(delta => delta.Length <= 1_024);
+            string.Concat(textDeltas).Should().Be(new string('t', textChunkCount));
+            string.Concat(reasoningDeltas).Should().Be(new string('r', reasoningChunkCount));
+            publisher.Published
+                .Select(item => item.evt)
+                .Where(item => item is TextMessageContentEvent or TextMessageReasoningEvent)
+                .Should().BeEmpty();
+
+            var completion = persisted
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+                .Should()
+                .ContainSingle()
+                .Subject;
+            completion.Content.Should().Be(new string('t', textChunkCount));
+            completion.ReasoningContent.Should().Be(new string('r', reasoningChunkCount));
+        }
+
+        [Fact]
         public async Task WorkflowRoleGAgent_WhenCompletedIntentIsRedelivered_ShouldNotPublishOrphanStartedEvent()
         {
             var eventStore = new InMemoryEventStore();
@@ -3196,6 +3250,32 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                 };
                 yield return new LLMStreamChunk { IsLast = true, FinishReason = "tool_calls" };
                 await Task.CompletedTask;
+            }
+        }
+
+        private sealed class FragmentedWorkflowIntentLlmProvider(
+            int textChunkCount,
+            int reasoningChunkCount) : WorkflowIntentLlmProviderBase
+        {
+            public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+                LLMRequest request,
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+            {
+                _ = request;
+                for (var i = 0; i < textChunkCount; i++)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    yield return new LLMStreamChunk { DeltaContent = "t" };
+                }
+
+                for (var i = 0; i < reasoningChunkCount; i++)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    yield return new LLMStreamChunk { DeltaReasoningContent = "r" };
+                }
+
+                await Task.CompletedTask;
+                yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
             }
         }
 

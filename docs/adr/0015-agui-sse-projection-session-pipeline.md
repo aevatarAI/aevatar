@@ -6,6 +6,16 @@ owner: liyingpei
 
 # ADR-0015: AGUI / SSE Projection Session Pipeline
 
+> 2026-08-07 update (#3290): a valid long-running workflow role held one
+> persistent-stream `DeliverBatch` open while committing more than a thousand
+> token-sized `RoleChatSessionProgressedEvent` facts. Their projection fan-out
+> filled the shared queue cache, so another command received an accepted receipt
+> but never reached a committed run state. Role chat now publishes the first
+> text/reasoning delta immediately and coalesces subsequent consecutive deltas
+> into bounded batches. The persistent-stream delivery horizon is three minutes,
+> which covers the 120-second role turn plus post-turn finalization; the previous
+> 10-second horizon incorrectly classified healthy AI turns as failed delivery.
+
 > 2026-08-04 update (#3170): workflow role streaming now commits the existing
 > typed `RoleChatSessionProgressedEvent` contract for text, reasoning, media,
 > and tool progress. The workflow run-event projector maps those committed

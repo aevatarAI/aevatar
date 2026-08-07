@@ -380,6 +380,10 @@ internal sealed class ManualDeadlineTimeProvider : TimeProvider
         }
     }
 
+    public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+    public override long GetTimestamp() => GetUtcNow().Ticks;
+
     public int PendingTimerCount
     {
         get

@@ -942,7 +942,12 @@ public class NyxIdChatGAgentTests
             message.ToolCalls[0].Id == toolCallId);
         var deltas = eventPublisher.Published.OfType<TextMessageContentEvent>()
             .Select(x => x.Delta).ToList();
-        deltas.Should().ContainInOrder(round1Text, round2Text);
+        var streamedContent = string.Concat(deltas);
+        streamedContent.Should().StartWith(round1Text);
+        streamedContent.Should().EndWith(round2Text);
+        var streamedMiddle = streamedContent[round1Text.Length..^round2Text.Length];
+        streamedMiddle.Should().MatchRegex(@"^\s*$",
+            "delta batching may combine the whitespace-only round separator with adjacent content");
 
         // ─── Completion event ───
 

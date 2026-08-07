@@ -48,6 +48,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     private const string CompletionNotificationRetryCallbackPrefix = "role-chat-completion-retry";
     private const int CompletionNotificationRetryInitialDelayMs = 250;
     private const int CompletionNotificationRetryMaxDelayMs = 30_000;
+    private const int MaxStreamedDeltaBatchCharacters = 1_024;
+    private static readonly TimeSpan StreamedDeltaBatchInterval = TimeSpan.FromMilliseconds(200);
     private static readonly TimeSpan ToolRecoveryPayloadLifetime = TimeSpan.FromHours(24);
     private string _appliedEventModules = string.Empty;
     private string _appliedEventRoutes = string.Empty;
@@ -3104,6 +3106,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var toolCallSnapshots = new List<ToolCallEvent>();
         TokenUsage? usage = null;
         var firstStreamedOutputObserved = false;
+        var sessionDeltas = CreateSessionDeltaBatcher(
+            request.SessionId,
+            publishParentDeltas: true);
         // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
         IReadOnlyDictionary<string, string>? metadata = request.Metadata.Count > 0
             ? AgentToolExecutionContextMapper.StripOwnedControlKeys(
@@ -3154,21 +3159,12 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
             {
                 fullContent.Append(chunk.DeltaContent);
-                await PersistSessionProgressAsync(
-                    request.SessionId,
-                    progress => progress.TextDelta = new RoleChatTextDeltaProgress { Delta = chunk.DeltaContent },
-                    streamCt);
-                streamCt.ThrowIfCancellationRequested();
-                await PublishAsync(new TextMessageContentEvent
-                {
-                    Delta = chunk.DeltaContent,
-                    SessionId = request.SessionId,
-                }, TopologyAudience.Parent, streamCt);
-                streamCt.ThrowIfCancellationRequested();
+                await sessionDeltas.AppendTextAsync(chunk.DeltaContent, streamCt);
             }
 
             if (chunk.DeltaContentPart != null)
             {
+                await sessionDeltas.FlushAsync(streamCt);
                 contentParts.Add(chunk.DeltaContentPart);
                 var part = ContentPartProtoMapper.ToProto(chunk.DeltaContentPart);
                 await PersistSessionProgressAsync(
@@ -3192,20 +3188,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             if (!string.IsNullOrEmpty(chunk.DeltaReasoningContent))
             {
                 fullReasoning.Append(chunk.DeltaReasoningContent);
-                await PersistSessionProgressAsync(
-                    request.SessionId,
-                    progress => progress.ReasoningDelta = new RoleChatReasoningDeltaProgress
-                    {
-                        Delta = chunk.DeltaReasoningContent,
-                    },
-                    streamCt);
-                streamCt.ThrowIfCancellationRequested();
-                await PublishAsync(new TextMessageReasoningEvent
-                {
-                    Delta = chunk.DeltaReasoningContent,
-                    SessionId = request.SessionId,
-                }, TopologyAudience.Parent, streamCt);
-                streamCt.ThrowIfCancellationRequested();
+                await sessionDeltas.AppendReasoningAsync(chunk.DeltaReasoningContent, streamCt);
             }
 
             if (chunk.DeltaToolCall != null)
@@ -3213,6 +3196,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
             if (chunk.ToolCallStarted != null)
             {
+                await sessionDeltas.FlushAsync(streamCt);
                 var started = chunk.ToolCallStarted;
                 CaptureToolCallSnapshot(toolCallSnapshots, started);
                 await PersistSessionProgressAsync(
@@ -3232,6 +3216,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
             if (chunk.ToolCallCompleted != null)
             {
+                await sessionDeltas.FlushAsync(streamCt);
                 var completed = chunk.ToolCallCompleted;
                 var toolResult = new ToolResultEvent
                 {
@@ -3262,6 +3247,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
         // Also reject a provider that observes cancellation and then ends the stream normally.
         streamCt.ThrowIfCancellationRequested();
+        await sessionDeltas.FlushAsync(streamCt);
 
         var appendedHistoryMessages = History.Messages
             .Skip(Math.Min(initialHistoryCount, History.Count))
@@ -3612,6 +3598,161 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             return;
 
         await PersistDomainEventAsync(CreateSessionProgress(sessionId, configure), ct);
+    }
+
+    protected RoleChatSessionDeltaBatcher CreateSessionDeltaBatcher(
+        string? sessionId,
+        bool publishParentDeltas) =>
+        new(this, sessionId, publishParentDeltas);
+
+    protected sealed class RoleChatSessionDeltaBatcher
+    {
+        private readonly RoleGAgent _owner;
+        private readonly string? _sessionId;
+        private readonly bool _publishParentDeltas;
+        private readonly StringBuilder _text = new();
+        private readonly StringBuilder _reasoning = new();
+        private long _lastSuccessfulFlushTimestamp;
+        private bool _textPublished;
+        private bool _reasoningPublished;
+
+        internal RoleChatSessionDeltaBatcher(
+            RoleGAgent owner,
+            string? sessionId,
+            bool publishParentDeltas)
+        {
+            _owner = owner;
+            _sessionId = sessionId;
+            _publishParentDeltas = publishParentDeltas;
+            _lastSuccessfulFlushTimestamp = owner.ChatRequestTimeProvider.GetTimestamp();
+        }
+
+        public async Task AppendTextAsync(string delta, CancellationToken ct = default)
+        {
+            if (string.IsNullOrEmpty(delta))
+                return;
+
+            await FlushReasoningAsync(ct);
+            _text.Append(delta);
+            await FlushReadyTextAsync(ct);
+        }
+
+        public async Task AppendReasoningAsync(string delta, CancellationToken ct = default)
+        {
+            if (string.IsNullOrEmpty(delta))
+                return;
+
+            await FlushTextAsync(ct);
+            _reasoning.Append(delta);
+            await FlushReadyReasoningAsync(ct);
+        }
+
+        public async Task FlushAsync(CancellationToken ct = default)
+        {
+            await FlushTextAsync(ct);
+            await FlushReasoningAsync(ct);
+        }
+
+        private async Task FlushReadyTextAsync(CancellationToken ct)
+        {
+            if (!_textPublished)
+                await FlushTextBatchAsync(Math.Min(_text.Length, MaxStreamedDeltaBatchCharacters), ct);
+
+            while (_text.Length >= MaxStreamedDeltaBatchCharacters)
+                await FlushTextBatchAsync(MaxStreamedDeltaBatchCharacters, ct);
+
+            if (_text.Length > 0 && HasReachedFlushCadence())
+                await FlushTextBatchAsync(_text.Length, ct);
+        }
+
+        private async Task FlushReadyReasoningAsync(CancellationToken ct)
+        {
+            if (!_reasoningPublished)
+            {
+                await FlushReasoningBatchAsync(
+                    Math.Min(_reasoning.Length, MaxStreamedDeltaBatchCharacters),
+                    ct);
+            }
+
+            while (_reasoning.Length >= MaxStreamedDeltaBatchCharacters)
+                await FlushReasoningBatchAsync(MaxStreamedDeltaBatchCharacters, ct);
+
+            if (_reasoning.Length > 0 && HasReachedFlushCadence())
+                await FlushReasoningBatchAsync(_reasoning.Length, ct);
+        }
+
+        private async Task FlushTextAsync(CancellationToken ct)
+        {
+            while (_text.Length > 0)
+            {
+                await FlushTextBatchAsync(
+                    Math.Min(_text.Length, MaxStreamedDeltaBatchCharacters),
+                    ct);
+            }
+        }
+
+        private async Task FlushReasoningAsync(CancellationToken ct)
+        {
+            while (_reasoning.Length > 0)
+            {
+                await FlushReasoningBatchAsync(
+                    Math.Min(_reasoning.Length, MaxStreamedDeltaBatchCharacters),
+                    ct);
+            }
+        }
+
+        private async Task FlushTextBatchAsync(int length, CancellationToken ct)
+        {
+            var delta = _text.ToString(0, length);
+            await _owner.PersistSessionProgressAsync(
+                _sessionId,
+                progress => progress.TextDelta = new RoleChatTextDeltaProgress { Delta = delta },
+                ct);
+            ct.ThrowIfCancellationRequested();
+            if (_publishParentDeltas)
+            {
+                await _owner.PublishAsync(new TextMessageContentEvent
+                {
+                    Delta = delta,
+                    SessionId = _sessionId,
+                }, TopologyAudience.Parent, ct);
+                ct.ThrowIfCancellationRequested();
+            }
+
+            _text.Remove(0, length);
+            _textPublished = true;
+            MarkSuccessfulFlush();
+        }
+
+        private async Task FlushReasoningBatchAsync(int length, CancellationToken ct)
+        {
+            var delta = _reasoning.ToString(0, length);
+            await _owner.PersistSessionProgressAsync(
+                _sessionId,
+                progress => progress.ReasoningDelta = new RoleChatReasoningDeltaProgress { Delta = delta },
+                ct);
+            ct.ThrowIfCancellationRequested();
+            if (_publishParentDeltas)
+            {
+                await _owner.PublishAsync(new TextMessageReasoningEvent
+                {
+                    Delta = delta,
+                    SessionId = _sessionId,
+                }, TopologyAudience.Parent, ct);
+                ct.ThrowIfCancellationRequested();
+            }
+
+            _reasoning.Remove(0, length);
+            _reasoningPublished = true;
+            MarkSuccessfulFlush();
+        }
+
+        private bool HasReachedFlushCadence() =>
+            _owner.ChatRequestTimeProvider.GetElapsedTime(_lastSuccessfulFlushTimestamp) >=
+            StreamedDeltaBatchInterval;
+
+        private void MarkSuccessfulFlush() =>
+            _lastSuccessfulFlushTimestamp = _owner.ChatRequestTimeProvider.GetTimestamp();
     }
 
     protected Task EnsureSessionTextStartedAsync(
