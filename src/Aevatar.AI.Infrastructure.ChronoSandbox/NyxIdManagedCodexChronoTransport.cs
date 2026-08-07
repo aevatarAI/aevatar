@@ -128,8 +128,8 @@ internal sealed class NyxIdManagedCodexChronoTransport(
             CancellationTokenSource.CreateLinkedTokenSource(ct, lifecycleTimeout.Token);
         var response = await secret.UseAsync(rawKey => _clientFactory.CreateClient().ProxyRequestBoundedWithApiKeyAsync(
                 rawKey,
-                ManagedCodexOptions.ChronoSandboxServiceSlug,
-                credential.ChronoSandboxUserServiceId,
+                ManagedCodexOptions.ManagedCodexServiceSlug,
+                credential.ManagedCodexUserServiceId,
                 ManagedCodexOptions.ChronoExecutionPath,
                 HttpMethod.Post.Method,
                 body,
@@ -218,13 +218,13 @@ internal sealed class NyxIdManagedCodexChronoTransport(
                 credential.ExpiresAt.ToDateTimeOffset() <= _timeProvider.GetUtcNow() ||
                 string.IsNullOrWhiteSpace(credential.ApiKeyId) ||
                 !string.Equals(
-                    credential.ChronoSandboxServiceSlug,
-                    ManagedCodexOptions.ChronoSandboxServiceSlug,
+                    credential.ManagedCodexServiceSlug,
+                    ManagedCodexOptions.ManagedCodexServiceSlug,
                     StringComparison.Ordinal) ||
-                string.IsNullOrWhiteSpace(credential.ChronoSandboxUserServiceId) ||
+                string.IsNullOrWhiteSpace(credential.ManagedCodexUserServiceId) ||
                 string.IsNullOrWhiteSpace(credential.ChronoLlmUserServiceId) ||
                 string.Equals(
-                    credential.ChronoSandboxUserServiceId,
+                    credential.ManagedCodexUserServiceId,
                     credential.ChronoLlmUserServiceId,
                     StringComparison.Ordinal) ||
                 credential.SecretReference is null ||

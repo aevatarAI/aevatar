@@ -1068,7 +1068,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         stored.Secret.Should().Be(RawKey);
         committed.Should().NotBeNull();
         committed!.ApiKeyId.Should().Be("key-1");
-        committed.ChronoSandboxUserServiceId.Should().Be("us-sandbox");
+        committed.ManagedCodexUserServiceId.Should().Be("us-sandbox");
         committed.ChronoLlmUserServiceId.Should().Be("us-llm");
         committed.SecretReference.Ref.Should().Be(stored.RequestedRef);
         committed.ToString().Should().NotContain(RawKey);
@@ -1266,7 +1266,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         handler.Paths.Should().Equal("/api/v1/api-keys/key-a", "/api/v1/api-keys");
         reconciled.ApiKeyId.Should().Be("key-a");
         reconciled.SecretReference.Should().BeEquivalentTo(current.SecretReference);
-        reconciled.ChronoSandboxUserServiceId.Should().Be("us-sandbox");
+        reconciled.ManagedCodexUserServiceId.Should().Be("us-sandbox");
         reconciled.ChronoLlmUserServiceId.Should().Be("us-llm");
         await commands.Received(1).CommitPolicyReconciledAsync(
             "key-a",
@@ -1275,7 +1275,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 descriptor.SecretReference.Ref == "sec-a" &&
                 descriptor.SecretReference.Version == 1 &&
                 descriptor.SecretReference.Fingerprint == "fingerprint" &&
-                descriptor.ChronoSandboxUserServiceId == "us-sandbox" &&
+                descriptor.ManagedCodexUserServiceId == "us-sandbox" &&
                 descriptor.ChronoLlmUserServiceId == "us-llm"),
             Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
             Arg.Any<CancellationToken>());
@@ -1485,7 +1485,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
             .Should().Equal(
                 "managed-codex-credential:nyxid::user-a",
                 "managed-codex-credential:nyxid::user-b");
-        committed.Select(static descriptor => descriptor.ChronoSandboxUserServiceId)
+        committed.Select(static descriptor => descriptor.ManagedCodexUserServiceId)
             .Should().Equal("us-sandbox-a", "us-sandbox-b");
         committed.Select(static descriptor => descriptor.ChronoLlmUserServiceId)
             .Should().Equal("us-llm-a", "us-llm-b");
@@ -3029,7 +3029,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
             .Select(static item => item.GetString()).Should().Equal("us-sandbox", "us-llm");
         await commands.Received(1).CommitProvisionedAsync(
             Arg.Is<ManagedCodexCredentialDescriptor>(descriptor =>
-                descriptor.ChronoSandboxUserServiceId == "us-sandbox" &&
+                descriptor.ManagedCodexUserServiceId == "us-sandbox" &&
                 descriptor.ChronoLlmUserServiceId == "us-llm"),
             Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
             Arg.Any<CancellationToken>());
@@ -3176,9 +3176,9 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 Version = version,
                 ExpiresAtUnixMs = Now.AddDays(30).ToUnixTimeMilliseconds(),
             },
-            ChronoSandboxUserServiceId = "us-sandbox",
+            ManagedCodexUserServiceId = "us-sandbox",
             ChronoLlmUserServiceId = "us-llm",
-            ChronoSandboxServiceSlug = "chrono-sandbox",
+            ManagedCodexServiceSlug = "chrono-sandbox",
             ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(Now.AddDays(30)),
             Status = ManagedCodexCredentialStatus.Active,
         };

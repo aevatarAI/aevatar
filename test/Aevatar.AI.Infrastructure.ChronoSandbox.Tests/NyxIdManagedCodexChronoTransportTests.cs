@@ -610,9 +610,9 @@ public sealed class NyxIdManagedCodexChronoTransportTests
             Version = 1,
             ExpiresAtUnixMs = Now.AddDays(30).ToUnixTimeMilliseconds(),
         },
-        ChronoSandboxUserServiceId = "us-sandbox",
+        ManagedCodexUserServiceId = "us-sandbox",
         ChronoLlmUserServiceId = "us-llm",
-        ChronoSandboxServiceSlug = "chrono-sandbox",
+        ManagedCodexServiceSlug = "chrono-sandbox",
         ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(Now.AddDays(30)),
         Status = ManagedCodexCredentialStatus.Active,
     };

@@ -1,7 +1,7 @@
 namespace Aevatar.AI.Application.CodexExecution;
 
 internal sealed record ManagedCodexNyxIdEligibility(
-    string ChronoSandboxUserServiceId,
+    string ManagedCodexUserServiceId,
     string ChronoLlmUserServiceId);
 
 internal sealed class ManagedCodexNyxIdCatalogResolver
@@ -20,7 +20,7 @@ internal sealed class ManagedCodexNyxIdCatalogResolver
             .Where(static service =>
                 string.Equals(
                     service.Slug,
-                    ManagedCodexOptions.ChronoSandboxServiceSlug,
+                    ManagedCodexOptions.ManagedCodexServiceSlug,
                     StringComparison.Ordinal) &&
                 string.Equals(service.CredentialSourceType, "personal", StringComparison.Ordinal))
             .ToArray();
