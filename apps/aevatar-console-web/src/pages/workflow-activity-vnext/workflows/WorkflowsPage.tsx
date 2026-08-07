@@ -363,6 +363,10 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     if (!renameTarget || !workflowName || renaming) return;
     setRenaming(true);
     try {
+      if (!renameTarget.hasDraftSource && !renameTarget.memberId) {
+        throw new Error('Workflow has no rename authority');
+      }
+
       if (renameTarget.hasDraftSource) {
         const draft = await studioApi.getWorkflowDraft(
           renameTarget.workflowId,
@@ -397,12 +401,24 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         }
         const refreshed = await drafts.refetch();
         if (refreshed.isError) throw refreshed.error;
-      } else if (renameTarget.memberId) {
+      }
+
+      if (renameTarget.memberId) {
         await studioApi.updateMemberDisplayName({
           scopeId,
           memberId: renameTarget.memberId,
           displayName: workflowName,
         });
+        const observation = await observeDraftMaterialization({
+          workflowId: renameTarget.memberId,
+          read: (memberId) => studioApi.getMember(scopeId, memberId),
+          isNotFound: (candidate) => isStudioApiStatus(candidate, 404),
+          isObserved: (candidate) =>
+            candidate.summary.displayName.trim() === workflowName,
+        });
+        if (observation.kind === 'delayed') {
+          throw new Error('Member rename was not observed');
+        }
         queryClient.setQueryData<StudioMemberRoster | undefined>(
           ['workflow-activity-vnext', 'members', scopeId],
           (current) =>
@@ -411,14 +427,12 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                   ...current,
                   members: current.members.map((member) =>
                     member.memberId === renameTarget.memberId
-                      ? { ...member, displayName: workflowName }
+                      ? observation.workflow.summary
                       : member,
                   ),
                 }
               : current,
         );
-      } else {
-        throw new Error('Workflow has no rename authority');
       }
       setRenameTarget(null);
       setRenameName('');
