@@ -334,6 +334,24 @@ public sealed class NyxIdManagedCodexChronoTransportTests
     }
 
     [Theory]
+    [InlineData(HttpStatusCode.TooManyRequests, CodexExecutionFailureKind.CapacityUnavailable)]
+    [InlineData(HttpStatusCode.BadGateway, CodexExecutionFailureKind.TerminalFailure)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, CodexExecutionFailureKind.TerminalFailure)]
+    public async Task ExecuteAsync_WhenProxyFailureHasNoTypedCode_ClassifiesOnly429AsCapacity(
+        HttpStatusCode statusCode,
+        CodexExecutionFailureKind expectedKind)
+    {
+        var handler = new RecordingHandler("""{"detail":"gateway"}""", statusCode);
+        var (transport, _) = CreateTransport(handler);
+
+        var act = () => transport.ExecuteAsync(Request(), Descriptor());
+
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
+        exception.Failure.Kind.Should().Be(expectedKind);
+        exception.Failure.Code.Should().Be("managed_proxy_unavailable");
+    }
+
+    [Theory]
     // 无可解析上游码时，失败原因必须仍可归因：形态诊断是区分「网关自身 502」与
     // 「chrono 报错但我们没解析出来」的唯一线索，且不得泄漏 body/凭据/标识。
     [InlineData("", "empty")]
@@ -375,7 +393,7 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         var act = () => transport.ExecuteAsync(Request(), Descriptor());
 
         var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
-        exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.CapacityUnavailable);
+        exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.TerminalFailure);
         exception.Failure.Code.Should().Be("managed_proxy_unavailable");
         exception.Message.Should().NotContain(RawKey);
     }

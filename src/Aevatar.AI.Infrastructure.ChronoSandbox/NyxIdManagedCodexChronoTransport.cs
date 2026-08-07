@@ -397,8 +397,13 @@ internal sealed class NyxIdManagedCodexChronoTransport(
                 upstreamCode ?? "managed_proxy_timeout",
                 "Managed Codex proxy request timed out.",
                 inspection.DiagnosticId),
-            429 or 502 or 503 => Failure(
+            429 => Failure(
                 CodexExecutionFailureKind.CapacityUnavailable,
+                upstreamCode ?? "managed_proxy_unavailable",
+                "Managed Codex proxy is temporarily unavailable.",
+                inspection.DiagnosticId),
+            502 or 503 => Failure(
+                CodexExecutionFailureKind.TerminalFailure,
                 upstreamCode ?? "managed_proxy_unavailable",
                 "Managed Codex proxy is temporarily unavailable.",
                 inspection.DiagnosticId),
