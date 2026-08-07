@@ -346,7 +346,9 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         },
         ChronoSandboxUserServiceId = "us-sandbox",
         ChronoLlmUserServiceId = "us-llm",
+        OrnnApiUserServiceId = "us-ornn",
         ChronoSandboxServiceSlug = "chrono-sandbox",
+        OrnnApiServiceSlug = "ornn-api",
         ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(Now.AddDays(30)),
         Status = ManagedCodexCredentialStatus.Active,
     };

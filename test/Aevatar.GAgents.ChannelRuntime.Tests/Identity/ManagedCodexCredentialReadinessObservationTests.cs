@@ -54,6 +54,7 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
         observed.Credential.ApiKeyId.Should().Be("key-a");
         observed.Credential.ChronoSandboxUserServiceId.Should().Be("us-sandbox-a");
         observed.Credential.ChronoLlmUserServiceId.Should().Be("us-llm-a");
+        observed.Credential.OrnnApiUserServiceId.Should().Be("us-ornn-a");
         observed.PendingRevocations.Should().ContainSingle()
             .Which.ApiKeyId.Should().Be("key-old-key-a");
         observed.StateVersion.Should().Be(4);
@@ -453,6 +454,8 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
             ChronoSandboxUserServiceId = chronoSandboxUserServiceId,
             ChronoSandboxServiceSlug = "chrono-sandbox",
             ChronoLlmUserServiceId = chronoLlmUserServiceId,
+            OrnnApiUserServiceId = chronoLlmUserServiceId.Replace("llm", "ornn", StringComparison.Ordinal),
+            OrnnApiServiceSlug = "ornn-api",
             Status = ManagedCodexCredentialStatus.Active,
         };
 

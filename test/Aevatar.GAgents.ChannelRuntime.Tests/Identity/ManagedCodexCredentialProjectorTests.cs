@@ -41,7 +41,9 @@ public sealed class ManagedCodexCredentialProjectorTests
                 },
                 ChronoSandboxUserServiceId = "user-service-sandbox",
                 ChronoLlmUserServiceId = "user-service-llm",
+                OrnnApiUserServiceId = "user-service-ornn",
                 ChronoSandboxServiceSlug = "chrono-sandbox",
+                OrnnApiServiceSlug = "ornn-api",
                 ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-21T00:00:00Z")),
                 Status = ManagedCodexCredentialStatus.Active,
             },
@@ -69,6 +71,7 @@ public sealed class ManagedCodexCredentialProjectorTests
         document.LastEventId.Should().Be("event-7");
         document.Credential.ApiKeyId.Should().Be("key-1");
         document.Credential.ChronoLlmUserServiceId.Should().Be("user-service-llm");
+        document.Credential.OrnnApiUserServiceId.Should().Be("user-service-ornn");
         document.PendingRevocations.Should().ContainSingle();
         document.ToString().Should().NotContain("raw-agent-key");
     }

@@ -390,11 +390,16 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
             candidate.SecretReference.Version <= 0 ||
             string.IsNullOrWhiteSpace(candidate.ChronoSandboxUserServiceId) ||
             string.IsNullOrWhiteSpace(candidate.ChronoLlmUserServiceId) ||
-            string.Equals(
-                candidate.ChronoSandboxUserServiceId.Trim(),
-                candidate.ChronoLlmUserServiceId.Trim(),
-                StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(candidate.OrnnApiUserServiceId) ||
+            new HashSet<string>(
+                [
+                    candidate.ChronoSandboxUserServiceId.Trim(),
+                    candidate.ChronoLlmUserServiceId.Trim(),
+                    candidate.OrnnApiUserServiceId.Trim(),
+                ],
+                StringComparer.Ordinal).Count != 3 ||
             !string.Equals(candidate.ChronoSandboxServiceSlug, "chrono-sandbox", StringComparison.Ordinal) ||
+            !string.Equals(candidate.OrnnApiServiceSlug, "ornn-api", StringComparison.Ordinal) ||
             candidate.ExpiresAt is null ||
             candidate.SecretReference.ExpiresAtUnixMs !=
                 candidate.ExpiresAt.ToDateTimeOffset().ToUnixTimeMilliseconds() ||
@@ -408,6 +413,7 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
         credential.ApiKeyId = credential.ApiKeyId.Trim();
         credential.ChronoSandboxUserServiceId = credential.ChronoSandboxUserServiceId.Trim();
         credential.ChronoLlmUserServiceId = credential.ChronoLlmUserServiceId.Trim();
+        credential.OrnnApiUserServiceId = credential.OrnnApiUserServiceId.Trim();
         return true;
     }
 

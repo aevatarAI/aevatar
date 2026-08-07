@@ -26,6 +26,7 @@ public sealed class BindingAgentToolSource : IAgentToolSource
     private readonly IScopeWorkflowQueryPort? _scopeWorkflowQueryPort;
     private readonly IExternalWorkflowCapabilityListPort? _externalCapabilityListPort;
     private readonly IExternalWorkflowCapabilityReadinessPort? _externalCapabilityReadinessPort;
+    private readonly IServiceApiWorkflowCapabilityDiscoveryPort? _serviceApiWorkflowCapabilityDiscoveryPort;
     private readonly IWorkflowExplicitRequestPreviewService? _explicitRequestPreviewService;
     private readonly ILogger _logger;
 
@@ -39,6 +40,7 @@ public sealed class BindingAgentToolSource : IAgentToolSource
         IScopeWorkflowQueryPort? scopeWorkflowQueryPort = null,
         IExternalWorkflowCapabilityListPort? externalCapabilityListPort = null,
         IExternalWorkflowCapabilityReadinessPort? externalCapabilityReadinessPort = null,
+        IServiceApiWorkflowCapabilityDiscoveryPort? serviceApiWorkflowCapabilityDiscoveryPort = null,
         IWorkflowExplicitRequestPreviewService? explicitRequestPreviewService = null,
         ILogger<BindingAgentToolSource>? logger = null)
     {
@@ -51,6 +53,7 @@ public sealed class BindingAgentToolSource : IAgentToolSource
         _scopeWorkflowQueryPort = scopeWorkflowQueryPort;
         _externalCapabilityListPort = externalCapabilityListPort;
         _externalCapabilityReadinessPort = externalCapabilityReadinessPort;
+        _serviceApiWorkflowCapabilityDiscoveryPort = serviceApiWorkflowCapabilityDiscoveryPort;
         _explicitRequestPreviewService = explicitRequestPreviewService;
         _logger = logger ?? NullLogger<BindingAgentToolSource>.Instance;
     }
@@ -60,6 +63,7 @@ public sealed class BindingAgentToolSource : IAgentToolSource
         if (_commandPort == null && _queryAdapter == null &&
             _scopeWorkflowCommandPort == null && _scopeWorkflowQueryPort == null &&
             _externalCapabilityListPort == null && _externalCapabilityReadinessPort == null &&
+            _serviceApiWorkflowCapabilityDiscoveryPort == null &&
             _explicitRequestPreviewService == null)
         {
             _logger.LogDebug("Binding adapter implementations not registered, skipping binding tools");
@@ -102,6 +106,9 @@ public sealed class BindingAgentToolSource : IAgentToolSource
 
         if (_externalCapabilityReadinessPort != null)
             tools.Add(new InspectExternalWorkflowCapabilityReadinessTool(_externalCapabilityReadinessPort));
+
+        if (_serviceApiWorkflowCapabilityDiscoveryPort != null)
+            tools.Add(new DiscoverServiceApiWorkflowCapabilityTool(_serviceApiWorkflowCapabilityDiscoveryPort));
 
         if (_explicitRequestPreviewService != null)
             tools.Add(new PreviewWorkflowExplicitRequestsTool(_explicitRequestPreviewService));

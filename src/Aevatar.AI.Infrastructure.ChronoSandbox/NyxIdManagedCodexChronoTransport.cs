@@ -176,12 +176,20 @@ internal sealed class NyxIdManagedCodexChronoTransport(
                     credential.ChronoSandboxServiceSlug,
                     ManagedCodexOptions.ChronoSandboxServiceSlug,
                     StringComparison.Ordinal) ||
+                !string.Equals(
+                    credential.OrnnApiServiceSlug,
+                    ManagedCodexOptions.OrnnApiServiceSlug,
+                    StringComparison.Ordinal) ||
                 string.IsNullOrWhiteSpace(credential.ChronoSandboxUserServiceId) ||
                 string.IsNullOrWhiteSpace(credential.ChronoLlmUserServiceId) ||
-                string.Equals(
-                    credential.ChronoSandboxUserServiceId,
-                    credential.ChronoLlmUserServiceId,
-                    StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(credential.OrnnApiUserServiceId) ||
+                new HashSet<string>(
+                    [
+                        credential.ChronoSandboxUserServiceId,
+                        credential.ChronoLlmUserServiceId,
+                        credential.OrnnApiUserServiceId,
+                    ],
+                    StringComparer.Ordinal).Count != 3 ||
                 credential.SecretReference is null ||
                 string.IsNullOrWhiteSpace(credential.SecretReference.Ref) ||
                 !string.Equals(

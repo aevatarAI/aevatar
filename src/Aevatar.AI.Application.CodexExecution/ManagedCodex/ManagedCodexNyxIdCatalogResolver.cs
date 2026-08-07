@@ -2,7 +2,8 @@ namespace Aevatar.AI.Application.CodexExecution;
 
 internal sealed record ManagedCodexNyxIdEligibility(
     string ChronoSandboxUserServiceId,
-    string ChronoLlmUserServiceId);
+    string ChronoLlmUserServiceId,
+    string OrnnApiUserServiceId);
 
 internal sealed class ManagedCodexNyxIdCatalogResolver
 {
@@ -27,8 +28,14 @@ internal sealed class ManagedCodexNyxIdCatalogResolver
                 ManagedCodexOptions.ChronoLlmServiceSlug,
                 StringComparison.Ordinal))
             .ToArray();
+        var ornnMatches = services
+            .Where(static service => string.Equals(
+                service.Slug,
+                ManagedCodexOptions.OrnnApiServiceSlug,
+                StringComparison.Ordinal))
+            .ToArray();
 
-        if (sandboxMatches.Length != 1 || llmMatches.Length != 1)
+        if (sandboxMatches.Length != 1 || llmMatches.Length != 1 || ornnMatches.Length != 1)
         {
             throw Failure(
                 "managed_user_services_unavailable",
@@ -37,13 +44,17 @@ internal sealed class ManagedCodexNyxIdCatalogResolver
 
         var sandbox = sandboxMatches[0];
         var llm = llmMatches[0];
+        var ornn = ornnMatches[0];
         var sandboxId = sandbox.Id?.Trim() ?? string.Empty;
         var llmId = llm.Id?.Trim() ?? string.Empty;
+        var ornnId = ornn.Id?.Trim() ?? string.Empty;
         if (!IsUsable(sandbox) ||
             !IsUsable(llm) ||
+            !IsUsable(ornn) ||
             string.IsNullOrWhiteSpace(sandboxId) ||
             string.IsNullOrWhiteSpace(llmId) ||
-            string.Equals(sandboxId, llmId, StringComparison.Ordinal))
+            string.IsNullOrWhiteSpace(ornnId) ||
+            new HashSet<string>([sandboxId, llmId, ornnId], StringComparer.Ordinal).Count != 3)
         {
             throw Failure(
                 "managed_user_services_unavailable",
@@ -58,7 +69,7 @@ internal sealed class ManagedCodexNyxIdCatalogResolver
                 "The chrono-sandbox NyxID delegation policy is not ready for managed Codex.");
         }
 
-        return new ManagedCodexNyxIdEligibility(sandboxId, llmId);
+        return new ManagedCodexNyxIdEligibility(sandboxId, llmId, ornnId);
     }
 
     private static bool IsUsable(ManagedCodexNyxIdService service) =>

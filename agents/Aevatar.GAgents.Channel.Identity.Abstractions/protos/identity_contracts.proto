@@ -77,6 +77,8 @@ message ManagedCodexCredentialDescriptor {
   google.protobuf.Timestamp expires_at = 6;
   ManagedCodexCredentialStatus status = 7;
   string chrono_llm_user_service_id = 8;
+  string ornn_api_user_service_id = 9;
+  string ornn_api_service_slug = 10;
 }
 
 enum ManagedCodexCredentialReadinessEvidence {

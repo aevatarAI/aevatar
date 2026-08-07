@@ -1,5 +1,7 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+using Aevatar.Workflow.Application.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -7,6 +9,7 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Infrastructure.Capabilities;
+using Aevatar.Workflow.Infrastructure.ExternalCapabilities;
 using Aevatar.Workflow.Infrastructure.Reporting;
 using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Infrastructure.Workflows;
@@ -78,6 +81,20 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowRunCommittedVersionPort, WorkflowRunCommittedVersionPort>();
         services.TryAddSingleton<IWorkflowRunMaterializationWatermarkPort, WorkflowRunMaterializationWatermarkPort>();
         services.TryAddSingleton<IWorkflowDefinitionResolver, RegistryWorkflowDefinitionResolver>();
+        return services;
+    }
+
+    public static IServiceCollection AddManagedServiceApiWorkflowCapabilityDiscovery(
+        this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.TryAddSingleton<
+            IManagedCodexServiceApiSkillDiscoveryExecutor,
+            ManagedCodexServiceApiSkillDiscoveryExecutor>();
+        services.TryAddSingleton<IExactServiceApiSkillVerifier, ManagedCodexExactOrnnApiSkillVerifier>();
+        services.TryAddTransient<IServiceApiWorkflowCapabilityDiscoveryPort,
+            ServiceApiWorkflowCapabilityDiscoveryService>();
         return services;
     }
 

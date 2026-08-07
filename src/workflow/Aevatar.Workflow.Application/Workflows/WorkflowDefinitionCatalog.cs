@@ -197,12 +197,22 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                 use the returned capability only as read-only contract guidance. Do not reconstruct the selector from
                 display text. Do not generate or guess selector identities or server-owned proof fields. Set capability
                 resolution to `exact_operation_resolved`. Do not author `capability.nyxid_request` when an exact descriptor exists.
-              - No matching exact descriptor is a fallback trigger, not a blocker. The next tool call MUST be
-                `nyxid_services` with `action: "list"`. Before capability resolution reaches
+              - No matching exact descriptor is a fallback trigger, not a blocker. The next tool call MUST be to
+                call `discover_service_api_workflow_capability` with the exact selected UserService id,
+                read-only service slug/label snapshot, normalized requested capability, descriptor inventory,
+                managed discovery policy version, request-shape admission policy version, and the
+                Application-computed capability fingerprint. This managed discovery operation is the only
+                workflow-authoring Ornn API skill path. It is not `codex_exec`, does not accept a prompt, and
+                does not return credentials or raw Ornn/Codex output.
+                `discover_service_api_workflow_capability` returns `capability.nyxid_request` only after exact Ornn verification and request-shape admission.
+                If `discover_service_api_workflow_capability` returns an error, stop and report that typed blocker; do not call `web_search` or `web_fetch`.
+                Only after a valid `NoReliableServiceApiSkill` from `discover_service_api_workflow_capability` may the workflow enter the web fallback branch.
+                Before capability resolution reaches
                 `exact_operation_resolved`, `fallback_request_resolved`, or `fallback_exhausted`, do not create a Team,
                 member, or workflow draft, and do not produce a final answer.
                 Only after `descriptor_discovery` returns no matching exact descriptor may the workflow enter the `nyxid_request` fallback branch.
-              - In `service_selection`, select the matching connected UserService from that list, then call
+              - In `service_selection`, after a valid `NoReliableServiceApiSkill`, call `nyxid_services` with `action: "list"`,
+                select the matching connected UserService from that list, then call
                 `nyxid_services` with `action: "show"` and that exact service `id`. Do not treat a service label, slug,
                 catalog id, endpoint id, or documentation URL as a UserService id. If several services remain equally
                 plausible, ask the user to choose; do not guess.
@@ -442,9 +452,8 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - nyxid_require_service
               - list_external_workflow_capabilities
               - inspect_external_workflow_capability_readiness
+              - discover_service_api_workflow_capability
               - preview_workflow_explicit_requests
-              - ornn_search_skills
-              - use_skill
             tool_sets:
               - nyxid.connected_services
         steps:

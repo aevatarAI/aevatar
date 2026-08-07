@@ -406,6 +406,7 @@ public class WorkflowDefinitionCatalogTests
         allowed.Should().Contain("nyxid_require_service");
         allowed.Should().Contain("list_external_workflow_capabilities");
         allowed.Should().Contain("inspect_external_workflow_capability_readiness");
+        allowed.Should().Contain("discover_service_api_workflow_capability");
         allowed.Should().Contain("preview_workflow_explicit_requests");
 
         allowed.Should().NotContain("nyxid_api_keys");
@@ -423,6 +424,8 @@ public class WorkflowDefinitionCatalogTests
         allowed.Should().NotContain("ssh_exec");
         allowed.Should().NotContain("codex_exec");
         allowed.Should().NotContain("code_execute");
+        allowed.Should().NotContain("ornn_search_skills");
+        allowed.Should().NotContain("use_skill");
     }
 
     [Fact]
@@ -432,9 +435,13 @@ public class WorkflowDefinitionCatalogTests
         var prompt = workflow.Roles.Should().ContainSingle().Subject.SystemPrompt;
 
         var discover = prompt.IndexOf("call `list_external_workflow_capabilities`", StringComparison.Ordinal);
+        var managedDiscovery = prompt.IndexOf(
+            "call `discover_service_api_workflow_capability`",
+            discover + 1,
+            StringComparison.Ordinal);
         var selectService = prompt.IndexOf(
             "`nyxid_services` with `action: \"list\"`",
-            discover + 1,
+            managedDiscovery + 1,
             StringComparison.Ordinal);
         var inspectService = prompt.IndexOf(
             "`nyxid_services` with `action: \"show\"`",
@@ -454,7 +461,8 @@ public class WorkflowDefinitionCatalogTests
         var bind = prompt.IndexOf("`aevatar_bind_member_workflow`", preview + 1, StringComparison.Ordinal);
 
         discover.Should().BeGreaterThanOrEqualTo(0);
-        selectService.Should().BeGreaterThan(discover);
+        managedDiscovery.Should().BeGreaterThan(discover);
+        selectService.Should().BeGreaterThan(managedDiscovery);
         inspectService.Should().BeGreaterThan(selectService);
         search.Should().BeGreaterThan(inspectService);
         fetch.Should().BeGreaterThan(search);
@@ -463,6 +471,12 @@ public class WorkflowDefinitionCatalogTests
         preview.Should().BeGreaterThan(saveDraft);
         bind.Should().BeGreaterThan(preview);
         prompt.Should().Contain("No matching exact descriptor is a fallback trigger, not a blocker.");
+        prompt.Should().Contain(
+            "Only after a valid `NoReliableServiceApiSkill` from `discover_service_api_workflow_capability` may the workflow enter the web fallback branch.");
+        prompt.Should().Contain(
+            "`discover_service_api_workflow_capability` returns `capability.nyxid_request` only after exact Ornn verification and request-shape admission.");
+        prompt.Should().Contain(
+            "If `discover_service_api_workflow_capability` returns an error, stop and report that typed blocker; do not call `web_search` or `web_fetch`.");
         prompt.Should().Contain(
             "Only after `descriptor_discovery` returns no matching exact descriptor may the workflow enter the `nyxid_request` fallback branch.");
         prompt.Should().Contain("The next tool call MUST be");

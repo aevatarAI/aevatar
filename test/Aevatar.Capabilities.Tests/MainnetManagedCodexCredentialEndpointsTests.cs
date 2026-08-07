@@ -204,6 +204,16 @@ public sealed class MainnetManagedCodexCredentialEndpointsTests
         payload.RootElement.GetProperty("execution_ready").GetBoolean().Should().BeTrue();
         payload.RootElement.GetProperty("execution_readiness_reason").GetString()
             .Should().Be("ready");
+        payload.RootElement.GetProperty("chrono_sandbox_user_service_id").GetString()
+            .Should().Be("us-sandbox");
+        payload.RootElement.GetProperty("chrono_llm_user_service_id").GetString()
+            .Should().Be("us-llm");
+        payload.RootElement.GetProperty("ornn_api_user_service_id").GetString()
+            .Should().Be("us-ornn");
+        payload.RootElement.GetProperty("chrono_sandbox_service_slug").GetString()
+            .Should().Be("chrono-sandbox");
+        payload.RootElement.GetProperty("ornn_api_service_slug").GetString()
+            .Should().Be("ornn-api");
         payload.RootElement.GetProperty("state_version").GetInt64().Should().Be(7);
     }
 
@@ -495,7 +505,9 @@ public sealed class MainnetManagedCodexCredentialEndpointsTests
             },
             ChronoSandboxUserServiceId = "us-sandbox",
             ChronoLlmUserServiceId = "us-llm",
+            OrnnApiUserServiceId = "us-ornn",
             ChronoSandboxServiceSlug = "chrono-sandbox",
+            OrnnApiServiceSlug = "ornn-api",
             ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(expiresAt),
             Status = ManagedCodexCredentialStatus.Active,
         };

@@ -672,6 +672,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             reference,
             eligibility.ChronoSandboxUserServiceId,
             eligibility.ChronoLlmUserServiceId,
+            eligibility.OrnnApiUserServiceId,
             expiresAt);
         var obsoleteCredentialCleanups = BuildObservedObsoleteCleanups(
             owner,
@@ -902,6 +903,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             newReference,
             eligibility.ChronoSandboxUserServiceId,
             eligibility.ChronoLlmUserServiceId,
+            eligibility.OrnnApiUserServiceId,
             expiresAt);
         var obsoleteCredentialCleanups = BuildObservedObsoleteCleanups(
             owner,
@@ -1102,6 +1104,10 @@ public sealed class ManagedCodexCredentialLifecycle(
                         string.Equals(
                             currentCredential.ChronoLlmUserServiceId,
                             eligibility.ChronoLlmUserServiceId,
+                            StringComparison.Ordinal) &&
+                        string.Equals(
+                            currentCredential.OrnnApiUserServiceId,
+                            eligibility.OrnnApiUserServiceId,
                             StringComparison.Ordinal);
                     var obsoleteApiKeyIds = activeKeys
                         .Where(key => !string.Equals(
@@ -1377,6 +1383,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             repair.RemoteReference!,
             repair.Eligibility.ChronoSandboxUserServiceId,
             repair.Eligibility.ChronoLlmUserServiceId,
+            repair.Eligibility.OrnnApiUserServiceId,
             remote.ExpiresAt!.Value);
         if (IsCommandableCurrent(repair.Current, owner))
         {
@@ -1586,6 +1593,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             reference,
             eligibility.ChronoSandboxUserServiceId,
             eligibility.ChronoLlmUserServiceId,
+            eligibility.OrnnApiUserServiceId,
             expiresAt);
     }
 
@@ -1750,7 +1758,8 @@ public sealed class ManagedCodexCredentialLifecycle(
         if (HasExactServiceIds(
                 key.AllowedServiceIds,
                 eligibility.ChronoSandboxUserServiceId,
-                eligibility.ChronoLlmUserServiceId))
+                eligibility.ChronoLlmUserServiceId,
+                eligibility.OrnnApiUserServiceId))
         {
             return true;
         }
@@ -2003,6 +2012,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             [
                 eligibility.ChronoSandboxUserServiceId,
                 eligibility.ChronoLlmUserServiceId,
+                eligibility.OrnnApiUserServiceId,
             ],
             false,
             [],
@@ -2017,6 +2027,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             [
                 eligibility.ChronoSandboxUserServiceId,
                 eligibility.ChronoLlmUserServiceId,
+                eligibility.OrnnApiUserServiceId,
             ],
             false,
             []);
@@ -2098,6 +2109,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             reference,
             eligibility.ChronoSandboxUserServiceId,
             eligibility.ChronoLlmUserServiceId,
+            eligibility.OrnnApiUserServiceId,
             activeKey.ExpiresAt!.Value);
         using var recording = outcomeDeadline.BeginRecording();
         var admission = await CommitProvisionedForReconciliationAsync(
@@ -2161,6 +2173,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             reference,
             eligibility.ChronoSandboxUserServiceId,
             eligibility.ChronoLlmUserServiceId,
+            eligibility.OrnnApiUserServiceId,
             activeKey.ExpiresAt!.Value);
         using var recording = outcomeDeadline.BeginRecording();
         var admission = await CommitRotatedForReconciliationAsync(
@@ -2233,6 +2246,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             reference,
             eligibility.ChronoSandboxUserServiceId,
             eligibility.ChronoLlmUserServiceId,
+            eligibility.OrnnApiUserServiceId,
             persisted.ExpiresAt!.Value);
         await CommitPolicyReconciledForReconciliationAsync(
             currentApiKeyId,
@@ -2927,6 +2941,7 @@ public sealed class ManagedCodexCredentialLifecycle(
         SecretReference reference,
         string chronoSandboxUserServiceId,
         string chronoLlmUserServiceId,
+        string ornnApiUserServiceId,
         DateTimeOffset expiresAt) =>
         new()
         {
@@ -2935,7 +2950,9 @@ public sealed class ManagedCodexCredentialLifecycle(
             SecretReference = reference.Clone(),
             ChronoSandboxUserServiceId = chronoSandboxUserServiceId,
             ChronoLlmUserServiceId = chronoLlmUserServiceId,
+            OrnnApiUserServiceId = ornnApiUserServiceId,
             ChronoSandboxServiceSlug = ManagedCodexOptions.ChronoSandboxServiceSlug,
+            OrnnApiServiceSlug = ManagedCodexOptions.OrnnApiServiceSlug,
             ExpiresAt = Timestamp.FromDateTimeOffset(expiresAt.ToUniversalTime()),
             Status = ManagedCodexCredentialStatus.Active,
         };
@@ -3004,19 +3021,21 @@ public sealed class ManagedCodexCredentialLifecycle(
         HasExactServiceIds(
             key.AllowedServiceIds,
             eligibility.ChronoSandboxUserServiceId,
-            eligibility.ChronoLlmUserServiceId) &&
+            eligibility.ChronoLlmUserServiceId,
+            eligibility.OrnnApiUserServiceId) &&
         !key.AllowAllNodes &&
         key.AllowedNodeIds is { Count: 0 };
 
     private static bool HasExactServiceIds(
         IReadOnlyList<string> actual,
         string sandboxId,
-        string llmId)
+        string llmId,
+        string ornnApiId)
     {
         var expected = new HashSet<string>(
-            [sandboxId, llmId],
+            [sandboxId, llmId, ornnApiId],
             StringComparer.Ordinal);
-        return expected.Count == 2 &&
+        return expected.Count == 3 &&
                actual is not null &&
                actual.Count == expected.Count &&
                actual.All(expected.Contains) &&

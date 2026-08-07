@@ -242,6 +242,8 @@ public class BindingToolsTests
                 new ExternalWorkflowCapabilityDiscoveryResult()));
         IAgentTool readinessTool = new InspectExternalWorkflowCapabilityReadinessTool(
             new StubExternalWorkflowCapabilityReadinessPort());
+        IAgentTool discoveryTool = new DiscoverServiceApiWorkflowCapabilityTool(
+            new StubServiceApiWorkflowCapabilityDiscoveryPort(ResolvedServiceApiRequestResult()));
         AgentToolRequestContext.Current = CapabilityContext(
             "scope-receipt-alpha",
             "caller-receipt-alpha",
@@ -287,6 +289,32 @@ public class BindingToolsTests
             readinessReceipt.CallId.Should().Be("call-readiness-beta");
             readinessReceipt.ToolName.Should().Be("inspect_external_workflow_capability_readiness");
             readinessReceipt.ResultJson.Should().Be(readinessResult);
+
+            const string discoveryArguments =
+                """
+                {
+                  "target_user_service_id": "usvc-receipt-alpha",
+                  "service_slug_snapshot": "example-service",
+                  "service_label_snapshot": "Example Service",
+                  "normalized_capability": "send a message",
+                  "descriptor_inventory": [],
+                  "managed_discovery_policy_version": "service_api_skill_discovery.v1",
+                  "admission_policy_version": "nyxid_request_selector.v1",
+                  "capability_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+                """;
+            var discoveryResult = await discoveryTool.ExecuteAsync(discoveryArguments);
+            var discoveryReceipt = discoveryTool.CreateResultReceipt(
+                "call-discovery-gamma",
+                discoveryTool.Name,
+                discoveryArguments,
+                discoveryResult);
+
+            discoveryReceipt.Should().NotBeNull();
+            discoveryReceipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+            discoveryReceipt.CallId.Should().Be("call-discovery-gamma");
+            discoveryReceipt.ToolName.Should().Be("discover_service_api_workflow_capability");
+            discoveryReceipt.ResultJson.Should().Be(discoveryResult);
         }
         finally
         {
@@ -657,19 +685,187 @@ public class BindingToolsTests
     }
 
     [Fact]
+    public async Task DiscoverServiceApiWorkflowCapabilityTool_UsesTypedApplicationPortAndCurrentAuthority()
+    {
+        const string callerBearer = "caller-secret-that-must-not-be-serialized";
+        const string organizationBearer = "organization-secret-that-must-not-be-serialized";
+        var port = new StubServiceApiWorkflowCapabilityDiscoveryPort(ResolvedServiceApiRequestResult());
+        var tool = new DiscoverServiceApiWorkflowCapabilityTool(port);
+
+        tool.Name.Should().Be("discover_service_api_workflow_capability");
+        tool.IsReadOnly.Should().BeTrue();
+        tool.ParametersSchema.Should().Contain("target_user_service_id");
+        tool.ParametersSchema.Should().Contain("capability_fingerprint");
+        tool.ParametersSchema.Should().NotContain("prompt");
+        AgentToolRequestContext.Current = CapabilityContext(
+            "owner-scope-alpha",
+            "caller-subject-alpha",
+            callerBearer,
+            organizationBearer);
+
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                """
+                {
+                  "target_user_service_id": "usvc-alpha",
+                  "service_slug_snapshot": "example-service",
+                  "service_label_snapshot": "Example Service",
+                  "normalized_capability": "send a message",
+                  "descriptor_inventory": [
+                    {
+                      "display_name": "Different exact operation",
+                      "selector": {
+                        "nyxid_operation": {
+                          "user_service_id": "usvc-beta",
+                          "endpoint_id": "read_status"
+                        }
+                      }
+                    }
+                  ],
+                  "managed_discovery_policy_version": "service_api_skill_discovery.v1",
+                  "admission_policy_version": "nyxid_request_selector.v1",
+                  "capability_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+                """);
+
+            port.Request.Should().NotBeNull();
+            port.Request!.Access.ScopeId.Should().Be("owner-scope-alpha");
+            port.Request.Access.CallerId.Should().Be("caller-subject-alpha");
+            port.Request.Access.NyxIdCallerCredential?.SourceReadableUserBearerToken
+                .Should().Be(callerBearer);
+            port.Request.Access.NyxIdOrganizationBearerToken.Should().Be(organizationBearer);
+            port.Request.Input.ScopeId.Should().Be("owner-scope-alpha");
+            port.Request.Input.CallerId.Should().Be("caller-subject-alpha");
+            port.Request.Input.TargetUserServiceId.Should().Be("usvc-alpha");
+            port.Request.Input.ServiceSlugSnapshot.Should().Be("example-service");
+            port.Request.Input.ServiceLabelSnapshot.Should().Be("Example Service");
+            port.Request.Input.NormalizedCapability.Should().Be("send a message");
+            port.Request.Input.ManagedDiscoveryPolicyVersion.Should().Be("service_api_skill_discovery.v1");
+            port.Request.Input.AdmissionPolicyVersion.Should().Be("nyxid_request_selector.v1");
+            port.Request.Input.CapabilityFingerprint.Should()
+                .Be("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+            port.Request.Input.DescriptorInventory.Should().ContainSingle();
+            port.Request.Input.CallerAuthority.OwnerSubject.Should().Be("caller-subject-alpha");
+
+            using var document = JsonDocument.Parse(result);
+            var root = document.RootElement;
+            root.GetProperty("scope_id").GetString().Should().Be("owner-scope-alpha");
+            root.GetProperty("target_user_service_id").GetString().Should().Be("usvc-alpha");
+            root.GetProperty("result").GetProperty("nyxid_request")
+                .GetProperty("user_service_id").GetString().Should().Be("usvc-alpha");
+            root.GetProperty("authoring_selector").GetProperty("nyxid_request")
+                .GetProperty("path_template").GetString().Should().Be("/v1/messages");
+            root.GetProperty("result").GetProperty("nyxid_request")
+                .GetProperty("ornn_skill")
+                .GetProperty("guid").GetString().Should().Be("d47a95c5-db2a-4f00-9057-27f674566bd5");
+            result.Should().NotContain(callerBearer);
+            result.Should().NotContain(organizationBearer);
+            result.Should().NotContain("bearer");
+            result.Should().NotContain("api_key");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task DiscoverServiceApiWorkflowCapabilityTool_RejectsMalformedTypedInput()
+    {
+        var port = new StubServiceApiWorkflowCapabilityDiscoveryPort(ResolvedServiceApiRequestResult());
+        var tool = new DiscoverServiceApiWorkflowCapabilityTool(port);
+        AgentToolRequestContext.Current = CapabilityContext(
+            "owner-scope-alpha",
+            "caller-subject-alpha",
+            "caller-bearer-alpha",
+            "organization-bearer-alpha");
+
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                """
+                {
+                  "target_user_service_id": "usvc-alpha",
+                  "service_slug_snapshot": "example-service",
+                  "service_label_snapshot": "Example Service",
+                  "normalized_capability": "send a message",
+                  "descriptor_inventory": [],
+                  "managed_discovery_policy_version": "service_api_skill_discovery.v1",
+                  "admission_policy_version": "nyxid_request_selector.v1",
+                  "capability_fingerprint": "not-a-sha"
+                }
+                """);
+
+            ReadError(result).Should().Be("capability_fingerprint must be 64 lowercase SHA-256 hex characters");
+            port.Request.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task DiscoverServiceApiWorkflowCapabilityTool_ReturnsTypedNoReliableSkillWithoutWebFallback()
+    {
+        var port = new StubServiceApiWorkflowCapabilityDiscoveryPort(NoReliableServiceApiSkillResult());
+        var tool = new DiscoverServiceApiWorkflowCapabilityTool(port);
+        AgentToolRequestContext.Current = CapabilityContext(
+            "owner-scope-alpha",
+            "caller-subject-alpha",
+            "caller-bearer-alpha",
+            "organization-bearer-alpha");
+
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                """
+                {
+                  "target_user_service_id": "usvc-alpha",
+                  "service_slug_snapshot": "example-service",
+                  "service_label_snapshot": "Example Service",
+                  "normalized_capability": "send a message",
+                  "descriptor_inventory": [],
+                  "managed_discovery_policy_version": "service_api_skill_discovery.v1",
+                  "admission_policy_version": "nyxid_request_selector.v1",
+                  "capability_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+                """);
+
+            using var document = JsonDocument.Parse(result);
+            var root = document.RootElement;
+            root.GetProperty("result_kind").GetString().Should().Be("no_reliable_skill");
+            root.GetProperty("result").GetProperty("no_reliable_api_skill")
+                .GetProperty("reason").GetString().Should()
+                .Be("SERVICE_API_NO_RELIABLE_SKILL_REASON_NO_MATCHING_SKILL");
+            root.TryGetProperty("authoring_selector", out _).Should().BeFalse();
+            result.Should().NotContain("web_search");
+            result.Should().NotContain("web_fetch");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task BindingAgentToolSource_RegistersExternalCapabilityToolsConditionally()
     {
         var source = new BindingAgentToolSource(
             new BindingToolOptions(),
             externalCapabilityListPort: new StubExternalWorkflowCapabilityListPort(
                 new ExternalWorkflowCapabilityDiscoveryResult()),
-            externalCapabilityReadinessPort: new StubExternalWorkflowCapabilityReadinessPort());
+            externalCapabilityReadinessPort: new StubExternalWorkflowCapabilityReadinessPort(),
+            serviceApiWorkflowCapabilityDiscoveryPort: new StubServiceApiWorkflowCapabilityDiscoveryPort(
+                ResolvedServiceApiRequestResult()));
 
         var tools = await source.DiscoverToolsAsync();
 
-        tools.Should().HaveCount(2);
+        tools.Should().HaveCount(3);
         tools.Should().ContainSingle(tool => tool is ListExternalWorkflowCapabilitiesTool);
         tools.Should().ContainSingle(tool => tool is InspectExternalWorkflowCapabilityReadinessTool);
+        tools.Should().ContainSingle(tool => tool is DiscoverServiceApiWorkflowCapabilityTool);
     }
 
     #endregion
@@ -1524,6 +1720,20 @@ public class BindingToolsTests
         }
     }
 
+    private sealed class StubServiceApiWorkflowCapabilityDiscoveryPort(
+        ServiceApiWorkflowCapabilityDiscoveryResult result) : IServiceApiWorkflowCapabilityDiscoveryPort
+    {
+        public DiscoverServiceApiWorkflowCapabilityRequest? Request { get; private set; }
+
+        public Task<ServiceApiWorkflowCapabilityDiscoveryResult> DiscoverAsync(
+            DiscoverServiceApiWorkflowCapabilityRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Request = request;
+            return Task.FromResult(result.Clone());
+        }
+    }
+
     private static ExternalWorkflowCapabilityDescriptor Descriptor(
         ExternalWorkflowCapabilitySelector selector,
         string displayName) =>
@@ -1545,6 +1755,64 @@ public class BindingToolsTests
                 EndpointId = endpointId,
             },
         };
+
+    private static ServiceApiWorkflowCapabilityDiscoveryResult ResolvedServiceApiRequestResult() =>
+        new()
+        {
+            Resolution = ResolvedServiceApiRequest(),
+        };
+
+    private static ServiceApiWorkflowCapabilityDiscoveryResult NoReliableServiceApiSkillResult() =>
+        new()
+        {
+            NoReliableApiSkill = new NoReliableServiceApiSkill
+            {
+                Reason = ServiceApiNoReliableSkillReason.NoMatchingSkill,
+            },
+        };
+
+    private static ServiceApiCapabilityResolution ResolvedServiceApiRequest()
+    {
+        var selector = new NyxIdRequestSelector
+        {
+            UserServiceId = "usvc-alpha",
+            Method = NyxIdRequestMethod.Post,
+            PathTemplate = "/v1/messages",
+            BodyMode = NyxIdRequestBodyMode.Json,
+            BodyRequired = true,
+            ResponseMode = NyxIdRequestResponseMode.Text,
+            Risk = NyxIdOperationRisk.Write,
+        };
+        selector.HeaderParameters.Add("Accept");
+
+        var resolution = new ServiceApiCapabilityResolution
+        {
+            NyxidRequest = new ResolvedNyxIdRequest
+            {
+                UserServiceId = "usvc-alpha",
+                AdmissionPolicyVersion = "nyxid_request_selector.v1",
+                RequestShape = new AdmittedNyxIdRequestShape
+                {
+                    Selector = selector,
+                },
+                OrnnSkill = new ExactOrnnApiSkillProvenance
+                {
+                    CanonicalName = "example-service-api",
+                    Guid = "d47a95c5-db2a-4f00-9057-27f674566bd5",
+                    LiteralVersion = "1.1",
+                    SkillHash = "75f0e0480c4cbeed68ba97ffe0b26a0c0cc0ec2d8d0bed631306b383eec0f486",
+                    PublisherId = "9f42ce90-8b05-406d-8461-acb5fdfa4fab",
+                },
+            },
+        };
+        resolution.NyxidRequest.OrnnSkill.Evidence.Add(new ExactOrnnApiSkillEvidence
+        {
+            SkillFilePath = "SKILL.md",
+            Section = "Send a message",
+            OperationId = "send-message",
+        });
+        return resolution;
+    }
 
     private static ScopeWorkflowSummary BuildWorkflowSummary(
         string scopeId,

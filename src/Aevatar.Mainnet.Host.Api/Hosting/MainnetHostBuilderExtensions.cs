@@ -73,6 +73,7 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Extensions.Hosting;
+using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Integration.AI;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -345,6 +346,7 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChronoSandboxCodexExecution(
             builder.Configuration,
             builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"));
+        builder.Services.AddManagedServiceApiWorkflowCapabilityDiscovery();
         builder.Services.AddNyxIdTools(o =>
         {
             // Override the single default (NyxIdToolOptions.DefaultBaseUrl) only when config provides a
