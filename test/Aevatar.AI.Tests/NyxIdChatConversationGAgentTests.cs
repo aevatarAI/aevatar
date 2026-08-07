@@ -3670,6 +3670,107 @@ public sealed class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
+    public async Task AskUserFreeTextOnly_ShouldPreserveOneCompositeQuestionAndResumeExactInputStep()
+    {
+        const string conversationActorId = "conversation-alpha";
+        const string compositeQuestion =
+            "Which region, budget, and launch date should I use for this deployment?";
+        const string rawAnswer =
+            "Singapore; budget SGD 200; launch 2026-08-20. Keep those defaults editable.";
+        var eventStore = new InMemoryEventStoreForTests();
+        var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        using var services = BuildEventSourcingServices(eventStore);
+        var initial = CreateController(services, conversationActorId, dispatch);
+        await initial.ActivateAsync();
+        await initial.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            CreateStartTurnCommand()));
+        var llmKey = initial.State.ActiveTask.Steps.Single().Operation.Key.Clone();
+        await initial.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = llmKey,
+                Llm = new NyxIdChatLLMOperationResult
+                {
+                    ToolCalls =
+                    {
+                        new NyxIdChatToolCall
+                        {
+                            CallId = "call-ask-user-composite",
+                            ToolName = "ask_user",
+                            ArgumentsJson = $$"""
+                                {
+                                  "question": "{{compositeQuestion}}",
+                                  "allow_free_text": true
+                                }
+                                """,
+                            Safety = new NyxIdChatToolCallSafety
+                            {
+                                IsReadOnly = true,
+                                MayChangeExternalState = false,
+                            },
+                        },
+                    },
+                },
+            }));
+
+        var selfRequest = dispatch.Calls.Should().ContainSingle(call =>
+                call.Envelope.Payload.Is(NyxIdChatInputRequestCommand.Descriptor))
+            .Which.Envelope.Clone();
+        await initial.HandleEventAsync(selfRequest);
+        initial.State.PendingInput.Should().NotBeNull();
+        var pending = initial.State.PendingInput!;
+        pending.Prompt.Should().Be(compositeQuestion);
+        pending.Options.Should().BeEmpty();
+        pending.AllowFreeText.Should().BeTrue();
+        pending.MultiSelect.Should().BeFalse();
+        initial.State.ActiveTask.Steps.Should().ContainSingle(step =>
+            step.Kind == NyxIdChatStepKind.Input &&
+            step.Status == NyxIdChatStepStatus.Waiting);
+
+        var recoveryDispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        var recovered = CreateController(services, conversationActorId, recoveryDispatch);
+        await recovered.ActivateAsync();
+        var committedBeforeResolution = await eventStore.GetEventsAsync(conversationActorId);
+        await recovered.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatInputResolveCommand
+            {
+                ScopeId = "scope-alpha",
+                ConversationActorId = conversationActorId,
+                RequestId = pending.RequestId,
+                ClientRequestId = "client-input-composite",
+                Answer = new NyxIdChatInputAnswer { FreeText = rawAnswer },
+                ExpectedStateVersion = committedBeforeResolution.Count,
+                CommandId = "command-input-composite",
+                CorrelationId = "correlation-input-composite",
+            }));
+
+        recovered.State.PendingInput.Should().BeNull();
+        recovered.State.ActiveTask.Steps.Should().ContainSingle(step =>
+            step.Kind == NyxIdChatStepKind.Input &&
+            step.Status == NyxIdChatStepStatus.Done);
+        recovered.State.ActiveTask.Steps.Should().ContainSingle(step =>
+            step.Kind == NyxIdChatStepKind.Llm &&
+            step.Status == NyxIdChatStepStatus.Running &&
+            step.AddedBy == NyxIdChatStepAddedBy.Replan);
+        var continuation = recoveryDispatch.OperationCalls.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatOperationDispatchCommand>();
+        continuation.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.InputContinuation);
+        continuation.InputContinuation.Answer.FreeText.Should().Be(rawAnswer);
+        continuation.InputContinuation.ToolCallId.Should().Be("call-ask-user-composite");
+
+        var committed = await eventStore.GetEventsAsync(conversationActorId);
+        committed.Should().ContainSingle(item =>
+            item.EventData.Is(NyxIdChatInputResolutionCommittedEvent.Descriptor));
+        committed.Should().OnlyContain(item =>
+            !item.EventData.ToString().Contains(rawAnswer, StringComparison.Ordinal));
+        recovered.State.ToString().Should().NotContain(rawAnswer);
+    }
+
+    [Fact]
     public async Task InputResolution_WhenContinuationDispatchFails_ShouldCommitSafeTerminal()
     {
         const string conversationActorId = "conversation-alpha";

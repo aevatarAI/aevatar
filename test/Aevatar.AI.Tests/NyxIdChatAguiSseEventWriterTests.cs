@@ -248,6 +248,24 @@ public class NyxIdChatAguiSseEventWriterTests
             Steps =
             {
                 taskStep,
+                new NyxIdChatTaskStepState
+                {
+                    StepId = "step-postcondition-alpha",
+                    Order = 2,
+                    Kind = NyxIdChatStepKind.Postcondition,
+                    Status = NyxIdChatStepStatus.Done,
+                    Required = true,
+                    Description = "Verify the connected service.",
+                    Source = new NyxIdChatStepSource
+                    {
+                        Postcondition = new NyxIdChatPostconditionStepSource
+                        {
+                            ActionRequestId = "action-alpha",
+                            Check = "service.connected",
+                        },
+                    },
+                    ExternalEffect = NyxIdChatEffectEvidence.Confirmed,
+                },
             },
         };
 
@@ -303,6 +321,9 @@ public class NyxIdChatAguiSseEventWriterTests
         step.GetProperty("source").GetProperty("tool")
             .GetProperty("readinessCapabilityId").GetString().Should()
             .Be("readiness-capability-alpha");
+        payload.GetProperty("steps")[1].GetProperty("source").GetProperty("postcondition")
+            .GetProperty("check").GetString().Should().Be("service.connected");
+        payload.GetRawText().Should().NotContain("postconditionKind");
         var changed = frames[1].GetProperty("custom");
         changed.GetProperty("name").GetString().Should().Be("nyxid.task.step.changed");
         var changedPayload = changed.GetProperty("payload");

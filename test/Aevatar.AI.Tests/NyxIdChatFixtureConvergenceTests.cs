@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using FluentAssertions;
 
 namespace Aevatar.AI.Tests;
@@ -46,6 +47,71 @@ public sealed class NyxIdChatFixtureConvergenceTests
             .And.Be(stateRoot.GetProperty("stateVersion").GetInt64());
         frameRoot.GetProperty("sequence").GetInt64().Should()
             .Be(snapshot.GetProperty("progressSequence").GetInt64());
+    }
+
+    [Fact]
+    public void VersionOneTaskPlanFixtures_ShouldUseOneShapeAcrossLiveAndCurrentState()
+    {
+        using var liveFrames = ReadFixture("task-plan-live-frames.json");
+        using var currentState = ReadFixture("task-plan-current-state.json");
+        var snapshotFrame = liveFrames.RootElement.GetProperty("snapshot");
+        var changedFrame = liveFrames.RootElement.GetProperty("stepChanged");
+        var liveTask = snapshotFrame.GetProperty("custom").GetProperty("payload");
+        var currentTask = currentState.RootElement.GetProperty("snapshot")
+            .GetProperty("activeTask");
+
+        snapshotFrame.GetProperty("custom").GetProperty("name").GetString().Should()
+            .Be("nyxid.task.snapshot");
+        snapshotFrame.GetProperty("sequence").GetInt64().Should().Be(67);
+        currentState.RootElement.GetProperty("stateVersion").GetInt64().Should().Be(67);
+        currentState.RootElement.GetProperty("snapshot").GetProperty("progressSequence")
+            .GetInt64().Should().Be(67);
+        JsonNode.DeepEquals(
+                JsonNode.Parse(liveTask.GetRawText()),
+                JsonNode.Parse(currentTask.GetRawText()))
+            .Should().BeTrue("live TaskPlan and current-state activeTask use one decoder shape");
+
+        foreach (var propertyName in new[]
+                 {
+                     "schemaVersion", "actorId", "taskId", "turnId", "planId",
+                     "planRevision", "title", "gate", "steps",
+                 })
+        {
+            liveTask.TryGetProperty(propertyName, out _).Should().BeTrue(propertyName);
+        }
+        liveTask.GetProperty("gate").GetProperty("mode").GetString().Should().Be("confirm");
+        liveTask.GetProperty("gate").GetProperty("reason").GetString().Should().NotBeEmpty();
+
+        var steps = liveTask.GetProperty("steps").EnumerateArray().ToArray();
+        steps.Select(step => step.GetProperty("source").EnumerateObject().Single().Name)
+            .Should().Equal(
+                "llm", "tool", "browserAction", "postcondition", "input", "approval", "web");
+        var toolStep = steps.Single(step => step.GetProperty("stepId").GetString() == "step-tool");
+        toolStep.GetProperty("addedBy").GetString().Should().Be("replan");
+        toolStep.GetProperty("dependsOn").EnumerateArray().Select(static item => item.GetString())
+            .Should().Equal("step-llm");
+        toolStep.GetProperty("estimate").GetProperty("seconds").GetInt32().Should().Be(30);
+        toolStep.GetProperty("substeps").GetArrayLength().Should().Be(2);
+        toolStep.GetProperty("source").GetProperty("tool")
+            .GetProperty("readinessCapabilityId").GetString().Should().Be("api-github");
+        toolStep.GetProperty("externalEffect").GetString().Should().Be("not_applied");
+        AssertAvailableActions(toolStep.GetProperty("availableActions"), true, true, false);
+        steps.Single(step => step.GetProperty("stepId").GetString() == "step-postcondition")
+            .GetProperty("source").GetProperty("postcondition").GetProperty("check")
+            .GetString().Should().Be("service.connected");
+
+        var changed = changedFrame.GetProperty("custom");
+        changed.GetProperty("name").GetString().Should().Be("nyxid.task.step.changed");
+        var changedPayload = changed.GetProperty("payload");
+        changedPayload.GetProperty("taskId").GetString().Should()
+            .Be(liveTask.GetProperty("taskId").GetString());
+        changedPayload.GetProperty("planRevision").GetInt32().Should()
+            .Be(liveTask.GetProperty("planRevision").GetInt32());
+        changedPayload.GetProperty("changeKind").GetString().Should().Be("status");
+        JsonNode.DeepEquals(
+                JsonNode.Parse(changedPayload.GetProperty("step").GetRawText()),
+                JsonNode.Parse(toolStep.GetRawText()))
+            .Should().BeTrue("step.changed carries the same complete step shape");
     }
 
     [Theory]
@@ -124,7 +190,8 @@ public sealed class NyxIdChatFixtureConvergenceTests
         using var currentStates = ReadFixture("tool-recovery-current-states.json");
         var frame = FindScenario(liveFrames.RootElement, scenario);
         var state = FindScenario(currentStates.RootElement, scenario);
-        var liveStep = frame.GetProperty("custom").GetProperty("payload");
+        var liveChange = frame.GetProperty("custom").GetProperty("payload");
+        var liveStep = liveChange.GetProperty("step");
         var snapshot = state.GetProperty("snapshot");
         var currentStep = snapshot.GetProperty("activeTask").GetProperty("steps")[0];
 
@@ -132,6 +199,11 @@ public sealed class NyxIdChatFixtureConvergenceTests
             .Be("nyxid.task.step.changed");
         frame.GetProperty("sequence").GetInt64().Should()
             .Be(snapshot.GetProperty("progressSequence").GetInt64());
+        liveChange.GetProperty("taskId").GetString().Should()
+            .Be(snapshot.GetProperty("activeTask").GetProperty("taskId").GetString());
+        liveChange.GetProperty("planRevision").GetInt32().Should()
+            .Be(snapshot.GetProperty("activeTask").GetProperty("planRevision").GetInt32());
+        liveChange.GetProperty("changeKind").GetString().Should().Be("status");
         state.GetProperty("stateVersion").GetInt64().Should()
             .Be(snapshot.GetProperty("stateVersion").GetInt64());
 

@@ -2258,7 +2258,7 @@ function actorStepSourceLabel(step) {
   }
   if (source.browserAction) return `NyxID Action · ${source.browserAction.action || "browser"}`;
   if (source.postcondition) {
-    return `验证 · ${source.postcondition.postconditionKind || "postcondition"}`;
+    return `验证 · ${source.postcondition.check || "postcondition"}`;
   }
   if (source.input) return "用户输入";
   if (source.approval) return "审批";

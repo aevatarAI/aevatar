@@ -155,6 +155,46 @@ Actor-authored task observation is committed before publication. The controller 
 - `nyxid.approval.request`
 - `nyxid.approval.changed`
 
+### TaskPlan observation contract
+
+`nyxid.task.snapshot.custom.payload` is the complete actor-owned TaskPlan. Its
+stable v1 fields are:
+
+| Field | Meaning |
+|---|---|
+| `schemaVersion` | Decoder contract version for the complete TaskPlan shape. |
+| `actorId` | Authoritative conversation actor that owns the plan. |
+| `taskId` / `turnId` | Exact task and turn identities; neither is an alias for `actorId`. |
+| `planId` / `planRevision` | Stable plan identity and actor-authored monotonic revision. |
+| `title` | Safe user-facing task title. |
+| `gate.mode` / `gate.reason` | Closed `auto` or `confirm` gate and its safe explanation. |
+| `steps` | Ordered complete step states. |
+
+Each step carries `stepId / order / kind / status / required / description`, a
+typed `source`, effect evidence, actor-computed `availableActions`, and its
+actor-authored update time. Planning provenance is typed as `addedBy`,
+`dependsOn`, optional `estimate`, and typed `substeps`. The closed source union
+is `llm`, `tool`, `browserAction`, `postcondition`, `input`, `approval`, or the
+reserved `web` source. Tool source keeps `toolName`, exact `serviceSlug`, exact
+`serviceId`, and optional producer-authored `readinessCapabilityId` separate.
+Postcondition source carries `actionRequestId` plus the stable `check`; approval
+source carries the exact `approvalRequestId`.
+
+`nyxid.task.step.changed.custom.payload` is always the complete typed envelope
+`taskId / planRevision / step / changeKind`. It never publishes a bare step.
+The nested `step` uses exactly the same shape as a step in TaskPlan.
+
+Live TaskPlan payloads and current-state `snapshot.activeTask` are the same
+contract, not two browser models. Clients must use one TaskPlan decoder and one
+step decoder for initial SSE, reconnect/reload, and step-change reduction. They
+must not rename fields, infer identities, or maintain a second lifecycle model.
+The checked-in v1 convergence fixtures compare these shapes field-for-field.
+
+G9 v1 deliberately allows only one browser action in a blocked turn. Multiple
+service connections are separate sequential actions. On reload, the browser
+resumes from current-state `activeTask`, whose shape is identical to the live
+TaskPlan payload; it does not reconstruct a plan from action cards or text.
+
 Text, reasoning, tool-start, task, control, and terminal frames share the actor-owned progress sequence. `RUN_STARTED`, keepalive, and bounded endpoint-local setup failures are transport context and do not invent an actor sequence. A stream closes with exactly one terminal:
 
 - task and turn `succeeded`: `RUN_FINISHED`, status `completed`;
@@ -265,7 +305,14 @@ Retry and skip validate the body `conversationId`, `turnId`, `taskId`, `stepId`,
 
 ## Pending input and tool approval
 
-Pending input is an actor-owned protobuf fact containing `requestId`, `turnId`, `taskId`, `stepId`, `prompt`, typed `options`, `askedAt`, `allowFreeText`, and `multiSelect`. Each option has an opaque stable `optionId` plus its display `label` and optional `description`. A production `ask_user` tool call authors the request for the exact active input step; a secret-free actor outbox retains that self-message until the pending fact commits. The actor then emits `nyxid.input.request`, and the projection session publishes that committed fact as a live frame. The request is not reconstructed from LLM text or browser state, and controller reload cannot lose it.
+Pending input is an actor-owned protobuf fact containing `requestId`, `turnId`, `taskId`, `stepId`, `prompt`, typed `options`, `askedAt`, `allowFreeText`, and `multiSelect`. Each option has an opaque stable `optionId` plus its display `label` and optional `description`. A choice question has 2-6 options. A free-text-only question has zero options, requires `allowFreeText=true`, and cannot be multi-select; one-option requests are always invalid. A production `ask_user` tool call authors the request for the exact active input step; a secret-free actor outbox retains that self-message until the pending fact commits. The actor then emits `nyxid.input.request`, and the projection session publishes that committed fact as a live frame. The request is not reconstructed from LLM text or browser state, and controller reload cannot lose it.
+
+Before Phase-1 execution, the assistant identifies all genuine information gaps.
+If any remain, it emits one `ask_user` call whose prose prompt combines those
+gaps into one editable question and waits for the answer before executing. It
+does not drip-feed separate questions. Suggested defaults are hints rather than
+accepted decisions. This remains one actor-owned pending input and one closed
+answer union, not a form or a collection of independently resolvable fields.
 
 The caller resolves input through the same public command surface:
 

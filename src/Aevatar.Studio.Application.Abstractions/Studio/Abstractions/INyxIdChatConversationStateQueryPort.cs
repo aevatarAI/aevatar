@@ -214,7 +214,7 @@ public sealed record NyxIdChatBrowserActionStepSourceSnapshot(
 
 public sealed record NyxIdChatPostconditionStepSourceSnapshot(
     string? ActionRequestId,
-    string? PostconditionKind);
+    string? Check);
 
 public sealed record NyxIdChatInputStepSourceSnapshot(string? RequestId);
 

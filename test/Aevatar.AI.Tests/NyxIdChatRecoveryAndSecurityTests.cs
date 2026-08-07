@@ -606,7 +606,7 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
                 Postcondition = new NyxIdChatPostconditionStepSource
                 {
                     ActionRequestId = "action-alpha",
-                    PostconditionKind = nameof(NyxIdAssistantActionKind.ServiceConnect),
+                    Check = nameof(NyxIdAssistantActionKind.ServiceConnect),
                 },
             },
             ActionRequestId = "action-alpha",

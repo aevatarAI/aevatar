@@ -371,7 +371,7 @@ message NyxIdChatConversationBrowserActionStepSourceDocument {
 
 message NyxIdChatConversationPostconditionStepSourceDocument {
   string action_request_id = 1;
-  string postcondition_kind = 2;
+  string check = 2;
 }
 
 message NyxIdChatConversationInputStepSourceDocument {

@@ -261,7 +261,7 @@ message NyxIdChatInputStepSource {
 
 message NyxIdChatPostconditionStepSource {
   string action_request_id = 1;
-  string postcondition_kind = 2;
+  string check = 2;
 }
 
 message NyxIdChatApprovalStepSource {

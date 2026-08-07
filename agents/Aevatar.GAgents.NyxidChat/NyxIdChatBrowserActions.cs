@@ -621,7 +621,7 @@ public static class NyxIdChatBrowserActions
                 Postcondition = new NyxIdChatPostconditionStepSource
                 {
                     ActionRequestId = request.ActionRequestId,
-                    PostconditionKind = request.Action.ToString(),
+                    Check = request.Action.ToString(),
                 },
             },
             ActionRequestId = request.ActionRequestId,

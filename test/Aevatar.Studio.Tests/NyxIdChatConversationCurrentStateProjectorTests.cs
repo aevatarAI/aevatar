@@ -188,6 +188,39 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldCopyTypedPostconditionCheck()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new NyxIdChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-05T10:00:00Z")));
+        var state = BuildState();
+        var step = state.ActiveTask.Steps.Single(item => item.StepId == "step-alpha");
+        step.Source = new NyxIdChatStepSource
+        {
+            Postcondition = new NyxIdChatPostconditionStepSource
+            {
+                ActionRequestId = "action-alpha",
+                Check = "service.connected",
+            },
+        };
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new NyxIdChatOperationReconciledEvent(),
+                state,
+                version: 30,
+                eventId: "event-alpha-30",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-08-05T09:59:00Z")));
+
+        var source = dispatcher.Upserts.Should().ContainSingle().Which.ActiveTask.Steps
+            .Single(item => item.StepId == "step-alpha").Source.Postcondition;
+        source.ActionRequestId.Should().Be("action-alpha");
+        source.Check.Should().Be("service.connected");
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldIgnoreNonControllerCommittedState()
     {
         var dispatcher = new RecordingWriteDispatcher();

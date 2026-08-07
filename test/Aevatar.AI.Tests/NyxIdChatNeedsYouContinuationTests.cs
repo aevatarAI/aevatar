@@ -83,6 +83,49 @@ public sealed class NyxIdChatNeedsYouContinuationTests
     }
 
     [Fact]
+    public async Task InputContinuation_ShouldInjectExactFreeTextOnlyIntoTransientToolResult()
+    {
+        const string rawAnswer =
+            "Singapore; budget SGD 200; launch 2026-08-20. Keep defaults editable.";
+        var generation = new AskUserGenerationExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(generation);
+        var session = new NyxIdChatTransientExecutionSession();
+        await executor.ExecuteAsync(
+            InitialLlmCommand(),
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+        var continuation = new NyxIdChatOperationDispatchCommand
+        {
+            Key = Key("step-input-free-text", "operation-input-free-text"),
+            InputContinuation = new NyxIdChatInputContinuationInput
+            {
+                RequestId = "input-free-text",
+                ToolCallId = "call-ask-user-alpha",
+                Answer = new NyxIdChatInputAnswer { FreeText = rawAnswer },
+            },
+        };
+
+        var execution = await executor.ExecuteAsync(
+            continuation,
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        execution.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Llm);
+        generation.LlmStates.Should().HaveCount(2);
+        var continued = generation.LlmStates[1];
+        continued.PendingToolCalls.Should().BeEmpty();
+        var toolMessage = continued.Messages.Should().ContainSingle(message =>
+            message.Role == "tool" && message.ToolCallId == "call-ask-user-alpha").Which;
+        using var response = JsonDocument.Parse(toolMessage.Content);
+        response.RootElement.GetProperty("type").GetString().Should().Be("ask_user_response");
+        response.RootElement.GetProperty("free_text").GetString().Should().Be(rawAnswer);
+        response.RootElement.TryGetProperty("selected_options", out _).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task ApprovalContinuation_ShouldExecuteExactCallWithGrantAndFreshCredentials()
     {
         var generation = new ApprovalGenerationExecutor();

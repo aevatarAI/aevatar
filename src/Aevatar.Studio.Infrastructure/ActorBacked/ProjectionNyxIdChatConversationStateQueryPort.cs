@@ -292,7 +292,7 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 new NyxIdChatConversationStepSourceSnapshot(
                     Postcondition: new NyxIdChatPostconditionStepSourceSnapshot(
                         NullIfEmpty(source.Postcondition.ActionRequestId),
-                        NullIfEmpty(source.Postcondition.PostconditionKind))),
+                        NullIfEmpty(source.Postcondition.Check))),
             NyxIdChatConversationStepSourceDocument.SourceOneofCase.Input =>
                 new NyxIdChatConversationStepSourceSnapshot(
                     Input: new NyxIdChatInputStepSourceSnapshot(

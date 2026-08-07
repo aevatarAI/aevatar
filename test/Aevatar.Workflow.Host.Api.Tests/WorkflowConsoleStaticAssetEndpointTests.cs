@@ -451,6 +451,15 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task WorkflowStudio_TaskStepSourceLabel_ShouldUseTypedPostconditionCheck()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+
+        app.Should().Contain("source.postcondition.check");
+        app.Should().NotContain("source.postcondition.postconditionKind");
+    }
+
+    [Fact]
     public async Task WorkflowStudio_Protocol_ShouldPreserveTypedRunStoppedPayload()
     {
         var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);

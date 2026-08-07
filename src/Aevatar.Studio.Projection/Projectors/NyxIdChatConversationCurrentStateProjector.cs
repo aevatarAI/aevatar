@@ -231,7 +231,7 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                     Postcondition = new NyxIdChatConversationPostconditionStepSourceDocument
                     {
                         ActionRequestId = source.Postcondition.ActionRequestId,
-                        PostconditionKind = source.Postcondition.PostconditionKind,
+                        Check = source.Postcondition.Check,
                     },
                 },
             NyxIdChatStepSource.SourceOneofCase.Input =>

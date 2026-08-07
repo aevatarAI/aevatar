@@ -85,6 +85,31 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
     }
 
     [Fact]
+    public async Task GetAsync_ShouldExposeTypedPostconditionCheck()
+    {
+        var document = BuildDocument(stateVersion: 8);
+        var step = document.ActiveTask.Steps.Single();
+        step.Source = new NyxIdChatConversationStepSourceDocument
+        {
+            Postcondition = new NyxIdChatConversationPostconditionStepSourceDocument
+            {
+                ActionRequestId = "action-alpha",
+                Check = "service.connected",
+            },
+        };
+        var port = new ProjectionNyxIdChatConversationStateQueryPort(
+            new RecordingReader { Document = document });
+
+        var result = await port.GetAsync(new NyxIdChatConversationStateQuery(
+            "scope-alpha",
+            "conversation-alpha"));
+
+        var source = result.Snapshot!.ActiveTask!.Steps.Single().Source!.Postcondition!;
+        source.ActionRequestId.Should().Be("action-alpha");
+        source.Check.Should().Be("service.connected");
+    }
+
+    [Fact]
     public async Task GetAttentionSummariesAsync_ShouldBatchReadActorScopedProjectionTruth()
     {
         var valid = BuildDocument(stateVersion: 23);

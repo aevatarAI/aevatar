@@ -242,7 +242,7 @@ public static class NyxIdChatTaskLifecycle
             RequestId = requestId,
             ToolCallId = toolCall.CallId,
             Prompt = input.Prompt,
-            AllowFreeText = false,
+            AllowFreeText = input.AllowFreeText,
             MultiSelect = input.MultiSelect,
         };
         request.Options.AddRange(input.Options.Select(static option => option.Clone()));
