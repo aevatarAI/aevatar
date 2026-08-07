@@ -1115,25 +1115,32 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
     private static bool IsAuditRecorded(AuditTrailAppendResult append) =>
         append.Status is AuditTrailAppendStatus.Appended or AuditTrailAppendStatus.Duplicate;
 
-    private static string ResolveExceptionErrorCode(Exception exception) =>
-        exception is CodexExecutionException codexException
-            ? codexException.Failure.Kind switch
-            {
-                CodexExecutionFailureKind.TargetNotConfigured => "codex_execution_target_not_configured",
-                CodexExecutionFailureKind.AdmissionDenied => "codex_execution_admission_denied",
-                CodexExecutionFailureKind.LlmProviderNotConnected => "codex_execution_llm_provider_not_connected",
-                CodexExecutionFailureKind.CapacityUnavailable => "codex_execution_capacity_unavailable",
-                CodexExecutionFailureKind.ProvisioningFailed => "codex_execution_provisioning_failed",
-                CodexExecutionFailureKind.ReadinessFailed => "codex_execution_readiness_failed",
-                CodexExecutionFailureKind.IsolationUnavailable => "codex_execution_isolation_unavailable",
-                CodexExecutionFailureKind.MalformedOutput => "codex_execution_malformed_output",
-                CodexExecutionFailureKind.TerminalFailure => "codex_execution_terminal_failure",
-                CodexExecutionFailureKind.TimedOut => "codex_execution_timed_out",
-                CodexExecutionFailureKind.Cancelled => "codex_execution_cancelled",
-                CodexExecutionFailureKind.CleanupFailed => "codex_execution_cleanup_failed",
-                _ => "tool_execution_exception",
-            }
-            : "tool_execution_exception";
+    private static string ResolveExceptionErrorCode(Exception exception)
+    {
+        if (exception is not CodexExecutionException codexException)
+            return "tool_execution_exception";
+
+        var managedUpstreamCode = ManagedCodexUpstreamErrorCode.Resolve(codexException.Failure.Code);
+        if (managedUpstreamCode is not null)
+            return managedUpstreamCode;
+
+        return codexException.Failure.Kind switch
+        {
+            CodexExecutionFailureKind.TargetNotConfigured => "codex_execution_target_not_configured",
+            CodexExecutionFailureKind.AdmissionDenied => "codex_execution_admission_denied",
+            CodexExecutionFailureKind.LlmProviderNotConnected => "codex_execution_llm_provider_not_connected",
+            CodexExecutionFailureKind.CapacityUnavailable => "codex_execution_capacity_unavailable",
+            CodexExecutionFailureKind.ProvisioningFailed => "codex_execution_provisioning_failed",
+            CodexExecutionFailureKind.ReadinessFailed => "codex_execution_readiness_failed",
+            CodexExecutionFailureKind.IsolationUnavailable => "codex_execution_isolation_unavailable",
+            CodexExecutionFailureKind.MalformedOutput => "codex_execution_malformed_output",
+            CodexExecutionFailureKind.TerminalFailure => "codex_execution_terminal_failure",
+            CodexExecutionFailureKind.TimedOut => "codex_execution_timed_out",
+            CodexExecutionFailureKind.Cancelled => "codex_execution_cancelled",
+            CodexExecutionFailureKind.CleanupFailed => "codex_execution_cleanup_failed",
+            _ => "tool_execution_exception",
+        };
+    }
 
     private static string? NormalizeIdentity(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

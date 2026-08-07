@@ -52,6 +52,41 @@ public sealed class CodexExecutionFailureAuditTests
         AuditOutcome.Error,
         AuditFailureCategory.Execution)]
     [InlineData(
+        CodexExecutionFailureKind.CapacityUnavailable,
+        "managed_upstream_codex_sandbox_creation_failed",
+        "managed_upstream_codex_sandbox_creation_failed",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        CodexExecutionFailureKind.CapacityUnavailable,
+        "managed_upstream_provider_capacity_unavailable",
+        "codex_execution_capacity_unavailable",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        CodexExecutionFailureKind.CapacityUnavailable,
+        "managed_upstream_codex_",
+        "codex_execution_capacity_unavailable",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        CodexExecutionFailureKind.CapacityUnavailable,
+        " managed_upstream_codex_capacity_unavailable",
+        "codex_execution_capacity_unavailable",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        CodexExecutionFailureKind.CapacityUnavailable,
+        "managed_upstream_codex_sandbox_creation_failed\nunsafe",
+        "codex_execution_capacity_unavailable",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
         CodexExecutionFailureKind.ProvisioningFailed,
         "provider_detail_05",
         "codex_execution_provisioning_failed",
@@ -179,16 +214,22 @@ public sealed class CodexExecutionFailureAuditTests
             audit.Failure.Category.Should().Be(expectedCategory.Value);
             audit.Failure.SanitizedMessage.Should().Be(expectedAuditCode);
         }
-        audit.ToString().Should().NotContain(providerCode);
+        if (expectedAuditCode == providerCode)
+            audit.ToString().Should().Contain(providerCode);
+        else
+            audit.ToString().Should().NotContain(providerCode);
         var warning = logger.Entries.Should().ContainSingle().Which;
         warning.Level.Should().Be(LogLevel.Warning);
         warning.Message.Should().Contain($"failureKind={failureKind}");
-        var expectedDiagnosticCode = providerCode.All(character =>
-            char.IsAsciiLetterLower(character) ||
-            char.IsAsciiDigit(character) ||
-            character == '_')
-                ? providerCode
-                : "unclassified";
+        var normalizedDiagnosticCode = providerCode.Trim();
+        var expectedDiagnosticCode = normalizedDiagnosticCode.Length is > 0 and <= 96 &&
+                                     char.IsAsciiLetterLower(normalizedDiagnosticCode[0]) &&
+                                     normalizedDiagnosticCode.All(character =>
+                                         char.IsAsciiLetterLower(character) ||
+                                         char.IsAsciiDigit(character) ||
+                                         character == '_')
+            ? normalizedDiagnosticCode
+            : "unclassified";
         warning.Message.Should().Contain($"failureCode={expectedDiagnosticCode}");
         if (expectedDiagnosticCode == "unclassified")
             warning.Message.Should().NotContain(providerCode);
