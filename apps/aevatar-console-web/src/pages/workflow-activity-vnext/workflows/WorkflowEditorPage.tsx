@@ -7,7 +7,7 @@ import {
   RocketOutlined,
   SaveOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Input, Modal, Popover, Segmented, Space } from 'antd';
+import { Alert, Button, Input, Modal, Segmented, Space, Tooltip } from 'antd';
 import React from 'react';
 import WorkflowStudioCanvasRegion from '@/pages/team-member-workflow-studio/components/WorkflowStudioCanvasRegion';
 import WorkflowStudioNodeLibrary from '@/pages/team-member-workflow-studio/components/WorkflowStudioNodeLibrary';
@@ -61,7 +61,6 @@ type PublicationStage = 'idle' | 'submitting' | 'accepted' | 'failed';
 type PublishReadinessIssue = {
   readonly id: string;
   readonly message: string;
-  readonly resolve: () => void;
 };
 
 function hasNonBlankIdentifier(value: unknown): value is string {
@@ -547,11 +546,6 @@ const WorkflowEditorPage: React.FC<{
       publication.phase === 'forbidden');
   const canRetryPublicationSubmission =
     publicationReceipt === null && publicationStage === 'failed';
-  const revealPublicationStatus = () => {
-    document
-      .getElementById('workflow-publication-status')
-      ?.scrollIntoView?.({ block: 'nearest' });
-  };
   const blockingFindings = editor.findings.filter(
     (finding) => String(finding.level).toLowerCase() === 'error',
   );
@@ -563,7 +557,6 @@ const WorkflowEditorPage: React.FC<{
         'workflowActivityVNext.publish.saveBeforePublishing',
         'Save this workflow before publishing.',
       ),
-      resolve: () => void saveWorkflow(),
     });
   }
   if (editor.dirty) {
@@ -573,7 +566,6 @@ const WorkflowEditorPage: React.FC<{
         'workflowActivityVNext.publish.saveChangesBeforePublishing',
         'Save your changes before publishing.',
       ),
-      resolve: () => void saveWorkflow(),
     });
   }
   if (hasUnappliedNodeChanges) {
@@ -583,29 +575,12 @@ const WorkflowEditorPage: React.FC<{
         'workflowActivityVNext.publish.applyNodeChanges',
         'Apply or discard node configuration before publishing.',
       ),
-      resolve: () => setMode('canvas'),
     });
   }
   for (const [findingIndex, finding] of blockingFindings.entries()) {
-    const stepMatch = finding.path?.match(/^\/steps\/(\d+)(?:\/|$)/);
-    const stepId = stepMatch
-      ? editor.document?.steps?.[Number(stepMatch[1])]?.id
-      : undefined;
     publishReadinessIssues.push({
       id: `finding-${finding.code}-${finding.path ?? findingIndex}`,
       message: finding.message,
-      resolve: () => {
-        if (finding.path === '/name') {
-          workflowNameRef.current?.focus();
-          return;
-        }
-        if (stepId) {
-          setMode('canvas');
-          editor.selectNode(`step:${stepId}`);
-          return;
-        }
-        setMode('yaml');
-      },
     });
   }
   if (!editor.document?.steps?.length && blockingFindings.length === 0) {
@@ -615,10 +590,6 @@ const WorkflowEditorPage: React.FC<{
         'workflowActivityVNext.publish.addExecutableStep',
         'Add at least one executable step before publishing.',
       ),
-      resolve: () => {
-        setMode('canvas');
-        setNodeLibraryOpen(true);
-      },
     });
   }
   if (editor.validating || editor.saving) {
@@ -628,7 +599,6 @@ const WorkflowEditorPage: React.FC<{
         'workflowActivityVNext.publish.waitForSave',
         'Wait for workflow validation and saving to finish.',
       ),
-      resolve: () => saveStatusRef.current?.focus(),
     });
   } else if (editor.structuralMutationPending) {
     publishReadinessIssues.push({
@@ -637,7 +607,6 @@ const WorkflowEditorPage: React.FC<{
         'workflowActivityVNext.publish.waitForEditorUpdate',
         'Wait for the workflow step update to finish.',
       ),
-      resolve: () => setMode('canvas'),
     });
   } else if (editor.receiptPending) {
     publishReadinessIssues.push({
@@ -646,7 +615,6 @@ const WorkflowEditorPage: React.FC<{
         'workflowActivityVNext.publish.waitForSavedDraft',
         'Wait for the saved draft to become readable.',
       ),
-      resolve: () => saveStatusRef.current?.focus(),
     });
   }
   if (publicationActionPending) {
@@ -656,7 +624,6 @@ const WorkflowEditorPage: React.FC<{
         'workflowActivityVNext.publish.waitForPublication',
         'Wait for the current publication to finish.',
       ),
-      resolve: revealPublicationStatus,
     });
   } else if (publicationObservationPending) {
     publishReadinessIssues.push({
@@ -665,7 +632,6 @@ const WorkflowEditorPage: React.FC<{
         'workflowActivityVNext.publish.resolvePublication',
         'Resolve the current publication status before publishing again.',
       ),
-      resolve: revealPublicationStatus,
     });
   }
   const publicationCurrent = publicationObserved && !publicationStale;
@@ -798,30 +764,21 @@ const WorkflowEditorPage: React.FC<{
             {t('workflowActivityVNext.common.run', 'Run')}
           </Button>
           {publishReadinessIssues.length > 0 ? (
-            <Popover
-              content={
-                <section
-                  aria-label={t(
-                    'workflowActivityVNext.publish.readinessIssues',
-                    'Publish readiness issues',
-                  )}
-                  className="wa-vnext__publish-readiness"
-                >
+            <Tooltip
+              placement="bottomRight"
+              title={
+                <div className="wa-vnext__publish-readiness">
                   <ul>
                     {publishReadinessIssues.map((issue) => (
-                      <li key={issue.id}>
-                        <Button onClick={issue.resolve} type="link">
-                          {issue.message}
-                        </Button>
-                      </li>
+                      <li key={issue.id}>{issue.message}</li>
                     ))}
                   </ul>
-                </section>
+                </div>
               }
-              trigger={['hover', 'focus', 'click']}
+              trigger={['hover', 'focus']}
             >
               {publishButton}
-            </Popover>
+            </Tooltip>
           ) : (
             publishButton
           )}

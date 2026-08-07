@@ -3081,7 +3081,7 @@ describe('Workflow Activity vNext editor', () => {
     await publishObservedWorkflow();
   }
 
-  it('keeps every publish blocker focusable and links validation issues to their fields and steps', async () => {
+  it('shows publish blockers in the standard compact tooltip', async () => {
     mockStudioApi.getWorkflow.mockResolvedValue({
       workflowId: 'wf-committed-source',
       name: 'Committed source',
@@ -3127,28 +3127,18 @@ describe('Workflow Activity vNext editor', () => {
     ).not.toBeInTheDocument();
 
     fireEvent.focus(publish);
-    const checklist = await screen.findByRole('region', {
-      name: 'Publish readiness issues',
-    });
-    expect(within(checklist).getAllByRole('listitem')).toHaveLength(3);
-
-    fireEvent.click(
-      within(checklist).getByRole('button', {
-        name: 'Workflow name is required.',
-      }),
-    );
+    const tooltip = await screen.findByRole('tooltip');
+    expect(tooltip.closest('.ant-tooltip')).not.toBeNull();
+    expect(tooltip.closest('.ant-popover')).toBeNull();
+    expect(within(tooltip).getAllByRole('listitem')).toHaveLength(3);
+    expect(within(tooltip).queryByRole('region')).not.toBeInTheDocument();
+    expect(within(tooltip).queryByRole('button')).not.toBeInTheDocument();
     expect(
-      screen.getByRole('textbox', { name: 'Workflow name' }),
-    ).toHaveFocus();
-
-    fireEvent.click(
-      within(checklist).getByRole('button', {
-        name: 'Step instruction is required.',
-      }),
-    );
+      within(tooltip).getByText('Workflow name is required.'),
+    ).toBeInTheDocument();
     expect(
-      await screen.findByRole('complementary', { name: 'Configure step-root' }),
-    ).toBeVisible();
+      within(tooltip).getByText('Step instruction is required.'),
+    ).toBeInTheDocument();
     expect(mockStudioApi.previewExplicitRequests).not.toHaveBeenCalled();
   });
 
