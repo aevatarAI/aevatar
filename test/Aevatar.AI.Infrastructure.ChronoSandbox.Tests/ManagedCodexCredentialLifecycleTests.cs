@@ -1010,12 +1010,15 @@ public sealed class ManagedCodexCredentialLifecycleTests
             Arg.Any<CancellationToken>());
     }
 
-    [Fact]
-    public async Task ProvisionAsync_CreatesExactKeyAndPersistsOnlyTheVaultReference()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProvisionAsync_WithEitherSandboxForwardingPolicy_CreatesExactKeyAndPersistsOnlyTheVaultReference(
+        bool forwardAccessToken)
     {
         var handler = new RoutingHandler(
             MeResponse(),
-            UserServicesResponse(),
+            UserServicesResponse(forwardAccessToken: forwardAccessToken),
             """{"keys":[]}""",
             IssuedKeyResponse("key-1", RawKey),
             ApiKeyListResponse("key-1", Now.AddDays(30)));
@@ -1487,7 +1490,6 @@ public sealed class ManagedCodexCredentialLifecycleTests
 
     [Theory]
     [InlineData(false, true, false, true, "proxy:*", "managed_user_services_unavailable")]
-    [InlineData(true, true, true, true, "proxy:*", "chrono_sandbox_delegation_misconfigured")]
     [InlineData(true, true, false, false, "proxy:*", "chrono_sandbox_delegation_misconfigured")]
     [InlineData(true, true, false, true, "llm:proxy", "chrono_sandbox_delegation_misconfigured")]
     [InlineData(true, true, false, true, "admin", "chrono_sandbox_delegation_misconfigured")]

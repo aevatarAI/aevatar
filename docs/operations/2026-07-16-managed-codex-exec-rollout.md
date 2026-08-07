@@ -22,8 +22,11 @@ Before enabling Aevatar, operations must confirm:
   that bearer to provision or repair a credential
 - the `chrono-sandbox` service is deployed from commit `1e8134d` or a
   descendant and exposes `POST /codex/execute`
-- its NyxID service definition is active with `forward_access_token=false`
-- `inject_delegation_token=true` and `delegation_token_scope=proxy:*`
+- its NyxID service definition is active with `inject_delegation_token=true`
+  and `delegation_token_scope=proxy:*`
+- `forward_access_token` may be either value for managed execution because its
+  proxy request has no bearer; set it to `true` when the same UserService also
+  serves ordinary `/execute`
 - each canary user directly owns an active `chrono-sandbox` UserService
 - each canary user has a usable `chrono-llm-public` route
 - chrono-sandbox sets `NYXID_LLM_PROXY_URL=https://nyx-api.chrono-ai.fun/api/v1/proxy/s/chrono-llm-public`; it does not use `/api/v1/llm/gateway/v1` or `/api/v1/llm/chrono-llm-public/v1`
@@ -39,11 +42,12 @@ The internal P0 uses two distinct NyxID UserService policies. The UserService
 fronting Aevatar temporarily forwards the interactive access token so the same
 authenticated user can call the explicit lifecycle API, which confirms
 `/users/me` before creating or repairing that user's Agent Key. The user's
-`chrono-sandbox` UserService must instead keep
-`forward_access_token=false`, `inject_delegation_token=true`, and exact
-`proxy:*` delegation; Aevatar validates that chrono policy during explicit
-provisioning, reconciliation, and rotation, but cannot prevent the service owner
-from changing it later.
+`chrono-sandbox` UserService must keep `inject_delegation_token=true` and exact
+`proxy:*` delegation. Managed requests use `X-API-Key` and omit
+`Authorization`, so bearer forwarding cannot expose the managed key; the shared
+service uses `forward_access_token=true` for ordinary `/execute`. Aevatar
+validates the delegation policy during explicit provisioning, reconciliation,
+and rotation, but cannot prevent the service owner from changing it later.
 
 The five-minute runner token can access other NyxID REST proxy services
 available to the same user, and Aevatar ingress temporarily handles the

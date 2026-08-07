@@ -111,13 +111,15 @@ The issued key must have exactly:
 - a finite configured expiry
 
 No extra service grant is accepted. NyxID's `chrono-sandbox` UserService must
-set `forward_access_token=false`, `inject_delegation_token=true`, and the
-temporary internal-canary `delegation_token_scope=proxy:*`. Aevatar validates
-these settings during explicit provisioning, reconciliation, and rotation.
+set `inject_delegation_token=true` and the temporary internal-canary
+`delegation_token_scope=proxy:*`. Aevatar validates these settings during
+explicit provisioning, reconciliation, and rotation. `forward_access_token`
+may be either value because managed execution sends no bearer; the shared
+service uses `true` so ordinary `/execute` can receive the caller bearer.
 
-The only persistent raw-key copy is stored in `ISecretVault`. Actor state, events, read models, APIs, logs, workflow state, and chrono request bodies contain only typed non-secret facts such as the key ID and `SecretReference`. Execution resolves the raw value immediately before the NyxID request and uses it only as that request's Authorization value. Aevatar never intentionally serializes or forwards it to chrono-sandbox or codex-runner.
+The only persistent raw-key copy is stored in `ISecretVault`. Actor state, events, read models, APIs, logs, workflow state, and chrono request bodies contain only typed non-secret facts such as the key ID and `SecretReference`. Execution resolves the raw value immediately before the NyxID request and uses it only as that request's `X-API-Key` value. Aevatar never intentionally serializes or forwards it to chrono-sandbox or codex-runner.
 
-For the internal P0, the NyxID UserService forwarding policy is a trust boundary rather than an end-to-end guarantee Aevatar can enforce. The UserService owner can currently change `forward_access_token` after Aevatar validates it. Broad or public rollout remains blocked on #2899 providing immutable/version-bound policy or a request-level fail-closed guarantee that NyxID will not forward the caller credential.
+For the internal P0, the mutable delegation-injection policy remains a trust boundary rather than an end-to-end guarantee Aevatar can enforce. The UserService owner can currently change token injection or scope after Aevatar validates it. Broad or public rollout remains blocked on #2899 providing immutable/version-bound policy or a request-level fail-closed delegation guarantee.
 
 ## Managed runtime call
 
@@ -125,7 +127,8 @@ Aevatar sends exactly one fixed proxy request:
 
 ```text
 POST /api/v1/proxy/s/chrono-sandbox/codex/execute?_nyxid_via=<chrono-sandbox-user-service-id>
-Authorization: Bearer <per-user agent key resolved from ISecretVault>
+X-API-Key: <per-user agent key resolved from ISecretVault>
+Authorization: <absent>
 ```
 
 The server-selected `_nyxid_via` value is the same personal UserService ID stored in the credential descriptor and granted to the key. NyxID strips this internal routing parameter before forwarding the request. This prevents slug auto-resolution from selecting an inherited service when the user has multiple services with the same slug.
