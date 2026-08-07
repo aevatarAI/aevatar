@@ -372,6 +372,16 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             Success = false,
             Error = "boom",
         }.ToByteArray());
+
+        var timing = CommittedEvents<WorkflowRunTerminalTimingRecordedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        timing.RunId.Should().Be(harness.RunId);
+        timing.CompletedAtUtc.Should().NotBeNull();
+        harness.Agent.State.CompletedAtUtc.Should().NotBeNull();
+        harness.Agent.State.HasDurationMs.Should().BeTrue();
+        harness.Agent.State.DurationMs.Should().BeGreaterThanOrEqualTo(0);
     }
 
     [Fact]

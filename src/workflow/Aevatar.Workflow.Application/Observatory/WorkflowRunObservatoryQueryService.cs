@@ -400,7 +400,10 @@ public sealed class WorkflowRunObservatoryQueryService
             StartedAtUtc = snapshot.StartedAtUtc?.ToDateTimeOffset(),
             CompletedAtUtc = completedAtUtc,
             UpdatedAtUtc = snapshot.LastUpdatedAt,
-            DurationMs = completedAtUtc == null ? null : snapshot.DurationMs,
+            // Fix (review round 1, F1):
+            //   Activity rows exposed duration whenever completedAt existed, collapsing missing duration to 0.
+            //   Read the optional snapshot field so completed-without-start stays unavailable.
+            DurationMs = completedAtUtc == null || !snapshot.HasDurationMs ? null : snapshot.DurationMs,
             StateVersion = snapshot.StateVersion,
         };
     }

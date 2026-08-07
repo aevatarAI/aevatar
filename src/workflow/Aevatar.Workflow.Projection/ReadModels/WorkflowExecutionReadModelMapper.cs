@@ -7,7 +7,7 @@ public sealed class WorkflowExecutionReadModelMapper
 {
     public WorkflowActorSnapshot ToActorSnapshot(WorkflowExecutionCurrentStateDocument source)
     {
-        return new WorkflowActorSnapshot
+        var snapshot = new WorkflowActorSnapshot
         {
             ActorId = source.RootActorId,
             RunId = source.RunId,
@@ -22,7 +22,6 @@ public sealed class WorkflowExecutionReadModelMapper
             LastUpdatedAt = source.UpdatedAt,
             StartedAtUtc = source.StartedAtUtcValue,
             CompletedAtUtc = source.CompletedAtUtcValue,
-            DurationMs = source.DurationMs,
             LastSuccess = source.Success,
             LastOutput = source.FinalOutput,
             LastError = source.FinalError,
@@ -42,6 +41,9 @@ public sealed class WorkflowExecutionReadModelMapper
             ActivityFirstFailure = MapActivityFirstFailure(source.ActivityFirstFailure),
             ActivityWaiting = MapActivityWaiting(source.ActivityWaiting),
         };
+        if (source.HasDurationMs)
+            snapshot.DurationMs = source.DurationMs;
+        return snapshot;
     }
 
     public WorkflowActorProjectionState ToActorProjectionState(WorkflowExecutionCurrentStateDocument source)

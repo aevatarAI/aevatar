@@ -1450,10 +1450,18 @@ public sealed partial class WorkflowRunGAgent
         }
 
         var stateBeforeCompletion = State.Clone();
-        var completedAt = evt.CompletedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        var completedAt = evt.CompletedAtUtc ?? Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
         var persistedEvent = evt.Clone();
-        persistedEvent.CompletedAtUtc = completedAt;
-        await PersistDomainEventAsync(persistedEvent);
+        persistedEvent.CompletedAtUtc = null;
+        await PersistDomainEventsAsync(
+            [
+                persistedEvent,
+                new WorkflowRunTerminalTimingRecordedEvent
+                {
+                    RunId = string.IsNullOrWhiteSpace(persistedEvent.RunId) ? RunId : persistedEvent.RunId,
+                    CompletedAtUtc = completedAt,
+                },
+            ]);
         await TryRevokeScheduledCallerCredentialAsync(
             stateBeforeCompletion,
             "workflow-run-completed",
@@ -1545,7 +1553,16 @@ public sealed partial class WorkflowRunGAgent
             "Adopt relayed WorkflowCompletedEvent for own run={RunId} success={Success}.",
             RunId,
             evt.Success);
-        await PersistDomainEventAsync(NormalizeAdoptedCompleted(evt));
+        var completedAt = evt.CompletedAtUtc ?? Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
+        await PersistDomainEventsAsync(
+            [
+                NormalizeAdoptedCompleted(evt),
+                new WorkflowRunTerminalTimingRecordedEvent
+                {
+                    RunId = RunId,
+                    CompletedAtUtc = completedAt,
+                },
+            ]);
         await EnsureTerminalNotificationAsync(CancellationToken.None);
     }
 
@@ -1555,7 +1572,7 @@ public sealed partial class WorkflowRunGAgent
         normalized.RunId = RunId;
         if (string.IsNullOrWhiteSpace(normalized.WorkflowName))
             normalized.WorkflowName = State.WorkflowName;
-        normalized.CompletedAtUtc ??= Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        normalized.CompletedAtUtc = null;
         return normalized;
     }
 
@@ -2019,6 +2036,7 @@ public sealed partial class WorkflowRunGAgent
             .On<WorkflowCompensationRetryRequestedEvent>(ApplyWorkflowCompensationRetryRequested)
             .On<WorkflowStoppedEvent>(ApplyWorkflowStopped)
             .On<WorkflowCompletedEvent>(ApplyWorkflowCompleted)
+            .On<WorkflowRunTerminalTimingRecordedEvent>(ApplyWorkflowRunTerminalTimingRecorded)
             .On<WorkflowRunStoppedEvent>(ApplyWorkflowRunStopped)
             .On<WorkflowRunTerminalNotificationPreparedEvent>(ApplyWorkflowRunTerminalNotificationPrepared)
             .On<WorkflowRunTerminalNotificationRetryScheduledEvent>(ApplyWorkflowRunTerminalNotificationRetryScheduled)
@@ -2166,7 +2184,7 @@ public sealed partial class WorkflowRunGAgent
         next.FinalOutput = string.Empty;
         next.FinalError = string.Empty;
         next.CompletedAtUtc = null;
-        next.DurationMs = 0;
+        next.ClearDurationMs();
         next.Initiator = null;
         next.ForkAttempt = 0;
         next.CompensableLedger.Clear();
@@ -2256,7 +2274,7 @@ public sealed partial class WorkflowRunGAgent
         next.FinalOutput = string.Empty;
         next.FinalError = string.Empty;
         next.CompletedAtUtc = null;
-        next.DurationMs = 0;
+        next.ClearDurationMs();
         next.Initiator = BuildInitiator(evt.ExecutionContextDelta?.CallerCredential?.NyxIdAuthority);
         next.ForkAttempt = Math.Max(0, evt.Attempt);
         next.CompensableLedger.Clear();
@@ -2639,6 +2657,15 @@ public sealed partial class WorkflowRunGAgent
         return next;
     }
 
+    private static WorkflowRunState ApplyWorkflowRunTerminalTimingRecorded(
+        WorkflowRunState current,
+        WorkflowRunTerminalTimingRecordedEvent evt)
+    {
+        var next = current.Clone();
+        ApplyTerminalTiming(next, evt.CompletedAtUtc);
+        return next;
+    }
+
     private static WorkflowRunState ApplyWorkflowRunStopped(WorkflowRunState current, WorkflowRunStoppedEvent evt)
     {
         var next = current.Clone();
@@ -2663,11 +2690,18 @@ public sealed partial class WorkflowRunGAgent
             return;
 
         state.CompletedAtUtc = completedAtUtc.Clone();
-        state.DurationMs = state.StartedAtUtc == null
-            ? 0
-            : Math.Max(
-                0,
-                (completedAtUtc.ToDateTimeOffset() - state.StartedAtUtc.ToDateTimeOffset()).TotalMilliseconds);
+        // Fix (review round 1, F1):
+        //   Missing startedAt was encoded as duration 0 for terminal Activity rows.
+        //   Preserve unavailable duration by only setting the optional field when both timestamps exist.
+        if (state.StartedAtUtc == null)
+        {
+            state.ClearDurationMs();
+            return;
+        }
+
+        state.DurationMs = Math.Max(
+            0,
+            (completedAtUtc.ToDateTimeOffset() - state.StartedAtUtc.ToDateTimeOffset()).TotalMilliseconds);
     }
 
     private static WorkflowRunInitiatorState BuildInitiator(WorkflowCallerNyxIdAuthority? authority)

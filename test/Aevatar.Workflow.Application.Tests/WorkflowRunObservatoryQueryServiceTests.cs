@@ -224,6 +224,28 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     }
 
     [Fact]
+    public async Task ListActivityRunsForScopeAsync_ShouldLeaveDurationUnavailable_WhenTerminalRunHasNoStart()
+    {
+        var completedAt = DateTimeOffset.UnixEpoch.AddSeconds(420);
+        var snapshot = Snapshot("actor-terminal-legacy", CallerScope, WorkflowRunCompletionStatus.Completed, updated: 430);
+        snapshot.CompletedAtUtc = Timestamp.FromDateTimeOffset(completedAt);
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            PageResult = new WorkflowActorCurrentStatePage([snapshot], null, null),
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        var page = await service.ListActivityRunsForScopeAsync(
+            CallerScope,
+            new WorkflowActivityRunFeedFilter());
+
+        var row = page.Items.Should().ContainSingle().Subject;
+        row.CompletedAtUtc.Should().Be(completedAt);
+        row.StartedAtUtc.Should().BeNull();
+        row.DurationMs.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ListActivityRunsForScopeAsync_ShouldDropForeignRowsEvenWhenPageContainsThem()
     {
         var currentState = new FakeCurrentStateQueryPort

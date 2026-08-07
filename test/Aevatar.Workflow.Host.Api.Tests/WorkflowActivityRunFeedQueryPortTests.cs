@@ -68,6 +68,23 @@ public sealed class WorkflowActivityRunFeedQueryPortTests
     }
 
     [Fact]
+    public void WorkflowExecutionReadModelMapper_ShouldLeaveDurationUnavailable_WhenDocumentHasNoDuration()
+    {
+        var mapper = new WorkflowExecutionReadModelMapper();
+        var completedAt = DateTimeOffset.Parse("2026-08-07T02:10:00+00:00");
+        var snapshot = mapper.ToActorSnapshot(new WorkflowExecutionCurrentStateDocument
+        {
+            RootActorId = "actor-legacy",
+            RunId = "run-legacy",
+            Status = "completed",
+            CompletedAtUtcValue = Timestamp.FromDateTimeOffset(completedAt),
+        });
+
+        snapshot.CompletedAtUtc?.ToDateTimeOffset().Should().Be(completedAt);
+        snapshot.HasDurationMs.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task PageWorkflowActorCurrentStatesAsync_ShouldForwardActivityFiltersAndCursor()
     {
         var reader = new RecordingCurrentStateReader

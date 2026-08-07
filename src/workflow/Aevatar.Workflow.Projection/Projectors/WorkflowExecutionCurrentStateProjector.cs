@@ -73,7 +73,6 @@ public sealed class WorkflowExecutionCurrentStateProjector
             LastEventId = stateEvent.EventId ?? string.Empty,
             UpdatedAt = input.ObservedAt,
             CompletedAtUtcValue = state.CompletedAtUtc?.Clone(),
-            DurationMs = state.DurationMs,
             ActivityInitiator = MapInitiator(state.Initiator),
             InputSummary = WorkflowAuditTextSanitizer.SanitizeForDisplay(state.Input, 240),
             ActivityCurrentStep = ResolveCurrentStep(state),
@@ -99,6 +98,12 @@ public sealed class WorkflowExecutionCurrentStateProjector
         };
         if (state.CapabilityAdmissionPlan is not null)
             document.CapabilityAdmissionPlan = state.CapabilityAdmissionPlan.Clone();
+
+        // Fix (review round 1, F1):
+        //   Projection previously materialized absent terminal duration as scalar zero.
+        //   Forward the optional duration only when the authoritative state carries it.
+        if (state.HasDurationMs)
+            document.DurationMs = state.DurationMs;
 
         // O2 (06-19-workflow-run-observatory): started_at is derived from the committed WorkflowRunState's
         // own start fact (StartedAtUtc), so the projector stays a pure committed-state -> readmodel mapper

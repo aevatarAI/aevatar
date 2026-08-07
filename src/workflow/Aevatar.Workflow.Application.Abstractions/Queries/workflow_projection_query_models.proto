@@ -35,7 +35,7 @@ message WorkflowActorSnapshot {
   repeated aevatar.workflow.WorkflowExternalActionApprovalSnapshot connector_approvals = 23;
   string workflow_id = 24;
   google.protobuf.Timestamp completed_at_utc = 25;
-  double duration_ms = 26;
+  optional double duration_ms = 26;
   WorkflowRunActivityInitiatorSnapshot activity_initiator = 27;
   string input_summary = 28;
   WorkflowRunActivityStepSnapshot activity_current_step = 29;

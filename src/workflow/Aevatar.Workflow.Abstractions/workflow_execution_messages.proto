@@ -425,6 +425,11 @@ message WorkflowCompletedEvent {
   google.protobuf.Timestamp completed_at_utc = 6;
 }
 
+message WorkflowRunTerminalTimingRecordedEvent {
+  string run_id = 1;
+  google.protobuf.Timestamp completed_at_utc = 2;
+}
+
 message WorkflowInteractionNotificationEvent {
   string run_id = 1;
   string step_id = 2;
