@@ -27,6 +27,7 @@ function workflowDetail(
     workflow: {
       scopeId,
       workflowId,
+      publishedServiceId: receipt.publishedServiceId,
       displayName: 'Publication workflow',
       serviceKey: 'workflow-publication',
       workflowName: 'Publication workflow',

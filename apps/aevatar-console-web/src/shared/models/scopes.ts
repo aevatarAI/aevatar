@@ -1,6 +1,7 @@
 export interface ScopeWorkflowSummary {
   scopeId: string;
   workflowId: string;
+  publishedServiceId: string;
   displayName: string;
   serviceKey: string;
   workflowName: string;

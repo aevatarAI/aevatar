@@ -14,6 +14,7 @@ import {
   expectRecord,
   readBoolean,
   readOptionalRecord,
+  readOptionalString,
   readString,
   readStringArray,
   readStringRecord,
@@ -31,6 +32,12 @@ function decodeScopeWorkflowSummary(
       ['workflowId', 'WorkflowId'],
       `${label}.workflowId`,
     ),
+    publishedServiceId:
+      readOptionalString(
+        record,
+        ['publishedServiceId', 'PublishedServiceId'],
+        `${label}.publishedServiceId`,
+      ) ?? '',
     displayName: readString(
       record,
       ['displayName', 'DisplayName'],

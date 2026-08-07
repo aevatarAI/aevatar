@@ -9,6 +9,7 @@ describe("workflowOperationalUnits", () => {
     {
       scopeId: "scope-a",
       workflowId: "wf-alpha",
+      publishedServiceId: "svc-alpha",
       displayName: "Customer Support Triage",
       serviceKey: "scope-a:alpha",
       workflowName: "customer-support-triage",
@@ -21,6 +22,7 @@ describe("workflowOperationalUnits", () => {
     {
       scopeId: "scope-a",
       workflowId: "wf-draft",
+      publishedServiceId: "svc-draft",
       displayName: "Draft Team",
       serviceKey: "",
       workflowName: "draft-team",
@@ -166,6 +168,7 @@ describe("workflowOperationalUnits", () => {
         {
           scopeId: "scope-a",
           workflowId: "wf-healthy",
+          publishedServiceId: "svc-healthy",
           displayName: "Healthy Team",
           serviceKey: "scope-a:healthy",
           workflowName: "healthy-team",
