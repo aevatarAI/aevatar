@@ -554,6 +554,7 @@ const workflowActivityVNextMessages = {
     "The page you requested isn't available.",
   'workflowActivityVNext.unavailable.title': 'Unavailable',
   'workflowActivityVNext.workflows.activeView': 'Active workflows',
+  'workflowActivityVNext.workflows.allView': 'All workflows',
   'workflowActivityVNext.workflows.archive': 'Archive',
   'workflowActivityVNext.workflows.archiveCheckAgain': 'Check again',
   'workflowActivityVNext.workflows.archiveConfirm': 'Archive workflow',
@@ -596,6 +597,9 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.workflows.empty': 'No workflows yet',
   'workflowActivityVNext.workflows.emptyDescription':
     'Create a workflow to get started.',
+  'workflowActivityVNext.workflows.loadMore': 'Load more',
+  'workflowActivityVNext.workflows.loadMoreFailed':
+    "More workflows couldn't be loaded",
   'workflowActivityVNext.workflows.loading': 'Loading workflows…',
   'workflowActivityVNext.workflows.moreActionsAria':
     'More actions for {name} in {owner}',

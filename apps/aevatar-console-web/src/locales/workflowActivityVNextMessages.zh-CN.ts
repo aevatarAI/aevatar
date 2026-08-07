@@ -515,6 +515,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.unavailable.description': '你请求的页面不可用。',
     'workflowActivityVNext.unavailable.title': '不可用',
     'workflowActivityVNext.workflows.activeView': '活跃工作流',
+    'workflowActivityVNext.workflows.allView': '全部工作流',
     'workflowActivityVNext.workflows.archive': '归档',
     'workflowActivityVNext.workflows.archiveCheckAgain': '再次检查',
     'workflowActivityVNext.workflows.archiveConfirm': '归档工作流',
@@ -555,6 +556,8 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.workflows.empty': '暂无工作流',
     'workflowActivityVNext.workflows.emptyDescription':
       '创建一个工作流即可开始。',
+    'workflowActivityVNext.workflows.loadMore': '加载更多',
+    'workflowActivityVNext.workflows.loadMoreFailed': '无法加载更多工作流',
     'workflowActivityVNext.workflows.loading': '正在加载工作流…',
     'workflowActivityVNext.workflows.moreActionsAria':
       '{owner}中{name}的更多操作',
