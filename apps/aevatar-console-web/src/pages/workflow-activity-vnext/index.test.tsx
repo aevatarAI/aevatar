@@ -169,11 +169,13 @@ jest.mock('@/shared/studio/api', () => ({
     deleteWorkflowDraft: jest.fn(),
     getWorkspaceSettings: jest.fn(),
     getAuthSession: jest.fn(),
+    getMember: jest.fn(),
     getUserConfigRuntime: jest.fn(),
     getUserLlmSettings: jest.fn(),
     getWorkflow: jest.fn(),
     getWorkflowDraft: jest.fn(),
     getWorkflowDraftFile: jest.fn(),
+    listMembers: jest.fn(),
     listWorkflowDrafts: jest.fn(),
     parseYaml: jest.fn(),
     previewExplicitRequests: jest.fn(),
@@ -181,6 +183,7 @@ jest.mock('@/shared/studio/api', () => ({
     saveAndBindWorkflow: jest.fn(),
     saveUserLlmSettings: jest.fn(),
     serializeYaml: jest.fn(),
+    updateMemberDisplayName: jest.fn(),
     updateWorkflowDraft: jest.fn(),
   },
 }));
@@ -299,11 +302,13 @@ const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
   deleteWorkflowDraft: jest.Mock;
   getWorkspaceSettings: jest.Mock;
   getAuthSession: jest.Mock;
+  getMember: jest.Mock;
   getUserConfigRuntime: jest.Mock;
   getUserLlmSettings: jest.Mock;
   getWorkflow: jest.Mock;
   getWorkflowDraft: jest.Mock;
   getWorkflowDraftFile: jest.Mock;
+  listMembers: jest.Mock;
   listWorkflowDrafts: jest.Mock;
   parseYaml: jest.Mock;
   previewExplicitRequests: jest.Mock;
@@ -311,6 +316,7 @@ const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
   saveAndBindWorkflow: jest.Mock;
   saveUserLlmSettings: jest.Mock;
   serializeYaml: jest.Mock;
+  updateMemberDisplayName: jest.Mock;
   updateWorkflowDraft: jest.Mock;
 };
 const mockCreateWorkflowRevisionIdentityCandidate = jest.requireMock(
@@ -354,6 +360,16 @@ describe('Workflow Activity vNext catalogue', () => {
       targetActorId: 'deployment-manager-alpha',
       commandId: 'cmd-archive-alpha',
       correlationId: 'corr-archive-alpha',
+    });
+    mockStudioApi.listMembers.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      members: [],
+      nextPageToken: null,
+    });
+    mockStudioApi.updateMemberDisplayName.mockResolvedValue({
+      status: 'accepted',
+      scopeId: 'scope-alpha',
+      memberId: 'm-alpha',
     });
   });
 
@@ -691,8 +707,8 @@ describe('Workflow Activity vNext catalogue', () => {
       }),
     );
     expect(
-      await screen.findByRole('menuitem', { name: 'Rename' }),
-    ).toBeInTheDocument();
+      (await screen.findAllByRole('menuitem')).map((item) => item.textContent),
+    ).toEqual(['Rename', 'Copy workflow reference', 'Archive']);
     fireEvent.click(
       screen.getByRole('menuitem', { name: 'Copy workflow reference' }),
     );
@@ -743,7 +759,20 @@ describe('Workflow Activity vNext catalogue', () => {
           : draft,
       ),
     );
-    mockScopesApi.listWorkflows.mockResolvedValue([]);
+    mockScopesApi.listWorkflows.mockResolvedValue([
+      {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-support-apac',
+        displayName: 'Support triage',
+        serviceKey: 'scope-alpha:default:default:svc-support-apac',
+        workflowName: 'support_triage',
+        actorId: 'actor-support-apac',
+        activeRevisionId: 'rev-support-apac',
+        deploymentId: 'dep-support-apac',
+        deploymentStatus: 'Active',
+        updatedAt: '2026-08-05T11:29:00Z',
+      },
+    ]);
     mockStudioApi.getWorkflowDraft.mockImplementation(async () => {
       if (pendingName && postUpdateReads++ > 0) {
         authoritativeName = pendingName;
@@ -837,7 +866,268 @@ describe('Workflow Activity vNext catalogue', () => {
     expect(mockConsoleToast.success).toHaveBeenCalledWith('Workflow renamed');
   });
 
-  it('keeps archived workflows out of Active and offers Archive for active published rows', async () => {
+  it('renames a published-only member through its explicit published service identity', async () => {
+    const memberSummary = {
+      memberId: 'm-alpha',
+      scopeId: 'scope-alpha',
+      displayName: 'Published workflow',
+      description: '',
+      implementationKind: 'workflow',
+      implementationRef: {
+        implementationKind: 'workflow',
+        workflowId: 'wf-alpha',
+      },
+      lifecycleStage: 'bind_ready',
+      publishedServiceId: 'svc-alpha',
+      lastBoundRevisionId: 'rev-alpha',
+      teamId: 't-alpha',
+      createdAt: '2026-08-06T09:00:00Z',
+      updatedAt: '2026-08-06T10:00:00Z',
+    };
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
+    mockStudioApi.listMembers.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      members: [memberSummary],
+      nextPageToken: null,
+    });
+    mockStudioApi.getMember
+      .mockResolvedValueOnce({ summary: memberSummary })
+      .mockResolvedValueOnce({
+        summary: {
+          ...memberSummary,
+          displayName: 'Published workflow renamed',
+        },
+      });
+    mockScopesApi.listWorkflows.mockResolvedValue([
+      {
+        scopeId: 'scope-alpha',
+        workflowId: 'legacy-catalogue-row-alpha',
+        publishedServiceId: 'svc-alpha',
+        displayName: 'Published workflow',
+        serviceKey: 'scope-alpha:default:default:svc-alpha',
+        workflowName: 'published_workflow',
+        actorId: 'actor-alpha',
+        activeRevisionId: 'rev-alpha',
+        deploymentId: 'dep-alpha',
+        deploymentStatus: 'Active',
+        updatedAt: '2026-08-06T10:00:00Z',
+      },
+    ]);
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const publishedRow = (
+      await screen.findByText('Published workflow')
+    ).closest('tr');
+    fireEvent.click(
+      within(publishedRow as HTMLElement).getByRole('button', {
+        name: 'More actions for Published workflow in Workspace',
+      }),
+    );
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Workflow name' }), {
+      target: { value: 'Published workflow renamed' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+
+    await waitFor(() =>
+      expect(mockStudioApi.updateMemberDisplayName).toHaveBeenCalledWith({
+        scopeId: 'scope-alpha',
+        memberId: 'm-alpha',
+        displayName: 'Published workflow renamed',
+      }),
+    );
+    await waitFor(() =>
+      expect(mockStudioApi.getMember).toHaveBeenCalledTimes(2),
+    );
+    expect(mockStudioApi.getWorkflowDraft).not.toHaveBeenCalled();
+    expect(await screen.findByText('Published workflow renamed')).toBeVisible();
+    expect(mockConsoleToast.success).toHaveBeenCalledWith('Workflow renamed');
+  });
+
+  it('does not infer a published member from workflow identity when service identity disagrees', async () => {
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
+    mockStudioApi.listMembers.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      members: [
+        {
+          memberId: 'm-alpha',
+          scopeId: 'scope-alpha',
+          displayName: 'Different published member',
+          description: '',
+          implementationKind: 'workflow',
+          implementationRef: {
+            implementationKind: 'workflow',
+            workflowId: 'wf-alpha',
+          },
+          lifecycleStage: 'bind_ready',
+          publishedServiceId: 'svc-other',
+          lastBoundRevisionId: 'rev-alpha',
+          teamId: 't-alpha',
+          createdAt: '2026-08-06T09:00:00Z',
+          updatedAt: '2026-08-06T10:00:00Z',
+        },
+      ],
+      nextPageToken: null,
+    });
+    mockScopesApi.listWorkflows.mockResolvedValue([
+      {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-alpha',
+        publishedServiceId: 'svc-alpha',
+        displayName: 'Published workflow without resolved owner',
+        serviceKey: 'scope-alpha:default:default:svc-alpha',
+        workflowName: 'published_workflow',
+        actorId: 'actor-alpha',
+        activeRevisionId: 'rev-alpha',
+        deploymentId: 'dep-alpha',
+        deploymentStatus: 'Active',
+        updatedAt: '2026-08-06T10:00:00Z',
+      },
+    ]);
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const publishedRow = (
+      await screen.findByText('Published workflow without resolved owner')
+    ).closest('tr');
+    fireEvent.click(
+      within(publishedRow as HTMLElement).getByRole('button', {
+        name: 'More actions for Published workflow without resolved owner in Workspace',
+      }),
+    );
+
+    expect(
+      screen.queryByRole('menuitem', { name: 'Rename' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('menuitem', { name: 'Copy workflow reference' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('menuitem', { name: 'Archive' }),
+    ).toBeInTheDocument();
+  });
+
+  it('renames both authorities when a published member still has an editable draft', async () => {
+    const memberSummary = {
+      memberId: 'm-alpha',
+      scopeId: 'scope-alpha',
+      displayName: 'Published workflow',
+      description: '',
+      implementationKind: 'workflow',
+      implementationRef: {
+        implementationKind: 'workflow',
+        workflowId: 'wf-alpha',
+      },
+      lifecycleStage: 'bind_ready',
+      publishedServiceId: 'svc-alpha',
+      lastBoundRevisionId: 'rev-alpha',
+      teamId: 't-alpha',
+      createdAt: '2026-08-06T09:00:00Z',
+      updatedAt: '2026-08-06T10:00:00Z',
+    };
+    const draft = {
+      workflowId: 'wf-alpha',
+      name: 'Published workflow',
+      description: '',
+      fileName: 'published.yaml',
+      filePath: '/published.yaml',
+      directoryId: 'directory-alpha',
+      directoryLabel: 'Workflows',
+      stepCount: 1,
+      hasLayout: true,
+      updatedAtUtc: '2026-08-06T10:00:00Z',
+      yaml: 'name: Published workflow\nsteps: []\n',
+      layout: { nodes: [] },
+    };
+    const renamedDraft = {
+      ...draft,
+      name: 'Published workflow renamed',
+      yaml: 'name: Published workflow renamed\nsteps: []\n',
+    };
+    mockStudioApi.listWorkflowDrafts
+      .mockResolvedValueOnce([draft])
+      .mockResolvedValue([renamedDraft]);
+    mockStudioApi.listMembers.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      members: [memberSummary],
+      nextPageToken: null,
+    });
+    mockStudioApi.getWorkflowDraft
+      .mockResolvedValueOnce(draft)
+      .mockResolvedValue(renamedDraft);
+    mockStudioApi.parseYaml.mockResolvedValue({
+      document: { name: 'Published workflow', steps: [] },
+    });
+    mockStudioApi.serializeYaml.mockResolvedValue({
+      document: { name: 'Published workflow renamed', steps: [] },
+      yaml: renamedDraft.yaml,
+    });
+    mockStudioApi.updateWorkflowDraft.mockResolvedValue(renamedDraft);
+    mockStudioApi.getMember
+      .mockResolvedValueOnce({ summary: memberSummary })
+      .mockResolvedValueOnce({
+        summary: {
+          ...memberSummary,
+          displayName: 'Published workflow renamed',
+        },
+      });
+    mockScopesApi.listWorkflows.mockResolvedValue([
+      {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-alpha',
+        publishedServiceId: 'svc-alpha',
+        displayName: 'Published workflow',
+        serviceKey: 'scope-alpha:studio:default:svc-alpha',
+        workflowName: 'published_workflow',
+        actorId: 'actor-alpha',
+        activeRevisionId: 'rev-alpha',
+        deploymentId: 'dep-alpha',
+        deploymentStatus: 'Active',
+        updatedAt: '2026-08-06T10:00:00Z',
+      },
+    ]);
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const publishedRow = (
+      await screen.findByText('Published workflow')
+    ).closest('tr');
+    fireEvent.click(
+      within(publishedRow as HTMLElement).getByRole('button', {
+        name: 'More actions for Published workflow in Workflows',
+      }),
+    );
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Workflow name' }), {
+      target: { value: 'Published workflow renamed' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+
+    await waitFor(() =>
+      expect(mockStudioApi.updateWorkflowDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scopeId: 'scope-alpha',
+          workflowId: 'wf-alpha',
+          workflowName: 'Published workflow renamed',
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(mockStudioApi.updateMemberDisplayName).toHaveBeenCalledWith({
+        scopeId: 'scope-alpha',
+        memberId: 'm-alpha',
+        displayName: 'Published workflow renamed',
+      }),
+    );
+    await waitFor(() =>
+      expect(mockStudioApi.getMember).toHaveBeenCalledTimes(2),
+    );
+    expect(await screen.findByText('Published workflow renamed')).toBeVisible();
+    expect(mockConsoleToast.success).toHaveBeenCalledWith('Workflow renamed');
+  });
+
+  it('keeps archived workflows out of Active and keeps rename on published rows with editable drafts', async () => {
     mockStudioApi.listWorkflowDrafts.mockResolvedValue([
       {
         workflowId: 'wf-draft-alpha',
@@ -850,6 +1140,18 @@ describe('Workflow Activity vNext catalogue', () => {
         stepCount: 1,
         hasLayout: true,
         updatedAtUtc: '2026-08-06T09:00:00Z',
+      },
+      {
+        workflowId: 'wf-active-alpha',
+        name: 'Active workflow',
+        description: 'Editable source for the published workflow',
+        fileName: 'active.yaml',
+        filePath: '/active.yaml',
+        directoryId: 'directory-alpha',
+        directoryLabel: 'Workflows',
+        stepCount: 2,
+        hasLayout: true,
+        updatedAtUtc: '2026-08-06T11:00:00Z',
       },
     ]);
     mockScopesApi.listWorkflows.mockResolvedValue([
@@ -889,12 +1191,12 @@ describe('Workflow Activity vNext catalogue', () => {
     const activeActions = within(
       activeName.closest('tr') as HTMLElement,
     ).getByRole('button', {
-      name: 'More actions for Active workflow in Workspace',
+      name: 'More actions for Active workflow in Workflows',
     });
     fireEvent.click(activeActions);
     expect(
-      await screen.findByRole('menuitem', { name: 'Archive' }),
-    ).toBeInTheDocument();
+      (await screen.findAllByRole('menuitem')).map((item) => item.textContent),
+    ).toEqual(['Rename', 'Copy workflow reference', 'Archive']);
   });
 
   it('restores the Archived view without offering Archive again', async () => {
@@ -1271,6 +1573,8 @@ describe('Workflow Activity vNext catalogue', () => {
   });
 
   it('deletes only the editable draft and refreshes authoritative draft membership', async () => {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows?view=drafts';
     let draftRows = [
       {
         workflowId: 'wf-draft-alpha',
@@ -1329,14 +1633,8 @@ describe('Workflow Activity vNext catalogue', () => {
     await waitFor(() =>
       expect(mockStudioApi.listWorkflowDrafts).toHaveBeenCalledTimes(2),
     );
-    expect(
-      await screen.findByText('Committed support source'),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', {
-        name: 'More actions for Committed support source in Workspace',
-      }),
-    ).toBeEnabled();
+    expect(screen.queryByText('Support triage')).not.toBeInTheDocument();
+    expect(mockServicesApi.deactivateDeployment).not.toHaveBeenCalled();
   });
 
   it('keeps the draft and offers retry when deletion fails', async () => {
@@ -1575,6 +1873,16 @@ describe('Workflow Activity vNext catalogue', () => {
       screen.getByRole('searchbox', { name: 'Search workflows' }),
     ).toHaveValue('support');
     expect(screen.getByText('Drafts')).toBeInTheDocument();
+
+    const draftActions = within(
+      screen.getByText('Support triage').closest('tr') as HTMLElement,
+    ).getByRole('button', {
+      name: 'More actions for Support triage in Workflows',
+    });
+    fireEvent.click(draftActions);
+    expect(
+      (await screen.findAllByRole('menuitem')).map((item) => item.textContent),
+    ).toEqual(['Rename', 'Copy workflow reference', 'Delete draft']);
 
     fireEvent.mouseDown(
       screen.getByRole('combobox', { name: 'Workflow view' }),
