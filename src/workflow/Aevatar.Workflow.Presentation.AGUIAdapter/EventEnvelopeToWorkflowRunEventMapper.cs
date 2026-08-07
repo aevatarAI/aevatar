@@ -119,6 +119,44 @@ public sealed class WorkflowRunExecutionStartedEnvelopeMappingHandler : IWorkflo
     }
 }
 
+public sealed class WorkflowInteractiveActionRunEventEnvelopeMappingHandler
+    : IWorkflowRunEventEnvelopeMappingHandler
+{
+    public const string EventName = "nyxid.action.request";
+
+    public int Order => -5;
+
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<WorkflowRunEventEnvelope> events)
+    {
+        if (envelope.Payload?.Is(WorkflowInteractiveActionHandoffDispatchedEvent.Descriptor) != true)
+        {
+            events = [];
+            return false;
+        }
+
+        var handoff = envelope.Payload.Unpack<WorkflowInteractiveActionHandoffDispatchedEvent>();
+        if (handoff.Request is null)
+        {
+            events = [];
+            return true;
+        }
+
+        events =
+        [
+            new WorkflowRunEventEnvelope
+            {
+                Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
+                Custom = new WorkflowCustomEventPayload
+                {
+                    Name = EventName,
+                    Payload = Any.Pack(handoff.Request),
+                },
+            },
+        ];
+        return true;
+    }
+}
+
 public sealed class StartWorkflowRunEventEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler
 {
     public int Order => 0;
@@ -297,28 +335,6 @@ public sealed class AITextStreamRunEventEnvelopeMappingHandler : IWorkflowRunEve
             return true;
         }
 
-        if (payload.Is(WorkflowLlmStreamChunkEvent.Descriptor))
-        {
-            var evt = payload.Unpack<WorkflowLlmStreamChunkEvent>();
-            if (string.IsNullOrEmpty(evt.DeltaContent))
-                return true;
-
-            var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id);
-            events =
-            [
-                new WorkflowRunEventEnvelope
-                {
-                    Timestamp = ts,
-                    TextMessageContent = new WorkflowTextMessageContentEventPayload
-                    {
-                        MessageId = msgId,
-                        Delta = evt.DeltaContent,
-                    },
-                },
-            ];
-            return true;
-        }
-
         if (payload.Is(Aevatar.AI.Abstractions.MediaContentEvent.Descriptor))
         {
             var evt = payload.Unpack<Aevatar.AI.Abstractions.MediaContentEvent>();
@@ -456,33 +472,6 @@ public sealed class AIReasoningRunEventEnvelopeMappingHandler : IWorkflowRunEven
 
     public bool TryMap(EventEnvelope envelope, out IReadOnlyList<WorkflowRunEventEnvelope> events)
     {
-        if (envelope.Payload?.Is(WorkflowLlmStreamChunkEvent.Descriptor) == true)
-        {
-            var workflowChunk = envelope.Payload.Unpack<WorkflowLlmStreamChunkEvent>();
-            events = [];
-            if (string.IsNullOrEmpty(workflowChunk.DeltaReasoningContent))
-                return true;
-
-            events =
-            [
-                new WorkflowRunEventEnvelope
-                {
-                    Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
-                    Custom = new WorkflowCustomEventPayload
-                    {
-                        Name = "aevatar.llm.reasoning",
-                        Payload = Any.Pack(new WorkflowReasoningCustomPayload
-                        {
-                            SessionId = workflowChunk.SessionId,
-                            Delta = workflowChunk.DeltaReasoningContent,
-                            Role = AGUIEventEnvelopeMappingHelpers.ResolveRoleFromPublisher(workflowChunk.RoleActorId),
-                        }),
-                    },
-                },
-            ];
-            return true;
-        }
-
         if (envelope.Payload?.Is(Aevatar.AI.Abstractions.TextMessageReasoningEvent.Descriptor) != true)
         {
             events = [];

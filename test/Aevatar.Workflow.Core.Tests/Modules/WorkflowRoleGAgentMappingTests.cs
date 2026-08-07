@@ -198,7 +198,9 @@ public sealed class WorkflowRoleGAgentMappingTests
         await agent.HandleWorkflowLlmExecutionIntent(intent);
 
         provider.LastRequest.Should().NotBeNull();
-        var user = provider.LastRequest!.Messages.Should().ContainSingle().Subject;
+        var user = provider.LastRequest!.Messages.Should()
+            .ContainSingle(message => message.Role == "user")
+            .Which;
         user.ContentParts.Should().NotBeNull();
         user.ContentParts!.Should().HaveCount(2);
         user.ContentParts[0].Kind.Should().Be(ContentPartKind.Text);
@@ -221,6 +223,20 @@ public sealed class WorkflowRoleGAgentMappingTests
         fileRef.Sha256.Should().Be("sha-file-role");
         fileRef.CreatedAtUnixMs.Should().Be(1710000000000);
         fileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
+
+        provider.LastRequest.ToolContext.Should().NotBeNull();
+        var toolContextFileRef = provider.LastRequest.ToolContext!.InputFileRefs.Should().ContainSingle().Subject;
+        toolContextFileRef.FileId.Should().Be("file-role");
+        toolContextFileRef.ArtifactId.Should().Be("workflow-file://file-role");
+        toolContextFileRef.SourceKind.Should().Be(Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource);
+        toolContextFileRef.SourceMessageId.Should().Be("om_1");
+        toolContextFileRef.SourceResourceKey.Should().Be("image_key_1");
+        toolContextFileRef.FileName.Should().Be("file-role.png");
+        toolContextFileRef.MediaType.Should().Be("image/png");
+        toolContextFileRef.SizeBytes.Should().Be(3);
+        toolContextFileRef.Sha256.Should().Be("sha-file-role");
+        toolContextFileRef.CreatedAtUnixMs.Should().Be(1710000000000);
+        toolContextFileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
     }
 
     [Fact]

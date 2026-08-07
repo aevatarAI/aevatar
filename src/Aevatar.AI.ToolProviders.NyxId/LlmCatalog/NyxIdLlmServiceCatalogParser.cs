@@ -8,6 +8,7 @@ namespace Aevatar.AI.ToolProviders.NyxId.LlmCatalog;
 
 public static class NyxIdLlmServiceCatalogParser
 {
+    private const string PreferredObservedDefaultModel = "gpt-5.5";
     private const string ReadyStatus = "ready";
 
     public static LLMModelCatalog ParseOpenAIModelsResponse(string response)
@@ -119,6 +120,43 @@ public static class NyxIdLlmServiceCatalogParser
         return diagnostics with { Services = gateway.Concat(inventoryServices).ToArray() };
     }
 
+    public static NyxIdLlmServicesResult MergeObservedModelCatalog(
+        NyxIdLlmServicesResult result,
+        string serviceSlug,
+        LLMModelCatalog observedCatalog)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        ArgumentNullException.ThrowIfNull(observedCatalog);
+        var normalizedSlug = UserLlmPreferenceWriteCore.NormalizeOptional(serviceSlug);
+        if (normalizedSlug is null || observedCatalog.Certainty != LLMModelCatalogCertainty.Enumerated)
+            return result;
+
+        var services = result.Services
+            .Select(service => string.Equals(service.ServiceSlug, normalizedSlug, StringComparison.OrdinalIgnoreCase)
+                ? service with { ModelCatalog = MergeModelCatalog(service.ModelCatalog, observedCatalog) }
+                : service)
+            .ToArray();
+        return result with { Services = services };
+    }
+
+    public static bool ShouldProbeProxyModels(NyxIdLlmService service)
+    {
+        if (!UserLlmCatalogNormalization.IsReady(service) ||
+            !UserLlmCatalogNormalization.NormalizeSource(service.Source).IsUserServiceRoute ||
+            service.Identity is null)
+        {
+            return false;
+        }
+
+        if (service.ModelCatalog.Certainty == LLMModelCatalogCertainty.Enumerated &&
+            !string.IsNullOrWhiteSpace(service.ModelCatalog.DefaultModelId))
+        {
+            return false;
+        }
+
+        return LooksLikeLlmRouteCandidate(service.ServiceSlug, service.DisplayName, service.Description);
+    }
+
     private static NyxIdLlmServicesResult MergeRouteCandidates(
         NyxIdLlmServicesResult result,
         IReadOnlyList<NyxIdLlmService> candidates)
@@ -159,16 +197,39 @@ public static class NyxIdLlmServiceCatalogParser
                 diagnostic?.DisplayName,
                 inventoryService.Slug),
             RouteValue: $"/api/v1/proxy/s/{inventoryService.Slug}",
-            ModelCatalog: diagnostic?.ModelCatalog.Clone() ?? BuildModelCatalog(
-                [],
-                null,
-                ReadyStatus,
-                allowed: true),
+            ModelCatalog: ComposeInventoryModelCatalog(diagnostic, inventoryService),
             Status: diagnostic?.Status ?? ReadyStatus,
             Source: NyxIdLlmProviderSource.UserService,
             Allowed: true,
             Description: null,
             Identity: InventoryIdentity(inventoryService));
+    }
+
+    private static LLMModelCatalog ComposeInventoryModelCatalog(
+        NyxIdLlmService? diagnostic,
+        NyxIdUserService inventoryService)
+    {
+        if (string.IsNullOrWhiteSpace(inventoryService.DefaultModel))
+            return diagnostic?.ModelCatalog.Clone() ?? NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.NotPublished);
+
+        if (diagnostic?.ModelCatalog.Certainty == LLMModelCatalogCertainty.Unavailable)
+            return diagnostic.ModelCatalog.Clone();
+
+        IReadOnlyList<string> models;
+        if (diagnostic?.ModelCatalog.Certainty == LLMModelCatalogCertainty.Enumerated)
+        {
+            var reconciledModels = new SortedSet<string>(diagnostic.ModelCatalog.ModelIds, StringComparer.Ordinal)
+            {
+                inventoryService.DefaultModel,
+            };
+            models = reconciledModels.ToArray();
+        }
+        else
+        {
+            models = [inventoryService.DefaultModel];
+        }
+
+        return BuildModelCatalog(models, inventoryService.DefaultModel, ReadyStatus, true);
     }
 
     private static bool IsEligible(NyxIdUserService service) =>
@@ -182,6 +243,26 @@ public static class NyxIdLlmServiceCatalogParser
 
     private static string FirstNonEmpty(params string?[] candidates) =>
         candidates.First(candidate => !string.IsNullOrWhiteSpace(candidate))!.Trim();
+
+    private static LLMModelCatalog MergeModelCatalog(
+        LLMModelCatalog existingCatalog,
+        LLMModelCatalog observedCatalog)
+    {
+        if (existingCatalog.Certainty == LLMModelCatalogCertainty.Unavailable)
+            return existingCatalog.Clone();
+
+        if (existingCatalog.Certainty != LLMModelCatalogCertainty.Enumerated)
+            return observedCatalog.Clone();
+
+        var models = existingCatalog.ModelIds
+            .Concat(observedCatalog.ModelIds)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var defaultModel = string.IsNullOrWhiteSpace(existingCatalog.DefaultModelId)
+            ? observedCatalog.DefaultModelId
+            : existingCatalog.DefaultModelId;
+        return BuildModelCatalog(models, defaultModel, ReadyStatus, allowed: true);
+    }
 
     public static IReadOnlyList<NyxIdLlmService> ParseProxyRouteCandidates(string response)
     {
@@ -474,7 +555,7 @@ public static class NyxIdLlmServiceCatalogParser
                 RouteValue: routeValue,
                 ModelCatalog: BuildModelCatalog(
                     models,
-                    models.FirstOrDefault(),
+                    null,
                     status,
                     string.Equals(status, "ready", StringComparison.OrdinalIgnoreCase)),
                 Status: status,
@@ -562,8 +643,9 @@ public static class NyxIdLlmServiceCatalogParser
             return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.ResponseTooLarge);
         }
 
+        var effectiveDefaultModel = SelectEffectiveDefaultModel(models, defaultModel);
         if (models.Any(static model => model.IndexOfAny(['*', '?', '[', ']', '{', '}']) >= 0) ||
-            defaultModel?.IndexOfAny(['*', '?', '[', ']', '{', '}']) >= 0)
+            effectiveDefaultModel?.IndexOfAny(['*', '?', '[', ']', '{', '}']) >= 0)
         {
             return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.PatternOnly);
         }
@@ -572,13 +654,24 @@ public static class NyxIdLlmServiceCatalogParser
         {
             return LLMSelectionPolicy.NormalizeCatalog(
                 models,
-                defaultModel,
+                effectiveDefaultModel,
                 LLMModelCatalogDiagnosticKind.NotPublished);
         }
         catch (InvalidOperationException)
         {
             return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.ResponseInvalid);
         }
+    }
+
+    private static string? SelectEffectiveDefaultModel(IReadOnlyList<string> models, string? explicitDefaultModel)
+    {
+        var normalizedDefaultModel = explicitDefaultModel?.Trim();
+        if (!string.IsNullOrWhiteSpace(normalizedDefaultModel))
+            return normalizedDefaultModel;
+
+        return models.FirstOrDefault(
+            model => string.Equals(model, PreferredObservedDefaultModel, StringComparison.OrdinalIgnoreCase)) ??
+            models.FirstOrDefault();
     }
 
     private static LLMModelCatalog NotVerifiableCatalog(LLMModelCatalogDiagnosticKind diagnostic) => new()
@@ -661,6 +754,14 @@ public static class NyxIdLlmServiceCatalogParser
             ReadOptionalString(element, "openapi_url", "openapiUrl"),
         };
 
+        return LooksLikeLlmRouteCandidate(signals);
+    }
+
+    private static bool LooksLikeLlmRouteCandidate(string slug, string displayName, string? description) =>
+        LooksLikeLlmRouteCandidate([slug, displayName, description]);
+
+    private static bool LooksLikeLlmRouteCandidate(IEnumerable<string?> signals)
+    {
         if (signals.Any(ContainsNegativeLlmRouteSignal))
             return false;
 

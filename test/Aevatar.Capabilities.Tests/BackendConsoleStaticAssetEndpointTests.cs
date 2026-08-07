@@ -18,6 +18,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
 {
     [Theory]
     [InlineData("/admin", "Aevatar Backend Console")]
+    [InlineData("/admin/studio", "<title>Aevatar Studio</title>")]
     [InlineData("/auto/callback", "正在完成登录")]
     [InlineData("/cqrs", "CQRS")]
     [InlineData("/voice", "Voice")]
@@ -51,20 +52,58 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("var NYX_API=BACKEND_CONSOLE_CONFIG.nyxidApi");
             html.Should().Contain("fetch(NYX_API+'/api/v1/admin/users");
             html.Should().NotContain("var NYX_AUTHORITY=BACKEND_CONSOLE_CONFIG.authority");
-            html.Should().Contain("searchParams.append('resource'");
+            // ADR-0018: only the deliberately narrowed voice-realtime purpose keeps
+            // explicit resources; the session login sends none.
+            html.Should().Contain("var resources=purpose===VOICE_TOKEN_PURPOSE?loginResources(requestedResources):[];");
+            html.Should().Contain("if(claims && claims.allow_all_services!==false) return true;");
             html.Should().Contain("function observatoryFrameSource()");
+            html.Should().Contain("'/admin/workflow-observatory'");
+            html.Should().NotContain("'/workflow/observatory'");
             html.Should().NotContain("function bindObservatory(");
+            html.Should().Contain("studio:{name:'工作台'");
+            html.Should().Contain("suiteFrame('/admin/studio','工作台')");
+            html.Should().NotContain("suiteFrame('/workflow/studio','工作台')");
+            html.Should().Contain("#frame-dock{flex:1 1 auto;height:100%;min-height:0;");
+            html.Should().Contain(".suite-embed{flex:1 1 auto;width:100%;height:100%;min-height:0;");
+        }
+        else if (path == "/admin/studio")
+        {
+            html.Should().Contain("\"nyxidWeb\":\"https://web.example.test\"");
+            html.Should().Contain("class=\"site-header\"");
+            html.Should().Contain("id=\"composerForm\"");
+            html.Should().Contain("生产环境 · 操作会影响真实数据，高风险操作需要确认");
+            html.Should().Contain("app.js?v=20260807-m40-studio-shell");
+            html.Should().Contain("styles.css?v=20260807-m40-studio-shell");
+            html.Should().NotContain("class=\"brand-mark\"");
+            html.Should().NotContain("Aevatar Studio · 工作流实录");
+            html.Should().NotContain("从意图到交付的真实对话");
         }
         else if (path == "/auto/callback")
         {
+            // The exchange loops over the PKCE-stored request list; session logins
+            // store an empty list (ADR-0018), so only voice-purpose logins append.
             html.Should().Contain("form.append(\"resource\"");
+            html.Should().Contain("normalizeResources(pending.resources) : []");
+            html.Should().NotContain("normalizeResources(RESOURCES)");
+        }
+        else if (path == "/voice")
+        {
+            html.Should().Contain("async function fetchWithConsoleAuth(");
+            html.Should().Contain("requestAdminShellTokenRefresh(");
+            html.Should().Contain("rejectedAccessToken");
+            // Voice keeps its deliberately narrowed realtime-token flows, but the
+            // session login must not request explicit resources.
+            html.Should().Contain("purpose===VOICE_TOKEN_PURPOSE ? normalizeResources(CFG.resources,requestedResources) : []");
+            html.Should().Contain("normalizeResources(pending.resources) : []");
         }
         else
         {
-            html.Should().Contain("searchParams.append(\"resource\"");
-            html.Should().Contain(path == "/workflow/skills"
-                ? "f.append(\"resource\""
-                : "form.append(\"resource\"");
+            html.Should().NotContain("searchParams.append(\"resource\"");
+            html.Should().NotContain("form.append(\"resource\"");
+            html.Should().NotContain("f.append(\"resource\"");
+            html.Should().Contain("async function fetchWithConsoleAuth(");
+            html.Should().Contain("requestAdminShellTokenRefresh(");
+            html.Should().Contain("rejectedAccessToken");
         }
     }
 
@@ -2259,6 +2298,21 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task AdminShell_Studio_ShouldUseAdminOwnedRouteAndTrimNestedHeader()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain(
+            "suiteFrame('/admin/studio','工作台'),persistentKey:'admin-studio',frameSource:'/admin/studio'");
+        html.Should().Contain(
+            "studio=f.getAttribute('data-persistent-view')==='admin-studio'");
+        html.Should().Contain("studio?'.site-header,.topbar':'.topbar'");
+        html.Should().Contain("data-admin-embed-trim");
+        html.Should().NotContain("suiteFrame('/workflow/studio','工作台')");
+    }
+
+    [Fact]
     public async Task AdminShell_ObservatoryRoute_ShouldEmbedCanonicalSurfaceWithDeepLink()
     {
         await using var app = await CreateAppAsync();
@@ -2300,7 +2354,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
 
             const frame = vm.runInContext('viewObservatoryFrame().html', context);
             assert.equal(frame.title, '运行观测台');
-            assert.equal(frame.src, '/workflow/observatory?scope=scope-alpha&status=failed&origin=schedule%2Capi&definition=wf-alpha&schedule=sched-alpha&from=2026-07-29T00%3A00%3A00Z&to=2026-07-30T00%3A00%3A00Z&run=run-alpha&tab=steps');
+            assert.equal(frame.src, '/admin/workflow-observatory?scope=scope-alpha&status=failed&origin=schedule%2Capi&definition=wf-alpha&schedule=sched-alpha&from=2026-07-29T00%3A00%3A00Z&to=2026-07-30T00%3A00%3A00Z&run=run-alpha&tab=steps');
             assert.equal(vm.runInContext('observatoryHash', context)({scope:'scope-alpha',run:'run-alpha',tab:'steps',ignored:'no'}), '#/observatory?scope=scope-alpha&run=run-alpha&tab=steps');
             assert.equal(vm.runInContext('observatoryHash', context)({scope:'mine',tab:'timeline'}), '#/observatory');
             """;
@@ -2361,29 +2415,29 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               frame.classList = { toggle(cls, on){ frame.activeFlag = !!on; } };
               return frame;
             }
-            const obsFrame = frameStub('observatory', '/workflow/observatory?run=abc');
-            const studioFrame = frameStub('workflow-studio', '/workflow/studio');
+            const obsFrame = frameStub('observatory', '/admin/workflow-observatory?run=abc');
+            const studioFrame = frameStub('admin-studio', '/admin/studio');
             const dock = {
               querySelector(sel){
                 if (sel.indexOf('"observatory"') >= 0) return obsFrame;
-                if (sel.indexOf('"workflow-studio"') >= 0) return studioFrame;
+                if (sel.indexOf('"admin-studio"') >= 0) return studioFrame;
                 return null;
               },
               querySelectorAll(){ return [obsFrame, studioFrame]; },
               insertAdjacentHTML(){ assert.fail('existing dock frames must be reused, not recreated'); }
             };
             const activate = vm.runInContext('activateDockFrame', context);
-            activate(dock, {persistentKey:'observatory', frameSource:'/workflow/observatory', html:''});
-            assert.equal(obsFrame.src, '/workflow/observatory?run=abc');
+            activate(dock, {persistentKey:'observatory', frameSource:'/admin/workflow-observatory', html:''});
+            assert.equal(obsFrame.src, '/admin/workflow-observatory?run=abc');
             assert.equal(obsFrame.activeFlag, true);
             assert.equal(studioFrame.activeFlag, false);
-            activate(dock, {persistentKey:'observatory', frameSource:'/workflow/observatory?run=zzz', html:''});
-            assert.equal(obsFrame.src, '/workflow/observatory?run=zzz');
-            assert.equal(obsFrame.attrs['data-frame-source'], '/workflow/observatory?run=zzz');
-            activate(dock, {persistentKey:'workflow-studio', frameSource:'/workflow/studio', html:''});
+            activate(dock, {persistentKey:'observatory', frameSource:'/admin/workflow-observatory?run=zzz', html:''});
+            assert.equal(obsFrame.src, '/admin/workflow-observatory?run=zzz');
+            assert.equal(obsFrame.attrs['data-frame-source'], '/admin/workflow-observatory?run=zzz');
+            activate(dock, {persistentKey:'admin-studio', frameSource:'/admin/studio', html:''});
             assert.equal(studioFrame.activeFlag, true);
             assert.equal(obsFrame.activeFlag, false);
-            assert.equal(obsFrame.src, '/workflow/observatory?run=zzz');
+            assert.equal(obsFrame.src, '/admin/workflow-observatory?run=zzz');
 
             const oldScroll = {scrollTop:420};
             const nextScroll = {scrollTop:0};
@@ -2652,12 +2706,24 @@ public sealed class BackendConsoleStaticAssetEndpointTests
                       }));
                     });
                   }
+                  if(phase === 'inactive') {
+                    return response(400, {
+                      error:'invalid_client',
+                      error_description:'OAuth client is inactive',
+                    });
+                  }
                   return response(200, {
-                    access_token: phase === 'proactive' ? 'proactive-access' : 'retry-access',
-                    refresh_token: phase === 'proactive' ? 'proactive-refresh' : 'retry-refresh',
+                    access_token: phase === 'proactive' ? 'proactive-access' : phase === 'embedded' ? 'embedded-access' : 'retry-access',
+                    refresh_token: phase === 'proactive' ? 'proactive-refresh' : phase === 'embedded' ? 'embedded-refresh' : 'retry-refresh',
                     expires_in: 900,
                     token_type: 'Bearer',
                   });
+                }
+                if(phase === 'stale' && calls.filter(call => call.input === '/api/probe').length === 1) {
+                  stored.set('console:test:token', JSON.stringify({
+                    access_token:'already-refreshed-access',refresh_token:'already-refreshed-refresh',expires_in:900,obtained_at:Date.now()
+                  }));
+                  return response(401, {});
                 }
                 if(phase === 'retry' && calls.filter(call => call.input === '/api/probe').length === 1) {
                   return response(401, {});
@@ -2667,6 +2733,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               setTimeout: () => 1,
               clearTimeout() {},
               document: {getElementById:()=>null,body:{appendChild(){}},createElement:()=>({classList:{add(){},remove(){}},innerHTML:''})},
+              renderAcctW() {},
+              renderLoginGate() {},
               crypto: {getRandomValues(){},subtle:{}},
               alert() {},
               URL,
@@ -2699,6 +2767,42 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               assert.equal(calls[1].input, 'https://id.example.test/oauth/token');
               assert.equal(calls[2].init.headers.Authorization, 'Bearer retry-access');
               assert.equal(JSON.parse(stored.get('console:test:token')).refresh_token, 'retry-refresh');
+
+              phase = 'stale';
+              calls.length = 0;
+              context.setToken({access_token:'stale-access',refresh_token:'stale-refresh',expires_in:3600,obtained_at:Date.now()});
+              const staleRetried = await context.adminApi('/api/probe');
+              assert.equal(staleRetried.status, 200);
+              assert.equal(calls.length, 2, 'a stale 401 retries directly with the token already in storage');
+              assert.equal(calls[1].init.headers.Authorization, 'Bearer already-refreshed-access');
+              assert.equal(JSON.parse(stored.get('console:test:token')).access_token, 'already-refreshed-access');
+
+              phase = 'embedded';
+              calls.length = 0;
+              const posted = [];
+              context.setToken({access_token:'embedded-old',refresh_token:'embedded-old-refresh',expires_in:3600,obtained_at:Date.now()});
+              await context.handleEmbeddedAuthRefresh({origin:'https://console.example.test',source:{postMessage(message,origin){posted.push({message,origin});}}},
+                {requestId:'request-alpha',rejectedAccessToken:'embedded-old'});
+              assert.equal(posted.length, 1);
+              assert.equal(posted[0].message.type, 'auth-refresh-result');
+              assert.equal(posted[0].message.refreshed, true);
+              assert.equal(JSON.parse(stored.get('console:test:token')).access_token, 'embedded-access');
+
+              assert.equal(context.showLoginGate('stale rejection', 'embedded-old'), false);
+              assert.equal(JSON.parse(stored.get('console:test:token')).access_token, 'embedded-access', 'stale auth-required must preserve the new token');
+              assert.equal(context.showLoginGate('current rejection', 'embedded-access'), true);
+              assert.equal(stored.has('console:test:token'), false, 'only the currently rejected token may be cleared');
+
+              phase = 'inactive';
+              posted.length = 0;
+              context.setToken({access_token:'inactive-old',refresh_token:'inactive-refresh',expires_in:3600,obtained_at:Date.now()});
+              await context.handleEmbeddedAuthRefresh({origin:'https://console.example.test',source:{postMessage(message,origin){posted.push({message,origin});}}},
+                {requestId:'request-inactive',rejectedAccessToken:'inactive-old'});
+              assert.equal(posted.length, 1);
+              assert.equal(posted[0].message.refreshed, false);
+              assert.equal(posted[0].message.errorCode, 'OAUTH_CLIENT_INACTIVE');
+              assert.match(posted[0].message.reason, /登录客户端已停用/);
+              assert.match(posted[0].message.reason, /重复登录不会恢复/);
 
               phase = 'logout';
               context.setToken({access_token:'logout-access',refresh_token:'logout-refresh',expires_in:3600,obtained_at:Date.now()});
@@ -2758,6 +2862,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         builder.Configuration["Aevatar:BackendConsole:OidcClientId"] = "client-example";
         builder.Configuration["Aevatar:BackendConsole:OidcScope"] = "openid profile";
         builder.Configuration["Aevatar:BackendConsole:NyxApiBaseUrl"] = "https://api.example.test";
+        builder.Configuration["Aevatar:BackendConsole:NyxWebBaseUrl"] = "https://web.example.test";
         builder.Configuration["Aevatar:BackendConsole:StorageKey"] = "console:test";
         builder.Configuration["Aevatar:BackendConsole:DefaultReturnPath"] = "/admin";
         builder.Services.AddBackendConsoleStaticAssets(builder.Configuration);

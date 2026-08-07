@@ -1743,6 +1743,26 @@ public sealed class ScheduledDispatchApplicationServiceTests
             .Be(ScheduledDispatchCredentialRequirementTargetKindState.WorkflowService);
         begin.ActivationDecision.RevisionId.Should().Be("revision-alpha");
         begin.ActivationDecision.Caller.ServiceKey.Should().Be(decision.Caller!.ServiceKey);
+
+        dispatchPort.Envelopes.Clear();
+        await port.DispatchRetryTeamAutomationCredentialOperationAsync(
+            actorId,
+            decision.Owner,
+            "operation-stale",
+            "idempotency-stale",
+            "observation-retry");
+
+        var retry = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload
+            .Unpack<RetryTeamAutomationCredentialOperationCommand>();
+        retry.Owner.Should().BeEquivalentTo(new TeamMemberAutomationOwnerState
+        {
+            ScopeId = "scope-alpha",
+            MemberId = "member-alpha",
+            TeamId = "team-alpha",
+        });
+        retry.OperationId.Should().Be("operation-stale");
+        retry.IdempotencyKey.Should().Be("idempotency-stale");
+        retry.ObservationRequestId.Should().Be("observation-retry");
     }
 
     [Fact]
@@ -2253,6 +2273,45 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task PendingTeamAutomation_ShouldBeVisibleToOwnerBeforeTargetActivation()
+    {
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
+        var pending = CreateSummaryDetail(
+            "schedule-team-pending",
+            ScheduledDispatchTargetKind.Envelope,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialSourceKind.None);
+        var queryPort = new RecordingScheduledDispatchQueryPort
+        {
+            Detail = pending with
+            {
+                Schedule = pending.Schedule with
+                {
+                    TeamOwned = true,
+                    TeamOwnerScopeId = owner.ScopeId,
+                    TeamId = owner.TeamId,
+                    TeamOwnerMemberId = owner.MemberId,
+                    TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatus.ProvisioningPending,
+                    TeamAutomationOperationId = "operation-alpha",
+                    TeamAutomationIdempotencyKey = "idempotency-alpha",
+                },
+            },
+        };
+        var service = new ScheduledDispatchApplicationService(
+            new RecordingScheduledDispatchActorPort(),
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var detail = await service.GetTeamAutomationAsync("schedule-team-pending", owner);
+
+        detail.Should().NotBeNull();
+        detail!.Schedule.TeamAutomationOperationId.Should().Be("operation-alpha");
+        detail.Schedule.TargetKind.Should().Be(ScheduledDispatchTargetKind.Envelope);
+    }
+
+    [Fact]
     public async Task RunNowAsync_ShouldRejectWorkflowScheduleWithoutCredentialBeforeActorDispatch()
     {
         var actorPort = new RecordingScheduledDispatchActorPort();
@@ -2519,6 +2578,34 @@ public sealed class ScheduledDispatchApplicationServiceTests
                 },
             },
             options => options.ComparingByMembers<ProjectionDocumentValue>());
+    }
+
+    [Fact]
+    public async Task ScheduledDispatchQueryPort_ShouldMapPinnedServiceRevision()
+    {
+        var document = new ScheduledDispatchDocument
+        {
+            ScheduleId = "workflow-revision-pinned",
+            TargetKind = ScheduledDispatchTargetKind.ServiceInvocation.ToString(),
+            ServiceId = "svc-alpha",
+            ServiceEndpointId = "chat",
+        };
+        SetRequiredStringProperty(document, "ServiceRevisionId", "rev-pinned");
+        var reader = new RecordingScheduledDispatchDocumentReader
+        {
+            Result = new ProjectionDocumentQueryResult<ScheduledDispatchDocument>
+            {
+                Items = [document],
+            },
+        };
+        var port = new ScheduledDispatchQueryPort(reader);
+
+        var result = await port.ListAsync(new ScheduledDispatchListQuery(25));
+
+        var item = result.Items.Should().ContainSingle().Which;
+        item.ServiceId.Should().Be("svc-alpha");
+        item.ServiceEndpointId.Should().Be("chat");
+        ReadRequiredStringProperty(item, "ServiceRevisionId").Should().Be("rev-pinned");
     }
 
     [Fact]

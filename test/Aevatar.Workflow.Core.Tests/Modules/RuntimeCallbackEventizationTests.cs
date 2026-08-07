@@ -847,7 +847,7 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
-    public async Task WorkflowLoop_ShouldRejectStartWhenRunAlreadyActive()
+    public async Task WorkflowLoop_ShouldRejectDifferentRunWhenRunAlreadyActive()
     {
         var ctx = new SchedulingContext();
         var module = CreateKernel(new WorkflowDefinition
@@ -879,7 +879,7 @@ public class RuntimeCallbackEventizationTests
             Wrap(new StartWorkflowEvent
             {
                 WorkflowName = "wf",
-                RunId = "run-active",
+                RunId = "run-other",
                 Input = "second",
             }),
             ctx,
@@ -887,7 +887,43 @@ public class RuntimeCallbackEventizationTests
 
         var completion = SingleWorkflowCompletion(ctx);
         completion.Success.Should().BeFalse();
+        completion.RunId.Should().Be("run-other");
         completion.Error.Should().Contain("already active");
+    }
+
+    [Fact]
+    public async Task WorkflowLoop_ShouldIgnoreDuplicateTopLevelStartForSameRun()
+    {
+        var ctx = new SchedulingContext();
+        var module = CreateKernel(new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "step-1",
+                    Type = "transform",
+                },
+            ],
+        }, ctx);
+        var start = new StartWorkflowEvent
+        {
+            WorkflowName = "wf",
+            RunId = "run-active",
+            Input = "first",
+        };
+
+        await module.HandleAsync(Wrap(start), ctx, CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(Wrap(start.Clone()), ctx, CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
+        var state = ctx.LoadState<WorkflowExecutionKernelState>(WorkflowExecutionKernel.ModuleStateKey);
+        state.Active.Should().BeTrue();
+        state.RunId.Should().Be("run-active");
     }
 
     [Fact]

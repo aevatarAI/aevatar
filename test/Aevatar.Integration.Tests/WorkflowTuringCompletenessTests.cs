@@ -166,7 +166,8 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
         SetAgentId(runAgent, "workflow-run-nyxid-failure");
         runAgent.EventPublisher = committedPublisher;
         runAgent.CommittedStateEventPublisher = committedPublisher;
-            await BindInteractiveWorkflowRunDefinitionAsync(runAgent,
+        await BindInteractiveWorkflowRunDefinitionAsync(
+            runAgent,
             "definition-nyxid-failure",
             """
             name: nyxid_failure
@@ -624,5 +625,4 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
             return Task.FromResult<IReadOnlyList<IWorkflowTool>>([tool]);
         }
     }
-
 }

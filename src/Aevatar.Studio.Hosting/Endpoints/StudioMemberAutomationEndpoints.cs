@@ -508,6 +508,14 @@ internal static class StudioMemberAutomationEndpoints
                     retryable = true,
                 },
                 statusCode: StatusCodes.Status503ServiceUnavailable),
+            StudioScheduledCredentialMaterializationException materialization
+                when !string.IsNullOrWhiteSpace(materialization.FailureCode) => Results.Json(
+                    new
+                    {
+                        code = materialization.FailureCode,
+                        message = ToCredentialProvisioningFailureMessage(materialization.FailureCode),
+                    },
+                    statusCode: ResolveCredentialProvisioningFailureStatus(materialization.FailureCode)),
             StudioMemberAutomationPlanConflictException conflict => Results.Json(
                 new StudioMemberAutomationConflictResponse(
                     ToPlanConflictCode(conflict.Code),
@@ -526,6 +534,37 @@ internal static class StudioMemberAutomationEndpoints
         };
         return result != null;
     }
+
+    private static int ResolveCredentialProvisioningFailureStatus(string failureCode) => failureCode switch
+    {
+        "api_key_scope_plan_not_found" => StatusCodes.Status404NotFound,
+        "authentication_failed" or "unauthorized" or "token_expired" => StatusCodes.Status401Unauthorized,
+        "forbidden" or "api_key_scope_plan_denied" => StatusCodes.Status403Forbidden,
+        "bad_request" or "validation_error" or "api_key_scope_plan_owner_unsupported" =>
+            StatusCodes.Status400BadRequest,
+        "conflict" or "api_key_scope_plan_route_unresolved" or "api_key_scope_plan_stale" =>
+            StatusCodes.Status409Conflict,
+        "rate_limited" => StatusCodes.Status429TooManyRequests,
+        "nyxid_scope_plan_provider_timed_out" => StatusCodes.Status504GatewayTimeout,
+        _ => StatusCodes.Status502BadGateway,
+    };
+
+    private static string ToCredentialProvisioningFailureMessage(string failureCode) => failureCode switch
+    {
+        "api_key_scope_plan_denied" =>
+            "NyxID denied the requested Agent Key scope for this caller.",
+        "api_key_scope_plan_not_found" =>
+            "A required NyxID service in the Agent Key scope was not found.",
+        "api_key_scope_plan_owner_unsupported" =>
+            "NyxID does not support the requested Agent Key owner.",
+        "api_key_scope_plan_route_unresolved" =>
+            "NyxID could not resolve a configured route required by the Agent Key scope.",
+        "api_key_scope_plan_stale" =>
+            "The NyxID Agent Key scope plan changed before the credential was created.",
+        "nyxid_scope_plan_provider_timed_out" =>
+            "NyxID timed out while planning the Agent Key scope.",
+        _ => "The scheduled Agent Key could not be issued.",
+    };
 
     private static IResult NotFound(string code, string message) =>
         Results.Json(new { code, message }, statusCode: StatusCodes.Status404NotFound);
@@ -593,6 +632,36 @@ internal static class StudioMemberAutomationEndpoints
                 "TEAM_AUTOMATION_AUTHORIZATION_DURABLE_AUTHORIZATION_UNAVAILABLE",
                 "Authorization is temporarily unavailable. Retry this request.",
                 true),
+            ScheduledInvocationAuthorizationFailureCode.DurableAdmissionRequired => (
+                StatusCodes.Status409Conflict,
+                "TEAM_AUTOMATION_DURABLE_ADMISSION_REQUIRED",
+                "The serving workflow revision requires durable admission before it can be scheduled.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.DurableRequestGrantMismatch => (
+                StatusCodes.Status409Conflict,
+                "TEAM_AUTOMATION_DURABLE_REQUEST_GRANT_MISMATCH",
+                "The serving workflow revision does not carry an exact durable request grant.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.NyxIdOperationGrantRequired => (
+                StatusCodes.Status409Conflict,
+                "TEAM_AUTOMATION_NYXID_OPERATION_GRANT_REQUIRED",
+                "NyxID requires an operation-scoped approval grant before this automation can be scheduled.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.NyxIdOperationApprovalRequired => (
+                StatusCodes.Status409Conflict,
+                "TEAM_AUTOMATION_NYXID_OPERATION_APPROVAL_REQUIRED",
+                "NyxID requires per-request approval before this operation can run on a schedule.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.NyxIdOperationDenied => (
+                StatusCodes.Status403Forbidden,
+                "TEAM_AUTOMATION_NYXID_OPERATION_DENIED",
+                "NyxID policy denies this scheduled operation.",
+                false),
+            ScheduledInvocationAuthorizationFailureCode.NyxIdOperationAuthorityContractUnavailable => (
+                StatusCodes.Status503ServiceUnavailable,
+                "TEAM_AUTOMATION_NYXID_OPERATION_AUTHORITY_CONTRACT_UNAVAILABLE",
+                "NyxID operation authorization cannot be previewed without executing the external request.",
+                false),
             ScheduledInvocationAuthorizationFailureCode.CatalogProjectionPending => (
                 StatusCodes.Status503ServiceUnavailable,
                 "TEAM_AUTOMATION_AUTHORIZATION_PROJECTION_PENDING",

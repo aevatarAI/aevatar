@@ -17,7 +17,7 @@ namespace Aevatar.Studio.Hosting.Endpoints;
 /// <summary>
 /// One-call workflow provisioning HTTP surface (C1) mounted at
 /// <c>POST /api/scopes/{scopeId}/provision-workflow</c>. Composes member
-/// create + bind + scheduled-dispatch behind a single proxied call so a Claude
+/// create + bind + schedule provisioning acceptance behind a single proxied call so a Claude
 /// Code session reaching aevatar through the nyxid downstream provisions a
 /// runnable, scope-owned workflow without orchestrating the multi-step member
 /// flow itself.
@@ -25,7 +25,7 @@ namespace Aevatar.Studio.Hosting.Endpoints;
 /// The flow is NON-BLOCKING: binding a workflow member is a multi-minute async
 /// pipeline, so the handler never polls the bind to completion (that would
 /// exhaust the gateway timeout). It creates the member, accepts the bind, and
-/// creates a Workflow-kind scheduled-dispatch that produces the run — the
+/// durably accepts actor-owned provisioning of a Workflow-kind scheduled-dispatch — the
 /// scheduled path is also the only one that projects the caller's re-minted NyxID
 /// token onto the run so its LLM calls authenticate. The endpoint therefore
 /// always returns 202 Accepted; runs appear in the Observatory as the schedule
@@ -44,7 +44,7 @@ namespace Aevatar.Studio.Hosting.Endpoints;
 /// is an explicit body field rather than derived from an ambient claim.
 ///
 /// Response status:
-///   - accepted (member created, bind accepted, schedule created) → 202 + links
+///   - accepted (member created, bind accepted, schedule provisioning accepted) → 202 + links
 ///   - validation / missing caller subject ref → 400
 ///   - cross-scope / unauthenticated → 403 / 401 (via the guard)
 ///
@@ -100,10 +100,11 @@ internal static class StudioProvisioningEndpoints
             var admittedRequest = request with
             {
                 ExplicitRequestConfirmations = null,
-                CapabilityAdmission = StudioWorkflowCapabilityAdmissionHttpContext.Create(
+                CapabilityAdmission = await StudioWorkflowCapabilityAdmissionHttpContext.CreateAsync(
                     http,
                     executionMode,
-                    request.ExplicitRequestConfirmations),
+                    request.ExplicitRequestConfirmations,
+                    ct),
                 AuthenticatedOwner = scheduleAuthority?.AuthenticatedOwner,
                 ProvisioningBearerToken = scheduleAuthority?.ProvisioningBearerToken,
             };
@@ -111,11 +112,12 @@ internal static class StudioProvisioningEndpoints
                 scopeId, callerCredential, admittedRequest, ct);
 
             // The bind and the run are both asynchronous, so provisioning always
-            // ACKs with 202 Accepted: the member + bind + schedule were accepted
-            // and the run is produced by the schedule. The Location points at the
-            // schedule so the caller can poll/manage it.
+            // ACKs with 202 Accepted: the member, bind, and schedule provisioning
+            // intent were accepted. The Location points at the
+            // member read model while schedule provisioning is pending, or the
+            // schedule itself when it is already visible.
             return Results.Accepted(
-                BuildScheduleLocation(response.ScheduleId),
+                BuildProvisioningLocation(response),
                 response);
         }
         catch (NyxIdExplicitRequestConfirmationInputException ex)
@@ -158,6 +160,15 @@ internal static class StudioProvisioningEndpoints
     {
         result = exception switch
         {
+            StudioTeamNotFoundException missingTeam => Results.Json(
+                new
+                {
+                    code = "STUDIO_TEAM_NOT_FOUND",
+                    message = missingTeam.Message,
+                    scopeId = missingTeam.ScopeId,
+                    teamId = missingTeam.TeamId,
+                },
+                statusCode: StatusCodes.Status404NotFound),
             StudioMemberAutomationProjectionPendingException pending => Results.Json(
                 new
                 {
@@ -250,10 +261,10 @@ internal static class StudioProvisioningEndpoints
         return true;
     }
 
-    private static string BuildScheduleLocation(string? scheduleId) =>
-        string.IsNullOrWhiteSpace(scheduleId)
-            ? "/api/schedules"
-            : $"/api/schedules/{Uri.EscapeDataString(scheduleId)}";
+    private static string BuildProvisioningLocation(ProvisionWorkflowResponse response) =>
+        string.IsNullOrWhiteSpace(response.ScheduleId)
+            ? $"/api/scopes/{Uri.EscapeDataString(response.ScopeId)}/members/{Uri.EscapeDataString(response.MemberId)}"
+            : $"/api/schedules/{Uri.EscapeDataString(response.ScheduleId)}";
 
     private static IResult BadRequest(string code, string message) =>
         Results.BadRequest(new { code, message });

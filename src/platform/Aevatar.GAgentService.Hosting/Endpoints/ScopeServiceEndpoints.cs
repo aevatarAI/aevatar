@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Aevatar.AGUI.Contracts;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -16,6 +17,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.ScopeScripts;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.Workflows;
@@ -37,6 +39,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using WorkflowRunOrigins = Aevatar.Workflow.Abstractions.WorkflowRunOrigins;
 using WorkflowSagaStatus = Aevatar.Workflow.Abstractions.WorkflowSagaStatus;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
@@ -193,7 +196,7 @@ public static class ScopeServiceEndpoints
                 return;
             }
 
-            var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+            var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
             if (!callerCredential.Succeeded)
             {
                 var (statusCode, code, message) = ScopeWorkflowEndpoints.MapRunStartError(callerCredential.Error);
@@ -383,7 +386,9 @@ public static class ScopeServiceEndpoints
                     request.ServiceId,
                     request.ExposureDesired)
                 {
-                    CapabilityAdmission = WorkflowCapabilityAdmissionHttpContext.Create(http),
+                    CapabilityAdmission = await WorkflowCapabilityAdmissionHttpContext.CreateAsync(
+                        http,
+                        ct: ct),
                 },
                 ct);
             return Results.Ok(result);
@@ -1110,6 +1115,9 @@ public static class ScopeServiceEndpoints
             ct);
         if (resolution.Failure != null)
             return resolution.Failure;
+
+        if (TryCreateInvalidToolApprovalResumeRequest(request, out var invalidRequest))
+            return invalidRequest;
 
         return await WorkflowCapabilityEndpoints.HandleResume(
             new WorkflowResumeInput
@@ -1865,6 +1873,9 @@ public static class ScopeServiceEndpoints
     {
         try
         {
+            var logger = http.RequestServices
+                .GetService<ILoggerFactory>()
+                ?.CreateLogger("Aevatar.GAgentService.Hosting.ScopeService");
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
@@ -1883,7 +1894,7 @@ public static class ScopeServiceEndpoints
             var request = requestInput.Request!;
             var normalizedPrompt = request.Prompt?.Trim() ?? string.Empty;
             var scopedHeaders = BuildScopedHeaders(request.Headers);
-            var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+            var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
             if (!callerCredential.Succeeded)
             {
                 var (statusCode, code, message) = ScopeWorkflowEndpoints.MapRunStartError(callerCredential.Error);
@@ -1913,6 +1924,10 @@ public static class ScopeServiceEndpoints
             {
                 case ServiceImplementationKind.Workflow:
                     EnsureWorkflowStreamTarget(target, invocationRequest);
+                    var resolvedDefinitionBinding = BuildWorkflowStreamDefinitionBinding(
+                        target,
+                        invocationRequest,
+                        scopeId);
                     var inputParts = MapInputParts(request.InputParts);
                     if (requestInput.MultipartForm is { HasFiles: true } multipartForm)
                     {
@@ -1923,6 +1938,22 @@ public static class ScopeServiceEndpoints
                             ct);
                         inputParts = AppendInputParts(inputParts, uploadedParts);
                     }
+
+                    var firstInputFileRef = FirstInputFileRef(inputParts);
+                    logger?.LogWarning(
+                        "Scope workflow stream input file refs resolved. scopeId={ScopeId} serviceId={ServiceId} endpointId={EndpointId} sessionId={SessionId} implementationKind={ImplementationKind} requestInputPartCount={RequestInputPartCount} mappedInputPartCount={MappedInputPartCount} multipartFileCount={MultipartFileCount} inputFileRefCount={InputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+                        scopeId,
+                        serviceId,
+                        endpointId,
+                        request.SessionId ?? string.Empty,
+                        target.Artifact.ImplementationKind,
+                        request.InputParts?.Count ?? 0,
+                        inputParts?.Count ?? 0,
+                        requestInput.MultipartForm?.PendingFiles.Count ?? 0,
+                        CountInputFileRefs(inputParts),
+                        firstInputFileRef?.FileId ?? string.Empty,
+                        firstInputFileRef?.ArtifactId ?? firstInputFileRef?.Uri ?? string.Empty,
+                        firstInputFileRef?.MediaType ?? string.Empty);
 
                     await WorkflowCapabilityEndpoints.HandleChat(
                         http,
@@ -1959,7 +1990,8 @@ public static class ScopeServiceEndpoints
                             correlationId: receipt.CorrelationId,
                             targetActorId: receipt.ActorId,
                             token),
-                        allowEmptyInputForResolvedMemberWorkflow: allowEmptyInputForResolvedMemberWorkflow);
+                        allowEmptyInputForResolvedMemberWorkflow: allowEmptyInputForResolvedMemberWorkflow,
+                        resolvedDefinitionBinding: resolvedDefinitionBinding);
                     break;
 
                 case ServiceImplementationKind.Static:
@@ -2337,6 +2369,19 @@ public static class ScopeServiceEndpoints
                 revisionCatalogReader,
                 ct);
 
+            if (payload.Is(ChatRequestEvent.Descriptor))
+            {
+                var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
+                if (!callerCredential.Succeeded)
+                {
+                    var (statusCode, code, message) =
+                        ScopeWorkflowEndpoints.MapRunStartError(callerCredential.Error);
+                    return Results.Json(new { code, message }, statusCode: statusCode);
+                }
+
+                payload = ProjectHttpCallerCredential(payload, callerCredential.Credential);
+            }
+
             var receipt = await invocationPort.InvokeAsync(new ServiceInvocationRequest
             {
                 Identity = identity,
@@ -2430,6 +2475,30 @@ public static class ScopeServiceEndpoints
     private static string ResolveAcceptedRunId(ServiceInvocationAcceptedReceipt receipt) =>
         string.IsNullOrWhiteSpace(receipt.RunId) ? receipt.CommandId : receipt.RunId;
 
+    private static bool TryCreateInvalidToolApprovalResumeRequest(
+        ResumeScopeServiceRunHttpRequest request,
+        out IResult result)
+    {
+        var hasFlatToolApprovalIdentity = request.ExtraFields?.Keys.Any(static key =>
+            string.Equals(key, "executionId", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(key, "toolCallId", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(key, "approvalRequestId", StringComparison.OrdinalIgnoreCase)) == true;
+        if (!hasFlatToolApprovalIdentity)
+        {
+            result = null!;
+            return false;
+        }
+
+        result = Results.BadRequest(new
+        {
+            code = "INVALID_TOOL_APPROVAL_RESUME_REQUEST",
+            message = "Tool approval identity must be nested under 'toolApproval'. Use " +
+                      "{\"toolApproval\":{\"executionId\":\"...\",\"toolCallId\":\"...\",\"approvalRequestId\":\"...\"}}; " +
+                      "top-level executionId, toolCallId and approvalRequestId are not accepted.",
+        });
+        return true;
+    }
+
     private static async Task<IResult> HandleResumeRunAsync(
         HttpContext http,
         string scopeId,
@@ -2454,6 +2523,9 @@ public static class ScopeServiceEndpoints
             ct);
         if (resolution.Failure != null)
             return resolution.Failure;
+
+        if (TryCreateInvalidToolApprovalResumeRequest(request, out var invalidRequest))
+            return invalidRequest;
 
         return await WorkflowCapabilityEndpoints.HandleResume(
             new WorkflowResumeInput
@@ -3671,6 +3743,20 @@ const response = await fetch("{{invokePath}}", {
         return string.IsNullOrWhiteSpace(token) ? string.Empty : $"Bearer {token}";
     }
 
+    private static Any ProjectHttpCallerCredential(
+        Any payload,
+        WorkflowCallerCredential? callerCredential)
+    {
+        var sanitized = ScheduledServiceInvocationPayloadPolicy
+            .StripScheduleOwnedCredentialFields(payload)
+            .Unpack<ChatRequestEvent>();
+        sanitized.ConnectorHttpAuthorization = ToConnectorHttpAuthorization(callerCredential);
+        sanitized.CallerNyxIdCredentialKind = ToAgentToolNyxIdCredentialKind(callerCredential?.Kind);
+        sanitized.CallerSourceReadableNyxIdBearerToken =
+            callerCredential?.SourceReadableUserBearerToken?.Trim() ?? string.Empty;
+        return Any.Pack(sanitized);
+    }
+
     private static AgentToolNyxIdCredentialKindPayload ToAgentToolNyxIdCredentialKind(
         Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind? kind) => kind switch
         {
@@ -3698,6 +3784,44 @@ const response = await fetch("{{invokePath}}", {
 
         if (string.IsNullOrWhiteSpace(target.Service.PrimaryActorId))
             throw new InvalidOperationException("Workflow service has no active definition actor.");
+    }
+
+    private static WorkflowDefinitionBinding BuildWorkflowStreamDefinitionBinding(
+        ServiceInvocationResolvedTarget target,
+        ServiceInvocationRequest request,
+        string scopeId)
+    {
+        var plan = target.Artifact.DeploymentPlan?.WorkflowPlan
+            ?? throw new InvalidOperationException("Workflow service deployment plan is required.");
+        var bindingIdentity = WorkflowServiceDeploymentPlanIntegrity.ResolveBindingIdentity(
+            target.Artifact,
+            target.Service.RevisionId);
+        return new WorkflowDefinitionBinding(
+            ResolveWorkflowServiceDefinitionActorId(target, plan),
+            plan.WorkflowName,
+            plan.WorkflowYaml,
+            plan.InlineWorkflowYamls,
+            plan.ExecutionMode,
+            scopeId.Trim(),
+            string.IsNullOrWhiteSpace(request.RunOrigin)
+                ? WorkflowRunOrigins.ServiceInvoke
+                : request.RunOrigin.Trim(),
+            request.ScheduleId?.Trim() ?? string.Empty,
+            SourceKind: "service_revision",
+            CapabilityAdmissionPlan: plan.CapabilityAdmissionPlan?.Clone(),
+            WorkflowId: bindingIdentity.WorkflowId,
+            RevisionId: bindingIdentity.RevisionId);
+    }
+
+    private static string ResolveWorkflowServiceDefinitionActorId(
+        ServiceInvocationResolvedTarget target,
+        WorkflowServiceDeploymentPlan plan)
+    {
+        var serviceDefinitionActorId = target.Service.PrimaryActorId?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(serviceDefinitionActorId))
+            return serviceDefinitionActorId;
+
+        return plan.DefinitionActorId?.Trim() ?? string.Empty;
     }
 
     private static Dictionary<string, string> BuildScopedHeaders(
@@ -3893,6 +4017,17 @@ const response = await fetch("{{invokePath}}", {
                 FileRef = p.FileRef,
             }).ToList();
     }
+
+    private static int CountInputFileRefs(IReadOnlyList<ChatInputContentPart>? inputParts) =>
+        inputParts?.Count(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef)) ?? 0;
+
+    private static ChatInputFileRef? FirstInputFileRef(IReadOnlyList<ChatInputContentPart>? inputParts) =>
+        inputParts?.FirstOrDefault(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef))?.FileRef;
+
+    private static bool HasFileRefIdentity(ChatInputFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId) ||
+        !string.IsNullOrWhiteSpace(fileRef.Uri);
 
     private static IReadOnlyList<ChatInputContentPart>? AppendInputParts(
         IReadOnlyList<ChatInputContentPart>? existing,
@@ -4170,10 +4305,11 @@ const response = await fetch("{{invokePath}}", {
         string memberId,
         out IResult denied)
     {
-        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out denied))
-            return true;
-
-        return AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out denied);
+        return AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(
+            http,
+            scopeId,
+            memberId,
+            out denied);
     }
 
     private static async Task<bool> TryWriteMemberRouteAccessDeniedAsync(
@@ -4182,10 +4318,11 @@ const response = await fetch("{{invokePath}}", {
         string memberId,
         CancellationToken ct)
     {
-        if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
-            return true;
-
-        return await AevatarMemberAccessGuard.TryWriteMemberAccessDeniedAsync(http, memberId, ct);
+        return await AevatarMemberAccessGuard.TryWriteMemberAccessDeniedAsync(
+            http,
+            scopeId,
+            memberId,
+            ct);
     }
 
     private static async Task WriteJsonErrorResponseAsync(
@@ -4288,7 +4425,11 @@ const response = await fetch("{{invokePath}}", {
         string? UserInput = null,
         Dictionary<string, string>? Metadata = null,
         string? ActorId = null,
-        WorkflowToolApprovalResumeHttpRequest? ToolApproval = null);
+        WorkflowToolApprovalResumeHttpRequest? ToolApproval = null)
+    {
+        [JsonExtensionData]
+        public Dictionary<string, JsonElement>? ExtraFields { get; init; }
+    }
 
     public sealed record WorkflowToolApprovalResumeHttpRequest(
         string? ExecutionId,

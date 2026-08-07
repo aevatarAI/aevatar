@@ -17,10 +17,10 @@ netstack has no iptables NAT for the sidecar; runc + COS nodes do not enable the
 credential-protection stack therefore forced the runtime with the weaker escape isolation.
 
 Since #2908, the only credential that reaches the sandbox is a five-minute, single-user
-delegation token injected by NyxID. The persistent per-user agent
-key never leaves the NyxID Authorization header, and the interactive workflow bearer is never
-used for the chrono request. The token being protected no longer justifies the stack built to
-protect it.
+delegation token injected by NyxID. The persistent per-user agent key terminates
+at NyxID in `X-API-Key`; the managed request has no `Authorization` header, and
+the interactive workflow bearer is never used for the chrono request. The token
+being protected no longer justifies the stack built to protect it.
 
 The 2026-07-24 internal-canary correction established that `chrono-llm-public` is exposed at
 NyxID's REST proxy path, not as a provider in the generic LLM gateway. NyxID currently grants
@@ -65,10 +65,11 @@ materially stronger escape isolation and sheds four moving parts.
 
 The managed credential boundary in `docs/canon/managed-codex-execution.md` is otherwise
 unchanged: the per-user agent key stays only in `ISecretVault`, is resolved immediately
-before the NyxID request, and is used only as that request's Authorization value. The NyxID
-UserService gate (`forward_access_token=false`, `inject_delegation_token=true`,
+before the NyxID request, and is used only as that request's `X-API-Key` value. The NyxID
+UserService gate (`inject_delegation_token=true`,
 `delegation_token_scope=proxy:*`) remains validated at provisioning and rotation for the
-internal canary.
+internal canary. `forward_access_token` is not a managed-execution gate because this request
+contains no bearer; a shared service may set it to `true` for ordinary `/execute`.
 
 Issue #2899 includes replacing the persistent invocation key with a short-lived caller
 capability, making caller-credential non-forwarding immutable or request-level fail-closed,

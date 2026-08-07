@@ -3,6 +3,7 @@ package aevatar.gagents.studio_member;
 option csharp_namespace = "Aevatar.GAgents.StudioMember";
 
 import "google/protobuf/timestamp.proto";
+import "scheduled_invocation_authorization_evidence.proto";
 import "workflow_capability_admission.proto";
 
 // ─── Canonical enums ───
@@ -40,10 +41,37 @@ enum StudioMemberBindingRunStatus {
   STUDIO_MEMBER_BINDING_RUN_STATUS_MEMBER_NOTIFICATION_PENDING = 8;
 }
 
+enum StudioMemberPlatformBindingReadinessStatus {
+  STUDIO_MEMBER_PLATFORM_BINDING_READINESS_STATUS_UNSPECIFIED = 0;
+  STUDIO_MEMBER_PLATFORM_BINDING_READINESS_STATUS_SERVICE_CATALOG_MISSING = 1;
+  STUDIO_MEMBER_PLATFORM_BINDING_READINESS_STATUS_SERVING_SET_MISSING = 2;
+  STUDIO_MEMBER_PLATFORM_BINDING_READINESS_STATUS_ELIGIBLE_SERVING_TARGET_MISSING = 3;
+  STUDIO_MEMBER_PLATFORM_BINDING_READINESS_STATUS_SERVICE_CATALOG_TARGET_MISSING = 4;
+  STUDIO_MEMBER_PLATFORM_BINDING_READINESS_STATUS_READY = 5;
+  STUDIO_MEMBER_PLATFORM_BINDING_READINESS_STATUS_TRAFFIC_VIEW_TARGET_MISSING = 6;
+  STUDIO_MEMBER_PLATFORM_BINDING_READINESS_STATUS_PREPARED_ARTIFACT_MISSING = 7;
+  STUDIO_MEMBER_PLATFORM_BINDING_READINESS_STATUS_INVOCATION_CATALOG_NOT_READY = 8;
+}
+
 enum StudioMemberGAgentEndpointKind {
   STUDIO_MEMBER_GAGENT_ENDPOINT_KIND_UNSPECIFIED = 0;
   STUDIO_MEMBER_GAGENT_ENDPOINT_KIND_COMMAND = 1;
   STUDIO_MEMBER_GAGENT_ENDPOINT_KIND_CHAT = 2;
+}
+
+enum StudioMemberWorkflowScheduleProvisioningStatus {
+  STUDIO_MEMBER_WORKFLOW_SCHEDULE_PROVISIONING_STATUS_UNSPECIFIED = 0;
+  STUDIO_MEMBER_WORKFLOW_SCHEDULE_PROVISIONING_STATUS_PENDING_BINDING = 1;
+  STUDIO_MEMBER_WORKFLOW_SCHEDULE_PROVISIONING_STATUS_PROVISIONING = 2;
+  STUDIO_MEMBER_WORKFLOW_SCHEDULE_PROVISIONING_STATUS_RETRY_PENDING = 3;
+  STUDIO_MEMBER_WORKFLOW_SCHEDULE_PROVISIONING_STATUS_SUCCEEDED = 4;
+  STUDIO_MEMBER_WORKFLOW_SCHEDULE_PROVISIONING_STATUS_FAILED = 5;
+}
+
+enum StudioMemberWorkflowScheduleMode {
+  STUDIO_MEMBER_WORKFLOW_SCHEDULE_MODE_UNSPECIFIED = 0;
+  STUDIO_MEMBER_WORKFLOW_SCHEDULE_MODE_RECURRING_CRON = 1;
+  STUDIO_MEMBER_WORKFLOW_SCHEDULE_MODE_ONE_SHOT_AT_UTC = 2;
 }
 
 // ─── Implementation refs ───
@@ -173,6 +201,51 @@ message StudioMemberBindingRunState {
   google.protobuf.Timestamp platform_execution_started_at_utc = 15;
 }
 
+message StudioMemberWorkflowScheduleProvisioningIntent {
+  string provisioning_id = 1;
+  string scope_id = 2;
+  string team_id = 3;
+  string member_id = 4;
+  string published_service_id = 5;
+  string workflow_id = 6;
+  string revision_id = 7;
+  string display_name = 8;
+  string prompt = 9;
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 10;
+  string subject_platform = 11;
+  string subject_tenant = 12;
+  string subject_external_user_id = 13;
+  string verified_binding_id = 14;
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity authenticated_actor = 15;
+  StudioMemberWorkflowScheduleMode schedule_mode = 16;
+  string cron_expression = 17;
+  string timezone = 18;
+  int32 one_shot_delay_seconds = 19;
+  string binding_run_id = 20;
+  string schedule_operation_id = 21;
+  string schedule_idempotency_key = 22;
+}
+
+message StudioMemberWorkflowScheduleProvisioningFailure {
+  string code = 1;
+  string message = 2;
+  google.protobuf.Timestamp failed_at_utc = 3;
+}
+
+message StudioMemberWorkflowScheduleProvisioningState {
+  StudioMemberWorkflowScheduleProvisioningIntent intent = 1;
+  StudioMemberWorkflowScheduleProvisioningStatus status = 2;
+  google.protobuf.Timestamp requested_at_utc = 3;
+  google.protobuf.Timestamp updated_at_utc = 4;
+  google.protobuf.Timestamp deadline_at_utc = 5;
+  google.protobuf.Timestamp resolved_one_shot_fire_at_utc = 6;
+  int32 attempt_count = 7;
+  bool attempt_in_flight = 8;
+  string schedule_id = 9;
+  string operation_id = 10;
+  StudioMemberWorkflowScheduleProvisioningFailure failure = 11;
+}
+
 // ─── State ───
 //
 // State for a single StudioMember actor. Actor ID format:
@@ -207,6 +280,9 @@ message StudioMemberState {
   // removes the member read model so GET/list surfaces return not found.
   bool deleted = 60;
   google.protobuf.Timestamp deleted_at_utc = 61;
+  // Actor-owned continuation for the deterministic schedule created by the
+  // one-call workflow provisioning flow. It contains no raw credentials.
+  StudioMemberWorkflowScheduleProvisioningState workflow_schedule_provisioning = 70;
 }
 
 // ─── Events ───
@@ -242,12 +318,16 @@ message StudioMemberRenamedEvent {
   string display_name = 1;
   string description = 2;
   google.protobuf.Timestamp updated_at_utc = 3;
+  string member_id = 4;
+  string scope_id = 5;
 }
 
 message StudioMemberImplementationUpdatedEvent {
   StudioMemberImplementationKind implementation_kind = 1;
   StudioMemberImplementationRef implementation_ref = 2;
   google.protobuf.Timestamp updated_at_utc = 3;
+  string member_id = 4;
+  string scope_id = 5;
 }
 
 message StudioMemberBindingPlatformPendingEvent {
@@ -264,6 +344,8 @@ message StudioMemberBindingCompletedEvent {
   StudioMemberImplementationRef implementation_ref = 5;
   google.protobuf.Timestamp completed_at_utc = 6;
   string expected_actor_id = 7;
+  string member_id = 8;
+  string scope_id = 9;
 }
 
 message StudioMemberPublishedBindingRecordedEvent {
@@ -278,6 +360,8 @@ message StudioMemberPublishedBindingRecordedEvent {
 message StudioMemberBindingFailedEvent {
   string binding_run_id = 1;
   StudioMemberBindingFailure failure = 2;
+  string member_id = 3;
+  string scope_id = 4;
 }
 
 message StudioMemberBindingRunRequested {
@@ -292,6 +376,10 @@ message StudioMemberBindAdmissionRequested {
   string request_hash = 4;
   StudioMemberBindingRequest request = 5;
   google.protobuf.Timestamp requested_at_utc = 6;
+}
+
+message StudioMemberBindingAdmissionWatchdogFired {
+  string binding_run_id = 1;
 }
 
 message StudioMemberBindingAdmittedEvent {
@@ -342,6 +430,13 @@ message StudioMemberPlatformBindingExecutionStarted {
   google.protobuf.Timestamp started_at_utc = 3;
 }
 
+message StudioMemberPlatformBindingReadinessTimedOut {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+  StudioMemberPlatformBindingReadinessStatus readiness_status = 3;
+  google.protobuf.Timestamp timed_out_at_utc = 4;
+}
+
 message StudioMemberPlatformBindingSucceeded {
   string binding_run_id = 1;
   string platform_binding_command_id = 2;
@@ -359,6 +454,50 @@ message StudioMemberBindingTerminalAcknowledged {
   string binding_run_id = 1;
   StudioMemberBindingRunStatus status = 2;
   google.protobuf.Timestamp acknowledged_at_utc = 3;
+}
+
+message StudioMemberWorkflowScheduleProvisioningRequested {
+  StudioMemberWorkflowScheduleProvisioningIntent intent = 1;
+  google.protobuf.Timestamp requested_at_utc = 2;
+}
+
+message StudioMemberWorkflowScheduleProvisioningTimingResolved {
+  string provisioning_id = 1;
+  google.protobuf.Timestamp one_shot_fire_at_utc = 2;
+  google.protobuf.Timestamp resolved_at_utc = 3;
+}
+
+message StudioMemberWorkflowScheduleProvisioningAttemptRequested {
+  string provisioning_id = 1;
+  int32 observed_attempt = 2;
+}
+
+message StudioMemberWorkflowScheduleProvisioningAttemptStarted {
+  string provisioning_id = 1;
+  int32 attempt = 2;
+  google.protobuf.Timestamp started_at_utc = 3;
+}
+
+message StudioMemberWorkflowScheduleProvisioningRetryDeferred {
+  string provisioning_id = 1;
+  string failure_code = 2;
+  string detail = 3;
+  google.protobuf.Timestamp deferred_at_utc = 4;
+  int32 attempt = 5;
+}
+
+message StudioMemberWorkflowScheduleProvisioningSucceeded {
+  string provisioning_id = 1;
+  string schedule_id = 2;
+  string operation_id = 3;
+  google.protobuf.Timestamp completed_at_utc = 4;
+  int32 attempt = 5;
+}
+
+message StudioMemberWorkflowScheduleProvisioningFailed {
+  string provisioning_id = 1;
+  StudioMemberWorkflowScheduleProvisioningFailure failure = 2;
+  int32 attempt = 3;
 }
 
 message StudioMemberDeleteRequested {

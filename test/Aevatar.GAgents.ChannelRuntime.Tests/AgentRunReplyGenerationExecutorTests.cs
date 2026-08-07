@@ -11,6 +11,7 @@ using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
@@ -26,6 +27,126 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class AgentRunReplyGenerationExecutorTests
 {
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenToolEnabledFirstRoundHasNoSuccessfulMutatingReceipt_ShouldPassMutationClaimConstraint()
+    {
+        var provider = new RecordingProvider();
+        var executor = CreateToolEnabledExecutor(new CountingTool("submit_invoice"), provider);
+        var workItem = BuildToolEnabledWorkItem(
+            new AgentToolReceipt
+            {
+                Status = AgentToolReceiptStatus.Error,
+                SideEffectKind = "invoice.submit",
+            });
+
+        await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        var request = provider.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().ContainSingle().Which.Name.Should().Be("submit_invoice");
+        request.Messages.Should().ContainSingle(message =>
+            message.Role == "system" &&
+            message.Content != null &&
+            message.Content.Contains("no successful mutating tool execution", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenNonCardTurnHasBlockingReceipt_ShouldSuppressModelStreaming()
+    {
+        var provider = new RecordingProvider();
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
+        var executor = CreateToolEnabledExecutor(
+            new CountingTool("submit_invoice"),
+            provider,
+            actorDispatchPort: dispatchPort,
+            relayOptions: new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                StreamingRepliesEnabled = true,
+                StreamingCardKitEnabled = false,
+            });
+        var workItem = BuildToolEnabledWorkItem(new AgentToolReceipt
+        {
+            CallId = "call-submit",
+            ToolName = "submit_invoice",
+            Status = AgentToolReceiptStatus.Error,
+            Effect = AgentToolReceiptEffect.Mutating,
+        });
+        workItem.Request.Activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "reply-1",
+            CorrelationId = "corr-1",
+        };
+
+        await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        await dispatchPort.DidNotReceiveWithAnyArgs()
+            .DispatchAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenNonCardTurnNeedsToolApproval_ShouldPreserveRelayReplyTokenForApprovalCard()
+    {
+        var tool = new ApprovalRequiredTool("use_skill");
+        var provider = new TextThenToolCallProvider(tool.Name, "Preparing the workflow.");
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
+        var executor = CreateToolEnabledExecutor(
+            tool,
+            provider,
+            actorDispatchPort: dispatchPort,
+            relayOptions: new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                StreamingRepliesEnabled = true,
+                StreamingCardKitEnabled = false,
+            });
+        var workItem = BuildToolEnabledWorkItem();
+        workItem.Request.Activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "relay-message-1",
+            CorrelationId = "corr-1",
+        };
+        workItem.Request.ReplyToken = "single-use-relay-token";
+        workItem.Request.ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds();
+
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        await dispatchPort.DidNotReceiveWithAnyArgs()
+            .DispatchAsync(default!, default!, default);
+        execution.Continuation.LlmStepResult.AccumulatedText.Should().BeEmpty();
+        execution.Continuation.LlmStepResult.HasStreamedTextContent.Should().BeFalse();
+        execution.Continuation.LlmStepResult.ToolCalls.Should().ContainSingle()
+            .Which.Name.Should().Be(tool.Name);
+        execution.Continuation.LlmStepResult.ToolRequestId.Should().Be("activity-1");
+        execution.AuthorizedToolCallSafeties.Should().ContainSingle()
+            .Which.CallSafety.RequiresApproval.Should().BeTrue();
+        execution.AuthorizedToolStep.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenToolEnabledFirstRoundHasSuccessfulMutatingReceipt_ShouldKeepGroundingConstraint()
+    {
+        var provider = new RecordingProvider();
+        var executor = CreateToolEnabledExecutor(new CountingTool("submit_invoice"), provider);
+        var workItem = BuildToolEnabledWorkItem(
+            new AgentToolReceipt
+            {
+                Status = AgentToolReceiptStatus.Success,
+                SideEffectKind = "invoice.submit",
+                Effect = AgentToolReceiptEffect.Mutating,
+            });
+
+        await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        var request = provider.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().ContainSingle().Which.Name.Should().Be("submit_invoice");
+        request.Messages.Should().NotContain(message =>
+            message.Role == "system" &&
+            message.Content != null &&
+            message.Content.Contains("no successful mutating tool execution", StringComparison.Ordinal));
+        request.Messages.Should().ContainSingle(message =>
+            message.Role == "system" &&
+            message.Content != null &&
+            message.Content.Contains("match that exact action", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task BuildLlmStepContinuation_WhenFinalNoToolsHasNoSuccessfulMutatingReceipt_ShouldPassReceiptsToCoreConstraint()
     {
@@ -44,7 +165,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
-    public async Task BuildLlmStepContinuation_WhenFinalNoToolsHasSuccessfulMutatingReceipt_ShouldSuppressCoreConstraint()
+    public async Task BuildLlmStepContinuation_WhenFinalNoToolsHasSuccessfulMutatingReceipt_ShouldKeepGroundingConstraint()
     {
         var provider = new RecordingProvider();
         var executor = CreateExecutor(provider);
@@ -53,6 +174,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             {
                 Status = AgentToolReceiptStatus.Success,
                 SideEffectKind = "definition.update",
+                Effect = AgentToolReceiptEffect.Mutating,
             });
 
         await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
@@ -63,6 +185,10 @@ public sealed class AgentRunReplyGenerationExecutorTests
             .Where(message => message.Role == "system" &&
                               message.Content?.Contains("no successful mutating tool execution") == true)
             .Should().BeEmpty();
+        request.Messages.Should().ContainSingle(message =>
+            message.Role == "system" &&
+            message.Content != null &&
+            message.Content.Contains("match that exact action", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -218,6 +344,413 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task BuildLlmStepContinuation_WithExactSkillRecovery_ShouldSearchDespitePriorTurnUseSkill()
+    {
+        var useSkill = new CountingTool("use_skill");
+        var searchSkills = new CountingTool("ornn_search_skills");
+        var provider = new RecordingProvider();
+        var recovery = new AgentSkillRecoveryContext(
+            RequireInitialOrnnSearch: true,
+            RequireOrnnSearchOnBlocker: true,
+            CommandName: "invoice-ocr-policy-review",
+            OriginalCommand: "使用精确名称为 invoice-ocr-policy-review 的 skill",
+            PrimarySkillName: "invoice-ocr-policy-review",
+            MaxOrnnSearchAttempts: 2,
+            CommandArguments: "提取发票并运行 workflow");
+        var toolContext = AgentToolExecutionContext.Empty with { SkillRecovery = recovery };
+        var executor = CreateToolEnabledExecutor([useSkill, searchSkills], provider, toolContext: toolContext);
+        var workItem = BuildToolEnabledWorkItem();
+        workItem.StepState.ToolContext = toolContext.ToPayload();
+        var priorUseSkillCall = new ToolCall
+        {
+            Id = "prior-use-skill",
+            Name = "use_skill",
+            ArgumentsJson = "{\"skill\":\"invoice-ocr-policy-review\"}",
+        };
+        workItem.StepState.Messages.Insert(0, AgentRunReplyStepMappers.ToProto(new ChatMessage
+        {
+            Role = "assistant",
+            ToolCalls = [priorUseSkillCall],
+        }));
+        workItem.StepState.Messages.Insert(1, AgentRunReplyStepMappers.ToProto(
+            ChatMessage.Tool(priorUseSkillCall.Id, "{\"status\":\"success\"}")));
+
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        provider.Requests.Should().BeEmpty();
+        var call = execution.Continuation.LlmStepResult.ToolCalls.Should().ContainSingle().Which;
+        call.Name.Should().Be("ornn_search_skills");
+        call.ArgumentsJson.Should().Contain("invoice-ocr-policy-review");
+        execution.AuthorizedToolStep.Should().NotBeNull();
+        execution.AuthorizedToolCallSafeties.Should().ContainSingle()
+            .Which.ToolName.Should().Be("ornn_search_skills");
+        useSkill.ExecuteCount.Should().Be(0);
+        searchSkills.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenMiddlewareRemovesRecoveryTool_ShouldNotAuthorizeDeterministicCall()
+    {
+        var tool = new CountingTool("use_skill");
+        var provider = new RecordingProvider();
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            SkillRecovery = new AgentSkillRecoveryContext(
+                RequireInitialOrnnSearch: true,
+                RequireOrnnSearchOnBlocker: true,
+                CommandName: "invoice-ocr-policy-review",
+                OriginalCommand: "使用精确名称为 invoice-ocr-policy-review 的 skill",
+                PrimarySkillName: "invoice-ocr-policy-review",
+                MaxOrnnSearchAttempts: 2),
+        };
+        var executor = CreateToolEnabledExecutor(
+            tool,
+            provider,
+            [new RemoveToolsMiddleware()],
+            toolContext);
+        var workItem = BuildToolEnabledWorkItem();
+        workItem.StepState.ToolContext = toolContext.ToPayload();
+
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        provider.Requests.Should().ContainSingle().Which.Tools.Should().BeNull();
+        execution.Continuation.LlmStepResult.ToolCalls.Should().BeEmpty();
+        execution.AuthorizedToolStep.Should().BeNull();
+        tool.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenFinalAnswerReportsBlocker_ShouldRecoverWithoutPublishingFailureText()
+    {
+        var searchSkills = new CountingTool("ornn_search_skills");
+        var provider = new RecordingProvider("无法完成：workflow backend unavailable");
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            SkillRecovery = new AgentSkillRecoveryContext(
+                RequireInitialOrnnSearch: false,
+                RequireOrnnSearchOnBlocker: true,
+                CommandName: "invoice-ocr-policy-review",
+                OriginalCommand: "使用精确名称为 invoice-ocr-policy-review 的 skill",
+                PrimarySkillName: "invoice-ocr-policy-review",
+                MaxOrnnSearchAttempts: 2),
+        };
+        var executor = CreateToolEnabledExecutor(
+            searchSkills,
+            provider,
+            toolContext: toolContext);
+        var workItem = BuildToolEnabledWorkItem();
+        workItem.StepState.ToolContext = toolContext.ToPayload();
+        var useSkillCall = new ToolCall
+        {
+            Id = "call-use-skill",
+            Name = "use_skill",
+            ArgumentsJson = "{\"skill\":\"invoice-ocr-policy-review\"}",
+        };
+        var useSkillMessage = AgentRunReplyStepMappers.ToProto(new ChatMessage
+        {
+            Role = "assistant",
+            ToolCalls = [useSkillCall],
+        });
+        var useSkillResult = AgentRunReplyStepMappers.ToProto(
+            ChatMessage.Tool(useSkillCall.Id, "{\"status\":\"success\"}"));
+        workItem.StepState.Messages.Add(useSkillMessage);
+        workItem.StepState.Messages.Add(useSkillResult);
+        workItem.StepState.PendingHistoryMessages.Add(useSkillMessage.Clone());
+        workItem.StepState.PendingHistoryMessages.Add(useSkillResult.Clone());
+        var publishedChunks = new List<LLMStreamChunk>();
+        workItem = workItem with
+        {
+            ReportChunkAsync = (chunk, _) =>
+            {
+                publishedChunks.Add(chunk);
+                return Task.CompletedTask;
+            },
+        };
+
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        provider.Requests.Should().ContainSingle();
+        publishedChunks.Should().BeEmpty();
+        execution.Continuation.LlmStepResult.AccumulatedText.Should().BeEmpty();
+        execution.Continuation.LlmStepResult.Content.Should().BeEmpty();
+        execution.Continuation.LlmStepResult.ToolCalls.Should().ContainSingle()
+            .Which.Name.Should().Be("ornn_search_skills");
+        execution.AuthorizedToolStep.Should().NotBeNull();
+        execution.AuthorizedToolCallSafeties.Should().ContainSingle()
+            .Which.ToolName.Should().Be("ornn_search_skills");
+        searchSkills.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenFinalAnswerHasNoBlocker_ShouldPublishDeferredText()
+    {
+        var searchSkills = new CountingTool("ornn_search_skills");
+        var provider = new RecordingProvider("workflow completed");
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            SkillRecovery = new AgentSkillRecoveryContext(
+                RequireInitialOrnnSearch: false,
+                RequireOrnnSearchOnBlocker: true,
+                CommandName: "invoice-ocr-policy-review",
+                OriginalCommand: "使用精确名称为 invoice-ocr-policy-review 的 skill",
+                PrimarySkillName: "invoice-ocr-policy-review",
+                MaxOrnnSearchAttempts: 2),
+        };
+        var executor = CreateToolEnabledExecutor(
+            searchSkills,
+            provider,
+            toolContext: toolContext);
+        var workItem = BuildToolEnabledWorkItem();
+        workItem.StepState.ToolContext = toolContext.ToPayload();
+        var useSkillCall = new ToolCall
+        {
+            Id = "call-use-skill",
+            Name = "use_skill",
+            ArgumentsJson = "{\"skill\":\"invoice-ocr-policy-review\"}",
+        };
+        var useSkillMessage = AgentRunReplyStepMappers.ToProto(new ChatMessage
+        {
+            Role = "assistant",
+            ToolCalls = [useSkillCall],
+        });
+        var useSkillResult = AgentRunReplyStepMappers.ToProto(
+            ChatMessage.Tool(useSkillCall.Id, "{\"status\":\"success\"}"));
+        workItem.StepState.Messages.Add(useSkillMessage);
+        workItem.StepState.Messages.Add(useSkillResult);
+        workItem.StepState.PendingHistoryMessages.Add(useSkillMessage.Clone());
+        workItem.StepState.PendingHistoryMessages.Add(useSkillResult.Clone());
+        var publishedChunks = new List<LLMStreamChunk>();
+        workItem = workItem with
+        {
+            ReportChunkAsync = (chunk, _) =>
+            {
+                publishedChunks.Add(chunk);
+                return Task.CompletedTask;
+            },
+        };
+
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        provider.Requests.Should().ContainSingle();
+        publishedChunks.Should().ContainSingle().Which.DeltaContent.Should().Be("workflow completed");
+        execution.Continuation.LlmStepResult.AccumulatedText.Should().Be("workflow completed");
+        execution.Continuation.LlmStepResult.Content.Should().Be("workflow completed");
+        execution.Continuation.LlmStepResult.ToolCalls.Should().BeEmpty();
+        execution.AuthorizedToolStep.Should().BeNull();
+        searchSkills.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WithPersistedSuccessfulSkillLoad_ShouldIgnoreFailureWordsInInstructions()
+    {
+        var useSkill = new CountingTool("use_skill");
+        var searchSkills = new CountingTool("ornn_search_skills");
+        var provider = new RecordingProvider("workflow completed");
+        var recovery = new AgentSkillRecoveryContext(
+            RequireInitialOrnnSearch: false,
+            RequireOrnnSearchOnBlocker: true,
+            CommandName: "invoice-ocr-policy-review",
+            OriginalCommand: "使用精确名称为 invoice-ocr-policy-review 的 skill",
+            PrimarySkillName: "invoice-ocr-policy-review",
+            MaxOrnnSearchAttempts: 2,
+            CommandArguments: "提取发票并运行 workflow");
+        var toolContext = AgentToolExecutionContext.Empty with { SkillRecovery = recovery };
+        var executor = CreateToolEnabledExecutor(
+            [useSkill, searchSkills],
+            provider,
+            toolContext: toolContext);
+        var workItem = BuildToolEnabledWorkItem();
+        workItem.StepState.ToolContext = toolContext.ToPayload();
+        var call = new ToolCall
+        {
+            Id = "call-load-invoice-skill",
+            Name = "use_skill",
+            ArgumentsJson = "{\"skill\":\"invoice-ocr-policy-review\"}",
+        };
+        var assistant = AgentRunReplyStepMappers.ToProto(new ChatMessage
+        {
+            Role = "assistant",
+            ToolCalls = [call],
+        });
+        var result = AgentRunReplyStepMappers.ToProto(ToolCallLoop.BuildToolResultMessage(
+            call.Id,
+            call.Name,
+            "# invoice-ocr-policy-review\n\nIf extraction failed, return a typed error artifact."));
+        workItem.StepState.Messages.Add(assistant);
+        workItem.StepState.Messages.Add(result);
+        workItem.StepState.PendingHistoryMessages.Add(assistant.Clone());
+        workItem.StepState.PendingHistoryMessages.Add(result.Clone());
+
+        var roundTripped = AgentRunReplyStepMappers.FromProto(result);
+        roundTripped.ToolResultView!.SkillLoad!.Status.Should().Be(ToolResultViewStatus.Success);
+
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        provider.Requests.Should().ContainSingle();
+        execution.Continuation.LlmStepResult.Content.Should().Be("workflow completed");
+        execution.Continuation.LlmStepResult.ToolCalls.Should().BeEmpty();
+        execution.AuthorizedToolStep.Should().BeNull();
+        searchSkills.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WithPersistedStructuredSearch_ShouldLoadMatchedSkillWithoutProvider()
+    {
+        var useSkill = new CountingTool("use_skill");
+        var provider = new RecordingProvider();
+        var recovery = new AgentSkillRecoveryContext(
+            RequireInitialOrnnSearch: true,
+            RequireOrnnSearchOnBlocker: true,
+            CommandName: "invoice-review",
+            OriginalCommand: "查找并运行发票审核 skill",
+            PrimarySkillName: null,
+            MaxOrnnSearchAttempts: 2,
+            CommandArguments: "提取发票并运行 workflow");
+        var toolContext = AgentToolExecutionContext.Empty with { SkillRecovery = recovery };
+        var executor = CreateToolEnabledExecutor(useSkill, provider, toolContext: toolContext);
+        var workItem = BuildToolEnabledWorkItem();
+        workItem.StepState.ToolContext = toolContext.ToPayload();
+        var call = new ToolCall
+        {
+            Id = "call-search-invoice-skill",
+            Name = "ornn_search_skills",
+            ArgumentsJson = "{\"query\":\"invoice\",\"scope\":\"mixed\"}",
+        };
+        var assistant = AgentRunReplyStepMappers.ToProto(new ChatMessage
+        {
+            Role = "assistant",
+            ToolCalls = [call],
+        });
+        var result = AgentRunReplyStepMappers.ToProto(ToolCallLoop.BuildToolResultMessage(
+            call.Id,
+            call.Name,
+            """
+            {"result_type":"skill_search","status":"success","matches":[{"skill_name":"invoice-ocr-policy-review","description":"Review invoices","is_private":false,"category":"finance","tags":["invoice"]}],"http_status":200,"text":"one match"}
+            """));
+        workItem.StepState.Messages.Add(assistant);
+        workItem.StepState.Messages.Add(result);
+        workItem.StepState.PendingHistoryMessages.Add(assistant.Clone());
+        workItem.StepState.PendingHistoryMessages.Add(result.Clone());
+
+        var roundTripped = AgentRunReplyStepMappers.FromProto(result);
+        var search = roundTripped.ToolResultView!.SkillSearch!;
+        search.Status.Should().Be(ToolResultViewStatus.Success);
+        search.HttpStatus.Should().Be(200);
+        search.Matches.Should().ContainSingle().Which.SkillName.Should().Be("invoice-ocr-policy-review");
+
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        provider.Requests.Should().BeEmpty();
+        var planned = execution.Continuation.LlmStepResult.ToolCalls.Should().ContainSingle().Which;
+        planned.Name.Should().Be("use_skill");
+        planned.ArgumentsJson.Should().Contain("invoice-ocr-policy-review");
+        execution.AuthorizedToolStep.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AgentRunChatMessage_WithTypedFailure_ShouldRoundTripFailureFacts()
+    {
+        var source = new ChatMessage
+        {
+            Role = "tool",
+            ToolCallId = "call-failed",
+            Content = "safe failure",
+            ToolResultView = new ToolResultView(
+                "use_skill",
+                SkillSearch: null,
+                SkillLoad: null,
+                Failure: new ToolFailureResultView(
+                    AgentToolReceiptStatus.AuthorizationRequired,
+                    "AUTHORIZATION_REQUIRED",
+                    "Authorize Ornn access.")),
+        };
+
+        var roundTripped = AgentRunReplyStepMappers.FromProto(
+            AgentRunReplyStepMappers.ToProto(source));
+
+        roundTripped.ToolResultView.Should().NotBeNull();
+        roundTripped.ToolResultView!.ToolName.Should().Be("use_skill");
+        roundTripped.ToolResultView.Failure.Should().BeEquivalentTo(source.ToolResultView.Failure);
+    }
+
+    [Fact]
+    public async Task NyxIdChatTurnExecutor_WithExactSkillRecovery_ShouldAdvanceSearchThenUseWithoutCallingProvider()
+    {
+        var useSkill = new CountingTool("use_skill");
+        var searchSkills = new CountingTool("ornn_search_skills");
+        var provider = new RecordingProvider();
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            SkillRecovery = new AgentSkillRecoveryContext(
+                RequireInitialOrnnSearch: true,
+                RequireOrnnSearchOnBlocker: true,
+                CommandName: "invoice-ocr-policy-review",
+                OriginalCommand: "使用精确名称为 invoice-ocr-policy-review 的 skill",
+                PrimarySkillName: "invoice-ocr-policy-review",
+                MaxOrnnSearchAttempts: 2),
+        };
+        var generationExecutor = CreateToolEnabledExecutor(
+            [useSkill, searchSkills],
+            provider,
+            toolContext: toolContext);
+        var executor = new NyxIdChatTurnOperationExecutor(generationExecutor);
+        var session = new NyxIdChatTransientExecutionSession();
+
+        var first = await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = BuildOperationKey("step-search", "operation-search"),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    Request = new ChatRequestEvent
+                    {
+                        Prompt = "提取发票并运行 workflow",
+                        SessionId = "turn-1",
+                        ToolContext = toolContext.ToPayload(),
+                    },
+                },
+            },
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+        var searchCall = first.Result.Llm.ToolCalls.Should().ContainSingle().Which;
+        searchCall.ToolName.Should().Be("ornn_search_skills");
+
+        var toolResult = await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = BuildOperationKey("step-search-result", "operation-search-result"),
+                Tool = new NyxIdChatToolOperationInput
+                {
+                    CallId = searchCall.CallId,
+                    ToolName = searchCall.ToolName,
+                    ArgumentsJson = searchCall.ArgumentsJson,
+                    MayChangeExternalState = searchCall.Safety.MayChangeExternalState,
+                },
+            },
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+        toolResult.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
+
+        var second = await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = BuildOperationKey("step-use", "operation-use"),
+                Llm = new NyxIdChatLLMOperationInput { ContinueSession = true },
+            },
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        second.Result.Llm.ToolCalls.Should().ContainSingle()
+            .Which.ToolName.Should().Be("use_skill");
+        provider.Requests.Should().BeEmpty();
+        useSkill.ExecuteCount.Should().Be(0);
+        searchSkills.ExecuteCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task BuildLlmStepContinuation_ShouldSnapshotExactProviderOwnedCallSafety()
     {
         var tool = new EffectClassifiedTool("repository_update");
@@ -236,6 +769,13 @@ public sealed class AgentRunReplyGenerationExecutorTests
         snapshot.CallSafety.IsReadOnly.Should().BeFalse();
         snapshot.CallSafety.IsDestructive.Should().BeTrue();
         snapshot.SideEffectKind.Should().Be("repository.update");
+        snapshot.Presentation.Should().NotBeNull();
+        snapshot.Presentation!.NyxIdOperation.ConnectedServiceId.Should()
+            .Be("connected-service-alpha");
+        snapshot.Presentation.NyxIdOperation.ServiceSlug.Should().Be("service-slug-alpha");
+        snapshot.Presentation.NyxIdOperation.CatalogServiceSlug.Should().Be("catalog-slug-alpha");
+        snapshot.Presentation.NyxIdOperation.ReadinessCapabilityId.Should()
+            .Be("readiness-capability-alpha");
     }
 
     [Fact]
@@ -537,6 +1077,211 @@ public sealed class AgentRunReplyGenerationExecutorTests
         registeredTool.ExecuteCount.Should().Be(0);
     }
 
+    [Fact]
+    public async Task BuildToolStepContinuation_WithDurableAuthorization_ShouldExecuteWhenCatalogStillAdmitsTool()
+    {
+        var registeredTool = new CountingTool("use_skill");
+        var executor = CreateToolEnabledExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name));
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildDurablyAuthorizedToolStepWorkItem(llmWorkItem, execution.Continuation);
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            authorizedToolStep: null,
+            CancellationToken.None);
+
+        continuation.ToolStepResult.Should().NotBeNull();
+        continuation.ToolStepResult.ResultMessages.Should().ContainSingle();
+        registeredTool.ExecuteCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task BuildApprovedToolStepContinuation_WhenCallbackActivityDiffers_ShouldUseOriginalToolRequestIdentity()
+    {
+        var registeredTool = new CountingTool("use_skill");
+        var executor = CreateToolEnabledExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name));
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var originalToolRequestId = llmWorkItem.Request.Activity.Id;
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildDurablyAuthorizedToolStepWorkItem(llmWorkItem, execution.Continuation);
+        var callbackRequest = toolWorkItem.Request.Clone();
+        callbackRequest.Activity.Id = "approval-callback-1";
+        toolWorkItem = toolWorkItem with { Request = callbackRequest };
+        var pendingCall = toolWorkItem.StepState.PendingToolCalls.Should().ContainSingle().Subject;
+        var pendingApproval = new AgentRunPendingToolApprovalState
+        {
+            RunId = toolWorkItem.RunId,
+            CorrelationId = callbackRequest.CorrelationId,
+            Attempt = toolWorkItem.Attempt,
+            StepIndex = toolWorkItem.StepIndex,
+            ApprovalRequestId = "tool-approval-1",
+            ToolRequestId = originalToolRequestId,
+            ToolCallId = pendingCall.Id,
+            ToolName = pendingCall.Name,
+            ArgumentsSha256 = AgentToolArgumentsDigest.ComputeSha256(pendingCall.ArgumentsJson),
+            Decision = AgentRunToolApprovalDecision.Approved,
+        };
+
+        var continuation = await executor.BuildApprovedToolStepContinuationAsync(
+            toolWorkItem,
+            pendingApproval,
+            CancellationToken.None);
+
+        continuation.ToolStepResult.Should().NotBeNull();
+        continuation.ToolStepResult.ResultMessages.Should().ContainSingle();
+        registeredTool.ExecuteCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task BuildToolStepContinuation_WithDurableAuthorization_ShouldMatchSafetyInsideToolContextScope()
+    {
+        var registeredTool = new ContextClassifiedTool("use_skill");
+        var executor = CreateToolEnabledExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name),
+            toolContext: BuildSafetyModeToolContext(SafetyMode.ReadOnly));
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildDurablyAuthorizedToolStepWorkItem(llmWorkItem, execution.Continuation);
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            authorizedToolStep: null,
+            CancellationToken.None);
+
+        continuation.ToolStepResult.Should().NotBeNull();
+        continuation.ToolStepResult.ResultMessages.Should().ContainSingle();
+        registeredTool.ExecuteCount.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(DefinitionDrift.Description)]
+    [InlineData(DefinitionDrift.ParametersSchema)]
+    public async Task BuildToolStepContinuation_WhenToolDefinitionDrifts_ShouldRejectBeforeToolExecution(
+        DefinitionDrift drift)
+    {
+        var registeredTool = new DriftableDefinitionTool("use_skill");
+        var executor = CreateToolEnabledExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name));
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildDurablyAuthorizedToolStepWorkItem(llmWorkItem, execution.Continuation);
+        registeredTool.Apply(drift);
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            authorizedToolStep: null,
+            CancellationToken.None);
+
+        continuation.ToolStepResult.Should().NotBeNull();
+        continuation.ToolStepResult.ResultMessages.Should().OnlyContain(static message =>
+            message.Content.Contains("not authorized", StringComparison.Ordinal));
+        registeredTool.ExecuteCount.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(SafetyMode.ApprovalUnspecified)]
+    [InlineData(SafetyMode.ApprovalRequired)]
+    [InlineData(SafetyMode.Destructive)]
+    [InlineData(SafetyMode.ReadOnlyChanged)]
+    [InlineData(SafetyMode.SideEffectChanged)]
+    public async Task BuildToolStepContinuation_WhenCurrentSafetyDrifts_ShouldRejectBeforeToolExecution(
+        SafetyMode currentSafety)
+    {
+        var registeredTool = new ContextClassifiedTool("use_skill");
+        var executor = CreateToolEnabledExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name),
+            toolContext: BuildSafetyModeToolContext(SafetyMode.ReadOnly));
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildDurablyAuthorizedToolStepWorkItem(llmWorkItem, execution.Continuation);
+        registeredTool.SafetyOverride = currentSafety;
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            authorizedToolStep: null,
+            CancellationToken.None);
+
+        continuation.ToolStepResult.Should().NotBeNull();
+        continuation.ToolStepResult.ResultMessages.Should().OnlyContain(static message =>
+            message.Content.Contains("not authorized", StringComparison.Ordinal));
+        registeredTool.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BuildToolStepContinuation_WhenDurableAuthorizationWasConsumed_ShouldRejectBeforeToolExecution()
+    {
+        var registeredTool = new CountingTool("use_skill");
+        var executor = CreateToolEnabledExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name));
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildToolStepWorkItem(llmWorkItem, execution.Continuation);
+        var consumedStepState = toolWorkItem.StepState.Clone();
+        consumedStepState.PendingToolAuthorizationConsumed = true;
+        toolWorkItem = toolWorkItem with { StepState = consumedStepState };
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            authorizedToolStep: null,
+            CancellationToken.None);
+
+        continuation.ToolStepResult.Should().NotBeNull();
+        continuation.ToolStepResult.ResultMessages.Should().OnlyContain(static message =>
+            message.Content.Contains("not authorized", StringComparison.Ordinal));
+        registeredTool.ExecuteCount.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(AuthorizedToolStepMutation.ToolCallId)]
+    [InlineData(AuthorizedToolStepMutation.ToolName)]
+    [InlineData(AuthorizedToolStepMutation.Arguments)]
+    public async Task BuildToolStepContinuation_WhenDurableAuthorizationIsMismatched_ShouldRejectBeforeToolExecution(
+        AuthorizedToolStepMutation mutation)
+    {
+        var registeredTool = new CountingTool("use_skill");
+        var executor = CreateToolEnabledExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name));
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = MutateToolStepWorkItem(
+            BuildDurablyAuthorizedToolStepWorkItem(llmWorkItem, execution.Continuation),
+            mutation);
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            authorizedToolStep: null,
+            CancellationToken.None);
+
+        continuation.ToolStepResult.Should().NotBeNull();
+        continuation.ToolStepResult.ResultMessages.Should().OnlyContain(static message =>
+            message.Content.Contains("not authorized", StringComparison.Ordinal));
+        registeredTool.ExecuteCount.Should().Be(0);
+    }
+
     [Theory]
     [InlineData(AuthorizedToolStepMutation.RunId)]
     [InlineData(AuthorizedToolStepMutation.CorrelationId)]
@@ -607,10 +1352,27 @@ public sealed class AgentRunReplyGenerationExecutorTests
         IAgentTool tool,
         ILLMProvider provider,
         IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
-        AgentToolExecutionContext? toolContext = null)
+        AgentToolExecutionContext? toolContext = null,
+        IActorDispatchPort? actorDispatchPort = null,
+        Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions = null)
+        => CreateToolEnabledExecutor(
+            [tool],
+            provider,
+            llmMiddlewares,
+            toolContext,
+            actorDispatchPort,
+            relayOptions);
+
+    private static AgentRunReplyGenerationExecutor CreateToolEnabledExecutor(
+        IReadOnlyList<IAgentTool> registeredTools,
+        ILLMProvider provider,
+        IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
+        AgentToolExecutionContext? toolContext = null,
+        IActorDispatchPort? actorDispatchPort = null,
+        Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions = null)
     {
         var tools = new ToolManager();
-        tools.Register(tool);
+        tools.Register(registeredTools);
         var runtime = new ChatRuntime(
             () => provider,
             new ChatHistory(),
@@ -628,10 +1390,10 @@ public sealed class AgentRunReplyGenerationExecutorTests
             InitialMessages: [],
             MaxToolRounds: 1);
         return new AgentRunReplyGenerationExecutor(
-            Substitute.For<IActorDispatchPort>(),
+            actorDispatchPort ?? Substitute.For<IActorDispatchPort>(),
             new StaticStepPlanReplyGenerator(plan),
             interactiveReplyCollector: null,
-            relayOptions: null,
+            relayOptions,
             NullLogger<AgentRunReplyGenerationExecutor>.Instance);
     }
 
@@ -672,7 +1434,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             stepState);
     }
 
-    private static AgentRunReplyStepExecutionRequest BuildToolEnabledWorkItem()
+    private static AgentRunReplyStepExecutionRequest BuildToolEnabledWorkItem(params AgentToolReceipt[] receipts)
     {
         var request = new NeedsLlmReplyEvent
         {
@@ -694,7 +1456,10 @@ public sealed class AgentRunReplyGenerationExecutorTests
             NextStepIndex = 1,
             MaxToolRounds = 1,
         };
-        stepState.Messages.Add(AgentRunReplyStepMappers.ToProto(ChatMessage.User("run")));
+        var userMessage = AgentRunReplyStepMappers.ToProto(ChatMessage.User("run"));
+        stepState.Messages.Add(userMessage);
+        stepState.PendingHistoryMessages.Add(userMessage.Clone());
+        stepState.ToolReceipts.AddRange(receipts.Select(receipt => receipt.Clone()));
         return new AgentRunReplyStepExecutionRequest(
             "run-1",
             "channel-agent-run:run-1",
@@ -703,6 +1468,15 @@ public sealed class AgentRunReplyGenerationExecutorTests
             request,
             stepState);
     }
+
+    private static AgentToolExecutionContext BuildSafetyModeToolContext(SafetyMode mode) =>
+        AgentToolExecutionContext.Empty with
+        {
+            ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["tool_safety_mode"] = mode.ToString(),
+            },
+        };
 
     private static NyxIdChatOperationKey BuildOperationKey(string stepId, string operationId) =>
         new()
@@ -723,11 +1497,23 @@ public sealed class AgentRunReplyGenerationExecutorTests
         stepState.NextStepIndex = continuation.StepIndex;
         stepState.PendingToolCalls.Clear();
         stepState.PendingToolCalls.AddRange(continuation.LlmStepResult.ToolCalls.Select(static call => call.Clone()));
+        stepState.PendingToolAuthorizations.Clear();
+        stepState.PendingToolAuthorizations.AddRange(
+            continuation.LlmStepResult.PendingToolAuthorizations.Select(static authorization => authorization.Clone()));
         return llmWorkItem with
         {
             StepIndex = continuation.StepIndex,
             StepState = stepState,
         };
+    }
+
+    private static AgentRunReplyStepExecutionRequest BuildDurablyAuthorizedToolStepWorkItem(
+        AgentRunReplyStepExecutionRequest llmWorkItem,
+        AgentRunNextLlmStepRequestedEvent continuation)
+    {
+        var workItem = BuildToolStepWorkItem(llmWorkItem, continuation);
+        workItem.StepState.PendingToolAuthorizationConsumed = true;
+        return workItem with { AllowDurableToolAuthorization = true };
     }
 
     private static AgentRunReplyStepExecutionRequest MutateToolStepWorkItem(
@@ -826,7 +1612,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             throw new NotSupportedException();
     }
 
-    private sealed class RecordingProvider : ILLMProvider
+    private sealed class RecordingProvider(string content = "final") : ILLMProvider
     {
         public string Name => "recording-provider";
         public List<LLMRequest> Requests { get; } = [];
@@ -836,7 +1622,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             [EnumeratorCancellation] CancellationToken ct = default)
         {
             Requests.Add(request);
-            yield return new LLMStreamChunk { DeltaContent = "final" };
+            yield return new LLMStreamChunk { DeltaContent = content };
             await Task.Yield();
         }
     }
@@ -856,6 +1642,28 @@ public sealed class AgentRunReplyGenerationExecutorTests
                 DeltaToolCall = new ToolCall
                 {
                     Id = "call-1",
+                    Name = toolName,
+                    ArgumentsJson = "{}",
+                },
+            };
+            await Task.Yield();
+        }
+    }
+
+    private sealed class TextThenToolCallProvider(string toolName, string content) : ILLMProvider
+    {
+        public string Name => "text-then-tool-call-provider";
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            yield return new LLMStreamChunk { DeltaContent = content };
+            yield return new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-approval-1",
                     Name = toolName,
                     ArgumentsJson = "{}",
                 },
@@ -902,6 +1710,134 @@ public sealed class AgentRunReplyGenerationExecutorTests
         }
     }
 
+    private sealed class ApprovalRequiredTool(string name) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => name;
+        public string ParametersSchema => "{}";
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+        public AgentToolCallSafety GetCallSafety(string argumentsJson) => new(
+            RequiresApproval: true,
+            IsReadOnly: false,
+            IsDestructive: false);
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
+    }
+
+    public enum DefinitionDrift
+    {
+        Description,
+        ParametersSchema,
+    }
+
+    private sealed class DriftableDefinitionTool : IAgentTool
+    {
+        private readonly string _name;
+
+        public DriftableDefinitionTool(string name)
+        {
+            _name = name;
+            Description = name;
+        }
+
+        public int ExecuteCount { get; private set; }
+        public string Name => _name;
+        public string Description { get; private set; }
+        public string ParametersSchema { get; private set; } = "{}";
+
+        public AgentToolCallSafety GetCallSafety(string argumentsJson) => new(
+            RequiresApproval: false,
+            IsReadOnly: true,
+            IsDestructive: false);
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ExecuteCount++;
+            return Task.FromResult("{}");
+        }
+
+        public void Apply(DefinitionDrift drift)
+        {
+            if (drift == DefinitionDrift.Description)
+            {
+                Description = "changed definition";
+                return;
+            }
+
+            ParametersSchema = "{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\"}}}";
+        }
+    }
+
+    public enum SafetyMode
+    {
+        ReadOnly,
+        ApprovalUnspecified,
+        ApprovalRequired,
+        Destructive,
+        ReadOnlyChanged,
+        SideEffectChanged,
+    }
+
+    private sealed class ContextClassifiedTool(string name) : IAgentTool
+    {
+        public int ExecuteCount { get; private set; }
+        public SafetyMode? SafetyOverride { get; set; }
+        public string Name => name;
+        public string Description => name;
+        public string ParametersSchema => "{}";
+        public string SideEffectKind => ResolveSafetyMode() == SafetyMode.SideEffectChanged
+            ? "context.changed"
+            : "context.classified";
+
+        public AgentToolCallSafety GetCallSafety(string argumentsJson)
+        {
+            return ResolveSafetyMode() switch
+            {
+                SafetyMode.ApprovalUnspecified => new AgentToolCallSafety(
+                    RequiresApproval: null,
+                    IsReadOnly: true,
+                    IsDestructive: false),
+                SafetyMode.ApprovalRequired => new AgentToolCallSafety(
+                    RequiresApproval: true,
+                    IsReadOnly: true,
+                    IsDestructive: false),
+                SafetyMode.Destructive => new AgentToolCallSafety(
+                    RequiresApproval: false,
+                    IsReadOnly: false,
+                    IsDestructive: true),
+                SafetyMode.ReadOnlyChanged => new AgentToolCallSafety(
+                    RequiresApproval: false,
+                    IsReadOnly: false,
+                    IsDestructive: false),
+                _ => new AgentToolCallSafety(
+                    RequiresApproval: false,
+                    IsReadOnly: true,
+                    IsDestructive: false),
+            };
+        }
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ExecuteCount++;
+            return Task.FromResult("{}");
+        }
+
+        private SafetyMode ResolveSafetyMode()
+        {
+            if (SafetyOverride is { } safetyOverride)
+                return safetyOverride;
+
+            if (AgentToolRequestContext.Current?.ExternalMetadata.TryGetValue("tool_safety_mode", out var mode) == true &&
+                Enum.TryParse<SafetyMode>(mode, ignoreCase: false, out var parsed))
+            {
+                return parsed;
+            }
+
+            return SafetyMode.Destructive;
+        }
+    }
+
     private sealed class ChatContextCapturingTool(string name) : IAgentTool
     {
         public string Name => name;
@@ -925,6 +1861,20 @@ public sealed class AgentRunReplyGenerationExecutorTests
         public string Name => name;
         public string Description => name;
         public string ParametersSchema => "{}";
+        public ToolPresentationDescriptor Presentation => new()
+        {
+            InvocationName = name,
+            DisplayName = name,
+            Kind = ToolPresentationKind.NyxIdOperation,
+            Availability = ToolAvailability.Available,
+            NyxIdOperation = new NyxIdOperationRef
+            {
+                ConnectedServiceId = "connected-service-alpha",
+                ServiceSlug = "service-slug-alpha",
+                CatalogServiceSlug = "catalog-slug-alpha",
+                ReadinessCapabilityId = "readiness-capability-alpha",
+            },
+        };
         public bool IsDestructive => true;
         public string SideEffectKind => "repository.update";
         public string? ClassifiedArguments { get; private set; }

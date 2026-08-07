@@ -219,7 +219,17 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 NullIfEmpty(task.SafeMessage),
                 ToDateTimeOffset(task.CreatedAt),
                 ToDateTimeOffset(task.UpdatedAt),
-                task.Steps.Select(ToStep).ToArray());
+                task.Steps.Select(ToStep).ToArray(),
+                task.SchemaVersion,
+                NullIfEmpty(task.ActorId),
+                NullIfEmpty(task.PlanId),
+                task.PlanRevision,
+                NullIfEmpty(task.Title),
+                task.Gate == null
+                    ? null
+                    : new NyxIdChatConversationPlanGateSnapshot(
+                        task.Gate.Mode,
+                        NullIfEmpty(task.Gate.Reason)));
 
     private static NyxIdChatConversationStepSnapshot ToStep(
         NyxIdChatConversationStepDocument step) =>
@@ -242,7 +252,60 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 step.AvailableActions?.Skip ?? false,
                 step.AvailableActions?.Stop ?? false),
             ToDateTimeOffset(step.UpdatedAt),
-            ToOperation(step.Operation));
+            ToOperation(step.Operation),
+            ToSource(step.Source),
+            NullIfEmpty(step.AddedBy),
+            step.DependsOn.ToArray(),
+            step.Estimate == null
+                ? null
+                : new NyxIdChatConversationStepEstimateSnapshot(
+                    step.Estimate.Kind,
+                    step.Estimate.Seconds),
+            step.Substeps.Select(static substep =>
+                new NyxIdChatConversationSubstepSnapshot(
+                    substep.SubstepId,
+                    substep.Title,
+                    substep.Status)).ToArray());
+
+    private static NyxIdChatConversationStepSourceSnapshot? ToSource(
+        NyxIdChatConversationStepSourceDocument? source) =>
+        source?.SourceCase switch
+        {
+            NyxIdChatConversationStepSourceDocument.SourceOneofCase.Llm =>
+                new NyxIdChatConversationStepSourceSnapshot(
+                    Llm: new NyxIdChatLLMStepSourceSnapshot(source.Llm.Model)),
+            NyxIdChatConversationStepSourceDocument.SourceOneofCase.Tool =>
+                new NyxIdChatConversationStepSourceSnapshot(
+                    Tool: new NyxIdChatToolStepSourceSnapshot(
+                        source.Tool.ToolName,
+                        NullIfEmpty(source.Tool.ServiceSlug),
+                        NullIfEmpty(source.Tool.ServiceId),
+                        source.Tool.HasReadinessCapabilityId
+                            ? NullIfEmpty(source.Tool.ReadinessCapabilityId)
+                            : null)),
+            NyxIdChatConversationStepSourceDocument.SourceOneofCase.BrowserAction =>
+                new NyxIdChatConversationStepSourceSnapshot(
+                    BrowserAction: new NyxIdChatBrowserActionStepSourceSnapshot(
+                        source.BrowserAction.Action,
+                        NullIfEmpty(source.BrowserAction.ActionRequestId))),
+            NyxIdChatConversationStepSourceDocument.SourceOneofCase.Postcondition =>
+                new NyxIdChatConversationStepSourceSnapshot(
+                    Postcondition: new NyxIdChatPostconditionStepSourceSnapshot(
+                        NullIfEmpty(source.Postcondition.ActionRequestId),
+                        NullIfEmpty(source.Postcondition.Check))),
+            NyxIdChatConversationStepSourceDocument.SourceOneofCase.Input =>
+                new NyxIdChatConversationStepSourceSnapshot(
+                    Input: new NyxIdChatInputStepSourceSnapshot(
+                        NullIfEmpty(source.Input.RequestId))),
+            NyxIdChatConversationStepSourceDocument.SourceOneofCase.Approval =>
+                new NyxIdChatConversationStepSourceSnapshot(
+                    Approval: new NyxIdChatApprovalStepSourceSnapshot(
+                        NullIfEmpty(source.Approval.ApprovalRequestId))),
+            NyxIdChatConversationStepSourceDocument.SourceOneofCase.Web =>
+                new NyxIdChatConversationStepSourceSnapshot(
+                    Web: new NyxIdChatWebStepSourceSnapshot()),
+            _ => null,
+        };
 
     private static NyxIdChatConversationOperationSnapshot? ToOperation(
         NyxIdChatConversationOperationDocument? operation) =>

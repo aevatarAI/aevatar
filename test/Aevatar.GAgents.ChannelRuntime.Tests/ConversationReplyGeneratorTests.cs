@@ -897,18 +897,27 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task BuildStepPlanAsync_InNyxIdChatTurn_GatesLegacyHumanSessionTools()
+    public async Task BuildStepPlanAsync_InNyxIdChatTurn_UsesPinnedSourceAndAllowsHumanSessionReads()
     {
-        var toolSource = new StubToolSource(
+        var registeredSource = new StubToolSource(
+            new StubTool("newly_registered_tool"));
+        var pinnedSource = new StubToolSource(
             new HumanSessionStubTool("nyxid_services"),
             new HumanSessionStubTool("nyxid_api_keys"),
             new StubTool("nyxid_require_service"));
+        var inputSource = new StubToolSource(new StubTool("ask_user"));
         IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
             new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
             BuiltInPromptFloorProvider,
-            toolSources: [toolSource]);
+            toolSources: [registeredSource],
+            nyxIdChatToolSources: [pinnedSource, inputSource]);
         var toolContext = AgentToolExecutionContext.Empty with
         {
+            Credentials = new AgentToolCredentials(
+                "runtime-token",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
             Channel = new AgentToolChannelContext(
                 NyxIdChatServiceDefaults.ServiceId,
                 null,
@@ -933,8 +942,51 @@ public sealed class ConversationReplyGeneratorTests
             CancellationToken.None);
 
         var toolNames = OfferedToolNames(plan);
-        toolNames.Should().Contain("nyxid_require_service");
-        toolNames.Should().NotContain(["nyxid_services", "nyxid_api_keys"]);
+        toolNames.Should().BeEquivalentTo(
+            "nyxid_services",
+            "nyxid_api_keys",
+            "nyxid_require_service",
+            "ask_user");
+        toolNames.Should().NotContain("newly_registered_tool");
+    }
+
+    [Fact]
+    public async Task BuildStepPlanAsync_InNyxIdChatTurnWithoutHumanSession_HidesPinnedReads()
+    {
+        var pinnedSource = new StubToolSource(
+            new HumanSessionStubTool("nyxid_status"),
+            new StubTool("nyxid_require_service"));
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
+            BuiltInPromptFloorProvider,
+            toolSources: [new StubToolSource(new StubTool("newly_registered_tool"))],
+            nyxIdChatToolSources: [pinnedSource]);
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                null,
+                "scope-alpha",
+                null,
+                null),
+        };
+
+        var plan = await generator.BuildStepPlanAsync(
+            new ChatActivity
+            {
+                Id = "turn-no-human-session",
+                Conversation = new ConversationReference { CanonicalKey = "nyxid-chat-alpha" },
+                Content = new MessageContent { Text = "查看状态" },
+            },
+            new Dictionary<string, string>(),
+            Control(),
+            toolContext,
+            priorHistory: null,
+            attachmentContext: null,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        OfferedToolNames(plan).Should().ContainSingle().Which.Should().Be("nyxid_require_service");
     }
 
     [Fact]
@@ -947,7 +999,8 @@ public sealed class ConversationReplyGeneratorTests
         IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
             new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
             BuiltInPromptFloorProvider,
-            toolSources: [new StubToolSource(rawProxy, requireService, typedInventory)]);
+            toolSources: [new StubToolSource(rawProxy)],
+            nyxIdChatToolSources: [new StubToolSource(rawProxy, requireService, typedInventory)]);
         var nyxIdChatContext = AgentToolExecutionContext.Empty with
         {
             Channel = new AgentToolChannelContext(
@@ -2149,7 +2202,7 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     // Tools whose outcome lands off-chat (e.g. aevatar_provision_workflow_schedule, which
-    // delivers its scheduled runs to /workflow/observatory, never a chat/bot) self-declare the
+    // delivers its scheduled runs to /admin#/observatory, never a chat/bot) self-declare the
     // generic AgentToolCapabilities.ExcludeFromDirectChannelChat marker. The channel/Lark
     // conversation agent must hide ANY tool carrying that capability — keyed off the capability,
     // not the tool name — otherwise it could route a Lark user's request away from their chat.
@@ -2251,7 +2304,7 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WhenUseSkillMountsWorkflows_ShouldUseRegisteredScopedToolWithoutApprovalDenial()
+    public async Task GenerateReplyAsync_WhenUseSkillPreviewsWorkflowMount_ShouldRunReadOnlyWithoutApprovalDenial()
     {
         var catalog = new LocalSkillCatalog();
         catalog.Register(new SkillDefinition
@@ -2269,14 +2322,14 @@ public sealed class ConversationReplyGeneratorTests
                 },
             ],
         });
-        var commandPort = new RecordingScopeWorkflowCommandPort();
+        var mountPort = new RecordingSkillWorkflowMountPort();
         var providerFactory = new UseSkillMountWorkflowProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
             BuiltInPromptFloorProvider,
             toolSources:
             [
-                new SingleToolSource(new UseSkillTool(catalog, scopeWorkflowCommandPort: commandPort)),
+                new SingleToolSource(new UseSkillTool(catalog, workflowMountPort: mountPort)),
             ],
             localSkillCatalog: catalog,
             toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort());
@@ -2293,6 +2346,11 @@ public sealed class ConversationReplyGeneratorTests
             AgentToolExecutionContext.Empty with
             {
                 Caller = new AgentToolCallerContext("scope-alpha", "owner-alpha", null),
+                Credentials = new AgentToolCredentials(
+                    "token-alpha",
+                    null,
+                    null,
+                    AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
                 NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
                     "nyxid",
                     "tenant-alpha",
@@ -2302,15 +2360,15 @@ public sealed class ConversationReplyGeneratorTests
             CancellationToken.None);
 
         reply.Text.Should().Contain("## Mounted Workflows");
-        reply.Text.Should().Contain("\"accepted\": true");
+        reply.Text.Should().Contain("\"status\": \"confirmation_required\"");
         reply.Text.Should().NotContain("approval-gated tools cannot run here");
-        reply.Text.Should().NotContain("scope workflow command port is not available in this host");
-        commandPort.Requests.Should().ContainSingle()
-            .Which.Should().Match<ScopeWorkflowUpsertRequest>(request =>
+        reply.Text.Should().NotContain("Workflow mounting is not available in this host");
+        mountPort.Requests.Should().ContainSingle()
+            .Which.Should().Match<SkillWorkflowMountRequest>(request =>
                 request.ScopeId == "scope-alpha" &&
-                request.WorkflowId == "demo_dinner" &&
-                request.CapabilityAdmission != null &&
-                request.CapabilityAdmission.CallerId == "nyx-user-alpha");
+                request.CallerId == "nyx-user-alpha" &&
+                request.Workflows.Count == 1 &&
+                request.Workflows[0].WorkflowId == "demo_dinner");
     }
 
     [Fact]
@@ -4239,26 +4297,33 @@ public sealed class ConversationReplyGeneratorTests
             Task.FromResult(result);
     }
 
-    private sealed class RecordingScopeWorkflowCommandPort : IScopeWorkflowCommandPort
+    private sealed class RecordingSkillWorkflowMountPort : ISkillWorkflowMountPort
     {
-        public List<ScopeWorkflowUpsertRequest> Requests { get; } = [];
+        public List<SkillWorkflowMountRequest> Requests { get; } = [];
 
-        public Task<ScopeWorkflowUpsertResult> UpsertAsync(
-            ScopeWorkflowUpsertRequest request,
+        public Task<SkillWorkflowMountResult> MountAsync(
+            SkillWorkflowMountRequest request,
             CancellationToken ct = default)
         {
             Requests.Add(request);
-            return Task.FromResult(new ScopeWorkflowUpsertResult(
-                request.ScopeId,
-                request.WorkflowId,
-                $"service-key-{request.WorkflowId}",
-                $"revision-{request.WorkflowId}",
-                "definition-prefix",
-                $"actor-{request.WorkflowId}",
-                $"deployment-{request.WorkflowId}",
-                DateTimeOffset.UnixEpoch,
-                [new ScopeWorkflowCommandAcceptedHandle("create_revision", "target-actor", "cmd-1", "corr-1")],
-                $"/api/scopes/{request.ScopeId}/workflows/{request.WorkflowId}"));
+            var confirmation = new SkillWorkflowMountConfirmation(
+                "demo_dinner",
+                "rev-demo-dinner",
+                "sha256:demo-dinner",
+                []);
+            return Task.FromResult(new SkillWorkflowMountResult(
+                "confirmation_required",
+                false,
+                [],
+                "Review before mounting.",
+                [
+                    new SkillWorkflowMountPreview(
+                        confirmation.WorkflowId,
+                        confirmation.RevisionId,
+                        confirmation.WorkflowBundleDigest,
+                        [],
+                        confirmation),
+                ]));
         }
     }
 

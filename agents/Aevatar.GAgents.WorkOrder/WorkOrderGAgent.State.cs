@@ -6,8 +6,9 @@ namespace Aevatar.GAgents.WorkOrder;
 
 public sealed partial class WorkOrderGAgent
 {
-    protected override WorkOrderState TransitionState(WorkOrderState current, IMessage evt) =>
-        StateTransitionMatcher
+    protected override WorkOrderState TransitionState(WorkOrderState current, IMessage evt)
+    {
+        var next = StateTransitionMatcher
             .Match(current, evt)
             .On<WorkOrderCreatedEvent>(ApplyCreated)
             .On<WorkOrderReadyEvent>(ApplyReady)
@@ -22,6 +23,11 @@ public sealed partial class WorkOrderGAgent
             .On<WorkOrderRunOutcomeObservedEvent>(ApplyRunOutcome)
             .On<WorkOrderLateRunOutcomeObservedEvent>(ApplyLateRunOutcome)
             .OrCurrent();
+
+        if (!ReferenceEquals(next, current))
+            ApplyAvailableActions(next);
+        return next;
+    }
 
     private static WorkOrderState ApplyCreated(WorkOrderState _, WorkOrderCreatedEvent evt)
     {
@@ -202,5 +208,17 @@ public sealed partial class WorkOrderGAgent
         state.ExecutionRetryAttempt = 0;
         state.ExecutionRetryCallbackId = string.Empty;
         state.ExecutionRetryAtUtc = null;
+    }
+
+    private static void ApplyAvailableActions(WorkOrderState state)
+    {
+        var canManageBeforeDispatch = state.LifecycleStatus is
+            WorkOrderLifecycleStatus.Accepted or WorkOrderLifecycleStatus.Ready;
+        state.AvailableActions = new WorkOrderAvailableActions
+        {
+            CanReassign = canManageBeforeDispatch,
+            CanDispatch = state.LifecycleStatus == WorkOrderLifecycleStatus.Ready,
+            CanCancel = canManageBeforeDispatch,
+        };
     }
 }

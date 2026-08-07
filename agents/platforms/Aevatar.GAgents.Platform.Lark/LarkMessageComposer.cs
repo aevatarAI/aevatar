@@ -35,8 +35,15 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         ArgumentNullException.ThrowIfNull(intent);
         ArgumentNullException.ThrowIfNull(context);
 
-        var effectiveText = Truncate(intent.Text, context.Capabilities?.MaxMessageLength ?? DefaultCapabilities.MaxMessageLength);
-        if (intent.Actions.Count == 0 && intent.Cards.Count == 0)
+        var maxMessageLength = context.Capabilities?.MaxMessageLength ?? DefaultCapabilities.MaxMessageLength;
+        var jsonPresentation = LarkJsonTableFormatter.Parse(intent.Text);
+        var effectiveText = Truncate(
+            jsonPresentation.HasTables ? jsonPresentation.RenderKeyValueText() : intent.Text,
+            maxMessageLength);
+        var effectiveProse = Truncate(
+            jsonPresentation.HasTables ? jsonPresentation.RenderProse() : intent.Text,
+            maxMessageLength);
+        if (!jsonPresentation.HasTables && intent.Actions.Count == 0 && intent.Cards.Count == 0)
         {
             return new LarkOutboundMessage(
                 MessageType: "text",
@@ -45,14 +52,23 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
                 IsInteractive: false);
         }
 
-        var headerTitle = ResolveHeaderTitle(intent, effectiveText);
+        var headerTitle = ResolveHeaderTitle(
+            intent,
+            jsonPresentation.HasTables && string.IsNullOrWhiteSpace(effectiveProse)
+                ? "Result"
+                : effectiveProse);
         var template = ResolveHeaderTemplate(intent);
         var formMode = RequiresFormWrapping(intent);
 
         if (formMode)
         {
             var formElements = new List<object>();
-            var leading = BuildLeadingMarkdown(effectiveText, intent);
+            if (jsonPresentation.HasTables)
+                AppendJsonPresentationElements(formElements, jsonPresentation, maxMessageLength);
+
+            var leading = BuildLeadingMarkdown(
+                jsonPresentation.HasTables ? string.Empty : effectiveText,
+                intent);
             if (leading is not null)
                 formElements.Add(leading);
 
@@ -96,7 +112,11 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         }
 
         var elements = new List<object>();
-        if (!string.IsNullOrWhiteSpace(effectiveText))
+        if (jsonPresentation.HasTables)
+        {
+            AppendJsonPresentationElements(elements, jsonPresentation, maxMessageLength);
+        }
+        else if (!string.IsNullOrWhiteSpace(effectiveText))
         {
             elements.Add(new
             {
@@ -239,6 +259,70 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             tag = "markdown",
             content = string.Join("\n\n", parts),
         };
+    }
+
+    private static void AppendJsonPresentationElements(
+        ICollection<object> elements,
+        LarkJsonTablePresentation presentation,
+        int maxTextLength)
+    {
+        var remainingTextLength = maxTextLength <= 0 ? int.MaxValue : maxTextLength;
+        var tableIndex = 0;
+        foreach (var part in presentation.Parts)
+        {
+            switch (part)
+            {
+                case LarkJsonTextPart textPart:
+                {
+                    if (remainingTextLength <= 0 || string.IsNullOrWhiteSpace(textPart.Text))
+                        break;
+
+                    var content = Truncate(textPart.Text.Trim(), remainingTextLength);
+                    if (string.IsNullOrWhiteSpace(content))
+                        break;
+
+                    elements.Add(new
+                    {
+                        tag = "markdown",
+                        content,
+                    });
+                    remainingTextLength -= new StringInfo(content).LengthInTextElements;
+                    break;
+                }
+                case LarkJsonTablePart { NativeEligible: true } tablePart:
+                {
+                    if (!string.IsNullOrWhiteSpace(tablePart.Table.Title))
+                    {
+                        elements.Add(new
+                        {
+                            tag = "markdown",
+                            content = $"**{tablePart.Table.Title.Trim()}**",
+                        });
+                    }
+
+                    elements.Add(tablePart.Table.BuildNativeElement($"json_table_{tableIndex}"));
+                    tableIndex++;
+                    break;
+                }
+                case LarkJsonTablePart tablePart:
+                {
+                    if (remainingTextLength <= 0)
+                        break;
+
+                    var content = Truncate(tablePart.Table.RenderKeyValueText(), remainingTextLength);
+                    if (string.IsNullOrWhiteSpace(content))
+                        break;
+
+                    elements.Add(new
+                    {
+                        tag = "markdown",
+                        content,
+                    });
+                    remainingTextLength -= new StringInfo(content).LengthInTextElements;
+                    break;
+                }
+            }
+        }
     }
 
     private static IEnumerable<object> BuildFormChildElements(ActionElement action)
@@ -403,13 +487,14 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         CopyWorkflowResumePayload(action.WorkflowResume, map);
         CopyLlmSelectionPayload(action.LlmSelection, map);
         CopyNyxIdApprovalPayload(action.NyxIdApproval, map);
+        CopyAgentRunApprovalPayload(action.AgentRunApproval, map);
 
         foreach (var argument in action.Arguments)
         {
             if (string.Equals(argument.Key, "action_id", StringComparison.Ordinal) ||
                 string.Equals(argument.Key, "value", StringComparison.Ordinal) ||
                 string.Equals(argument.Key, "action_kind", StringComparison.Ordinal) ||
-                IsReservedNyxIdApprovalArgument(action, argument.Key))
+                IsReservedTypedApprovalArgument(action, argument.Key))
                 continue;
 
             map[argument.Key] = CoerceArgumentValue(argument.Value);
@@ -418,10 +503,25 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         return map;
     }
 
-    private static bool IsReservedNyxIdApprovalArgument(ActionElement action, string key) =>
-        action.NyxIdApproval is not null &&
-        (string.Equals(key, "nyxid_approval_request_id", StringComparison.Ordinal) ||
-         string.Equals(key, "nyxid_approval_approved", StringComparison.Ordinal));
+    private static bool IsReservedTypedApprovalArgument(ActionElement action, string key) =>
+        (action.WorkflowResume is not null &&
+         (string.Equals(key, "actor_id", StringComparison.Ordinal) ||
+          string.Equals(key, "run_id", StringComparison.Ordinal) ||
+          string.Equals(key, "step_id", StringComparison.Ordinal) ||
+          string.Equals(key, "approved", StringComparison.Ordinal) ||
+          string.Equals(key, "execution_id", StringComparison.Ordinal) ||
+          string.Equals(key, "tool_call_id", StringComparison.Ordinal) ||
+          string.Equals(key, "approval_request_id", StringComparison.Ordinal))) ||
+        (action.NyxIdApproval is not null &&
+         (string.Equals(key, "nyxid_approval_request_id", StringComparison.Ordinal) ||
+          string.Equals(key, "nyxid_approval_approved", StringComparison.Ordinal))) ||
+        (action.AgentRunApproval is not null &&
+         (string.Equals(key, "agent_run_id", StringComparison.Ordinal) ||
+          string.Equals(key, "agent_run_approval_request_id", StringComparison.Ordinal) ||
+          string.Equals(key, "agent_run_tool_call_id", StringComparison.Ordinal) ||
+          string.Equals(key, "agent_run_tool_name", StringComparison.Ordinal) ||
+          string.Equals(key, "agent_run_arguments_sha256", StringComparison.Ordinal) ||
+          string.Equals(key, "agent_run_approved", StringComparison.Ordinal)));
 
     private static string ToBoundaryActionKind(ActionElementKind kind) =>
         kind switch
@@ -459,6 +559,15 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             map["edited_content"] = payload.EditedContent;
         if (!string.IsNullOrWhiteSpace(payload.Feedback))
             map["feedback"] = payload.Feedback;
+        if (payload.ToolApproval is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(payload.ToolApproval.ExecutionId))
+                map["execution_id"] = payload.ToolApproval.ExecutionId;
+            if (!string.IsNullOrWhiteSpace(payload.ToolApproval.ToolCallId))
+                map["tool_call_id"] = payload.ToolApproval.ToolCallId;
+            if (!string.IsNullOrWhiteSpace(payload.ToolApproval.ApprovalRequestId))
+                map["approval_request_id"] = payload.ToolApproval.ApprovalRequestId;
+        }
     }
 
     private static void CopyLlmSelectionPayload(
@@ -496,6 +605,26 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         if (!string.IsNullOrWhiteSpace(payload.RequestId))
             map["nyxid_approval_request_id"] = payload.RequestId;
         map["nyxid_approval_approved"] = payload.Approved;
+    }
+
+    private static void CopyAgentRunApprovalPayload(
+        AgentRunApprovalActionPayload? payload,
+        IDictionary<string, object?> map)
+    {
+        if (payload is null)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(payload.RunId))
+            map["agent_run_id"] = payload.RunId;
+        if (!string.IsNullOrWhiteSpace(payload.ApprovalRequestId))
+            map["agent_run_approval_request_id"] = payload.ApprovalRequestId;
+        if (!string.IsNullOrWhiteSpace(payload.ToolCallId))
+            map["agent_run_tool_call_id"] = payload.ToolCallId;
+        if (!string.IsNullOrWhiteSpace(payload.ToolName))
+            map["agent_run_tool_name"] = payload.ToolName;
+        if (!string.IsNullOrWhiteSpace(payload.ArgumentsSha256))
+            map["agent_run_arguments_sha256"] = payload.ArgumentsSha256;
+        map["agent_run_approved"] = payload.Approved;
     }
 
     private static object? CoerceArgumentValue(string raw)

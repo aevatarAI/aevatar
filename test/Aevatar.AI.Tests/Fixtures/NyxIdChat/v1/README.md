@@ -24,3 +24,22 @@ resolution, and remove attention while the exact resumed step is running.
 Additional contract evidence:
 
 - [Aevatar issue #3154](https://github.com/aevatarAI/aevatar/issues/3154)
+
+`tool-recovery-live-frames.json` and `tool-recovery-current-states.json`
+freeze matching failed and uncertain tool-step recovery facts. The exact
+producer-authored `source.tool.readinessCapabilityId` converges with service
+identity, status, external-effect evidence, and actor-computed available
+actions. These fixtures intentionally contain no credentials, URLs, raw tool
+arguments, or results.
+
+Additional recovery contract evidence:
+
+- [Aevatar issue #3152](https://github.com/aevatarAI/aevatar/issues/3152)
+- [NyxID issue #1307](https://github.com/ChronoAIProject/NyxID/issues/1307)
+
+`task-plan-live-frames.json` and `task-plan-current-state.json` freeze the full
+TaskPlan v1 shape. The snapshot frame and current-state `activeTask` are
+field-for-field identical, while the step-changed frame carries the complete
+`taskId / planRevision / step / changeKind` envelope. The fixture covers every
+v1 step source, including producer-authored tool readiness, approval, reserved
+web, and the postcondition `check` contract.

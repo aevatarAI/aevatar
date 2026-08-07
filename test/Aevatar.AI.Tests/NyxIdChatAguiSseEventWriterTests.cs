@@ -60,6 +60,7 @@ public class NyxIdChatAguiSseEventWriterTests
                         ConnectedServiceId = "connected-service-github",
                         ServiceSlug = "api-github-work",
                         CatalogServiceSlug = "github",
+                        ReadinessCapabilityId = "api-github",
                         ConnectionLabel = "Work GitHub",
                         ConnectorDisplayName = "GitHub",
                         OperationId = "get_repository",
@@ -88,6 +89,8 @@ public class NyxIdChatAguiSseEventWriterTests
         sourceRef.GetProperty("type").GetString().Should().Be("nyxIdOperation");
         sourceRef.GetProperty("nyxIdOperation").GetProperty("connectedServiceId").GetString().Should()
             .Be("connected-service-github");
+        sourceRef.GetProperty("nyxIdOperation").GetProperty("readinessCapabilityId").GetString()
+            .Should().Be("api-github");
         frames[1].GetProperty("type").GetString().Should().Be("TOOL_CALL_END");
         frames[1].GetProperty("toolCallEnd").GetProperty("toolCallId").GetString().Should().Be("call-1");
         frames[1].GetProperty("toolCallEnd").GetProperty("result").GetString().Should().Be("done");
@@ -171,6 +174,60 @@ public class NyxIdChatAguiSseEventWriterTests
     public async Task WriteAsync_ShouldMapTypedTaskSnapshotCustomEventToStableJson()
     {
         var sink = new SseFrameSink();
+        var taskStep = new NyxIdChatTaskStepState
+        {
+            StepId = "step-alpha",
+            Order = 1,
+            Kind = NyxIdChatStepKind.Tool,
+            Status = NyxIdChatStepStatus.Failed,
+            Required = true,
+            Description = "Update the repository.",
+            ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+            AddedBy = NyxIdChatStepAddedBy.Replan,
+            DependsOn = { "step-plan" },
+            Estimate = new NyxIdChatStepEstimate
+            {
+                Kind = NyxIdChatStepEstimateKind.Duration,
+                Seconds = 30,
+            },
+            Substeps =
+            {
+                new NyxIdChatSubstepState
+                {
+                    SubstepId = "substep-alpha",
+                    Title = "Validate the target",
+                    Status = NyxIdChatSubstepStatus.Done,
+                },
+            },
+            Source = new NyxIdChatStepSource
+            {
+                Tool = new NyxIdChatToolStepSource
+                {
+                    ToolName = "repository_update",
+                    ServiceId = "connected-service-alpha",
+                    ServiceSlug = "service-slug-alpha",
+                    ReadinessCapabilityId = "readiness-capability-alpha",
+                },
+            },
+            AvailableActions = new NyxIdChatAvailableActions
+            {
+                Retry = true,
+            },
+            Operation = new NyxIdChatOperationState
+            {
+                Key = new NyxIdChatOperationKey
+                {
+                    ConversationActorId = "conversation-alpha",
+                    TurnId = "turn-alpha",
+                    TaskId = "task-alpha",
+                    StepId = "step-alpha",
+                    OperationId = "operation-alpha",
+                    OperationGeneration = 1,
+                },
+                Kind = NyxIdChatStepKind.Tool,
+                Phase = NyxIdChatOperationPhase.Failed,
+            },
+        };
         var task = new NyxIdChatTaskState
         {
             TaskId = "task-alpha",
@@ -178,30 +235,36 @@ public class NyxIdChatAguiSseEventWriterTests
             Status = NyxIdChatTaskStatus.Active,
             ActiveStepId = "step-alpha",
             ActiveOperationId = "operation-alpha",
+            SchemaVersion = 4,
+            ActorId = "conversation-alpha",
+            PlanId = "plan-alpha",
+            PlanRevision = 2,
+            Title = "Update the repository safely",
+            Gate = new NyxIdChatPlanGate
+            {
+                Mode = NyxIdChatPlanGateMode.Confirm,
+                Reason = "The plan contains an effect-capable operation.",
+            },
             Steps =
             {
+                taskStep,
                 new NyxIdChatTaskStepState
                 {
-                    StepId = "step-alpha",
-                    Order = 1,
-                    Kind = NyxIdChatStepKind.Tool,
-                    Status = NyxIdChatStepStatus.Running,
+                    StepId = "step-postcondition-alpha",
+                    Order = 2,
+                    Kind = NyxIdChatStepKind.Postcondition,
+                    Status = NyxIdChatStepStatus.Done,
                     Required = true,
-                    ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
-                    Operation = new NyxIdChatOperationState
+                    Description = "Verify the connected service.",
+                    Source = new NyxIdChatStepSource
                     {
-                        Key = new NyxIdChatOperationKey
+                        Postcondition = new NyxIdChatPostconditionStepSource
                         {
-                            ConversationActorId = "conversation-alpha",
-                            TurnId = "turn-alpha",
-                            TaskId = "task-alpha",
-                            StepId = "step-alpha",
-                            OperationId = "operation-alpha",
-                            OperationGeneration = 1,
+                            ActionRequestId = "action-alpha",
+                            Check = "service.connected",
                         },
-                        Kind = NyxIdChatStepKind.Tool,
-                        Phase = NyxIdChatOperationPhase.Requested,
                     },
+                    ExternalEffect = NyxIdChatEffectEvidence.Confirmed,
                 },
             },
         };
@@ -215,8 +278,25 @@ public class NyxIdChatAguiSseEventWriterTests
                 Payload = Any.Pack(task),
             },
         }, "turn-alpha");
+        await sink.WriteAsync(new AGUIEvent
+        {
+            Sequence = 17,
+            Custom = new CustomEvent
+            {
+                Name = "nyxid.task.step.changed",
+                Payload = Any.Pack(new NyxIdChatTaskStepChanged
+                {
+                    TaskId = task.TaskId,
+                    PlanRevision = task.PlanRevision,
+                    Step = taskStep,
+                    ChangeKind = NyxIdChatStepChangeKind.Status,
+                }),
+            },
+        }, "turn-alpha");
 
-        var frame = sink.ReadFrames().Should().ContainSingle().Which;
+        var frames = sink.ReadFrames();
+        frames.Should().HaveCount(2);
+        var frame = frames[0];
         frame.GetProperty("type").GetString().Should().Be("CUSTOM");
         frame.GetProperty("sequence").GetInt64().Should().Be(17);
         var custom = frame.GetProperty("custom");
@@ -225,11 +305,34 @@ public class NyxIdChatAguiSseEventWriterTests
         payload.GetProperty("taskId").GetString().Should().Be("task-alpha");
         payload.GetProperty("turnId").GetString().Should().Be("turn-alpha");
         payload.GetProperty("status").GetString().Should().Be("active");
+        payload.GetProperty("planId").GetString().Should().Be("plan-alpha");
+        payload.GetProperty("planRevision").GetInt32().Should().Be(2);
+        payload.GetProperty("gate").GetProperty("mode").GetString().Should().Be("confirm");
         var step = payload.GetProperty("steps")[0];
         step.GetProperty("kind").GetString().Should().Be("tool");
-        step.GetProperty("status").GetString().Should().Be("running");
-        step.GetProperty("externalEffect").GetString().Should().Be("not_started");
-        step.GetProperty("operation").GetProperty("phase").GetString().Should().Be("requested");
+        step.GetProperty("status").GetString().Should().Be("failed");
+        step.GetProperty("externalEffect").GetString().Should().Be("not_applied");
+        step.GetProperty("addedBy").GetString().Should().Be("replan");
+        step.GetProperty("dependsOn")[0].GetString().Should().Be("step-plan");
+        step.GetProperty("estimate").GetProperty("seconds").GetInt32().Should().Be(30);
+        step.GetProperty("substeps")[0].GetProperty("status").GetString().Should().Be("done");
+        step.GetProperty("availableActions").GetProperty("retry").GetBoolean().Should().BeTrue();
+        step.GetProperty("operation").GetProperty("phase").GetString().Should().Be("failed");
+        step.GetProperty("source").GetProperty("tool")
+            .GetProperty("readinessCapabilityId").GetString().Should()
+            .Be("readiness-capability-alpha");
+        payload.GetProperty("steps")[1].GetProperty("source").GetProperty("postcondition")
+            .GetProperty("check").GetString().Should().Be("service.connected");
+        payload.GetRawText().Should().NotContain("postconditionKind");
+        var changed = frames[1].GetProperty("custom");
+        changed.GetProperty("name").GetString().Should().Be("nyxid.task.step.changed");
+        var changedPayload = changed.GetProperty("payload");
+        changedPayload.GetProperty("taskId").GetString().Should().Be("task-alpha");
+        changedPayload.GetProperty("planRevision").GetInt32().Should().Be(2);
+        changedPayload.GetProperty("changeKind").GetString().Should().Be("status");
+        changedPayload.GetProperty("step").GetProperty("source").GetProperty("tool")
+            .GetProperty("readinessCapabilityId").GetString().Should()
+            .Be("readiness-capability-alpha");
         frame.GetRawText().Should().NotContain("@type");
     }
 

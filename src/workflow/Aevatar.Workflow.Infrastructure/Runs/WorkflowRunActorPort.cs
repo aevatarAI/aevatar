@@ -762,8 +762,10 @@ internal sealed class WorkflowRunActorPort :
             return;
         }
 
-        throw new InvalidOperationException(
-            $"Workflow definition actor '{actorId}' expected execution mode does not match the requested definition.");
+        throw new WorkflowExpectedExecutionModeCompatibilityException(
+            actorId,
+            binding.ExpectedExecutionMode,
+            definition.ExpectedExecutionMode);
     }
 
     private static void EnsureScopeCompatibility(

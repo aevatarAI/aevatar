@@ -73,6 +73,90 @@ release_distributed_smoke_lock() {
   DISTRIBUTED_SMOKE_LOCK_ACQUIRED=0
 }
 
+create_synthetic_secret_store_keyring() {
+  local keyring_path="$1"
+
+  python3 - "${keyring_path}" <<'PY'
+import base64
+import json
+import os
+import secrets
+import sys
+
+path = sys.argv[1]
+document = {
+    "activeKeyId": "ci-key-1",
+    "keys": {
+        "ci-key-1": base64.b64encode(secrets.token_bytes(32)).decode("ascii"),
+    },
+    "fingerprintKey": base64.b64encode(secrets.token_bytes(32)).decode("ascii"),
+}
+
+descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+    json.dump(document, handle, indent=2)
+    handle.write("\n")
+PY
+}
+
+create_synthetic_scope_service_token() {
+  local generated
+
+  generated="$(python3 - <<'PY'
+import base64
+import hashlib
+import hmac
+import json
+import secrets
+import time
+
+issuer = "urn:aevatar:distributed-smoke"
+audience = "urn:aevatar:distributed-smoke-services"
+kid = "distributed-smoke-scope-key"
+key = secrets.token_bytes(32)
+now = int(time.time())
+
+def base64url(value):
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+header = base64url(json.dumps(
+    {"alg": "HS256", "kid": kid, "typ": "JWT"},
+    separators=(",", ":"),
+).encode("utf-8"))
+payload = base64url(json.dumps(
+    {
+        "iss": issuer,
+        "aud": audience,
+        "iat": now,
+        "nbf": now - 5,
+        "exp": now + 7200,
+        "scope_id": "distributed-smoke",
+        "aevatar.scope_service": "true",
+        "aevatar.service_id": "distributed-smoke",
+        "aevatar.service_key": "distributed-smoke:default:default:distributed-smoke",
+    },
+    separators=(",", ":"),
+).encode("utf-8"))
+signing_input = f"{header}.{payload}".encode("ascii")
+signature = base64url(hmac.new(key, signing_input, hashlib.sha256).digest())
+
+print(base64.b64encode(key).decode("ascii"))
+print(f"{header}.{payload}.{signature}")
+PY
+)"
+
+  DISTRIBUTED_SMOKE_SCOPE_TOKEN_ISSUER="urn:aevatar:distributed-smoke"
+  DISTRIBUTED_SMOKE_SCOPE_TOKEN_AUDIENCE="urn:aevatar:distributed-smoke-services"
+  DISTRIBUTED_SMOKE_SCOPE_TOKEN_KID="distributed-smoke-scope-key"
+  DISTRIBUTED_SMOKE_SCOPE_TOKEN_KEY_BASE64="$(printf '%s\n' "${generated}" | sed -n '1p')"
+  DISTRIBUTED_SMOKE_BEARER_TOKEN="$(printf '%s\n' "${generated}" | sed -n '2p')"
+
+  if [[ -z "${DISTRIBUTED_SMOKE_SCOPE_TOKEN_KEY_BASE64}" || -z "${DISTRIBUTED_SMOKE_BEARER_TOKEN}" ]]; then
+    echo "Failed to create synthetic scope service token." >&2
+    return 1
+  fi
+}
+
 _distributed_smoke_can_bind_local_port() {
   local port="$1"
   python3 - "${port}" <<'PY'

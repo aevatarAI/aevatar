@@ -120,6 +120,7 @@ public sealed class WorkflowDocumentNormalizer
                         .ToList(),
                     BodyMode = capability.NyxIdRequest.BodyMode.Trim(),
                     ResponseMode = capability.NyxIdRequest.ResponseMode.Trim(),
+                    Risk = capability.NyxIdRequest.Risk.Trim(),
                 },
         };
     }

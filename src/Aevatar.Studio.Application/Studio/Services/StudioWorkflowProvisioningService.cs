@@ -7,29 +7,33 @@ using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
-using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
+using Google.Protobuf;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
 /// <summary>
 /// One-call workflow provisioning facade (C1). Composes the existing member-first
-/// services — it reinvents nothing: create a member via
+/// services: create a member via
 /// <see cref="IStudioMemberService.CreateAsync"/>, bind the inline workflow YAML
-/// via <see cref="IStudioMemberWorkflowBindingPort"/>, then create a
-/// Team-owned workflow schedule via <see cref="IStudioMemberWorkflowSchedulePort"/>
-/// that produces the run under the caller scope.
+/// via <see cref="IStudioMemberWorkflowBindingPort"/>, then submit a secret-free
+/// provisioning intent through <see cref="IStudioWorkflowScheduleProvisioningCommandPort"/>.
+/// The member actor waits for that exact binding revision before a background
+/// executor creates or replaces the Team-owned workflow schedule.
 ///
 /// The flow is deliberately NON-BLOCKING. Binding a workflow member is an
 /// asynchronous pipeline that can take minutes, so a synchronous handler that
 /// polled the bind to completion would exhaust the gateway timeout and never
-/// invoke. Instead the run is produced by a scheduled-dispatch:
+/// invoke. Instead the actor-owned continuation produces a scheduled-dispatch:
 /// <list type="bullet">
-///   <item>it schedules the requested run without polling the bind; binding-terminal
-///   readiness and reconciliation when a one-shot fires before the deterministic
-///   <c>member-{memberId}</c> service is callable remain tracked by issue #2679;</item>
+///   <item>it observes the committed binding revision before scheduling, so a
+///   one-shot timestamp is resolved only after the target service is ready;</item>
+///   <item>projection lag returns a retryable typed result and is reconciled by
+///   durable self-timeouts without re-admitting a new workflow revision;</item>
 ///   <item>because the schedule kind is <see cref="ScheduledDispatchScheduleKind.Workflow"/>,
 ///   the dispatch projects a freshly re-minted caller NyxID token onto the run's
 ///   <c>ChatRequestEvent</c> (<c>LlmControl.SenderNyxIdAccessToken</c>), so the
@@ -37,59 +41,60 @@ namespace Aevatar.Studio.Application.Studio.Services;
 ///   <c>IServiceInvocationPort.InvokeAsync</c> could not provide.</item>
 /// </list>
 ///
-/// The schedule carries EXACTLY ONE credential source, chosen by
-/// <see cref="BuildScheduleAuth"/> to stay valid for the schedule's whole
-/// lifetime: a re-mintable NyxID subject reference. The dispatch exchanges it for
-/// a fresh token on every fire, past session-token expiry. The scope id and the
-/// caller credential are always input parameters — the service holds no
-/// HttpContext and no infrastructure dependency, only application ports.
+/// The durable intent carries a verified NyxID binding reference, never a raw
+/// bearer token. The background schedule port uses that reference to issue a
+/// short-lived provisioning token and materialize the schedule's dedicated
+/// credential. The scope id and caller identity are always input parameters;
+/// this service holds no HttpContext and depends only on application ports.
 ///
 /// Two invariants keep the non-blocking flow from leaking resources:
 /// <list type="bullet">
 ///   <item><b>Admit before provisioning.</b> The unified external-capability
 ///   admission service parses the workflow and evaluates readiness before any
 ///   mutation. Invalid or non-ready workflows provision NOTHING — no member, no
-///   schedule — so an authoring agent can repair the YAML and retry without
+///   schedule provisioning intent — so an authoring agent can repair the YAML and retry without
 ///   leaving garbage behind.</item>
 ///   <item><b>Retries converge.</b> One (scope, display name) pair owns exactly
 ///   one member, one workflow id, and one schedule inside one target Team: the
 ///   member id is derived deterministically from that ownership tuple (an
-///   existing member is reused, never
-///   re-created), and the schedule uses a deterministic id via
-///   <see cref="IScheduledDispatchApplicationService.EnsureAsync"/> (idempotent
-///   upsert). Re-provisioning the same display name re-binds and re-schedules the
-///   same resources instead of accumulating a new member + enabled schedule per
-///   attempt. That reuse is also the documented ownership rule: a display name
-///   identifies ONE automation, and re-provisioning it replaces that member's
-///   workflow. When the pair's schedule was explicitly deleted, the schedule id
-///   advances to the next generation instead of resurrecting the tombstone (see
-///   <see cref="EnsureProvisionScheduleAsync"/>).</item>
+///   existing member is reused, never re-created), and the schedule uses a
+///   deterministic id. Re-provisioning the same display name replaces the live
+///   automation through the credential replacement protocol instead of trying to
+///   create a second active credential. That reuse is also the documented
+///   ownership rule: a display name identifies ONE automation, and
+///   re-provisioning it replaces that member's workflow. When the pair's schedule
+///   was explicitly deleted, the schedule id advances to the next generation
+///   instead of resurrecting the tombstone (see
+///   the actor-owned provisioning continuation).</item>
 /// </list>
 /// </summary>
 public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvisioningService
 {
-    private const string ObservatoryPath = "/workflow/observatory";
-    private const string CredentialProvisioningKind = "dedicated_scheduled_invocation_agent_key";
+    private const string ObservatoryPath = "/admin#/observatory";
 
     private readonly IStudioMemberService _memberService;
     private readonly IStudioMemberWorkflowBindingPort _bindingPort;
-    private readonly IStudioMemberWorkflowSchedulePort _schedulePort;
-    private readonly IWorkflowExternalCapabilityAdmissionService _capabilityAdmissionService;
-    private readonly TimeProvider _timeProvider;
+    private readonly IStudioWorkflowScheduleProvisioningCommandPort _scheduleProvisioningCommandPort;
+    private readonly StudioWorkflowProvisioningAdmissionService _provisioningAdmissionService;
 
     public StudioWorkflowProvisioningService(
         IStudioMemberService memberService,
         IStudioMemberWorkflowBindingPort bindingPort,
-        IStudioMemberWorkflowSchedulePort schedulePort,
+        IStudioWorkflowScheduleProvisioningCommandPort scheduleProvisioningCommandPort,
         IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService,
-        TimeProvider? timeProvider = null)
+        INyxIdAuthorizationCatalogRefreshPort? catalogRefreshPort = null,
+        INyxIdAuthorizationCatalogVisibilityPort? catalogVisibilityPort = null,
+        ILogger<StudioWorkflowProvisioningService>? logger = null)
     {
         _memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
         _bindingPort = bindingPort ?? throw new ArgumentNullException(nameof(bindingPort));
-        _schedulePort = schedulePort ?? throw new ArgumentNullException(nameof(schedulePort));
-        _capabilityAdmissionService = capabilityAdmissionService
-            ?? throw new ArgumentNullException(nameof(capabilityAdmissionService));
-        _timeProvider = timeProvider ?? TimeProvider.System;
+        _scheduleProvisioningCommandPort = scheduleProvisioningCommandPort
+            ?? throw new ArgumentNullException(nameof(scheduleProvisioningCommandPort));
+        _provisioningAdmissionService = new StudioWorkflowProvisioningAdmissionService(
+            capabilityAdmissionService,
+            catalogRefreshPort,
+            catalogVisibilityPort,
+            logger);
     }
 
     public async Task<ProvisionWorkflowResponse> ProvisionAsync(
@@ -101,48 +106,40 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         ArgumentNullException.ThrowIfNull(callerCredential);
         ArgumentNullException.ThrowIfNull(request);
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        _ = NormalizeRequired(callerCredential.Platform, nameof(callerCredential.Platform));
+        _ = NormalizeRequired(callerCredential.ExternalUserId, nameof(callerCredential.ExternalUserId));
+        _ = NormalizeRequired(callerCredential.Scope, nameof(callerCredential.Scope));
         var teamId = NormalizeRequired(request.TeamId, "teamId");
         var displayName = NormalizeRequired(request.DisplayName, nameof(request.DisplayName));
         var workflowYaml = NormalizeRequired(request.WorkflowYaml, nameof(request.WorkflowYaml));
+        var inlineWorkflowYamls = SnapshotInlineWorkflowYamls(request.InlineWorkflowYamls);
         var provisionKey = BuildProvisionKey(normalizedScopeId, teamId, displayName);
         var workflowId = $"workflow-{provisionKey}";
-        var revisionId = $"revision-{provisionKey}";
+        var executionMode = ShouldSchedule(request)
+            ? ExternalCapabilityExecutionMode.Durable
+            : ExternalCapabilityExecutionMode.Interactive;
 
         var suppliedAdmission = request.CapabilityAdmission;
         var callerId = suppliedAdmission?.CallerId ?? string.Empty;
         var nyxIdCallerCredentialSelection = suppliedAdmission?.NyxIdCallerCredential;
         var organizationBearerToken = suppliedAdmission?.NyxIdOrganizationBearerToken;
         var existingPlan = suppliedAdmission?.ExistingPlan?.Clone();
-        var explicitRequestConfirmations = suppliedAdmission?.ExplicitRequestConfirmations ?? [];
-        var executionMode = ShouldSchedule(request)
-            ? ExternalCapabilityExecutionMode.Durable
-            : ExternalCapabilityExecutionMode.Interactive;
-        var capabilityAdmissionPlan = existingPlan is not null
-            ? await _capabilityAdmissionService.RevalidatePersistedAsync(
-                new PersistedWorkflowCapabilityAdmissionRequest(
-                    existingPlan,
-                    workflowYaml,
-                    new Dictionary<string, string>(),
-                    "studio_workflow_provisioning",
-                    executionMode,
-                    workflowId,
-                    revisionId),
-                ct)
-            : await _capabilityAdmissionService.AdmitAsync(
-                new WorkflowExternalCapabilityAdmissionRequest(
-                new ExternalWorkflowCapabilityAccessContext(
-                    normalizedScopeId,
-                    callerId,
-                    nyxIdCallerCredentialSelection,
-                    organizationBearerToken),
-                workflowYaml,
-                new Dictionary<string, string>(),
-                "studio_workflow_provisioning",
-                executionMode,
-                explicitRequestConfirmations,
-                workflowId,
-                revisionId),
-                ct);
+        var suppliedExplicitRequestConfirmations = suppliedAdmission?.ExplicitRequestConfirmations;
+        var (revisionId, capabilityAdmissionPlan) = await ResolveProvisionRevisionAdmissionAsync(
+            normalizedScopeId,
+            provisionKey,
+            workflowId,
+            workflowYaml,
+            inlineWorkflowYamls,
+            executionMode,
+            callerId,
+            nyxIdCallerCredentialSelection,
+            organizationBearerToken,
+            existingPlan,
+            suppliedExplicitRequestConfirmations,
+            request,
+            ct);
+        ValidatePersistedAdmissionCapabilities(capabilityAdmissionPlan);
         var trustedAdmission = new WorkflowCapabilityAdmissionContext(
             callerId,
             executionMode: executionMode,
@@ -173,43 +170,63 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             {
                 WorkflowId = workflowId,
                 RevisionId = revisionId,
+                InlineWorkflowYamls = inlineWorkflowYamls,
                 CapabilityAdmission = trustedAdmission,
             },
             ct);
+        if (!bindReceipt.Success ||
+            !string.Equals(bindReceipt.ScopeId, normalizedScopeId, StringComparison.Ordinal) ||
+            !string.Equals(bindReceipt.MemberId, memberId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("workflow_binding_receipt_invalid");
+        }
+        var acceptedWorkflowId = NormalizeOptional(bindReceipt.WorkflowId) ?? workflowId;
+        var acceptedRevisionId = NormalizeOptional(bindReceipt.RevisionId) ?? revisionId;
 
-        // 3. Create the scheduled-dispatch that produces the run. The Workflow kind
-        //    is what flips on caller-token projection. A schedule is created when
-        //    there is something to fire — a recurring monitor (caller Cron) or a
-        //    one-shot demo (RunImmediately). RunImmediately=false with no Cron is an
-        //    honest "bind only": no schedule, no run (and nothing to credential).
+        // 3. Durably accept actor-owned schedule provisioning. The actor waits for
+        //    the exact binding revision and only then creates the workflow-kind
+        //    scheduled dispatch. Scheduling is requested for a recurring monitor
+        //    (caller Cron) or a one-shot demo (RunImmediately). RunImmediately=false
+        //    with no Cron is an honest "bind only": no schedule and no run.
         //
-        //    The schedule carries EXACTLY ONE credential source (the validator admits
-        //    no more), a re-mintable subject reference. Raw bearer tokens are never
-        //    persisted in schedule state.
+        //    The intent persists only a re-mintable subject and verified binding
+        //    reference. Raw bearer tokens never enter member or schedule state.
         //
-        //    The schedule id is deterministic (provision-{publishedServiceId}) and
-        //    the write goes through EnsureAsync, so a re-provision updates the one
-        //    existing schedule instead of stacking a new enabled schedule per retry.
+        //    The executor later uses deterministic id provision-{publishedServiceId};
+        //    it replaces a live schedule through the credential protocol and advances
+        //    to a new generation after an explicit delete tombstone.
         string? scheduleId = null;
+        string? scheduleProvisioningId = null;
+        string? scheduleProvisioningStatus = null;
         if (ShouldSchedule(request))
         {
-            var timing = ResolveScheduleTiming(request);
-            scheduleId = await EnsureProvisionScheduleAsync(
+            var authenticatedOwner = request.AuthenticatedOwner
+                ?? throw new UnauthorizedAccessException("authenticated_authorization_owner_required");
+            if (string.IsNullOrWhiteSpace(authenticatedOwner.VerifiedBindingId))
+                throw new UnauthorizedAccessException("authenticated_authorization_owner_binding_missing");
+
+            var intent = BuildScheduleProvisioningIntent(
                 normalizedScopeId,
                 teamId,
                 memberId,
                 publishedServiceId,
-                bindReceipt,
-                workflowId,
-                revisionId,
+                acceptedWorkflowId,
+                acceptedRevisionId,
                 displayName,
-                workflowYaml,
                 request.Prompt ?? string.Empty,
-                callerCredential,
-                request,
-                capabilityAdmissionPlan,
-                timing,
-                ct);
+                authenticatedOwner,
+                bindReceipt.BindingRunId,
+                request);
+            var scheduleAcceptance = await _scheduleProvisioningCommandPort.AcceptAsync(intent, ct);
+            if (!scheduleAcceptance.Accepted ||
+                !string.Equals(scheduleAcceptance.ProvisioningId, intent.ProvisioningId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("workflow_schedule_provisioning_receipt_invalid");
+            }
+
+            scheduleId = NormalizeOptional(scheduleAcceptance.ScheduleId);
+            scheduleProvisioningId = intent.ProvisioningId;
+            scheduleProvisioningStatus = scheduleAcceptance.Status;
         }
 
         return new ProvisionWorkflowResponse(
@@ -221,8 +238,157 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         {
             BindingRunId = NormalizeOptional(bindReceipt.BindingRunId),
             ScheduleId = scheduleId,
+            ScheduleProvisioningId = scheduleProvisioningId,
+            ScheduleProvisioningStatus = scheduleProvisioningStatus,
             StudioUrl = BuildStudioUrl(normalizedScopeId, teamId, memberId),
         };
+    }
+
+    private async Task<ProvisionRevisionAdmission> ResolveProvisionRevisionAdmissionAsync(
+        string scopeId,
+        string provisionKey,
+        string workflowId,
+        string workflowYaml,
+        IReadOnlyDictionary<string, string> inlineWorkflowYamls,
+        ExternalCapabilityExecutionMode executionMode,
+        string callerId,
+        NyxIdCallerCredentialSelection? nyxIdCallerCredentialSelection,
+        string? organizationBearerToken,
+        WorkflowCapabilityAdmissionPlan? existingPlan,
+        IReadOnlyList<NyxIdExplicitRequestConfirmation>? suppliedConfirmations,
+        ProvisionWorkflowRequest request,
+        CancellationToken ct)
+    {
+        var revisionId = BuildProvisionRevisionId(
+            provisionKey,
+            workflowId,
+            workflowYaml,
+            executionMode,
+            inlineWorkflowYamls: inlineWorkflowYamls);
+        var mayBindResolvedRevision = existingPlan is null &&
+                                      CanBindProvisionedConfirmationIdentity(suppliedConfirmations);
+
+        var explicitRequestConfirmations = BindProvisionedExplicitRequestConfirmations(
+            suppliedConfirmations,
+            workflowId,
+            revisionId);
+        var liveAdmissionRequest = new WorkflowExternalCapabilityAdmissionRequest(
+            new ExternalWorkflowCapabilityAccessContext(
+                scopeId,
+                callerId,
+                nyxIdCallerCredentialSelection,
+                organizationBearerToken),
+            workflowYaml,
+            inlineWorkflowYamls,
+            "studio_workflow_provisioning",
+            executionMode,
+            explicitRequestConfirmations,
+            workflowId,
+            revisionId);
+        var capabilityAdmissionPlan = await _provisioningAdmissionService.ResolveAsync(
+            liveAdmissionRequest,
+            existingPlan,
+            request,
+            ct);
+        var resolvedRevisionId = BuildProvisionRevisionId(
+            provisionKey,
+            workflowId,
+            workflowYaml,
+            executionMode,
+            capabilityAdmissionPlan,
+            inlineWorkflowYamls);
+
+        if (string.Equals(resolvedRevisionId, revisionId, StringComparison.Ordinal) ||
+            !WorkflowCapabilityAdmissionPlanIntegrity.RequiresExplicitRequestBindingIdentity(
+                capabilityAdmissionPlan))
+        {
+            return new ProvisionRevisionAdmission(resolvedRevisionId, capabilityAdmissionPlan);
+        }
+
+        // Exact caller-bound confirmations retain their reviewed revision identity.
+        // Skill scheduling supplies unbound confirmations, allowing this service to
+        // bind the already-admitted plan to the immutable revision without repeating
+        // external discovery and changing its source snapshot between passes.
+        if (!mayBindResolvedRevision)
+            return new ProvisionRevisionAdmission(revisionId, capabilityAdmissionPlan);
+
+        var reboundPlan = BindProvisionedAdmissionPlanRevision(
+            capabilityAdmissionPlan,
+            workflowYaml,
+            inlineWorkflowYamls,
+            workflowId,
+            resolvedRevisionId);
+        var reboundRevisionId = BuildProvisionRevisionId(
+            provisionKey,
+            workflowId,
+            workflowYaml,
+            executionMode,
+            reboundPlan,
+            inlineWorkflowYamls);
+        if (!string.Equals(reboundRevisionId, resolvedRevisionId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Provisioned workflow admission did not produce a stable revision identity.");
+        }
+
+        return new ProvisionRevisionAdmission(resolvedRevisionId, reboundPlan);
+    }
+
+    private static bool CanBindProvisionedConfirmationIdentity(
+        IReadOnlyList<NyxIdExplicitRequestConfirmation>? confirmations) =>
+        (confirmations ?? []).All(static confirmation =>
+            string.IsNullOrWhiteSpace(confirmation.WorkflowId) &&
+            string.IsNullOrWhiteSpace(confirmation.RevisionId));
+
+    private static IReadOnlyList<NyxIdExplicitRequestConfirmation> BindProvisionedExplicitRequestConfirmations(
+        IReadOnlyList<NyxIdExplicitRequestConfirmation>? confirmations,
+        string workflowId,
+        string revisionId) =>
+        (confirmations ?? []).Select(confirmation =>
+        {
+            var bound = confirmation.Clone();
+            if (bound.WorkflowId.Length == 0 && bound.RevisionId.Length == 0)
+            {
+                bound.WorkflowId = workflowId;
+                bound.RevisionId = revisionId;
+            }
+
+            return bound;
+        }).ToArray();
+
+    private static WorkflowCapabilityAdmissionPlan BindProvisionedAdmissionPlanRevision(
+        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan,
+        string workflowYaml,
+        IReadOnlyDictionary<string, string> inlineWorkflowYamls,
+        string workflowId,
+        string revisionId)
+    {
+        var rebound = capabilityAdmissionPlan.Clone();
+        foreach (var admission in rebound.InvocationAdmissions)
+        {
+            var grant = admission.NyxIdExplicitRequestGrant;
+            if (grant is null)
+                continue;
+            if (admission.Capability?.CapabilityCase !=
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest)
+            {
+                throw new InvalidOperationException(
+                    "Provisioned workflow explicit request admission is invalid.");
+            }
+
+            grant.WorkflowId = workflowId;
+            grant.RevisionId = revisionId;
+            admission.Capability.NyxIdUserRequest.ExplicitRequestGrantDigest =
+                WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdExplicitRequestGrantDigest(grant);
+        }
+
+        rebound.DefinitionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeDefinitionDigest(
+            workflowYaml,
+            inlineWorkflowYamls,
+            workflowId,
+            revisionId);
+        rebound.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(rebound);
+        return rebound;
     }
 
     /// <summary>
@@ -272,115 +438,6 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     }
 
     /// <summary>
-    /// Converges the provision schedule onto a deterministic id. A deleted
-    /// schedule is a permanent tombstone (the platform rejects reconfiguring it
-    /// as typed not-found), so an explicit user delete advances the id to the
-    /// next generation (<c>provision-{serviceId}</c>, <c>provision-{serviceId}.2</c>, …):
-    /// retries still converge on the first live generation, and a deleted pair
-    /// can be re-provisioned without resurrecting the deleted schedule.
-    /// </summary>
-    private async Task<string?> EnsureProvisionScheduleAsync(
-        string scopeId,
-        string teamId,
-        string memberId,
-        string publishedServiceId,
-        StudioMemberWorkflowBindingResult bindReceipt,
-        string workflowId,
-        string revisionId,
-        string displayName,
-        string workflowYaml,
-        string prompt,
-        ProvisionWorkflowCallerCredential callerCredential,
-        ProvisionWorkflowRequest request,
-        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan,
-        ProvisionScheduleTiming timing,
-        CancellationToken ct)
-    {
-        var authenticatedOwner = request.AuthenticatedOwner
-            ?? BuildLegacyUnauthenticatedOwner(callerCredential);
-        var baseScheduleRequest = new StudioMemberWorkflowScheduleRequest(
-            scopeId,
-            memberId,
-            timing.CronExpression,
-            timing.Timezone,
-            authenticatedOwner)
-        {
-            TeamId = teamId,
-            CredentialProvisioningKind = CredentialProvisioningKind,
-            Prompt = prompt,
-            DisplayName = $"provision-{displayName}",
-            ProvisioningBearerToken = request.ProvisioningBearerToken,
-            Enabled = true,
-            ScheduleMode = timing.ScheduleMode,
-            OneShotFireAt = timing.OneShotFireAt,
-            AcceptedBinding = new StudioMemberWorkflowAcceptedBindingContext(
-                teamId,
-                publishedServiceId,
-                NormalizeOptional(bindReceipt.WorkflowId) ?? workflowId,
-                NormalizeOptional(bindReceipt.RevisionId) ?? revisionId)
-            {
-                WorkflowEvidence = BuildTrustedWorkflowEvidence(
-                    workflowYaml,
-                    capabilityAdmissionPlan),
-            },
-        };
-
-        var preflight = await _schedulePort.PreflightForWriteAsync(baseScheduleRequest, ct);
-        if (!preflight.Success)
-            throw new InvalidOperationException(preflight.Detail);
-        var permissionDigest = NormalizeRequired(preflight.Plan?.PermissionDigest, "permissionDigest");
-        var policyVersion = NormalizeRequired(preflight.Plan?.CredentialPolicy?.PolicyVersion, "policyVersion");
-
-        const int maxGenerations = 50;
-        for (var generation = 1; generation <= maxGenerations; generation++)
-        {
-            var scheduleId = generation == 1
-                ? $"provision-{publishedServiceId}"
-                : $"provision-{publishedServiceId}.{generation}";
-            var operationIdentity = BuildProvisionScheduleOperationIdentity(
-                request,
-                scheduleId,
-                permissionDigest,
-                timing);
-            try
-            {
-                var schedule = await _schedulePort.CreateAsync(
-                    baseScheduleRequest with
-                    {
-                        ScheduleId = scheduleId,
-                        OperationId = operationIdentity.OperationId,
-                        IdempotencyKey = operationIdentity.IdempotencyKey,
-                        ConfirmedPolicyVersion = policyVersion,
-                    },
-                    permissionDigest,
-                    ct);
-                return NormalizeOptional(schedule.ScheduleId);
-            }
-            catch (ScheduledDispatchNotFoundException)
-            {
-                // Tombstoned by an explicit delete — advance to the next generation.
-            }
-        }
-
-        throw new InvalidOperationException(
-            $"Provisioning for service '{publishedServiceId}' exhausted {maxGenerations} deleted schedule generations.");
-    }
-
-    private static ScheduledInvocationWorkflowEvidence BuildTrustedWorkflowEvidence(
-        string workflowYaml,
-        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan)
-    {
-        var workflow = new WorkflowParser().Parse(workflowYaml);
-        var authorizationDependencies = WorkflowAuthorizationDependencyEvaluator.Evaluate(workflow);
-        var admittedCapabilities = WorkflowCapabilityAdmissionPlanIntegrity.DistinctCapabilities(capabilityAdmissionPlan);
-        return new ScheduledInvocationWorkflowEvidence(
-            StateVersion: 0,
-            ExternalCapabilities: admittedCapabilities,
-            OwnerLLMRouteRequired: authorizationDependencies.OwnerLlmRouteRequired,
-            ServiceGrantRequirement: WorkflowServiceGrantRequirementClassifier.Classify(admittedCapabilities));
-    }
-
-    /// <summary>
     /// A schedule (and therefore a run) is created when there is something to
     /// fire: a recurring monitor (caller-supplied <see cref="ProvisionWorkflowRequest.Cron"/>)
     /// or a one-shot demo (<see cref="ProvisionWorkflowRequest.RunImmediately"/>).
@@ -388,88 +445,107 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     private static bool ShouldSchedule(ProvisionWorkflowRequest request) =>
         request.RunImmediately || !string.IsNullOrWhiteSpace(request.Cron);
 
-    /// <summary>
-    /// Resolves schedule timing as one typed value. A caller-supplied cron remains
-    /// recurring with its normalized timezone; otherwise a first-class one-shot
-    /// fires shortly after the bind at an exact UTC timestamp.
-    /// </summary>
-    private ProvisionScheduleTiming ResolveScheduleTiming(ProvisionWorkflowRequest request)
+    private static void ValidatePersistedAdmissionCapabilities(
+        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan)
     {
-        var callerCron = NormalizeOptional(request.Cron);
-        if (callerCron != null)
+        foreach (var admission in capabilityAdmissionPlan.InvocationAdmissions)
         {
-            return new ProvisionScheduleTiming(
-                callerCron,
-                ScheduledDispatchCalculator.NormalizeTimezone(request.Timezone),
-                ScheduledDispatchScheduleMode.RecurringCron,
-                null);
+            if (admission.Capability?.CapabilityCase is
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.HostConnector or
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService or
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest)
+            {
+                continue;
+            }
+
+            throw new InvalidOperationException(
+                "Workflow capability admission contains an unsupported capability.");
         }
-
-        return new ProvisionScheduleTiming(
-            string.Empty,
-            ScheduledDispatchCalculator.DefaultTimezone,
-            ScheduledDispatchScheduleMode.OneShotAtUtc,
-            _timeProvider
-                .GetUtcNow()
-                .AddSeconds(ProvisionWorkflowRequest.DefaultOneShotDelaySeconds)
-                .ToUniversalTime());
     }
 
-    private readonly record struct ProvisionScheduleTiming(
-        string CronExpression,
-        string Timezone,
-        ScheduledDispatchScheduleMode ScheduleMode,
-        DateTimeOffset? OneShotFireAt);
-
-    private static ProvisionScheduleOperationIdentity BuildProvisionScheduleOperationIdentity(
-        ProvisionWorkflowRequest request,
-        string scheduleId,
-        string permissionDigest,
-        ProvisionScheduleTiming timing)
+    private static StudioWorkflowScheduleProvisioningIntent BuildScheduleProvisioningIntent(
+        string scopeId,
+        string teamId,
+        string memberId,
+        string publishedServiceId,
+        string workflowId,
+        string revisionId,
+        string displayName,
+        string prompt,
+        AuthenticatedAuthorizationOwnerContext authenticatedOwner,
+        string? bindingRunId,
+        ProvisionWorkflowRequest request)
     {
-        var explicitOperationId = NormalizeOptional(request.ScheduleOperationId);
-        var explicitIdempotencyKey = NormalizeOptional(request.ScheduleIdempotencyKey);
-        if (explicitOperationId != null && explicitIdempotencyKey != null)
-            return new ProvisionScheduleOperationIdentity(explicitOperationId, explicitIdempotencyKey);
-
-        var identity = Encoding.UTF8.GetBytes(string.Join('\n',
-            "studio-workflow-provision-schedule/v1",
-            scheduleId,
-            permissionDigest,
-            NormalizeOptional(request.Prompt) ?? string.Empty,
-            timing.CronExpression,
-            timing.Timezone,
-            ((int)timing.ScheduleMode).ToString(),
-            timing.OneShotFireAt?.ToUniversalTime().UtcTicks.ToString() ?? string.Empty));
-        var hash = Convert.ToHexStringLower(SHA256.HashData(identity).AsSpan(0, 16));
-        return new ProvisionScheduleOperationIdentity(
-            $"studio-workflow-provision-create:{hash}",
-            $"studio-workflow-provision-schedule:{hash}");
+        var cronExpression = NormalizeOptional(request.Cron);
+        var scheduleMode = cronExpression is null
+            ? ScheduledDispatchScheduleMode.OneShotAtUtc
+            : ScheduledDispatchScheduleMode.RecurringCron;
+        var timezone = scheduleMode == ScheduledDispatchScheduleMode.RecurringCron
+            ? ScheduledDispatchCalculator.NormalizeTimezone(request.Timezone)
+            : ScheduledDispatchCalculator.DefaultTimezone;
+        var provisioningId = BuildScheduleProvisioningId(
+            scopeId,
+            teamId,
+            memberId,
+            publishedServiceId,
+            workflowId,
+            revisionId,
+            displayName,
+            prompt,
+            scheduleMode,
+            cronExpression ?? string.Empty,
+            timezone);
+        return new StudioWorkflowScheduleProvisioningIntent(
+            provisioningId,
+            scopeId,
+            teamId,
+            memberId,
+            publishedServiceId,
+            workflowId,
+            revisionId,
+            displayName,
+            prompt,
+            authenticatedOwner,
+            scheduleMode,
+            cronExpression ?? string.Empty,
+            timezone,
+            ProvisionWorkflowRequest.DefaultOneShotDelaySeconds,
+            NormalizeOptional(bindingRunId),
+            NormalizeOptional(request.ScheduleOperationId),
+            NormalizeOptional(request.ScheduleIdempotencyKey));
     }
 
-    private readonly record struct ProvisionScheduleOperationIdentity(
-        string OperationId,
-        string IdempotencyKey);
+    private static string BuildScheduleProvisioningId(
+        string scopeId,
+        string teamId,
+        string memberId,
+        string publishedServiceId,
+        string workflowId,
+        string revisionId,
+        string displayName,
+        string prompt,
+        ScheduledDispatchScheduleMode scheduleMode,
+        string cronExpression,
+        string timezone)
+    {
+        var identity = Encoding.UTF8.GetBytes(string.Join('\n',
+            "studio-workflow-schedule-provisioning/v1",
+            scopeId,
+            teamId,
+            memberId,
+            publishedServiceId,
+            workflowId,
+            revisionId,
+            displayName,
+            prompt,
+            ((int)scheduleMode).ToString(),
+            cronExpression,
+            timezone));
+        return $"schedule-provisioning-{Convert.ToHexStringLower(SHA256.HashData(identity).AsSpan(0, 16))}";
+    }
 
     internal static string BuildStudioUrl(string scopeId, string teamId, string memberId) =>
         $"/scopes/{Uri.EscapeDataString(scopeId)}/teams/{Uri.EscapeDataString(teamId)}/members/{Uri.EscapeDataString(memberId)}/workflow";
-
-    private static AuthenticatedAuthorizationOwnerContext BuildLegacyUnauthenticatedOwner(
-        ProvisionWorkflowCallerCredential callerCredential)
-    {
-        var externalUserId = NormalizeRequired(callerCredential.ExternalUserId, nameof(callerCredential.ExternalUserId));
-        return new AuthenticatedAuthorizationOwnerContext(
-            new AuthorizationOwnerIdentity
-            {
-                Authority = NyxIdAuthorizationAuthorities.NyxId,
-                OwnerKind = AuthorizationOwnerKind.Personal,
-                OwnerSubject = externalUserId,
-            },
-            NormalizeRequired(callerCredential.Platform, nameof(callerCredential.Platform)),
-            NormalizeOptional(callerCredential.Tenant) ?? string.Empty,
-            externalUserId,
-            string.Empty);
-    }
 
     /// <summary>
     /// Deterministic provision identity for one (scope, team, display name) tuple:
@@ -484,6 +560,85 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         return Convert.ToHexString(hash.AsSpan(0, 16)).ToLowerInvariant();
     }
 
+    /// <summary>
+    /// A provisioned workflow keeps one stable draft identity while each distinct
+    /// executable spec receives its own immutable service revision. The versioned
+    /// contract marker also prevents a retry from colliding with revisions created
+    /// before the published-member binding began resolving the workflow name from
+    /// YAML instead of writing the workflow id into that semantic field.
+    /// </summary>
+    internal static string BuildProvisionRevisionId(
+        string provisionKey,
+        string workflowId,
+        string workflowYaml,
+        ExternalCapabilityExecutionMode executionMode,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null)
+    {
+        var admissionDiscriminator = BuildAdmissionRevisionDiscriminator(capabilityAdmissionPlan);
+        var hasInlineWorkflowYamls = inlineWorkflowYamls is { Count: > 0 };
+        var contractVersion = (hasInlineWorkflowYamls, admissionDiscriminator.Length > 0) switch
+        {
+            (false, false) => "studio-workflow-provision-revision/v2",
+            (false, true) => "studio-workflow-provision-revision/v3",
+            (true, false) => "studio-workflow-provision-revision/v4",
+            (true, true) => "studio-workflow-provision-revision/v5",
+        };
+        var components = new List<string>
+        {
+            contractVersion,
+            provisionKey,
+            workflowId,
+            "workflow-name=yaml",
+            ((int)executionMode).ToString(),
+            workflowYaml,
+            admissionDiscriminator,
+        };
+        if (hasInlineWorkflowYamls)
+        {
+            components.Add(WorkflowCapabilityAdmissionPlanIntegrity.ComputeDefinitionDigest(
+                workflowYaml,
+                inlineWorkflowYamls));
+        }
+
+        var canonicalSpec = Encoding.UTF8.GetBytes(string.Join('\n', components));
+        var hash = SHA256.HashData(canonicalSpec);
+        return $"revision-{Convert.ToHexString(hash.AsSpan(0, 16)).ToLowerInvariant()}";
+    }
+
+    private static string BuildAdmissionRevisionDiscriminator(
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan)
+    {
+        if (capabilityAdmissionPlan is null ||
+            (capabilityAdmissionPlan.InvocationAdmissions.Count == 0 &&
+             capabilityAdmissionPlan.SourceStamps.Count == 0 &&
+             capabilityAdmissionPlan.DurableAuthorizationOwner is null))
+        {
+            return string.Empty;
+        }
+
+        var canonical = capabilityAdmissionPlan.Clone();
+        canonical.DefinitionDigest = string.Empty;
+        canonical.AdmissionDigest = string.Empty;
+        foreach (var admission in canonical.InvocationAdmissions)
+        {
+            var grant = admission.NyxIdExplicitRequestGrant;
+            if (grant is null)
+                continue;
+
+            grant.WorkflowId = string.Empty;
+            grant.RevisionId = string.Empty;
+            if (admission.Capability?.NyxIdUserRequest is { } requestCapability)
+                requestCapability.ExplicitRequestGrantDigest = string.Empty;
+        }
+
+        return Convert.ToHexStringLower(SHA256.HashData(canonical.ToByteArray()));
+    }
+
+    private readonly record struct ProvisionRevisionAdmission(
+        string RevisionId,
+        WorkflowCapabilityAdmissionPlan Plan);
+
     private static string NormalizeRequired(string? value, string fieldName)
     {
         var normalized = value?.Trim() ?? string.Empty;
@@ -496,6 +651,20 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     {
         var normalized = value?.Trim() ?? string.Empty;
         return normalized.Length == 0 ? null : normalized;
+    }
+
+    private static IReadOnlyDictionary<string, string> SnapshotInlineWorkflowYamls(
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls)
+    {
+        if (inlineWorkflowYamls is null || inlineWorkflowYamls.Count == 0)
+            return new Dictionary<string, string>();
+
+        return inlineWorkflowYamls
+            .OrderBy(static item => item.Key, StringComparer.Ordinal)
+            .ToDictionary(
+                static item => NormalizeRequired(item.Key, "inlineWorkflowYamls key"),
+                static item => NormalizeRequired(item.Value, "inlineWorkflowYamls value"),
+                StringComparer.Ordinal);
     }
 
 }

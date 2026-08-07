@@ -150,6 +150,55 @@ public sealed class ProjectionRuntimeRegistrationTests
     }
 
     [Fact]
+    public async Task AddEventSinkProjectionRuntimeCore_ShouldReleaseScope_WhenRelayReadinessFails()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var services = new ServiceCollection();
+        services.AddSingleton<IActorRuntime>(runtime);
+        services.AddSingleton<IActorDispatchPort>(dispatchPort);
+        services.AddSingleton<IStreamForwardingRegistry>(
+            new FailingStreamForwardingRegistry(new InvalidOperationException("relay unavailable")));
+
+        services.AddEventSinkProjectionRuntimeCore<
+            TestSessionContext,
+            TestSessionLease,
+            StringValue,
+            ProjectionSessionScopeGAgent<TestSessionContext>>(
+            scopeKey => new TestSessionContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+                SessionId = scopeKey.SessionId,
+            },
+            context => new TestSessionLease(context));
+
+        await using var provider = services.BuildServiceProvider();
+        var activation = provider.GetRequiredService<IProjectionScopeActivationService<TestSessionLease>>();
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "actor-relay-failure",
+            "projection-relay-failure",
+            ProjectionRuntimeMode.SessionObservation,
+            "session-relay-failure");
+
+        var act = () => activation.EnsureAsync(new ProjectionScopeStartRequest
+        {
+            RootActorId = scopeKey.RootActorId,
+            ProjectionKind = scopeKey.ProjectionKind,
+            Mode = scopeKey.Mode,
+            SessionId = scopeKey.SessionId,
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("relay unavailable");
+        dispatchPort.Dispatched.Select(item => item.command.Payload!.TypeUrl).Should().Equal(
+            Any.Pack(new EnsureProjectionScopeCommand()).TypeUrl,
+            Any.Pack(new ReleaseProjectionScopeCommand()).TypeUrl);
+        dispatchPort.Dispatched.Should().OnlyContain(item => item.actorId == ProjectionScopeActorId.Build(scopeKey));
+        dispatchPort.Dispatched[1].command.Payload!.Unpack<ReleaseProjectionScopeCommand>().SessionId
+            .Should().Be(scopeKey.SessionId);
+    }
+
+    [Fact]
     public async Task AddProjectionMaterializationRuntimeCore_ShouldRegisterAttachExistingLeaseLookup()
     {
         var runtime = new RecordingActorRuntime();
@@ -535,6 +584,23 @@ public sealed class ProjectionRuntimeRegistrationTests
             Dispatched.Add((actorId, envelope));
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
+    }
+
+    private sealed class FailingStreamForwardingRegistry(Exception failure) : IStreamForwardingRegistry
+    {
+        public Task UpsertAsync(StreamForwardingBinding binding, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task RemoveAsync(
+            string sourceStreamId,
+            string targetStreamId,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task<IReadOnlyList<StreamForwardingBinding>> ListBySourceAsync(
+            string sourceStreamId,
+            CancellationToken ct = default) =>
+            Task.FromException<IReadOnlyList<StreamForwardingBinding>>(failure);
     }
 
     private sealed class RecordingStreamProvider : IStreamProvider

@@ -57,6 +57,7 @@ import {
 import TeamMembersTab, { type TeamMembersDeleteTarget } from "./tabs/TeamMembersTab";
 import TeamAutomationsTab from "./tabs/TeamAutomationsTab";
 import TeamOverviewTab from "./tabs/TeamOverviewTab";
+import TeamWorkOrdersTab from "./tabs/TeamWorkOrdersTab";
 import { resolveWorkflowOperationalUnit } from "./workflowOperationalUnits";
 import { useTeamRuntimeLens } from "./runtime/useTeamRuntimeLens";
 import { t } from "@/shared/i18n/messages";
@@ -230,6 +231,8 @@ function formatTeamTabLabel(
       });
     case "members":
       return intl.formatMessage({ id: "teams.detail.tabs.members" });
+    case "work-orders":
+      return intl.formatMessage({ id: "teams.detail.tabs.workOrders" });
     default:
       return intl.formatMessage({ id: "teams.detail.tabs.overview" });
   }
@@ -1368,6 +1371,7 @@ const TeamDetailPage: React.FC = () => {
   const tabOptions: TeamTabOption[] = [
     { label: t("pages.teams.detail.copy.45", "Overview"), value: "overview" },
     { label: t("teams.detail.tabs.automations", "Automations"), value: "automations" },
+    { label: t("teams.detail.tabs.workOrders", "Requests"), value: "work-orders" },
     { label: t("pages.teams.detail.copy.46", "Team members"), value: "members" },
   ];
 
@@ -2045,6 +2049,14 @@ const TeamDetailPage: React.FC = () => {
     );
   };
 
+  const renderWorkOrdersTab = () => (
+    <TeamWorkOrdersTab
+      onNavigate={(href) => history.push(href)}
+      scopeId={scopeId}
+      teamId={selectedTeamId}
+    />
+  );
+
   let tabContent: React.ReactNode;
   switch (activeTab) {
     case "automations":
@@ -2052,6 +2064,9 @@ const TeamDetailPage: React.FC = () => {
       break;
     case "members":
       tabContent = renderMembersTab();
+      break;
+    case "work-orders":
+      tabContent = renderWorkOrdersTab();
       break;
     default:
       tabContent = renderOverviewTab();

@@ -83,6 +83,21 @@ public sealed class ChatStreamContentAggregatorTests
         response.FinishReason.Should().Be("stop");
     }
 
+    [Fact]
+    public void StreamingToolCallAccumulator_ShouldNamespaceAnonymousIdsByRoundCallId()
+    {
+        var firstRound = new StreamingToolCallAccumulator("request-1:round:0");
+        firstRound.TrackDelta(new ToolCall { Id = string.Empty, Name = "submit_invoice", ArgumentsJson = "{}" });
+        var secondRound = new StreamingToolCallAccumulator("request-1:round:1");
+        secondRound.TrackDelta(new ToolCall { Id = string.Empty, Name = "submit_invoice", ArgumentsJson = "{}" });
+
+        var firstId = firstRound.BuildToolCalls().Should().ContainSingle().Subject.Id;
+        var secondId = secondRound.BuildToolCalls().Should().ContainSingle().Subject.Id;
+        firstId.Should().Be("request-1:round:0:stream-tool-call-1");
+        secondId.Should().Be("request-1:round:1:stream-tool-call-1");
+        secondId.Should().NotBe(firstId);
+    }
+
     private sealed class StubProvider(IReadOnlyList<LLMStreamChunk> chunks) : ILLMProvider
     {
         public string Name => "stub";

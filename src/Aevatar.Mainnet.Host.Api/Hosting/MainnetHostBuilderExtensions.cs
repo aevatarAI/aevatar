@@ -121,8 +121,8 @@ public static class MainnetHostBuilderExtensions
         //
         // 2026-06-03 prod incident: enabling HostOptions.ServicesStartConcurrently
         // raced the co-hosted Orleans silo reaching the Active lifecycle stage.
-        // Grain-calling startup services (WorkflowDefinitionBootstrap,
-        // ChannelBotRegistration, AevatarOAuthClientBootstrap, HealthProbeStartup,
+        // Grain-calling startup services (ChannelBotRegistration,
+        // AevatarOAuthClientBootstrap, HealthProbeStartup,
         // StreamingProxyChatLifecycleContinuationRunner) fired their grain calls
         // before the silo could create activations, so every one failed with
         // "Unable to create local activation. Rejecting now." -> AggregateException
@@ -131,8 +131,11 @@ public static class MainnetHostBuilderExtensions
         // Sequential startup runs hosted services in registration order: Kestrel
         // (binds the probe port early), then AddMainnetDistributedOrleansHost (silo
         // to Active), then the grain-calling services above — so grain activations
-        // succeed. Liveness exposure is handled by binding http://+:8080 in the
-        // container (see ConfigureMainnetListenUrls), not by parallelising startup.
+        // succeed. WorkflowDefinitionBootstrap performs file loading in StartAsync
+        // and actor materialization in StartedAsync so a slow committed observation
+        // cannot block the probe port. Liveness exposure is handled by binding
+        // http://+:8080 in the container (see ConfigureMainnetListenUrls), not by
+        // parallelising startup.
 
         builder.AddAevatarDefaultHost(options =>
         {
@@ -391,12 +394,22 @@ public static class MainnetHostBuilderExtensions
         });
         builder.Services.AddWebTools(o =>
         {
-            o.NyxIdBaseUrl = builder.Configuration["Aevatar:NyxId:Authority"]
-                             ?? builder.Configuration["Cli:App:NyxId:Authority"]
-                             ?? builder.Configuration["Aevatar:Authentication:Authority"];
-            o.NyxIdSearchSlug = builder.Configuration["Aevatar:Web:NyxIdSearchSlug"]
-                                ?? builder.Configuration["Aevatar:Web:SearchSlug"];
-            o.SearchApiBaseUrl = builder.Configuration["Aevatar:Web:SearchApiBaseUrl"];
+            o.NyxIdBaseUrl = FirstConfiguredValue(
+                builder.Configuration,
+                "Aevatar:Web:NyxIdBaseUrl",
+                "Aevatar:NyxId:ApiBaseUrl",
+                "Aevatar:NyxId:Authority",
+                "Cli:App:NyxId:Authority",
+                "Aevatar:Authentication:Authority");
+            o.NyxIdSearchSlug = FirstConfiguredValue(
+                builder.Configuration,
+                "Aevatar:Web:NyxIdSearchSlug",
+                "Aevatar:Web:SearchSlug",
+                "Aevatar:WebSearch:NyxIdSlug");
+            o.SearchApiBaseUrl = FirstConfiguredValue(
+                builder.Configuration,
+                "Aevatar:Web:SearchApiBaseUrl",
+                "Aevatar:WebSearch:ApiBaseUrl");
         });
         builder.Services.AddToolSetRegistry(options =>
         {
@@ -447,9 +460,11 @@ public static class MainnetHostBuilderExtensions
                 "NyxID connected-service operations explicitly marked x-aevatar-tool, registered as individual tools.");
             options.AddToolSet(
                 AgentProfilePolicies.NyxIdChatRouteToolSet,
-                [ToolSetNames.WorkspaceDefault, ToolSetNames.NyxIdConnectedServices],
-                [],
-                "NyxID chat profile route tool composition with workspace and typed connected-service tools.");
+                [
+                    CreateToolSource<NyxIdAssistantToolSource>,
+                    CreateToolSource<AskUserAgentToolSource>,
+                ],
+                "Pinned NyxID Assistant route: safe management reads, readiness, brokered proxy execution, and typed user input only.");
         });
 
         return builder;
@@ -598,6 +613,18 @@ public static class MainnetHostBuilderExtensions
         var value = Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER");
         return string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(value, "1", StringComparison.Ordinal);
+    }
+
+    private static string? FirstConfiguredValue(IConfiguration configuration, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            var value = configuration[key];
+            if (!string.IsNullOrWhiteSpace(value))
+                return value.Trim();
+        }
+
+        return null;
     }
 
     private static void ConfigureMainnetAIFeatures(AevatarAIFeatureOptions options)

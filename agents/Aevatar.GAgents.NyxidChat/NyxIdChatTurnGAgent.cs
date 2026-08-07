@@ -66,20 +66,22 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             ExpectedStateVersion = version,
             Kind = NyxIdChatRecoveryKind.InterruptedOperationReconciliation,
         };
-        var envelope = new EventEnvelope
-        {
-            Id = $"{State.AdmittedOperation.OperationId}:turn-recovery:{version}",
-            Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-            Payload = Any.Pack(signal),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication(
-                Id,
-                TopologyAudience.Self),
-            Propagation = new EnvelopePropagation
+        await PublishAsync(
+            signal,
+            TopologyAudience.Self,
+            ct,
+            new EventEnvelopePublishOptions
             {
-                CorrelationId = State.AdmittedOperation.OperationId,
-            },
-        };
-        await _actorDispatchPort.DispatchAsync(Id, envelope, ct);
+                Propagation = new EventEnvelopePropagationOverrides
+                {
+                    CorrelationId = State.AdmittedOperation.OperationId,
+                },
+                Delivery = new EventEnvelopeDeliveryOptions
+                {
+                    OperationId =
+                        $"{State.AdmittedOperation.OperationId}:turn-recovery:{version}",
+                },
+            });
     }
 
     [EventHandler]

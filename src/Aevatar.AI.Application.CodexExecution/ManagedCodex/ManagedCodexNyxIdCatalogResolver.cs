@@ -49,8 +49,10 @@ internal sealed class ManagedCodexNyxIdCatalogResolver
                 "managed_user_services_unavailable",
                 "The user's required managed Codex services are not usable.");
         }
-        if (sandbox.ForwardAccessToken != false ||
-            sandbox.InjectDelegationToken != true ||
+        // Managed execution authenticates the NyxID proxy with X-API-Key and deliberately
+        // sends no Authorization header, so forwarding policy cannot expose the managed key.
+        // A shared chrono-sandbox service may enable bearer forwarding for ordinary /execute.
+        if (sandbox.InjectDelegationToken != true ||
             !string.Equals(sandbox.DelegationTokenScope, "proxy:*", StringComparison.Ordinal))
         {
             throw Failure(

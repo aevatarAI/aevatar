@@ -386,7 +386,9 @@ jobs:
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
       needs.changes.outputs.docs_only == 'false'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # Full coverage recently passed at 34-35 minutes, then timed out during the
+    # 121 MB artifact upload. Keep the fail-fast guard while allowing cleanup.
+    timeout-minutes: 45
     services:
       agent-tool-admission-redis:
         image: redis:7.2.3

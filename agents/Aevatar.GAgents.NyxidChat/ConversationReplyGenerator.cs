@@ -73,6 +73,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
     private readonly ILLMProviderFactory _llmProviderFactory;
     private readonly IReadOnlyList<IAgentToolSource> _toolSources;
+    private readonly IReadOnlyList<IAgentToolSource> _nyxIdChatToolSources;
     private readonly IReadOnlyList<IAgentRunMiddleware> _agentMiddlewares;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
     private readonly IAgentToolExecutionPort? _toolExecutionPort;
@@ -131,10 +132,12 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         ISystemSkillOverlayProvider? overlayProvider = null,
         ILarkOutboundClientFactory? larkOutboundClientFactory = null,
         IAgentToolExecutionPort? toolExecutionPort = null,
-        IRemoteSkillAccessTokenResolver? remoteSkillAccessTokenResolver = null)
+        IRemoteSkillAccessTokenResolver? remoteSkillAccessTokenResolver = null,
+        IEnumerable<IAgentToolSource>? nyxIdChatToolSources = null)
     {
         _llmProviderFactory = llmProviderFactory ?? throw new ArgumentNullException(nameof(llmProviderFactory));
         _toolSources = (toolSources ?? []).ToArray();
+        _nyxIdChatToolSources = (nyxIdChatToolSources ?? []).ToArray();
         _agentMiddlewares = (agentMiddlewares ?? []).ToArray();
         _llmMiddlewares = (llmMiddlewares ?? []).ToArray();
         _toolExecutionPort = toolExecutionPort;
@@ -337,10 +340,11 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             replyPlan.Primary,
             replyPlan.PrimaryControl,
             replyPlan.PrimaryToolContext);
+        var isChannelRelayTurn = IsChannelRelayTurn(toolContext);
         var tools = turnCatalog is null
             ? await BuildTurnToolsAsync(
                 disableTools,
-                IsChannelRelayTurn(toolContext),
+                isChannelRelayTurn,
                 effectiveToolContext,
                 ct)
             : BuildProfileTools(disableTools, turnCatalog);
@@ -353,6 +357,16 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         var inputFileRefs = CollectInputFileRefs(input.Parts);
         effectiveToolContext = WithInputFileRefs(effectiveToolContext, inputFileRefs);
         var ownerFallbackToolContext = WithInputFileRefs(replyPlan.OwnerFallbackToolContext, inputFileRefs);
+        LogChannelLlmToolPlan(
+            "actor-step",
+            isChannelRelayTurn,
+            forceDisableTools,
+            replyPlan.DisableTools,
+            disableTools,
+            turnCatalog,
+            effectiveToolContext,
+            inputFileRefs,
+            tools);
 
         var runtime = BuildRuntime(
             activity,
@@ -399,6 +413,41 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         if (!disableTools)
             tools.Register(turnCatalog.RouteOwnedTools.Values);
         return tools;
+    }
+
+    private void LogChannelLlmToolPlan(
+        string surface,
+        bool isChannelRelayTurn,
+        bool forceDisableTools,
+        bool replyPlanDisableTools,
+        bool disableTools,
+        AgentProfileTurnCatalog? turnCatalog,
+        AgentToolExecutionContext toolContext,
+        IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef> inputFileRefs,
+        ToolManager tools)
+    {
+        var isNyxIdChatTurn = IsNyxIdChatTurn(toolContext);
+        if (!isChannelRelayTurn && !isNyxIdChatTurn)
+            return;
+
+        var validTools = FilterValidTools(tools) ?? [];
+        _logger.LogWarning(
+            "Channel LLM tool plan prepared. surface={Surface} isChannelRelayTurn={IsChannelRelayTurn} isNyxIdChatTurn={IsNyxIdChatTurn} forceDisableTools={ForceDisableTools} replyPlanDisableTools={ReplyPlanDisableTools} disableTools={DisableTools} turnCatalogPresent={TurnCatalogPresent} profileAllowedToolCount={ProfileAllowedToolCount} profileAllowedTools={ProfileAllowedTools} routeOwnedToolCount={RouteOwnedToolCount} routeOwnedTools={RouteOwnedTools} finalToolCount={FinalToolCount} finalTools={FinalTools} inputPartFileRefCount={InputPartFileRefCount} toolContextInputFileRefCount={ToolContextInputFileRefCount}",
+            surface,
+            isChannelRelayTurn,
+            isNyxIdChatTurn,
+            forceDisableTools,
+            replyPlanDisableTools,
+            disableTools,
+            turnCatalog is not null,
+            turnCatalog?.FinalAllowedToolNames.Count ?? 0,
+            FormatToolNames(turnCatalog?.FinalAllowedToolNames ?? Enumerable.Empty<string>()),
+            turnCatalog?.RouteOwnedTools.Count ?? 0,
+            FormatToolNames(turnCatalog?.RouteOwnedTools.Values.Select(static tool => tool.Name) ?? Enumerable.Empty<string>()),
+            validTools.Count,
+            FormatToolNames(validTools.Select(static tool => tool.Name)),
+            inputFileRefs.Count,
+            toolContext.InputFileRefs.Count);
     }
 
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
@@ -474,7 +523,18 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 ct)
             .ConfigureAwait(false);
         input = await MaterializeUserInputPartsAsync(input, ct).ConfigureAwait(false);
-        toolContext = WithInputFileRefs(toolContext, CollectInputFileRefs(input.Parts));
+        var inputFileRefs = CollectInputFileRefs(input.Parts);
+        toolContext = WithInputFileRefs(toolContext, inputFileRefs);
+        LogChannelLlmToolPlan(
+            "direct-reply",
+            IsChannelRelayTurn(toolContext),
+            forceDisableTools: false,
+            replyPlanDisableTools: false,
+            disableTools: false,
+            turnCatalog: null,
+            toolContext,
+            inputFileRefs,
+            tools);
 
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
         //   Old pattern: NyxID reply construction passed stream_buffer_capacity into ChatRuntime after the stream loop moved to Task.Run + Channel.
@@ -686,7 +746,24 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     {
         var text = activity.Content?.Text ?? string.Empty;
         var parts = new List<ContentPart> { ContentPart.TextPart(text) };
+        var currentAttachmentCount = activity.Content?.Attachments?.Count ?? 0;
+        var recentAttachmentCount = CountAttachments(attachmentContext?.RecentAttachmentActivities
+            .Where(static entry => entry.Activity?.Content?.Attachments is { Count: > 0 })
+            .Select(static entry => new AttachmentActivity(
+                entry.Activity!,
+                entry.Activity!.Content!.Attachments.Select(static attachment => attachment.Clone()).ToArray())) ?? []);
         var attachments = SelectAttachmentActivities(activity, attachmentContext).ToArray();
+        if (IsLarkActivity(activity) || attachments.Any(static attachment => IsLarkActivity(attachment.Activity)))
+        {
+            _logger.LogWarning(
+                "Channel attachment input selection prepared. activityId={ActivityId} currentAttachmentCount={CurrentAttachmentCount} recentAttachmentCount={RecentAttachmentCount} selectedAttachmentActivityCount={SelectedAttachmentActivityCount} selectedAttachmentCount={SelectedAttachmentCount}",
+                activity.Id,
+                currentAttachmentCount,
+                recentAttachmentCount,
+                attachments.Length,
+                CountAttachments(attachments));
+        }
+
         if (attachments.Length == 0)
             return new UserInputParts(text, parts);
 
@@ -960,6 +1037,17 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         var instruction = unseenCount > 0
             ? BuildAttachmentVisibilityInstruction(unseenCount, unseenReason)
             : null;
+        if (IsLarkActivity(activity) || attachments.Any(static attachment => IsLarkActivity(attachment.Activity)))
+        {
+            _logger.LogWarning(
+                "Channel attachment input processing completed. activityId={ActivityId} selectedAttachmentCount={SelectedAttachmentCount} outputPartCount={OutputPartCount} outputFileRefPartCount={OutputFileRefPartCount} unseenAttachmentCount={UnseenAttachmentCount} imageInputUnsupportedCount={ImageInputUnsupportedCount}",
+                activity.Id,
+                CountAttachments(attachments),
+                parts.Count,
+                parts.Count(static part => part.FileRef is not null),
+                unseenCount,
+                imageInputUnsupportedCount);
+        }
 
         return new UserInputParts(text, parts, instruction);
     }
@@ -2133,11 +2221,13 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         AgentToolExecutionContext? toolContext,
         CancellationToken ct)
     {
-        if (_toolSources.Count == 0)
+        var isNyxIdChatTurn = IsNyxIdChatTurn(toolContext);
+        var toolSources = isNyxIdChatTurn ? _nyxIdChatToolSources : _toolSources;
+        if (toolSources.Count == 0)
             return [];
 
         var discovered = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
-        foreach (var source in _toolSources)
+        foreach (var source in toolSources)
         {
             var tools = await source.DiscoverToolsAsync(ct);
             var excludedDirectChannelToolNames = new List<string>();
@@ -2146,7 +2236,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             {
                 // Channel-side exclusion by GENERIC capability, not by tool name: a tool that
                 // declares AgentToolCapabilities.ExcludeFromDirectChannelChat completes its work
-                // off-chat (e.g. delivered to /workflow/observatory), so surfacing it on this
+                // off-chat (e.g. delivered to /admin#/observatory), so surfacing it on this
                 // direct-channel/Lark agent would let the model silently route a chat user's
                 // request away from their chat. Such tools stay in the global catalog for the
                 // workflow allowlist path; the exclusion is channel-side only. No channel agent
@@ -2157,18 +2247,18 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     continue;
                 }
 
-                if (IsNyxIdChatTurn(toolContext) &&
+                if (isNyxIdChatTurn &&
                     DeclaresCapability(tool, AgentToolCapabilities.ExcludeFromNyxIdChat))
                 {
                     continue;
                 }
 
-                // Human-session management tools do not belong on channel relay or NyxID Assistant
-                // chat surfaces. The relay credential cannot call them, and NyxID Assistant owns
-                // service connection through nyxid_require_service + typed browser actions. Keep
-                // them available to other human-session consumers without exposing them here.
-                if ((isChannelTurn || IsNyxIdChatTurn(toolContext)) &&
-                    DeclaresCapability(tool, AgentToolCapabilities.RequiresHumanSession))
+                var requiresHumanSession =
+                    DeclaresCapability(tool, AgentToolCapabilities.RequiresHumanSession);
+                var hasSourceReadableBearer = !string.IsNullOrWhiteSpace(
+                    AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(toolContext?.Credentials));
+                if (requiresHumanSession &&
+                    (isChannelTurn || (isNyxIdChatTurn && !hasSourceReadableBearer)))
                 {
                     excludedHumanSessionToolNames.Add(tool.Name);
                     continue;
@@ -2193,7 +2283,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         {
             _logger.LogInformation(
                 "Channel effective tool discovery completed: sourceCount={SourceCount}, toolCount={ToolCount}, tools={Tools}",
-                _toolSources.Count,
+                toolSources.Count,
                 effectiveTools.Length,
                 FormatToolNames(effectiveTools.Select(static tool => tool.Name)));
         }

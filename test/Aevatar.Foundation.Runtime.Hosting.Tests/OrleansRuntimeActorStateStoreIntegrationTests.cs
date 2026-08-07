@@ -26,6 +26,33 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 public sealed class OrleansRuntimeActorStateStoreIntegrationTests
 {
     [Fact]
+    public async Task RuntimeActorGrain_ShouldAllowInboxSelfDispatchDuringAgentActivation()
+    {
+        ActivationSelfDispatchAgent.Reset();
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var host = await StartSiloHostAsync();
+
+        try
+        {
+            var grain = host.Services
+                .GetRequiredService<IGrainFactory>()
+                .GetGrain<IRuntimeActorGrain>(actorId);
+
+            (await grain.InitializeAgentByKindAsync("tests.activation-self-dispatch"))
+                .Should()
+                .BeTrue();
+            (await ActivationSelfDispatchAgent.WaitForDeliveryAsync(TimeSpan.FromSeconds(20)))
+                .Should()
+                .Be("activation-continuation");
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task RuntimeActorGrain_ShouldNotRestoreTransientStateWithoutEvents_WhenReinitialized()
     {
         var actorId = $"actor-{Guid.NewGuid():N}";
@@ -315,7 +342,8 @@ public sealed class OrleansRuntimeActorStateStoreIntegrationTests
                         .Register<StateStoreAwareActivationAgent>()
                         .Register<ObserveAwareStatefulAgent>()
                         .Register<PublicationRecoveryGapAgent>()
-                        .Register<OrdinaryActivationFailureAgent>());
+                        .Register<OrdinaryActivationFailureAgent>()
+                        .Register<ActivationSelfDispatchAgent>());
                     configureServices?.Invoke(services);
                 });
             })
@@ -370,6 +398,40 @@ public sealed class OrleansRuntimeActorStateStoreIntegrationTests
     {
         protected override Task OnActivateAsync(CancellationToken ct) =>
             throw new InvalidOperationException("Injected ordinary activation failure.");
+    }
+
+    [GAgent("tests.activation-self-dispatch")]
+    public sealed class ActivationSelfDispatchAgent(IActorDispatchPort dispatchPort)
+        : GAgentBase<Int32Value>
+    {
+        private static TaskCompletionSource<string> _delivery = CreateDeliverySource();
+
+        public static void Reset() =>
+            Interlocked.Exchange(ref _delivery, CreateDeliverySource());
+
+        public static Task<string> WaitForDeliveryAsync(TimeSpan timeout) =>
+            Volatile.Read(ref _delivery).Task.WaitAsync(timeout);
+
+        protected override Task OnActivateAsync(CancellationToken ct) =>
+            dispatchPort.DispatchAsync(
+                Id,
+                new EventEnvelope
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    Payload = Any.Pack(new StringValue { Value = "activation-continuation" }),
+                    Route = EnvelopeRouteSemantics.CreateTopologyPublication(Id, TopologyAudience.Self),
+                },
+                ct);
+
+        [EventHandler(AllowSelfHandling = true)]
+        public Task HandleActivationContinuationAsync(StringValue continuation)
+        {
+            Volatile.Read(ref _delivery).TrySetResult(continuation.Value);
+            return Task.CompletedTask;
+        }
+
+        private static TaskCompletionSource<string> CreateDeliverySource() =>
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     private sealed class FaultInjectingEventStore : IEventStore, IEventStoreMaintenance

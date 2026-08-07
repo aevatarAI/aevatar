@@ -17,6 +17,7 @@ write_fixture() {
     "${root}/src/Aevatar.Mainnet.Host.Api/Voice" \
     "${root}/src/Aevatar.Mainnet.Host.Api/Skills" \
     "${root}/src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi" \
+    "${root}/src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/StudioAssistant/Vendor" \
     "${root}/agents/channels/Aevatar.GAgents.Channel.NyxIdRelay"
 
   printf '<!doctype html><script>const cfg = __BACKEND_CONSOLE_CONFIG__;</script>\n' \
@@ -32,9 +33,21 @@ write_fixture() {
   printf '<!doctype html><script>const cfg = __BACKEND_CONSOLE_CONFIG__;</script>\n' \
     > "${root}/src/Aevatar.Mainnet.Host.Api/Skills/workflow-skills.html"
   printf '<!doctype html><script>const cfg = __BACKEND_CONSOLE_CONFIG__;</script>\n' \
-    > "${root}/src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-observatory.html"
+    > "${root}/src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/admin-workflow-observatory.html"
   printf '<!doctype html><script>const cfg = __BACKEND_CONSOLE_CONFIG__;</script>\n' \
     > "${root}/src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-studio.html"
+  printf '<!doctype html><script>const cfg = __BACKEND_CONSOLE_CONFIG__;</script>\n' \
+    > "${root}/src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/studio-assistant.html"
+  for asset in actor-state.js app.js blocks.js protocol.js readiness.js transport.js; do
+    printf 'export const fixture = true;\n' \
+      > "${root}/src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/StudioAssistant/${asset}"
+  done
+  printf ':root { color-scheme: light; }\n' \
+    > "${root}/src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/StudioAssistant/styles.css"
+  for asset in lucide.min.js marked.min.js purify.min.js; do
+    printf 'globalThis.fixture = true;\n' \
+      > "${root}/src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/StudioAssistant/Vendor/${asset}"
+  done
   printf '<!doctype html><script>const cfg = __BACKEND_CONSOLE_CONFIG__;</script>\n' \
     > "${root}/agents/channels/Aevatar.GAgents.Channel.NyxIdRelay/channels.html"
 
@@ -50,8 +63,19 @@ write_fixture() {
 XML
   cat > "${root}/src/workflow/Aevatar.Workflow.Infrastructure/Aevatar.Workflow.Infrastructure.csproj" <<'XML'
 <Project><ItemGroup>
-  <EmbeddedResource Include="CapabilityApi\workflow-observatory.html" />
+  <EmbeddedResource Include="CapabilityApi\admin-workflow-observatory.html" />
   <EmbeddedResource Include="CapabilityApi\workflow-studio.html" />
+  <EmbeddedResource Include="CapabilityApi\studio-assistant.html" />
+  <EmbeddedResource Include="CapabilityApi\StudioAssistant\actor-state.js" />
+  <EmbeddedResource Include="CapabilityApi\StudioAssistant\app.js" />
+  <EmbeddedResource Include="CapabilityApi\StudioAssistant\blocks.js" />
+  <EmbeddedResource Include="CapabilityApi\StudioAssistant\protocol.js" />
+  <EmbeddedResource Include="CapabilityApi\StudioAssistant\readiness.js" />
+  <EmbeddedResource Include="CapabilityApi\StudioAssistant\styles.css" />
+  <EmbeddedResource Include="CapabilityApi\StudioAssistant\transport.js" />
+  <EmbeddedResource Include="CapabilityApi\StudioAssistant\Vendor\lucide.min.js" />
+  <EmbeddedResource Include="CapabilityApi\StudioAssistant\Vendor\marked.min.js" />
+  <EmbeddedResource Include="CapabilityApi\StudioAssistant\Vendor\purify.min.js" />
 </ItemGroup></Project>
 XML
   cat > "${root}/agents/channels/Aevatar.GAgents.Channel.NyxIdRelay/Aevatar.GAgents.Channel.NyxIdRelay.csproj" <<'XML'
@@ -125,5 +149,11 @@ write_fixture "${wwwroot}"
 printf '<script src="/wwwroot/app.js"></script>\n' \
   >> "${wwwroot}/src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-studio.html"
 assert_fails_with "zero-build" "${wwwroot}"
+
+external_runtime="${TMP_DIR}/external-runtime"
+write_fixture "${external_runtime}"
+printf '<script src="https://cdn.example.test/runtime.js"></script>\n' \
+  >> "${external_runtime}/src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/studio-assistant.html"
+assert_fails_with "runtime assets must be self-contained" "${external_runtime}"
 
 echo "backend console static asset guard tests passed"

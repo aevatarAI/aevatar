@@ -565,7 +565,9 @@ public static class AgentToolExecutionContextMapper
             AgentToolExecutionContext.Normalize(payload.PrimarySkillName),
             payload.MaxOrnnSearchAttempts,
             AgentToolExecutionContext.Normalize(payload.CommandArguments),
-            payload.DiscoveryRequested);
+            payload.DiscoveryRequested,
+            payload.IsolatePriorConversationHistory,
+            payload.MountWorkflowsRequested);
     }
 
     private static AgentSkillRecoveryContext FromSkillRecoveryCheckpointPayload(
@@ -582,7 +584,9 @@ public static class AgentToolExecutionContextMapper
             AgentToolExecutionContext.Normalize(payload.PrimarySkillName),
             payload.MaxOrnnSearchAttempts,
             CommandArguments: null,
-            payload.DiscoveryRequested);
+            payload.DiscoveryRequested,
+            payload.IsolatePriorConversationHistory,
+            payload.MountWorkflowsRequested);
     }
 
     private static AgentToolCredentialSource FromCredentialSourcePayload(AgentToolCredentialSourcePayload source) =>
@@ -663,6 +667,8 @@ public static class AgentToolExecutionContextMapper
             MaxOrnnSearchAttempts = context.MaxOrnnSearchAttempts,
             CommandArguments = context.CommandArguments ?? string.Empty,
             DiscoveryRequested = context.DiscoveryRequested,
+            IsolatePriorConversationHistory = context.IsolatePriorConversationHistory,
+            MountWorkflowsRequested = context.MountWorkflowsRequested,
         };
 
     private static AgentSkillRecoveryCheckpointPayload ToSkillRecoveryCheckpointPayload(
@@ -675,6 +681,8 @@ public static class AgentToolExecutionContextMapper
             PrimarySkillName = context.PrimarySkillName ?? string.Empty,
             MaxOrnnSearchAttempts = context.MaxOrnnSearchAttempts,
             DiscoveryRequested = context.DiscoveryRequested,
+            IsolatePriorConversationHistory = context.IsolatePriorConversationHistory,
+            MountWorkflowsRequested = context.MountWorkflowsRequested,
         };
 
     private static AgentToolVisibilityScope FromToolVisibilityPayload(AgentToolVisibilityScopePayload? payload)

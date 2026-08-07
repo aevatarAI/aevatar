@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgents.Channel.Runtime;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -18,6 +19,13 @@ public interface IAgentRunReplyGenerationExecutorPort
         AgentRunReplyStepExecutionRequest request,
         AgentRunAuthorizedToolStep? authorizedToolStep,
         CancellationToken ct);
+
+    Task<AgentRunNextToolStepRequestedEvent> BuildApprovedToolStepContinuationAsync(
+        AgentRunReplyStepExecutionRequest request,
+        AgentRunPendingToolApprovalState pendingApproval,
+        CancellationToken ct) =>
+        Task.FromException<AgentRunNextToolStepRequestedEvent>(
+            new NotSupportedException("Approved AgentRun tool continuation is not supported by this executor."));
 }
 
 public sealed record AgentRunLlmStepExecution(
@@ -35,7 +43,9 @@ public sealed record AgentRunAuthorizedToolCallSafety(
     string ToolName,
     string ArgumentsJson,
     AgentToolCallSafety CallSafety,
-    string SideEffectKind);
+    string SideEffectKind,
+    string ToolDefinitionFingerprint = "",
+    ToolPresentationDescriptor? Presentation = null);
 
 public sealed class AgentRunAuthorizedToolStep
 {
@@ -244,4 +254,6 @@ public sealed record AgentRunReplyStepExecutionRequest(
     NeedsLlmReplyEvent Request,
     AgentRunReplyStepState StepState,
     Func<LLMStreamChunk, CancellationToken, Task>? ReportChunkAsync = null,
-    AgentProfileTurnCatalog? TurnCatalog = null);
+    AgentProfileTurnCatalog? TurnCatalog = null,
+    bool AllowDurableToolAuthorization = false,
+    bool? AllowMultipleToolCalls = null);

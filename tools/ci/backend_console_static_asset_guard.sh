@@ -26,8 +26,19 @@ asset_files=(
   "src/Aevatar.Mainnet.Host.Api/Cqrs/cqrs-observatory.html"
   "src/Aevatar.Mainnet.Host.Api/Voice/voice-console.html"
   "src/Aevatar.Mainnet.Host.Api/Skills/workflow-skills.html"
-  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-observatory.html"
+  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/admin-workflow-observatory.html"
   "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-studio.html"
+  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/studio-assistant.html"
+  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/StudioAssistant/actor-state.js"
+  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/StudioAssistant/app.js"
+  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/StudioAssistant/blocks.js"
+  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/StudioAssistant/protocol.js"
+  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/StudioAssistant/readiness.js"
+  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/StudioAssistant/styles.css"
+  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/StudioAssistant/transport.js"
+  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/StudioAssistant/Vendor/lucide.min.js"
+  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/StudioAssistant/Vendor/marked.min.js"
+  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/StudioAssistant/Vendor/purify.min.js"
   "agents/channels/Aevatar.GAgents.Channel.NyxIdRelay/channels.html"
 )
 
@@ -37,10 +48,13 @@ config_asset_files=(
   "src/Aevatar.Mainnet.Host.Api/Cqrs/cqrs-observatory.html"
   "src/Aevatar.Mainnet.Host.Api/Voice/voice-console.html"
   "src/Aevatar.Mainnet.Host.Api/Skills/workflow-skills.html"
-  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-observatory.html"
+  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/admin-workflow-observatory.html"
   "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-studio.html"
+  "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/studio-assistant.html"
   "agents/channels/Aevatar.GAgents.Channel.NyxIdRelay/channels.html"
 )
+
+assistant_page="src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/studio-assistant.html"
 
 old_carriers=(
   "src/Aevatar.Mainnet.Host.Api/BackendConsole/AutoConsoleCallbackPage.cs"
@@ -76,7 +90,7 @@ for file in "${asset_files[@]}"; do
     continue
   fi
 
-  host_fact_hits="$(rg -n -P 'https://nyx\.chrono-ai\.fun|https://nyx-api\.chrono-ai\.fun|37a93189-2734-406e-bca1-7dbdf25c5a53|aevatar-console:nyxid:pkce|openid profile email proxy' "${path}" || true)"
+  host_fact_hits="$(rg -n -P 'https://nyx\.chrono-ai\.fun|https://nyx-api\.chrono-ai\.fun|37a93189-2734-406e-bca1-7dbdf25c5a53|aevatar-console:nyxid:pkce|openid profile email (?:offline_access )?proxy' "${path}" || true)"
   if [[ -n "${host_fact_hits}" ]]; then
     echo "${host_fact_hits}"
     echo "${file}: backend console page assets must not hardcode Nyx/OIDC host facts."
@@ -90,6 +104,16 @@ for file in "${asset_files[@]}"; do
     violations=$((violations + 1))
   fi
 done
+
+assistant_page_path="${ROOT}/${assistant_page}"
+if [[ -f "${assistant_page_path}" ]]; then
+  external_runtime_hits="$(rg -n -P '<(?:script|link)\b[^>]*(?:src|href)="(?:https?:)?//' "${assistant_page_path}" || true)"
+  if [[ -n "${external_runtime_hits}" ]]; then
+    echo "${external_runtime_hits}"
+    echo "${assistant_page}: Studio Assistant runtime assets must be self-contained."
+    violations=$((violations + 1))
+  fi
+fi
 
 for file in "${config_asset_files[@]}"; do
   path="${ROOT}/${file}"

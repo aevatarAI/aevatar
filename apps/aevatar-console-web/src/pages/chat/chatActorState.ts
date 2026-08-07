@@ -1,0 +1,844 @@
+type JsonRecord = Record<string, unknown>;
+
+const ACTOR_EVENT_NAMES = {
+  "nyxid.task.snapshot": "task_snapshot",
+  "nyxid.task.step.changed": "task_step_changed",
+  "nyxid.control.changed": "control_changed",
+  "nyxid.continuation.changed": "continuation_changed",
+  "nyxid.step.control.changed": "step_control_changed",
+  "nyxid.input.request": "input_request",
+  "nyxid.input.changed": "input_changed",
+  "nyxid.approval.request": "approval_request",
+  "nyxid.approval.changed": "approval_changed",
+  "nyxid.action.request": "action_request",
+} as const;
+
+const ACTION_IDENTITY_KEYS = [
+  "actorId",
+  "originTurnId",
+  "taskId",
+  "stepId",
+  "actionRequestId",
+] as const;
+const ACTION_KEYS = [
+  "schemaVersion",
+  ...ACTION_IDENTITY_KEYS,
+  "action",
+  "params",
+];
+const FORBIDDEN_ACTION_KEY =
+  /(?:^|[_-])(authorization|api[-_]?key|token|secret|password|credential|cookie|user[-_]?code|device[-_]?code)(?:$|[_-])/i;
+const SECRET_VALUE =
+  /(Bearer\s+)[A-Za-z0-9._~+/-]+|nyx(?:id)?_[A-Za-z0-9_-]{8,}/gi;
+const ACTION_CACHE_PREFIX = "aevatar-console:chat-action:v4:";
+const CUSTOM_SERVICE_AUTH_METHODS = [
+  "bearer",
+  "header",
+  "query",
+  "path",
+  "basic",
+  "body",
+  "none",
+] as const;
+type ChatCustomServiceAuthMethod =
+  (typeof CUSTOM_SERVICE_AUTH_METHODS)[number];
+
+export class ChatActorProtocolError extends Error {
+  readonly code: string;
+
+  constructor(message: string, code: string) {
+    super(message);
+    this.name = "ChatActorProtocolError";
+    this.code = code;
+  }
+}
+
+export type ChatAvailableActions = {
+  retry: boolean;
+  skip: boolean;
+  stop: boolean;
+};
+
+export type ChatActorStep = JsonRecord & {
+  stepId: string;
+  order?: number;
+  availableActions?: ChatAvailableActions;
+  operation?: (JsonRecord & { operationGeneration?: number }) | null;
+};
+
+export type ChatPendingInput = JsonRecord & {
+  requestId: string;
+  prompt: string;
+  options: readonly { optionId: string; label: string; description?: string }[];
+  allowFreeText: boolean;
+  multiSelect: boolean;
+};
+
+export type ChatPendingApproval = JsonRecord & {
+  approvalRequestId: string;
+  toolName: string;
+  action?: string;
+  target?: string;
+};
+
+export type ChatServiceConnectActionRequest = {
+  readonly schemaVersion: 4;
+  readonly actorId: string;
+  readonly originTurnId: string;
+  readonly taskId: string;
+  readonly stepId: string;
+  readonly actionRequestId: string;
+  readonly action: "service.connect";
+  readonly params:
+    | {
+        readonly catalogService: {
+          readonly serviceSlug: string;
+          readonly requestedScopes?: readonly string[];
+          readonly viaNodeId?: string;
+          readonly targetOrgId?: string;
+        };
+      }
+    | {
+        readonly customService: {
+          readonly name: string;
+          readonly endpointUrl: string;
+          readonly authMethod: ChatCustomServiceAuthMethod;
+          readonly authKeyName?: string;
+          readonly viaNodeId?: string;
+          readonly targetOrgId?: string;
+        };
+      };
+};
+
+export type ChatActionSummary = {
+  schemaVersion: number;
+  actorId: string;
+  originTurnId: string;
+  taskId: string;
+  stepId: string;
+  actionRequestId: string;
+  action: string;
+  reports?: readonly JsonRecord[];
+  postconditionResult?: JsonRecord | null;
+  request?: ChatServiceConnectActionRequest | null;
+  conflicted?: boolean;
+};
+
+export type ChatActorProjection = {
+  actorId: string | null;
+  scopeId: string | null;
+  stateVersion: number;
+  progressSequence: number;
+  activeTurn: JsonRecord | null;
+  latestTurn: JsonRecord | null;
+  recentTerminalTurns: JsonRecord[];
+  task: JsonRecord | null;
+  steps: Map<string, ChatActorStep>;
+  pendingInput: ChatPendingInput | null;
+  pendingApproval: ChatPendingApproval | null;
+  actions: Map<string, ChatActionSummary>;
+  controlFence: JsonRecord | null;
+  latestControlResult: JsonRecord | null;
+  continuation: JsonRecord | null;
+  latestStepControlResult: JsonRecord | null;
+  latestInputResolution: JsonRecord | null;
+  latestApprovalResolution: JsonRecord | null;
+  conflicts: readonly { code: string }[];
+};
+
+export type ChatActorFrame =
+  | { type: "ignored" }
+  | {
+      type:
+        | "task_snapshot"
+        | "task_step_changed"
+        | "control_changed"
+        | "continuation_changed"
+        | "step_control_changed"
+        | "input_request"
+        | "input_changed"
+        | "approval_request"
+        | "approval_changed";
+      sequence: number;
+      payload: JsonRecord;
+    }
+  | {
+      type: "action_request";
+      sequence: number;
+      request: ChatServiceConnectActionRequest;
+    };
+
+export function createChatActorProjection(
+  actorId: string | null = null
+): ChatActorProjection {
+  return {
+    actorId,
+    scopeId: null,
+    stateVersion: 0,
+    progressSequence: 0,
+    activeTurn: null,
+    latestTurn: null,
+    recentTerminalTurns: [],
+    task: null,
+    steps: new Map(),
+    pendingInput: null,
+    pendingApproval: null,
+    actions: new Map(),
+    controlFence: null,
+    latestControlResult: null,
+    continuation: null,
+    latestStepControlResult: null,
+    latestInputResolution: null,
+    latestApprovalResolution: null,
+    conflicts: [],
+  };
+}
+
+export function decodeActorFrame(raw: unknown): ChatActorFrame {
+  const frame = optionalRecord(raw);
+  const custom = optionalRecord(frame?.custom);
+  const name = typeof custom?.name === "string" ? custom.name : "";
+  const type = ACTOR_EVENT_NAMES[name as keyof typeof ACTOR_EVENT_NAMES];
+  if (!type) return { type: "ignored" };
+  const sequence = frame?.sequence;
+  if (!validVersion(sequence)) {
+    throw new ChatActorProtocolError(
+      "Actor progress sequence is invalid.",
+      "NYXID_SEQUENCE_INVALID"
+    );
+  }
+  const payload = unpackAny(custom?.payload);
+  return type === "action_request"
+    ? { type, sequence, request: validateActionRequest(payload) }
+    : { type, sequence, payload };
+}
+
+export function reduceActorFrame(
+  projection: ChatActorProjection,
+  frame: ChatActorFrame
+): ChatActorProjection {
+  if (frame.type === "ignored" || frame.sequence < projection.progressSequence) {
+    return projection;
+  }
+  const next = cloneProjection(projection);
+  next.progressSequence = frame.sequence;
+  switch (frame.type) {
+    case "task_snapshot":
+      applyTask(next, frame.payload);
+      break;
+    case "task_step_changed":
+      applyStep(next, frame.payload);
+      break;
+    case "control_changed":
+      next.latestControlResult = cloneRecord(frame.payload);
+      break;
+    case "continuation_changed":
+      next.continuation = cloneRecord(frame.payload);
+      break;
+    case "step_control_changed":
+      next.latestStepControlResult = cloneRecord(frame.payload);
+      break;
+    case "input_request":
+      next.pendingInput = frame.payload as ChatPendingInput;
+      break;
+    case "input_changed":
+      next.latestInputResolution = cloneRecord(frame.payload);
+      if (next.pendingInput?.requestId === frame.payload.requestId) {
+        next.pendingInput = null;
+      }
+      break;
+    case "approval_request":
+      next.pendingApproval = normalizePendingApproval(frame.payload);
+      break;
+    case "approval_changed":
+      next.latestApprovalResolution = cloneRecord(frame.payload);
+      if (
+        next.pendingApproval?.approvalRequestId ===
+        (frame.payload.approvalRequestId ?? frame.payload.requestId)
+      ) {
+        next.pendingApproval = null;
+      }
+      break;
+    case "action_request":
+      applyActionRequest(next, frame.request);
+      break;
+  }
+  return next;
+}
+
+export function applyCurrentStateResult(
+  projection: ChatActorProjection,
+  input: unknown
+): { projection: ChatActorProjection; reloadWithoutCursor: boolean } {
+  const envelope = optionalRecord(input);
+  if (!envelope) {
+    return {
+      projection: withConflict(projection, "NYXID_STATE_STATUS_INVALID"),
+      reloadWithoutCursor: false,
+    };
+  }
+  const status = envelope.status;
+  if (status === "reload_required") {
+    return { projection, reloadWithoutCursor: true };
+  }
+  if (status === "not_found") {
+    return {
+      projection: createChatActorProjection(projection.actorId),
+      reloadWithoutCursor: false,
+    };
+  }
+  if (status === "not_modified") {
+    return validVersion(envelope.stateVersion) &&
+      envelope.stateVersion === projection.stateVersion
+      ? { projection, reloadWithoutCursor: false }
+      : {
+          projection: withConflict(projection, "NYXID_STATE_VERSION_CONFLICT"),
+          reloadWithoutCursor: false,
+        };
+  }
+  if (status !== "current") {
+    return {
+      projection: withConflict(projection, "NYXID_STATE_STATUS_INVALID"),
+      reloadWithoutCursor: false,
+    };
+  }
+
+  const snapshot = optionalRecord(envelope.snapshot);
+  if (
+    !snapshot ||
+    !validVersion(envelope.stateVersion) ||
+    envelope.stateVersion !== snapshot.stateVersion ||
+    !validVersion(snapshot.progressSequence)
+  ) {
+    return {
+      projection: withConflict(projection, "NYXID_STATE_SNAPSHOT_INVALID"),
+      reloadWithoutCursor: false,
+    };
+  }
+  if (
+    projection.stateVersion > envelope.stateVersion ||
+    projection.progressSequence > snapshot.progressSequence
+  ) {
+    return { projection, reloadWithoutCursor: false };
+  }
+  const actorId = readIdentity(snapshot.actorId);
+  const scopeId = readIdentity(snapshot.scopeId);
+  if (
+    !actorId ||
+    !scopeId ||
+    (projection.actorId && projection.actorId !== actorId) ||
+    (projection.scopeId && projection.scopeId !== scopeId)
+  ) {
+    return {
+      projection: withConflict(projection, "NYXID_STATE_IDENTITY_CONFLICT"),
+      reloadWithoutCursor: false,
+    };
+  }
+
+  const next = createChatActorProjection(actorId);
+  next.scopeId = scopeId;
+  next.stateVersion = envelope.stateVersion;
+  next.progressSequence = snapshot.progressSequence;
+  next.activeTurn = cloneNullableRecord(snapshot.activeTurn);
+  next.latestTurn = cloneNullableRecord(snapshot.latestTurn);
+  next.recentTerminalTurns = Array.isArray(snapshot.recentTerminalTurns)
+    ? snapshot.recentTerminalTurns
+        .map(optionalRecord)
+        .filter((value): value is JsonRecord => Boolean(value))
+        .map(cloneRecord)
+    : [];
+  next.pendingInput = optionalRecord(snapshot.pendingInput) as ChatPendingInput | null;
+  next.pendingApproval = normalizePendingApproval(snapshot.pendingApproval);
+  next.controlFence = cloneNullableRecord(snapshot.controlFence);
+  next.latestControlResult = cloneNullableRecord(snapshot.latestControlResult);
+  next.continuation = cloneNullableRecord(snapshot.continuationAdmission);
+  next.latestInputResolution = cloneNullableRecord(
+    snapshot.latestInputResolution
+  );
+  next.latestApprovalResolution = cloneNullableRecord(
+    snapshot.latestApprovalResolution
+  );
+  next.conflicts = [...projection.conflicts];
+  const activeTask = optionalRecord(snapshot.activeTask);
+  if (activeTask) applyTask(next, activeTask);
+  applyActionSummaries(next, snapshot.pendingActions);
+  return { projection: next, reloadWithoutCursor: false };
+}
+
+export function actorCan(
+  projection: ChatActorProjection | null | undefined,
+  action: "retry" | "skip" | "stop",
+  stepId?: string
+): boolean {
+  if (!projection) return false;
+  if (action === "stop" && !stepId) {
+    return [...projection.steps.values()].some(
+      (step) => step.availableActions?.stop === true
+    );
+  }
+  if (!stepId) return false;
+  return projection.steps.get(stepId)?.availableActions?.[action] === true;
+}
+
+export function validateActionRequest(
+  input: unknown
+): ChatServiceConnectActionRequest {
+  const value = unpackAny(input);
+  assertAllowedKeys(value, ACTION_KEYS);
+  if (value.schemaVersion !== 4 || value.action !== "service.connect") {
+    throw new ChatActorProtocolError(
+      "Unsupported NyxID action request.",
+      "NYXID_ACTION_UNSUPPORTED"
+    );
+  }
+  const identity = Object.fromEntries(
+    ACTION_IDENTITY_KEYS.map((key) => [key, requireIdentity(value[key])])
+  ) as Record<(typeof ACTION_IDENTITY_KEYS)[number], string>;
+  const params = validateServiceConnectParams(value.params);
+  rejectSecretBearingInput({ ...identity, params });
+  return {
+    schemaVersion: 4,
+    ...identity,
+    action: "service.connect",
+    params,
+  };
+}
+
+export function writeCachedActionRequest(
+  request: ChatServiceConnectActionRequest
+): void {
+  const validated = validateActionRequest(request);
+  try {
+    globalThis.sessionStorage?.setItem(
+      actionCacheKey(validated.actorId, validated.actionRequestId),
+      JSON.stringify(validated)
+    );
+  } catch {
+    // Session cache is optional; live actor facts remain authoritative.
+  }
+}
+
+export function readCachedActionRequest(
+  summary: Omit<ChatActionSummary, "request">
+): ChatServiceConnectActionRequest | null {
+  try {
+    const raw = globalThis.sessionStorage?.getItem(
+      actionCacheKey(summary.actorId, summary.actionRequestId)
+    );
+    if (!raw || summary.conflicted) return null;
+    const request = validateActionRequest(JSON.parse(raw));
+    return summary.schemaVersion === request.schemaVersion &&
+      summary.action === request.action &&
+      ACTION_IDENTITY_KEYS.every((key) => summary[key] === request[key])
+      ? request
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function chatActionIdentityKey(
+  actorId: string,
+  actionRequestId: string
+): string {
+  return JSON.stringify([actorId, actionRequestId]);
+}
+
+function validateServiceConnectParams(
+  input: unknown
+): ChatServiceConnectActionRequest["params"] {
+  const value = requireRecord(input, "NYXID_ACTION_VARIANT_INVALID");
+  assertAllowedKeys(value, ["catalogService", "customService"]);
+  const hasCatalog = "catalogService" in value;
+  const hasCustom = "customService" in value;
+  if (hasCatalog === hasCustom) throw invalidVariant();
+  if (hasCatalog) {
+    const catalog = requireRecord(
+      value.catalogService,
+      "NYXID_ACTION_VARIANT_INVALID"
+    );
+    assertAllowedKeys(catalog, [
+      "serviceSlug",
+      "requestedScopes",
+      "viaNodeId",
+      "targetOrgId",
+    ]);
+    const serviceSlug = requireBoundedString(catalog.serviceSlug, 128);
+    if (!/^[A-Za-z0-9._-]+$/.test(serviceSlug)) throw invalidVariant();
+    const requestedScopes = catalog.requestedScopes;
+    if (
+      requestedScopes !== undefined &&
+      (!Array.isArray(requestedScopes) || requestedScopes.length > 64)
+    ) {
+      throw invalidVariant();
+    }
+    return {
+      catalogService: {
+        serviceSlug,
+        ...(requestedScopes !== undefined
+          ? {
+              requestedScopes: requestedScopes.map((scope) =>
+                requireBoundedString(scope, 256)
+              ),
+            }
+          : {}),
+        ...(catalog.viaNodeId !== undefined
+          ? { viaNodeId: requireIdentity(catalog.viaNodeId) }
+          : {}),
+        ...(catalog.targetOrgId !== undefined
+          ? { targetOrgId: requireIdentity(catalog.targetOrgId) }
+          : {}),
+      },
+    };
+  }
+
+  const custom = requireRecord(
+    value.customService,
+    "NYXID_ACTION_VARIANT_INVALID"
+  );
+  assertAllowedKeys(custom, [
+    "name",
+    "endpointUrl",
+    "authMethod",
+    "authKeyName",
+    "viaNodeId",
+    "targetOrgId",
+  ]);
+  const requestedAuthMethod = requireBoundedString(custom.authMethod, 32);
+  const authMethod = CUSTOM_SERVICE_AUTH_METHODS.find(
+    (method) => method === requestedAuthMethod
+  );
+  if (!authMethod) throw invalidVariant();
+  const endpointUrl = requireBoundedString(custom.endpointUrl, 2048);
+  const authKeyName =
+    custom.authKeyName === undefined
+      ? undefined
+      : requireBoundedString(custom.authKeyName, 256);
+  if (authKeyName !== undefined && !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(authKeyName)) {
+    throw invalidVariant();
+  }
+  let url: URL;
+  try {
+    url = new URL(endpointUrl);
+  } catch {
+    throw unsafeUrl();
+  }
+  if (
+    url.protocol !== "https:" ||
+    !url.hostname ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw unsafeUrl();
+  }
+  return {
+    customService: {
+      name: requireBoundedString(custom.name, 256),
+      endpointUrl,
+      authMethod,
+      ...(authKeyName !== undefined ? { authKeyName } : {}),
+      ...(custom.viaNodeId !== undefined
+        ? { viaNodeId: requireIdentity(custom.viaNodeId) }
+        : {}),
+      ...(custom.targetOrgId !== undefined
+        ? { targetOrgId: requireIdentity(custom.targetOrgId) }
+        : {}),
+    },
+  };
+}
+
+function applyTask(projection: ChatActorProjection, task: JsonRecord): void {
+  projection.task = cloneRecord(task);
+  const steps = Array.isArray(task.steps)
+    ? task.steps
+        .map(optionalRecord)
+        .filter((value): value is JsonRecord => Boolean(value))
+        .map((value) => value as ChatActorStep)
+        .filter((step) => Boolean(readIdentity(step.stepId)))
+        .sort((left, right) =>
+          Number(left.order ?? Number.MAX_SAFE_INTEGER) -
+            Number(right.order ?? Number.MAX_SAFE_INTEGER) ||
+          left.stepId.localeCompare(right.stepId)
+        )
+    : [];
+  projection.steps = new Map(steps.map((step) => [step.stepId, cloneStep(step)]));
+}
+
+function applyStep(projection: ChatActorProjection, input: JsonRecord): void {
+  const stepId = readIdentity(input.stepId);
+  if (!stepId) return;
+  const step = { ...projection.steps.get(stepId), ...cloneRecord(input), stepId };
+  projection.steps.set(stepId, step as ChatActorStep);
+}
+
+function applyActionRequest(
+  projection: ChatActorProjection,
+  request: ChatServiceConnectActionRequest
+): void {
+  if (projection.actorId && projection.actorId !== request.actorId) {
+    projection.conflicts = [
+      ...projection.conflicts,
+      { code: "NYXID_STATE_IDENTITY_CONFLICT" },
+    ];
+    return;
+  }
+  const existing = projection.actions.get(request.actionRequestId);
+  if (
+    existing &&
+    (!actionIdentityMatches(existing, request) ||
+      (existing.request &&
+        JSON.stringify(existing.request) !== JSON.stringify(request)))
+  ) {
+    projection.actions.set(request.actionRequestId, {
+      ...existing,
+      conflicted: true,
+    });
+    return;
+  }
+  projection.actorId ||= request.actorId;
+  projection.actions.set(request.actionRequestId, {
+    schemaVersion: request.schemaVersion,
+    ...Object.fromEntries(
+      ACTION_IDENTITY_KEYS.map((key) => [key, request[key]])
+    ),
+    action: request.action,
+    reports: existing?.reports ?? [],
+    postconditionResult: existing?.postconditionResult ?? null,
+    request,
+  } as ChatActionSummary);
+  writeCachedActionRequest(request);
+}
+
+function actionCacheKey(actorId: string, actionRequestId: string): string {
+  return `${ACTION_CACHE_PREFIX}${chatActionIdentityKey(actorId, actionRequestId)}`;
+}
+
+function applyActionSummaries(
+  projection: ChatActorProjection,
+  input: unknown
+): void {
+  projection.actions = new Map();
+  if (!Array.isArray(input)) return;
+  for (const raw of input) {
+    const summary = optionalRecord(raw);
+    if (!summary) continue;
+    const actionRequestId = readIdentity(summary.actionRequestId);
+    const originTurnId = readIdentity(summary.originTurnId);
+    const taskId = readIdentity(summary.taskId);
+    const stepId = readIdentity(summary.stepId);
+    if (!actionRequestId || !originTurnId || !taskId || !stepId) continue;
+    const existing = projection.actions.get(actionRequestId);
+    if (existing) {
+      projection.actions.set(actionRequestId, {
+        ...existing,
+        conflicted: true,
+        request: null,
+      });
+      projection.conflicts = [
+        ...projection.conflicts,
+        { code: "NYXID_ACTION_ID_CONFLICT" },
+      ];
+      continue;
+    }
+    const item: ChatActionSummary = {
+      schemaVersion:
+        typeof summary.schemaVersion === "number" ? summary.schemaVersion : 0,
+      actorId: projection.actorId ?? "",
+      originTurnId,
+      taskId,
+      stepId,
+      actionRequestId,
+      action: typeof summary.action === "string" ? summary.action : "",
+      reports: Array.isArray(summary.reports)
+        ? (summary.reports.filter(optionalRecord) as JsonRecord[])
+        : [],
+      postconditionResult: cloneNullableRecord(summary.postconditionResult),
+    };
+    item.request = readCachedActionRequest(item);
+    projection.actions.set(actionRequestId, item);
+  }
+}
+
+function normalizePendingApproval(input: unknown): ChatPendingApproval | null {
+  const value = optionalRecord(input);
+  if (!value) return null;
+  const presentation = optionalRecord(value.presentation);
+  const normalized = { ...cloneRecord(value), ...(presentation ?? {}) };
+  const approvalRequestId = readIdentity(
+    value.approvalRequestId ?? value.requestId
+  );
+  if (!approvalRequestId) return null;
+  return {
+    ...normalized,
+    approvalRequestId,
+    toolName: typeof normalized.toolName === "string" ? normalized.toolName : "",
+  };
+}
+
+function actionIdentityMatches(
+  summary: ChatActionSummary,
+  request: ChatServiceConnectActionRequest
+): boolean {
+  return (
+    summary.schemaVersion === request.schemaVersion &&
+    summary.action === request.action &&
+    ACTION_IDENTITY_KEYS.every((key) => summary[key] === request[key])
+  );
+}
+
+function unpackAny(input: unknown): JsonRecord {
+  const value = requireRecord(input, "NYXID_ACTION_VARIANT_INVALID");
+  const nested = optionalRecord(value.value);
+  if (nested) return nested;
+  const result = { ...value };
+  delete result["@type"];
+  return result;
+}
+
+function assertAllowedKeys(value: JsonRecord, allowed: readonly string[]): void {
+  const set = new Set(allowed);
+  if (Object.keys(value).some((key) => !set.has(key))) {
+    throw new ChatActorProtocolError(
+      "NyxID action contains an undeclared field.",
+      "NYXID_FIELD_UNDECLARED"
+    );
+  }
+}
+
+function rejectSecretBearingInput(value: unknown): void {
+  if (Array.isArray(value)) {
+    value.forEach(rejectSecretBearingInput);
+  } else if (value && typeof value === "object") {
+    for (const [key, child] of Object.entries(value)) {
+      if (FORBIDDEN_ACTION_KEY.test(key)) throw secretForbidden();
+      rejectSecretBearingInput(child);
+    }
+  } else if (typeof value === "string") {
+    SECRET_VALUE.lastIndex = 0;
+    if (SECRET_VALUE.test(value)) throw secretForbidden();
+  }
+}
+
+function requireRecord(input: unknown, code: string): JsonRecord {
+  const value = optionalRecord(input);
+  if (!value) throw new ChatActorProtocolError("Invalid object.", code);
+  return value;
+}
+
+function optionalRecord(input: unknown): JsonRecord | null {
+  return input && typeof input === "object" && !Array.isArray(input)
+    ? (input as JsonRecord)
+    : null;
+}
+
+function validVersion(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function readIdentity(value: unknown): string | null {
+  if (typeof value !== "string" || value.length < 1 || value.length > 256) {
+    return null;
+  }
+  const invalid = [...value].some((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 31 || code === 127 || /[\s/\\?#]/u.test(character);
+  });
+  return invalid ? null : value;
+}
+
+function requireIdentity(value: unknown): string {
+  const identity = readIdentity(value);
+  if (!identity) {
+    throw new ChatActorProtocolError(
+      "NyxID action identity is invalid.",
+      "NYXID_IDENTITY_INVALID"
+    );
+  }
+  return identity;
+}
+
+function requireBoundedString(value: unknown, maximum: number): string {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > maximum ||
+    value.trim() !== value
+  ) {
+    throw invalidVariant();
+  }
+  return value;
+}
+
+function invalidVariant(): ChatActorProtocolError {
+  return new ChatActorProtocolError(
+    "NyxID action params are invalid.",
+    "NYXID_ACTION_VARIANT_INVALID"
+  );
+}
+
+function unsafeUrl(): ChatActorProtocolError {
+  return new ChatActorProtocolError(
+    "NyxID action URL is unsafe.",
+    "NYXID_URL_UNSAFE"
+  );
+}
+
+function secretForbidden(): ChatActorProtocolError {
+  return new ChatActorProtocolError(
+    "NyxID action input must not contain secrets.",
+    "NYXID_SECRET_FORBIDDEN"
+  );
+}
+
+function cloneProjection(projection: ChatActorProjection): ChatActorProjection {
+  return {
+    ...projection,
+    recentTerminalTurns: projection.recentTerminalTurns.map(cloneRecord),
+    task: cloneNullableRecord(projection.task),
+    steps: new Map(
+      [...projection.steps].map(([key, value]) => [key, cloneStep(value)])
+    ),
+    pendingInput: projection.pendingInput
+      ? ({ ...projection.pendingInput } as ChatPendingInput)
+      : null,
+    pendingApproval: projection.pendingApproval
+      ? ({ ...projection.pendingApproval } as ChatPendingApproval)
+      : null,
+    actions: new Map(
+      [...projection.actions].map(([key, value]) => [key, { ...value }])
+    ),
+    conflicts: [...projection.conflicts],
+  };
+}
+
+function cloneStep(step: ChatActorStep): ChatActorStep {
+  return {
+    ...step,
+    ...(step.availableActions
+      ? { availableActions: { ...step.availableActions } }
+      : {}),
+    ...(step.operation ? { operation: { ...step.operation } } : {}),
+  };
+}
+
+function cloneRecord(value: JsonRecord): JsonRecord {
+  return JSON.parse(JSON.stringify(value)) as JsonRecord;
+}
+
+function cloneNullableRecord(value: unknown): JsonRecord | null {
+  const record = optionalRecord(value);
+  return record ? cloneRecord(record) : null;
+}
+
+function withConflict(
+  projection: ChatActorProjection,
+  code: string
+): ChatActorProjection {
+  const next = cloneProjection(projection);
+  if (!next.conflicts.some((conflict) => conflict.code === code)) {
+    next.conflicts = [...next.conflicts, { code }];
+  }
+  return next;
+}

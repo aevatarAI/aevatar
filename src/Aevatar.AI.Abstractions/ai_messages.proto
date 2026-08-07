@@ -208,6 +208,11 @@ message AgentSkillRecoveryContextPayload {
   int32 max_ornn_search_attempts = 6;
   string command_arguments = 7;
   bool discovery_requested = 8;
+  // Explicit named-skill invocations must not inherit prior assistant/tool output
+  // that could satisfy a new invocation without creating a new workflow run.
+  bool isolate_prior_conversation_history = 9;
+  // True only when the caller explicitly requested mounting the skill's workflows.
+  bool mount_workflows_requested = 10;
 }
 
 message AgentToolVisibilityScopePayload {
@@ -255,6 +260,8 @@ message AgentSkillRecoveryCheckpointPayload {
   string primary_skill_name = 4;
   int32 max_ornn_search_attempts = 5;
   bool discovery_requested = 6;
+  bool isolate_prior_conversation_history = 7;
+  bool mount_workflows_requested = 8;
 }
 
 enum AgentToolNyxIdCredentialKindPayload {
@@ -400,6 +407,12 @@ enum AgentToolReceiptApprovalMode {
   AGENT_TOOL_RECEIPT_APPROVAL_MODE_AUTO = 3;
 }
 
+enum AgentToolReceiptEffect {
+  AGENT_TOOL_RECEIPT_EFFECT_UNSPECIFIED = 0;
+  AGENT_TOOL_RECEIPT_EFFECT_READ_ONLY = 1;
+  AGENT_TOOL_RECEIPT_EFFECT_MUTATING = 2;
+}
+
 message NyxIdAuthorizationRequiredEvent {
   string service_slug = 1;
   optional string service_label = 2;
@@ -407,6 +420,7 @@ message NyxIdAuthorizationRequiredEvent {
   string reason_code = 4;
   string safe_message = 5;
   optional string user_service_id = 6;
+  repeated string requested_scopes = 7;
 }
 
 message AgentToolReceipt {
@@ -427,6 +441,7 @@ message AgentToolReceipt {
   ManagedWorkflowHandoffReceipt managed_workflow_handoff = 15;
   WorkflowRunBackgroundDeliveryReceipt workflow_run_delivery = 16;
   NyxIdAuthorizationRequiredEvent authorization_required = 17;
+  AgentToolReceiptEffect effect = 18;
 }
 
 message ManagedWorkflowHandoffReceipt {

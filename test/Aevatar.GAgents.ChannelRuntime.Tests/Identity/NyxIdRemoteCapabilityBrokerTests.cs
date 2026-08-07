@@ -1,12 +1,14 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using FluentAssertions;
 using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
@@ -150,7 +152,10 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         scope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
         scope.Should().Contain(AevatarOAuthClientScopes.OfflineAccess);
         scope.Should().NotContain("llm:proxy", "capability scopes are requested only during token exchange");
-        query["resource"].Should().Equal(RequiredResources);
+        query.ContainsKey("resource").Should()
+            .BeFalse("NyxID narrows the authorization code — and the durable binding it mints — " +
+                     "to exactly the RFC 8707 resources sent here, discarding every optional " +
+                     "UserService the user approved on the Consent page");
         query["prompt"].Should().ContainSingle().Which.Should().Be("consent");
         query.ContainsKey("binding_grant_id").Should().BeFalse();
         query["external_subject_platform"].Should().ContainSingle().Which.Should().Be("lark");
@@ -277,7 +282,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
             codeExchange.BindingId!,
             new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy });
 
-        authorizeQuery["resource"].Should().Equal(RequiredResources);
+        authorizeQuery.ContainsKey("resource").Should().BeFalse();
         codeExchange.BindingId.Should().Be(bindingId);
         handle.AccessToken.Should().Be(accessToken);
         handler.Requests.Should().HaveCount(2);
@@ -502,21 +507,31 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         exception.Which.RequiredResources.Should().Equal(RequiredOrnnResource);
     }
 
-    [Fact]
-    public async Task IssueShortLivedByBindingIdAsync_RejectsBindingWithoutOrnnResource()
+    // Omitting `resource` at /oauth/authorize means the Consent page can no
+    // longer mark these as non-deselectable, so every one of them has to be
+    // enforced fail-closed here — not just the Ornn route that first regressed.
+    [Theory]
+    [InlineData(RequiredAevatarResource)]
+    [InlineData(RequiredLlmResource)]
+    [InlineData(RequiredOrnnResource)]
+    [InlineData(RequiredSandboxResource)]
+    public async Task IssueShortLivedByBindingIdAsync_RejectsBindingMissingAnyRequiredResource(
+        string omittedResource)
     {
+        var grantedResources = RequiredResources
+            .Where(resource => resource != omittedResource)
+            .ToArray();
         var broker = NewBroker(
             NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
-            httpHandler: StubHandler.Text(
-                HttpStatusCode.OK,
-                JsonSerializer.Serialize(new
-                {
-                    access_token = CreateAccessToken(
-                        [RequiredAevatarResource, RequiredLlmResource, RequiredSandboxResource]),
-                    token_type = "Bearer",
-                    expires_in = 300,
-                    scope = "proxy",
-                })));
+            httpHandler: new SequenceHandler(
+                TokenExchangeResponse(CreateAccessToken(grantedResources)),
+                // The catalog cannot rescue an explicitly-restricted token: the
+                // grant enumerates `resources`, so nothing else is granted.
+                UserServiceCatalogResponse(
+                    ("svc-aevatar", RequiredAevatarResource),
+                    ("svc-llm", RequiredLlmResource),
+                    ("svc-ornn", RequiredOrnnResource),
+                    ("svc-sandbox", RequiredSandboxResource))));
 
         var act = () => broker.IssueShortLivedByBindingIdAsync(
             SampleSubject(),
@@ -524,7 +539,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
             new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy });
 
         var exception = await act.Should().ThrowAsync<BindingServiceAccessMismatchException>();
-        exception.Which.RequiredResources.Should().Equal(RequiredOrnnResource);
+        exception.Which.RequiredResources.Should().Equal(omittedResource);
     }
 
     [Fact]
@@ -543,11 +558,33 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         exception.Which.RequiredResources.Should().Equal(RequiredResources);
     }
 
+    [Fact]
+    public async Task RevokeBindingByIdAsync_LogsOnlyBindingDigest_WhenNyxIdRejectsRevocation()
+    {
+        const string bindingId = "bnd-raw-secret";
+        var logger = new RecordingLogger<NyxIdRemoteCapabilityBroker>();
+        var broker = NewBroker(
+            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
+            httpHandler: StubHandler.Text(
+                HttpStatusCode.BadRequest,
+                $$"""{"error":"revoke_failed","binding_id":"{{bindingId}}"}"""),
+            logger: logger);
+
+        var act = () => broker.RevokeBindingByIdAsync(bindingId);
+
+        await act.Should().ThrowAsync<HttpRequestException>();
+        var logs = string.Join('\n', logger.Messages);
+        logs.Should().Contain(NyxIdRemoteCapabilityBroker.BindingDigest(bindingId));
+        logs.Should().Contain(SecretScrubber.Marker);
+        logs.Should().NotContain(bindingId);
+    }
+
     private static NyxIdRemoteCapabilityBroker NewBroker(
         AevatarOAuthClientSnapshot snapshot,
         NyxIdBrokerOptions? options = null,
         HttpMessageHandler? httpHandler = null,
-        IExternalIdentityBindingQueryPort? queryPort = null)
+        IExternalIdentityBindingQueryPort? queryPort = null,
+        ILogger<NyxIdRemoteCapabilityBroker>? logger = null)
     {
         var provider = new FakeOAuthClientProvider(snapshot);
         options ??= new NyxIdBrokerOptions
@@ -565,7 +602,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
             new StateTokenCodec(provider),
             queryPort ?? new EmptyBindingQueryPort(),
             new FakeTimeProvider(DateTimeOffset.Parse("2026-04-30T10:00:00Z")),
-            NullLogger<NyxIdRemoteCapabilityBroker>.Instance);
+            logger ?? NullLogger<NyxIdRemoteCapabilityBroker>.Instance);
     }
 
     private static AevatarOAuthClientSnapshot NewSnapshot(string? redirectUri) => new(
@@ -709,5 +746,22 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
                 Content = new StringContent(_responseBodies.Dequeue()),
             };
         }
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Messages.Add(formatter(state, exception));
     }
 }

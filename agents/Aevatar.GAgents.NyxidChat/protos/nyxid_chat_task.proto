@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.GAgents.NyxidChat";
 
 import "ai_messages.proto";
 import "google/protobuf/timestamp.proto";
+import "Tools/tool_presentation.proto";
 
 message NyxIdDirectChatHistoryDispatchedEvent {
   string session_id = 1;
@@ -76,6 +77,41 @@ enum NyxIdChatStepKind {
   NYX_ID_CHAT_STEP_KIND_BROWSER_ACTION = 3;
   NYX_ID_CHAT_STEP_KIND_POSTCONDITION = 4;
   NYX_ID_CHAT_STEP_KIND_INPUT = 5;
+  NYX_ID_CHAT_STEP_KIND_APPROVAL = 6;
+  NYX_ID_CHAT_STEP_KIND_WEB = 7;
+}
+
+enum NyxIdChatPlanGateMode {
+  NYX_ID_CHAT_PLAN_GATE_MODE_UNSPECIFIED = 0;
+  NYX_ID_CHAT_PLAN_GATE_MODE_AUTO = 1;
+  NYX_ID_CHAT_PLAN_GATE_MODE_CONFIRM = 2;
+}
+
+enum NyxIdChatStepAddedBy {
+  NYX_ID_CHAT_STEP_ADDED_BY_UNSPECIFIED = 0;
+  NYX_ID_CHAT_STEP_ADDED_BY_INITIAL = 1;
+  NYX_ID_CHAT_STEP_ADDED_BY_REPLAN = 2;
+  NYX_ID_CHAT_STEP_ADDED_BY_STEERING = 3;
+}
+
+enum NyxIdChatStepEstimateKind {
+  NYX_ID_CHAT_STEP_ESTIMATE_KIND_UNSPECIFIED = 0;
+  NYX_ID_CHAT_STEP_ESTIMATE_KIND_DURATION = 1;
+}
+
+enum NyxIdChatSubstepStatus {
+  NYX_ID_CHAT_SUBSTEP_STATUS_UNSPECIFIED = 0;
+  NYX_ID_CHAT_SUBSTEP_STATUS_RUNNING = 1;
+  NYX_ID_CHAT_SUBSTEP_STATUS_DONE = 2;
+  NYX_ID_CHAT_SUBSTEP_STATUS_FAILED = 3;
+}
+
+enum NyxIdChatStepChangeKind {
+  NYX_ID_CHAT_STEP_CHANGE_KIND_UNSPECIFIED = 0;
+  NYX_ID_CHAT_STEP_CHANGE_KIND_STATUS = 1;
+  NYX_ID_CHAT_STEP_CHANGE_KIND_SUBSTEP = 2;
+  NYX_ID_CHAT_STEP_CHANGE_KIND_ADDED = 3;
+  NYX_ID_CHAT_STEP_CHANGE_KIND_CANCELLED = 4;
 }
 
 enum NyxIdChatAttentionKind {
@@ -211,6 +247,7 @@ message NyxIdChatToolStepSource {
   string tool_name = 1;
   string service_slug = 2;
   string service_id = 3;
+  optional string readiness_capability_id = 4;
 }
 
 message NyxIdChatBrowserActionStepSource {
@@ -224,8 +261,14 @@ message NyxIdChatInputStepSource {
 
 message NyxIdChatPostconditionStepSource {
   string action_request_id = 1;
-  string postcondition_kind = 2;
+  string check = 2;
 }
+
+message NyxIdChatApprovalStepSource {
+  string approval_request_id = 1;
+}
+
+message NyxIdChatWebStepSource {}
 
 message NyxIdChatStepSource {
   oneof source {
@@ -234,7 +277,25 @@ message NyxIdChatStepSource {
     NyxIdChatBrowserActionStepSource browser_action = 3;
     NyxIdChatPostconditionStepSource postcondition = 4;
     NyxIdChatInputStepSource input = 5;
+    NyxIdChatApprovalStepSource approval = 6;
+    NyxIdChatWebStepSource web = 7;
   }
+}
+
+message NyxIdChatPlanGate {
+  NyxIdChatPlanGateMode mode = 1;
+  string reason = 2;
+}
+
+message NyxIdChatStepEstimate {
+  NyxIdChatStepEstimateKind kind = 1;
+  int32 seconds = 2;
+}
+
+message NyxIdChatSubstepState {
+  string substep_id = 1;
+  string title = 2;
+  NyxIdChatSubstepStatus status = 3;
 }
 
 message NyxIdChatOperationState {
@@ -276,6 +337,10 @@ message NyxIdChatTaskStepState {
   // credential-free conversation state plus a newly supplied transient
   // capability. V1 sets this for initial LLM steps, never for tool calls.
   bool retry_input_rebuildable = 18;
+  NyxIdChatStepAddedBy added_by = 19;
+  repeated string depends_on = 20;
+  NyxIdChatStepEstimate estimate = 21;
+  repeated NyxIdChatSubstepState substeps = 22;
 }
 
 message NyxIdChatTaskState {
@@ -289,6 +354,19 @@ message NyxIdChatTaskState {
   string safe_message = 8;
   google.protobuf.Timestamp created_at = 9;
   google.protobuf.Timestamp updated_at = 10;
+  int32 schema_version = 11;
+  string actor_id = 12;
+  string plan_id = 13;
+  int32 plan_revision = 14;
+  string title = 15;
+  NyxIdChatPlanGate gate = 16;
+}
+
+message NyxIdChatTaskStepChanged {
+  string task_id = 1;
+  int32 plan_revision = 2;
+  NyxIdChatTaskStepState step = 3;
+  NyxIdChatStepChangeKind change_kind = 4;
 }
 
 message NyxIdChatTurnState {
@@ -915,6 +993,9 @@ message NyxIdChatToolCall {
   // Exact invocation safety is snapshotted by the authorized tool provider.
   // Its absence is fail-closed; consumers never infer safety from strings.
   NyxIdChatToolCallSafety safety = 4;
+  // Provider-authored NyxID identity provenance. The conversation actor copies
+  // only its safe identity fields into the durable tool step source.
+  aevatar.foundation.tools.NyxIdOperationRef nyx_id_provenance = 5;
 }
 
 message NyxIdChatLLMOperationResult {
@@ -977,6 +1058,7 @@ message NyxIdChatReasoningProgress {
 message NyxIdChatToolProgress {
   string call_id = 1;
   string tool_name = 2;
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 3;
 }
 
 message NyxIdChatOperationProgressSignal {
@@ -1001,6 +1083,12 @@ message NyxIdChatStartTurnCommand {
   repeated aevatar.ai.ChatContentPart input_parts = 9;
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 10;
   aevatar.ai.LLMControlContextPayload llm_control = 11;
+  // Stable fingerprint of the caller-supplied input parts before inline bytes
+  // are replaced by storage-assigned file artifact identities.
+  string input_parts_fingerprint = 12;
+  string plan_id = 13;
+  int32 plan_revision = 14;
+  NyxIdChatStepAddedBy added_by = 15;
 }
 
 message NyxIdChatStopCommand {

@@ -226,6 +226,19 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                     },
                 },
                 RuntimeContext: WorkflowToolRuntimeContext.Empty,
+                InputFileRefs:
+                [
+                    new WorkflowFileRef
+                    {
+                        FileId = "wf-file-1",
+                        ArtifactId = "workflow-file://wf-file-1",
+                        SourceKind = WorkflowFileSourceKind.ChatInput,
+                        FileName = "invoice.pdf",
+                        MediaType = "application/pdf",
+                        OwnerRunId = "run-1",
+                        OwnerScopeId = "scope-1",
+                    },
+                ],
                 IdempotencyKey: "idem-agent-tool-1",
                 ScheduleId: " schedule-1 "),
             CancellationToken.None);
@@ -248,6 +261,16 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         agentTool.ObservedCallId.Should().Be("call-1");
         agentTool.ObservedIdempotencyKey.Should().Be("idem-agent-tool-1");
         agentTool.ObservedScheduleId.Should().Be("schedule-1");
+        agentTool.ObservedInputFileRefs.Should().ContainSingle().Which.Should().BeEquivalentTo(new ChatFileRef
+        {
+            FileId = "wf-file-1",
+            ArtifactId = "workflow-file://wf-file-1",
+            SourceKind = ChatFileSourceKind.ChatInput,
+            FileName = "invoice.pdf",
+            MediaType = "application/pdf",
+            OwnerRunId = "run-1",
+            OwnerScopeId = "scope-1",
+        });
         agentTool.ObservedExternalMetadata.Should().NotContainKey("ExecutionId");
         AgentToolRequestContext.Current.Should().BeNull();
     }
@@ -280,6 +303,117 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         executionRequest.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.WorkflowRun);
         executionRequest.ExecutionOwner.OwnerId.Should().Be("run-1");
         AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowTool_WhenAdmissionDetectsActorRedelivery_ShouldRecoverTheSameToolCall()
+    {
+        const string recoveredResult = """{"recovered":true}""";
+        var agentTool = new CapturingAgentTool();
+        var executionPort = new SequencedOutcomeExecutionPort(
+            new AgentToolExecutionOutcome(
+                AgentToolExecutionOutcomeKind.Failed,
+                string.Empty,
+                new AgentToolReceipt
+                {
+                    CallId = "call-presentation-kappa",
+                    ToolName = agentTool.Name,
+                    Status = AgentToolReceiptStatus.Error,
+                },
+                IsMutation: false,
+                FailureCode: "tool_execution_already_started",
+                SafeMessage: "This exact tool call already started and will not be replayed.",
+                AgentToolExecutionFailureStage.Admission,
+                TerminalInvoked: false,
+                Retryable: false,
+                AuditCompleted: true),
+            new AgentToolExecutionOutcome(
+                AgentToolExecutionOutcomeKind.Executed,
+                recoveredResult,
+                new AgentToolReceipt
+                {
+                    CallId = "call-presentation-kappa",
+                    ToolName = agentTool.Name,
+                    Status = AgentToolReceiptStatus.Success,
+                    ResultJson = recoveredResult,
+                },
+                IsMutation: false,
+                FailureCode: string.Empty,
+                SafeMessage: string.Empty,
+                AgentToolExecutionFailureStage.None,
+                TerminalInvoked: true,
+                Retryable: false,
+                AuditCompleted: true));
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            executionPort);
+        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+
+        var result = await tool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: """{"format":"preview"}""",
+                RunId: "run-finance-alpha",
+                StepId: "present-preview",
+                ExecutionId: "exec-recovery-zeta",
+                CallId: "call-presentation-kappa",
+                ScopeId: "scope-personal-beta",
+                CallerCredential: new WorkflowCallerCredential()),
+            CancellationToken.None);
+
+        result.ResultJson.Should().Be(recoveredResult);
+        result.Failure.Should().BeNull();
+        executionPort.Requests.Should().HaveCount(2);
+        executionPort.Requests[0].ExecutionAttemptKind.Should().Be(AgentToolExecutionAttemptKind.Initial);
+        executionPort.Requests[1].ExecutionAttemptKind.Should().Be(AgentToolExecutionAttemptKind.ActorRecovery);
+        executionPort.Requests.Select(request => request.ExecutionContext.Request.RequestId)
+            .Should().OnlyContain(requestId => requestId == "run-finance-alpha");
+        executionPort.Requests.Select(request => request.ExecutionContext.Request.CallId)
+            .Should().OnlyContain(callId => callId == "call-presentation-kappa");
+    }
+
+    [Fact]
+    public async Task WorkflowTool_WhenDuplicateFailureAlreadyInvokedTerminal_ShouldNotRecover()
+    {
+        var duplicateFailure = new AgentToolExecutionOutcome(
+            AgentToolExecutionOutcomeKind.Failed,
+            string.Empty,
+            new AgentToolReceipt
+            {
+                CallId = "call-write-lambda",
+                ToolName = "capture_context",
+                Status = AgentToolReceiptStatus.Error,
+            },
+            IsMutation: true,
+            FailureCode: "tool_execution_already_started",
+            SafeMessage: "terminal execution already ran",
+            AgentToolExecutionFailureStage.TerminalExecution,
+            TerminalInvoked: true,
+            Retryable: false,
+            AuditCompleted: true);
+        var executionPort = new FixedOutcomeExecutionPort(duplicateFailure);
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(new CapturingAgentTool())],
+            executionPort);
+        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+
+        var result = await tool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: """{"operation":"write"}""",
+                RunId: "run-write-delta",
+                StepId: "submit-write",
+                ExecutionId: "exec-write-eta",
+                CallId: "call-write-lambda",
+                ScopeId: "scope-personal-gamma",
+                CallerCredential: new WorkflowCallerCredential()),
+            CancellationToken.None);
+
+        result.Failure.Should().Be(new WorkflowToolExecutionFailure(
+            "tool_execution_already_started",
+            "terminal execution already ran",
+            TerminalInvoked: true,
+            Retryable: false));
+        executionPort.Requests.Should().ContainSingle();
+        executionPort.Requests[0].ExecutionAttemptKind.Should().Be(AgentToolExecutionAttemptKind.Initial);
     }
 
     [Fact]
@@ -700,6 +834,8 @@ public sealed class AgentWorkflowToolSourceAdapterTests
 
         public string? ObservedScheduleId { get; private set; }
 
+        public IReadOnlyList<ChatFileRef> ObservedInputFileRefs { get; private set; } = [];
+
         public IReadOnlyDictionary<string, string> ObservedExternalMetadata { get; private set; } =
             new Dictionary<string, string>(StringComparer.Ordinal);
 
@@ -736,6 +872,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             ObservedCallId = AgentToolRequestContext.CallId;
             ObservedIdempotencyKey = AgentToolRequestContext.IdempotencyKey;
             ObservedScheduleId = AgentToolRequestContext.Current?.Schedule.ScheduleId;
+            ObservedInputFileRefs = AgentToolRequestContext.Current?.InputFileRefs ?? [];
             ObservedExternalMetadata = AgentToolRequestContext.Current?.ExternalMetadata
                 ?? new Dictionary<string, string>(StringComparer.Ordinal);
             ObservedWorkflowRuntime = AgentToolRequestContext.Current?.WorkflowRuntime
@@ -961,6 +1098,23 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             ct.ThrowIfCancellationRequested();
             Requests.Add(request);
             return Task.FromResult(outcome);
+        }
+    }
+
+    private sealed class SequencedOutcomeExecutionPort(params AgentToolExecutionOutcome[] outcomes)
+        : IAgentToolExecutionPort
+    {
+        private readonly Queue<AgentToolExecutionOutcome> _outcomes = new(outcomes);
+
+        public List<AgentToolExecutionRequest> Requests { get; } = [];
+
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.FromResult(_outcomes.Dequeue());
         }
     }
 

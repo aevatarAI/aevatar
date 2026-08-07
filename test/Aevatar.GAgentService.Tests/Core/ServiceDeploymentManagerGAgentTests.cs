@@ -202,6 +202,8 @@ public sealed class ServiceDeploymentManagerGAgentTests
         var rearmed = scheduler.ScheduledTimeouts[0].Payload.Unpack<ActivateServiceRevisionCommand>();
         rearmed.RevisionId.Should().Be("r1");
         rearmed.ActivationDeadlineAt.Should().NotBeNull("the bounded retry deadline must be stamped onto the re-armed command");
+        agent.State.PendingActivations.Should().ContainKey("r1");
+        agent.State.PendingActivations["r1"].DeadlineAt.Should().Be(rearmed.ActivationDeadlineAt);
 
         // Projection catches up; the re-fired continuation now succeeds and writes the serving set.
         await revisionCatalog.UpsertRevisionAsync(
@@ -217,39 +219,108 @@ public sealed class ServiceDeploymentManagerGAgentTests
         activator.ActivationRequests.Should().ContainSingle();
         agent.State.Deployments.Should().ContainKey("dep-r1");
         agent.State.Deployments["dep-r1"].Status.Should().Be(ServiceDeploymentStatus.Active);
+        agent.State.PendingActivations.Should().NotContainKey("r1");
         dispatchPort.Commands.Should().ContainSingle();
         dispatchPort.Commands[0].actorId.Should().Be(ServiceActorIds.ServingSet(identity));
         dispatchPort.Commands[0].command.Targets[0].DeploymentId.Should().Be("dep-r1");
     }
 
     [Fact]
-    public async Task HandleActivateAsync_ShouldFailTerminally_WhenProjectionLagExceedsDeadline()
+    public async Task HandleActivateAsync_ShouldReuseActorOwnedDeadlineAcrossReplayAndExternalRetry()
     {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var firstScheduler = new RecordingCallbackScheduler();
+        var actorId = ServiceActorIds.Deployment(identity);
+        var agent = CreateAgent(
+            eventStore,
+            new FakeServiceRevisionCatalogQueryReader(),
+            new RecordingRuntimeActivator(),
+            actorId,
+            scheduler: firstScheduler);
+        await agent.ActivateAsync();
+
+        await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+        });
+
+        var originalDeadline = agent.State.PendingActivations["r1"].DeadlineAt.Clone();
+        var committedVersion = agent.State.LastAppliedEventVersion;
+        await agent.DeactivateAsync();
+
+        var replayScheduler = new RecordingCallbackScheduler();
+        var replayed = CreateAgent(
+            eventStore,
+            new FakeServiceRevisionCatalogQueryReader(),
+            new RecordingRuntimeActivator(),
+            actorId,
+            scheduler: replayScheduler);
+        await replayed.ActivateAsync();
+        replayed.State.PendingActivations["r1"].DeadlineAt.Should().Be(originalDeadline);
+
+        await replayed.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationDeadlineAt = Timestamp.FromDateTime(DateTime.UtcNow.AddHours(1)),
+        });
+
+        replayed.State.LastAppliedEventVersion.Should().Be(committedVersion, "an external retry must not replace actor-owned pending state");
+        replayed.State.PendingActivations["r1"].DeadlineAt.Should().Be(originalDeadline);
+        replayScheduler.ScheduledTimeouts.Should().ContainSingle();
+        replayScheduler.ScheduledTimeouts[0].Payload.Unpack<ActivateServiceRevisionCommand>()
+            .ActivationDeadlineAt.Should().Be(originalDeadline);
+    }
+
+    [Fact]
+    public async Task HandleActivateAsync_ShouldCommitTerminalFailure_WhenProjectionLagExceedsDeadline()
+    {
+        var eventStore = new InMemoryEventStore();
         var identity = GAgentServiceTestKit.CreateIdentity();
         var scheduler = new RecordingCallbackScheduler();
         var agent = CreateAgent(
-            new InMemoryEventStore(),
+            eventStore,
             new FakeServiceRevisionCatalogQueryReader(),
             new RecordingRuntimeActivator(),
             ServiceActorIds.Deployment(identity),
             scheduler: scheduler);
         await agent.ActivateAsync();
 
-        var act = () => agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        var command = new ActivateServiceRevisionCommand
         {
             Identity = identity.Clone(),
             RevisionId = "r1",
-            // Deadline already in the past -> the retry budget is exhausted, so the honest failure surfaces.
             ActivationDeadlineAt = Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-1)),
-        });
+        };
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*was not found before the activation deadline*");
+        await agent.HandleActivateAsync(command);
+
+        agent.State.ActivationFailures.Should().ContainKey("r1");
+        var failure = agent.State.ActivationFailures["r1"];
+        failure.FailureCode.Should().Be(ServiceDeploymentActivationFailureCode.PreparedArtifactMissing);
+        failure.FailureReason.Should().Contain("was not found before the activation deadline");
+        failure.OccurredAt.Should().NotBeNull();
         scheduler.ScheduledTimeouts.Should().BeEmpty("an exhausted budget must not keep re-arming");
+
+        var committedVersion = agent.State.LastAppliedEventVersion;
+        await agent.HandleActivateAsync(command);
+        agent.State.LastAppliedEventVersion.Should().Be(committedVersion, "duplicate callbacks must converge on the committed failure");
+
+        await agent.DeactivateAsync();
+        var replayed = CreateAgent(
+            eventStore,
+            new FakeServiceRevisionCatalogQueryReader(),
+            new RecordingRuntimeActivator(),
+            ServiceActorIds.Deployment(identity));
+        await replayed.ActivateAsync();
+        replayed.State.ActivationFailures["r1"].FailureCode
+            .Should().Be(ServiceDeploymentActivationFailureCode.PreparedArtifactMissing);
     }
 
     [Fact]
-    public async Task HandleActivateAsync_ShouldFailTerminally_WhenRevisionPreparationFailed()
+    public async Task HandleActivateAsync_ShouldCommitTerminalFailure_WhenRevisionPreparationFailed()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var scheduler = new RecordingCallbackScheduler();
@@ -261,15 +332,71 @@ public sealed class ServiceDeploymentManagerGAgentTests
             scheduler: scheduler);
         await agent.ActivateAsync();
 
-        var act = () => agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
         {
             Identity = identity.Clone(),
             RevisionId = "r1",
         });
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*failed preparation*");
+        agent.State.ActivationFailures.Should().ContainKey("r1");
+        agent.State.ActivationFailures["r1"].FailureCode
+            .Should().Be(ServiceDeploymentActivationFailureCode.RevisionPreparationFailed);
+        agent.State.ActivationFailures["r1"].FailureReason.Should().Contain("failed preparation");
         scheduler.ScheduledTimeouts.Should().BeEmpty("a terminally failed revision must not be re-armed");
+    }
+
+    [Fact]
+    public async Task HandleActivateAsync_ShouldClearCommittedFailure_WhenRevisionLaterActivates()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        var activator = new RecordingRuntimeActivator();
+        activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
+        var agent = CreateAgent(
+            eventStore,
+            revisionCatalog,
+            activator,
+            ServiceActorIds.Deployment(identity));
+        await agent.ActivateAsync();
+
+        await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationDeadlineAt = Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-1)),
+        });
+        agent.State.ActivationFailures.Should().ContainKey("r1");
+
+        await revisionCatalog.UpsertRevisionAsync(
+            ServiceKeys.Build(identity),
+            "r1",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
+        await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+        });
+
+        agent.State.ActivationFailures.Should().NotContainKey("r1");
+        agent.State.Deployments["dep-r1"].Status.Should().Be(ServiceDeploymentStatus.Active);
+
+        await agent.DeactivateAsync();
+        var replayed = CreateAgent(
+            eventStore,
+            new FakeServiceRevisionCatalogQueryReader(),
+            new RecordingRuntimeActivator(),
+            ServiceActorIds.Deployment(identity));
+        await replayed.ActivateAsync();
+        var committedVersion = replayed.State.LastAppliedEventVersion;
+        await replayed.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationDeadlineAt = Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-1)),
+        });
+        replayed.State.LastAppliedEventVersion.Should().Be(committedVersion, "a stale callback must not fail an active revision");
+        replayed.State.ActivationFailures.Should().NotContainKey("r1");
     }
 
     [Fact]

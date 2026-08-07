@@ -38,6 +38,21 @@ public static class ServiceCollectionExtensions
         configureRegistry?.Invoke(options);
         var runBehaviorOptions = new WorkflowRunBehaviorOptions();
         configureRunBehavior?.Invoke(runBehaviorOptions);
+        if (runBehaviorOptions.AcceptedObservationTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(configureRunBehavior),
+                "Workflow accepted observation timeout must be positive.");
+        }
+        if (runBehaviorOptions.ChatHistoryReservationObservationTimeout <= TimeSpan.Zero ||
+            runBehaviorOptions.ChatHistoryReservationObservationInterval <= TimeSpan.Zero ||
+            runBehaviorOptions.ChatHistoryReservationObservationInterval >
+            runBehaviorOptions.ChatHistoryReservationObservationTimeout)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(configureRunBehavior),
+                "Chat history reservation observation timing must be positive and the interval must not exceed the timeout.");
+        }
         services.AddSingleton(runBehaviorOptions);
         services.TryAddTransient<ExternalWorkflowCapabilityReadinessService>();
         services.TryAddTransient<IExternalWorkflowCapabilityListPort>(provider =>
@@ -48,20 +63,34 @@ public static class ServiceCollectionExtensions
             WorkflowExternalCapabilityAdmissionService>();
         services.TryAddTransient<IWorkflowArtifactCompatibilityPreflight,
             WorkflowArtifactCompatibilityPreflight>();
-        services.TryAddTransient<IWorkflowExplicitRequestPreviewService,
+        services.TryAddSingleton<IWorkflowExplicitRequestPreviewService,
             WorkflowExplicitRequestPreviewService>();
+        services.TryAddTransient<IWorkflowDraftRunCapabilityAdmissionService,
+            WorkflowDraftRunCapabilityAdmissionService>();
 
         services.AddSingleton<IWorkflowDefinitionCatalog>(_ =>
         {
             var catalog = new WorkflowDefinitionCatalog();
             if (options.RegisterBuiltInDirectWorkflow)
-                catalog.Register("direct", WorkflowDefinitionCatalog.BuiltInDirectYaml);
+                catalog.Register(
+                    "direct",
+                    WorkflowDefinitionCatalog.BuiltInDirectYaml,
+                    Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode.Interactive);
             if (options.RegisterBuiltInStudioWorkflow)
-                catalog.Register("studio", WorkflowDefinitionCatalog.BuiltInStudioYaml);
+                catalog.Register(
+                    "studio",
+                    WorkflowDefinitionCatalog.BuiltInStudioYaml,
+                    Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode.Interactive);
             if (options.RegisterBuiltInAutoWorkflow)
-                catalog.Register("auto", WorkflowDefinitionCatalog.CreateBuiltInAutoYaml());
+                catalog.Register(
+                    "auto",
+                    WorkflowDefinitionCatalog.CreateBuiltInAutoYaml(),
+                    Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode.Interactive);
             if (options.RegisterBuiltInAutoReviewWorkflow)
-                catalog.Register("auto_review", WorkflowDefinitionCatalog.CreateBuiltInAutoReviewYaml());
+                catalog.Register(
+                    "auto_review",
+                    WorkflowDefinitionCatalog.CreateBuiltInAutoReviewYaml(),
+                    Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode.Interactive);
 
             return catalog;
         });
@@ -73,6 +102,7 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IWorkflowRunProvisioningPort>(),
                 sp.GetRequiredService<IWorkflowDefinitionParser>(),
                 sp.GetRequiredService<IWorkflowDefinitionCatalog>(),
+                sp.GetRequiredService<IWorkflowDraftRunCapabilityAdmissionService>(),
                 sp.GetRequiredService<WorkflowRunBehaviorOptions>()));
         services.TryAddSingleton<ICommandContextPolicy, DefaultCommandContextPolicy>();
         services.AddSingleton<ICommandTargetResolver<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunStartError>, WorkflowRunCommandTargetResolver>();
@@ -127,7 +157,8 @@ public static class ServiceCollectionExtensions
                 sp.GetService<Microsoft.Extensions.Logging.ILogger<DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>>(),
                 sp.GetRequiredService<ICommandObservationLifecycle<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>(),
                 sp.GetRequiredService<ICommandReceiptFactory<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>>(),
-                sp.GetRequiredService<ICommandObservationScopeLeasePreparation<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>()));
+                sp.GetRequiredService<ICommandObservationScopeLeasePreparation<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>(),
+                acceptedObservationTimeout: sp.GetRequiredService<WorkflowRunBehaviorOptions>().AcceptedObservationTimeout));
         services.AddSingleton<IWorkflowChatRunInteractionPort>(sp =>
             new WorkflowChatRunInteractionService(
                 sp.GetRequiredService<IWorkflowRunActorResolver>(),
@@ -136,7 +167,8 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>(),
                 sp.GetRequiredService<WorkflowDirectFallbackPolicy>(),
                 sp.GetService<IWorkflowChatHistoryTerminalDeliveryPort>(),
-                sp.GetService<IWorkflowChatHistoryCreateRecoveryReadPort>()));
+                sp.GetService<IWorkflowChatHistoryCreateRecoveryReadPort>(),
+                sp.GetRequiredService<WorkflowRunBehaviorOptions>()));
         services.TryAddSingleton<IWorkflowRunReportExportPort, NoopWorkflowRunReportExporter>();
         // Refactor (iter18/cluster-005):
         //   Old pattern: accepted-only dispatch used a detached live-sink monitor service

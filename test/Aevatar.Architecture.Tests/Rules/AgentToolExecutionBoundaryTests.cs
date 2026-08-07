@@ -24,6 +24,8 @@ public sealed class AgentToolExecutionBoundaryTests
         "Aevatar.GAgents.NyxidChat.NyxIdConversationReplyGenerator";
     private const string AgentRunAuthorizedToolStepTypeName =
         "Aevatar.GAgents.NyxidChat.AgentRunAuthorizedToolStep";
+    private const string AgentRunReplyGenerationExecutorTypeName =
+        "Aevatar.GAgents.NyxidChat.AgentRunReplyGenerationExecutor";
     private const string ToolCallLoopTypeName = "Aevatar.AI.Core.Tools.ToolCallLoop";
     private const string InventoryReaderTypeName =
         "Aevatar.AI.ToolProviders.NyxId.ConnectedServices.NyxIdConnectedServiceInventoryReader";
@@ -185,7 +187,13 @@ public sealed class AgentToolExecutionBoundaryTests
         Assert.NotEmpty(grantCreators);
         Assert.All(grantCreators, creator => Assert.Contains(
             creator.EnclosingType,
-            new[] { RoleTypeName, WorkflowAdapterTypeName, AgentRunAuthorizedToolStepTypeName }));
+            new[]
+            {
+                RoleTypeName,
+                WorkflowAdapterTypeName,
+                AgentRunAuthorizedToolStepTypeName,
+                AgentRunReplyGenerationExecutorTypeName,
+            }));
     }
 
     private static bool IsRawTerminalMethod(string methodName) =>

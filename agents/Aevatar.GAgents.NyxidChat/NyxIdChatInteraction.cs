@@ -22,7 +22,7 @@ public sealed record NyxIdChatCommand(
     string Prompt,
     string TurnId,
     string AccessToken,
-    IReadOnlyList<NyxIdChatEndpoints.ContentPartDto>? InputParts,
+    IReadOnlyList<ChatContentPart>? InputParts,
     IReadOnlyDictionary<string, string>? Metadata,
     LLMControlContext? LlmControl = null,
     string? CommandId = null,
@@ -32,7 +32,8 @@ public sealed record NyxIdChatCommand(
     string? OwnerSubject = null,
     AgentProfileReference? AgentProfileReference = null,
     AgentToolNyxIdCredentialKind NyxIdCredentialKind =
-        AgentToolNyxIdCredentialKind.Unspecified)
+        AgentToolNyxIdCredentialKind.Unspecified,
+    string? InputPartsFingerprint = null)
     : ICommandContextSeed
 {
     public IReadOnlyDictionary<string, string>? Headers => null;
@@ -49,6 +50,14 @@ internal static class NyxIdChatPublicIdentity
 
     public static string CreateTurnId(string actorId, string clientRequestId) =>
         Build("turn", actorId.Trim(), clientRequestId.Trim());
+
+    public static string CreateInputPartsFingerprint(IEnumerable<ChatContentPart> inputParts)
+    {
+        var payload = new ChatRequestEvent();
+        payload.InputParts.Add(inputParts.Select(static part => part.Clone()));
+        return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+            payload.ToByteArray()));
+    }
 
     public static string CreateChatCommandId(
         string actorId,
@@ -480,21 +489,26 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(context);
 
+        var taskId = CreateTaskId(command.ActorId, command.TurnId);
         var startTurn = new NyxIdChatStartTurnCommand
         {
             Prompt = command.Prompt,
             ScopeId = command.ScopeId,
             ConversationActorId = command.ActorId,
             TurnId = command.TurnId,
-            TaskId = CreateTaskId(command.ActorId, command.TurnId),
+            TaskId = taskId,
+            PlanId = CreatePlanId(command.ActorId, command.TurnId),
+            PlanRevision = 1,
+            AddedBy = NyxIdChatStepAddedBy.Initial,
             ClientRequestId = command.ClientRequestId?.Trim() ?? string.Empty,
             CommandId = context.CommandId,
             CorrelationId = context.CorrelationId,
+            InputPartsFingerprint = command.InputPartsFingerprint?.Trim() ?? string.Empty,
         };
         if (command.InputParts is { Count: > 0 })
         {
             foreach (var part in command.InputParts)
-                startTurn.InputParts.Add(part.ToProto());
+                startTurn.InputParts.Add(part.Clone());
         }
 
         var control = command.LlmControl ?? LLMControlContext.Empty;
@@ -580,6 +594,16 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
         var hash = System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(identity));
         return $"task-{Convert.ToHexStringLower(hash)[..32]}";
+    }
+
+    private static string CreatePlanId(string actorId, string turnId)
+    {
+        var normalizedActorId = actorId?.Trim() ?? string.Empty;
+        var normalizedTurnId = turnId?.Trim() ?? string.Empty;
+        var identity = $"{normalizedActorId.Length}:{normalizedActorId}{normalizedTurnId.Length}:{normalizedTurnId}";
+        var hash = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(identity));
+        return $"plan-{Convert.ToHexStringLower(hash)[..32]}";
     }
 
     private static EventEnvelope CreateDirectEnvelope(CommandContext context, IMessage message) =>

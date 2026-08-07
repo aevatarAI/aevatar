@@ -312,6 +312,11 @@ internal sealed class NyxIdChatSseWriter
             "NYX_ID_CHAT_TASK_STATUS_",
             "NYX_ID_CHAT_STEP_STATUS_",
             "NYX_ID_CHAT_STEP_KIND_",
+            "NYX_ID_CHAT_PLAN_GATE_MODE_",
+            "NYX_ID_CHAT_STEP_ADDED_BY_",
+            "NYX_ID_CHAT_STEP_ESTIMATE_KIND_",
+            "NYX_ID_CHAT_SUBSTEP_STATUS_",
+            "NYX_ID_CHAT_STEP_CHANGE_KIND_",
             "NYX_ID_CHAT_ATTENTION_KIND_",
             "NYX_ID_CHAT_APPROVAL_REVERSIBILITY_",
             "NYX_ID_CHAT_NEEDS_YOU_RESOLUTION_OUTCOME_",
@@ -376,6 +381,11 @@ internal sealed class NyxIdChatSseWriter
                     connectedServiceId = descriptor.NyxIdOperation.ConnectedServiceId,
                     serviceSlug = descriptor.NyxIdOperation.ServiceSlug,
                     catalogServiceSlug = descriptor.NyxIdOperation.CatalogServiceSlug,
+                    readinessCapabilityId = descriptor.NyxIdOperation.HasReadinessCapabilityId &&
+                                            !string.IsNullOrWhiteSpace(
+                                                descriptor.NyxIdOperation.ReadinessCapabilityId)
+                        ? descriptor.NyxIdOperation.ReadinessCapabilityId
+                        : null,
                     connectionLabel = descriptor.NyxIdOperation.ConnectionLabel,
                     connectorDisplayName = descriptor.NyxIdOperation.ConnectorDisplayName,
                     operationId = descriptor.NyxIdOperation.OperationId,

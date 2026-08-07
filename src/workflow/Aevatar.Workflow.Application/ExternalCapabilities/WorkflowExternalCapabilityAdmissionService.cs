@@ -30,6 +30,14 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
         ArgumentNullException.ThrowIfNull(request);
         if (request.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified)
             throw new InvalidOperationException("External capability execution mode is required.");
+        if (request.ExplicitRequestGrantMode == ExternalCapabilityExecutionMode.Unspecified)
+            throw new InvalidOperationException("Explicit request grant mode is required.");
+        if (request.ExecutionMode == ExternalCapabilityExecutionMode.Durable &&
+            request.ExplicitRequestGrantMode != ExternalCapabilityExecutionMode.Durable)
+        {
+            throw new InvalidOperationException(
+                "Durable execution requires a durable explicit request grant mode.");
+        }
 
         var definition = await ParseDefinitionAsync(
             request.WorkflowYaml,
@@ -51,16 +59,6 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             {
                 throw new WorkflowExternalCapabilityAdmissionException(
                     BuildNyxIdOperationSelectionRequiredReadiness(request.ExecutionMode));
-            }
-
-            if (RequiresInteractiveExplicitRequest(request.ExecutionMode, invocation.Selector))
-            {
-                throw ExplicitRequestConfirmationFailure(
-                    invocation,
-                    null,
-                    request.ExecutionMode,
-                    "NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED",
-                    "This explicit request can only be admitted for interactive execution.");
             }
 
             var readiness = await _readinessPort.InspectAsync(
@@ -164,7 +162,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
                 "The explicit request contract changed after it was confirmed.");
         }
         if (confirmation.AttestedRisk != capability.NyxIdUserRequest.ExecutionPolicy?.Risk ||
-            !IsAttestedRiskAllowed(capability.NyxIdUserRequest.Request.Method, confirmation.AttestedRisk))
+            !IsAttestedRiskAllowed(capability.NyxIdUserRequest.Request, confirmation.AttestedRisk))
         {
             throw ExplicitRequestConfirmationFailure(
                 invocation,
@@ -173,9 +171,11 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
                 "NYXID_EXPLICIT_REQUEST_CONFIRMATION_RISK_MISMATCH",
                 "The explicit request risk confirmation does not satisfy the request method policy.");
         }
-        if (request.ExecutionMode == ExternalCapabilityExecutionMode.Durable &&
-            capability.NyxIdUserRequest.ExecutionPolicy?.Risk is
-                NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive)
+        if (request.ExplicitRequestGrantMode == ExternalCapabilityExecutionMode.Durable &&
+            (capability.NyxIdUserRequest.ExecutionPolicy is not { } executionPolicy ||
+             !NyxIdRequestSelectorContract.SupportsDurableExecution(
+                 capability.NyxIdUserRequest.Request.Method,
+                 executionPolicy.Risk)))
         {
             throw ExplicitRequestConfirmationFailure(
                 invocation,
@@ -183,6 +183,16 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
                 request.ExecutionMode,
                 "NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED",
                 "This explicit request can only be admitted for interactive execution.");
+        }
+        if (capability.NyxIdUserRequest.ExecutionPolicy?.AllowedExecutionModes.Contains(
+                request.ExplicitRequestGrantMode) != true)
+        {
+            throw ExplicitRequestConfirmationFailure(
+                invocation,
+                capability,
+                request.ExecutionMode,
+                "NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED",
+                "The current explicit request capability does not allow the requested grant mode.");
         }
         if (string.IsNullOrWhiteSpace(request.Access.CallerId))
         {
@@ -206,7 +216,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             RevisionId = request.RevisionId!,
         };
         grant.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
-        if (request.ExecutionMode == ExternalCapabilityExecutionMode.Durable)
+        if (request.ExplicitRequestGrantMode == ExternalCapabilityExecutionMode.Durable)
             grant.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Durable);
 
         var admittedCapability = capability.Clone();
@@ -284,25 +294,13 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             "The explicit request confirmation does not match this workflow revision.");
     }
 
-    private static bool RequiresInteractiveExplicitRequest(
-        ExternalCapabilityExecutionMode executionMode,
-        ExternalWorkflowCapabilitySelector selector) =>
-        executionMode == ExternalCapabilityExecutionMode.Durable &&
-        selector.SelectorCase == ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest &&
-        selector.NyxIdRequest.Method is NyxIdRequestMethod.Post or NyxIdRequestMethod.Put or
-            NyxIdRequestMethod.Patch or NyxIdRequestMethod.Delete;
-
     private static bool IsAttestedRiskAllowed(
-        NyxIdRequestMethod method,
-        NyxIdOperationRisk risk) => method switch
-    {
-        NyxIdRequestMethod.Get or NyxIdRequestMethod.Head or NyxIdRequestMethod.Options =>
-            risk is NyxIdOperationRisk.ReadOnly or NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive,
-        NyxIdRequestMethod.Post or NyxIdRequestMethod.Put or NyxIdRequestMethod.Patch =>
-            risk is NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive,
-        NyxIdRequestMethod.Delete => risk == NyxIdOperationRisk.Destructive,
-        _ => false,
-    };
+        NyxIdRequestSelector request,
+        NyxIdOperationRisk risk) =>
+        NyxIdRequestSelectorContract.IsRiskAttestationSatisfied(
+            request.Method,
+            request.Risk,
+            risk);
 
     private static WorkflowExternalCapabilityAdmissionException ExplicitRequestConfirmationFailure(
         ExternalToolInvocationSpec invocation,

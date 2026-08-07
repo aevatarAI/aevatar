@@ -60,11 +60,13 @@ using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.Mainnet.Host.Api.AgentProfiles;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.Mainnet.Host.Api.Responses;
+using Aevatar.Mainnet.Host.Api.Skills;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Scripting.Projection.ReadModels;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Hosting;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -137,6 +139,35 @@ public sealed class MainnetHostCompositionTests
         builder.Services.Should().ContainSingle(descriptor =>
             descriptor.ServiceType == typeof(IAgentToolSource) &&
             descriptor.ImplementationType == typeof(BindingAgentToolSource));
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldResolveWorkflowScheduleProvisioningComposition()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        using var runtimeProvider = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__Provider", "InMemory");
+        using var secretStoreBackend = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__SecretStoreBackend", "InMemory");
+        var builder = CreateBuilder();
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+
+        app.Services.GetRequiredService<IStudioWorkflowScheduleProvisioningCommandPort>()
+            .Should().NotBeNull();
+        app.Services.GetRequiredService<IStudioWorkflowScheduleProvisioningExecutor>()
+            .Should().BeOfType<StudioWorkflowScheduleProvisioningExecutor>();
+        app.Services.GetRequiredService<IWorkflowScheduleProvisioningPort>()
+            .Should().BeOfType<WorkflowScheduleProvisioningPort>();
+        app.Services.GetRequiredService<IUserSkillRunService>()
+            .Should().BeOfType<UserSkillRunService>();
+        app.Services.GetRequiredService<ISkillWorkflowConfirmationPort>()
+            .Should().NotBeOfType<NoOpSkillWorkflowConfirmationPort>();
     }
 
     [Fact]
@@ -688,6 +719,17 @@ public sealed class MainnetHostCompositionTests
                 source is ChannelNyxIdConnectedServiceInventoryToolSource)
             .Which.Should()
             .BeSameAs(channelInventorySource);
+        var nyxIdChatToolSources = replyGenerator.GetType()
+            .GetField("_nyxIdChatToolSources", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(replyGenerator)
+            .Should()
+            .BeAssignableTo<IReadOnlyList<IAgentToolSource>>()
+            .Subject;
+        nyxIdChatToolSources.Select(static source => source.GetType()).Should().Equal(
+            typeof(NyxIdAssistantToolSource),
+            typeof(AskUserAgentToolSource));
+        nyxIdChatToolSources.Should().NotContain(source => source is NyxIdAgentToolSource);
+        nyxIdChatToolSources.Should().NotContain(source => source is WebAgentToolSource);
         var scheduleQueries = app.Services.GetRequiredService<IStudioMemberAutomationQueryPort>();
         var scheduleMutations = app.Services.GetRequiredService<IStudioMemberWorkflowSchedulePort>();
         scheduleQueries.Should().BeSameAs(scheduleMutations);
@@ -718,9 +760,19 @@ public sealed class MainnetHostCompositionTests
 
         var nyxIdChatProfile = registry.Resolve(AgentProfilePolicies.NyxIdChatRouteToolSet);
         nyxIdChatProfile.IsSuccess.Should().BeTrue(nyxIdChatProfile.Error?.Message);
-        nyxIdChatProfile.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
-        nyxIdChatProfile.Sources.Should().ContainSingle(source =>
+        nyxIdChatProfile.Sources.Select(static source => source.GetType()).Should().Equal(
+            typeof(NyxIdAssistantToolSource),
+            typeof(AskUserAgentToolSource));
+        nyxIdChatProfile.Sources.Should().NotContain(source => source is NyxIdAgentToolSource);
+        nyxIdChatProfile.Sources.Should().NotContain(source =>
             source is NyxIdConnectedServiceToolSource);
+        nyxIdChatProfile.Sources.Should().NotContain(source => source is WebAgentToolSource);
+        var nyxIdChatInputTools = await nyxIdChatProfile.Sources
+            .OfType<AskUserAgentToolSource>()
+            .Single()
+            .DiscoverToolsAsync();
+        nyxIdChatInputTools.Select(static tool => tool.Name).Should()
+            .ContainSingle().Which.Should().Be("ask_user");
 
         var voice = registry.Resolve("voice.realtime");
         voice.IsSuccess.Should().BeFalse();
@@ -1132,13 +1184,15 @@ public sealed class MainnetHostCompositionTests
     {
         // Regression guard (2026-06-03 prod incident): enabling
         // HostOptions.ServicesStartConcurrently raced the co-hosted Orleans silo
-        // reaching Active. Grain-calling startup services (WorkflowDefinitionBootstrap,
-        // ChannelBotRegistration, AevatarOAuthClientBootstrap, HealthProbeStartup,
+        // reaching Active. Grain-calling startup services (ChannelBotRegistration,
+        // AevatarOAuthClientBootstrap, HealthProbeStartup,
         // StreamingProxyChatLifecycleContinuationRunner) fired before the silo could
         // create activations -> "Unable to create local activation. Rejecting now."
         // -> AggregateException -> CrashLoopBackOff. Sequential startup (the Generic
         // Host default) runs hosted services in registration order so Kestrel binds
         // the probe port and the Orleans silo reaches Active before grain-callers run.
+        // WorkflowDefinitionBootstrap materializes actor state in StartedAsync after
+        // both of those StartAsync phases have completed.
         using var home = new TemporaryAevatarHomeScope();
         var builder = CreateBuilder();
 

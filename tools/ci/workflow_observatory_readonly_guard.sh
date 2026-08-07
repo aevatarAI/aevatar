@@ -27,14 +27,14 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
 ENDPOINTS_FILE="src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/WorkflowRunObservatoryEndpoints.cs"
-PAGE_FILE="src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-observatory.html"
+PAGE_FILE="src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/admin-workflow-observatory.html"
 OLD_PAGE_FILE="src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/WorkflowRunObservatoryPage.cs"
 SERVICE_FILE="src/workflow/Aevatar.Workflow.Application/Observatory/WorkflowRunObservatoryQueryService.cs"
 CSPROJ_FILE="src/workflow/Aevatar.Workflow.Infrastructure/Aevatar.Workflow.Infrastructure.csproj"
 
 if [[ "${1:-}" == "--scan" ]] && [[ -n "${2:-}" ]]; then
   ENDPOINTS_FILE="$2/WorkflowRunObservatoryEndpoints.cs"
-  PAGE_FILE="$2/workflow-observatory.html"
+  PAGE_FILE="$2/admin-workflow-observatory.html"
   OLD_PAGE_FILE="$2/WorkflowRunObservatoryPage.cs"
   SERVICE_FILE="$2/WorkflowRunObservatoryQueryService.cs"
   CSPROJ_FILE="$2/Aevatar.Workflow.Infrastructure.csproj"
@@ -70,7 +70,7 @@ fi
 
 # 3. Embedded zero-build page (no wwwroot / no build step); ignore comment lines.
 if [[ -f "${OLD_PAGE_FILE}" ]]; then
-  echo "${OLD_PAGE_FILE}: old C# raw-string page carrier must not exist; use workflow-observatory.html embedded asset."
+  echo "${OLD_PAGE_FILE}: old C# raw-string page carrier must not exist; use admin-workflow-observatory.html embedded asset."
   violations=$((violations + 1))
 fi
 
@@ -97,8 +97,8 @@ else
 fi
 
 if [[ -f "${CSPROJ_FILE}" ]]; then
-  if ! rg -q -F 'workflow-observatory.html' "${CSPROJ_FILE}"; then
-    echo "${CSPROJ_FILE}: expected workflow-observatory.html to be declared as an EmbeddedResource."
+  if ! rg -q -F 'admin-workflow-observatory.html' "${CSPROJ_FILE}"; then
+    echo "${CSPROJ_FILE}: expected admin-workflow-observatory.html to be declared as an EmbeddedResource."
     violations=$((violations + 1))
   fi
 else

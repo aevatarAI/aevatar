@@ -25,6 +25,7 @@ public sealed class BackendConsoleAssetServiceTests
                 ["Aevatar:BackendConsole:NyxApiBaseUrl"] = " https://api.example.test/// ",
                 ["Aevatar:BackendConsole:StorageKey"] = "console:test",
                 ["Aevatar:BackendConsole:DefaultReturnPath"] = "/admin",
+                ["Aevatar:BackendConsole:EnableStudioWireInspector"] = "true",
             })
             .Build();
         services.AddBackendConsoleStaticAssets(configuration);
@@ -41,10 +42,12 @@ public sealed class BackendConsoleAssetServiceTests
 
         html.Should().Contain("\"authority\":\"https://id.example.test\"");
         html.Should().Contain("\"clientId\":\"client-example\"");
+        html.Should().Contain("\"scope\":\"openid profile offline_access\"");
         html.Should().Contain(
             "\"resources\":[\"https://api.example.test/api/v1/proxy/s/aevatar\",\"https://api.example.test/api/v1/proxy/s/ornn-api\",\"https://resource.example.test/custom\"]");
         html.Should().Contain("\"nyxidApi\":\"https://api.example.test\"");
         html.Should().Contain("\"storageKey\":\"console:test\"");
+        html.Should().Contain("\"enableStudioWireInspector\":true");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
     }
 
@@ -72,7 +75,7 @@ public sealed class BackendConsoleAssetServiceTests
 
         html.Should().Contain("\"authority\":\"https://env-id.example.test\"");
         html.Should().Contain("\"clientId\":\"env-client\"");
-        html.Should().Contain("\"scope\":\"env-scope\"");
+        html.Should().Contain("\"scope\":\"env-scope offline_access\"");
         html.Should().Contain(
             "\"resources\":[\"https://env-api.example.test/api/v1/proxy/s/aevatar\",\"https://env-api.example.test/api/v1/proxy/s/ornn-api\"]");
         html.Should().Contain("\"nyxidApi\":\"https://env-api.example.test\"");
@@ -110,12 +113,36 @@ public sealed class BackendConsoleAssetServiceTests
 
         html.Should().Contain("\"authority\":\"https://auth.example.test\"");
         html.Should().Contain("\"clientId\":\"client-example\"");
-        html.Should().Contain("\"scope\":\"openid profile\"");
+        html.Should().Contain("\"scope\":\"openid profile offline_access\"");
         html.Should().Contain(
             "\"resources\":[\"https://nyx-api.example.test/api/v1/proxy/s/aevatar\",\"https://nyx-api.example.test/api/v1/proxy/s/ornn-api\"]");
         html.Should().Contain("\"nyxidApi\":\"https://nyx-api.example.test\"");
         html.Should().Contain("\"storageKey\":\"console:test\"");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
+    }
+
+    [Fact]
+    public void Render_ShouldIncludeOfflineAccessScopeExactlyOnce()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:BackendConsole:OidcScope"] =
+                    "openid offline_access profile offline_access",
+            })
+            .Build();
+        services.AddBackendConsoleStaticAssets(configuration);
+
+        var assets = services.BuildServiceProvider().GetRequiredService<IBackendConsoleAssetService>();
+        var html = assets.Render(new BackendConsoleAsset(
+            "fixture",
+            typeof(BackendConsoleAssetServiceTests).Assembly,
+            "BackendConsoleAssetServiceTests.fixture.html",
+            "text/html",
+            InjectHostConfiguration: true));
+
+        html.Should().Contain("\"scope\":\"openid offline_access profile\"");
     }
 
     [Fact]

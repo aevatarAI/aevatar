@@ -110,7 +110,11 @@ External operation 先按 authority owner 选 primitive，而不是按“是否�
 
 Chat authoring 先调用只读 `list_external_workflow_capabilities` 选择 `nyxid_operation` 的 `PublishedEndpoint(endpoint_id)`；已知静态 HTTP contract 则可作者化 `nyxid_request` 的 `AuthoredRequest(request_contract_digest)`。两者都是 typed step-owned selector，绝不从 display name、slug 或 ID 字符串规则推导身份。`nyxid_request` 只是 contract proposal：Apply/save 可保存它，但不能创建授权；authenticated binder 必须显式确认当前 canonical digest 与 risk，definition actor 才持久化 `NyxIdExplicitRequestGrant`。只有每个 external capability 的 typed readiness status 都是 `READY` 且显式 request grant 匹配，才尝试 bind/publish；其他 status 只展示 typed blocker 和 trusted remediation。
 
-NyxID durable admission is deliberately narrow. `nyxid_operation` obtains its published contract from MCP; `nyxid_request` obtains only exact UserService facts at bind time and performs zero MCP/OpenAPI reads. Durable is allowed only for GET/HEAD/OPTIONS whose binder-attested grant is `READ_ONLY`, and only when the exact-service durable authorization catalog is activated, fresh, exact-owner matched, and emits `DURABLE_AUTHORIZATION_CATALOG`. A safe method without trusted read-only attestation is conservatively a write; POST/PUT/PATCH and DELETE are always approval-required and interactive-only. Querying this read model must not refresh, activate, lease, poll, replay, or prime projection.
+NyxID durable admission does not use mutating HTTP methods as a schedule hard block. `nyxid_operation` obtains its published contract from MCP; `nyxid_request` obtains exact UserService facts at admission time and performs zero MCP/OpenAPI reads. GET/HEAD/OPTIONS with `read_only` risk and request contracts admitted as `write` or `destructive` may receive an exact binder-issued durable grant when the canonical request digest, workflow/revision/call-site identity, allowed execution mode, and exact-service durable authorization catalog agree. A binder-confirmed `POST + READ_ONLY` contract remains interactive-only; durable `write` or `destructive` admission must keep the risk in the immutable proof and cannot be lowered by the caller or LLM.
+
+Schedule admission is a separate gate from bind/publish. It resolves and pins backend-owned `publishedServiceId + revisionId`, revalidates the immutable durable request grant and catalog evidence, and then asks a typed NyxID operation-authorization port before credential materialization or schedule actor creation. The currently published NyxID surface does not expose a side-effect-free contract that can preview the real HTTP operation policy or request/verify an operation-scoped reusable grant without dispatching the request. Its generic `tool_approval` request is per-request tool approval and cannot be treated as an operation grant. Therefore the default production adapter returns typed `NYXID_OPERATION_AUTHORITY_CONTRACT_UNAVAILABLE` and descriptor-less `nyxid_request` schedule creation fails closed before credential/catalog mutation; interactive invocation remains governed by its admitted revision. Querying catalog or readiness read models must not refresh, activate, lease, poll, replay, or prime projection.
+
+At execution time, a `WorkflowToolCall` carrying a valid committed `OperationAdmission` has already passed exact call-site binder admission, but that attestation is not approval to perform every future call. `nyxid_proxy` applies the proof's `Approval.Required` marker to each run through the actor-owned typed tool-approval continuation and sends no downstream request before an exact matching approval. Read-only admitted calls remain ungated. Once dispatched, the request remains fully governed by NyxID's own `auto_allow / grant / per_request / deny` authority.
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -149,7 +153,7 @@ V4 plan 以 call-site scoped `invocation_admissions` 作为唯一当前事实，
 YAML 的 exact capability 规则：
 
 - `connector_call` 使用静态 `connector + operation + contract_digest`，对应 `HostConnectorCapabilityRef`。
-- `nyxid_proxy` has exactly one selector: `capability.nyxid_operation { user_service_id, endpoint_id }` (`PublishedEndpoint`) or `capability.nyxid_request { user_service_id, method, path_template, query_parameters, header_parameters, body_mode, body_required, response_mode }` (`AuthoredRequest`). Both are static and mutually exclusive.
+- `nyxid_proxy` has exactly one selector: `capability.nyxid_operation { user_service_id, endpoint_id }` (`PublishedEndpoint`) or `capability.nyxid_request { user_service_id, method, path_template, query_parameters, header_parameters, body_mode, body_required, response_mode, risk? }` (`AuthoredRequest`). Both are static and mutually exclusive. `risk` accepts `read_only`、`write` or `destructive`; omitted contracts preserve the method-derived v1 digest, while an explicit risk is bound into the v2 request digest.
 - Published-operation slug/method/path/schema/source facts come from `/api/v1/mcp/config` at admission. Authored-request admission reads only exact UserService inventory, derives the slug constraint server-side, and requires a separate authenticated binder confirmation to create the typed grant. Dynamic selector, missing selector/grant, caller-authored proof fields, secret-bearing headers, and runtime route/policy overrides fail closed.
 - ordinary、nested、`foreach`/`for_each`/`foreach_llm` 与 `while`/`loop` 共享同一 invocation compiler。循环 primitive 的 selector 写在 owner step 的 `capability` 上，编译器为其 synthesized tool sub-step 生成稳定 `<workflow>/<step>/sub-step` call-site；每个 item/iteration 只能改变 runtime arguments，不能改变服务或 endpoint。
 - `sub_param_` 仍是通用的 synthesized sub-step 参数前缀；`sub_param_prompt`、`sub_param_workflow`、`sub_param_prompt_prefix` 与其他非工具用法保持原语义，不承载 capability proof。
@@ -163,6 +167,8 @@ YAML 的 exact capability 规则：
 - 常用参数：`op`、`n`、`separator`；当 `op=json_extract` 时，还可用 `path`、`field`、`sort_by`、`order`。
 - 金额级确定性操作：`sum`、`subtract`、`multiply`、`divide`、`round`、`min`、`max`、`group_by`。这些操作会被解析为 typed `transform_operation`，同时保留 legacy `parameters` map；识别到的数值/分组操作解析或运行失败时发布失败的 `StepCompletedEvent`，不会包装成成功文本。
 - `group_by` v1 只接受 JSON array of objects，支持单个 `key`/`group_by`、单个 `value`/`value_field`，`aggregate` 仅支持 `sum`、`count`、`avg`。这不是脚本、表达式、SQL 或 LLM 数据处理入口。
+- `template` 接受 bounded JSON 输入和 typed `template` program，用于确定性的多集合聚合与 JSON/report rendering。它只暴露 `append`、`date`、`get`、`json`、`keys`、`number`、`round`；默认 builtins、CLR member、template loader、文件和网络都不可用，输入对象/数组只读。模板、输入、输出分别限制为 256 KiB、4 MiB、4 MiB，loop 和 mutable template array 最多 10,000 项，递归深度最多 64；任何越界、缺失变量、输入 mutation、parse 或 evaluation error 都 fail closed。
+- typed `template` program 不参与 workflow `${...}` expansion；只有传入 transform step 的 JSON 数据可变，避免上游数据变成模板代码。
 - `rss_extract_items` 是唯一 RSS/Atom 解析 op 名称，不提供 `rss_extract` alias。输入为 RSS 2.0 或 Atom XML，输出 JSON array，每个 item 只包含 `source_id`、`source_url`、`id`、`title`、`link`、`published_at`、`summary`。
 
 ```yaml
@@ -196,6 +202,17 @@ steps:
       value: amount
       aggregate: sum
       precision: "2"
+```
+
+```yaml
+steps:
+  - id: summarize_items
+    type: transform
+    op: template
+    template: >-
+      {{ total = 0 }}
+      {{ for item in data.items; total = total + number(item.amount); end }}
+      {{ json({ count: data.items.size, total: round(total, 2) }) }}
 ```
 
 ```yaml
@@ -614,7 +631,8 @@ steps:
 ### `parallel`（别名：`parallel_fanout`、`fan_out`）
 
 - 作用：并行扇出到多个 worker，收敛合并，可选接投票步骤。
-- 常用参数：`workers`、`parallel_count`、`vote_step_type`、`vote_param_{key}`、`min_concurrent_workers`、`max_concurrent_workers`。
+- 常用参数：`workers`、`parallel_count`、`sub_step_type`、`sub_target_role`、`sub_param_{key}`、`vote_step_type`、`vote_param_{key}`、`min_concurrent_workers`、`max_concurrent_workers`。
+- `sub_step_type` 默认是 `llm_call`；确定性探针可改用 `assign`、`transform` 等原语。`sub_param_{key}` 支持 `${input}`、`${index}` 和 `${worker}`，扇入结果始终按 dispatch index 合并，不受完成先后影响。
 - `vote_step_type=vote` 时，`vote_param_{key}` 会在扇入时解析为 typed agreement rule；worker 完成态会作为 `VoteAgreementCandidateSet` 传给 vote step，不再把拼接文本当作权威候选结构。
 - 并发口径：`max_concurrent_workers` 默认安全值为 `20`，显式参数可提升到 `200`；若设置 `min_concurrent_workers`，运行时会保留队列并持续补位到该 floor，适合长尾 worker 任务。
 
@@ -623,7 +641,9 @@ steps:
   - id: fanout_analyze
     type: parallel
     parameters:
-      workers: "agent_a,agent_b,agent_c"
+      parallel_count: "3"
+      sub_step_type: "assign"
+      sub_param_value: "worker-${index}"
       min_concurrent_workers: "2"
       max_concurrent_workers: "8"
       vote_step_type: "vote"
@@ -635,15 +655,17 @@ steps:
 ### `race`（别名：`select`）
 
 - 作用：并行发送到多个 worker，返回最先完成的结果。
-- 常用参数：`workers`、`count`。
+- 常用参数：`workers`、`count`、`sub_step_type`、`sub_target_role`、`sub_param_{key}`。
+- `sub_step_type` 默认是 `llm_call`；确定性原语不要求 worker role。`sub_param_{key}` 支持 `${input}`、`${index}` 和 `${worker}`，父步骤只采用首个成功结果，后续完成仅用于清理 race 状态。
 
 ```yaml
 steps:
   - id: first_answer_wins
     type: race
     parameters:
-      workers: "fast_model,cheap_model"
       count: "2"
+      sub_step_type: "assign"
+      sub_param_value: "candidate-${index}"
 ```
 
 ### `map_reduce`（别名：`mapreduce`、`map_reduce_llm`）

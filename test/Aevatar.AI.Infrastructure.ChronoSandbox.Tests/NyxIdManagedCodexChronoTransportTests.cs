@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.CodexExecution;
@@ -46,8 +45,8 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         result.DiagnosticId.Should().Be("chrono-1");
         handler.PathAndQuery.Should().Be(
             "/api/v1/proxy/s/chrono-sandbox/codex/execute?_nyxid_via=us-sandbox");
-        handler.Authorization.Should().Be(new AuthenticationHeaderValue("Bearer", RawKey).ToString());
-        handler.Authorization.Should().NotContain(InteractiveBearer);
+        handler.Authorization.Should().BeNull();
+        handler.ApiKeys.Should().Equal(RawKey);
         using var body = JsonDocument.Parse(handler.Body!);
         body.RootElement.EnumerateObject().Select(static property => property.Name)
             .Should().Equal("prompt", "timeout_secs", "workspace");
@@ -178,6 +177,169 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
         exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.AdmissionDenied);
         exception.Failure.Code.Should().Be("managed_proxy_authorization_denied");
+        exception.Message.Should().NotContain(RawKey);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized, "managed_proxy_authentication_failed")]
+    [InlineData(HttpStatusCode.Forbidden, "managed_proxy_authorization_denied")]
+    public async Task ExecuteAsync_WhenProxyRejectsAtHttpBoundary_DistinguishesAuthenticationFromAuthorization(
+        HttpStatusCode statusCode,
+        string expectedCode)
+    {
+        var handler = new RecordingHandler($$"""{"detail":"denied {{RawKey}}"}""", statusCode);
+        var (transport, _) = CreateTransport(handler);
+
+        var act = () => transport.ExecuteAsync(Request(), Descriptor());
+
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
+        exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.AdmissionDenied);
+        exception.Failure.Code.Should().Be(expectedCode);
+        exception.Message.Should().NotContain(RawKey);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenChronoReturnsKnownFailure_PreservesOnlyStableUpstreamCode()
+    {
+        var handler = new RecordingHandler(
+            $$"""
+            {
+              "success": false,
+              "error": {
+                "code": "CODEX_SANDBOX_CREATION_FAILED",
+                "message": "sensitive {{RawKey}}"
+              }
+            }
+            """,
+            HttpStatusCode.BadGateway);
+        var (transport, _) = CreateTransport(handler);
+
+        var act = () => transport.ExecuteAsync(Request(), Descriptor());
+
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
+        // Sandbox creation / workspace preparation are provisioning stages, not capacity
+        // rejections: chrono-sandbox returns CODEX_CAPACITY_UNAVAILABLE with 429 and reserves
+        // 502 for provisioning faults, so classifying by HTTP status alone misreports them.
+        exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.ProvisioningFailed);
+        exception.Failure.Code.Should().Be("managed_upstream_codex_sandbox_creation_failed");
+        exception.Failure.Message.Should().Be("Managed Codex sandbox provisioning failed upstream.");
+        exception.Message.Should().NotContain(RawKey);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenNyxIdWrapsKnownChronoFailure_PreservesOnlyStableUpstreamCode()
+    {
+        var chronoBody = $$"""
+                         {
+                           "success": false,
+                           "error": {
+                             "code": "CODEX_WORKSPACE_PREPARATION_FAILED",
+                             "message": "sensitive {{RawKey}}"
+                           }
+                         }
+                         """;
+        var handler = new RecordingHandler(
+            JsonSerializer.Serialize(new
+            {
+                error = "http_error",
+                status = 502,
+                body = chronoBody,
+            }),
+            HttpStatusCode.BadGateway);
+        var (transport, _) = CreateTransport(handler);
+
+        var act = () => transport.ExecuteAsync(Request(), Descriptor());
+
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
+        // Sandbox creation / workspace preparation are provisioning stages, not capacity
+        // rejections: chrono-sandbox returns CODEX_CAPACITY_UNAVAILABLE with 429 and reserves
+        // 502 for provisioning faults, so classifying by HTTP status alone misreports them.
+        exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.ProvisioningFailed);
+        exception.Failure.Code.Should().Be("managed_upstream_codex_workspace_preparation_failed");
+        exception.Failure.Message.Should().Be("Managed Codex sandbox provisioning failed upstream.");
+        exception.Message.Should().NotContain(RawKey);
+    }
+
+    [Theory]
+    // chrono-sandbox 只在容量许可被拒时返回 CODEX_CAPACITY_UNAVAILABLE，且走 429；
+    // 502 携带的是 provisioning / OpenSandbox 家族的码。按 HTTP 状态一刀切成
+    // CapacityUnavailable 会把「沙箱创建失败」误报为「容量不足」，把排障引向错误方向。
+    [InlineData("CODEX_SANDBOX_CREATION_FAILED", CodexExecutionFailureKind.ProvisioningFailed)]
+    [InlineData("CODEX_WORKSPACE_PREPARATION_FAILED", CodexExecutionFailureKind.ProvisioningFailed)]
+    [InlineData("CODEX_OPENSANDBOX_UNAVAILABLE", CodexExecutionFailureKind.ProvisioningFailed)]
+    [InlineData("CODEX_OPENSANDBOX_TIMEOUT", CodexExecutionFailureKind.TimedOut)]
+    [InlineData("CODEX_SANDBOX_READY_TIMEOUT", CodexExecutionFailureKind.TimedOut)]
+    [InlineData("CODEX_CAPACITY_UNAVAILABLE", CodexExecutionFailureKind.CapacityUnavailable)]
+    public async Task ExecuteAsync_WhenUpstreamCodeIsTyped_ClassifiesByUpstreamCauseNotHttpStatus(
+        string upstreamCode,
+        CodexExecutionFailureKind expectedKind)
+    {
+        var handler = new RecordingHandler(
+            JsonSerializer.Serialize(new
+            {
+                error = "http_error",
+                status = 502,
+                body = JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    error = new { code = upstreamCode, message = "upstream" },
+                }),
+            }),
+            HttpStatusCode.BadGateway);
+        var (transport, _) = CreateTransport(handler);
+
+        var act = () => transport.ExecuteAsync(Request(), Descriptor());
+
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
+        exception.Failure.Kind.Should().Be(expectedKind);
+        exception.Failure.Code.Should().Be($"managed_upstream_{upstreamCode.ToLowerInvariant()}");
+        exception.Message.Should().NotContain(RawKey);
+    }
+
+    [Theory]
+    // 无可解析上游码时，失败原因必须仍可归因：形态诊断是区分「网关自身 502」与
+    // 「chrono 报错但我们没解析出来」的唯一线索，且不得泄漏 body/凭据/标识。
+    [InlineData("", "empty")]
+    [InlineData("<html>502 Bad Gateway</html>", "non_json")]
+    [InlineData("[]", "json_non_object")]
+    [InlineData("""{"detail":"gateway"}""", "json_without_error")]
+    [InlineData("""{"error":true,"status":502,"body":{"error":{"code":"X"}}}""", "nested_body_object")]
+    [InlineData("""{"error":{"code":"CODEX_TURN_FAILED"}}""", "json_error_code")]
+    public void ClassifyBodyShape_LabelsProxyFailureBodiesWithoutExposingContent(
+        string body,
+        string expectedShape)
+    {
+        var classify = typeof(NyxIdManagedCodexChronoTransport).GetMethod(
+            "ClassifyBodyShape",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        classify.Should().NotBeNull("shape diagnostics are the only attribution signal when no upstream code resolves");
+
+        var shape = (string)classify!.Invoke(null, [body])!;
+
+        shape.Should().Be(expectedShape);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenChronoReturnsUnknownFailure_DoesNotExposeUpstreamContent()
+    {
+        var handler = new RecordingHandler(
+            $$"""
+            {
+              "success": false,
+              "error": {
+                "code": "CODEX_SECRET_{{RawKey}}",
+                "message": "sensitive {{RawKey}}"
+              }
+            }
+            """,
+            HttpStatusCode.BadGateway);
+        var (transport, _) = CreateTransport(handler);
+
+        var act = () => transport.ExecuteAsync(Request(), Descriptor());
+
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
+        exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.CapacityUnavailable);
+        exception.Failure.Code.Should().Be("managed_proxy_unavailable");
         exception.Message.Should().NotContain(RawKey);
     }
 
@@ -372,12 +534,15 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         }
     }
 
-    private sealed class RecordingHandler(string response) : HttpMessageHandler
+    private sealed class RecordingHandler(
+        string response,
+        HttpStatusCode statusCode = HttpStatusCode.OK) : HttpMessageHandler
     {
         public int CallCount { get; private set; }
         public string? Path { get; private set; }
         public string? PathAndQuery { get; private set; }
         public string? Authorization { get; private set; }
+        public IReadOnlyList<string> ApiKeys { get; private set; } = [];
         public string? Body { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(
@@ -388,10 +553,13 @@ public sealed class NyxIdManagedCodexChronoTransportTests
             Path = request.RequestUri?.AbsolutePath;
             PathAndQuery = request.RequestUri?.PathAndQuery;
             Authorization = request.Headers.Authorization?.ToString();
+            ApiKeys = request.Headers.TryGetValues("X-API-Key", out var apiKeys)
+                ? apiKeys.ToArray()
+                : [];
             Body = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
-            return new HttpResponseMessage(HttpStatusCode.OK)
+            return new HttpResponseMessage(statusCode)
             {
                 Content = new StringContent(response, Encoding.UTF8, "application/json"),
             };

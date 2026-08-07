@@ -117,7 +117,8 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
         var backend = new RecordingResponsesWebSubstituteBackend
         {
             SearchResult = new ResponsesWebSearchBoundaryResult(
-                SearchOutput(("fresh", "https://example.com/fresh", "snippet"))),
+                ResponsesWebResultMigration.FromSearch(
+                    SearchOutput(("fresh", "https://example.com/fresh", "snippet")))),
         };
         var service = CreateService(state, backend);
 
@@ -135,6 +136,31 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
         state.WebTraces[0].Trace.Query.Should().Be("aevatar docs");
         state.WebTraces[0].Trace.CacheHit.Should().BeFalse();
         state.WebTraces[0].Trace.Result.Search.Results[0].Title.Should().Be("fresh");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenSearchBackendReturnsTypedError_ShouldReturnAndRecordError()
+    {
+        var state = new RecordingResponsesAgentToolStatePort();
+        var backend = new RecordingResponsesWebSubstituteBackend
+        {
+            SearchResult = new ResponsesWebSearchBoundaryResult(
+                ResponsesWebResultMigration.FromError(
+                    "search_backend_not_configured",
+                    "No search backend configured.")),
+        };
+        var service = CreateService(state, backend);
+
+        var result = await service.ExecuteAsync(CreateRequest(
+            "WebSearch",
+            """{"query":"official X API documentation"}""",
+            token: "secret-token"));
+
+        result.ResultCase.Should().Be(ResponsesWebSubstituteToolExecutionResult.ResultOneofCase.TypedError);
+        result.TypedError.Code.Should().Be("search_backend_not_configured");
+        result.TypedError.Message.Should().Be("No search backend configured.");
+        state.WebTraces.Should().ContainSingle();
+        state.WebTraces[0].Trace.Result.Error.Code.Should().Be("search_backend_not_configured");
     }
 
     [Fact]
@@ -288,7 +314,7 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
         public List<ResponsesWebFetchBoundaryInput> FetchCalls { get; } = [];
 
         public ResponsesWebSearchBoundaryResult SearchResult { get; init; } =
-            new(new ResponsesWebSearchToolOutput());
+            new(ResponsesWebResultMigration.FromSearch(new ResponsesWebSearchToolOutput()));
 
         public ResponsesWebFetchBoundaryResult FetchResult { get; init; } = new(
             "https://example.com",
@@ -304,7 +330,7 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
             CancellationToken ct)
         {
             SearchCalls.Add(input);
-            return Task.FromResult(new ResponsesWebSearchBoundaryResult(SearchResult.Output.Clone()));
+            return Task.FromResult(new ResponsesWebSearchBoundaryResult(SearchResult.Result.Clone()));
         }
 
         public Task<ResponsesWebFetchBoundaryResult> ExecuteWebFetchAsync(

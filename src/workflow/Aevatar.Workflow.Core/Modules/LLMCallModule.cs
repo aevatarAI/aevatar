@@ -169,6 +169,16 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
 
         await StopWatchdogAsync(pending, ctx, ct);
+        if (evt.AuthorizationRequirement is not null)
+        {
+            ctx.Logger.LogInformation(
+                "LLMCallModule: run={RunId} step={StepId} session={SessionId} status=interactive_authorization_handoff",
+                pending.RunId,
+                pending.StepId,
+                sessionId);
+            return;
+        }
+
         var publisherActorId = envelope.Route?.PublisherActorId ?? ctx.AgentId;
         if (!evt.Success)
         {

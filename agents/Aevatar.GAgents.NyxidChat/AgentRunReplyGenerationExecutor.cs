@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -128,6 +129,10 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             foreach (var pair in plan.Metadata)
                 state.ExternalMetadata[pair.Key] = pair.Value;
             state.Messages.AddRange(plan.InitialMessages.Select(AgentRunReplyStepMappers.ToProto));
+            var currentUserMessage = plan.InitialMessages.LastOrDefault(static message =>
+                string.Equals(message.Role, "user", StringComparison.Ordinal));
+            if (currentUserMessage is not null)
+                state.PendingHistoryMessages.Add(AgentRunReplyStepMappers.ToProto(currentUserMessage));
             return state;
         }
     }
@@ -140,7 +145,12 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         //   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
         //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
         var request = workItem.Request.Clone();
-        using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, workItem.RunActorId, request.TargetActorId);
+        var hasBlockingReceipt = AgentToolReceiptDeliveryPolicy.HasBlockingMutation(
+            AgentToolReceiptDeliveryPolicy.Reconcile(workItem.StepState.ToolReceipts));
+        var suppressTextStreaming = hasBlockingReceipt && _relayOptions?.StreamingCardKitEnabled != true;
+        using TurnStreamingReplySink? streamingSink = suppressTextStreaming
+            ? null
+            : TryBuildStreamingSink(request, workItem.RunActorId, request.TargetActorId);
         var streamingState = TryBuildStreamingReplyState(streamingSink);
         var generator = RequireStepGenerator();
         var stepMetadata = AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata);
@@ -182,8 +192,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             plan.LlmControl,
             workItem.StepState.Round,
             workItem.StepState.FinalNoToolsStep,
-            toolReceipts: workItem.StepState.ToolReceipts);
-        llmRequest = await MaterializeFileRefMessagesAsync(llmRequest, ct).ConfigureAwait(false);
+            toolReceipts: workItem.StepState.ToolReceipts,
+            allowMultipleToolCalls: workItem.AllowMultipleToolCalls);
         if (workItem.StepState.FinalNoToolsStep && llmRequest.Tools is { Count: > 0 })
         {
             // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
@@ -203,31 +213,72 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 Model = llmRequest.Model,
                 Temperature = llmRequest.Temperature,
                 MaxTokens = llmRequest.MaxTokens,
+                AllowMultipleToolCalls = llmRequest.AllowMultipleToolCalls,
                 ResponseFormat = llmRequest.ResponseFormat,
             };
         }
 
         var output = new StringBuilder(workItem.StepState.AccumulatedText ?? string.Empty);
-        using var interactiveScope = TryBeginInteractiveScope(request);
-        var llmResult = await plan.StepExecutor.ExecuteLlmStepAsync(
-                    plan.StepExecutor.ResolveProvider(),
-                    llmRequest,
-                    async (chunk, token) =>
-                    {
-                        if (!string.IsNullOrEmpty(chunk.DeltaContent))
-                        {
-                            output.Append(chunk.DeltaContent);
-                            if (streamingState is not null)
-                                await streamingState.OnDeltaAsync(output.ToString(), token).ConfigureAwait(false);
-                        }
+        var skillRecoveryMessages = BuildSkillRecoveryMessages(workItem.StepState);
+        var deferSkillRecoveryText = !workItem.StepState.FinalNoToolsStep &&
+                                     llmRequest.ToolContext?.SkillRecovery.RequireOrnnSearchOnBlocker == true;
+        // A relay reply token can create exactly one visible reply. Buffer text while an
+        // approval-capable tool is in play so a model preamble cannot consume the token
+        // before the actor sends the approval card. CardKit uses its own Lark transport.
+        var deferApprovalCapableToolText = streamingState is not null &&
+                                          _relayOptions?.StreamingCardKitEnabled != true &&
+                                          llmRequest.Tools?.Any(static tool =>
+                                              tool.ApprovalMode != ToolApprovalMode.NeverRequire) == true;
+        List<LLMStreamChunk>? deferredLlmChunks = deferSkillRecoveryText || deferApprovalCapableToolText
+            ? []
+            : null;
 
-                        if (workItem.ReportChunkAsync is not null)
-                            await workItem.ReportChunkAsync(chunk, token).ConfigureAwait(false);
-                    },
+        async Task DeliverLlmChunkAsync(LLMStreamChunk chunk, CancellationToken token)
+        {
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+            {
+                output.Append(chunk.DeltaContent);
+                if (streamingState is not null)
+                    await streamingState.OnDeltaAsync(output.ToString(), token).ConfigureAwait(false);
+            }
+
+            if (workItem.ReportChunkAsync is not null)
+                await workItem.ReportChunkAsync(chunk, token).ConfigureAwait(false);
+        }
+
+        var recoveryToolCall = workItem.StepState.FinalNoToolsStep
+            ? null
+            : await plan.StepExecutor.TryPlanSkillRecoveryToolCallAsync(
+                    llmRequest,
+                    skillRecoveryMessages,
+                    finalContent: null,
                     ct)
                 .ConfigureAwait(false);
-        if (streamingState is not null)
-            await streamingState.FinalizeAsync(output.ToString(), ct).ConfigureAwait(false);
+        ChatRuntimeStepLlmResult llmResult;
+        if (recoveryToolCall is not null)
+        {
+            llmResult = BuildSkillRecoveryLlmResult(recoveryToolCall);
+        }
+        else
+        {
+            llmRequest = await MaterializeFileRefMessagesAsync(llmRequest, ct).ConfigureAwait(false);
+            using var interactiveScope = TryBeginInteractiveScope(request);
+            llmResult = await plan.StepExecutor.ExecuteLlmStepAsync(
+                        plan.StepExecutor.ResolveProvider(),
+                        llmRequest,
+                        async (chunk, token) =>
+                        {
+                            if (deferredLlmChunks is not null)
+                            {
+                                deferredLlmChunks.Add(chunk);
+                                return;
+                            }
+
+                            await DeliverLlmChunkAsync(chunk, token).ConfigureAwait(false);
+                        },
+                        ct)
+                    .ConfigureAwait(false);
+        }
 
         // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
         // slash silently consumed.
@@ -247,13 +298,45 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             }
         }
 
+        if (effectiveToolCalls is not { Count: > 0 } &&
+            !workItem.StepState.FinalNoToolsStep &&
+            effectiveContent is not null)
+        {
+            var finalAnswerRecovery = await plan.StepExecutor.TryPlanSkillRecoveryToolCallAsync(
+                    llmRequest,
+                    skillRecoveryMessages,
+                    effectiveContent,
+                    ct)
+                .ConfigureAwait(false);
+            if (finalAnswerRecovery is not null)
+            {
+                llmResult = BuildSkillRecoveryLlmResult(finalAnswerRecovery, llmResult.Usage);
+                effectiveContent = null;
+                effectiveToolCalls = llmResult.ToolCalls;
+                deferredLlmChunks?.Clear();
+            }
+        }
+
+        var approvalRequired = HasApprovalRequiredToolCall(
+            effectiveToolCalls,
+            llmResult.AuthorizedTools,
+            llmResult.AuthorizedToolContext);
+        if (deferredLlmChunks is not null && !approvalRequired)
+        {
+            foreach (var chunk in deferredLlmChunks)
+                await DeliverLlmChunkAsync(chunk, ct).ConfigureAwait(false);
+        }
+        if (streamingState is not null && !approvalRequired)
+            await streamingState.FinalizeAsync(output.ToString(), ct).ConfigureAwait(false);
+
         var result = new AgentRunLlmStepResult
         {
             AccumulatedText = output.ToString(),
             Content = effectiveContent ?? string.Empty,
             ReasoningContent = llmResult.ReasoningContent ?? string.Empty,
             FinishReason = llmResult.FinishReason ?? string.Empty,
-            HasStreamedTextContent = !string.IsNullOrEmpty(llmResult.Content),
+            HasStreamedTextContent = !approvalRequired && !string.IsNullOrEmpty(llmResult.Content),
+            ToolRequestId = llmRequest.ToolContext?.Request.RequestId ?? string.Empty,
         };
         if (AgentRunReplyStepMappers.ToProto(llmResult.Usage) is { } usage)
             result.Usage = usage;
@@ -283,7 +366,21 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             var capturedToolContext = llmResult.AuthorizedToolContext;
             authorizedToolCallSafeties = BuildAuthorizedToolCallSafeties(
                 capturedToolCalls,
-                capturedTools);
+                capturedTools,
+                capturedToolContext);
+            _logger.LogWarning(
+                "Agent run LLM step emitted tool calls. runId={RunId} correlation={CorrelationId} step={StepIndex} toolCallCount={ToolCallCount} toolNames={ToolNames} authorizedToolCount={AuthorizedToolCount} authorizedToolNames={AuthorizedToolNames} pendingAuthorizationCount={PendingAuthorizationCount} inputFileRefCount={InputFileRefCount}",
+                workItem.RunId,
+                request.CorrelationId,
+                workItem.StepIndex,
+                capturedToolCalls.Length,
+                FormatToolNames(capturedToolCalls.Select(static call => call.Name)),
+                capturedTools.Length,
+                FormatToolNames(capturedTools.Select(static tool => tool.Name)),
+                authorizedToolCallSafeties.Count,
+                capturedToolContext.InputFileRefs.Count);
+            result.PendingToolAuthorizations.AddRange(
+                authorizedToolCallSafeties.Select(BuildPendingToolAuthorization));
             authorizedToolStep = new AgentRunAuthorizedToolStep(
                 workItem.RunId,
                 request.CorrelationId,
@@ -314,10 +411,40 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             authorizedToolCallSafeties);
     }
 
+    private static ChatRuntimeStepLlmResult BuildSkillRecoveryLlmResult(
+        ChatRuntimeStepRecoveryToolCall recovery,
+        TokenUsage? usage = null) =>
+        new(
+            Content: null,
+            ReasoningContent: null,
+            ToolCalls: [recovery.ToolCall],
+            Terminated: false,
+            FinishReason: "tool_calls",
+            Usage: usage,
+            recovery.AuthorizedTools,
+            recovery.AuthorizedToolContext);
+
+    private static IReadOnlyList<ChatMessage> BuildSkillRecoveryMessages(AgentRunReplyStepState stepState)
+    {
+        if (stepState.PendingHistoryMessages.Count > 0)
+        {
+            return stepState.PendingHistoryMessages
+                .Select(AgentRunReplyStepMappers.FromProto)
+                .ToArray();
+        }
+
+        return stepState.AppendedHistory
+            .Select(AgentRunReplyStepMappers.ToProto)
+            .Select(AgentRunReplyStepMappers.FromProto)
+            .ToArray();
+    }
+
     private static IReadOnlyList<AgentRunAuthorizedToolCallSafety> BuildAuthorizedToolCallSafeties(
         IReadOnlyList<ToolCall> toolCalls,
-        IReadOnlyList<IAgentTool> authorizedTools)
+        IReadOnlyList<IAgentTool> authorizedTools,
+        AgentToolExecutionContext authorizedToolContext)
     {
+        using var toolContextScope = AgentToolContextScope.Push(authorizedToolContext);
         var snapshots = new List<AgentRunAuthorizedToolCallSafety>(toolCalls.Count);
         foreach (var call in toolCalls)
         {
@@ -326,16 +453,68 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             if (tool is null)
                 continue;
 
+            var argumentsJson = call.ArgumentsJson ?? string.Empty;
+            var callSafety = tool.GetCallSafety(argumentsJson);
             snapshots.Add(new AgentRunAuthorizedToolCallSafety(
                 call.Id ?? string.Empty,
                 call.Name ?? string.Empty,
-                call.ArgumentsJson ?? string.Empty,
-                tool.GetCallSafety(call.ArgumentsJson ?? string.Empty),
-                tool.SideEffectKind ?? string.Empty));
+                argumentsJson,
+                callSafety,
+                tool.SideEffectKind ?? string.Empty,
+                BuildToolDefinitionFingerprint(tool, callSafety),
+                ToolPresentationDescriptors.Snapshot(tool, call.Name ?? string.Empty, argumentsJson)));
         }
 
         return snapshots;
     }
+
+    private static bool HasApprovalRequiredToolCall(
+        IReadOnlyList<ToolCall>? toolCalls,
+        IReadOnlyList<IAgentTool> authorizedTools,
+        AgentToolExecutionContext authorizedToolContext)
+    {
+        if (toolCalls is not { Count: > 0 })
+            return false;
+
+        using var toolContextScope = AgentToolContextScope.Push(authorizedToolContext);
+        foreach (var call in toolCalls)
+        {
+            var tool = authorizedTools.FirstOrDefault(candidate =>
+                string.Equals(candidate.Name, call.Name, StringComparison.OrdinalIgnoreCase));
+            if (tool is null)
+                continue;
+
+            var safety = tool.GetCallSafety(call.ArgumentsJson ?? string.Empty);
+            if (tool.ApprovalMode == ToolApprovalMode.NeverRequire)
+                continue;
+            if (safety.RequiresApproval ??
+                (tool.ApprovalMode == ToolApprovalMode.AlwaysRequire ||
+                 (!safety.IsReadOnly && safety.IsDestructive)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static AgentRunPendingToolAuthorization BuildPendingToolAuthorization(
+        AgentRunAuthorizedToolCallSafety source) =>
+        new()
+        {
+            Call = new AgentRunToolCall
+            {
+                Id = source.CallId,
+                Name = source.ToolName,
+                ArgumentsJson = source.ArgumentsJson,
+            },
+            HasRequiresApproval = source.CallSafety.RequiresApproval.HasValue,
+            RequiresApproval = source.CallSafety.RequiresApproval ?? false,
+            IsReadOnly = source.CallSafety.IsReadOnly,
+            IsDestructive = source.CallSafety.IsDestructive,
+            SideEffectKind = source.SideEffectKind ?? string.Empty,
+            ToolDefinitionFingerprint = source.ToolDefinitionFingerprint ?? string.Empty,
+        };
 
     private async Task<LLMRequest> MaterializeFileRefMessagesAsync(LLMRequest request, CancellationToken ct)
     {
@@ -381,6 +560,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             Model = request.Model,
             Temperature = request.Temperature,
             MaxTokens = request.MaxTokens,
+            AllowMultipleToolCalls = request.AllowMultipleToolCalls,
             ResponseFormat = request.ResponseFormat,
         };
     }
@@ -395,26 +575,60 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
         var request = workItem.Request.Clone();
         var toolCalls = workItem.StepState.PendingToolCalls.Select(AgentRunReplyStepMappers.FromProto).ToArray();
+        var transientAuthorizationMatched = authorizedToolStep?.Matches(workItem) == true;
+        _logger.LogWarning(
+            "Agent run tool step resolving authorization. runId={RunId} correlation={CorrelationId} step={StepIndex} toolCallCount={ToolCallCount} toolNames={ToolNames} transientAuthorizationPresent={TransientAuthorizationPresent} transientAuthorizationMatched={TransientAuthorizationMatched} durableAuthorizationAllowed={DurableAuthorizationAllowed} pendingAuthorizationCount={PendingAuthorizationCount} pendingAuthorizationConsumed={PendingAuthorizationConsumed} inputFileRefCount={InputFileRefCount}",
+            workItem.RunId,
+            request.CorrelationId,
+            workItem.StepIndex,
+            toolCalls.Length,
+            FormatToolNames(toolCalls.Select(static call => call.Name)),
+            authorizedToolStep is not null,
+            transientAuthorizationMatched,
+            workItem.AllowDurableToolAuthorization,
+            workItem.StepState.PendingToolAuthorizations.Count,
+            workItem.StepState.PendingToolAuthorizationConsumed,
+            AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState).InputFileRefs.Count);
+
         AgentRunToolStepResult toolStepResult;
-        if (authorizedToolStep?.Matches(workItem) == true)
+        if (authorizedToolStep is not null)
         {
-            toolStepResult = await authorizedToolStep.ExecuteAsync(ct).ConfigureAwait(false);
+            if (transientAuthorizationMatched)
+            {
+                _logger.LogWarning(
+                    "Agent run tool step executing with transient authorization. runId={RunId} correlation={CorrelationId} step={StepIndex} toolNames={ToolNames}",
+                    workItem.RunId,
+                    request.CorrelationId,
+                    workItem.StepIndex,
+                    FormatToolNames(toolCalls.Select(static call => call.Name)));
+                toolStepResult = await authorizedToolStep.ExecuteAsync(ct).ConfigureAwait(false);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Agent run tool step rejected by transient authorization mismatch. runId={RunId} correlation={CorrelationId} step={StepIndex} toolNames={ToolNames}",
+                    workItem.RunId,
+                    request.CorrelationId,
+                    workItem.StepIndex,
+                    FormatToolNames(toolCalls.Select(static call => call.Name)));
+                toolStepResult = BuildUnauthorizedToolStepResult(toolCalls);
+            }
+        }
+        else if (workItem.AllowDurableToolAuthorization &&
+                 await TryExecuteDurablyAuthorizedToolStepAsync(workItem, request, toolCalls, ct)
+                     .ConfigureAwait(false) is { } durableToolStepResult)
+        {
+            toolStepResult = durableToolStepResult;
         }
         else
         {
-            var deniedResults = new List<ToolExecutionResult>(toolCalls.Length);
-            foreach (var toolCall in toolCalls)
-            {
-                deniedResults.Add(new ToolExecutionResult(
-                    toolCall.Id,
-                    toolCall.Name,
-                    JsonSerializer.Serialize(new
-                    {
-                        error = $"Tool '{toolCall.Name}' is not authorized for this actor-owned step.",
-                    }),
-                    IsError: true));
-            }
-            toolStepResult = BuildToolStepResult(deniedResults);
+            _logger.LogWarning(
+                "Agent run tool step rejected because no matching authorization was available. runId={RunId} correlation={CorrelationId} step={StepIndex} toolNames={ToolNames}",
+                workItem.RunId,
+                request.CorrelationId,
+                workItem.StepIndex,
+                FormatToolNames(toolCalls.Select(static call => call.Name)));
+            toolStepResult = BuildUnauthorizedToolStepResult(toolCalls);
         }
 
         return new AgentRunNextToolStepRequestedEvent
@@ -429,6 +643,324 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         };
     }
 
+    public async Task<AgentRunNextToolStepRequestedEvent> BuildApprovedToolStepContinuationAsync(
+        AgentRunReplyStepExecutionRequest workItem,
+        AgentRunPendingToolApprovalState pendingApproval,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(pendingApproval);
+        var request = workItem.Request.Clone();
+        var toolCalls = workItem.StepState.PendingToolCalls.Select(AgentRunReplyStepMappers.FromProto).ToArray();
+        var toolStepResult = await TryExecuteDurablyAuthorizedToolStepAsync(
+                workItem with { AllowDurableToolAuthorization = true },
+                request,
+                toolCalls,
+                ct,
+                pendingApproval)
+            .ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The approved AgentRun tool capability no longer matches the suspended call.");
+
+        return new AgentRunNextToolStepRequestedEvent
+        {
+            RunId = workItem.RunId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            Attempt = workItem.Attempt,
+            StepIndex = workItem.StepIndex + 1,
+            Request = request.Clone(),
+            ToolStepResult = toolStepResult,
+        };
+    }
+
+    private async Task<AgentRunToolStepResult?> TryExecuteDurablyAuthorizedToolStepAsync(
+        AgentRunReplyStepExecutionRequest workItem,
+        NeedsLlmReplyEvent request,
+        IReadOnlyList<ToolCall> toolCalls,
+        CancellationToken ct,
+        AgentRunPendingToolApprovalState? pendingApproval = null)
+    {
+        if (!TryMatchDurablePendingToolAuthorizations(workItem.StepState, toolCalls, out var authorizations))
+        {
+            _logger.LogWarning(
+                "Agent run durable tool authorization snapshot did not match pending tool calls. runId={RunId} correlation={CorrelationId} step={StepIndex} toolCallCount={ToolCallCount} pendingAuthorizationCount={PendingAuthorizationCount} pendingAuthorizationConsumed={PendingAuthorizationConsumed} toolNames={ToolNames}",
+                workItem.RunId,
+                request.CorrelationId,
+                workItem.StepIndex,
+                toolCalls.Count,
+                workItem.StepState.PendingToolAuthorizations.Count,
+                workItem.StepState.PendingToolAuthorizationConsumed,
+                FormatToolNames(toolCalls.Select(static call => call.Name)));
+            return null;
+        }
+        if (request.Activity is null)
+        {
+            _logger.LogWarning(
+                "Agent run durable tool authorization cannot rebuild catalog because request activity is missing. runId={RunId} correlation={CorrelationId} step={StepIndex} toolNames={ToolNames}",
+                workItem.RunId,
+                request.CorrelationId,
+                workItem.StepIndex,
+                FormatToolNames(toolCalls.Select(static call => call.Name)));
+            return null;
+        }
+
+        var generator = RequireStepGenerator();
+        var stepMetadata = AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata);
+        var stepControl = AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState);
+        var planToolContext = AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState);
+        if (workItem.StepState.FinalNoToolsStep)
+        {
+            _logger.LogWarning(
+                "Agent run durable tool authorization skipped because step is final no-tools step. runId={RunId} correlation={CorrelationId} step={StepIndex} toolNames={ToolNames}",
+                workItem.RunId,
+                request.CorrelationId,
+                workItem.StepIndex,
+                FormatToolNames(toolCalls.Select(static call => call.Name)));
+            return null;
+        }
+
+        (stepControl, planToolContext) = await ReSupplyRuntimeCredentialsAsync(request, stepControl, planToolContext, ct)
+            .ConfigureAwait(false);
+        var plan = await generator.BuildStepPlanAsync(
+                request.Activity,
+                stepMetadata,
+                stepControl,
+                planToolContext,
+                priorHistory: null,
+                attachmentContext: null,
+                forceDisableTools: false,
+                ct: ct,
+                turnCatalog: workItem.TurnCatalog)
+            .ConfigureAwait(false);
+        var messages = workItem.StepState.Messages.Select(AgentRunReplyStepMappers.FromProto).ToList();
+        var toolRequestId = pendingApproval?.ToolRequestId ?? request.Activity.Id;
+        var llmRequest = plan.StepExecutor.BuildLlmStepRequest(
+            messages,
+            toolRequestId,
+            plan.Metadata,
+            plan.ToolContext,
+            plan.LlmControl,
+            workItem.StepState.Round,
+            finalNoTools: false,
+            toolReceipts: workItem.StepState.ToolReceipts,
+            allowMultipleToolCalls: workItem.AllowMultipleToolCalls);
+        var executionToolContext = llmRequest.ToolContext ?? plan.ToolContext ?? AgentToolExecutionContext.Empty;
+        var currentCatalog = llmRequest.Tools ?? [];
+        if (!TryMatchCurrentCatalog(toolCalls, authorizations, currentCatalog, executionToolContext, out var admittedTools))
+        {
+            _logger.LogWarning(
+                "Agent run durable tool authorization could not match current catalog. runId={RunId} correlation={CorrelationId} step={StepIndex} toolNames={ToolNames} catalogToolCount={CatalogToolCount} catalogToolNames={CatalogToolNames} inputFileRefCount={InputFileRefCount}",
+                workItem.RunId,
+                request.CorrelationId,
+                workItem.StepIndex,
+                FormatToolNames(toolCalls.Select(static call => call.Name)),
+                currentCatalog.Count,
+                FormatToolNames(currentCatalog.Select(static tool => tool.Name)),
+                executionToolContext.InputFileRefs.Count);
+            return null;
+        }
+
+        AgentToolApprovalGrant? approvalGrant = null;
+        if (pendingApproval is not null)
+        {
+            if (!TryBuildApprovalGrant(workItem, toolCalls, executionToolContext, pendingApproval, out approvalGrant))
+            {
+                _logger.LogWarning(
+                    "Agent run approved tool call failed exact identity validation. runId={RunId} correlation={CorrelationId} step={StepIndex} approvalRequest={ApprovalRequestId}",
+                    workItem.RunId,
+                    request.CorrelationId,
+                    workItem.StepIndex,
+                    pendingApproval.ApprovalRequestId);
+                return null;
+            }
+        }
+
+        _logger.LogWarning(
+            "Agent run tool step executing with durable authorization. runId={RunId} correlation={CorrelationId} step={StepIndex} toolNames={ToolNames} inputFileRefCount={InputFileRefCount} approvalGrantPresent={ApprovalGrantPresent}",
+            workItem.RunId,
+            request.CorrelationId,
+            workItem.StepIndex,
+            FormatToolNames(toolCalls.Select(static call => call.Name)),
+            executionToolContext.InputFileRefs.Count,
+            approvalGrant is not null);
+        using var toolScope = TryBeginInteractiveScope(request);
+        var toolResults = await plan.StepExecutor.ExecuteAuthorizedToolStepAsync(
+                toolCalls,
+                admittedTools,
+                executionToolContext,
+                ct,
+                approvalGrant)
+            .ConfigureAwait(false);
+        var toolStepResult = BuildToolStepResult(toolResults);
+        if (TryTakeOutboundIntent(generator) is { } toolOutboundIntent)
+            toolStepResult.OutboundIntent = toolOutboundIntent.Clone();
+        return toolStepResult;
+    }
+
+    private static bool TryBuildApprovalGrant(
+        AgentRunReplyStepExecutionRequest workItem,
+        IReadOnlyList<ToolCall> toolCalls,
+        AgentToolExecutionContext executionToolContext,
+        AgentRunPendingToolApprovalState pending,
+        out AgentToolApprovalGrant? approvalGrant)
+    {
+        approvalGrant = null;
+        if (pending.Decision != AgentRunToolApprovalDecision.Approved ||
+            toolCalls.Count != 1 ||
+            !string.Equals(pending.RunId, workItem.RunId, StringComparison.Ordinal) ||
+            !string.Equals(pending.CorrelationId, workItem.Request.CorrelationId, StringComparison.Ordinal) ||
+            pending.Attempt != workItem.Attempt ||
+            pending.StepIndex != workItem.StepIndex ||
+            string.IsNullOrWhiteSpace(pending.ApprovalRequestId) ||
+            string.IsNullOrWhiteSpace(pending.ToolRequestId))
+        {
+            return false;
+        }
+
+        var call = toolCalls[0];
+        if (!string.Equals(pending.ToolRequestId, executionToolContext.Request.RequestId, StringComparison.Ordinal) ||
+            !string.Equals(pending.ToolCallId, call.Id, StringComparison.Ordinal) ||
+            !string.Equals(pending.ToolName, call.Name, StringComparison.Ordinal) ||
+            !string.Equals(
+                pending.ArgumentsSha256,
+                AgentToolArgumentsDigest.ComputeSha256(call.ArgumentsJson),
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        approvalGrant = new AgentToolApprovalGrant(
+            executionToolContext.ExecutionOwner.Clone(),
+            pending.ApprovalRequestId,
+            pending.ToolRequestId,
+            pending.ToolName,
+            pending.ToolCallId,
+            pending.ArgumentsSha256);
+        return true;
+    }
+
+    private static bool TryMatchDurablePendingToolAuthorizations(
+        AgentRunReplyStepState stepState,
+        IReadOnlyList<ToolCall> toolCalls,
+        out IReadOnlyList<AgentRunPendingToolAuthorization> authorizations)
+    {
+        authorizations = [];
+        if (toolCalls.Count == 0 ||
+            !stepState.PendingToolAuthorizationConsumed ||
+            stepState.PendingToolAuthorizations.Count != toolCalls.Count)
+        {
+            return false;
+        }
+
+        var matched = new List<AgentRunPendingToolAuthorization>(toolCalls.Count);
+        foreach (var toolCall in toolCalls)
+        {
+            var snapshot = stepState.PendingToolAuthorizations.FirstOrDefault(candidate =>
+                ToolCallMatches(candidate.Call, toolCall));
+            if (snapshot is null)
+                return false;
+
+            matched.Add(snapshot);
+        }
+
+        authorizations = matched;
+        return true;
+    }
+
+    private static bool TryMatchCurrentCatalog(
+        IReadOnlyList<ToolCall> toolCalls,
+        IReadOnlyList<AgentRunPendingToolAuthorization> authorizations,
+        IReadOnlyList<IAgentTool> currentCatalog,
+        AgentToolExecutionContext executionToolContext,
+        out IReadOnlyList<IAgentTool> admittedTools)
+    {
+        using var toolContextScope = AgentToolContextScope.Push(executionToolContext);
+        admittedTools = [];
+        var matchedTools = new List<IAgentTool>(toolCalls.Count);
+        for (var i = 0; i < toolCalls.Count; i++)
+        {
+            var toolCall = toolCalls[i];
+            var authorization = authorizations[i];
+            var tool = currentCatalog.FirstOrDefault(candidate =>
+                string.Equals(candidate.Name, toolCall.Name, StringComparison.OrdinalIgnoreCase));
+            if (tool is null || !ToolSafetyMatches(authorization, tool, toolCall.ArgumentsJson ?? string.Empty))
+                return false;
+
+            matchedTools.Add(tool);
+        }
+
+        admittedTools = matchedTools
+            .GroupBy(static tool => tool.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(static group => group.First())
+            .ToArray();
+        return true;
+    }
+
+    private static bool ToolCallMatches(AgentRunToolCall? snapshot, ToolCall toolCall) =>
+        snapshot is not null &&
+        string.Equals(snapshot.Id, toolCall.Id, StringComparison.Ordinal) &&
+        string.Equals(snapshot.Name, toolCall.Name, StringComparison.Ordinal) &&
+        string.Equals(snapshot.ArgumentsJson, toolCall.ArgumentsJson, StringComparison.Ordinal);
+
+    private static bool ToolSafetyMatches(
+        AgentRunPendingToolAuthorization authorization,
+        IAgentTool tool,
+        string argumentsJson)
+    {
+        var currentSafety = tool.GetCallSafety(argumentsJson);
+        return authorization.HasRequiresApproval == currentSafety.RequiresApproval.HasValue &&
+               authorization.RequiresApproval == (currentSafety.RequiresApproval ?? false) &&
+               authorization.IsReadOnly == currentSafety.IsReadOnly &&
+               authorization.IsDestructive == currentSafety.IsDestructive &&
+               string.Equals(authorization.SideEffectKind, tool.SideEffectKind ?? string.Empty, StringComparison.Ordinal) &&
+               string.Equals(
+                   authorization.ToolDefinitionFingerprint,
+                   BuildToolDefinitionFingerprint(tool, currentSafety),
+                   StringComparison.Ordinal);
+    }
+
+    private static string FormatToolNames(IEnumerable<string?> names)
+    {
+        var values = names
+            .Select(NormalizeOptional)
+            .Where(static name => name is not null)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return values.Length == 0 ? "(none)" : string.Join(',', values);
+    }
+
+    private static string BuildToolDefinitionFingerprint(IAgentTool tool, AgentToolCallSafety callSafety)
+    {
+        var canonical = string.Join('\n',
+            tool.Name ?? string.Empty,
+            tool.Description ?? string.Empty,
+            tool.ParametersSchema ?? string.Empty,
+            tool.SideEffectKind ?? string.Empty,
+            callSafety.RequiresApproval.HasValue ? "1" : "0",
+            callSafety.RequiresApproval == true ? "1" : "0",
+            callSafety.IsReadOnly ? "1" : "0",
+            callSafety.IsDestructive ? "1" : "0");
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+    }
+
+    private static AgentRunToolStepResult BuildUnauthorizedToolStepResult(IReadOnlyList<ToolCall> toolCalls)
+    {
+        var deniedResults = new List<ToolExecutionResult>(toolCalls.Count);
+        foreach (var toolCall in toolCalls)
+        {
+            deniedResults.Add(new ToolExecutionResult(
+                toolCall.Id,
+                toolCall.Name,
+                JsonSerializer.Serialize(new
+                {
+                    error = $"Tool '{toolCall.Name}' is not authorized for this actor-owned step.",
+                }),
+                IsError: true));
+        }
+
+        return BuildToolStepResult(deniedResults);
+    }
+
     private static AgentRunToolStepResult BuildToolStepResult(
         IReadOnlyList<ToolExecutionResult> results)
     {
@@ -439,7 +971,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         foreach (var toolResult in results)
         {
             toolStepResult.ResultMessages.Add(AgentRunReplyStepMappers.ToProto(
-                ToolCallLoop.BuildToolResultMessage(toolResult.CallId, toolResult.ToolName, toolResult.Result)));
+                ToolCallLoop.BuildToolResultMessage(
+                    toolResult.CallId,
+                    toolResult.ToolName,
+                    toolResult.Result,
+                    toolResult.Receipt)));
             if (toolResult.Receipt is not null)
                 toolStepResult.ToolReceipts.Add(toolResult.Receipt.Clone());
         }

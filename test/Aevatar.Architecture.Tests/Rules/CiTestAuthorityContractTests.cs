@@ -221,6 +221,118 @@ public class CiTestAuthorityContractTests
         Assert.Contains("AEVATAR_ActorRuntime__Provider=Orleans", script, StringComparison.Ordinal);
         Assert.Contains("AEVATAR_ActorRuntime__OrleansPersistenceBackend=InMemory", script, StringComparison.Ordinal);
         Assert.Contains("AEVATAR_ActorRuntime__SecretStoreBackend=InMemory", script, StringComparison.Ordinal);
+        Assert.Contains("start_nyxid_stub", script, StringComparison.Ordinal);
+        Assert.Contains("wait_for_schedule_provisioning", script, StringComparison.Ordinal);
+        Assert.Contains("scheduleProvisioningId", script, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("distributed_3node_smoke.sh")]
+    [InlineData("distributed_mixed_version_smoke.sh")]
+    public void DistributedRuntimeSmoke_ShouldUseSyntheticSecretsAndAuthenticatedApiProbes(string scriptName)
+    {
+        var scriptPath = Path.Combine(TemporaryCiRepo.FindRepositoryRoot(), "tools", "ci", scriptName);
+        var script = File.ReadAllText(scriptPath);
+
+        Assert.Contains("create_synthetic_secret_store_keyring", script, StringComparison.Ordinal);
+        Assert.Contains("create_synthetic_scope_service_token", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("Aevatar__Authentication__Enabled=false", script, StringComparison.Ordinal);
+        Assert.Contains("Aevatar__Authentication__Authority=\"\"", script, StringComparison.Ordinal);
+        Assert.Contains("Aevatar__Authentication__ScopeServiceTokens__Enabled=true", script, StringComparison.Ordinal);
+        Assert.Contains("Aevatar__Authentication__ScopeServiceTokens__SigningKeys__0__KeyBase64", script, StringComparison.Ordinal);
+        Assert.Contains("/health/ready", script, StringComparison.Ordinal);
+        Assert.Contains("AEVATAR_TEST_CLUSTER_BEARER_TOKEN", script, StringComparison.Ordinal);
+        Assert.Contains("AEVATAR_ActorRuntime__SecretStoreBackend=Garnet", script, StringComparison.Ordinal);
+        Assert.Contains("AEVATAR_ActorRuntime__SecretStoreKeyringPath", script, StringComparison.Ordinal);
+        Assert.Contains("Audit__ActorIdentityHasher__ActiveKeyId=distributed-smoke-key", script, StringComparison.Ordinal);
+        Assert.Contains("Audit__ActorIdentityHasher__Keys__0__KeyId=distributed-smoke-key", script, StringComparison.Ordinal);
+        Assert.Contains("Audit__ActorIdentityHasher__Keys__0__Key=", script, StringComparison.Ordinal);
+        Assert.Contains("ChannelIdentity__OAuthClient__Bootstrap__Enabled=false", script, StringComparison.Ordinal);
+        Assert.Contains(
+            "dotnet build test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains("--no-build", script, StringComparison.Ordinal);
+        Assert.Contains("--no-restore", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DistributedMixedVersionSmoke_ShouldRetryOnlyTransientEventProbeFailures()
+    {
+        var scriptPath = Path.Combine(
+            TemporaryCiRepo.FindRepositoryRoot(),
+            "tools",
+            "ci",
+            "distributed_mixed_version_smoke.sh");
+        var script = File.ReadAllText(scriptPath);
+
+        Assert.Contains("max_attempts = 5", script, StringComparison.Ordinal);
+        Assert.Contains("retryable_status_codes = {502, 503, 504}", script, StringComparison.Ordinal);
+        Assert.Contains(
+            "except (ConnectionError, urllib.error.URLError, TimeoutError, socket.timeout)",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains("error.code not in retryable_status_codes", script, StringComparison.Ordinal);
+        Assert.Contains("file=sys.stderr", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DistributedMixedVersionSmoke_ShouldWaitForCommittedWorkflowDetailReadiness()
+    {
+        var scriptPath = Path.Combine(
+            TemporaryCiRepo.FindRepositoryRoot(),
+            "tools",
+            "ci",
+            "distributed_mixed_version_smoke.sh");
+        var script = File.ReadAllText(scriptPath);
+
+        Assert.Contains("query_workflow_name()", script, StringComparison.Ordinal);
+        Assert.Contains("method=\"GET\"", script, StringComparison.Ordinal);
+        Assert.Contains("required_workflow = \"mission_wall_15_node_probe\"", script, StringComparison.Ordinal);
+        Assert.Contains("max_attempts = 10", script, StringComparison.Ordinal);
+        Assert.Contains("/api/workflows/", script, StringComparison.Ordinal);
+        Assert.Contains("urllib.parse.quote(required_workflow, safe='')", script, StringComparison.Ordinal);
+        Assert.Contains("readiness_status_codes = {404, 502, 503, 504}", script, StringComparison.Ordinal);
+        Assert.Contains("if workflow_name == required_workflow:", script, StringComparison.Ordinal);
+        Assert.Contains(
+            "Workflow detail readiness probe attempt {attempt}/{max_attempts}",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains("error.code not in readiness_status_codes", script, StringComparison.Ordinal);
+        Assert.Contains(
+            "except (ConnectionError, urllib.error.URLError, TimeoutError, socket.timeout)",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains("Workflow detail readiness probe returned invalid JSON.", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DistributedMixedVersionSmoke_ShouldBoundTypedEventProbeFailureDiagnostics()
+    {
+        var scriptPath = Path.Combine(
+            TemporaryCiRepo.FindRepositoryRoot(),
+            "tools",
+            "ci",
+            "distributed_mixed_version_smoke.sh");
+        var script = File.ReadAllText(scriptPath);
+
+        Assert.Contains("print_event_probe_failure_diagnostic()", script, StringComparison.Ordinal);
+        Assert.Contains("payload.get(\"code\")", script, StringComparison.Ordinal);
+        Assert.Contains("payload.get(\"message\")", script, StringComparison.Ordinal);
+        Assert.Contains("[:160]", script, StringComparison.Ordinal);
+        Assert.Contains(
+            "print_event_probe_failure_diagnostic \"${probe_log_file}\"",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains("print_event_probe_server_diagnostic()", script, StringComparison.Ordinal);
+        Assert.Contains("Workflow chat execution failed.", script, StringComparison.Ordinal);
+        Assert.Contains("if len(diagnostics) == 5:", script, StringComparison.Ordinal);
+        Assert.Contains("[:200]", script, StringComparison.Ordinal);
+        Assert.Contains("Bearer <redacted>", script, StringComparison.Ordinal);
+        Assert.Contains(
+            "print_event_probe_server_diagnostic \"${log_dir}/node1.log\"",
+            script,
+            StringComparison.Ordinal);
     }
 
     private static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";

@@ -13,9 +13,9 @@ namespace Aevatar.Studio.Application.Studio.Contracts;
 /// provisioning hand-off, not the bind terminal state:
 /// <list type="bullet">
 ///   <item><c>accepted</c> — the member was created, the inline workflow YAML bind
-///   was accepted, and a scheduled-dispatch was created to produce the run once
-///   the member is bound. Runs appear in the Observatory as the schedule fires;
-///   the caller watches the Observatory, there is no synchronous run id.</item>
+///   was accepted, and actor-owned schedule provisioning was durably accepted.
+///   The member read model exposes the later provisioning result; there is no
+///   synchronous run id.</item>
 /// </list>
 /// A validation failure (missing YAML / caller credential) is surfaced as an
 /// exception, not a status value, so the endpoint maps it to a 4xx.
@@ -23,8 +23,7 @@ namespace Aevatar.Studio.Application.Studio.Contracts;
 public static class ProvisionWorkflowBindingStatusNames
 {
     /// <summary>
-    /// The member + bind + schedule were accepted; the run is produced
-    /// asynchronously by the scheduled-dispatch (HTTP 202).
+    /// The member + bind + schedule provisioning intent were accepted (HTTP 202).
     /// </summary>
     public const string Accepted = "accepted";
 }
@@ -55,9 +54,10 @@ public sealed record ProvisionWorkflowCallerCredential(
 /// <summary>
 /// Single-call workflow provisioning request. The caller supplies the workflow
 /// body inline (YAML), a target Team, and a prompt; the service composes
-/// Team-owned member create + bind + scheduled-dispatch so a Claude Code session
-/// reaches a runnable, discoverable workflow in one proxied call. No serviceId /
-/// memberId / workflowId is accepted — those are minted internally and returned.
+/// Team-owned member create + bind + durable schedule provisioning acceptance so
+/// a Claude Code session can request a runnable, discoverable workflow in one
+/// proxied call. No serviceId / memberId / workflowId is accepted — those are
+/// minted internally and returned.
 ///
 /// The run is produced asynchronously by a scheduled-dispatch. By default a
 /// near-future one-shot fire is created so the caller sees a single demo run;
@@ -79,6 +79,12 @@ public sealed record ProvisionWorkflowRequest(
     string? Timezone = null,
     ProvisionWorkflowCallerCredential? Caller = null)
 {
+    /// <summary>
+    /// Additional named workflow definitions referenced by the entry workflow.
+    /// Each dictionary key is the stable definition name used by workflow_call.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? InlineWorkflowYamls { get; init; }
+
     public IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations { get; init; }
 
     [JsonIgnore]
@@ -104,18 +110,17 @@ public sealed record ProvisionWorkflowRequest(
     public string? ScheduleIdempotencyKey { get; init; }
 
     /// <summary>
-    /// Delay ahead of "now" for the synthesized one-shot fire when no recurring
-    /// <see cref="Cron"/> is supplied. This near-future fire does not guarantee
-    /// binding-terminal readiness; readiness and reconciliation remain tracked by
-    /// issue #2679.
+    /// Delay ahead of binding readiness for the synthesized one-shot fire when no
+    /// recurring <see cref="Cron"/> is supplied. The member actor resolves and
+    /// persists the exact UTC fire time only after observing the target revision.
     /// </summary>
     public const int DefaultOneShotDelaySeconds = 30;
 }
 
 /// <summary>
 /// Result of a single-call provision. The bind and the run are both asynchronous,
-/// so no run id is returned at provision time; the run appears in the Observatory
-/// (<see cref="ObservatoryUrl"/>) as the <see cref="ScheduleId"/> fires.
+/// so no run id is returned at provision time. The schedule id is absent until
+/// actor-owned provisioning succeeds and becomes visible in the member read model.
 /// <see cref="BindingRunId"/> lets the caller poll the bind status if desired.
 /// <see cref="StudioUrl"/> is the editable Studio member page under the owning
 /// Team.
@@ -130,6 +135,18 @@ public sealed record ProvisionWorkflowResponse(
     public string? BindingRunId { get; init; }
 
     public string? ScheduleId { get; init; }
+
+    /// <summary>
+    /// Stable identity of the actor-owned schedule provisioning intent. Present
+    /// whenever scheduling was requested, including while no schedule id exists yet.
+    /// </summary>
+    public string? ScheduleProvisioningId { get; init; }
+
+    /// <summary>
+    /// Honest asynchronous schedule state. A successful request normally returns
+    /// <c>pending_binding</c>; the member read model later exposes terminal status.
+    /// </summary>
+    public string? ScheduleProvisioningStatus { get; init; }
 
     public string StudioUrl { get; init; } = string.Empty;
 }

@@ -50,6 +50,45 @@ public sealed class NyxIdWorkflowReceiptIntegrationTests
         result.ResultJson.Should().Be("{\"ok\":true}");
     }
 
+    [Fact]
+    public async Task ExplicitRequestWithUnknownQueryParameter_ShouldPreserveTypedAdmissionFailure()
+    {
+        var handler = new SuccessHandler();
+        var proxy = new NyxIdProxyTool(
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
+                new HttpClient(handler)),
+            managedWorkflowAdmissionMode: NyxIdManagedWorkflowAdmissionMode.Enforce);
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleToolSource(proxy)],
+            new PassThroughExecutionPort());
+        var tool = (await adapter.GetToolsAsync()).Single(candidate => candidate.Name == "nyxid_proxy");
+
+        var result = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+            ArgumentsJson: """{"query":{"field_names":["Amount"]}}""",
+            RunId: "run-beta",
+            StepId: "request-beta",
+            ExecutionId: "execution-beta",
+            CallId: "call-beta",
+            ScopeId: "scope-beta",
+            CallerCredential: new WorkflowCallerCredential
+            {
+                BearerToken = "delegation-beta",
+                Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+            },
+            RuntimeContext: new WorkflowToolRuntimeContext(
+                "run-actor-beta",
+                "run-beta",
+                "request-beta",
+                "run-beta",
+                1),
+            InvocationAdmission: ExplicitRequestAdmission()));
+
+        handler.RequestCount.Should().Be(0);
+        result.Failure.Should().NotBeNull();
+        result.Failure!.ErrorCode.Should().Be("NYXID_OPERATION_QUERY_PARAMETER_UNKNOWN");
+    }
+
     private static WorkflowCapabilityInvocationAdmission ExplicitRequestAdmission()
     {
         const string callSiteId = "workflow-alpha/request-alpha";

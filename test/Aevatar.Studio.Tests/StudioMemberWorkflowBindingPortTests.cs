@@ -224,6 +224,33 @@ public sealed class StudioMemberWorkflowBindingPortTests
     }
 
     [Fact]
+    public async Task BindAsync_WithInlineWorkflowYamls_ShouldAdmitAndBindCompleteDefinitionSet()
+    {
+        var memberService = new RecordingMemberService { ThrowMemberNotFoundOnGet = true };
+        var admission = new StudioWorkflowCapabilityAdmissionTestService();
+        var port = new StudioMemberWorkflowBindingPort(
+            memberService,
+            admission,
+            new RecordingSaveAndBindPort(),
+            new RecordingMemberCommandPort());
+        const string rootYaml = "name: root\nsteps: []\n";
+        const string childYaml = "name: child\nsteps: []\n";
+
+        await port.BindAsync(new StudioMemberWorkflowBindingRequest(
+            "scope-1",
+            "member-1",
+            rootYaml)
+        {
+            WorkflowId = "workflow-root",
+            InlineWorkflowYamls = new Dictionary<string, string> { ["child"] = childYaml },
+        });
+
+        admission.Requests.Should().ContainSingle().Which.InlineWorkflowYamls
+            .Should().Contain("child", childYaml);
+        memberService.LastRequest!.Workflow!.WorkflowYamls.Should().Equal(rootYaml, childYaml);
+    }
+
+    [Fact]
     public async Task BindAsync_WhenCapabilityAdmissionFails_ShouldNotReadOrMutateMember()
     {
         var memberService = new RecordingMemberService();
@@ -468,6 +495,10 @@ public sealed class StudioMemberWorkflowBindingPortTests
             WorkflowYaml: "name: demo\nsteps: []\n")
         {
             WorkflowId = " workflow-explicit ",
+            InlineWorkflowYamls = new Dictionary<string, string>
+            {
+                ["child"] = "name: child\nsteps: []\n",
+            },
         });
 
         result.Success.Should().BeTrue();
@@ -485,6 +516,9 @@ public sealed class StudioMemberWorkflowBindingPortTests
         saveAndBindPort.LastRequest.ExposureDesired.Should().BeTrue();
         saveAndBindPort.LastRequest.DisplayName.Should().Be("Member One");
         saveAndBindPort.LastRequest.WorkflowId.Should().Be("workflow-explicit");
+        saveAndBindPort.LastRequest.WorkflowName.Should().BeNull();
+        saveAndBindPort.LastRequest.InlineWorkflowYamls.Should()
+            .Contain("child", "name: child\nsteps: []\n");
         saveAndBindPort.LastRequest.CapabilityAdmission.Should().NotBeNull();
         saveAndBindPort.LastRequest.CapabilityAdmission!.ExistingPlan.Should().NotBeNull();
         memberCommandPort.LastRecordPublishedBinding.Should().NotBeNull();

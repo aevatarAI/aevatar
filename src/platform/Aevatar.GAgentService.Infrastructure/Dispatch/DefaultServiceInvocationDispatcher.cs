@@ -142,7 +142,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         if (plan.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
             !System.Enum.IsDefined(plan.ExecutionMode))
         {
-            throw new InvalidOperationException("Workflow service deployment execution mode is required.");
+            throw CreateWorkflowExecutionModeRebindRequired(plan.ExecutionMode);
         }
         var bindingIdentity = WorkflowServiceDeploymentPlanIntegrity.ResolveBindingIdentity(
             target.Artifact,
@@ -205,6 +205,33 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
 
         return CreateReceipt(target, run.ActorId, commandId, correlationId, serviceRunId);
     }
+
+    private static WorkflowExternalCapabilityAdmissionException CreateWorkflowExecutionModeRebindRequired(
+        ExternalCapabilityExecutionMode executionMode) =>
+        new(new ExternalCapabilityReadiness
+        {
+            ExecutionMode = executionMode,
+            Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+            Blockers =
+            {
+                new ExternalCapabilityBlocker
+                {
+                    Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+                    Code = WorkflowCapabilityAdmissionPlanIntegrity.RebindRequiredCode,
+                    SafeMessage =
+                        "Saved workflow deployment is missing an explicit execution mode. " +
+                        "Re-publish the workflow and reprovision schedules that reference it.",
+                },
+            },
+            Remediations =
+            {
+                new ExternalCapabilityRemediation
+                {
+                    ActionKind = ExternalCapabilityRemediationActionKind.RebindWorkflow,
+                    Label = "Re-publish workflow and reprovision schedule",
+                },
+            },
+        });
 
     private async Task<ServiceInvocationAcceptedReceipt> DispatchExactWorkflowRunAsync(
         ServiceInvocationResolvedTarget target,

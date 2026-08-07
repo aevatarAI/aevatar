@@ -242,6 +242,7 @@ public sealed class WorkflowParser
             BodyMode = ParseNyxIdRequestBodyMode(request.BodyMode),
             BodyRequired = request.BodyRequired,
             ResponseMode = ParseNyxIdRequestResponseMode(request.ResponseMode),
+            Risk = ParseNyxIdOperationRisk(request.Risk),
         };
         selector.QueryParameters.Add(NormalizeNames(request.QueryParameters, StringComparer.Ordinal));
         selector.HeaderParameters.Add(NormalizeNames(request.HeaderParameters, StringComparer.OrdinalIgnoreCase));
@@ -265,6 +266,20 @@ public sealed class WorkflowParser
             "DELETE" => NyxIdRequestMethod.Delete,
             _ => NyxIdRequestMethod.Unspecified,
         };
+
+    private static NyxIdOperationRisk ParseNyxIdOperationRisk(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return NyxIdOperationRisk.Unspecified;
+
+        return value.Trim().ToUpperInvariant() switch
+        {
+            "READ_ONLY" => NyxIdOperationRisk.ReadOnly,
+            "WRITE" => NyxIdOperationRisk.Write,
+            "DESTRUCTIVE" => NyxIdOperationRisk.Destructive,
+            _ => (NyxIdOperationRisk)(-1),
+        };
+    }
 
     private static NyxIdRequestBodyMode ParseNyxIdRequestBodyMode(string? value) =>
         value?.Trim().ToLowerInvariant() switch
@@ -1048,6 +1063,7 @@ public sealed class WorkflowParser
         AddIfMissing(parameters, "value_field", s.ValueField);
         AddIfMissing(parameters, "field", s.Field);
         AddIfMissing(parameters, "aggregate", s.Aggregate);
+        AddIfMissing(parameters, "template", s.Template);
     }
 
     private static TransformOperationSpec? MapTransformOperation(
@@ -1079,6 +1095,7 @@ public sealed class WorkflowParser
         spec.Key = GetParameter(parameters, "key", "group_key", "group_by").Trim();
         spec.Value = GetParameter(parameters, "value", "value_field", "field").Trim();
         spec.Aggregate = ParseTransformAggregateKind(GetParameter(parameters, "aggregate", "agg").Trim());
+        spec.Template = GetParameter(parameters, "template");
         return spec;
     }
 
@@ -1190,6 +1207,7 @@ public sealed class WorkflowParser
             "min" => TransformOperationKind.Min,
             "max" => TransformOperationKind.Max,
             "groupby" => TransformOperationKind.GroupBy,
+            "template" => TransformOperationKind.Template,
             _ => TransformOperationKind.Unspecified,
         };
 
@@ -1478,6 +1496,7 @@ public sealed class WorkflowParser
         public string? ValueField { get; set; }
         public string? Field { get; set; }
         public string? Aggregate { get; set; }
+        public string? Template { get; set; }
         public object? AllowedTools { get; set; }
         public object? ToolSets { get; set; }
         public RawStepCapability? Capability { get; set; }
@@ -1521,6 +1540,7 @@ public sealed class WorkflowParser
         public string? BodyMode { get; set; }
         public bool BodyRequired { get; set; }
         public string? ResponseMode { get; set; }
+        public string? Risk { get; set; }
     }
     private sealed class RawStepPresentation
     {

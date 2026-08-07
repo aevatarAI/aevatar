@@ -198,6 +198,9 @@ Connector 是**按名称调用的外部能力**：在 `~/.aevatar/connectors.jso
 ```
 
 - 通过 `allowedTools` 限制可调用的 MCP 工具名，避免越权调用。
+- 远程 MCP 使用 `url` 代替 `command/arguments`，可配置部署拥有的 `additionalHeaders`；
+  动态认证使用 MCP `auth`，不要把运行时凭据写入静态 header。
+- 客户端默认协商 MCP `2026-07-28` 无状态协议，并自动兼容旧版初始化握手服务端。
 
 应用启动时会从该文件加载并注册到 `IConnectorRegistry`；工作流里只需写 `connector_call` + `connector: name`。
 

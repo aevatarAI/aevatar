@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Hosting.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Orleans.Configuration;
@@ -49,6 +50,7 @@ public static class MainnetDistributedHostBuilderExtensions
                 orleansOptions.GarnetConnectionString = runtimeOptions.OrleansGarnetConnectionString;
                 orleansOptions.QueueCount = hostOptions.QueueCount;
                 orleansOptions.QueueCacheSize = hostOptions.QueueCacheSize;
+                orleansOptions.MaxEventDeliveryTime = hostOptions.MaxEventDeliveryTime;
             });
 
             if (string.Equals(runtimeOptions.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendKafkaProvider, StringComparison.OrdinalIgnoreCase))
@@ -300,6 +302,13 @@ public static class MainnetDistributedHostBuilderExtensions
         if (int.TryParse(configuredQueueCacheSize, out var queueCacheSize) && queueCacheSize > 0)
             options.QueueCacheSize = queueCacheSize;
 
+        var configuredMaxEventDeliveryTime = configuration["Orleans:MaxEventDeliveryTime"];
+        if (TimeSpan.TryParse(configuredMaxEventDeliveryTime, out var maxEventDeliveryTime) &&
+            maxEventDeliveryTime > TimeSpan.Zero)
+        {
+            options.MaxEventDeliveryTime = maxEventDeliveryTime;
+        }
+
         var configuredListenOnAnyHostAddress = configuration["Orleans:ListenOnAnyHostAddress"];
         if (bool.TryParse(configuredListenOnAnyHostAddress, out var listenOnAnyHostAddress))
             options.ListenOnAnyHostAddress = listenOnAnyHostAddress;
@@ -362,7 +371,10 @@ public static class MainnetDistributedHostBuilderExtensions
 
         public int QueueCount { get; set; } = 8;
 
-        public int QueueCacheSize { get; set; } = 4096;
+        public int QueueCacheSize { get; set; } = AevatarOrleansRuntimeOptions.DefaultQueueCacheSize;
+
+        public TimeSpan MaxEventDeliveryTime { get; set; } =
+            AevatarOrleansRuntimeOptions.DefaultMaxEventDeliveryTime;
 
         public bool ListenOnAnyHostAddress { get; set; }
     }

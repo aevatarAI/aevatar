@@ -132,6 +132,76 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         return Convert.ToHexStringLower(SHA256.HashData(canonical.ToByteArray()));
     }
 
+    public static WorkflowCapabilityAdmissionPlan RebindExplicitRequestBindingIdentity(
+        WorkflowCapabilityAdmissionPlan plan,
+        string workflowYaml,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+        string workflowId,
+        string revisionId)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ValidateBindingIdentity(workflowId, nameof(workflowId));
+        ValidateBindingIdentity(revisionId, nameof(revisionId));
+        if (!string.Equals(plan.SchemaVersion, SchemaVersion, StringComparison.Ordinal) ||
+            plan.ExternalCapabilities.Count != 0 ||
+            plan.ExecutionMode is not (ExternalCapabilityExecutionMode.Interactive or
+                ExternalCapabilityExecutionMode.Durable) ||
+            !FixedTimeEquals(plan.AdmissionDigest, ComputeAdmissionDigest(plan)))
+        {
+            throw new InvalidOperationException(
+                "Workflow capability admission plan cannot be rebound because its integrity is invalid.");
+        }
+
+        var admissions = plan.InvocationAdmissions.ToArray();
+        ValidateInvocationAdmissions(admissions, plan.ExecutionMode);
+        if (!IsSortedByCallSite(admissions))
+        {
+            throw new InvalidOperationException(
+                "Workflow capability invocation admissions are not canonically ordered.");
+        }
+
+        var firstGrant = admissions
+            .Select(static admission => admission.NyxIdExplicitRequestGrant)
+            .FirstOrDefault(static grant => grant is not null)
+            ?? throw new InvalidOperationException(
+                "Workflow NyxID explicit request binding identity is required.");
+        var currentIdentity = ResolveExplicitRequestBindingIdentity(
+            admissions,
+            firstGrant.WorkflowId,
+            firstGrant.RevisionId)!.Value;
+        if (!FixedTimeEquals(
+                plan.DefinitionDigest,
+                ComputeDefinitionDigest(
+                    workflowYaml,
+                    inlineWorkflowYamls,
+                    currentIdentity.WorkflowId,
+                    currentIdentity.RevisionId)))
+        {
+            throw new InvalidOperationException(
+                "Workflow capability admission definition digest does not match its current binding identity.");
+        }
+
+        var rebound = plan.Clone();
+        foreach (var admission in rebound.InvocationAdmissions.Where(static admission =>
+                     admission.NyxIdExplicitRequestGrant is not null))
+        {
+            var grant = admission.NyxIdExplicitRequestGrant;
+            grant.WorkflowId = workflowId;
+            grant.RevisionId = revisionId;
+            admission.Capability.NyxIdUserRequest.ExplicitRequestGrantDigest =
+                ComputeNyxIdExplicitRequestGrantDigest(grant);
+        }
+
+        rebound.DefinitionDigest = ComputeDefinitionDigest(
+            workflowYaml,
+            inlineWorkflowYamls,
+            workflowId,
+            revisionId);
+        rebound.AdmissionDigest = ComputeAdmissionDigest(rebound);
+        ValidateInvocationAdmissions(rebound.InvocationAdmissions.ToArray(), rebound.ExecutionMode);
+        return rebound;
+    }
+
     public static void ValidateOrThrow(
         WorkflowCapabilityAdmissionPlan plan,
         string workflowYaml,
@@ -405,8 +475,11 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         if (!NyxIdRequestSelectorContract.TryNormalize(selector, out var normalized, out var error))
             throw new InvalidOperationException($"Workflow NyxID {error}.");
 
-        return ComputeLengthPrefixedDigest([
-            "nyxid-explicit-request-contract.v1",
+        var components = new List<string?>
+        {
+            normalized.Risk == NyxIdOperationRisk.Unspecified
+                ? "nyxid-explicit-request-contract.v1"
+                : "nyxid-explicit-request-contract.v2",
             normalized.UserServiceId,
             ((int)normalized.Method).ToString(System.Globalization.CultureInfo.InvariantCulture),
             normalized.PathTemplate,
@@ -418,7 +491,14 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             ((int)normalized.BodyMode).ToString(System.Globalization.CultureInfo.InvariantCulture),
             normalized.BodyRequired.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ((int)normalized.ResponseMode).ToString(System.Globalization.CultureInfo.InvariantCulture),
-        ]);
+        };
+        if (normalized.Risk != NyxIdOperationRisk.Unspecified)
+        {
+            components.Add(((int)normalized.Risk)
+                .ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        return ComputeLengthPrefixedDigest(components);
     }
 
     public static string ComputeNyxIdExplicitRequestProofDigest(
@@ -654,12 +734,14 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             throw new InvalidOperationException("Workflow NyxID explicit request grant policy is invalid.");
         }
 
-        ValidateExplicitRequestRisk(proof.Request.Method, grant.Risk);
-        if (grant.Risk is NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive &&
-            grant.AllowedExecutionModes.Contains(ExternalCapabilityExecutionMode.Durable))
+        ValidateExplicitRequestRisk(proof.Request, grant.Risk);
+        if (grant.AllowedExecutionModes.Contains(ExternalCapabilityExecutionMode.Durable) &&
+            !NyxIdRequestSelectorContract.SupportsDurableExecution(
+                proof.Request.Method,
+                grant.Risk))
         {
             throw new InvalidOperationException(
-                "Workflow NyxID explicit request durable admission is limited to read-only grants.");
+                "Workflow NyxID explicit request durable admission is not allowed for the request risk.");
         }
 
         ValidateNyxIdExecutionPolicy(proof.ExecutionPolicy);
@@ -697,18 +779,17 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         }
     }
 
-    private static void ValidateExplicitRequestRisk(NyxIdRequestMethod method, NyxIdOperationRisk risk)
+    private static void ValidateExplicitRequestRisk(
+        NyxIdRequestSelector request,
+        NyxIdOperationRisk risk)
     {
-        var isValid = method switch
+        if (!NyxIdRequestSelectorContract.IsRiskAttestationSatisfied(
+                request.Method,
+                request.Risk,
+                risk))
         {
-            NyxIdRequestMethod.Get or NyxIdRequestMethod.Head or NyxIdRequestMethod.Options => true,
-            NyxIdRequestMethod.Post or NyxIdRequestMethod.Put or NyxIdRequestMethod.Patch =>
-                risk is NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive,
-            NyxIdRequestMethod.Delete => risk == NyxIdOperationRisk.Destructive,
-            _ => false,
-        };
-        if (!isValid)
             throw new InvalidOperationException("Workflow NyxID explicit request grant risk is below the method floor.");
+        }
     }
 
     public static bool IsValidNyxIdExecutionPolicy(NyxIdOperationExecutionPolicy? policy)
@@ -730,8 +811,7 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         {
             NyxIdOperationRisk.ReadOnly => policy.Approval == NyxIdOperationApproval.None,
             NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive =>
-                policy.Approval == NyxIdOperationApproval.Required &&
-                !policy.AllowedExecutionModes.Contains(ExternalCapabilityExecutionMode.Durable),
+                policy.Approval == NyxIdOperationApproval.Required,
             _ => false,
         };
     }

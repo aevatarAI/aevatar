@@ -25,8 +25,9 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
     private readonly HashSet<string> _allowedTools;
     private readonly HashSet<string> _allowedInputKeys;
     private readonly CancellationTokenSource _disposeCts = new();
-    private volatile Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? _tools;
+    private volatile Lazy<Task<CachedToolIndex>>? _tools;
     private readonly ILogger _logger;
+    private readonly TimeProvider _timeProvider;
     private readonly bool _ownsClientManager;
     private int _disposed;
 
@@ -38,7 +39,8 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         IEnumerable<string>? allowedInputKeys = null,
         IMCPToolDiscoveryPort? clientManager = null,
         IAgentToolExecutionPort? toolExecutionPort = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        TimeProvider? timeProvider = null)
     {
         if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("name is required", nameof(name));
         Name = name;
@@ -51,6 +53,7 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
             ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         _ownsClientManager = clientManager == null;
         _logger = logger ?? NullLogger.Instance;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <inheritdoc />
@@ -75,7 +78,7 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
                 };
             }
 
-            var tools = await GetOrConnectAsync(ct);
+            var tools = (await GetOrConnectAsync(ct)).Tools;
 
             var toolName = ResolveToolName(request);
             if (string.IsNullOrWhiteSpace(toolName))
@@ -244,7 +247,7 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    private Task<IReadOnlyDictionary<string, IAgentTool>> GetOrConnectAsync(CancellationToken ct)
+    private Task<CachedToolIndex> GetOrConnectAsync(CancellationToken ct)
     {
         while (true)
         {
@@ -259,7 +262,7 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
             // could still open external MCP clients.
             // New: publish a non-started Lazy<Task<T>> first; ExecutionAndPublication lets only the
             // winning Lazy start discovery, while losing Lazy instances are never evaluated.
-            var candidate = new Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>(
+            var candidate = new Lazy<Task<CachedToolIndex>>(
                 () => ConnectAndIndexToolsAsync(ct, _disposeCts.Token),
                 LazyThreadSafetyMode.ExecutionAndPublication);
             var winner = Interlocked.CompareExchange(ref _tools, candidate, current);
@@ -268,9 +271,9 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         }
     }
 
-    private static bool TryGetReusableTask(
-        Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? current,
-        out Task<IReadOnlyDictionary<string, IAgentTool>> task)
+    private bool TryGetReusableTask(
+        Lazy<Task<CachedToolIndex>>? current,
+        out Task<CachedToolIndex> task)
     {
         task = null!;
         if (current == null)
@@ -283,21 +286,38 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         }
 
         var existing = current.Value;
-        if (existing.IsFaulted || existing.IsCanceled)
+        if (!existing.IsCompletedSuccessfully)
+        {
+            if (!existing.IsCompleted)
+            {
+                task = existing;
+                return true;
+            }
+
+            return false;
+        }
+
+        var snapshot = existing.Result;
+        if (snapshot.TimeToLive.HasValue &&
+            (snapshot.TimeToLive <= TimeSpan.Zero ||
+             _timeProvider.GetElapsedTime(snapshot.DiscoveredAtTimestamp) >= snapshot.TimeToLive))
             return false;
 
         task = existing;
         return true;
     }
 
-    private async Task<IReadOnlyDictionary<string, IAgentTool>> ConnectAndIndexToolsAsync(
+    private async Task<CachedToolIndex> ConnectAndIndexToolsAsync(
         CancellationToken requestCt,
         CancellationToken disposeCt)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(requestCt, disposeCt);
         var ct = linkedCts.Token;
         var discovered = await _clientManager.ConnectAndDiscoverAsync(_serverConfig, ct);
-        return discovered.ToFrozenDictionary(t => t.Name, t => t, StringComparer.OrdinalIgnoreCase);
+        return new CachedToolIndex(
+            discovered.Tools.ToFrozenDictionary(t => t.Name, t => t, StringComparer.OrdinalIgnoreCase),
+            _timeProvider.GetTimestamp(),
+            discovered.TimeToLive);
     }
 
     /// <inheritdoc />
@@ -332,11 +352,16 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         _disposeCts.Dispose();
     }
 
-    private static Task<IReadOnlyDictionary<string, IAgentTool>>? TryGetCreatedToolsTask(
-        Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? current)
+    private static Task<CachedToolIndex>? TryGetCreatedToolsTask(
+        Lazy<Task<CachedToolIndex>>? current)
     {
         return current is { IsValueCreated: true } ? current.Value : null;
     }
+
+    private sealed record CachedToolIndex(
+        IReadOnlyDictionary<string, IAgentTool> Tools,
+        long DiscoveredAtTimestamp,
+        TimeSpan? TimeToLive);
 
     private static bool TryValidatePayloadKeys(string payload, HashSet<string> allowedKeys, out string error)
     {

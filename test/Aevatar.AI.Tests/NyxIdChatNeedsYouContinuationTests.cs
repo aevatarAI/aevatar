@@ -83,9 +83,11 @@ public sealed class NyxIdChatNeedsYouContinuationTests
     }
 
     [Fact]
-    public async Task ApprovalContinuation_ShouldExecuteExactCallWithGrantAndFreshCredentials()
+    public async Task InputContinuation_ShouldInjectExactFreeTextOnlyIntoTransientToolResult()
     {
-        var generation = new ApprovalGenerationExecutor();
+        const string rawAnswer =
+            "Singapore; budget SGD 200; launch 2026-08-20. Keep defaults editable.";
+        var generation = new AskUserGenerationExecutor();
         var executor = new NyxIdChatTurnOperationExecutor(generation);
         var session = new NyxIdChatTransientExecutionSession();
         await executor.ExecuteAsync(
@@ -93,10 +95,60 @@ public sealed class NyxIdChatNeedsYouContinuationTests
             session,
             static (_, _) => Task.CompletedTask,
             CancellationToken.None);
+        var continuation = new NyxIdChatOperationDispatchCommand
+        {
+            Key = Key("step-input-free-text", "operation-input-free-text"),
+            InputContinuation = new NyxIdChatInputContinuationInput
+            {
+                RequestId = "input-free-text",
+                ToolCallId = "call-ask-user-alpha",
+                Answer = new NyxIdChatInputAnswer { FreeText = rawAnswer },
+            },
+        };
+
+        var execution = await executor.ExecuteAsync(
+            continuation,
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        execution.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Llm);
+        generation.LlmStates.Should().HaveCount(2);
+        var continued = generation.LlmStates[1];
+        continued.PendingToolCalls.Should().BeEmpty();
+        var toolMessage = continued.Messages.Should().ContainSingle(message =>
+            message.Role == "tool" && message.ToolCallId == "call-ask-user-alpha").Which;
+        using var response = JsonDocument.Parse(toolMessage.Content);
+        response.RootElement.GetProperty("type").GetString().Should().Be("ask_user_response");
+        response.RootElement.GetProperty("free_text").GetString().Should().Be(rawAnswer);
+        response.RootElement.TryGetProperty("selected_options", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ApprovalContinuation_ShouldExecuteExactCallWithGrantAndFreshCredentials()
+    {
+        var generation = new ApprovalGenerationExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(generation);
+        var session = new NyxIdChatTransientExecutionSession();
+        var progress = new List<NyxIdChatOperationProgressSignal>();
+        Task ReportProgressAsync(
+            NyxIdChatOperationProgressSignal signal,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            progress.Add(signal.Clone());
+            return Task.CompletedTask;
+        }
+        await executor.ExecuteAsync(
+            InitialLlmCommand(),
+            session,
+            ReportProgressAsync,
+            CancellationToken.None);
         var waiting = await executor.ExecuteAsync(
             ToolCommand(),
             session,
-            static (_, _) => Task.CompletedTask,
+            ReportProgressAsync,
             CancellationToken.None);
 
         waiting.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.ApprovalRequired);
@@ -104,11 +156,17 @@ public sealed class NyxIdChatNeedsYouContinuationTests
         var approved = await executor.ExecuteAsync(
             resolution.NextCommand!,
             session,
-            static (_, _) => Task.CompletedTask,
+            ReportProgressAsync,
             CancellationToken.None);
 
         approved.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
         approved.Result.Tool.Receipt.CallId.Should().Be("call-danger-alpha");
+        var toolStarts = progress.Where(signal =>
+            signal.ProgressCase ==
+            NyxIdChatOperationProgressSignal.ProgressOneofCase.ToolStarted).ToArray();
+        toolStarts.Should().ContainSingle();
+        toolStarts[0].ToolStarted.CallId.Should().Be("call-danger-alpha");
+        toolStarts[0].ToolStarted.Presentation.Should().BeNull();
         generation.ToolExecutions.Should().Be(2);
         generation.Grants.Should().HaveCount(2);
         generation.Grants[0].Should().BeNull();
@@ -163,6 +221,7 @@ public sealed class NyxIdChatNeedsYouContinuationTests
         denied.Result.Tool.Receipt.ToolName.Should().Be("dangerous_tool");
         denied.Result.Tool.Receipt.ApprovalRequestId.Should().Be("approval-alpha");
         denied.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Denied);
+        denied.Result.Tool.Receipt.Effect.Should().Be(AgentToolReceiptEffect.Mutating);
         denied.Result.Tool.Receipt.ErrorCode.Should().Be("approval_denied");
         denied.Result.Tool.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
         var reconciled = NyxIdChatTaskLifecycle.ApplyOperationResult(

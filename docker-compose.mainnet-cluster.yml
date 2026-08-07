@@ -70,7 +70,7 @@ services:
       AEVATAR_Orleans__GatewayPort: 30000
       AEVATAR_Orleans__ListenOnAnyHostAddress: "true"
       AEVATAR_Orleans__QueueCount: 8
-      AEVATAR_Orleans__QueueCacheSize: 4096
+      AEVATAR_Orleans__QueueCacheSize: 32768
       Projection__Document__Providers__Elasticsearch__Enabled: "true"
       Projection__Document__Providers__Elasticsearch__Endpoints__0: http://elasticsearch:9200
       Projection__Document__Providers__Elasticsearch__IndexPrefix: aevatar-mainnet
@@ -118,7 +118,7 @@ services:
       AEVATAR_Orleans__GatewayPort: 30000
       AEVATAR_Orleans__ListenOnAnyHostAddress: "true"
       AEVATAR_Orleans__QueueCount: 8
-      AEVATAR_Orleans__QueueCacheSize: 4096
+      AEVATAR_Orleans__QueueCacheSize: 32768
       Projection__Document__Providers__Elasticsearch__Enabled: "true"
       Projection__Document__Providers__Elasticsearch__Endpoints__0: http://elasticsearch:9200
       Projection__Document__Providers__Elasticsearch__IndexPrefix: aevatar-mainnet
@@ -166,7 +166,7 @@ services:
       AEVATAR_Orleans__GatewayPort: 30000
       AEVATAR_Orleans__ListenOnAnyHostAddress: "true"
       AEVATAR_Orleans__QueueCount: 8
-      AEVATAR_Orleans__QueueCacheSize: 4096
+      AEVATAR_Orleans__QueueCacheSize: 32768
       Projection__Document__Providers__Elasticsearch__Enabled: "true"
       Projection__Document__Providers__Elasticsearch__Endpoints__0: http://elasticsearch:9200
       Projection__Document__Providers__Elasticsearch__IndexPrefix: aevatar-mainnet

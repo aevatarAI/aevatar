@@ -1,8 +1,10 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Expressions;
 using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
+using System.Globalization;
 
 namespace Aevatar.Workflow.Core.Modules;
 
@@ -14,6 +16,7 @@ namespace Aevatar.Workflow.Core.Modules;
 public sealed class RaceModule : IEventModule<IWorkflowExecutionContext>
 {
     private const string ModuleStateKey = "race";
+    private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
 
     public string Name => "race";
     public int Priority => 5;
@@ -35,18 +38,31 @@ public sealed class RaceModule : IEventModule<IWorkflowExecutionContext>
             var raceKey = BuildRaceKey(runId, request.StepId);
 
             var workers = WorkflowParameterValueParser.GetStringList(request.Parameters, "workers", "worker_roles");
+            var subStepType = WorkflowPrimitiveCatalog.ToCanonicalType(
+                WorkflowParameterValueParser.GetString(
+                    request.Parameters,
+                    "llm_call",
+                    "sub_step_type",
+                    "child_step_type"));
+            var subTargetRole = WorkflowParameterValueParser.GetString(
+                request.Parameters,
+                request.TargetRole,
+                "sub_target_role",
+                "child_target_role");
 
             var count = workers.Count > 0 ? workers.Count
                 : WorkflowParameterValueParser.GetBoundedInt(request.Parameters, 2, 1, 10, "count", "race_count");
 
-            if (workers.Count == 0 && string.IsNullOrWhiteSpace(request.TargetRole))
+            if (workers.Count == 0 &&
+                string.IsNullOrWhiteSpace(subTargetRole) &&
+                string.Equals(subStepType, "llm_call", StringComparison.Ordinal))
             {
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
                     StepId = request.StepId,
                     RunId = runId,
                     Success = false,
-                    Error = "race requires parameters.workers (CSV/JSON list) or target_role",
+                    Error = "race requires parameters.workers (CSV/JSON list) or target_role for llm_call workers",
                 }, TopologyAudience.Self, ct);
                 return;
             }
@@ -64,15 +80,20 @@ public sealed class RaceModule : IEventModule<IWorkflowExecutionContext>
 
             for (var i = 0; i < count; i++)
             {
-                var role = i < workers.Count ? workers[i] : request.TargetRole;
-                await ctx.PublishAsync(new StepRequestEvent
+                var role = i < workers.Count ? workers[i] : subTargetRole;
+                var child = new StepRequestEvent
                 {
                     StepId = $"{request.StepId}_race_{i}",
-                    StepType = "llm_call",
+                    StepType = subStepType,
                     RunId = runId,
                     Input = request.Input,
                     TargetRole = role ?? "",
-                }, TopologyAudience.Self, ct);
+                    ExternalInvocation = request.ExternalInvocation?.Clone(),
+                };
+                foreach (var (key, value) in ResolveSubStepParameters(request.Parameters, request.Input, role, i))
+                    child.Parameters[key] = value;
+
+                await ctx.PublishAsync(child, TopologyAudience.Self, ct);
             }
         }
         else if (payload.Is(StepCompletedEvent.Descriptor))
@@ -137,6 +158,29 @@ public sealed class RaceModule : IEventModule<IWorkflowExecutionContext>
 
     private static string BuildRaceKey(string runId, string stepId) =>
         $"{WorkflowRunIdNormalizer.Normalize(runId)}::{stepId}";
+
+    private Dictionary<string, string> ResolveSubStepParameters(
+        IReadOnlyDictionary<string, string> parameters,
+        string input,
+        string? worker,
+        int index)
+    {
+        var variables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["input"] = input,
+            ["output"] = input,
+            ["index"] = index.ToString(CultureInfo.InvariantCulture),
+            ["worker"] = worker ?? string.Empty,
+        };
+        var resolved = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in parameters)
+        {
+            if (key.StartsWith("sub_param_", StringComparison.OrdinalIgnoreCase))
+                resolved[key["sub_param_".Length..]] = _expressionEvaluator.Evaluate(value, variables);
+        }
+
+        return resolved;
+    }
 
     private static Task SaveStateAsync(
         RaceModuleState state,

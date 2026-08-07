@@ -84,7 +84,19 @@ classifier 的普通 provider failure JSON fallback 只作为主链上的非超�
 `WorkflowRoleGAgent` 的 workflow intent 与 approval continuation 使用独立的流消费循环，但仍遵循
 同一 fencing 契约：每个 chunk 在写入内容、发布进度或收集 tool receipt 前先检查 host token，
 异步枚举正常结束后再次检查，防止忽略 cancellation 的 provider 以晚到 chunk 或无 chunk 的正常
-结束伪造成功终态。
+结束伪造成功终态。所有用户可见 text/reasoning/media/tool progress 均提交为统一的
+`RoleChatSessionProgressedEvent`，由 workflow Projection Pipeline 映射为 run-event；禁止恢复
+workflow 专用 transient chunk 协议。completion 中的 typed terminal tail 只补齐 usage、fallback text、
+text end 与 authorization，role terminal/replay 不得冒充 workflow 根 actor 的 run terminal。每个 role
+session 的首个 progress 必须且只能是 `text_started`；approval continuation 与 recovery 重入也必须通过
+同一个幂等 start gate，禁止在新 message id 上直接发送 text delta，或因 recovery 重复发送 start。
+provider 的首个 text/reasoning delta 仍立即提交和发布；后续连续 token-sized delta 按有界字符数合并，
+并由 200 ms 上限保证低吞吐 stream 的交互刷新频率；
+切换 text/reasoning、进入 media/tool lifecycle 或正常结束前必须 flush。committed progress 与发给 parent
+的对应 publication 必须使用同一个 batch 边界，禁止一侧逐 token、另一侧批量而重新制造 stream fan-out。
+Orleans persistent-stream `MaxEventDeliveryTime` 必须覆盖默认 120 秒 turn 与 30 秒 post-turn finalization；
+Mainnet 默认三分钟，不能再用 10 秒 stale-subscription horizon 中断合法 AI turn。失效 subscription 仍由
+delivery failure handler 在真实 forwarding/delivery failure 时 fault，不靠缩短正常 handler 的执行窗口。
 
 审批通过后的 tool resume 是新的 actor turn，必须创建新的 Host-owned deadline；其 token 连续覆盖
 caller token refresh、request tool catalog materialization 和 approved tool execution，禁止使用
@@ -404,7 +416,7 @@ flowchart LR
 
 NyxIdChat 的用户可见 live path 不直接投影上述 transient publications。`RoleGAgent` 在每个 chunk 上提交 `RoleChatSessionProgressedEvent(session_id, sequence, typed payload)`，NyxIdChat session projector 只消费该 committed `EventEnvelope`。typed payload 覆盖 text、reasoning、media、tool start/result、tool approval、usage、authorization、terminal 与 explicit replay；actor sequence 是该 turn 的唯一展示顺序水位。Projection scope 另按 origin actor 持久化 source-version watermark，拒绝 normal observation 中 fan-out 前的 broker 重投或乱序旧 envelope；已记录 projection failure 的显式 replay 绕过该 fence，避免 N 失败、N+1 成功后 N 永久不可恢复。每个显式 sink attachment 再用 latest sequence + protobuf bytes fence 拒绝 fan-out 后的重复帧。该 fence 随 attachment 释放，同一 replay sequence 下内容不同的多帧仍全部投递。
 
-`RoleChatSessionCompletedEvent` 仍是 terminal/final authority，并在同一个 committed fact 内嵌尚未 live 投递的 final text、usage、text end、authorization 与唯一 terminal typed tail。normal projector 只展开该 tail，不读取 completion snapshot 合成全文，因此 completed authority 与 terminal presentation 不会被逐事件发布失败拆开，也不会重复已流式投递的内容。显式 replay 才能把 committed completion snapshot 按 tool、reasoning、media、text、usage、terminal 的展示顺序完整展开。不同输入复用同一 turn id 时，新 producer 提交带独立 command attempt id 的 rejection，不推进已完成 session 的 progress sequence；projection 在滚动升级期间仍兼容旧 `RoleChatSessionConflictEvent` TypeUrl。provider-native tool、text-parsed tool 与 initial skill recovery 都使用同一个 start-before-execution/result lifecycle；`use_skill` 在 start snapshot 时从结构化参数解析实际 skill identity。
+`RoleChatSessionCompletedEvent` 仍是 terminal/final authority，并在同一个 committed fact 内嵌尚未 live 投递的 final text、usage、text end、authorization 与唯一 terminal typed tail。normal projector 只展开该 tail，不读取 completion snapshot 合成全文，因此 completed authority 与 terminal presentation 不会被逐事件发布失败拆开，也不会重复已流式投递的内容。显式 replay 才能把 committed completion snapshot 按 tool、reasoning、media、text、usage、terminal 的展示顺序完整展开。不同输入复用同一 turn id 时，新 producer 提交带独立 command attempt id 的 rejection，不推进已完成 session 的 progress sequence；projection 在滚动升级期间仍兼容旧 `RoleChatSessionConflictEvent` TypeUrl。provider-native tool、text-parsed tool 与 initial skill recovery 都使用同一个 start-before-execution/result lifecycle；`use_skill` 在 start snapshot 时从结构化参数解析实际 skill identity。single-step runtime 必须在完整 tool call 形成时用 resolved typed start 取代 provider 增量 tool JSON 的对外发布，不能把二者投影成同一 call 的两个 start。工具可声明 `RetireAfterSuccess` turn reuse policy：成功 receipt 后只从当前 turn 的后续 LLM 工具目录移除，下一用户 turn 恢复；`aevatar_invoke_member` 用该策略把 accepted dispatch 固定为一次副作用，并保留 `aevatar_observe_run` 读取完成态。NyxIdChat actor-step 主链再把同一个 `ToolPresentationDescriptor` 写入 `NyxIdChatToolProgress` committed fact，并由 projection 原样映射到 `TOOL_CALL_START`；禁止只持久化 tool name 而丢失具体 skill、NyxID operation 或 MCP source identity。
 
 `RoleGAgent` 在 session start 时提交 generation 1 的 `MODEL_READY` checkpoint。每轮 tool batch 必须先把 frozen intent 提交为 `TOOL_BATCH_PREPARED`，其中包含 stable `operation_id`、typed recovery context、replay policy、arguments digest 与 actor/session/operation-bound vault reference；intent commit 成功前不得调用外部 terminal。每个 completion 同样以 digest + vault reference 写入 checkpoint，多工具 batch 在全部 operation 都有 completion 前保持 `TOOL_BATCH_PREPARED`。result reference 内保存 protobuf typed result proof，并以 deterministic reference 实施 first-result authority：result 已写 vault 但 checkpoint append 失败时，caller redelivery 与 activation recovery 都必须在任何外呼前采用原 payload/reference，不得用第二次响应覆盖，也不得创建 alias。checkpoint generation 每次单调递增，producer 在持久化前校验合法 stage transition，consumer 再以 expected generation fence 陈旧 self-message。
 
@@ -434,6 +446,19 @@ flowchart LR
 3. `src/Aevatar.AI.Core/RoleGAgent.cs:114`
 4. `src/workflow/Aevatar.Workflow.Core/Modules/ToolCallModule.cs:53`
 5. `src/Aevatar.AI.Abstractions/ai_messages.proto:34`
+
+### 8.1.1 Mutating receipt grounding and terminal delivery
+
+LLM 文本不是外部写操作结果的事实源。只有同一 turn 内 `Status=Success`、`Effect=Mutating`，并且 `call_id`、tool、side effect 与 typed subject 都和具体动作匹配的 `AgentToolReceipt`，才允许支撑面向用户的写成功声明。probe、workflow run、read 或无关动作的成功回执不能证明目标动作成功。`Effect` 必须由 executor 根据本次调用的 `GetCallSafety(argumentsJson)` 与 `SideEffectKind` 确定为 `ReadOnly` 或 `Mutating`；`Unspecified` 只用于兼容，不能作为 mutation success evidence。
+
+每次生成请求都必须携带“成功回执只证明匹配动作”的 request-local grounding constraint；本 turn 尚无 successful mutating receipt 时，再附加 no-success 约束。constraint 负责约束 zero-receipt 或 unrelated-success 场景的模型措辞，最终投递仍必须确定性执行 receipt authority。对同一非空 `call_id + tool`，最后一条 receipt 是 terminal authority；空 `call_id` 的 receipts 保持彼此独立，不得互相覆盖。provider 未返回 call id 时，runtime 生成的匿名 ID 必须包含 request/round identity。完成对账后，mutating receipt 的 terminal delivery 规则如下：
+
+| Reconciled status | Final delivery behavior |
+|---|---|
+| `Success` | 仅在 tool、side effect 与 typed subject 同样匹配时，允许支撑对应动作的成功声明。 |
+| `Error` / `ApprovalRequired` / `Denied` / `AuthorizationRequired` / `Unspecified` | 用 deterministic receipt text 替换模型成功叙述，并同时写入 streaming snapshot、reply、outbound intent 与本 turn assistant history；必须保持用户可见。`ApprovalRequired` 的确定性文案保留 approval request evidence。 |
+
+Assistant tool-call history 中与 blocking receipt 匹配的 narrative 必须清空，同时保留 tool call/result pairing，避免下一 turn 重放虚假成功。Read-only failure 可以追加为用户可见诊断，但不替换一个其他方面有效的回答；追加后的实际可见文本也必须同步进 retained history。`use_skill` 省略 `mount_workflows` 时只是 read-only 的 skill/instruction load，该成功回执不能证明 workflow mount；首次 `mount_workflows=true` 仍是 read-only preview，返回服务端可重算的 `workflow_mount_confirmation_token`。携带该 token 的二次调用才是 approval-gated mutating operation，批准后必须重算全部 workflow/capability confirmation 并校验 token；只有其 matching successful mutating receipt 才能证明挂载完成。自然语言 skill trigger 必须把显式 `mount/挂载` 意图建模为 typed recovery state 并跨 checkpoint 保留；普通 `use/使用/load/加载` 不得隐式升级为 workflow mount。Preview 到 confirmation 的推进由 typed recovery planner 读取结构化 `skill_load.workflow_mount` 后确定性完成，不能把 opaque token 的提取和审批推进委托给模型文本推理。
 
 ### 8.2 WorkflowRunEvent（输出统一事件）
 

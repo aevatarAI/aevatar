@@ -1,5 +1,6 @@
 using Aevatar.AI.ToolProviders.Web;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 
 namespace Aevatar.Mainnet.Host.Api.Responses;
@@ -58,11 +59,18 @@ internal sealed class ResponsesWebSubstituteBackendAdapter : IResponsesWebSubsti
         // Refactor (issue1273/first-slice): Old pattern: Host adapter re-parsed loose
         // provider Value/JSON into Responses output. New principle: provider returns a
         // local typed DTO and Host only maps between boundary-owned typed contracts.
-        return new ResponsesWebSearchBoundaryResult(ToSearchOutput(result));
+        return new ResponsesWebSearchBoundaryResult(ToSearchResult(result));
     }
 
-    private static ResponsesWebSearchToolOutput ToSearchOutput(WebSearchResult result)
+    private static ResponsesWebToolResult ToSearchResult(WebSearchResult result)
     {
+        if (result.Error is not null)
+        {
+            return ResponsesWebResultMigration.FromError(
+                result.Error.Code,
+                result.Error.Message);
+        }
+
         var output = new ResponsesWebSearchToolOutput();
         output.Results.AddRange(result.Results
             .Select(static item => new ResponsesWebSearchResultItem
@@ -71,6 +79,6 @@ internal sealed class ResponsesWebSubstituteBackendAdapter : IResponsesWebSubsti
                 Url = item.Url,
                 Snippet = item.Snippet,
             }));
-        return output;
+        return ResponsesWebResultMigration.FromSearch(output);
     }
 }

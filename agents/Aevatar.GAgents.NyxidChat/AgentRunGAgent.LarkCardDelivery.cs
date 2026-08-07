@@ -88,10 +88,44 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         if (!IsCurrentCardDeliverySignal(evt.RunId, evt.CorrelationId))
             return;
 
+        evt = ApplyBlockingReceiptToCardChunk(evt);
         if (await HandleLarkCardStreamingChunkCoreAsync(evt, correlationId))
             return;
 
         await ForwardLarkCardTextFallbackSnapshotAsync(evt, correlationId);
+    }
+
+    private LlmReplyCardStreamChunkEvent ApplyBlockingReceiptToCardChunk(
+        LlmReplyCardStreamChunkEvent source)
+    {
+        var receipts = State.GenerationStep?.ToolReceipts;
+        if (receipts is not { Count: > 0 })
+            return source;
+
+        var reconciled = AgentToolReceiptDeliveryPolicy.Reconcile(receipts);
+        if (!AgentToolReceiptDeliveryPolicy.HasBlockingMutation(reconciled))
+            return source;
+
+        var toolCalls = State.GenerationStep!.AppendedHistory
+            .SelectMany(static entry => entry.ToolCalls)
+            .Select(AgentRunReplyStepMappers.ToProto)
+            .ToArray();
+        var delivery = AgentToolReceiptDeliveryPolicy.Build(
+            source.AccumulatedText,
+            outboundIntent: null,
+            appendedHistory: [],
+            receipts: reconciled,
+            toolCalls: toolCalls,
+            renderer: _toolReceiptRenderer);
+        if (string.IsNullOrWhiteSpace(delivery.ReplyText) ||
+            string.Equals(delivery.ReplyText, source.AccumulatedText, StringComparison.Ordinal))
+        {
+            return source;
+        }
+
+        var sanitized = source.Clone();
+        sanitized.AccumulatedText = delivery.ReplyText;
+        return sanitized;
     }
 
     [EventHandler(AllowSelfHandling = true)]

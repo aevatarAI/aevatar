@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Tools;
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Models;
@@ -215,6 +216,10 @@ public sealed class ToolAuditRecordFactory
 
     private static string ResolveFailureCode(string? value, AgentToolReceiptStatus status)
     {
+        var managedUpstreamCode = ManagedCodexUpstreamErrorCode.Resolve(value);
+        if (managedUpstreamCode is not null)
+            return managedUpstreamCode;
+
         var normalized = Normalize(value);
         if (IsOwnedNyxIdProxyFailureCode(normalized) ||
             IsOwnedWebFetchFailureCode(normalized))

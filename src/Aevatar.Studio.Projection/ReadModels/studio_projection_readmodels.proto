@@ -103,6 +103,12 @@ message WorkOrderRunOutcomeReferenceDocument {
   int64 terminal_at_unix_ms = 7;
 }
 
+message WorkOrderAvailableActionsDocument {
+  bool can_reassign = 1;
+  bool can_dispatch = 2;
+  bool can_cancel = 3;
+}
+
 // Actor-scoped current-state replica for WorkOrderGAgent. Business lifecycle
 // decisions are copied from the authoritative actor state; projection does
 // not reconstruct or advance the WorkOrder state machine.
@@ -131,6 +137,7 @@ message WorkOrderCurrentStateDocument {
   int64 created_at_unix_ms = 35;
   int64 timeout_at_unix_ms = 36;
   google.protobuf.Timestamp work_order_updated_at_utc = 37;
+  WorkOrderAvailableActionsDocument available_actions = 38;
 
   string input_prompt = 40;
   repeated WorkOrderArtifactReferenceDocument input_artifacts = 41;
@@ -346,6 +353,60 @@ message NyxIdChatConversationOperationDocument {
   google.protobuf.Timestamp completed_at = 16;
 }
 
+message NyxIdChatConversationLLMStepSourceDocument {
+  string model = 1;
+}
+
+message NyxIdChatConversationToolStepSourceDocument {
+  string tool_name = 1;
+  string service_slug = 2;
+  string service_id = 3;
+  optional string readiness_capability_id = 4;
+}
+
+message NyxIdChatConversationBrowserActionStepSourceDocument {
+  string action = 1;
+  string action_request_id = 2;
+}
+
+message NyxIdChatConversationPostconditionStepSourceDocument {
+  string action_request_id = 1;
+  string check = 2;
+}
+
+message NyxIdChatConversationInputStepSourceDocument {
+  string request_id = 1;
+}
+
+message NyxIdChatConversationApprovalStepSourceDocument {
+  string approval_request_id = 1;
+}
+
+message NyxIdChatConversationWebStepSourceDocument {}
+
+message NyxIdChatConversationStepSourceDocument {
+  oneof source {
+    NyxIdChatConversationLLMStepSourceDocument llm = 1;
+    NyxIdChatConversationToolStepSourceDocument tool = 2;
+    NyxIdChatConversationBrowserActionStepSourceDocument browser_action = 3;
+    NyxIdChatConversationPostconditionStepSourceDocument postcondition = 4;
+    NyxIdChatConversationInputStepSourceDocument input = 5;
+    NyxIdChatConversationApprovalStepSourceDocument approval = 6;
+    NyxIdChatConversationWebStepSourceDocument web = 7;
+  }
+}
+
+message NyxIdChatConversationStepEstimateDocument {
+  string kind = 1;
+  int32 seconds = 2;
+}
+
+message NyxIdChatConversationSubstepDocument {
+  string substep_id = 1;
+  string title = 2;
+  string status = 3;
+}
+
 message NyxIdChatConversationStepDocument {
   string step_id = 1;
   int32 order = 2;
@@ -363,6 +424,16 @@ message NyxIdChatConversationStepDocument {
   NyxIdChatConversationAvailableActionsDocument available_actions = 14;
   google.protobuf.Timestamp updated_at = 15;
   NyxIdChatConversationOperationDocument operation = 16;
+  NyxIdChatConversationStepSourceDocument source = 17;
+  string added_by = 18;
+  repeated string depends_on = 19;
+  NyxIdChatConversationStepEstimateDocument estimate = 20;
+  repeated NyxIdChatConversationSubstepDocument substeps = 21;
+}
+
+message NyxIdChatConversationPlanGateDocument {
+  string mode = 1;
+  string reason = 2;
 }
 
 message NyxIdChatConversationTaskDocument {
@@ -376,6 +447,12 @@ message NyxIdChatConversationTaskDocument {
   google.protobuf.Timestamp created_at = 8;
   google.protobuf.Timestamp updated_at = 9;
   repeated NyxIdChatConversationStepDocument steps = 10;
+  int32 schema_version = 11;
+  string actor_id = 12;
+  string plan_id = 13;
+  int32 plan_revision = 14;
+  string title = 15;
+  NyxIdChatConversationPlanGateDocument gate = 16;
 }
 
 message NyxIdChatConversationPendingApprovalDocument {
@@ -602,6 +679,17 @@ message StudioMemberCurrentStateDocument {
   string binding_failure_message = 64;
   google.protobuf.Timestamp binding_failure_at = 65;
   google.protobuf.Timestamp binding_updated_at = 66;
+
+  // ── Actor-owned provision schedule continuation ──
+  string schedule_provisioning_id = 70;
+  string schedule_provisioning_status = 71;
+  string schedule_provisioning_revision_id = 72;
+  string schedule_provisioning_schedule_id = 73;
+  string schedule_provisioning_operation_id = 74;
+  int32 schedule_provisioning_attempt_count = 75;
+  string schedule_provisioning_failure_code = 76;
+  string schedule_provisioning_failure_message = 77;
+  google.protobuf.Timestamp schedule_provisioning_updated_at = 78;
 }
 
 // ─── StudioMemberBindingRun Current State ReadModel ───

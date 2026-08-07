@@ -364,7 +364,9 @@ public sealed class AgentToolExecutionContextMapperTests
                 PrimarySkillName: " goal-skill ",
                 MaxOrnnSearchAttempts: 2,
                 CommandArguments: " ship ",
-                DiscoveryRequested: true),
+                DiscoveryRequested: true,
+                IsolatePriorConversationHistory: true,
+                MountWorkflowsRequested: true),
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["external-trace"] = "trace-1",
@@ -427,6 +429,8 @@ public sealed class AgentToolExecutionContextMapperTests
         copy.SkillRecovery.MaxOrnnSearchAttempts.Should().Be(2);
         copy.SkillRecovery.CommandArguments.Should().Be("ship");
         copy.SkillRecovery.DiscoveryRequested.Should().BeTrue();
+        copy.SkillRecovery.IsolatePriorConversationHistory.Should().BeTrue();
+        copy.SkillRecovery.MountWorkflowsRequested.Should().BeTrue();
         copy.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.HostService);
         copy.ExecutionOwner.OwnerId.Should().Be("svc-context-roundtrip");
         copy.ExternalMetadata.Should().ContainSingle().Which.Should().Be(new KeyValuePair<string, string>("external-trace", "trace-1"));
@@ -450,6 +454,8 @@ public sealed class AgentToolExecutionContextMapperTests
         context.SkillRecovery.CommandName.Should().Be("goal");
         context.SkillRecovery.CommandArguments.Should().BeNull();
         context.SkillRecovery.DiscoveryRequested.Should().BeFalse();
+        context.SkillRecovery.IsolatePriorConversationHistory.Should().BeFalse();
+        context.SkillRecovery.MountWorkflowsRequested.Should().BeFalse();
     }
 
     [Fact]

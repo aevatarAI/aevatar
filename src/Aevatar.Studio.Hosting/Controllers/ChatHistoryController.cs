@@ -51,7 +51,8 @@ public static class ChatHistoryEndpoints
             ? Results.NotFound()
             : Results.Ok(new ChatHistoryConversationResponse(
                 messages.Messages,
-                messages.StateVersion));
+                messages.StateVersion,
+                ToProjectionStatusName(messages.ProjectionStatus)));
     }
 
     private static async Task<IResult> HandleGetCreateRecovery(
@@ -114,6 +115,13 @@ public static class ChatHistoryEndpoints
             _ => "not_found",
         };
 
+    private static string ToProjectionStatusName(ChatHistoryConversationProjectionStatus status) =>
+        status switch
+        {
+            ChatHistoryConversationProjectionStatus.Pending => "pending",
+            _ => "current",
+        };
+
     private sealed record ChatHistoryCreateRecoveryResponse(
         string Status,
         string ScopeId,
@@ -129,5 +137,6 @@ public static class ChatHistoryEndpoints
 
     private sealed record ChatHistoryConversationResponse(
         IReadOnlyList<StoredChatMessage> Messages,
-        long StateVersion);
+        long StateVersion,
+        string ProjectionStatus);
 }

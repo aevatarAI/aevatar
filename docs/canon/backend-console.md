@@ -28,7 +28,6 @@ Backend console 只使用一种页面承载方式：
 | `/cqrs` | `src/Aevatar.Mainnet.Host.Api/Cqrs/cqrs-observatory.html` | Mainnet Host |
 | `/voice` | `src/Aevatar.Mainnet.Host.Api/Voice/voice-console.html` | Mainnet Host |
 | `/workflow/skills` | `src/Aevatar.Mainnet.Host.Api/Skills/workflow-skills.html` | Mainnet Host |
-| `/workflow/observatory` | `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-observatory.html` | Workflow Infrastructure |
 | `/workflow/studio`, `/schedules` | `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-studio.html` | Workflow Infrastructure |
 | `/channels` | `agents/channels/Aevatar.GAgents.Channel.NyxIdRelay/channels.html` | NyxIdRelay channel package |
 
@@ -40,7 +39,7 @@ Nyx/OIDC deployment facts are host configuration, not page source:
 |---|---|
 | `Aevatar:BackendConsole:OidcAuthority` | Browser OIDC authority; falls back to existing Nyx/Auth authority config when empty. |
 | `Aevatar:BackendConsole:OidcClientId` | Canonical public OAuth client id used by embedded-console PKCE, Studio login/finalization, broker token-exchange, and binding revoke. Bootstrap materializes this value into the OAuth Client Actor; no runtime path may fall back to an older projected client id. |
-| `Aevatar:BackendConsole:OidcScope` | Browser OIDC scope. |
+| `Aevatar:BackendConsole:OidcScope` | Browser OIDC scope. The host adds `offline_access` to every non-empty configured scope to obtain the rotating refresh token required for a durable console session. |
 | `Aevatar:BackendConsole:OidcResources` | Additional RFC 8707 resource indicators. The host always includes `{NyxApiBaseUrl}/api/v1/proxy/s/aevatar` and the Ornn proxy resource resolved from `Aevatar:Ornn:NyxIdSlug` (default `ornn-api`). |
 | `Aevatar:BackendConsole:NyxApiBaseUrl` | Canonical NyxID API/resource-server base. It falls back only to `Aevatar:NyxId:ApiBaseUrl`, never to the browser OIDC authority. |
 | `Aevatar:BackendConsole:StorageKey` | Shared browser localStorage/sessionStorage prefix. |
@@ -48,7 +47,7 @@ Nyx/OIDC deployment facts are host configuration, not page source:
 
 Each configurable HTML asset contains `__BACKEND_CONSOLE_CONFIG__`. The serving helper replaces that placeholder with JSON rendered from `BackendConsoleOptions`. The six `HOST_BACKEND_CONSOLE_*` environment variables are optional overrides for host deployment, but `.refactor-loop/host.env` is not a production configuration source.
 
-The OIDC client id and resource indicators are public browser values, not secrets. Every configurable console page appends each injected resource to both `/oauth/authorize` and the authorization-code exchange at `/oauth/token`; the shared `/auto/callback` follows the same contract. The OIDC authority owns browser authorization, while `NyxApiBaseUrl` owns RFC 8707 resource identity and NyxID REST/admin routing; these hosts may differ and must not be substituted for each other. Secrets still belong in the existing host secret/config mechanisms and must not be injected into page assets.
+The OIDC client id and resource indicators are public browser values, not secrets. Every configurable console page appends each injected resource to both `/oauth/authorize` and the authorization-code exchange at `/oauth/token`; the shared `/auto/callback` follows the same contract. The host normalizes the configured scope and adds `offline_access` exactly once, including after environment overrides, because NyxID access tokens expire after 15 minutes and broker-capable clients return a refresh token only when that scope is granted. The OIDC authority owns browser authorization, while `NyxApiBaseUrl` owns RFC 8707 resource identity and NyxID REST/admin routing; these hosts may differ and must not be substituted for each other. Secrets still belong in the existing host secret/config mechanisms and must not be injected into page assets.
 
 Studio's `/api/auth/nyxid/config` still returns an actor-backed snapshot so authority, callback/scope contract, HMAC state, and broker observation remain cluster-coherent. Its `clientId` must match `Aevatar:BackendConsole:OidcClientId`; while Actor projection still carries another id, the provider fails closed instead of combining new configuration with stale runtime facts. Startup and the admin reconcile endpoint materialize the configured id into Actor state, but neither DCR output nor an API request body is an alternative client-id authority.
 
@@ -66,15 +65,19 @@ Aevatar admins resolved by `IPlatformAdminAuthorizer` may use
 drilldown endpoints still read only workflow current-state/readmodel artifacts; they do not replay events, prime
 projections, or dispatch actor commands.
 
-`/workflow/observatory` is the only Workflow Observatory renderer and data client. `/admin#/observatory` is a
-shell route that embeds that page in a same-origin iframe; it does not retain a second run cache, renderer,
-poller, or API path. The shell forwards only `scope`, `status`, `origin`, `definition`, `schedule`, `from`, `to`,
-`run`, and `tab`, preserving exact values so standalone and embedded deep links express the same observation
-intent. Typed same-origin messages carry CQRS/audit navigation back to the shell without duplicating data reads.
-The canonical page also owns the compact observation workspace bar, manual refresh, admin lookup tools, and
-immersive observation. Immersive mode is session-local rather than URL state. When embedded, a typed same-origin
-message asks the admin shell to hide its navigation/header/account chrome; `Escape` exits without changing scope,
-filters, selected run, or tab.
+`/admin#/observatory` is the only user-facing Workflow Observatory surface. The admin shell embeds the internal
+`admin-workflow-observatory.html` renderer from `/admin/workflow-observatory`; that frame route is not a product
+page and top-level navigation immediately returns to `/admin#/observatory`. The former `/workflow/observatory`
+and `/workflow/observatory/callback` routes are not mapped. Studio, Skills, schedules, voice, CQRS, workflow
+prompts, and API receipts must link to the admin hash route rather than recreating a standalone observatory.
+
+The admin shell does not retain a second run cache, renderer, poller, or API path. It forwards only `scope`,
+`status`, `origin`, `definition`, `schedule`, `from`, `to`, `run`, and `tab` to the internal same-origin frame.
+Typed same-origin messages carry CQRS/audit navigation back to the shell without duplicating data reads. The
+internal renderer owns the compact observation workspace bar, manual refresh, admin lookup tools, and immersive
+observation. Immersive mode is session-local rather than URL state. A typed same-origin message asks the admin
+shell to hide its navigation/header/account chrome; `Escape` exits without changing scope, filters, selected run,
+or tab.
 
 The canonical observatory stores run-list and detail-canvas scroll positions in `sessionStorage`, keyed by the
 canonical observation route. Polling and same-route refresh preserve both positions; changing scope or server
@@ -94,12 +97,14 @@ Own-scope detail and graph reads use normal endpoints without `scope`; exact-sco
 with that scope; all-scope selections and unknown-owner manual run lookup use the administrator endpoints.
 Administrator identity by itself does not select the administrator endpoint.
 
-An active human approval is recognized only from a typed step with `suspensionType=human_approval` and no
-completion timestamp. Only the run owner (`detail.summary.scopeId == /api/workflow/observatory/me.scopeId`) may
-submit the existing scope resume command; an administrator inspecting another scope remains read-only. HTTP
-`202` means accepted for dispatch, not committed. The UI waits for a newer committed state version before
-treating the approval as resolved. The Artifacts tab is deliberately labelled as a download derived from
-`finalOutput`; the current detail contract does not claim a formal artifact collection.
+An active approval is recognized only from a typed, incomplete step. Human approval uses
+`suspensionType=human_approval`. Tool approval uses `suspensionType=tool_approval` plus complete typed
+`executionId`, `toolCallId`, and `approvalRequestId` identity; the UI does not infer these values from text or a
+generic bag. Only the run owner (`detail.summary.scopeId == /api/workflow/observatory/me.scopeId`) may submit the
+existing scope resume command; an administrator inspecting another scope remains read-only. HTTP `202` means
+accepted for dispatch, not committed. The UI waits for a newer committed state version before treating the
+approval as resolved. The Artifacts tab is deliberately labelled as a download derived from `finalOutput`; the
+current detail contract does not claim a formal artifact collection.
 
 Run detail responses expose `diagnostics` assembled from the committed workflow current-state snapshot and the
 materialized run-report artifact. Diagnostics are query-time explanations for operators; they are not durable log

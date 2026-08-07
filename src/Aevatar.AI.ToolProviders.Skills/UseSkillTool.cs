@@ -1,11 +1,10 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.Tools;
-using Aevatar.GAgentService.Abstractions;
-using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.Skills;
@@ -26,32 +25,26 @@ public sealed class UseSkillTool : IAgentTool
         WriteIndented = true,
     };
 
+    static UseSkillTool()
+    {
+        s_jsonOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower));
+    }
+
     private readonly LocalSkillCatalog _localCatalog;
     private readonly IRemoteSkillFetcher? _remoteFetcher;
     private readonly IRemoteSkillAccessTokenResolver? _remoteAccessTokenResolver;
     private readonly ISkillWorkflowMountPort _workflowMountPort;
-    private readonly IScopeWorkflowCommandPort? _scopeWorkflowCommandPort;
 
     public UseSkillTool(
         LocalSkillCatalog localCatalog,
         IRemoteSkillFetcher? remoteFetcher = null,
         ISkillWorkflowMountPort? workflowMountPort = null,
-        IScopeWorkflowCommandPort? scopeWorkflowCommandPort = null,
         IRemoteSkillAccessTokenResolver? remoteAccessTokenResolver = null)
     {
         _localCatalog = localCatalog;
         _remoteFetcher = remoteFetcher;
         _remoteAccessTokenResolver = remoteAccessTokenResolver;
         _workflowMountPort = workflowMountPort ?? new NoOpSkillWorkflowMountPort();
-        _scopeWorkflowCommandPort = scopeWorkflowCommandPort;
-    }
-
-    public UseSkillTool(
-        LocalSkillCatalog localCatalog,
-        IRemoteSkillFetcher? remoteFetcher,
-        IScopeWorkflowCommandPort scopeWorkflowCommandPort)
-        : this(localCatalog, remoteFetcher, workflowMountPort: null, scopeWorkflowCommandPort: scopeWorkflowCommandPort)
-    {
     }
 
     public string Name => "use_skill";
@@ -71,6 +64,40 @@ public sealed class UseSkillTool : IAgentTool
             "mount_workflows": {
               "type": "boolean",
               "description": "When true, mount the skill's workflow YAML bundles into the current scope as callable workflows. Omit or set false to load instructions without changing workflows."
+            },
+            "workflow_mount_confirmation_token": {
+              "type": "string",
+              "description": "Exact opaque confirmation_token returned by a prior read-only mount preview. Supplying it with mount_workflows=true makes the call approval-gated; prefer this over copying confirmation objects."
+            },
+            "workflow_mount_confirmations": {
+              "type": "array",
+              "description": "Legacy exact confirmation objects returned by a prior read-only mount preview. New calls should use workflow_mount_confirmation_token.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "workflow_id": { "type": "string" },
+                  "revision_id": { "type": "string" },
+                  "workflow_bundle_digest": { "type": "string" },
+                  "explicit_requests": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "call_site_id": { "type": "string" },
+                        "request_contract_digest": { "type": "string" },
+                        "attested_risk": {
+                          "type": "string",
+                          "enum": ["read_only", "write", "destructive"]
+                        }
+                      },
+                      "required": ["call_site_id", "request_contract_digest", "attested_risk"]
+                    }
+                  }
+                },
+                "required": ["workflow_id", "revision_id", "workflow_bundle_digest", "explicit_requests"]
+              }
             }
           },
           "required": ["skill"]
@@ -109,16 +136,21 @@ public sealed class UseSkillTool : IAgentTool
             source: "local-or-remote");
     }
 
-    public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
 
-    public bool? RequiresApproval(string argumentsJson) => false;
+    public bool? RequiresApproval(string argumentsJson)
+    {
+        var arguments = ParseArguments(argumentsJson);
+        return arguments.MountWorkflows == true && arguments.HasMountConfirmation;
+    }
 
     public AgentToolCallSafety GetCallSafety(string argumentsJson)
     {
-        var mountsWorkflows = ParseArguments(argumentsJson).MountWorkflows == true;
+        var arguments = ParseArguments(argumentsJson);
+        var approvedMountRequested = arguments.MountWorkflows == true && arguments.HasMountConfirmation;
         return new AgentToolCallSafety(
-            RequiresApproval: false,
-            IsReadOnly: !mountsWorkflows,
+            RequiresApproval: approvedMountRequested,
+            IsReadOnly: !approvedMountRequested,
             IsDestructive: false);
     }
 
@@ -128,6 +160,10 @@ public sealed class UseSkillTool : IAgentTool
         string argumentsJson,
         string resultJson)
     {
+        var arguments = ParseArguments(argumentsJson);
+        var sideEffectKind = arguments.MountWorkflows == true && arguments.HasMountConfirmation
+            ? "workflow.mount"
+            : string.Empty;
         try
         {
             using var document = JsonDocument.Parse(resultJson);
@@ -145,10 +181,18 @@ public sealed class UseSkillTool : IAgentTool
 
             var status = statusValue.GetString() ?? string.Empty;
             if (!loadedValue.GetBoolean() || !string.Equals(status, "success", StringComparison.Ordinal))
-                return ErrorReceipt(callId, toolName, LoadFailureCode(status), "The skill could not be loaded.");
+            {
+                return ErrorReceipt(
+                    callId,
+                    toolName,
+                    LoadFailureCode(status),
+                    "The skill could not be loaded.",
+                    arguments.SkillName,
+                    sideEffectKind);
+            }
 
-            if (ParseArguments(argumentsJson).MountWorkflows != true)
-                return SuccessReceipt(callId, toolName);
+            if (arguments.MountWorkflows != true)
+                return SuccessReceipt(callId, toolName, arguments.SkillName);
 
             if (!root.TryGetProperty("workflow_mount", out var workflowMount) ||
                 workflowMount.ValueKind != JsonValueKind.Object)
@@ -157,7 +201,9 @@ public sealed class UseSkillTool : IAgentTool
                     callId,
                     toolName,
                     "USE_SKILL_MOUNT_RESULT_INVALID",
-                    "Skill workflow mounting returned an invalid result.");
+                    "Skill workflow mounting returned an invalid result.",
+                    arguments.SkillName,
+                    sideEffectKind);
             }
 
             var mounted = workflowMount.TryGetProperty("mounted", out var mountedValue) &&
@@ -167,17 +213,26 @@ public sealed class UseSkillTool : IAgentTool
             var succeeded = workflowMount.TryGetProperty("success", out var successValue) &&
                             successValue.ValueKind == JsonValueKind.True;
             if (mounted || accepted && succeeded)
-                return SuccessReceipt(callId, toolName, sideEffectKind: "workflow.mount");
+                return SuccessReceipt(callId, toolName, arguments.SkillName, sideEffectKind);
 
             var mountStatus = workflowMount.TryGetProperty("status", out var mountStatusValue) &&
                               mountStatusValue.ValueKind == JsonValueKind.String
                 ? mountStatusValue.GetString()
                 : null;
+            if (string.Equals(mountStatus, "confirmation_required", StringComparison.Ordinal))
+                return SuccessReceipt(callId, toolName, arguments.SkillName);
+
+            var failureCode = workflowMount.TryGetProperty("failure_code", out var failureCodeValue) &&
+                              failureCodeValue.ValueKind == JsonValueKind.String
+                ? failureCodeValue.GetString()
+                : null;
             return ErrorReceipt(
                 callId,
                 toolName,
-                MountFailureCode(mountStatus),
-                "Skill workflow mounting failed.");
+                string.IsNullOrWhiteSpace(failureCode) ? MountFailureCode(mountStatus) : failureCode,
+                "Skill workflow mounting failed.",
+                arguments.SkillName,
+                sideEffectKind);
         }
         catch (JsonException)
         {
@@ -217,6 +272,8 @@ public sealed class UseSkillTool : IAgentTool
                 text: BuildSkillResponse(skill, args),
                 skill: skill,
                 mountWorkflows: ShouldMountWorkflows(requestedMountWorkflows),
+                workflowMountConfirmationToken: arguments.WorkflowMountConfirmationToken,
+                workflowMountConfirmations: arguments.WorkflowMountConfirmations,
                 ct: ct);
 
         if (_remoteFetcher != null)
@@ -261,6 +318,8 @@ public sealed class UseSkillTool : IAgentTool
                         text: BuildSkillResponse(skill, args),
                         skill: skill,
                         mountWorkflows: ShouldMountWorkflows(requestedMountWorkflows),
+                        workflowMountConfirmationToken: arguments.WorkflowMountConfirmationToken,
+                        workflowMountConfirmations: arguments.WorkflowMountConfirmations,
                         ct: ct);
                 }
             }
@@ -282,13 +341,19 @@ public sealed class UseSkillTool : IAgentTool
         string text,
         SkillDefinition? skill,
         bool mountWorkflows,
+        string workflowMountConfirmationToken,
+        IReadOnlyList<SkillWorkflowMountConfirmation> workflowMountConfirmations,
         CancellationToken ct)
     {
         object? workflowMount = null;
         var renderedText = text;
         if (loaded && mountWorkflows)
         {
-            var mountRenderResult = await BuildWorkflowMountRenderResultAsync(skill, ct);
+            var mountRenderResult = await BuildWorkflowMountRenderResultAsync(
+                skill,
+                workflowMountConfirmationToken,
+                workflowMountConfirmations,
+                ct);
             workflowMount = mountRenderResult.Payload;
             if (!string.IsNullOrWhiteSpace(mountRenderResult.Text))
                 renderedText = string.Concat(text, Environment.NewLine, mountRenderResult.Text);
@@ -305,21 +370,24 @@ public sealed class UseSkillTool : IAgentTool
 
     private async Task<WorkflowMountRenderResult> BuildWorkflowMountRenderResultAsync(
         SkillDefinition? skill,
+        string workflowMountConfirmationToken,
+        IReadOnlyList<SkillWorkflowMountConfirmation> workflowMountConfirmations,
         CancellationToken ct)
     {
-        if (_workflowMountPort is not NoOpSkillWorkflowMountPort)
-        {
-            var workflowMount = await TryMountWorkflowsAsync(skill, ct);
-            return new WorkflowMountRenderResult(
-                workflowMount,
-                BuildMountedWorkflowsSummary(workflowMount));
-        }
-
-        return await TryMountWorkflowsViaScopeCommandPortAsync(skill, ct);
+        var workflowMount = await TryMountWorkflowsAsync(
+            skill,
+            workflowMountConfirmationToken,
+            workflowMountConfirmations,
+            ct);
+        return new WorkflowMountRenderResult(
+            workflowMount,
+            BuildMountedWorkflowsSummary(workflowMount));
     }
 
     private async Task<SkillWorkflowMountResult> TryMountWorkflowsAsync(
         SkillDefinition? skill,
+        string workflowMountConfirmationToken,
+        IReadOnlyList<SkillWorkflowMountConfirmation> workflowMountConfirmations,
         CancellationToken ct)
     {
         if (skill == null || skill.Workflows.Count == 0)
@@ -341,7 +409,8 @@ public sealed class UseSkillTool : IAgentTool
                 Message: "Workflow mounting skipped because scope_id is missing from the request context.");
         }
 
-        var token = AgentToolRequestContext.NyxIdAccessToken;
+        var token = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
+            AgentToolRequestContext.Current?.Credentials);
         if (string.IsNullOrWhiteSpace(token))
         {
             return new SkillWorkflowMountResult(
@@ -364,9 +433,14 @@ public sealed class UseSkillTool : IAgentTool
         try
         {
             return await _workflowMountPort.MountAsync(
-                new SkillWorkflowMountRequest(scopeId.Trim(), token.Trim(), skill.Workflows)
+                new SkillWorkflowMountRequest(
+                    scopeId.Trim(),
+                    token.Trim(),
+                    skill.Workflows,
+                    workflowMountConfirmations)
                 {
                     CallerId = callerId.Trim(),
+                    ConfirmationToken = workflowMountConfirmationToken,
                 },
                 ct);
         }
@@ -384,99 +458,6 @@ public sealed class UseSkillTool : IAgentTool
         }
     }
 
-    private async Task<WorkflowMountRenderResult> TryMountWorkflowsViaScopeCommandPortAsync(
-        SkillDefinition? skill,
-        CancellationToken ct)
-    {
-        if (skill == null || skill.Workflows.Count == 0)
-            return BuildScopeWorkflowMountError(
-                "no_workflows",
-                "The skill does not expose workflow YAML bundles.",
-                "skill has no workflow descriptors to mount");
-
-        var scopeId = AgentToolRequestContext.ScopeId;
-        if (string.IsNullOrWhiteSpace(scopeId))
-            return BuildScopeWorkflowMountError(
-                "missing_scope",
-                "Workflow mounting skipped because scope_id is missing from the request context.",
-                "scope_id not available in request context");
-
-        if (_scopeWorkflowCommandPort == null)
-            return BuildScopeWorkflowMountError(
-                "not_available",
-                "Workflow mounting is not available in this host.",
-                "scope workflow command port is not available in this host");
-
-        var callerId = ResolveCapabilityCallerId();
-        if (string.IsNullOrWhiteSpace(callerId))
-            return BuildScopeWorkflowMountError(
-                "missing_identity",
-                "Workflow mounting skipped because authenticated caller identity is missing from the request context.",
-                "authenticated caller identity not available in request context");
-
-        callerId = callerId.Trim();
-        var mountedPayloads = new List<object>(skill.Workflows.Count);
-        var mountedWorkflows = new List<MountedSkillWorkflow>(skill.Workflows.Count);
-        foreach (var workflow in skill.Workflows)
-        {
-            if (string.IsNullOrWhiteSpace(workflow.WorkflowId))
-                return BuildScopeWorkflowMountError(
-                    "invalid_workflow",
-                    "Workflow mounting skipped because the skill contains a workflow descriptor without a workflow_id.",
-                    "skill workflow descriptor has no workflow_id");
-
-            var workflowYamls = workflow.WorkflowYamls
-                .Where(yaml => !string.IsNullOrWhiteSpace(yaml))
-                .ToArray();
-            if (workflowYamls.Length == 0)
-                return BuildScopeWorkflowMountError(
-                    "invalid_workflow",
-                    $"Workflow mounting skipped because skill workflow '{workflow.WorkflowId}' has no workflow YAML.",
-                    $"skill workflow '{workflow.WorkflowId}' has no workflow YAML");
-
-            var upsertResult = await _scopeWorkflowCommandPort.UpsertAsync(
-                new ScopeWorkflowUpsertRequest(
-                    scopeId.Trim(),
-                    workflow.WorkflowId.Trim(),
-                    workflowYamls[0],
-                    DisplayName: workflow.WorkflowId.Trim(),
-                    InlineWorkflowYamls: BuildInlineWorkflowYamls(workflowYamls))
-                {
-                    CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
-                        callerId,
-                        NyxIdCallerCredentialSelection.SourceReadableUserBearerOrNull(
-                            AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
-                                AgentToolRequestContext.Current?.Credentials)),
-                        AgentToolRequestContext.NyxIdOrgToken),
-                },
-                ct);
-
-            mountedPayloads.Add(ToMountedWorkflowPayload(upsertResult));
-            mountedWorkflows.Add(new MountedSkillWorkflow(
-                workflow.WorkflowId.Trim(),
-                upsertResult.WorkflowId,
-                "chat",
-                upsertResult.RevisionId));
-        }
-
-        var workflowMount = new SkillWorkflowMountResult(
-            Status: "mounted",
-            Mounted: mountedWorkflows.Count > 0,
-            Workflows: mountedWorkflows,
-            Message: mountedWorkflows.Count > 0
-                ? "Mounted skill workflows into the current scope."
-                : "No skill workflows were mounted.");
-
-        return new WorkflowMountRenderResult(
-            new
-            {
-                success = true,
-                accepted = true,
-                workflows = mountedPayloads,
-            },
-            BuildMountedWorkflowsPayload(mountedPayloads));
-    }
-
     private static string ResolveCapabilityCallerId()
     {
         var authority = AgentToolRequestContext.NyxIdAuthority;
@@ -490,12 +471,14 @@ public sealed class UseSkillTool : IAgentTool
         string skillName = "";
         string args = "";
         bool? mountWorkflows = null;
+        string workflowMountConfirmationToken = "";
+        IReadOnlyList<SkillWorkflowMountConfirmation> workflowMountConfirmations = [];
 
         try
         {
             using var doc = JsonDocument.Parse(argumentsJson);
             if (doc.RootElement.ValueKind != JsonValueKind.Object)
-                return new UseSkillArguments("", "", null);
+                return new UseSkillArguments("", "", null, "", []);
 
             if (doc.RootElement.TryGetProperty("skill", out var s) && s.ValueKind == JsonValueKind.String)
                 skillName = s.GetString() ?? "";
@@ -506,13 +489,31 @@ public sealed class UseSkillTool : IAgentTool
             {
                 mountWorkflows = m.GetBoolean();
             }
+            if (doc.RootElement.TryGetProperty("workflow_mount_confirmation_token", out var token) &&
+                token.ValueKind == JsonValueKind.String)
+            {
+                workflowMountConfirmationToken = token.GetString()?.Trim() ?? string.Empty;
+            }
+            if (doc.RootElement.TryGetProperty("workflow_mount_confirmations", out var confirmations) &&
+                confirmations.ValueKind == JsonValueKind.Array)
+            {
+                workflowMountConfirmations =
+                    JsonSerializer.Deserialize<SkillWorkflowMountConfirmation[]>(
+                        confirmations.GetRawText(),
+                        s_jsonOptions) ?? [];
+            }
         }
         catch (JsonException)
         {
-            return new UseSkillArguments("", "", null);
+            return new UseSkillArguments("", "", null, "", []);
         }
 
-        return new UseSkillArguments(skillName, args, mountWorkflows);
+        return new UseSkillArguments(
+            skillName,
+            args,
+            mountWorkflows,
+            workflowMountConfirmationToken,
+            workflowMountConfirmations);
     }
 
     private static bool ShouldMountWorkflows(bool? requestedMountWorkflows) =>
@@ -630,46 +631,6 @@ public sealed class UseSkillTool : IAgentTool
         return sb.ToString();
     }
 
-    private static IReadOnlyDictionary<string, string>? BuildInlineWorkflowYamls(IReadOnlyList<string> workflowYamls)
-    {
-        if (workflowYamls.Count <= 1)
-            return null;
-
-        var inlineWorkflowYamls = new Dictionary<string, string>(StringComparer.Ordinal);
-        for (var i = 1; i < workflowYamls.Count; i++)
-            inlineWorkflowYamls[$"workflow_{i}"] = workflowYamls[i];
-        return inlineWorkflowYamls;
-    }
-
-    private static object ToMountedWorkflowPayload(ScopeWorkflowUpsertResult result) => new
-    {
-        success = true,
-        accepted = true,
-        scope_id = result.ScopeId,
-        workflow_id = result.WorkflowId,
-        service_key = result.ServiceKey,
-        revision_id = result.RevisionId,
-        expected_actor_id = result.ExpectedActorId,
-        expected_deployment_id = result.ExpectedDeploymentId,
-        acceptance_stage = result.AcceptanceStage,
-        propagation_stage = result.PropagationStage,
-        read_model_url = result.ReadModelUrl,
-        command_handles = result.CommandHandles,
-    };
-
-    private static string BuildMountedWorkflowsPayload(IReadOnlyList<object> mounted)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("## Mounted Workflows");
-        sb.AppendLine();
-        sb.AppendLine("Workflow mount/import commands were accepted for dispatch through the Scope Workflow command path; read models may still be propagating before the workflows are page-visible or runnable.");
-        sb.AppendLine();
-        sb.AppendLine("```json");
-        sb.AppendLine(JsonSerializer.Serialize(new { workflows = mounted }, SnakeCaseJson));
-        sb.AppendLine("```");
-        return sb.ToString();
-    }
-
     private static string BuildMountedWorkflowsSummary(SkillWorkflowMountResult workflowMount)
     {
         var sb = new StringBuilder();
@@ -683,24 +644,6 @@ public sealed class UseSkillTool : IAgentTool
 
         sb.AppendLine("```json");
         sb.AppendLine(JsonSerializer.Serialize(workflowMount, SnakeCaseJson));
-        sb.AppendLine("```");
-        return sb.ToString();
-    }
-
-    private static string BuildMountedWorkflowsError(string message)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("## Mounted Workflows");
-        sb.AppendLine();
-        sb.AppendLine("Workflow templates were not mounted. Treat any inline workflow YAMLs above as unmounted templates/import sources, not as page-visible runnable scope workflows.");
-        sb.AppendLine();
-        sb.AppendLine("```json");
-        sb.AppendLine(JsonSerializer.Serialize(new
-        {
-            success = false,
-            accepted = false,
-            error = message,
-        }, SnakeCaseJson));
         sb.AppendLine("```");
         return sb.ToString();
     }
@@ -758,6 +701,7 @@ public sealed class UseSkillTool : IAgentTool
     private AgentToolReceipt SuccessReceipt(
         string callId,
         string toolName,
+        string skillName,
         string sideEffectKind = "") =>
         new()
         {
@@ -765,20 +709,33 @@ public sealed class UseSkillTool : IAgentTool
             ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
             Status = AgentToolReceiptStatus.Success,
             ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            Effect = string.IsNullOrWhiteSpace(sideEffectKind)
+                ? AgentToolReceiptEffect.ReadOnly
+                : AgentToolReceiptEffect.Mutating,
             SideEffectKind = sideEffectKind,
+            SubjectKind = string.IsNullOrWhiteSpace(skillName) ? string.Empty : "ornn.skill",
+            SubjectId = skillName?.Trim() ?? string.Empty,
         };
 
     private AgentToolReceipt ErrorReceipt(
         string callId,
         string toolName,
         string errorCode,
-        string errorMessage) =>
+        string errorMessage,
+        string skillName,
+        string sideEffectKind) =>
         new()
         {
             CallId = callId ?? string.Empty,
             ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
             Status = AgentToolReceiptStatus.Error,
             ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            Effect = string.IsNullOrWhiteSpace(sideEffectKind)
+                ? AgentToolReceiptEffect.ReadOnly
+                : AgentToolReceiptEffect.Mutating,
+            SideEffectKind = sideEffectKind,
+            SubjectKind = string.IsNullOrWhiteSpace(skillName) ? string.Empty : "ornn.skill",
+            SubjectId = skillName?.Trim() ?? string.Empty,
             ErrorCode = errorCode,
             ErrorMessage = errorMessage,
             ResultJson = JsonSerializer.Serialize(new { error = errorCode, message = errorMessage }),
@@ -803,26 +760,20 @@ public sealed class UseSkillTool : IAgentTool
             _ => "USE_SKILL_MOUNT_FAILED",
         };
 
-    private static WorkflowMountRenderResult BuildScopeWorkflowMountError(
-        string status,
-        string message,
-        string renderMessage) =>
-        new(
-            new
-            {
-                status,
-                success = false,
-                accepted = false,
-                mounted = false,
-                error = message,
-            },
-            BuildMountedWorkflowsError(renderMessage));
-
     private sealed record WorkflowMountRenderResult(
         object Payload,
         string Text);
 
-    private readonly record struct UseSkillArguments(string SkillName, string Args, bool? MountWorkflows);
+    private readonly record struct UseSkillArguments(
+        string SkillName,
+        string Args,
+        bool? MountWorkflows,
+        string WorkflowMountConfirmationToken,
+        IReadOnlyList<SkillWorkflowMountConfirmation> WorkflowMountConfirmations)
+    {
+        public bool HasMountConfirmation =>
+            !string.IsNullOrWhiteSpace(WorkflowMountConfirmationToken) || WorkflowMountConfirmations.Count > 0;
+    }
 
     private static readonly JsonSerializerOptions SnakeCaseJson = new()
     {

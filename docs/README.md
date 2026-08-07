@@ -95,6 +95,7 @@ Immutable records of architectural choices and their rationale.
 - [Scheduled Credential Lifecycle Compensation](adr/0043-scheduled-credential-lifecycle-compensation.md)
 - [Managed Codex gVisor Direct-Token Isolation Model](adr/0044-managed-codex-gvisor-direct-token.md)
 - [0045 - Runtime-owned committed-state publication recovery](adr/0045-runtime-owned-committed-state-publication-recovery.md)
+- [NyxID Assistant Operation-Class Boundary](adr/0048-nyxid-assistant-operation-class-boundary.md)
 - [Agent Kind Primary-Only Identity](adr/2026-06-04-agent-kind-primary-only-identity.md)
 
 ## History
@@ -131,6 +132,7 @@ Point-in-time design snapshots. Not authoritative — for context only.
 - [2026-05-19-auto-refactor-loop-summary.md](audit-scorecard/2026-05-19-auto-refactor-loop-summary.md)
 - [2026-05-19-meta-audit-loop-depth-diagnosis.md](audit-scorecard/2026-05-19-meta-audit-loop-depth-diagnosis.md)
 - [2026-06-11-nyxid-workflow-scope-service-runbook.md](audit-scorecard/2026-06-11-nyxid-workflow-scope-service-runbook.md)
+- [2026-08-07-milestone-40-gate-0-inventory.md](audit-scorecard/2026-08-07-milestone-40-gate-0-inventory.md)
 - [FEATURE_APP_SERVICES_AUDIT.md](audit-scorecard/FEATURE_APP_SERVICES_AUDIT.md)
 
 ## Templates

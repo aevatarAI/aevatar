@@ -22,6 +22,64 @@ public sealed class NyxIdChatStateEndpointTests
     [Fact]
     public async Task GetState_ShouldReturnCurrentSnapshotFromTypedQueryPort()
     {
+        var activeTask = new NyxIdChatConversationTaskSnapshot(
+            "task-alpha",
+            "turn-alpha",
+            "failed",
+            "step-alpha",
+            null,
+            "TOOL_FAILED",
+            "The tool failed.",
+            null,
+            null,
+            [
+                new NyxIdChatConversationStepSnapshot(
+                    "step-alpha",
+                    1,
+                    "tool",
+                    "failed",
+                    true,
+                    "Update repository.",
+                    true,
+                    "not_applied",
+                    null,
+                    null,
+                    "TOOL_FAILED",
+                    "The tool failed.",
+                    false,
+                    new NyxIdChatAvailableActionsSnapshot(true, false, false),
+                    null,
+                    null,
+                    new NyxIdChatConversationStepSourceSnapshot(
+                        Tool: new NyxIdChatToolStepSourceSnapshot(
+                            "repository_update",
+                            "service-slug-alpha",
+                            "connected-service-alpha",
+                            "readiness-capability-alpha"))),
+                new NyxIdChatConversationStepSnapshot(
+                    "step-beta",
+                    2,
+                    "tool",
+                    "failed",
+                    true,
+                    "Read repository.",
+                    false,
+                    "not_applied",
+                    null,
+                    null,
+                    "TOOL_FAILED",
+                    "The tool failed.",
+                    false,
+                    new NyxIdChatAvailableActionsSnapshot(true, false, false),
+                    null,
+                    null,
+                    new NyxIdChatConversationStepSourceSnapshot(
+                        Tool: new NyxIdChatToolStepSourceSnapshot(
+                            "repository_read",
+                            "service-slug-beta",
+                            "connected-service-beta",
+                            null))),
+            ]);
         var queryPort = new RecordingQueryPort
         {
             Result = NyxIdChatConversationStateQueryResult.Current(new NyxIdChatConversationStateSnapshot(
@@ -34,7 +92,7 @@ public sealed class NyxIdChatStateEndpointTests
                     "turn-alpha", "task-alpha", "active", null, null, null, null),
                 null,
                 [],
-                null,
+                activeTask,
                 new NyxIdChatPendingApprovalSnapshot(
                     ApprovalRequestId: "approval-alpha",
                     TurnId: "turn-alpha",
@@ -77,6 +135,24 @@ public sealed class NyxIdChatStateEndpointTests
         pendingApproval.GetProperty("nyxidRequestId").GetString()
             .Should().Be("nyx-request-alpha");
         pendingApproval.TryGetProperty("nyxIdRequestId", out _).Should().BeFalse();
+        var toolSource = json.RootElement
+            .GetProperty("snapshot")
+            .GetProperty("activeTask")
+            .GetProperty("steps")[0]
+            .GetProperty("source")
+            .GetProperty("tool");
+        toolSource.GetProperty("serviceId").GetString().Should().Be("connected-service-alpha");
+        toolSource.GetProperty("serviceSlug").GetString().Should().Be("service-slug-alpha");
+        toolSource.GetProperty("readinessCapabilityId").GetString().Should()
+            .Be("readiness-capability-alpha");
+        toolSource.TryGetProperty("readiness_capability_id", out _).Should().BeFalse();
+        var sourceWithoutReadiness = json.RootElement
+            .GetProperty("snapshot")
+            .GetProperty("activeTask")
+            .GetProperty("steps")[1]
+            .GetProperty("source")
+            .GetProperty("tool");
+        sourceWithoutReadiness.TryGetProperty("readinessCapabilityId", out _).Should().BeFalse();
     }
 
     [Fact]

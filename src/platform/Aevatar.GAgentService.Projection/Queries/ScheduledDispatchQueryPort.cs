@@ -234,6 +234,7 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             OwnerLLMUserServiceId = document.OwnerLlmUserServiceId ?? string.Empty,
             OwnerLLMServiceSlug = document.OwnerLlmServiceSlug ?? string.Empty,
             OwnerLLMModel = document.OwnerLlmModel ?? string.Empty,
+            ServiceRevisionId = document.ServiceRevisionId ?? string.Empty,
             NyxIdRevocationStatus = document.NyxidRevocationStatus ?? string.Empty,
             VaultRevocationStatus = document.VaultRevocationStatus ?? string.Empty,
         };

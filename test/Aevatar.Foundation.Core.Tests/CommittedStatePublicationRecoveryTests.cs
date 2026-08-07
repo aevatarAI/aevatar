@@ -208,6 +208,8 @@ public sealed class CommittedStatePublicationRecoveryTests
         (await fixture.EventStore.GetEventsAsync(actorId)).Count.ShouldBe(1);
         publisher.Accepted.ShouldHaveSingleItem();
         (await fixture.PublicationStore.LoadAsync(actorId))!.PublishedVersion.ShouldBe(1);
+        agent.PublicationRecoveryHookCalls.ShouldBe(1);
+        agent.RecoveredEnvelopeId.ShouldBe(original.Id);
     }
 
     private static StateEvent BuildStateEvent(
@@ -278,12 +280,26 @@ public sealed class CommittedStatePublicationRecoveryTests
 
     private sealed class RecoveryAgent : TestGAgentBase<CounterState>
     {
+        public int PublicationRecoveryHookCalls { get; private set; }
+
+        public string RecoveredEnvelopeId { get; private set; } = string.Empty;
+
         [EventHandler]
         public Task HandleIncrement(IncrementEvent evt) => PersistDomainEventAsync(evt);
 
         public Task CommitAsync(params int[] amounts) =>
             PersistDomainEventsAsync(
                 amounts.Select(static amount => (IMessage)new IncrementEvent { Amount = amount }));
+
+        protected override Task OnCommittedStatePublicationRecoveredAsync(
+            EventEnvelope envelope,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            PublicationRecoveryHookCalls++;
+            RecoveredEnvelopeId = envelope.Id;
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class CounterIncrementApplier

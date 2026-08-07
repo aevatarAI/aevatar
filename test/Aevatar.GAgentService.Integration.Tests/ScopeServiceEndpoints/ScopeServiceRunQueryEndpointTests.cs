@@ -423,6 +423,53 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
     }
 
     [Fact]
+    public async Task ResumeMemberRunEndpoint_ShouldRejectFlatToolApprovalIdentityWithoutDispatch()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "member-a", "def-member-resume-flat");
+        host.LifecycleQueryPort.Deployments = BuildDeployments(
+            "scope-a:default:default:member-a",
+            "dep-member-resume-flat",
+            "rev-1",
+            "def-member-resume-flat");
+        host.RunBindingReader.BindingsByRunId["run-member-resume-flat"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-member-resume-flat",
+                "def-member-resume-flat",
+                "run-member-resume-flat",
+                "member-flow",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Interactive,
+                "scope-a"),
+        ];
+
+        using var request = CreateAuthenticatedJsonRequest(
+            HttpMethod.Post,
+            "/api/scopes/scope-a/members/member-a/runs/run-member-resume-flat:resume",
+            new
+            {
+                stepId = "approval-1",
+                approved = true,
+                executionId = "exec-member-flat",
+                toolCallId = "tool-call-member-flat",
+                approvalRequestId = "approval-member-flat",
+            },
+            "scope-a");
+        request.Headers.Add("X-Test-Member-Id", "member-a");
+
+        var response = await host.Client.SendAsync(request);
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("INVALID_TOOL_APPROVAL_RESUME_REQUEST");
+        host.ResumeDispatchService.LastCommand.Should().BeNull();
+    }
+
+    [Fact]
     public async Task SignalMemberRunEndpoint_ShouldResolveMemberPublishedServiceAndDispatch()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();

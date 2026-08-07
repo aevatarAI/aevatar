@@ -417,6 +417,45 @@ public sealed class WorkflowRuntimeModuleBranchTests
     }
 
     [Fact]
+    public async Task LlmCallModule_WhenCompletionRequiresAuthorization_ShouldLeaveParentStepPending()
+    {
+        var module = new LLMCallModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "reply",
+                StepType = "llm_call",
+                RunId = "run-llm-authorization",
+                Input = "connect github",
+            }),
+            ctx,
+            CancellationToken.None);
+        var intent = DispatchedLlmIntent(ctx);
+        var watchdog = ctx.Scheduled.Single();
+
+        await module.HandleAsync(
+            Wrap(new WorkflowLlmInvocationCompletedEvent
+            {
+                RunId = "run-llm-authorization",
+                StepId = "reply",
+                SessionId = intent.SessionId,
+                Success = false,
+                AuthorizationRequirement = new WorkflowInteractiveAuthorizationRequirement
+                {
+                    ServiceSlug = "api-github",
+                    RequestedScopes = { "repo" },
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Canceled.Should().ContainSingle(x => x.CallbackId == watchdog.CallbackId);
+        ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task LlmCallModule_ShouldIgnoreMetadataOnlyCallerCredential()
     {
         var module = new LLMCallModule();

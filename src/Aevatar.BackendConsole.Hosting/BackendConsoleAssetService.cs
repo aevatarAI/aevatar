@@ -78,8 +78,10 @@ public sealed class BackendConsoleAssetService(IOptions<BackendConsoleOptions> o
             scope = options.OidcScope ?? string.Empty,
             resources = options.OidcResources ?? [],
             nyxidApi = options.NyxApiBaseUrl ?? string.Empty,
+            nyxidWeb = options.NyxWebBaseUrl ?? string.Empty,
             storageKey = options.StorageKey ?? string.Empty,
             defaultReturnPath = options.DefaultReturnPath ?? string.Empty,
+            enableStudioWireInspector = options.EnableStudioWireInspector,
         };
 
         return JsonSerializer.Serialize(normalized, JsonOptions);

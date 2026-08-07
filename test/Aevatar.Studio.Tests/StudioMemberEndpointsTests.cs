@@ -114,6 +114,31 @@ public sealed class StudioMemberEndpointsTests
     }
 
     [Fact]
+    public async Task HandleCreateAsync_ShouldReturnTypedNotFound_WhenTeamDoesNotExist()
+    {
+        const string missingTeamId = "t-missing";
+        var service = new RecordingMemberService
+        {
+            CreateException = new StudioTeamNotFoundException(ScopeId, missingTeamId),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandleCreateAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new CreateStudioMemberRequest(
+                DisplayName: "Alpha",
+                ImplementationKind: MemberImplementationKindNames.Workflow,
+                MemberId: "m-alpha",
+                TeamId: missingTeamId),
+            service,
+            CancellationToken.None);
+
+        AssertNotFoundResult(result, "STUDIO_TEAM_NOT_FOUND");
+        service.CreateInvoked.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task HandleCreateAsync_ShouldReturnForbidden_WhenScopeAccessDenied()
     {
         var service = new RecordingMemberService();

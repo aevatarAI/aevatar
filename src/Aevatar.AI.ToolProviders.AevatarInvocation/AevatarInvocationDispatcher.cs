@@ -218,7 +218,8 @@ public sealed class AevatarInvocationDispatcher
         var payload = request.Payload;
         var endpointId = ResolveMemberEndpointId(request.EndpointId);
         var error = ProtoToolArguments.Require(request.MemberId, "member_id", "member_id is required.") ??
-                    ProtoToolArguments.RequirePayload(payload, "payload");
+                    ProtoToolArguments.RequirePayload(payload, "payload") ??
+                    RejectMemberCompleteWait(request.Wait);
         if (error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(error), error);
 
@@ -236,8 +237,19 @@ public sealed class AevatarInvocationDispatcher
                 memberResolution.ScopeId,
                 memberResolution.MemberId,
                 memberResolution.PublishedServiceId);
-            var invocationRequest = BuildServiceInvocationRequest(resolution, payload, endpointId);
-            var target = await _serviceInvocationResolutionPort.ResolveAsync(invocationRequest, ct);
+            var resolutionRequest = BuildServiceInvocationRequest(
+                resolution,
+                payload,
+                endpointId,
+                toolContext: null);
+            var target = await _serviceInvocationResolutionPort.ResolveAsync(resolutionRequest, ct);
+            var invocationRequest = target.Artifact.ImplementationKind == ServiceImplementationKind.Workflow
+                ? BuildServiceInvocationRequest(
+                    resolution,
+                    payload,
+                    endpointId,
+                    AgentToolRequestContext.Current)
+                : resolutionRequest;
             await _admissionAuthorizer.AuthorizeAsync(
                 target.Service.ServiceKey,
                 target.Service.DeploymentId,
@@ -318,8 +330,19 @@ public sealed class AevatarInvocationDispatcher
                 teamResolution.ScopeId,
                 teamResolution.EntryMemberId,
                 teamResolution.PublishedServiceId);
-            var invocationRequest = BuildServiceInvocationRequest(resolution, payload, request.EndpointId);
-            var target = await _serviceInvocationResolutionPort.ResolveAsync(invocationRequest, ct);
+            var resolutionRequest = BuildServiceInvocationRequest(
+                resolution,
+                payload,
+                request.EndpointId,
+                toolContext: null);
+            var target = await _serviceInvocationResolutionPort.ResolveAsync(resolutionRequest, ct);
+            var invocationRequest = target.Artifact.ImplementationKind == ServiceImplementationKind.Workflow
+                ? BuildServiceInvocationRequest(
+                    resolution,
+                    payload,
+                    request.EndpointId,
+                    AgentToolRequestContext.Current)
+                : resolutionRequest;
             await _admissionAuthorizer.AuthorizeAsync(
                 target.Service.ServiceKey,
                 target.Service.DeploymentId,
@@ -398,20 +421,41 @@ public sealed class AevatarInvocationDispatcher
 
         var request = parsed.Value!;
         var wait = ResolveWait(request.Wait);
+        var toolContext = AgentToolRequestContext.Current;
+        var isManagedWorkflowRuntime = TryGetManagedWorkflowRuntimeContext(toolContext, out var workflowRuntimeContext);
+        var workflowInputParts = request.Inputs == null || isManagedWorkflowRuntime
+            ? null
+            : ToWorkflowInputParts(request.Inputs, toolContext);
+        var firstWorkflowInputFileRef = FirstWorkflowInputFileRef(workflowInputParts);
+        _logger.LogWarning(
+            "Start workflow input file refs resolved: workflowId={WorkflowId} managedRuntime={ManagedRuntime} explicitInputPartCount={ExplicitInputPartCount} explicitInputFileRefCount={ExplicitInputFileRefCount} ambientToolContextFileRefCount={AmbientToolContextFileRefCount} workflowInputPartCount={WorkflowInputPartCount} workflowInputFileRefCount={WorkflowInputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+            request.WorkflowId ?? string.Empty,
+            isManagedWorkflowRuntime,
+            request.Inputs?.InputParts.Count ?? 0,
+            CountExplicitInputFileRefs(request.Inputs),
+            toolContext?.InputFileRefs.Count ?? 0,
+            workflowInputParts?.Count ?? 0,
+            CountWorkflowInputFileRefs(workflowInputParts),
+            firstWorkflowInputFileRef?.FileId ?? string.Empty,
+            firstWorkflowInputFileRef?.ArtifactId ?? string.Empty,
+            firstWorkflowInputFileRef?.MediaType ?? string.Empty);
         var error = ProtoToolArguments.Require(request.WorkflowId, "workflow_id", "workflow_id is required.") ??
-                    ProtoToolArguments.RequirePayload(request.Inputs, "inputs");
+                    (isManagedWorkflowRuntime
+                        ? ProtoToolArguments.RequirePayload(request.Inputs, "inputs")
+                        : RequireWorkflowInputs(request.Inputs, workflowInputParts));
         if (error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(error), error);
 
+        var inputs = request.Inputs!;
         var workflowYamls = request.WorkflowYamls.Count == 0
             ? null
             : request.WorkflowYamls
                 .Where(static item => !string.IsNullOrWhiteSpace(item))
                 .Select(static item => item.Trim())
                 .ToArray();
-        var workflowName = request.WorkflowId.Trim();
+        var workflowName = request.WorkflowId!.Trim();
         var actorId = string.IsNullOrWhiteSpace(request.ActorId) ? null : request.ActorId.Trim();
-        if (TryGetManagedWorkflowRuntimeContext(AgentToolRequestContext.Current, out var workflowRuntimeContext))
+        if (isManagedWorkflowRuntime)
         {
             var managedScope = ResolveCallerScope(requireOwner: false);
             if (managedScope.Error != null)
@@ -425,6 +469,7 @@ public sealed class AevatarInvocationDispatcher
                 workflowRuntimeContext,
                 workflowName,
                 workflowYamls,
+                toolContext,
                 ct);
         }
 
@@ -449,7 +494,7 @@ public sealed class AevatarInvocationDispatcher
         if (callerCredential.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(callerCredential.Error), callerCredential.Error);
 
-        var metadata = BuildPayloadHeaders(request.Inputs.Headers);
+        var metadata = BuildPayloadHeaders(inputs.Headers);
         var sourceResolution = await ResolveWorkflowStartSourceAsync(
                 scope.ScopeId,
                 workflowName,
@@ -461,11 +506,11 @@ public sealed class AevatarInvocationDispatcher
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(sourceResolution.Error), sourceResolution.Error);
 
         var command = new WorkflowChatRunRequest(
-            Prompt: request.Inputs.Prompt,
+            Prompt: inputs.Prompt,
             Source: sourceResolution.Source!,
             ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             SessionId: ResolveSessionId(),
-            InputParts: ToWorkflowInputParts(request.Inputs),
+            InputParts: workflowInputParts,
             Metadata: metadata,
             ScopeId: scope.ScopeId,
             LlmControl: ToWorkflowLlmControl(AgentToolRequestContext.Current),
@@ -659,6 +704,7 @@ public sealed class AevatarInvocationDispatcher
         var streamTopic = wait == InvocationWaitMode.Stream
             ? AevatarInvocationStreamTopics.ForActorRun(receipt.ActorId, receipt.CommandId)
             : string.Empty;
+        LogWorkflowStartAccepted(command, receipt, wait);
         WorkflowRunBackgroundDeliveryReceipt? workflowRunDeliveryReceipt = null;
         if (deliveryReservation != null)
         {
@@ -673,7 +719,7 @@ public sealed class AevatarInvocationDispatcher
 
         return ToChatRunRequest(chatRunRequest, new InvocationToolResult
         {
-            RunId = receipt.CommandId,
+            RunId = receipt.ActorId,
             Status = wait == InvocationWaitMode.Ack ? "accepted" : "streaming",
             StreamTopic = streamTopic,
             ActorId = receipt.ActorId,
@@ -692,6 +738,7 @@ public sealed class AevatarInvocationDispatcher
         AgentWorkflowRuntimeContext workflowRuntimeContext,
         string workflowName,
         IReadOnlyList<string>? workflowYamls,
+        AgentToolExecutionContext? toolContext,
         CancellationToken ct)
     {
         if (!string.IsNullOrWhiteSpace(request.ActorId))
@@ -722,10 +769,25 @@ public sealed class AevatarInvocationDispatcher
                 : workflowRuntimeContext.RootRunId.Trim(),
             RequestedDepth = Math.Max(0, workflowRuntimeContext.Depth) + 1,
         };
-        managedStart.InputFileRefs.Add(request.Inputs.InputParts
+        var effectiveInputParts = ToEffectiveInputParts(request.Inputs, toolContext);
+        managedStart.InputFileRefs.Add(effectiveInputParts
             .Select(static part => ToWorkflowEventFileRef(part.FileRef))
             .Where(static fileRef => fileRef != null)
             .Select(static fileRef => fileRef!.Clone()));
+        var firstManagedFileRef = managedStart.InputFileRefs.FirstOrDefault();
+        _logger.LogWarning(
+            "Managed sub-workflow input file refs resolved: workflowId={WorkflowId} parentRunId={ParentRunId} parentStepId={ParentStepId} commandId={CommandId} explicitInputPartCount={ExplicitInputPartCount} explicitInputFileRefCount={ExplicitInputFileRefCount} ambientToolContextFileRefCount={AmbientToolContextFileRefCount} managedInputFileRefCount={ManagedInputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+            workflowName,
+            parentRunId,
+            parentStepId,
+            commandId,
+            request.Inputs.InputParts.Count,
+            CountExplicitInputFileRefs(request.Inputs),
+            toolContext?.InputFileRefs.Count ?? 0,
+            managedStart.InputFileRefs.Count,
+            firstManagedFileRef?.FileId ?? string.Empty,
+            firstManagedFileRef?.ArtifactId ?? string.Empty,
+            firstManagedFileRef?.MediaType ?? string.Empty);
 
         if (workflowYamls is { Count: > 0 })
         {
@@ -1537,7 +1599,7 @@ public sealed class AevatarInvocationDispatcher
             Prompt: payload.Prompt,
             SessionId: ResolveSessionId(),
             Headers: headers,
-            InputParts: ToGAgentInputParts(payload),
+            InputParts: ToGAgentInputParts(payload, toolContext: null),
             Caller: new ServiceInvocationCaller
             {
                 TenantId = resolution.ScopeId,
@@ -1552,7 +1614,8 @@ public sealed class AevatarInvocationDispatcher
     private ServiceInvocationRequest BuildServiceInvocationRequest(
         PublishedServiceInvocationTarget resolution,
         InvocationPayload payload,
-        string endpointId)
+        string endpointId,
+        AgentToolExecutionContext? toolContext)
     {
         var identity = new ServiceIdentity
         {
@@ -1570,7 +1633,7 @@ public sealed class AevatarInvocationDispatcher
                 AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty),
             LlmControl = ToLlmControlPayload(AgentToolRequestContext.Current),
         };
-        chatRequest.InputParts.AddRange(ToChatInputParts(payload));
+        chatRequest.InputParts.AddRange(ToChatInputParts(payload, toolContext));
         var headers = BuildPayloadHeaders(payload.Headers);
         AppendMetadata(chatRequest.Metadata, headers);
         AppendMetadata(chatRequest.Headers, headers);
@@ -1886,7 +1949,7 @@ public sealed class AevatarInvocationDispatcher
         };
         AppendMetadata(request.Headers, headers);
         AppendMetadata(request.Metadata, headers);
-        request.InputParts.Add(ToChatInputParts(payload));
+        request.InputParts.Add(ToChatInputParts(payload, toolContext: null));
         return request;
     }
 
@@ -2041,8 +2104,10 @@ public sealed class AevatarInvocationDispatcher
         });
     }
 
-    private static IReadOnlyList<ChatContentPart> ToChatInputParts(InvocationPayload payload) =>
-        payload.InputParts.Select(static part => new ChatContentPart
+    private static IReadOnlyList<ChatContentPart> ToChatInputParts(
+        InvocationPayload payload,
+        AgentToolExecutionContext? toolContext) =>
+        ToEffectiveInputParts(payload, toolContext).Select(static part => new ChatContentPart
         {
             Kind = part.Kind switch
             {
@@ -2061,12 +2126,15 @@ public sealed class AevatarInvocationDispatcher
             FileRef = part.FileRef?.Clone(),
         }).ToArray();
 
-    private static IReadOnlyList<GAgentDraftRunInputPart>? ToGAgentInputParts(InvocationPayload payload)
+    private static IReadOnlyList<GAgentDraftRunInputPart>? ToGAgentInputParts(
+        InvocationPayload payload,
+        AgentToolExecutionContext? toolContext)
     {
-        if (payload.InputParts.Count == 0)
+        var inputParts = ToEffectiveInputParts(payload, toolContext);
+        if (inputParts.Count == 0)
             return null;
 
-        return payload.InputParts.Select(static part => new GAgentDraftRunInputPart
+        return inputParts.Select(static part => new GAgentDraftRunInputPart
         {
             Kind = part.Kind switch
             {
@@ -2086,12 +2154,42 @@ public sealed class AevatarInvocationDispatcher
         }).ToArray();
     }
 
-    private static IReadOnlyList<WorkflowChatInputPart>? ToWorkflowInputParts(InvocationPayload payload)
+    private static InvocationToolError? RequireWorkflowInputs(
+        InvocationPayload? payload,
+        IReadOnlyList<WorkflowChatInputPart>? inputParts)
     {
-        if (payload.InputParts.Count == 0)
+        if (payload == null)
+        {
+            return new InvocationToolError
+            {
+                Code = "invalid_arguments",
+                Message = "inputs is required.",
+                Field = "inputs",
+            };
+        }
+
+        if (string.IsNullOrWhiteSpace(payload.Prompt) && inputParts is not { Count: > 0 })
+        {
+            return new InvocationToolError
+            {
+                Code = "invalid_arguments",
+                Message = "inputs.prompt or inputs.input_parts is required.",
+                Field = "inputs",
+            };
+        }
+
+        return null;
+    }
+
+    private static IReadOnlyList<WorkflowChatInputPart>? ToWorkflowInputParts(
+        InvocationPayload payload,
+        AgentToolExecutionContext? toolContext)
+    {
+        var inputParts = ToEffectiveInputParts(payload, toolContext);
+        if (inputParts.Count == 0)
             return null;
 
-        return payload.InputParts.Select(static part => new WorkflowChatInputPart
+        return inputParts.Select(static part => new WorkflowChatInputPart
         {
             Kind = part.Kind switch
             {
@@ -2110,6 +2208,56 @@ public sealed class AevatarInvocationDispatcher
             FileRef = ToWorkflowFileRef(part.FileRef),
         }).ToArray();
     }
+
+    private static bool HasExplicitFileRef(InvocationPayload payload) =>
+        payload.InputParts.Any(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef));
+
+    private static int CountExplicitInputFileRefs(InvocationPayload? payload) =>
+        payload?.InputParts.Count(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef)) ?? 0;
+
+    private static int CountWorkflowInputFileRefs(IReadOnlyList<WorkflowChatInputPart>? inputParts) =>
+        inputParts?.Count(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef)) ?? 0;
+
+    private static FileArtifactRef? FirstWorkflowInputFileRef(IReadOnlyList<WorkflowChatInputPart>? inputParts) =>
+        inputParts?
+            .Select(static part => part.FileRef)
+            .FirstOrDefault(static fileRef => fileRef is not null && HasFileRefIdentity(fileRef));
+
+    private static IReadOnlyList<InvocationContentPart> ToEffectiveInputParts(
+        InvocationPayload payload,
+        AgentToolExecutionContext? toolContext)
+    {
+        if (HasExplicitFileRef(payload) || toolContext is null || toolContext.InputFileRefs.Count == 0)
+            return payload.InputParts;
+
+        var parts = new List<InvocationContentPart>(payload.InputParts.Count + toolContext.InputFileRefs.Count);
+        parts.AddRange(payload.InputParts);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var fileRef in toolContext.InputFileRefs)
+        {
+            if (!HasFileRefIdentity(fileRef))
+                continue;
+
+            var key = FileRefIdentityKey(fileRef);
+            if (!seen.Add(key))
+                continue;
+
+            parts.Add(new InvocationContentPart
+            {
+                Kind = InvocationContentPartKind.File,
+                MediaType = fileRef.MediaType ?? string.Empty,
+                Name = fileRef.FileName ?? string.Empty,
+                FileRef = fileRef.Clone(),
+            });
+        }
+
+        return parts;
+    }
+
+    private static string FileRefIdentityKey(Aevatar.AI.Abstractions.ChatFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId)
+            ? $"artifact:{fileRef.ArtifactId.Trim()}"
+            : $"file:{fileRef.FileId?.Trim()}";
 
     private static FileArtifactRef? ToWorkflowFileRef(Aevatar.AI.Abstractions.ChatFileRef? fileRef) =>
         fileRef is null || !HasFileRefIdentity(fileRef)
@@ -2140,6 +2288,10 @@ public sealed class AevatarInvocationDispatcher
             };
 
     private static bool HasFileRefIdentity(Aevatar.AI.Abstractions.ChatFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
+
+    private static bool HasFileRefIdentity(FileArtifactRef fileRef) =>
         !string.IsNullOrWhiteSpace(fileRef.FileId) ||
         !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
 
@@ -2178,6 +2330,14 @@ public sealed class AevatarInvocationDispatcher
             ? InvocationWaitMode.Stream
             : wait;
 
+    private static InvocationToolError? RejectMemberCompleteWait(InvocationWaitMode wait) =>
+        wait == InvocationWaitMode.Complete
+            ? Error(
+                "unsupported_wait_mode",
+                "aevatar_invoke_member cannot wait for terminal completion. Use wait=ack or wait=stream once, then call aevatar_observe_run with the returned service_id and run_id.",
+                "wait")
+            : null;
+
     private static string ResolveMemberEndpointId(string endpointId) =>
         Normalize(endpointId) ?? DefaultMemberEndpointId;
 
@@ -2185,6 +2345,32 @@ public sealed class AevatarInvocationDispatcher
         Normalize(AgentToolRequestContext.CallId)
         ?? Normalize(AgentToolRequestContext.RequestId)
         ?? Guid.NewGuid().ToString("N");
+
+    private void LogWorkflowStartAccepted(
+        WorkflowChatRunRequest command,
+        WorkflowChatRunAcceptedReceipt receipt,
+        InvocationWaitMode wait)
+    {
+        var inputFileRefs = command.InputParts?
+            .Where(static part => part.FileRef is not null)
+            .Select(static part => part.FileRef!)
+            .ToArray() ?? [];
+        var firstFileRef = inputFileRefs.FirstOrDefault();
+
+        _logger.LogWarning(
+            "Aevatar workflow start accepted. workflowId={WorkflowId} workflowRunId={WorkflowRunId} workflowCommandId={WorkflowCommandId} correlationId={CorrelationId} wait={Wait} scopeId={ScopeId} inputPartCount={InputPartCount} inputFileRefCount={InputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+            command.Source.WorkflowName ?? string.Empty,
+            receipt.ActorId,
+            receipt.CommandId,
+            receipt.CorrelationId,
+            wait.ToString(),
+            command.ScopeId ?? string.Empty,
+            command.InputParts?.Count ?? 0,
+            inputFileRefs.Length,
+            firstFileRef?.FileId ?? string.Empty,
+            firstFileRef?.ArtifactId ?? string.Empty,
+            firstFileRef?.MediaType ?? string.Empty);
+    }
 
     private static string ResolveWorkflowCorrelationId(string commandId) =>
         new[]

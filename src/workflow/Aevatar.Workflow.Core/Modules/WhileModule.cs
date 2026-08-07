@@ -185,7 +185,9 @@ public sealed class WhileModule : IEventModule<IWorkflowExecutionContext>
         foreach (var (key, value) in state.SubParameters)
             request.Parameters[key] = _expressionEvaluator.Evaluate(value, vars);
 
-        await ctx.PublishAsync(request, TopologyAudience.Children, ct);
+        // 迭代子步骤由本 run 的模块管线消费（与 foreach / map_reduce 一致）。
+        // 投递到 Children 时没有子 actor 承接，while 步骤会永远挂起。
+        await ctx.PublishAsync(request, TopologyAudience.Self, ct);
     }
 
     private static Dictionary<string, string> BuildIterationVariables(string input, int iteration, int maxIterations) =>

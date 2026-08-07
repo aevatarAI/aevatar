@@ -108,6 +108,7 @@ public sealed class ApplicationServiceGuardTests
                 new NoOpRolloutCommandObservationQueryReader(),
                 new NoOpTrafficViewQueryReader()),
             new NoOpRevisionCatalogQueryReader(),
+            new NoOpInvocationCatalogQueryReader(),
             Options.Create(new ScopeWorkflowCapabilityOptions()));
         Action nullServingPort = () => new ScopeBindingReadinessQueryService(
             new ServiceLifecycleQueryApplicationService(
@@ -116,6 +117,7 @@ public sealed class ApplicationServiceGuardTests
                 new NoOpDeploymentCatalogQueryReader()),
             null!,
             new NoOpRevisionCatalogQueryReader(),
+            new NoOpInvocationCatalogQueryReader(),
             Options.Create(new ScopeWorkflowCapabilityOptions()));
         Action nullRevisionCatalogReader = () => new ScopeBindingReadinessQueryService(
             new ServiceLifecycleQueryApplicationService(
@@ -127,6 +129,20 @@ public sealed class ApplicationServiceGuardTests
                 new NoOpRolloutQueryReader(),
                 new NoOpRolloutCommandObservationQueryReader(),
                 new NoOpTrafficViewQueryReader()),
+            null!,
+            new NoOpInvocationCatalogQueryReader(),
+            Options.Create(new ScopeWorkflowCapabilityOptions()));
+        Action nullInvocationCatalogReader = () => new ScopeBindingReadinessQueryService(
+            new ServiceLifecycleQueryApplicationService(
+                new NoOpCatalogQueryReader(),
+                new NoOpRevisionCatalogQueryReader(),
+                new NoOpDeploymentCatalogQueryReader()),
+            new ServiceServingQueryApplicationService(
+                new NoOpServingSetQueryReader(),
+                new NoOpRolloutQueryReader(),
+                new NoOpRolloutCommandObservationQueryReader(),
+                new NoOpTrafficViewQueryReader()),
+            new NoOpRevisionCatalogQueryReader(),
             null!,
             Options.Create(new ScopeWorkflowCapabilityOptions()));
         Action nullOptions = () => new ScopeBindingReadinessQueryService(
@@ -140,11 +156,13 @@ public sealed class ApplicationServiceGuardTests
                 new NoOpRolloutCommandObservationQueryReader(),
                 new NoOpTrafficViewQueryReader()),
             new NoOpRevisionCatalogQueryReader(),
+            new NoOpInvocationCatalogQueryReader(),
             null!);
 
         nullLifecyclePort.Should().Throw<ArgumentNullException>();
         nullServingPort.Should().Throw<ArgumentNullException>();
         nullRevisionCatalogReader.Should().Throw<ArgumentNullException>();
+        nullInvocationCatalogReader.Should().Throw<ArgumentNullException>();
         nullOptions.Should().Throw<ArgumentNullException>();
     }
 

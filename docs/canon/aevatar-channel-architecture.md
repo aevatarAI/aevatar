@@ -883,6 +883,19 @@ NyxidChat 的 draft-run interaction port 不在 `ConversationGAgent` turn 内执
 - **sender gate 不变**：与显式 skill 触发一致，未绑定 NyxID 的 sender 不启用（tool dispatch 对 unbound sender 关闭）。
 - **不感知具体 skill 名**：binding 值是 host/user 数据，路由逻辑只做通用 skill 触发合成，生产代码不 hardcode 任何 skill 名。
 
+### 5.6.4 Channel reply truthfulness: mutating receipts outrank model prose
+
+Channel 面向用户声称某个外部写操作成功时，唯一充分证据是**同一 turn** 内与该动作精确匹配的 typed `AgentToolReceipt`：`Status=Success`、`Effect=Mutating`，且 `call_id`、tool、side effect 与 typed subject 都对应本次具体动作。probe、workflow run、read 或其他动作的成功回执都不能替代该证据；`Effect=Unspecified` 仅用于兼容，永远不是写操作成功的正向证据。
+
+Executor 必须根据具体调用的 `GetCallSafety(argumentsJson)` 与 `SideEffectKind` 冻结 `Effect` 为 `ReadOnly` 或 `Mutating`，下游不得从模型措辞、结果 JSON 或工具名称重新猜测效果。最终 channel delivery 按以下规则对账并约束 reply：
+
+- 同一非空 `call_id + tool` 以最后一条回执为 terminal authority；空 `call_id` 的回执各自独立，不得合并对账。provider 未给 `call_id` 时，runtime 生成的 ID 必须带 request/round identity，禁止跨 round 重用匿名 ID。
+- 对账后的 mutating receipt 若为 `Error`、`ApprovalRequired`、`Denied`、`AuthorizationRequired` 或 `Unspecified`，必须用 deterministic receipt text 替换模型的成功叙述，并同步替换 streaming snapshot、reply、outbound intent 与本 turn assistant history。该回执必须保持用户可见，不能被模型文本覆盖或省略；assistant tool-call message 的 narrative 要清理，但 tool-call pairing 必须保留。
+- read-only failure 可以附加到回复中，但不得替换一个本来有效的答案。
+- `ApprovalRequired` 仍表示等待审批，不能证明成功；deterministic pending 文案必须保留 approval request evidence，不能与模型成功措辞并列。
+
+`use_skill` 必须保持两种操作语义分离：省略 `mount_workflows` 时仅加载 skill/instructions，是 read-only，加载成功不能证明 workflow 已挂载；首次 `mount_workflows=true` 也只做外部请求 preview，并返回覆盖 workflow revision、bundle 与全部 explicit request contract 的 `workflow_mount_confirmation_token`。后续调用必须原样携带该 token，进入 durable approval 后由服务端重新解析 workflow、重算 confirmation 并校验 token，不能信任模型复制的 capability 字段。只有 matching successful mutating receipt 才能证明挂载成功；完整 `workflow_mount_confirmations` 对象仅作为旧会话兼容契约。Channel 自然语言入口只把显式 `mount/挂载` 解析为 typed workflow-mount intent，并跨 tool context/checkpoint 保留；`use/使用/load/加载` 仍只允许 read-only skill load，禁止由模型自行扩大为写操作。Typed recovery planner 必须从结构化 `skill_load.workflow_mount` 读取 `confirmation_required` 与 opaque token，并确定性地产生一次 confirmation call；不得依赖模型从展示文本复制 token 或决定是否进入审批。
+
 ### 5.7 Middleware Pipeline（窄范围）
 
 ```csharp
@@ -1967,6 +1980,7 @@ Rotation is forward-only because NyxID immediately deactivates the old key. The 
 
 - **平台职责**：`Platform.Lark` 现在只保留 Lark 平台渲染/组合能力，例如 `LarkMessageComposer`、`LarkOutboundMessage`
 - **生产 transport**：Lark 生产 ingress/egress 已统一走 `Channel.NyxIdRelay`，不再由 `Platform.Lark` 直接承载 webhook 验签、payload 解密或 direct reply
+- **JSON 展示策略**：Lark presentation boundary 对回复文本中的完整合法 JSON 做有界解析，并由 `LarkMessageComposer` 投影为 Card JSON 2.0 原生 `table`；对象数组映射为行列，嵌套值展开为非 JSON 单元格文本。这个策略只改变 Lark 出站载荷，不改写模型历史、工具结果或内部协议。流式阶段尚未闭合的 JSON 保持原文本，闭合后改为表格表示；CardKit/interactive dispatcher 不可用时降级为逐行 `key: value` 文本，不使用 Markdown 管道表格。
 - **兼容性壳**：`LarkPlatformAdapter` 仅保留为 retired direct-callback shell；任何 direct callback / direct reply 尝试都返回 retired/410 语义
 - **Capability gap**：不支持 ephemeral / modal
 

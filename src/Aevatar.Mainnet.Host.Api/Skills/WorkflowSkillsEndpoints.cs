@@ -59,7 +59,7 @@ internal static class WorkflowSkillsEndpoints
 
         data.MapPost("/{guid}/schedule", ScheduleSkill)
             .WithName("ScheduleWorkflowSkill")
-            .WithSummary("Provision a recurring (cron) schedule for a skill; runs surface in the observatory.")
+            .WithSummary("Accept recurring skill schedule provisioning; poll the returned Location for completion.")
             .RequireAuthorization();
 
         return app;
@@ -186,12 +186,7 @@ internal static class WorkflowSkillsEndpoints
         if (!AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var scopeId))
             return Results.Unauthorized();
 
-        var loggerFactory = http.RequestServices.GetService<ILoggerFactory>();
-        var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
-            http,
-            http.RequestServices.GetService<IExternalIdentityBindingQueryPort>(),
-            loggerFactory?.CreateLogger("Aevatar.Mainnet.Host.Api.WorkflowSkills"),
-            ct);
+        var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
         if (!callerCredential.Succeeded ||
             callerCredential.Credential == null ||
             string.IsNullOrWhiteSpace(callerCredential.Credential.BearerToken))
@@ -237,11 +232,8 @@ internal static class WorkflowSkillsEndpoints
             return Results.Unauthorized();
 
         var loggerFactory = http.RequestServices.GetService<ILoggerFactory>();
-        var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
-            http,
-            http.RequestServices.GetService<IExternalIdentityBindingQueryPort>(),
-            loggerFactory?.CreateLogger("Aevatar.Mainnet.Host.Api.WorkflowSkills"),
-            ct);
+        var logger = loggerFactory?.CreateLogger("Aevatar.Mainnet.Host.Api.WorkflowSkills");
+        var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
         if (!callerCredential.Succeeded ||
             callerCredential.Credential == null ||
             string.IsNullOrWhiteSpace(callerCredential.Credential.BearerToken))
@@ -273,14 +265,81 @@ internal static class WorkflowSkillsEndpoints
             body.Timezone ?? string.Empty,
             body.DisplayName ?? string.Empty,
             body.TeamId!,
+            body.WorkflowConfirmationToken ?? string.Empty,
             ct);
-        if (outcome.Succeeded)
-            return Results.Json(outcome.Receipt);
+        if (outcome.Succeeded && outcome.Receipt is { } receipt)
+        {
+            return Results.Accepted(
+                BuildSkillScheduleLocation(receipt),
+                receipt);
+        }
+        if (outcome.Confirmation is not null)
+        {
+            logger?.LogInformation(
+                "Workflow skill schedule confirmation returned. SkillGuid={SkillGuid} Stage={Stage} Status={Status} FailureCode={FailureCode}",
+                guid,
+                "confirmation",
+                outcome.Confirmation.Status,
+                outcome.Confirmation.FailureCode ?? string.Empty);
+            return Results.Json(outcome.Confirmation);
+        }
 
-        var scheduleStatus = string.Equals(outcome.ErrorCode, "skill_not_found", StringComparison.Ordinal)
-            ? StatusCodes.Status404NotFound
-            : StatusCodes.Status502BadGateway;
+        logger?.LogWarning(
+            "Workflow skill schedule failed. SkillGuid={SkillGuid} Stage={Stage} ErrorCode={ErrorCode}",
+            guid,
+            ResolveScheduleFailureStage(outcome.ErrorCode),
+            outcome.ErrorCode ?? "skill_schedule_unknown_failure");
+
+        var scheduleStatus = ResolveScheduleFailureStatus(outcome.ErrorCode);
         return Results.Json(new { code = outcome.ErrorCode, message = outcome.ErrorMessage }, statusCode: scheduleStatus);
+    }
+
+    private static string BuildSkillScheduleLocation(SkillScheduleReceipt receipt) =>
+        string.IsNullOrWhiteSpace(receipt.ScheduleId)
+            ? $"/api/scopes/{Uri.EscapeDataString(receipt.ScopeId)}/members/{Uri.EscapeDataString(receipt.MemberId)}"
+            : $"/api/schedules/{Uri.EscapeDataString(receipt.ScheduleId)}";
+
+    private static int ResolveScheduleFailureStatus(string? errorCode) => errorCode switch
+    {
+        "skill_not_found" or "api_key_scope_plan_not_found" => StatusCodes.Status404NotFound,
+        "authentication_failed" or "unauthorized" or "token_expired" => StatusCodes.Status401Unauthorized,
+        "forbidden" or "api_key_scope_plan_denied" => StatusCodes.Status403Forbidden,
+        "bad_request" or "validation_error" or "api_key_scope_plan_owner_unsupported" =>
+            StatusCodes.Status400BadRequest,
+        "conflict" or "api_key_scope_plan_route_unresolved" or "api_key_scope_plan_stale" =>
+            StatusCodes.Status409Conflict,
+        "rate_limited" => StatusCodes.Status429TooManyRequests,
+        "nyxid_scope_plan_provider_timed_out" => StatusCodes.Status504GatewayTimeout,
+        _ => StatusCodes.Status502BadGateway,
+    };
+
+    private static string ResolveScheduleFailureStage(string? errorCode)
+    {
+        if (string.IsNullOrWhiteSpace(errorCode))
+            return "unknown";
+
+        if (errorCode is "invalid_caller_credential" or
+            "authenticated_authorization_owner_required" or
+            "source_readable_caller_credential_required")
+        {
+            return "caller_authority";
+        }
+
+        if (string.Equals(errorCode, "skill_not_found", StringComparison.Ordinal))
+            return "skill_fetch";
+        if (errorCode.StartsWith("skill_schedule_workflow_", StringComparison.Ordinal))
+            return "workflow_resolution";
+        if (errorCode.Contains("confirmation", StringComparison.OrdinalIgnoreCase))
+            return "confirmation";
+        if (errorCode.StartsWith("schedule_authorization_", StringComparison.Ordinal) ||
+            string.Equals(errorCode, "schedule_reauthorization_required", StringComparison.Ordinal) ||
+            errorCode.StartsWith("api_key_scope_plan_", StringComparison.Ordinal) ||
+            errorCode.StartsWith("nyxid_scope_plan_", StringComparison.Ordinal))
+        {
+            return "authorization_catalog";
+        }
+
+        return "provisioning";
     }
 
     private static bool TryGetBearerToken(HttpContext http, out string token)

@@ -35,10 +35,19 @@ internal static class StudioExplicitRequestAdmissionTestKit
         """;
 
     public static StudioWorkflowCapabilityAdmissionTestService CreateAdmissionService(
-        NyxIdOperationRisk currentRisk = NyxIdOperationRisk.ReadOnly)
+        NyxIdOperationRisk currentRisk = NyxIdOperationRisk.ReadOnly,
+        string ownerSubject = CallerId,
+        Func<bool>? durableCatalogReady = null,
+        long sourceVersion = 23,
+        DateTimeOffset? sourceObservedAt = null)
     {
         var readiness = new ExternalWorkflowCapabilityReadinessService(
-            [new ExplicitRequestSource(currentRisk)]);
+            [new ExplicitRequestSource(
+                currentRisk,
+                ownerSubject,
+                durableCatalogReady,
+                sourceVersion,
+                sourceObservedAt)]);
         var inner = new WorkflowExternalCapabilityAdmissionService(
             new RealWorkflowDefinitionParser(),
             readiness,
@@ -143,7 +152,12 @@ internal static class StudioExplicitRequestAdmissionTestKit
             throw new NotSupportedException();
     }
 
-    private sealed class ExplicitRequestSource(NyxIdOperationRisk currentRisk) :
+    private sealed class ExplicitRequestSource(
+        NyxIdOperationRisk currentRisk,
+        string ownerSubject,
+        Func<bool>? durableCatalogReady,
+        long sourceVersion,
+        DateTimeOffset? sourceObservedAt) :
         IExternalWorkflowCapabilitySource
     {
         public ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind =>
@@ -160,6 +174,7 @@ internal static class StudioExplicitRequestAdmissionTestKit
             ExternalCapabilityExecutionMode executionMode,
             CancellationToken cancellationToken = default)
         {
+            var observedAt = sourceObservedAt ?? FixedTimeProvider.Now;
             var request = selector.NyxIdRequest.Clone();
             var requestDigest = WorkflowCapabilityAdmissionPlanIntegrity
                 .ComputeNyxIdRequestContractDigest(request);
@@ -196,12 +211,27 @@ internal static class StudioExplicitRequestAdmissionTestKit
             result.Sources.Add(new ExternalCapabilitySourceStamp
             {
                 SourceKind = ExternalCapabilitySourceKind.NyxIdUserServices,
-                SourceId = $"nyxid-keys:caller:{CallerId}",
-                SourceVersion = 23,
-                ObservedAt = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now),
-                FreshUntil = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now.AddMinutes(5)),
+                SourceId = $"nyxid-keys:caller:{ownerSubject}",
+                SourceVersion = sourceVersion,
+                ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
+                FreshUntil = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(5)),
                 ContentDigest = "keys-digest-alpha",
             });
+            if (executionMode != ExternalCapabilityExecutionMode.Durable)
+                return Task.FromResult(result);
+
+            if (durableCatalogReady?.Invoke() == false)
+            {
+                result.Status = ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable;
+                result.Blockers.Add(new ExternalCapabilityBlocker
+                {
+                    Status = ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
+                    Code = "DURABLE_AUTHORIZATION_UNAVAILABLE",
+                    SafeMessage = "The current authorization catalog does not prove this durable grant.",
+                });
+                return Task.FromResult(result);
+            }
+
             result.Sources.Add(new ExternalCapabilitySourceStamp
             {
                 SourceKind = ExternalCapabilitySourceKind.DurableAuthorizationCatalog,
@@ -209,11 +239,11 @@ internal static class StudioExplicitRequestAdmissionTestKit
                 {
                     Authority = NyxIdAuthorizationAuthorities.NyxId,
                     OwnerKind = AuthorizationOwnerKind.Personal,
-                    OwnerSubject = CallerId,
+                    OwnerSubject = ownerSubject,
                 }),
-                SourceVersion = 23,
-                ObservedAt = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now),
-                FreshUntil = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now.AddMinutes(5)),
+                SourceVersion = sourceVersion,
+                ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
+                FreshUntil = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(5)),
                 ContentDigest = "catalog-digest-alpha",
             });
             return Task.FromResult(result);

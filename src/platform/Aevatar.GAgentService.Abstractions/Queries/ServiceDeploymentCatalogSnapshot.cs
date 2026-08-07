@@ -1,9 +1,22 @@
+using System.Text.Json.Serialization;
+
 namespace Aevatar.GAgentService.Abstractions.Queries;
 
+[method: JsonConstructor]
 public sealed record ServiceDeploymentCatalogSnapshot(
     string ServiceKey,
     IReadOnlyList<ServiceDeploymentSnapshot> Deployments,
-    DateTimeOffset UpdatedAt);
+    IReadOnlyList<ServiceDeploymentActivationFailureSnapshot> ActivationFailures,
+    DateTimeOffset UpdatedAt)
+{
+    public ServiceDeploymentCatalogSnapshot(
+        string serviceKey,
+        IReadOnlyList<ServiceDeploymentSnapshot> deployments,
+        DateTimeOffset updatedAt)
+        : this(serviceKey, deployments, [], updatedAt)
+    {
+    }
+}
 
 public sealed record ServiceDeploymentSnapshot(
     string DeploymentId,
@@ -12,3 +25,9 @@ public sealed record ServiceDeploymentSnapshot(
     string Status,
     DateTimeOffset? ActivatedAt,
     DateTimeOffset UpdatedAt);
+
+public sealed record ServiceDeploymentActivationFailureSnapshot(
+    string RevisionId,
+    ServiceDeploymentActivationFailureCode FailureCode,
+    string FailureReason,
+    DateTimeOffset OccurredAt);

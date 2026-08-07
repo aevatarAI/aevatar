@@ -37,7 +37,8 @@ public sealed class AgentToolReceiptWireContractTests
                 (14, "result_json"),
                 (15, "managed_workflow_handoff"),
                 (16, "workflow_run_delivery"),
-                (17, "authorization_required"));
+                (17, "authorization_required"),
+                (18, "effect"));
         AgentToolReceipt.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => field.Name)
             .Should()

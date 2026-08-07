@@ -32,9 +32,9 @@ public sealed class NyxIdToolOptions
     public string? BaseUrl { get; set; } = DefaultBaseUrl;
 
     /// <summary>
-    /// NyxID service slug used by <c>code_execute</c>. Hosts that expose the
-    /// tool through a per-user OAuth binding must request this same service as
-    /// an RFC 8707 resource.
+    /// NyxID service slug used by <c>code_execute</c> when no <c>codex_exec</c>
+    /// target is enabled. Hosts that expose the tool through a per-user OAuth
+    /// binding must request this same service as an RFC 8707 resource.
     /// </summary>
     public string SandboxServiceSlug { get; set; } = DefaultSandboxServiceSlug;
 
@@ -48,9 +48,10 @@ public sealed class NyxIdToolOptions
     public bool EnableSshExecTool { get; set; }
 
     /// <summary>
-    /// When <c>true</c>, expose the managed-sandbox target of <c>codex_exec</c>.
-    /// A matching <c>ICodexExecutionPort</c> must be registered by the host; endpoint,
-    /// image, credential, and admission policy remain operator-owned configuration.
+    /// When <c>true</c>, expose the managed-sandbox target of <c>codex_exec</c>
+    /// instead of <c>code_execute</c>. A matching <c>ICodexExecutionPort</c> must be
+    /// registered by the host; endpoint, image, credential, and admission policy
+    /// remain operator-owned configuration.
     /// </summary>
     public bool EnableManagedCodexExecTool { get; set; }
 

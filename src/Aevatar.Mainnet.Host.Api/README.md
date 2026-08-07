@@ -142,6 +142,10 @@ ASPNETCORE_ENVIRONMENT=PersistentLocal dotnet run --project src/Aevatar.Mainnet.
 
 `Aevatar.Mainnet.Host.Api` 现在是 `aevatar app` 的唯一后端 API 面。当前用户面 contract 已经收敛为 `scope-first`，默认认为一个 `scope` 对应一个对外 service binding；内核仍保留 `service` 级别接口，作为未来扩展到多 service 的基础。
 
+Backend Admin 的 Studio 从 `/admin#/studio` 进入。Admin shell 通过 Mainnet-owned
+`/admin/studio` 页面路由装载 canonical Studio 静态资源，并在嵌入时移除 Studio 自带顶栏；
+`/workflow/studio` 仅保留为独立 Studio surface，不再是 Admin 导航的目标。
+
 Responses / Messages 直连接口也挂在主机上，外部推荐经 NyxID proxy 访问：
 
 - `GET /v1/models`

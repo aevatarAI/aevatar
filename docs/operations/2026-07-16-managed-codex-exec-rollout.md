@@ -22,8 +22,11 @@ Before enabling Aevatar, operations must confirm:
   that bearer to provision or repair a credential
 - the `chrono-sandbox` service is deployed from commit `1e8134d` or a
   descendant and exposes `POST /codex/execute`
-- its NyxID service definition is active with `forward_access_token=false`
-- `inject_delegation_token=true` and `delegation_token_scope=proxy:*`
+- its NyxID service definition is active with `inject_delegation_token=true`
+  and `delegation_token_scope=proxy:*`
+- `forward_access_token` may be either value for managed execution because its
+  proxy request has no bearer; set it to `true` when the same UserService also
+  serves ordinary `/execute`
 - each canary user directly owns an active `chrono-sandbox` UserService
 - each canary user has a usable `chrono-llm-public` route
 - chrono-sandbox sets `NYXID_LLM_PROXY_URL=https://nyx-api.chrono-ai.fun/api/v1/proxy/s/chrono-llm-public`; it does not use `/api/v1/llm/gateway/v1` or `/api/v1/llm/chrono-llm-public/v1`
@@ -39,11 +42,12 @@ The internal P0 uses two distinct NyxID UserService policies. The UserService
 fronting Aevatar temporarily forwards the interactive access token so the same
 authenticated user can call the explicit lifecycle API, which confirms
 `/users/me` before creating or repairing that user's Agent Key. The user's
-`chrono-sandbox` UserService must instead keep
-`forward_access_token=false`, `inject_delegation_token=true`, and exact
-`proxy:*` delegation; Aevatar validates that chrono policy during explicit
-provisioning, reconciliation, and rotation, but cannot prevent the service owner
-from changing it later.
+`chrono-sandbox` UserService must keep `inject_delegation_token=true` and exact
+`proxy:*` delegation. Managed requests use `X-API-Key` and omit
+`Authorization`, so bearer forwarding cannot expose the managed key; the shared
+service uses `forward_access_token=true` for ordinary `/execute`. Aevatar
+validates the delegation policy during explicit provisioning, reconciliation,
+and rotation, but cannot prevent the service owner from changing it later.
 
 The five-minute runner token can access other NyxID REST proxy services
 available to the same user, and Aevatar ingress temporarily handles the
@@ -154,6 +158,13 @@ curl -i -X DELETE \
   https://<aevatar-host>/api/managed-codex/credential
 ```
 
+When a credential mutation returns a typed lifecycle failure, the Host writes
+one bounded warning containing only the fixed operation (`provision`, `rotate`,
+or `revoke`), the stable lifecycle code, and its mapped HTTP status. Use those
+fields to correlate a failed request. The warning must not include the exception
+message, bearer, NyxID subject, API-key ID, actor ID, command ID, or Vault
+reference.
+
 ## Workflow canaries
 
 Invoke the public Ornn skill `aevatar-codex-exec-workflow-sample` and its
@@ -187,6 +198,8 @@ The public skill invoke endpoint uses the same trusted caller-credential extract
 - `managed_credential_not_provisioned`: call the explicit credential POST endpoint as that user; normal `codex_exec` will not repair it.
 - `managed_credential_inactive` / `managed_credential_expired`: reconcile through POST or force replacement through `/rotate`.
 - `managed_credential_owner_invalid` / `managed_credential_reference_invalid` / `managed_credential_service_binding_invalid`: stop execution and run explicit reconciliation; do not patch the read model.
+- `managed_user_authentication_failed`: NyxID returned HTTP 401 for the current lifecycle bearer; refresh the user's NyxID authentication and retry. The lifecycle endpoint preserves this boundary as HTTP 401.
+- `managed_user_authorization_denied`: NyxID returned HTTP 403 for the current lifecycle bearer; inspect the user's NyxID API-key lifecycle authority rather than rotating the managed key manually. The lifecycle endpoint preserves this boundary as HTTP 403.
 - `managed_user_authorization_unavailable`: an explicit lifecycle action needs the current user's bearer; do not substitute an operator credential.
 - `managed_credential_commit_timeout`: Actor commit or Projection Session observation did not finish inside the bounded mutation window; inspect dispatch/projection health rather than polling in the workflow.
 - `managed_user_services_unavailable`: the user's required `chrono-sandbox` or `chrono-llm-public` UserService is absent, ambiguous, inactive, or has invalid delegation configuration.
@@ -202,6 +215,7 @@ The public skill invoke endpoint uses the same trusted caller-credential extract
 - `managed_proxy_authorization_denied`: inspect the exact agent-key service grant and NyxID proxy policy.
 - `managed_proxy_target_unavailable`: verify the user's `chrono-sandbox` UserService and deployed route.
 - `managed_proxy_timeout` / `managed_proxy_unavailable`: inspect NyxID and chrono-sandbox capacity.
+- `managed_upstream_codex_*`: Aevatar received an explicitly allowlisted stable chrono error code inside a response that passed the configured byte bound. Use the suffix to select the producer-owned sandbox creation, readiness, workspace, command, output, timeout, capacity, or cleanup diagnostic path. Aevatar intentionally discards the upstream message and raw body; this code does not authorize an automatic retry or ordinary `/execute` fallback.
 - `managed_response_invalid` / `managed_response_too_large`: correlate with the sanitized chrono diagnostic ID and treat the contract drift as a rollout blocker.
 
 ### Incident 3d836d6c causal record

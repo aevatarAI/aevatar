@@ -49,3 +49,20 @@ Turn-local materialization 继续使用已固化 snapshot 与既有 `AgentProfil
 Runtime 先对 route-owned tools、registered tools、typed visibility、Profile maximum/recovery/task policy 与 caller authorization 取交集，再执行 bounded routing/classification。任何 profile、exact fetch、identity、collision、capability 或 integrity 失败都只能继续缩权；交集为空即 restricted-empty，不能退回 unrestricted。
 
 Request-local `AgentProfileTurnCatalog` 不是 DI service、cache 或进程级上下文。非 Profile consumer 必须显式传 `null`；当前只有 genuinely unprofiled NyxID Chat 允许这个值表达未绑定。
+
+## Static route tool ceiling
+
+Profiled 与 genuinely unprofiled NyxID Chat 共用 Host 静态注册的
+`agent-profile.nyxid-chat` route tool set。Profile 只能在这个 ceiling 内继续收窄；
+unprofiled turn 直接使用同一 ceiling，不会回退为枚举所有 DI `IAgentToolSource`。
+因此注册新的通用 tool source 不会自动扩大 NyxID Chat surface，扩大 surface 必须通过
+明确的 route tool set 变更。
+
+这个固定 tool set 只提供审查过的只读 NyxID management wrappers、readiness/browser-action
+handoff、单一 `ask_user` typed input，以及其他明确允许的 route-owned tools。`ask_user`
+通过只含该工具的窄 source 挂载；它不让 `web_search`、`web_fetch` 或完整
+`WebAgentToolSource` 进入 ceiling。声明 `ExcludeFromNyxIdChat` 的通用 proxy
+不会进入模型可调用面。声明 `RequiresHumanSession` 的 Class-R read 只有在当前 turn 携带
+可验证的 source-readable user bearer 时才会被提供；credential 缺失、类型错误或仅有
+不可读 delegation 时，该 read 在 tool discovery 阶段即被移除。无论是否绑定 Profile，
+mutation schema、secret-bearing 参数与新注册但未列入 ceiling 的工具都保持不可调用。

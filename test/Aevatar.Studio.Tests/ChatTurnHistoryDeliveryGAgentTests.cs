@@ -9,6 +9,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Studio.Tests;
 
@@ -371,7 +372,8 @@ public sealed class ChatTurnHistoryDeliveryGAgentTests
 
         var agent = new ChatTurnHistoryDeliveryGAgent(
             runtime,
-            dispatch)
+            dispatch,
+            NullLogger<ChatTurnHistoryDeliveryGAgent>.Instance)
         {
             Services = services,
             EventSourcingBehaviorFactory =

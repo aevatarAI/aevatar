@@ -82,6 +82,9 @@ internal static class NyxIdChatConversationAguiFrameBuilder
                 {
                     ToolCallId = progressed.Progress.ToolStarted.CallId,
                     ToolName = progressed.Progress.ToolStarted.ToolName,
+                    Presentation = Aevatar.AI.Abstractions.ToolProviders.ToolPresentationDescriptors.Snapshot(
+                        progressed.Progress.ToolStarted.Presentation,
+                        progressed.Progress.ToolStarted.ToolName),
                 },
             },
             _ => null,
@@ -403,9 +406,22 @@ internal static class NyxIdChatConversationAguiFrameBuilder
             Custom(TaskSnapshotEventName, task, sequence),
         };
         frames.AddRange(changedSteps.Select(step =>
-            Custom(TaskStepChangedEventName, step, sequence)));
+            Custom(TaskStepChangedEventName, BuildStepChanged(task, step), sequence)));
         return frames;
     }
+
+    private static NyxIdChatTaskStepChanged BuildStepChanged(
+        NyxIdChatTaskState task,
+        NyxIdChatTaskStepState step) =>
+        new()
+        {
+            TaskId = task.TaskId,
+            PlanRevision = task.PlanRevision,
+            Step = step.Clone(),
+            ChangeKind = step.Status == NyxIdChatStepStatus.Cancelled
+                ? NyxIdChatStepChangeKind.Cancelled
+                : NyxIdChatStepChangeKind.Status,
+        };
 
     private static IEnumerable<NyxIdChatTaskStepState> ResolveChangedSteps(
         NyxIdChatTaskState task,

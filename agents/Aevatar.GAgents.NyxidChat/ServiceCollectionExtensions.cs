@@ -33,6 +33,7 @@ using Aevatar.GAgents.NyxidChat.WorkflowRunDelivery;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
+using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.Extensions.Configuration;
@@ -104,6 +105,7 @@ public static class ServiceCollectionExtensions
 
         // ─── Channel LLM reply run dispatch ───
         services.TryAddSingleton<IChannelLlmReplyRunDispatcher, AgentRunDispatcher>();
+        services.TryAddSingleton<IAgentRunToolApprovalDecisionDispatcher, AgentRunToolApprovalDecisionDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, ChannelWorkflowDraftRunSlashCommandHandler>());
         services.TryAddSingleton<ChannelSlashCommandRegistry>();
         services.TryAddSingleton<ChannelWorkflowDraftRunIntentParser>();
@@ -184,7 +186,8 @@ public static class ServiceCollectionExtensions
                 overlayProvider: sp.GetService<ISystemSkillOverlayProvider>(),
                 larkOutboundClientFactory: sp.GetService<ILarkOutboundClientFactory>(),
                 toolExecutionPort: sp.GetRequiredService<IAgentToolExecutionPort>(),
-                remoteSkillAccessTokenResolver: sp.GetService<IRemoteSkillAccessTokenResolver>()));
+                remoteSkillAccessTokenResolver: sp.GetService<IRemoteSkillAccessTokenResolver>(),
+                nyxIdChatToolSources: ResolveNyxIdChatToolSources(sp)));
         services.TryAddSingleton<ChannelNyxIdConnectedServiceInventoryToolSource>();
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
         services.TryAddSingleton<INyxIdActionPostconditionPort>(sp =>
@@ -262,6 +265,15 @@ public static class ServiceCollectionExtensions
         var inventory = serviceProvider.GetService<ChannelNyxIdConnectedServiceInventoryToolSource>();
         if (inventory is not null)
             yield return inventory;
+    }
+
+    private static IReadOnlyList<IAgentToolSource> ResolveNyxIdChatToolSources(
+        IServiceProvider serviceProvider)
+    {
+        var result = serviceProvider
+            .GetRequiredService<IToolSetRegistry>()
+            .Resolve(AgentProfilePolicies.NyxIdChatRouteToolSet);
+        return result.IsSuccess ? result.Sources : [];
     }
 
     private static void AddNyxIdStreamingInteractions(IServiceCollection services)

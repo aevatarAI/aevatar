@@ -45,6 +45,8 @@ The conversation controller owns active/latest turns, task and step status, oper
 
 `NyxIdChatTurnGAgent` is short-lived. Its opaque actor address is a server-owned reuse key and has no client-visible meaning. It records only admission/completion/delivery waterlines and safe effect evidence, runs one LLM or tool operation, and reports back to the controller. It never owns conversation truth and never performs a second operation without a new controller authorization.
 
+One NyxID Chat LLM operation admits at most one tool call. The turn executor carries this as the typed `AllowMultipleToolCalls = false` request constraint and provider adapters must preserve it through routing, request copies, and tool-round construction. Providers that support the constraint map it to their native option. The actor still fails closed with `NYXID_CHAT_MULTIPLE_TOOL_CALLS_UNSUPPORTED` if a provider violates the contract; ordinary non-NyxID chat requests leave the nullable option unset and retain their provider default.
+
 The Host authenticates, validates identities, dispatches commands, and maps typed results. It does not decide task transitions. Projection consumes committed controller facts only. Query reads `NyxIdChatConversationCurrentStateDocument` only; it does not activate an actor, read the event store, attach or prime a projection, replay events, or create a turn.
 
 Conversation creation has three deliberately separate authorities:
@@ -76,6 +78,10 @@ The HTTP endpoint owns only authentication/protocol adaptation, serialized SSE w
 | input `requestId` | Conversation actor | Selects the exact pending input fact; it is distinct from the caller's `clientRequestId`. |
 | approval `requestId` | Conversation actor | Selects a pending Aevatar tool approval; it is not a browser-action ID. |
 | `actionRequestId` | Conversation actor | Correlates one NyxID browser journey and its reports. |
+| `connectedServiceId` | NyxID connected-service inventory | One exact connected UserService instance; it is not a route or readiness identity. |
+| `serviceSlug` | NyxID route contract | The exact route slug for the admitted operation; it is not a connected-service ID. |
+| `catalogServiceSlug` | NyxID catalog | The catalog family that authored the operation descriptor; it is not a route slug or readiness identity. |
+| `readinessCapabilityId` | NyxID Assistant readiness registry | Optional producer-authored recovery identity, such as `api-github`; it is never derived by Aevatar. |
 | `originTurnId` | Conversation actor | The blocked turn that emitted an action request. |
 | `continuationTurnId` | Server-created | New run created after accepted steering or `action.continue`; it never resumes the old turn ID. |
 | `stateVersion` | Conversation actor committed version | Read-model freshness watermark; projection never invents a local version. |
@@ -149,6 +155,46 @@ Actor-authored task observation is committed before publication. The controller 
 - `nyxid.approval.request`
 - `nyxid.approval.changed`
 
+### TaskPlan observation contract
+
+`nyxid.task.snapshot.custom.payload` is the complete actor-owned TaskPlan. Its
+stable v1 fields are:
+
+| Field | Meaning |
+|---|---|
+| `schemaVersion` | Decoder contract version for the complete TaskPlan shape. |
+| `actorId` | Authoritative conversation actor that owns the plan. |
+| `taskId` / `turnId` | Exact task and turn identities; neither is an alias for `actorId`. |
+| `planId` / `planRevision` | Stable plan identity and actor-authored monotonic revision. |
+| `title` | Safe user-facing task title. |
+| `gate.mode` / `gate.reason` | Closed `auto` or `confirm` gate and its safe explanation. |
+| `steps` | Ordered complete step states. |
+
+Each step carries `stepId / order / kind / status / required / description`, a
+typed `source`, effect evidence, actor-computed `availableActions`, and its
+actor-authored update time. Planning provenance is typed as `addedBy`,
+`dependsOn`, optional `estimate`, and typed `substeps`. The closed source union
+is `llm`, `tool`, `browserAction`, `postcondition`, `input`, `approval`, or the
+reserved `web` source. Tool source keeps `toolName`, exact `serviceSlug`, exact
+`serviceId`, and optional producer-authored `readinessCapabilityId` separate.
+Postcondition source carries `actionRequestId` plus the stable `check`; approval
+source carries the exact `approvalRequestId`.
+
+`nyxid.task.step.changed.custom.payload` is always the complete typed envelope
+`taskId / planRevision / step / changeKind`. It never publishes a bare step.
+The nested `step` uses exactly the same shape as a step in TaskPlan.
+
+Live TaskPlan payloads and current-state `snapshot.activeTask` are the same
+contract, not two browser models. Clients must use one TaskPlan decoder and one
+step decoder for initial SSE, reconnect/reload, and step-change reduction. They
+must not rename fields, infer identities, or maintain a second lifecycle model.
+The checked-in v1 convergence fixtures compare these shapes field-for-field.
+
+G9 v1 deliberately allows only one browser action in a blocked turn. Multiple
+service connections are separate sequential actions. On reload, the browser
+resumes from current-state `activeTask`, whose shape is identical to the live
+TaskPlan payload; it does not reconstruct a plan from action cards or text.
+
 Text, reasoning, tool-start, task, control, and terminal frames share the actor-owned progress sequence. `RUN_STARTED`, keepalive, and bounded endpoint-local setup failures are transport context and do not invent an actor sequence. A stream closes with exactly one terminal:
 
 - task and turn `succeeded`: `RUN_FINISHED`, status `completed`;
@@ -200,6 +246,32 @@ External-effect evidence is closed:
 
 The actor computes `retry`, `skip`, and `stop` availability. Retry requires rebuildable typed input plus proof that replay is safe: no effect occurred, or the exact logical operation is idempotent under a stable key. V1 does not persist tool arguments or capabilities, so an interrupted tool is never silently reconstructed. Skip requires an optional step or explicit safe-skip policy. UI code must not derive these actions independently.
 
+### Tool recovery provenance
+
+An authorized NyxID operation may provide an optional
+`readiness_capability_id` in its typed `NyxIdOperationRef`; its JSON name is
+`readinessCapabilityId`. Admission snapshots that exact producer-owned value
+beside the exact call safety. The turn result carries only the connected
+service ID, service slug, catalog service slug, and optional readiness
+capability ID into the conversation actor. It does not persist the descriptor's
+method, path, labels, arguments, or result.
+
+When the conversation actor creates the tool step, it copies the connected
+service ID to `source.tool.serviceId`, the route slug to
+`source.tool.serviceSlug`, and the readiness identity to
+`source.tool.readinessCapabilityId`. The catalog slug remains a distinct
+provider-provenance identity and is never substituted for any of those fields.
+If the producer omits readiness provenance, the actor and every projection omit
+`readinessCapabilityId`; Aevatar never derives it from tool names, failure text,
+service IDs, route slugs, catalog slugs, or route position.
+
+The committed tool step is the single source for both
+`nyxid.task.snapshot`/`nyxid.task.step.changed` and the current-state query.
+Passivation and reload therefore preserve the same recovery identity together
+with the unchanged `externalEffect` evidence and actor-computed
+`availableActions`. The failed and uncertain convergence examples are checked
+in under `test/Aevatar.AI.Tests/Fixtures/NyxIdChat/v1/`.
+
 ## Stop, steering, retry, and skip
 
 All controls use authenticated JSON requests to `POST /api/chat`. A successful response is `202 Accepted` and contains `requestId`, `commandId`, `correlationId`, and the canonical `stateUrl`; acceptance promises dispatch only. Observe committed outcome through AGUI or the state query.
@@ -233,7 +305,14 @@ Retry and skip validate the body `conversationId`, `turnId`, `taskId`, `stepId`,
 
 ## Pending input and tool approval
 
-Pending input is an actor-owned protobuf fact containing `requestId`, `turnId`, `taskId`, `stepId`, `prompt`, typed `options`, `askedAt`, `allowFreeText`, and `multiSelect`. Each option has an opaque stable `optionId` plus its display `label` and optional `description`. A production `ask_user` tool call authors the request for the exact active input step; a secret-free actor outbox retains that self-message until the pending fact commits. The actor then emits `nyxid.input.request`, and the projection session publishes that committed fact as a live frame. The request is not reconstructed from LLM text or browser state, and controller reload cannot lose it.
+Pending input is an actor-owned protobuf fact containing `requestId`, `turnId`, `taskId`, `stepId`, `prompt`, typed `options`, `askedAt`, `allowFreeText`, and `multiSelect`. Each option has an opaque stable `optionId` plus its display `label` and optional `description`. A choice question has 2-6 options. A free-text-only question has zero options, requires `allowFreeText=true`, and cannot be multi-select; one-option requests are always invalid. A production `ask_user` tool call authors the request for the exact active input step; a secret-free actor outbox retains that self-message until the pending fact commits. The actor then emits `nyxid.input.request`, and the projection session publishes that committed fact as a live frame. The request is not reconstructed from LLM text or browser state, and controller reload cannot lose it.
+
+Before Phase-1 execution, the assistant identifies all genuine information gaps.
+If any remain, it emits one `ask_user` call whose prose prompt combines those
+gaps into one editable question and waits for the answer before executing. It
+does not drip-feed separate questions. Suggested defaults are hints rather than
+accepted decisions. This remains one actor-owned pending input and one closed
+answer union, not a form or a collection of independently resolvable fields.
 
 The caller resolves input through the same public command surface:
 
@@ -436,7 +515,7 @@ Example `current` envelope:
 }
 ```
 
-The snapshot contains query-shaped safe data: active/latest/recent turns, ordered task steps, operation key/generation and phase, effect evidence, available actions, pending input, approval presentation, latest safe input/approval resolution facts, control fences, continuation admission, progress sequence, actor-authored attention, and actor version. It excludes submitted answers and reasons, transient capabilities, raw LLM/tool results, credentials, and actor runtime internals.
+The snapshot contains query-shaped safe data: active/latest/recent turns, ordered task steps and their typed sources, operation key/generation and phase, effect evidence, available actions, pending input, approval presentation, latest safe input/approval resolution facts, control fences, continuation admission, progress sequence, actor-authored attention, and actor version. A NyxID tool source may include the exact optional `readinessCapabilityId` described above. It excludes submitted answers and reasons, transient capabilities, raw LLM/tool results, credentials, and actor runtime internals.
 
 The read model is eventually consistent and says so through its actor-derived `stateVersion`. Writes are monotonic overwrite: newer replaces older, byte-equivalent equal-version duplicates are idempotent, equal-version conflicts fail, and older versions cannot overwrite newer state. Query-time priming and replay are forbidden.
 

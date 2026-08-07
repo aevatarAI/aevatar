@@ -49,6 +49,13 @@ public sealed class ServiceServingProjectorAndQueryTests
             ActivatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-03-15T02:00:00+00:00")),
             UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-03-15T03:00:00+00:00")),
         };
+        state.ActivationFailures["r-failed"] = new ServiceDeploymentActivationFailureRecord
+        {
+            RevisionId = "r-failed",
+            FailureCode = ServiceDeploymentActivationFailureCode.PreparedArtifactMissing,
+            FailureReason = "projection deadline exceeded",
+            OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-03-15T02:30:00+00:00")),
+        };
         await projector.ProjectAsync(
             context,
             BuildCommittedEnvelope(
@@ -74,6 +81,13 @@ public sealed class ServiceServingProjectorAndQueryTests
         snapshot.Deployments[0].RevisionId.Should().Be("r1");
         snapshot.Deployments[1].Status.Should().Be(ServiceDeploymentStatus.Active.ToString());
         snapshot.Deployments[1].RevisionId.Should().BeEmpty();
+        snapshot.ActivationFailures.Should().ContainSingle();
+        snapshot.ActivationFailures[0].RevisionId.Should().Be("r-failed");
+        snapshot.ActivationFailures[0].FailureCode
+            .Should().Be(ServiceDeploymentActivationFailureCode.PreparedArtifactMissing);
+        snapshot.ActivationFailures[0].FailureReason.Should().Be("projection deadline exceeded");
+        snapshot.ActivationFailures[0].OccurredAt
+            .Should().Be(DateTimeOffset.Parse("2026-03-15T02:30:00+00:00"));
     }
 
     [Fact]

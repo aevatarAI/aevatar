@@ -72,12 +72,22 @@ public sealed class ServiceReadModelCloneTests
                     PrimaryActorId = "actor-1",
                 },
             },
+            ActivationFailures =
+            {
+                new ServiceDeploymentActivationFailureReadModel
+                {
+                    RevisionId = "r-failed",
+                    FailureReason = "deadline exceeded",
+                },
+            },
         };
 
         var clone = source.Clone();
         clone.Deployments[0].RevisionId = "changed";
+        clone.ActivationFailures[0].FailureReason = "changed";
 
         source.Deployments[0].RevisionId.Should().Be("r1");
+        source.ActivationFailures[0].FailureReason.Should().Be("deadline exceeded");
     }
 
     [Fact]

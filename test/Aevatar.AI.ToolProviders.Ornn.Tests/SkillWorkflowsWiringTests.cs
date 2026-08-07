@@ -1,9 +1,8 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
-using Aevatar.GAgentService.Abstractions;
-using Aevatar.GAgentService.Abstractions.Ports;
 using FluentAssertions;
 using System.Text.Json;
 
@@ -238,13 +237,13 @@ public sealed class SkillWorkflowsWiringTests
     }
 
     [Fact]
-    public async Task UseSkillTool_MountWorkflowsFalse_DoesNotRequireApprovalAndDoesNotCallCommandPort()
+    public async Task UseSkillTool_MountWorkflowsFalse_DoesNotRequireApprovalAndDoesNotCallMountPort()
     {
         var catalog = CreateCatalogWithWorkflowSkill();
-        var commandPort = new RecordingScopeWorkflowCommandPort();
-        var tool = new UseSkillTool(catalog, scopeWorkflowCommandPort: commandPort);
+        var mountPort = new RecordingSkillWorkflowMountPort();
+        var tool = new UseSkillTool(catalog, workflowMountPort: mountPort);
 
-        tool.ApprovalMode.Should().Be(ToolApprovalMode.NeverRequire);
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
         tool.RequiresApproval("""{"skill":"translator"}""").Should().BeFalse();
         tool.RequiresApproval("""{"skill":"translator","mount_workflows":false}""").Should().BeFalse();
 
@@ -253,21 +252,78 @@ public sealed class SkillWorkflowsWiringTests
         output.Should().Contain("## Workflow Templates");
         output.Should().Contain("templates/import sources");
         output.Should().NotContain("## Mounted Workflows");
-        commandPort.Requests.Should().BeEmpty();
+        mountPort.Requests.Should().BeEmpty();
     }
 
     [Fact]
-    public void UseSkillTool_MountWorkflowsTrue_DoesNotRequireApproval()
+    public void UseSkillTool_MountPreviewIsReadOnly_AndConfirmedMountRequiresApproval()
     {
         var tool = new UseSkillTool(new LocalSkillCatalog());
+        const string tokenMount = """
+            {
+              "skill": "translator",
+              "mount_workflows": true,
+              "workflow_mount_confirmation_token": "sha256:alpha"
+            }
+            """;
 
-        tool.ApprovalMode.Should().Be(ToolApprovalMode.NeverRequire);
+        const string confirmedMount = """
+            {
+              "skill": "translator",
+              "mount_workflows": true,
+              "workflow_mount_confirmations": [
+                {
+                  "workflow_id": "translate_flow",
+                  "revision_id": "rev-skill-alpha",
+                  "workflow_bundle_digest": "sha256:alpha",
+                  "explicit_requests": []
+                }
+              ]
+            }
+            """;
+
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
         tool.RequiresApproval("""{"skill":"translator","mount_workflows":true}""").Should().BeFalse();
         ((IAgentTool)tool).GetCallSafety("""{"skill":"translator","mount_workflows":true}""").Should().Be(
             new AgentToolCallSafety(
                 RequiresApproval: false,
+                IsReadOnly: true,
+                IsDestructive: false));
+        tool.RequiresApproval(tokenMount).Should().BeTrue();
+        ((IAgentTool)tool).GetCallSafety(tokenMount).Should().Be(
+            new AgentToolCallSafety(
+                RequiresApproval: true,
                 IsReadOnly: false,
                 IsDestructive: false));
+        tool.RequiresApproval(confirmedMount).Should().BeTrue();
+        ((IAgentTool)tool).GetCallSafety(confirmedMount).Should().Be(
+            new AgentToolCallSafety(
+                RequiresApproval: true,
+                IsReadOnly: false,
+                IsDestructive: false));
+        tool.ParametersSchema.Should().Contain("workflow_mount_confirmation_token");
+    }
+
+    [Fact]
+    public async Task UseSkillTool_MountPreviewReceipt_ShouldRemainReadOnly()
+    {
+        using var _ = BeginContextScope(
+            scopeId: "scope-alpha",
+            token: "token-alpha",
+            nyxIdUserId: "nyx-user-alpha");
+        var catalog = CreateCatalogWithWorkflowSkill();
+        var tool = new UseSkillTool(catalog, workflowMountPort: new RecordingSkillWorkflowMountPort());
+        const string matchingArguments = "{\"skill\":\"translator\",\"mount_workflows\":true}";
+        var result = await tool.ExecuteAsync(matchingArguments);
+
+        var receipt = tool.CreateResultReceipt("call-mount", tool.Name, matchingArguments, result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.Effect.Should().Be(AgentToolReceiptEffect.ReadOnly);
+        receipt.SideEffectKind.Should().BeEmpty();
+        receipt.SubjectKind.Should().Be("ornn.skill");
+        receipt.SubjectId.Should().Be("translator");
     }
 
     [Fact]
@@ -277,15 +333,15 @@ public sealed class SkillWorkflowsWiringTests
         try
         {
             AgentToolRequestContext.Current = null;
-            var commandPort = new RecordingScopeWorkflowCommandPort();
-            var tool = new UseSkillTool(CreateCatalogWithWorkflowSkill(), scopeWorkflowCommandPort: commandPort);
+            var mountPort = new RecordingSkillWorkflowMountPort();
+            var tool = new UseSkillTool(CreateCatalogWithWorkflowSkill(), workflowMountPort: mountPort);
 
             var output = await tool.ExecuteAsync("""{"skill":"translator","mount_workflows":true}""");
 
             output.Should().Contain("## Mounted Workflows");
-            output.Should().Contain("\"success\": false");
-            output.Should().Contain("scope_id not available in request context");
-            commandPort.Requests.Should().BeEmpty();
+            output.Should().Contain("\"status\": \"missing_scope\"");
+            output.Should().Contain("scope_id is missing from the request context");
+            mountPort.Requests.Should().BeEmpty();
         }
         finally
         {
@@ -294,29 +350,32 @@ public sealed class SkillWorkflowsWiringTests
     }
 
     [Fact]
-    public async Task UseSkillTool_MountWorkflowsTrueWithoutCommandPort_ReturnsErrorAfterLoadingSkill()
+    public async Task UseSkillTool_MountWorkflowsTrueWithoutMountPort_ReturnsErrorAfterLoadingSkill()
     {
-        using var _ = BeginContextScope(scopeId: "scope-1");
+        using var _ = BeginContextScope(
+            scopeId: "scope-1",
+            token: "token-alpha",
+            nyxIdUserId: "nyx-user-alpha");
         var tool = new UseSkillTool(CreateCatalogWithWorkflowSkill());
 
         var output = await tool.ExecuteAsync("""{"skill":"translator","mount_workflows":true}""");
 
         output.Should().Contain("# translator");
         output.Should().Contain("## Mounted Workflows");
-        output.Should().Contain("scope workflow command port is not available in this host");
+        output.Should().Contain("Workflow mounting is not available in this host");
     }
 
     [Fact]
     public async Task UseSkillTool_MountWorkflowsTrueWithoutCallerAuthority_ReturnsMissingIdentityAndDoesNotUpsert()
     {
         using var _ = BeginContextScope(scopeId: "scope-alpha", ownerSubject: "owner-alpha");
-        var commandPort = new RecordingScopeWorkflowCommandPort();
-        var tool = new UseSkillTool(CreateCatalogWithWorkflowSkill(), scopeWorkflowCommandPort: commandPort);
+        var mountPort = new RecordingSkillWorkflowMountPort();
+        var tool = new UseSkillTool(CreateCatalogWithWorkflowSkill(), workflowMountPort: mountPort);
 
         var output = await tool.ExecuteAsync("""{"skill":"translator","mount_workflows":true}""");
 
         output.Should().Contain("\"status\": \"missing_identity\"");
-        commandPort.Requests.Should().BeEmpty();
+        mountPort.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -331,13 +390,13 @@ public sealed class SkillWorkflowsWiringTests
             Instructions = "body",
             Source = SkillSource.Local,
         });
-        var commandPort = new RecordingScopeWorkflowCommandPort();
-        var tool = new UseSkillTool(catalog, scopeWorkflowCommandPort: commandPort);
+        var mountPort = new RecordingSkillWorkflowMountPort();
+        var tool = new UseSkillTool(catalog, workflowMountPort: mountPort);
 
         var output = await tool.ExecuteAsync("""{"skill":"plain","mount_workflows":true}""");
 
-        output.Should().Contain("skill has no workflow descriptors to mount");
-        commandPort.Requests.Should().BeEmpty();
+        output.Should().Contain("The skill does not expose workflow YAML bundles");
+        mountPort.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -345,6 +404,7 @@ public sealed class SkillWorkflowsWiringTests
     {
         using var _ = BeginContextScope(
             scopeId: "scope-alpha",
+            token: "token-alpha",
             ownerSubject: "owner-alpha",
             nyxIdUserId: "nyx-user-alpha");
         var catalog = new LocalSkillCatalog();
@@ -363,15 +423,14 @@ public sealed class SkillWorkflowsWiringTests
                 },
             ],
         });
-        var commandPort = new RecordingScopeWorkflowCommandPort();
-        var tool = new UseSkillTool(catalog, scopeWorkflowCommandPort: commandPort);
+        var mountPort = new RecordingSkillWorkflowMountPort();
+        var tool = new UseSkillTool(catalog, workflowMountPort: mountPort);
 
         var output = await tool.ExecuteAsync("""{"skill":"translator","mount_workflows":true}""");
 
         output.Should().Contain("## Mounted Workflows");
-        output.Should().Contain("\"success\": false");
-        output.Should().Contain("skill workflow descriptor has no workflow_id");
-        commandPort.Requests.Should().BeEmpty();
+        output.Should().Contain("\"status\": \"invalid_workflow\"");
+        mountPort.Requests.Should().ContainSingle();
     }
 
     [Fact]
@@ -379,6 +438,7 @@ public sealed class SkillWorkflowsWiringTests
     {
         using var _ = BeginContextScope(
             scopeId: "scope-alpha",
+            token: "token-alpha",
             ownerSubject: "owner-alpha",
             nyxIdUserId: "nyx-user-alpha");
         var catalog = new LocalSkillCatalog();
@@ -397,57 +457,65 @@ public sealed class SkillWorkflowsWiringTests
                 },
             ],
         });
-        var commandPort = new RecordingScopeWorkflowCommandPort();
-        var tool = new UseSkillTool(catalog, scopeWorkflowCommandPort: commandPort);
+        var mountPort = new RecordingSkillWorkflowMountPort();
+        var tool = new UseSkillTool(catalog, workflowMountPort: mountPort);
 
         var output = await tool.ExecuteAsync("""{"skill":"translator","mount_workflows":true}""");
 
         output.Should().Contain("## Mounted Workflows");
-        output.Should().Contain("\"success\": false");
-        output.Should().Contain(@"skill workflow \u0027translate_flow\u0027 has no workflow YAML");
-        commandPort.Requests.Should().BeEmpty();
+        output.Should().Contain("\"status\": \"invalid_workflow\"");
+        mountPort.Requests.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task UseSkillTool_MountWorkflowsTrue_UpsertsAllSkillWorkflowsThroughScopeWorkflowCommandPort()
+    public async Task UseSkillTool_MountPreview_PassesAllSkillWorkflowsThroughMountPortWithoutMutation()
     {
         using var _ = BeginContextScope(
             scopeId: "scope-alpha",
+            token: "token-alpha",
             ownerSubject: "owner-alpha",
             nyxIdUserId: "nyx-user-alpha");
-        var commandPort = new RecordingScopeWorkflowCommandPort();
-        var tool = new UseSkillTool(CreateCatalogWithWorkflowSkill(), scopeWorkflowCommandPort: commandPort);
+        var mountPort = new RecordingSkillWorkflowMountPort();
+        var tool = new UseSkillTool(CreateCatalogWithWorkflowSkill(), workflowMountPort: mountPort);
 
         var output = await tool.ExecuteAsync("""{"skill":"translator","mount_workflows":true}""");
 
-        commandPort.Requests.Should().HaveCount(2);
-        commandPort.Requests[0].ScopeId.Should().Be("scope-alpha");
-        commandPort.Requests[0].WorkflowId.Should().Be("translate_flow");
-        commandPort.Requests[0].WorkflowYaml.Should().Be("name: translate_flow\nsteps: []\n");
-        commandPort.Requests[0].WorkflowName.Should().BeNull();
-        commandPort.Requests[0].DisplayName.Should().Be("translate_flow");
-        commandPort.Requests[0].InlineWorkflowYamls.Should().ContainSingle()
-            .Which.Should().Be(new KeyValuePair<string, string>("workflow_1", "name: helper_flow\nsteps: []\n"));
-        commandPort.Requests[0].CapabilityAdmission.Should().NotBeNull();
-        commandPort.Requests[0].CapabilityAdmission!.CallerId.Should().Be("nyx-user-alpha");
-        commandPort.Requests[1].WorkflowId.Should().Be("qa_flow");
-        commandPort.Requests[1].CapabilityAdmission.Should().NotBeNull();
-        commandPort.Requests[1].CapabilityAdmission!.CallerId.Should().Be("nyx-user-alpha");
+        mountPort.Requests.Should().ContainSingle();
+        mountPort.Requests[0].ScopeId.Should().Be("scope-alpha");
+        mountPort.Requests[0].CallerId.Should().Be("nyx-user-alpha");
+        mountPort.Requests[0].Workflows.Select(static workflow => workflow.WorkflowId)
+            .Should().Equal("translate_flow", "qa_flow");
+        mountPort.Requests[0].Workflows[0].WorkflowYamls.Should().Equal(
+            "name: translate_flow\nsteps: []\n",
+            "name: helper_flow\nsteps: []\n");
         output.Should().Contain("## Mounted Workflows");
-        output.Should().Contain("Workflow mount/import commands were accepted for dispatch through the Scope Workflow command path; read models may still be propagating before the workflows are page-visible or runnable.");
-        output.Should().Contain("\"accepted\": true");
-        output.Should().Contain("\"acceptance_stage\": \"accepted\"");
-        output.Should().Contain("\"propagation_stage\": \"readmodel_propagating\"");
-        output.Should().Contain("\"read_model_url\": \"/api/scopes/scope-alpha/workflows/translate_flow\"");
-        output.Should().Contain("\"command_handles\"");
-        output.Should().NotContain("already visible");
-        output.Should().NotContain("strongly consistent");
+        output.Should().Contain("\"status\": \"confirmation_required\"");
+        output.Should().Contain("\"confirmation_requests\"");
+    }
+
+    [Fact]
+    public async Task UseSkillTool_ConfirmedMount_PassesOpaqueConfirmationTokenWithoutMutation()
+    {
+        using var _ = BeginContextScope(
+            scopeId: "scope-alpha",
+            token: "token-alpha",
+            ownerSubject: "owner-alpha",
+            nyxIdUserId: "nyx-user-alpha");
+        var mountPort = new RecordingSkillWorkflowMountPort();
+        var tool = new UseSkillTool(CreateCatalogWithWorkflowSkill(), workflowMountPort: mountPort);
+
+        await tool.ExecuteAsync(
+            """{"skill":"translator","mount_workflows":true,"workflow_mount_confirmation_token":"sha256:opaque-alpha"}""");
+
+        mountPort.Requests.Should().ContainSingle();
+        mountPort.Requests[0].ConfirmationToken.Should().Be("sha256:opaque-alpha");
+        mountPort.Requests[0].Confirmations.Should().BeEmpty();
     }
 
     [Theory]
     [InlineData(AgentToolNyxIdCredentialKind.ProxyDelegation)]
     [InlineData(AgentToolNyxIdCredentialKind.Unspecified)]
-    public async Task UseSkillTool_MountWorkflowsTrue_WhenCredentialIsNotSourceReadable_ShouldOmitCallerCredential(
+    public async Task UseSkillTool_MountWorkflowsTrue_WhenCredentialIsNotSourceReadable_ShouldRejectBeforeMount(
         AgentToolNyxIdCredentialKind credentialKind)
     {
         using var _ = BeginContextScope(
@@ -456,22 +524,39 @@ public sealed class SkillWorkflowsWiringTests
             ownerSubject: "owner-alpha",
             nyxIdUserId: "nyx-user-alpha",
             credentialKind: credentialKind);
-        var commandPort = new RecordingScopeWorkflowCommandPort();
-        var tool = new UseSkillTool(CreateCatalogWithWorkflowSkill(), scopeWorkflowCommandPort: commandPort);
+        var mountPort = new RecordingSkillWorkflowMountPort();
+        var tool = new UseSkillTool(CreateCatalogWithWorkflowSkill(), workflowMountPort: mountPort);
 
         await tool.ExecuteAsync("""{"skill":"translator","mount_workflows":true}""");
 
-        commandPort.Requests.Should().HaveCount(2);
-        commandPort.Requests.Should().OnlyContain(request =>
-            request.CapabilityAdmission != null &&
-            request.CapabilityAdmission.NyxIdCallerCredential == null);
+        mountPort.Requests.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task UseSkillTool_MountWorkflowsTrue_PreservesDescriptorWorkflowIdAndLetsCommandPortParseYamlName()
+    public async Task UseSkillTool_MountWorkflowsTrue_WithProxyDelegation_UsesOnlySourceReadableCredential()
     {
         using var _ = BeginContextScope(
             scopeId: "scope-alpha",
+            token: "proxy-delegation-alpha",
+            sourceReadableToken: "source-readable-alpha",
+            ownerSubject: "owner-alpha",
+            nyxIdUserId: "nyx-user-alpha",
+            credentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation);
+        var mountPort = new RecordingSkillWorkflowMountPort();
+        var tool = new UseSkillTool(CreateCatalogWithWorkflowSkill(), workflowMountPort: mountPort);
+
+        await tool.ExecuteAsync("""{"skill":"translator","mount_workflows":true}""");
+
+        mountPort.Requests.Should().ContainSingle();
+        mountPort.Requests[0].SourceReadableNyxIdAccessToken.Should().Be("source-readable-alpha");
+    }
+
+    [Fact]
+    public async Task UseSkillTool_MountWorkflowsTrue_PreservesDescriptorWorkflowIdForMountPort()
+    {
+        using var _ = BeginContextScope(
+            scopeId: "scope-alpha",
+            token: "token-alpha",
             ownerSubject: "owner-alpha",
             nyxIdUserId: "nyx-user-alpha");
         var catalog = new LocalSkillCatalog();
@@ -490,16 +575,16 @@ public sealed class SkillWorkflowsWiringTests
                 },
             ],
         });
-        var commandPort = new RecordingScopeWorkflowCommandPort();
-        var tool = new UseSkillTool(catalog, scopeWorkflowCommandPort: commandPort);
+        var mountPort = new RecordingSkillWorkflowMountPort();
+        var tool = new UseSkillTool(catalog, workflowMountPort: mountPort);
 
         await tool.ExecuteAsync("""{"skill":"packaged-skill","mount_workflows":true}""");
 
-        commandPort.Requests.Should().ContainSingle();
-        commandPort.Requests[0].WorkflowId.Should().Be("packaged-entry");
-        commandPort.Requests[0].WorkflowYaml.Should().Be("name: parsed_entry\nsteps: []\n");
-        commandPort.Requests[0].WorkflowName.Should().BeNull();
-        commandPort.Requests[0].DisplayName.Should().Be("packaged-entry");
+        mountPort.Requests.Should().ContainSingle();
+        mountPort.Requests[0].Workflows.Should().ContainSingle();
+        mountPort.Requests[0].Workflows[0].WorkflowId.Should().Be("packaged-entry");
+        mountPort.Requests[0].Workflows[0].WorkflowYamls.Should()
+            .Equal("name: parsed_entry\nsteps: []\n");
     }
 
     [Fact]
@@ -525,13 +610,18 @@ public sealed class SkillWorkflowsWiringTests
                 },
             ],
         });
-        var commandPort = new RecordingScopeWorkflowCommandPort();
-        var tool = new UseSkillTool(new LocalSkillCatalog(), fetcher, commandPort);
+        var mountPort = new RecordingSkillWorkflowMountPort();
+        var tool = new UseSkillTool(
+            new LocalSkillCatalog(),
+            fetcher,
+            workflowMountPort: mountPort);
 
         var output = await tool.ExecuteAsync("""{"skill":"remote-translator","mount_workflows":true}""");
 
         fetcher.Requests.Should().ContainSingle().Which.Should().Be(("current-token", "remote-translator"));
-        commandPort.Requests.Should().ContainSingle().Which.WorkflowId.Should().Be("remote_flow");
+        mountPort.Requests.Should().ContainSingle();
+        mountPort.Requests[0].Workflows.Should().ContainSingle()
+            .Which.WorkflowId.Should().Be("remote_flow");
         output.Should().Contain("# remote-translator");
         output.Should().Contain("\"workflow_id\": \"remote_flow\"");
     }
@@ -612,6 +702,7 @@ public sealed class SkillWorkflowsWiringTests
     private static AgentToolRequestContextScope BeginContextScope(
         string? scopeId = null,
         string? token = null,
+        string? sourceReadableToken = null,
         string? ownerSubject = null,
         string? nyxIdUserId = null,
         AgentToolNyxIdCredentialKind credentialKind = AgentToolNyxIdCredentialKind.SourceReadableUserBearer)
@@ -629,6 +720,7 @@ public sealed class SkillWorkflowsWiringTests
             Credentials = context.Credentials with
             {
                 NyxIdCredentialKind = credentialKind,
+                SourceReadableNyxIdAccessToken = sourceReadableToken,
             },
         };
         if (!string.IsNullOrWhiteSpace(nyxIdUserId))
@@ -669,26 +761,45 @@ public sealed class SkillWorkflowsWiringTests
         }
     }
 
-    private sealed class RecordingScopeWorkflowCommandPort : IScopeWorkflowCommandPort
+    private sealed class RecordingSkillWorkflowMountPort : ISkillWorkflowMountPort
     {
-        public List<ScopeWorkflowUpsertRequest> Requests { get; } = [];
+        public List<SkillWorkflowMountRequest> Requests { get; } = [];
 
-        public Task<ScopeWorkflowUpsertResult> UpsertAsync(
-            ScopeWorkflowUpsertRequest request,
+        public Task<SkillWorkflowMountResult> MountAsync(
+            SkillWorkflowMountRequest request,
             CancellationToken ct = default)
         {
             Requests.Add(request);
-            return Task.FromResult(new ScopeWorkflowUpsertResult(
-                request.ScopeId,
-                request.WorkflowId,
-                $"service-key-{request.WorkflowId}",
-                $"revision-{request.WorkflowId}",
-                "definition-prefix",
-                $"actor-{request.WorkflowId}",
-                $"deployment-{request.WorkflowId}",
-                DateTimeOffset.UnixEpoch,
-                [new ScopeWorkflowCommandAcceptedHandle("create_revision", "target-actor", "cmd-1", "corr-1")],
-                $"/api/scopes/{request.ScopeId}/workflows/{request.WorkflowId}"));
+            if (request.Workflows.Any(static workflow => string.IsNullOrWhiteSpace(workflow.WorkflowId)) ||
+                request.Workflows.Any(static workflow =>
+                    workflow.WorkflowYamls.Count == 0 ||
+                    workflow.WorkflowYamls.All(string.IsNullOrWhiteSpace)))
+            {
+                return Task.FromResult(new SkillWorkflowMountResult(
+                    "invalid_workflow",
+                    false,
+                    [],
+                    "The skill workflow bundle is invalid.",
+                    FailureCode: "USE_SKILL_MOUNT_INVALID_WORKFLOW"));
+            }
+
+            var confirmations = request.Workflows.Select(workflow =>
+                new SkillWorkflowMountConfirmation(
+                    workflow.WorkflowId,
+                    $"rev-{workflow.WorkflowId}",
+                    $"sha256:{workflow.WorkflowId}",
+                    [])).ToArray();
+            return Task.FromResult(new SkillWorkflowMountResult(
+                "confirmation_required",
+                false,
+                [],
+                "Review before mounting.",
+                confirmations.Select(confirmation => new SkillWorkflowMountPreview(
+                    confirmation.WorkflowId,
+                    confirmation.RevisionId,
+                    confirmation.WorkflowBundleDigest,
+                    [],
+                    confirmation)).ToArray()));
         }
     }
 

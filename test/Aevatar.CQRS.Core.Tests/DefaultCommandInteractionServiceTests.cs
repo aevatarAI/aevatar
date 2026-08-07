@@ -137,6 +137,44 @@ public sealed class DefaultCommandInteractionServiceTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenAcceptedCommandProducesNoFrame_ShouldFailAtObservationDeadline()
+    {
+        var timeout = TimeSpan.FromSeconds(30);
+        var timeProvider = new ManualTimeoutTimeProvider();
+        var sink = new EventChannel<string>();
+        var target = new TestTarget("target-1", sink);
+        var receipt = new TestReceipt("target-1", "receipt-silent");
+        var pipeline = new TestDispatchPipeline(
+            CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                CreateExecution(target, receipt, commandId: "cmd-silent")));
+        var accepted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = CreateService(
+            pipeline,
+            acceptedObservationTimeout: timeout,
+            timeProvider: timeProvider);
+
+        var resultTask = service.ExecuteAsync(
+            "command-silent",
+            static (_, _) => ValueTask.CompletedTask,
+            (_, _) =>
+            {
+                accepted.TrySetResult();
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None);
+
+        await accepted.Task;
+        await timeProvider.TimerCreated.Task;
+        timeProvider.Fire();
+
+        var act = async () => await resultTask;
+        var exception = await act.Should().ThrowAsync<CommandObservationTimeoutException>();
+        exception.Which.Timeout.Should().Be(timeout);
+        target.ReleaseCalls.Should().ContainSingle();
+        target.ReleaseCalls[0].Cleanup.DurableCompletion.HasTerminalCompletion.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenDispatchFailsAfterPumpStarts_ShouldCancelPumpAndNotEmitAccepted()
     {
         var order = new List<string>();
@@ -701,7 +739,9 @@ public sealed class DefaultCommandInteractionServiceTests
         ICommandReceiptFactory<TestTarget, TestReceipt>? receiptFactory = null,
         ICommandObservationScopeLeasePreparation<string, TestTarget, TestReceipt, string>? observationScopePreparation = null,
         IEventOutputStream<string, string>? outputStream = null,
-        bool probeDurableCompletionWhileLive = false) =>
+        bool probeDurableCompletionWhileLive = false,
+        TimeSpan? acceptedObservationTimeout = null,
+        TimeProvider? timeProvider = null) =>
         new(
             dispatchPipeline,
             outputStream ?? new DefaultEventOutputStream<string, string>(new PassThroughFrameMapper()),
@@ -712,7 +752,9 @@ public sealed class DefaultCommandInteractionServiceTests
             observationLifecycle,
             receiptFactory,
             observationScopePreparation,
-            probeDurableCompletionWhileLive);
+            probeDurableCompletionWhileLive,
+            acceptedObservationTimeout,
+            timeProvider);
 
     private static CommandDispatchExecution<TestTarget, TestReceipt> CreateExecution(
         TestTarget target,
@@ -727,6 +769,50 @@ public sealed class DefaultCommandInteractionServiceTests
         };
 
     private sealed record TestReceipt(string TargetId, string ReceiptId);
+
+    private sealed class ManualTimeoutTimeProvider : TimeProvider
+    {
+        private ManualTimer? _timer;
+
+        public TaskCompletionSource TimerCreated { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            _timer = new ManualTimer(callback, state);
+            TimerCreated.TrySetResult();
+            return _timer;
+        }
+
+        public void Fire() =>
+            (_timer ?? throw new InvalidOperationException("No timeout timer was created.")).Fire();
+
+        private sealed class ManualTimer(TimerCallback callback, object? state) : ITimer
+        {
+            private int _disposed;
+
+            public bool Change(TimeSpan dueTime, TimeSpan period) =>
+                Volatile.Read(ref _disposed) == 0;
+
+            public void Dispose() => Interlocked.Exchange(ref _disposed, 1);
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+
+            public void Fire()
+            {
+                if (Volatile.Read(ref _disposed) == 0)
+                    callback(state);
+            }
+        }
+    }
 
     private sealed class TestTarget(string targetId, IEventSink<string> sink)
         : ICommandEventTarget<string>,

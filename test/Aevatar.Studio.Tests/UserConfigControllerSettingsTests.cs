@@ -29,7 +29,7 @@ public sealed class UserConfigControllerSettingsTests
                   "display_name": "OpenAI Work",
                   "route_value": "/api/v1/proxy/s/openai-work",
                   "default_model": "gpt-5.4",
-                  "models": ["gpt-5.4"],
+                  "models": ["gpt-5.4", "gpt-5.5"],
                   "status": "ready",
                   "source": "user",
                   "allowed": true
@@ -39,7 +39,7 @@ public sealed class UserConfigControllerSettingsTests
             """),
             (HttpStatusCode.OK, """{"keys":[]}"""),
             (HttpStatusCode.OK, """{"services":[]}"""))
-            .RespondToUserServicesWith(PersonalUserServicesJson("us-openai", "openai-work", "OpenAI Work"));
+            .RespondToUserServicesWith(PersonalUserServicesJson("us-openai", "openai-work", "OpenAI Work", "gpt-5.5"));
         var controller = CreateController(
             current: UserServiceConfig("gpt-5.4", "openai-work", "us-openai"),
             httpHandler: httpHandler,
@@ -59,7 +59,7 @@ public sealed class UserConfigControllerSettingsTests
         payload.RouteOptions.Should().Contain(option =>
             option.UserServiceId == "us-openai" &&
             option.Ready &&
-            option.ModelCatalog.DefaultModelId == "gpt-5.4");
+            option.ModelCatalog.DefaultModelId == "gpt-5.5");
         payload.RouteOptions.Should()
             .ContainSingle(option => option.RouteValue == UserConfigLlmRouteDefaults.Gateway)
             .Which.ModelCatalog.Certainty.Should().Be("unavailable");
@@ -72,6 +72,55 @@ public sealed class UserConfigControllerSettingsTests
                 "/api/v1/keys",
                 "/api/v1/proxy/services?per_page=100",
                 "/api/v1/user-services");
+    }
+
+    [Fact]
+    public async Task GetLlmSettings_WhenInventoryLacksModelCatalog_ShouldProbeProxyModelsAndPreferGpt55Default()
+    {
+        var httpHandler = new RecordingHttpHandler(
+            (HttpStatusCode.OK, """{"services":[]}"""),
+            (HttpStatusCode.OK, """{"keys":[]}"""),
+            (HttpStatusCode.OK, """{"services":[]}"""))
+            .RespondToUserServicesWith(PersonalUserServicesJson(
+                "us-chrono-public",
+                "chrono-llm-public",
+                "Chrono LLM (public)"))
+            .RespondToPathWith(
+                "/api/v1/proxy/s/chrono-llm-public/models",
+                """
+                {
+                  "object": "list",
+                  "data": [
+                    { "id": "gpt-5.4", "object": "model" },
+                    { "id": "gpt-5.5", "object": "model" }
+                  ]
+                }
+                """);
+        var controller = CreateController(
+            current: UserServiceConfig("", "chrono-llm-public", "us-chrono-public"),
+            httpHandler: httpHandler,
+            bearerToken: "user-token-1");
+
+        var response = await controller.GetLlmSettings(CancellationToken.None);
+
+        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var payload = ok.Value.Should().BeOfType<UserLlmSettingsResponse>().Subject;
+        var option = payload.RouteOptions.Should()
+            .ContainSingle(candidate => candidate.UserServiceId == "us-chrono-public")
+            .Subject;
+        option.ModelCatalog.DefaultModelId.Should().Be("gpt-5.5");
+        option.ModelCatalog.ModelIds.Should().Equal("gpt-5.4", "gpt-5.5");
+        payload.ModelGroupsByRoute.Should()
+            .ContainSingle(group => group.RouteValue == "/api/v1/proxy/s/chrono-llm-public")
+            .Which.Models.Should().Equal("gpt-5.4", "gpt-5.5");
+        httpHandler.Requests.Select(request => request.Path)
+            .Should()
+            .Equal(
+                "/api/v1/llm/services",
+                "/api/v1/keys",
+                "/api/v1/proxy/services?per_page=100",
+                "/api/v1/user-services",
+                "/api/v1/proxy/s/chrono-llm-public/models");
     }
 
     [Fact]
@@ -438,7 +487,8 @@ public sealed class UserConfigControllerSettingsTests
               ]
             }
             """))
-            .RespondToUserServicesWith(PersonalUserServicesJson("us-chrono", "chrono-llm", "Chrono LLM"));
+            .RespondToUserServicesWith(PersonalUserServicesJson("us-chrono", "chrono-llm", "Chrono LLM"))
+            .RespondToPathWith("/api/v1/proxy/s/chrono-llm/models", """{"data":[]}""");
         var controller = CreateController(
             current: UserServiceConfig("gpt-5.5", "chrono-llm", "us-chrono"),
             httpHandler: httpHandler,
@@ -462,7 +512,8 @@ public sealed class UserConfigControllerSettingsTests
                 "/api/v1/llm/services",
                 "/api/v1/keys",
                 "/api/v1/proxy/services?per_page=100",
-                "/api/v1/user-services");
+                "/api/v1/user-services",
+                "/api/v1/proxy/s/chrono-llm/models");
     }
 
     [Fact]
@@ -846,20 +897,42 @@ public sealed class UserConfigControllerSettingsTests
         BuildNyxIdConfiguration(),
         NullLogger<NyxIdLlmCatalogHttpClient>.Instance);
 
-    private static string PersonalUserServicesJson(string id, string slug, string label) => $$"""
+    private static string PersonalUserServicesJson(string id, string slug, string label, string? defaultModel = null)
+    {
+        if (string.IsNullOrWhiteSpace(defaultModel))
         {
-          "services": [
-            {
-              "id": "{{id}}",
-              "slug": "{{slug}}",
-              "label": "{{label}}",
-              "catalog_service_name": "{{label}}",
-              "is_active": true,
-              "credential_source": { "type": "personal" }
-            }
-          ]
+            return $$"""
+                {
+                  "services": [
+                    {
+                      "id": "{{id}}",
+                      "slug": "{{slug}}",
+                      "label": "{{label}}",
+                      "catalog_service_name": "{{label}}",
+                      "is_active": true,
+                      "credential_source": { "type": "personal" }
+                    }
+                  ]
+                }
+                """;
         }
-        """;
+
+        return $$"""
+            {
+              "services": [
+                {
+                  "id": "{{id}}",
+                  "slug": "{{slug}}",
+                  "label": "{{label}}",
+                  "catalog_service_name": "{{label}}",
+                  "is_active": true,
+                  "credential_source": { "type": "personal" },
+                  "default_model": "{{defaultModel}}"
+                }
+              ]
+            }
+            """;
+    }
 
     private static string SingleReadyServiceJson() => """
         {
@@ -969,6 +1042,7 @@ public sealed class UserConfigControllerSettingsTests
     {
         private readonly Queue<(HttpStatusCode StatusCode, string Body)> _responses;
         private readonly (HttpStatusCode StatusCode, string Body) _fallback;
+        private readonly Dictionary<string, (HttpStatusCode StatusCode, string Body)> _pathResponses = new(StringComparer.Ordinal);
         private (HttpStatusCode StatusCode, string Body) _userServicesResponse =
             (HttpStatusCode.OK, """{"services":[]}""");
 
@@ -995,20 +1069,32 @@ public sealed class UserConfigControllerSettingsTests
             return this;
         }
 
+        public RecordingHttpHandler RespondToPathWith(
+            string path,
+            string body,
+            HttpStatusCode statusCode = HttpStatusCode.OK)
+        {
+            _pathResponses[path] = (statusCode, body);
+            return this;
+        }
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
+            var pathAndQuery = request.RequestUri?.PathAndQuery ?? string.Empty;
             Requests.Add((
-                request.RequestUri?.PathAndQuery ?? string.Empty,
+                pathAndQuery,
                 request.Method.Method,
                 request.Headers.Authorization?.ToString(),
                 request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
-            var response = request.RequestUri?.AbsolutePath == "/api/v1/user-services"
-                ? _userServicesResponse
-                : _responses.Count > 0
-                    ? _responses.Dequeue()
-                    : _fallback;
+            var response = _pathResponses.TryGetValue(pathAndQuery, out var pathResponse)
+                ? pathResponse
+                : request.RequestUri?.AbsolutePath == "/api/v1/user-services"
+                    ? _userServicesResponse
+                    : _responses.Count > 0
+                        ? _responses.Dequeue()
+                        : _fallback;
             return new HttpResponseMessage(response.StatusCode)
             {
                 Content = new StringContent(response.Body, System.Text.Encoding.UTF8, "application/json"),

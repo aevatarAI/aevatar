@@ -30,15 +30,23 @@ internal static class NyxIdProxyReceiptFactory
                 serviceLabel,
                 resourceUri);
 
+        var isServiceScopeForbidden = error.HttpStatus == 403 &&
+                                      string.Equals(
+                                          error.ErrorKey,
+                                          "api_key_scope_forbidden",
+                                          StringComparison.OrdinalIgnoreCase);
         var errorCode = error.HttpStatus switch
         {
             401 => "NYXID_PROXY_UNAUTHORIZED",
+            403 when isServiceScopeForbidden => "NYXID_PROXY_SERVICE_SCOPE_FORBIDDEN",
             403 => "NYXID_PROXY_FORBIDDEN",
             _ => $"NYXID_PROXY_HTTP_{error.HttpStatus}",
         };
-        var safeMessage = error.HttpStatus == 403
-            ? "The service request was denied."
-            : "The service request failed.";
+        var safeMessage = isServiceScopeForbidden
+            ? "The NyxID caller credential is not authorized for this service."
+            : error.HttpStatus == 403
+                ? "The service request was denied."
+                : "The service request failed.";
 
         return CreateError(
             callId,

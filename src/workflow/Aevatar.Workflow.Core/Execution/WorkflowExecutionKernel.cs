@@ -19,7 +19,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         Compensation,
     }
 
-    private const string ModuleStateKey = "workflow_execution_kernel";
+    internal const string ModuleStateKey = "workflow_execution_kernel";
     private const string WorkflowCallInvocationIdParameterKey = "workflow_call.invocation_id";
     private const int DefaultCompensationTimeoutMs = 30_000;
     private const int CompensationPhaseDeadlineMs = 300_000;
@@ -132,6 +132,17 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
 
             if (IsDuplicateWorkflowCallStart(state, evt, runId))
                 return;
+
+            // Top-level starts do not carry a workflow-call invocation id. The run actor and
+            // envelope identity already provide the idempotency boundary, so an at-least-once
+            // redelivery for the same run must not turn that run into a terminal failure.
+            if (IsActiveRun(state, runId) && !HasWorkflowCallInvocationId(evt))
+            {
+                ctx.Logger.LogDebug(
+                    "workflow_loop: ignore duplicate top-level start run={RunId}",
+                    runId);
+                return;
+            }
 
             await PublishWorkflowCompletedAsync(
                 ctx,
@@ -504,7 +515,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 return;
             }
 
-            await DispatchStepAsync(next, evt.Output ?? string.Empty, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
+            await DispatchStepAsync(next, evt.Output ?? string.Empty, state.InputFileRefs, state, WorkflowStepDispatchKind.Forward, ctx, ct);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
@@ -1097,7 +1108,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     }
                     else
                     {
-                        await DispatchStepAsync(next, output, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
+                        await DispatchStepAsync(next, output, state.InputFileRefs, state, WorkflowStepDispatchKind.Forward, ctx, ct);
                     }
 
                     return true;
@@ -1118,7 +1129,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     var fallbackInput = string.IsNullOrWhiteSpace(evt.Output)
                         ? evt.Error ?? string.Empty
                         : evt.Output;
-                    await DispatchStepAsync(fallback, fallbackInput, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
+                    await DispatchStepAsync(fallback, fallbackInput, state.InputFileRefs, state, WorkflowStepDispatchKind.Forward, ctx, ct);
                     return true;
                 }
             default:
@@ -1151,6 +1162,17 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         try
         {
             var fileRefs = inputFileRefs.Select(static fileRef => fileRef.Clone()).ToArray();
+            var firstFileRef = fileRefs.FirstOrDefault();
+            ctx.Logger.LogWarning(
+                "Workflow step input file refs dispatching. runId={RunId} stepId={StepId} stepType={StepType} dispatchKind={DispatchKind} inputFileRefCount={InputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+                state.RunId,
+                step.Id,
+                WorkflowPrimitiveCatalog.ToCanonicalType(step.Type),
+                dispatchKind,
+                fileRefs.Length,
+                firstFileRef?.FileId ?? string.Empty,
+                firstFileRef?.ArtifactId ?? string.Empty,
+                firstFileRef?.MediaType ?? string.Empty);
             var request = BuildStepRequest(step, input, fileRefs, state, ctx);
             var idempotency = ResolveAndPersistStepIdempotency(step, state);
             request.IdempotencyKey = idempotency.IdempotencyKey;
@@ -1329,9 +1351,13 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         return resolved;
     }
 
-    private static bool ShouldDeferWhileParameterEvaluation(string canonicalStepType, string parameterKey) =>
-        string.Equals(canonicalStepType, "while", StringComparison.OrdinalIgnoreCase) &&
-        (string.Equals(parameterKey, "condition", StringComparison.OrdinalIgnoreCase) ||
+    private static bool ShouldDeferParameterEvaluation(string canonicalStepType, string parameterKey) =>
+        (string.Equals(canonicalStepType, "while", StringComparison.OrdinalIgnoreCase) &&
+         string.Equals(parameterKey, "condition", StringComparison.OrdinalIgnoreCase)) ||
+        ((string.Equals(canonicalStepType, "foreach", StringComparison.OrdinalIgnoreCase) ||
+          string.Equals(canonicalStepType, "while", StringComparison.OrdinalIgnoreCase) ||
+          string.Equals(canonicalStepType, "parallel", StringComparison.OrdinalIgnoreCase) ||
+          string.Equals(canonicalStepType, "race", StringComparison.OrdinalIgnoreCase)) &&
          parameterKey.StartsWith("sub_param_", StringComparison.OrdinalIgnoreCase));
 
     private static bool IsTimeoutError(string? error) =>
@@ -1604,30 +1630,52 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
-        if (!state.Active &&
-            string.IsNullOrWhiteSpace(state.RunId) &&
-            string.IsNullOrWhiteSpace(state.CurrentStepId) &&
-            string.IsNullOrWhiteSpace(state.CurrentStepInput) &&
-            !state.CurrentStepDispatchPending &&
-            string.IsNullOrWhiteSpace(state.CurrentStepTimeoutCallbackId) &&
-            state.Variables.Count == 0 &&
-            state.RetryAttemptsByStepId.Count == 0 &&
-            state.TimeoutsByStepId.Count == 0 &&
-            state.RetryBackoffsByStepId.Count == 0 &&
-            string.IsNullOrWhiteSpace(state.CompensationPhaseDeadlineCallbackId) &&
-            state.CompensationPhaseDeadlineLease == null &&
-            state.ExecutionIdsByStepId.Count == 0 &&
-            state.IdempotencyByStepId.Count == 0 &&
-            state.CompensationExecutionIdsByStepId.Count == 0 &&
-            state.InputFileRefs.Count == 0 &&
-            state.CurrentStepInputFileRefs.Count == 0 &&
-            IsEmptyUsage(state.Usage))
+        if (IsEmptyState(state))
         {
             return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
         }
 
         return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
     }
+
+    internal static bool NormalizeTerminalState(WorkflowExecutionKernelState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+
+        state.Active = false;
+        state.RunId = string.Empty;
+        state.CurrentStepDispatchPending = false;
+        state.CurrentStepTimeoutCallbackId = string.Empty;
+        state.CompensationPhaseDeadlineCallbackId = string.Empty;
+        state.CompensationPhaseDeadlineLease = null;
+        state.InputFileRefs.Clear();
+        state.RetryAttemptsByStepId.Clear();
+        state.TimeoutsByStepId.Clear();
+        state.RetryBackoffsByStepId.Clear();
+        state.ExecutionIdsByStepId.Clear();
+
+        return IsEmptyState(state);
+    }
+
+    private static bool IsEmptyState(WorkflowExecutionKernelState state) =>
+        !state.Active &&
+        string.IsNullOrWhiteSpace(state.RunId) &&
+        string.IsNullOrWhiteSpace(state.CurrentStepId) &&
+        string.IsNullOrWhiteSpace(state.CurrentStepInput) &&
+        !state.CurrentStepDispatchPending &&
+        string.IsNullOrWhiteSpace(state.CurrentStepTimeoutCallbackId) &&
+        state.Variables.Count == 0 &&
+        state.RetryAttemptsByStepId.Count == 0 &&
+        state.TimeoutsByStepId.Count == 0 &&
+        state.RetryBackoffsByStepId.Count == 0 &&
+        string.IsNullOrWhiteSpace(state.CompensationPhaseDeadlineCallbackId) &&
+        state.CompensationPhaseDeadlineLease == null &&
+        state.ExecutionIdsByStepId.Count == 0 &&
+        state.IdempotencyByStepId.Count == 0 &&
+        state.CompensationExecutionIdsByStepId.Count == 0 &&
+        state.InputFileRefs.Count == 0 &&
+        state.CurrentStepInputFileRefs.Count == 0 &&
+        IsEmptyUsage(state.Usage);
 
     private static bool MatchesCurrentStep(WorkflowExecutionKernelState state, string? stepId) =>
         !string.IsNullOrWhiteSpace(stepId) &&
@@ -1655,6 +1703,10 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         return state.Variables.TryGetValue(WorkflowCallInvocationIdParameterKey, out var activeInvocationId) &&
                string.Equals(activeInvocationId, requestedInvocationId.Trim(), StringComparison.Ordinal);
     }
+
+    private static bool HasWorkflowCallInvocationId(StartWorkflowEvent evt) =>
+        evt.Parameters.TryGetValue(WorkflowCallInvocationIdParameterKey, out var invocationId) &&
+        !string.IsNullOrWhiteSpace(invocationId);
 
     private static void ApplyStepUsage(
         StepCompletedEvent evt,
@@ -1878,7 +1930,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.Variables["input"] = input;
         foreach (var (key, value) in step.Parameters)
         {
-            if (ShouldDeferWhileParameterEvaluation(canonicalStepType, key))
+            if (ShouldDeferParameterEvaluation(canonicalStepType, key))
             {
                 request.Parameters[key] = value;
                 continue;

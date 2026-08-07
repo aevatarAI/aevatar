@@ -90,6 +90,8 @@ public sealed class AevatarInvocationToolSourceTests
         var tool = await DiscoverSingleAsync(new StartWorkflowToolSource(new Harness().CreateDispatcher()));
 
         tool.Description.Should().Contain("mounted/imported Aevatar Scope Workflow");
+        tool.Description.Should().Contain("run_id is the workflow run actor id");
+        tool.Description.Should().Contain("command_id is the start command/tool-call id");
         tool.Description.Should().Contain("workflow_yamls");
         tool.Description.Should().Contain("explicit fallback");
         tool.Description.Should().Contain("templates/import sources");
@@ -131,7 +133,37 @@ public sealed class AevatarInvocationToolSourceTests
 
         required.Should().BeEquivalentTo("member_id", "payload");
         doc.RootElement.GetProperty("properties").TryGetProperty("endpoint_id", out _).Should().BeTrue();
+        doc.RootElement.GetProperty("properties").GetProperty("wait").GetProperty("enum")
+            .EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should().BeEquivalentTo("ack", "stream");
         tool.Description.Should().Contain("defaults to chat");
+        tool.Description.Should().Contain("acceptance only");
+        tool.Description.Should().Contain("aevatar_observe_run");
+        tool.Description.Should().Contain("not complete");
+        tool.SideEffectKind.Should().Be("studio.member.run-dispatch");
+        tool.TurnReusePolicy.Should().Be(AgentToolTurnReusePolicy.RetireAfterSuccess);
+    }
+
+    [Fact]
+    public async Task InvokeMember_WaitComplete_ShouldRejectBeforeDispatch()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_member");
+
+        using var _ = PushContext(callId: "call-member-complete");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "m-alpha",
+              "payload": { "prompt": "run once" },
+              "wait": "complete"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().Be("unsupported_wait_mode");
+        output.Should().Contain("aevatar_observe_run");
+        harness.MemberResolver.LastMemberId.Should().BeNull();
+        harness.ServiceInvocationDispatcher.Calls.Should().BeEmpty();
     }
 
     [Fact]
@@ -144,11 +176,13 @@ public sealed class AevatarInvocationToolSourceTests
         tool.Name.Should().Be("aevatar_read_workflow_run_artifact");
         tool.IsReadOnly.Should().BeTrue();
         tool.Description.Should().Contain("aevatar_start_workflow");
+        tool.Description.Should().Contain("always pass both");
         tool.Description.Should().Contain("pending");
         doc.RootElement.GetProperty("type").GetString().Should().Be("object");
         doc.RootElement.GetProperty("additionalProperties").GetBoolean().Should().BeFalse();
         doc.RootElement.GetProperty("required")[0].GetString().Should().Be("workflow_run_id");
         doc.RootElement.GetProperty("properties").TryGetProperty("workflow_run_id", out _).Should().BeTrue();
+        doc.RootElement.GetProperty("properties").TryGetProperty("actor_id", out _).Should().BeTrue();
         doc.RootElement.GetProperty("properties").TryGetProperty("wait_ms", out _).Should().BeTrue();
     }
 
@@ -848,6 +882,251 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task InvokeTeam_WhenPublishedWorkflowPayloadOmitsFileRef_ShouldForwardAmbientInputFileRefs()
+    {
+        var harness = new Harness();
+        harness.TeamResolver.Resolution = new TeamEntryMemberResolution(
+            "scope-1",
+            "team-1",
+            "m-alpha",
+            "svc-team-workflow");
+        harness.ConfigureServiceTarget(
+            ServiceImplementationKind.Workflow,
+            serviceId: "svc-team-workflow",
+            endpointId: "chat",
+            primaryActorId: "workflow-definition-actor");
+        harness.ServiceInvocationDispatcher.Receipt = new ServiceInvocationAcceptedReceipt
+        {
+            RequestId = "team-ambient-command",
+            ServiceKey = "tenant:aevatar-service:default:svc-team-workflow",
+            DeploymentId = "deployment-team-workflow",
+            TargetActorId = "workflow-run-actor",
+            EndpointId = "chat",
+            CommandId = "team-ambient-command",
+            CorrelationId = "team-ambient-correlation",
+            RunId = "team-ambient-run",
+        };
+        var dispatcher = harness.CreateDispatcher();
+        var ambientFileRef = BuildInputFileRef(
+            "file-team-ambient",
+            "workflow-file://file-team-ambient",
+            "team-ambient.pdf");
+
+        using var _ = PushContext(
+            callId: "call-team-ambient-file-ref",
+            inputFileRefs: [ambientFileRef]);
+        var request = BuildChatRunRequest(
+            "response-team-ambient-file-ref",
+            "tool-call-team-ambient-file-ref",
+            "aevatar_invoke_team",
+            """
+            {
+              "team_id": "team-1",
+              "endpoint_id": "chat",
+              "payload": { "prompt": "process ambient invoice" },
+              "wait": "stream"
+            }
+            """);
+
+        var result = await dispatcher.InvokeTeamForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().BeEmpty(result.ToolExecutionResultJson);
+        var dispatch = harness.ServiceInvocationDispatcher.Calls.Should().ContainSingle().Subject;
+        var chatPayload = dispatch.Request.Payload!.Unpack<ChatRequestEvent>();
+        var inputPart = chatPayload.InputParts.Should().ContainSingle().Subject;
+        inputPart.FileRef.Should().NotBeNull();
+        inputPart.FileRef!.FileId.Should().Be("file-team-ambient");
+        inputPart.FileRef.ArtifactId.Should().Be("workflow-file://file-team-ambient");
+        inputPart.FileRef.SourceMessageId.Should().Be("om_file-team-ambient");
+        inputPart.FileRef.SourceResourceKey.Should().Be("resource_file-team-ambient");
+        inputPart.FileRef.FileName.Should().Be("team-ambient.pdf");
+        inputPart.FileRef.MediaType.Should().Be("application/pdf");
+        inputPart.FileRef.SizeBytes.Should().Be(789);
+        harness.ServiceInvocationResolution.LastRequest!.Payload!.Unpack<ChatRequestEvent>()
+            .InputParts.Should().BeEmpty("service resolution must not mutate the explicit payload");
+        harness.AdmissionAuthorizer.Calls.Should().ContainSingle().Subject.Request.Payload!
+            .Unpack<ChatRequestEvent>().InputParts.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task InvokeMember_WhenPublishedWorkflowPayloadOmitsFileRef_ShouldForwardAmbientInputFileRefs()
+    {
+        var harness = new Harness();
+        harness.MemberResolver.Resolution = new MemberPublishedServiceResolution(
+            "scope-1",
+            "m-alpha",
+            "svc-member-workflow");
+        harness.ConfigureServiceTarget(
+            ServiceImplementationKind.Workflow,
+            serviceId: "svc-member-workflow",
+            endpointId: "chat",
+            primaryActorId: "workflow-definition-actor");
+        harness.ServiceInvocationDispatcher.Receipt = new ServiceInvocationAcceptedReceipt
+        {
+            RequestId = "member-ambient-command",
+            ServiceKey = "tenant:aevatar-service:default:svc-member-workflow",
+            DeploymentId = "deployment-member-workflow",
+            TargetActorId = "workflow-run-actor",
+            EndpointId = "chat",
+            CommandId = "member-ambient-command",
+            CorrelationId = "member-ambient-correlation",
+            RunId = "member-ambient-run",
+        };
+        var dispatcher = harness.CreateDispatcher();
+        var ambientFileRef = BuildInputFileRef(
+            "file-member-ambient",
+            "workflow-file://file-member-ambient",
+            "member-ambient.pdf");
+
+        using var _ = PushContext(
+            callId: "call-member-ambient-file-ref",
+            inputFileRefs: [ambientFileRef]);
+        var request = BuildChatRunRequest(
+            "response-member-ambient-file-ref",
+            "tool-call-member-ambient-file-ref",
+            "aevatar_invoke_member",
+            """
+            {
+              "member_id": "m-alpha",
+              "payload": { "prompt": "process ambient invoice" },
+              "wait": "stream"
+            }
+            """);
+
+        var result = await dispatcher.InvokeMemberForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().BeEmpty(result.ToolExecutionResultJson);
+        var dispatch = harness.ServiceInvocationDispatcher.Calls.Should().ContainSingle().Subject;
+        var chatPayload = dispatch.Request.Payload!.Unpack<ChatRequestEvent>();
+        var inputPart = chatPayload.InputParts.Should().ContainSingle().Subject;
+        inputPart.FileRef.Should().NotBeNull();
+        inputPart.FileRef!.FileId.Should().Be("file-member-ambient");
+        inputPart.FileRef.ArtifactId.Should().Be("workflow-file://file-member-ambient");
+        inputPart.FileRef.SourceMessageId.Should().Be("om_file-member-ambient");
+        inputPart.FileRef.SourceResourceKey.Should().Be("resource_file-member-ambient");
+        inputPart.FileRef.FileName.Should().Be("member-ambient.pdf");
+        inputPart.FileRef.MediaType.Should().Be("application/pdf");
+        inputPart.FileRef.SizeBytes.Should().Be(789);
+        harness.ServiceInvocationResolution.LastRequest!.Payload!.Unpack<ChatRequestEvent>()
+            .InputParts.Should().BeEmpty("service resolution must not mutate the explicit payload");
+        harness.AdmissionAuthorizer.Calls.Should().ContainSingle().Subject.Request.Payload!
+            .Unpack<ChatRequestEvent>().InputParts.Should().ContainSingle();
+    }
+
+    [Theory]
+    [InlineData("aevatar_invoke_team")]
+    [InlineData("aevatar_invoke_member")]
+    public async Task InvokePublishedWorkflow_WhenPayloadProvidesExplicitFileRef_ShouldNotAppendAmbientInputFileRefs(
+        string toolName)
+    {
+        var harness = new Harness();
+        const string publishedServiceId = "svc-explicit-file-workflow";
+        if (string.Equals(toolName, "aevatar_invoke_team", StringComparison.Ordinal))
+        {
+            harness.TeamResolver.Resolution = new TeamEntryMemberResolution(
+                "scope-1",
+                "team-1",
+                "m-alpha",
+                publishedServiceId);
+        }
+        else
+        {
+            harness.MemberResolver.Resolution = new MemberPublishedServiceResolution(
+                "scope-1",
+                "m-alpha",
+                publishedServiceId);
+        }
+
+        harness.ConfigureServiceTarget(
+            ServiceImplementationKind.Workflow,
+            serviceId: publishedServiceId,
+            endpointId: "chat",
+            primaryActorId: "workflow-definition-actor");
+        harness.ServiceInvocationDispatcher.Receipt = new ServiceInvocationAcceptedReceipt
+        {
+            RequestId = "explicit-file-command",
+            ServiceKey = "tenant:aevatar-service:default:svc-explicit-file-workflow",
+            DeploymentId = "deployment-explicit-file-workflow",
+            TargetActorId = "workflow-run-actor",
+            EndpointId = "chat",
+            CommandId = "explicit-file-command",
+            CorrelationId = "explicit-file-correlation",
+            RunId = "explicit-file-run",
+        };
+        var dispatcher = harness.CreateDispatcher();
+        var ambientFileRef = BuildInputFileRef(
+            "file-ambient-suppressed",
+            "workflow-file://file-ambient-suppressed",
+            "ambient-suppressed.pdf");
+        var argumentsJson = string.Equals(toolName, "aevatar_invoke_team", StringComparison.Ordinal)
+            ? """
+              {
+                "team_id": "team-1",
+                "endpoint_id": "chat",
+                "payload": {
+                  "prompt": "process explicit invoice",
+                  "input_parts": [
+                    {
+                      "kind": "file",
+                      "file_ref": {
+                        "file_id": "file-explicit",
+                        "artifact_id": "workflow-file://file-explicit",
+                        "source_kind": 3,
+                        "file_name": "explicit.pdf",
+                        "media_type": "application/pdf"
+                      }
+                    }
+                  ]
+                },
+                "wait": "stream"
+              }
+              """
+            : """
+              {
+                "member_id": "m-alpha",
+                "payload": {
+                  "prompt": "process explicit invoice",
+                  "input_parts": [
+                    {
+                      "kind": "file",
+                      "file_ref": {
+                        "file_id": "file-explicit",
+                        "artifact_id": "workflow-file://file-explicit",
+                        "source_kind": 3,
+                        "file_name": "explicit.pdf",
+                        "media_type": "application/pdf"
+                      }
+                    }
+                  ]
+                },
+                "wait": "stream"
+              }
+              """;
+
+        using var _ = PushContext(
+            callId: $"call-{toolName}-explicit-file-ref",
+            inputFileRefs: [ambientFileRef]);
+        var request = BuildChatRunRequest(
+            $"response-{toolName}-explicit-file-ref",
+            $"tool-call-{toolName}-explicit-file-ref",
+            toolName,
+            argumentsJson);
+
+        var result = string.Equals(toolName, "aevatar_invoke_team", StringComparison.Ordinal)
+            ? await dispatcher.InvokeTeamForChatRunAsync(request, request.ArgumentsJson)
+            : await dispatcher.InvokeMemberForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().BeEmpty(result.ToolExecutionResultJson);
+        var dispatch = harness.ServiceInvocationDispatcher.Calls.Should().ContainSingle().Subject;
+        var chatPayload = dispatch.Request.Payload!.Unpack<ChatRequestEvent>();
+        var inputPart = chatPayload.InputParts.Should().ContainSingle().Subject;
+        inputPart.FileRef.Should().NotBeNull();
+        inputPart.FileRef!.FileId.Should().Be("file-explicit");
+        inputPart.FileRef.ArtifactId.Should().Be("workflow-file://file-explicit");
+        inputPart.FileRef.FileName.Should().Be("explicit.pdf");
+    }
+
+    [Fact]
     public async Task InvokeMember_WhenEndpointIsExplicit_UsesRequestedEndpoint()
     {
         var harness = new Harness();
@@ -1158,6 +1437,50 @@ public sealed class AevatarInvocationToolSourceTests
         harness.ServiceRunRegistration.Records.Should().BeEmpty();
         harness.AdmissionAuthorizer.Calls.Should().ContainSingle();
         harness.AdmissionAuthorizer.Calls[0].Artifact.ImplementationKind.Should().Be(ServiceImplementationKind.Static);
+    }
+
+    [Fact]
+    public async Task InvokeTeam_WhenEntryServiceIsStatic_ShouldKeepAmbientFileRefsOutOfAdmissionAndExecution()
+    {
+        var harness = new Harness();
+        harness.ConfigureServiceTarget(
+            ServiceImplementationKind.Static,
+            serviceId: "service-static-ambient",
+            endpointId: "entry",
+            primaryActorId: "static-actor");
+        var dispatcher = harness.CreateDispatcher();
+        var ambientFileRef = BuildInputFileRef(
+            "file-static-ambient",
+            "workflow-file://file-static-ambient",
+            "ambient.pdf");
+
+        using var _ = PushContext(
+            callId: "call-team-static-ambient",
+            inputFileRefs: [ambientFileRef]);
+        var request = BuildChatRunRequest(
+            "response-team-static-ambient",
+            "call-team-static-ambient-tool",
+            "aevatar_invoke_team",
+            """
+            {
+              "team_id": "team-1",
+              "endpoint_id": "entry",
+              "payload": { "prompt": "go" },
+              "wait": "stream"
+            }
+            """);
+
+        var result = await dispatcher.InvokeTeamForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().BeEmpty(result.ToolExecutionResultJson);
+        var resolutionPayload = harness.ServiceInvocationResolution.LastRequest!.Payload!
+            .Unpack<ChatRequestEvent>();
+        resolutionPayload.InputParts.Should().BeEmpty();
+        var admittedPayload = harness.AdmissionAuthorizer.Calls.Should().ContainSingle().Subject
+            .Request.Payload!.Unpack<ChatRequestEvent>();
+        admittedPayload.InputParts.Should().BeEmpty();
+        harness.TeamInvocation.Request.Should().NotBeNull();
+        harness.TeamInvocation.Request!.Input.InputParts.Should().BeNullOrEmpty();
     }
 
     [Fact]
@@ -1475,7 +1798,7 @@ public sealed class AevatarInvocationToolSourceTests
                     "file_ref": {
                       "file_id": "file-lark-1",
                       "artifact_id": "workflow-file://file-lark-1",
-                      "source_kind": 3,
+                      "source_kind": "chat_file_source_kind_connected_service_resource",
                       "source_message_id": "om_lark_1",
                       "source_resource_key": "file_key_1",
                       "file_name": "invoice.pdf",
@@ -1516,8 +1839,9 @@ public sealed class AevatarInvocationToolSourceTests
         ShouldCarryTypedTrustedCallerValues(harness.WorkflowDispatch.Command);
 
         var result = Read(output);
-        result.GetProperty("run_id").GetString().Should().Be("call-workflow");
+        result.GetProperty("run_id").GetString().Should().Be("workflow-actor");
         result.GetProperty("actor_id").GetString().Should().Be("workflow-actor");
+        result.GetProperty("command_id").GetString().Should().Be("call-workflow");
         result.GetProperty("stream_topic").GetString().Should().Be("aevatar://actors/workflow-actor/runs/call-workflow");
     }
 
@@ -1562,12 +1886,13 @@ public sealed class AevatarInvocationToolSourceTests
             }
             """);
 
-        result.Result.Should().Contain("\"run_id\":\"call-workflow-executor\"");
+        result.Result.Should().Contain("\"run_id\":\"workflow-actor\"");
+        result.Result.Should().Contain("\"command_id\":\"call-workflow-executor\"");
         result.Result.Should().Contain("\"status\":\"streaming\"");
         result.Result.Should().NotContain("tool outcome could not be verified");
         result.Receipt.Should().NotBeNull();
         result.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
-        result.Receipt.SubjectId.Should().Be("call-workflow-executor");
+        result.Receipt.SubjectId.Should().Be("workflow-actor");
     }
 
     [Fact]
@@ -1618,7 +1943,7 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task StartWorkflow_ShouldNotPopulateInputPartsFromAmbientInputFileRefs()
+    public async Task StartWorkflow_ShouldPopulateInputPartsFromAmbientInputFileRefs_WhenExplicitFileRefsAreAbsent()
     {
         var harness = new Harness();
         harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
@@ -1651,7 +1976,107 @@ public sealed class AevatarInvocationToolSourceTests
 
         ErrorCodeOrNull(output).Should().BeNull(output);
         harness.WorkflowDispatch.Command.Should().NotBeNull();
-        harness.WorkflowDispatch.Command!.InputParts.Should().BeNull();
+        harness.WorkflowDispatch.Command!.InputParts.Should().ContainSingle();
+        var inputPart = harness.WorkflowDispatch.Command.InputParts!.Single();
+        inputPart.Kind.Should().Be(Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.File);
+        inputPart.Name.Should().Be("ambient.pdf");
+        inputPart.MediaType.Should().Be("application/pdf");
+        inputPart.FileRef.Should().NotBeNull();
+        var fileRef = inputPart.FileRef!;
+        fileRef.FileId.Should().Be("file-ambient-1");
+        fileRef.ArtifactId.Should().Be("workflow-file://file-ambient-1");
+        fileRef.SourceKind.Should().Be(FileArtifactSourceKind.ConnectedServiceResource);
+        fileRef.SourceMessageId.Should().Be("om_ambient_1");
+        fileRef.SourceResourceKey.Should().Be("file_key_ambient_1");
+        fileRef.FileName.Should().Be("ambient.pdf");
+        fileRef.MediaType.Should().Be("application/pdf");
+        fileRef.SizeBytes.Should().Be(789);
+    }
+
+    [Fact]
+    public async Task StartWorkflow_ShouldAcceptAmbientInputFileRefs_WhenInputsObjectIsEmpty()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+        var ambientFileRef = new Aevatar.AI.Abstractions.ChatFileRef
+        {
+            FileId = "file-empty-inputs-1",
+            ArtifactId = "workflow-file://file-empty-inputs-1",
+            SourceKind = Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource,
+            FileName = "empty-inputs.pdf",
+            MediaType = "application/pdf",
+        };
+
+        using var _ = PushContext(
+            callId: "call-workflow-empty-inputs-file-ref",
+            inputFileRefs: [ambientFileRef]);
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": {},
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowDispatch.Command.Should().NotBeNull();
+        var inputPart = harness.WorkflowDispatch.Command!.InputParts.Should().ContainSingle().Subject;
+        inputPart.FileRef.Should().NotBeNull();
+        inputPart.FileRef!.FileId.Should().Be("file-empty-inputs-1");
+        inputPart.FileRef.ArtifactId.Should().Be("workflow-file://file-empty-inputs-1");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_ShouldNotAppendAmbientInputFileRefs_WhenExplicitFileRefExists()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+        var ambientFileRef = new Aevatar.AI.Abstractions.ChatFileRef
+        {
+            FileId = "file-ambient-1",
+            ArtifactId = "workflow-file://file-ambient-1",
+            SourceKind = Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource,
+            FileName = "ambient.pdf",
+            MediaType = "application/pdf",
+        };
+
+        using var _ = PushContext(
+            callId: "call-workflow-explicit-file-ref",
+            inputFileRefs: [ambientFileRef]);
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": {
+                "prompt": "run workflow",
+                "input_parts": [
+                  {
+                    "kind": "file",
+                    "file_ref": {
+                      "file_id": "file-explicit-1",
+                      "artifact_id": "workflow-file://file-explicit-1",
+                      "source_kind": 3,
+                      "file_name": "explicit.pdf",
+                      "media_type": "application/pdf"
+                    }
+                  }
+                ]
+              },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowDispatch.Command.Should().NotBeNull();
+        harness.WorkflowDispatch.Command!.InputParts.Should().ContainSingle();
+        var fileRef = harness.WorkflowDispatch.Command.InputParts!.Single().FileRef;
+        fileRef.Should().NotBeNull();
+        fileRef!.FileId.Should().Be("file-explicit-1");
+        fileRef.ArtifactId.Should().Be("workflow-file://file-explicit-1");
+        fileRef.FileName.Should().Be("explicit.pdf");
     }
 
     [Fact]
@@ -1877,7 +2302,9 @@ public sealed class AevatarInvocationToolSourceTests
         result.ToolCall.Should().BeSameAs(request.ToolCall);
         result.ArgumentsJson.Should().Be(request.ArgumentsJson);
         result.ToolExecutionResultJson.Should().NotBeNullOrWhiteSpace();
-        result.RunId.Should().Be("call-workflow-typed");
+        result.RunId.Should().Be("workflow-actor");
+        using var invocationResultJson = JsonDocument.Parse(result.ToolExecutionResultJson);
+        invocationResultJson.RootElement.GetProperty("command_id").GetString().Should().Be("call-workflow-typed");
         result.ScopeId.Should().Be("scope-1");
         result.WaitMode.Should().Be(ChatRunSubRunWaitMode.Stream);
         result.Status.Should().Be("streaming");
@@ -1999,7 +2426,9 @@ public sealed class AevatarInvocationToolSourceTests
         var result = await dispatcher.StartWorkflowForChatRunAsync(request, request.ArgumentsJson);
 
         result.ErrorCode.Should().BeEmpty(result.ToolExecutionResultJson);
-        result.RunId.Should().Be("command-alpha");
+        result.RunId.Should().Be("workflow-actor-alpha");
+        using var invocationResultJson = JsonDocument.Parse(result.ToolExecutionResultJson);
+        invocationResultJson.RootElement.GetProperty("command_id").GetString().Should().Be("command-alpha");
         result.ActorId.Should().Be("workflow-actor-alpha");
         harness.WorkflowRunDelivery.Reservations.Should().ContainSingle()
             .Which.ExpectedWorkflowCommandId.Should().Be("command-alpha");
@@ -2146,7 +2575,7 @@ public sealed class AevatarInvocationToolSourceTests
 
         result.ErrorCode.Should().BeEmpty();
         result.Status.Should().Be("streaming");
-        result.RunId.Should().Be("accepted-command-mismatch");
+        result.RunId.Should().Be("workflow-actor-mismatch");
         harness.WorkflowRunDelivery.Registrations.Should().ContainSingle();
         harness.WorkflowRunDelivery.Abandonments.Should().BeEmpty();
         using var resultJson = JsonDocument.Parse(result.ToolExecutionResultJson);
@@ -2231,7 +2660,7 @@ public sealed class AevatarInvocationToolSourceTests
 
         var result = await dispatcher.StartWorkflowForChatRunAsync(request, request.ArgumentsJson);
 
-        result.RunId.Should().Be("call-workflow-delivery-throws");
+        result.RunId.Should().Be("workflow-actor");
         result.Status.Should().Be("streaming");
         result.StreamTopic.Should().Be("aevatar://actors/workflow-actor/runs/call-workflow-delivery-throws");
         result.ErrorCode.Should().BeEmpty();
@@ -2679,7 +3108,7 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task StartWorkflow_WhenManagedRuntimeExists_ShouldNotPopulateInputFileRefsFromAmbientRefs()
+    public async Task StartWorkflow_WhenManagedRuntimeExists_ShouldPopulateInputFileRefsFromAmbientRefs()
     {
         var harness = new Harness();
         var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
@@ -2718,7 +3147,15 @@ public sealed class AevatarInvocationToolSourceTests
         receipt!.ManagedWorkflowHandoff.Should().NotBeNull();
         var requested = harness.ActorDispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload
             .Unpack<SubWorkflowInvokeRequestedEvent>();
-        requested.InputFileRefs.Should().BeEmpty();
+        var fileRef = requested.InputFileRefs.Should().ContainSingle().Subject;
+        fileRef.FileId.Should().Be("file-ambient-child-1");
+        fileRef.ArtifactId.Should().Be("workflow-file://file-ambient-child-1");
+        fileRef.SourceKind.Should().Be(Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ConnectedServiceResource);
+        fileRef.SourceMessageId.Should().Be("om_ambient_child_1");
+        fileRef.SourceResourceKey.Should().Be("file_key_ambient_child_1");
+        fileRef.FileName.Should().Be("ambient-child.pdf");
+        fileRef.MediaType.Should().Be("application/pdf");
+        fileRef.SizeBytes.Should().Be(654);
     }
 
     [Fact]
@@ -3592,6 +4029,34 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task ReadWorkflowRunArtifact_ShouldUseExplicitActorIdWithoutBindingLookup()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.ReportsByWorkflowRunId["workflow-run-actor"] = new WorkflowRunReport
+        {
+            RootActorId = "workflow-run-actor",
+            CommandId = "run-1",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            StateVersion = 11,
+            Success = true,
+            FinalOutput = "Completed through explicit actor identity.",
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_read_workflow_run_artifact");
+
+        var output = await tool.ExecuteAsync(
+            """{"workflow_run_id":"run-1","actor_id":"workflow-run-actor"}""");
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.RunBindingReader.ListByRunIdCalls.Should().BeEmpty();
+        harness.WorkflowQuery.ReportCalls.Should().Equal("run-1", "workflow-run-actor");
+        var result = Read(output);
+        result.GetProperty("workflow_run_id").GetString().Should().Be("run-1");
+        result.GetProperty("artifact_actor_id").GetString().Should().Be("workflow-run-actor");
+        result.GetProperty("status").GetString().Should().Be(nameof(WorkflowRunCompletionStatus.Completed));
+        result.GetProperty("final_output").GetString().Should().Be("Completed through explicit actor identity.");
+    }
+
+    [Fact]
     public async Task ReadWorkflowRunArtifact_ShouldWaitForReportMaterializationAndReResolveBinding()
     {
         var harness = new Harness();
@@ -3922,6 +4387,22 @@ public sealed class AevatarInvocationToolSourceTests
         llmControl.UserMemoryPrompt.Should().Be("memory");
         llmControl.RoutePreference.Should().Be("route-1");
     }
+
+    private static Aevatar.AI.Abstractions.ChatFileRef BuildInputFileRef(
+        string fileId,
+        string artifactId,
+        string fileName) =>
+        new()
+        {
+            FileId = fileId,
+            ArtifactId = artifactId,
+            SourceKind = Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource,
+            SourceMessageId = $"om_{fileId}",
+            SourceResourceKey = $"resource_{fileId}",
+            FileName = fileName,
+            MediaType = "application/pdf",
+            SizeBytes = 789,
+        };
 
     private static AgentToolContextScope PushContext(
         string callId,

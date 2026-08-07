@@ -136,8 +136,10 @@ public sealed class WorkflowRunActorPortBranchTests
             },
             CancellationToken.None);
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*expected execution mode*");
+        var error = await act.Should()
+            .ThrowAsync<WorkflowExpectedExecutionModeCompatibilityException>();
+        error.Which.PersistedMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+        error.Which.RequestedMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
         preflight.Calls.Should().BeEmpty();
         AssertNoLifecycleMutations(runtime);
     }

@@ -14,13 +14,14 @@ internal static class StudioWorkflowCapabilityAdmissionHttpContext
         ClaimTypes.NameIdentifier,
     ];
 
-    public static WorkflowCapabilityAdmissionContext Create(
+    public static async ValueTask<WorkflowCapabilityAdmissionContext> CreateAsync(
         HttpContext http,
         ExternalCapabilityExecutionMode executionMode,
-        IEnumerable<NyxIdExplicitRequestConfirmationInput>? explicitRequestConfirmations = null)
+        IEnumerable<NyxIdExplicitRequestConfirmationInput>? explicitRequestConfirmations = null,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(http);
-        var extraction = WorkflowCallerCredentialExtractor.Extract(http);
+        var extraction = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
         if (!extraction.Succeeded)
             throw new WorkflowCallerCredentialSelectionException();
 

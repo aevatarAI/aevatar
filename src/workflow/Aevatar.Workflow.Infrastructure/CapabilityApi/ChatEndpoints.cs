@@ -53,7 +53,7 @@ public static class WorkflowCapabilityEndpoints
         WorkflowWebhookIngressEndpoints.Map(group);
         WorkflowExternalApprovalCallbackEndpoints.Map(group);
         // 06-19-workflow-run-observatory (C2): read-only, scope-gated run viewer. Maps its own absolute
-        // routes (page /workflow/observatory + data /api/workflow/observatory/*) on the root app.
+        // routes (admin frame /admin/workflow-observatory + data /api/workflow/observatory/*) on the root app.
         app.MapWorkflowRunObservatory();
         // Workflow studio: conversational orchestration surface, gated behind the same OIDC login as the
         // observatory. Mount + login only this increment (page /workflow/studio + /workflow/studio/callback).
@@ -96,7 +96,7 @@ public static class WorkflowCapabilityEndpoints
         ArgumentNullException.ThrowIfNull(chatRunService);
         ArgumentNullException.ThrowIfNull(multipartParser);
 
-        var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+        var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
         if (!callerCredential.Succeeded)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(callerCredential.Error);
@@ -198,7 +198,8 @@ public static class WorkflowCapabilityEndpoints
         CancellationToken ct = default,
         Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedHook = null,
         IFileArtifactIngressPort? fileIngressPort = null,
-        bool allowEmptyInputForResolvedMemberWorkflow = false)
+        bool allowEmptyInputForResolvedMemberWorkflow = false,
+        WorkflowDefinitionBinding? resolvedDefinitionBinding = null)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var serviceProvider = http.Features.Get<IServiceProvidersFeature>()?.RequestServices;
@@ -209,11 +210,7 @@ public static class WorkflowCapabilityEndpoints
         try
         {
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
-            var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
-                http,
-                serviceProvider?.GetService<IExternalIdentityBindingQueryPort>(),
-                logger,
-                ct);
+            var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
             if (!callerCredential.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(callerCredential.Error);
@@ -231,6 +228,19 @@ public static class WorkflowCapabilityEndpoints
             var trustedScopeId = Aevatar.Capabilities.AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var callerScopeId)
                 ? callerScopeId
                 : null;
+            var firstInputFileRef = FirstInputFileRef(input.InputParts);
+            logger?.LogWarning(
+                "Workflow chat input file refs received. path={Path} sourceKind={SourceKind} sessionId={SessionId} scopeId={ScopeId} trustedScopeId={TrustedScopeId} requestInputPartCount={RequestInputPartCount} inputFileRefCount={InputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+                http.Request.Path.Value ?? string.Empty,
+                input.Source?.Kind ?? string.Empty,
+                input.SessionId ?? string.Empty,
+                input.ScopeId ?? string.Empty,
+                trustedScopeId ?? string.Empty,
+                input.InputParts?.Count ?? 0,
+                CountInputFileRefs(input.InputParts),
+                firstInputFileRef?.FileId ?? string.Empty,
+                firstInputFileRef?.ArtifactId ?? firstInputFileRef?.Uri ?? string.Empty,
+                firstInputFileRef?.MediaType ?? string.Empty);
             var normalizedRequest = await ChatRunRequestNormalizer.NormalizeAsync(
                 input,
                 fileIngressPort,
@@ -248,8 +258,24 @@ public static class WorkflowCapabilityEndpoints
                 return;
             }
 
-            var result = await chatRunService.ExecuteAsync(
+            var normalizedInputParts = normalizedRequest.Request!.InputParts;
+            var firstNormalizedFileRef = FirstInputFileRef(normalizedInputParts);
+            logger?.LogWarning(
+                "Workflow chat input file refs normalized. path={Path} sessionId={SessionId} scopeId={ScopeId} normalizedInputPartCount={NormalizedInputPartCount} normalizedInputFileRefCount={NormalizedInputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+                http.Request.Path.Value ?? string.Empty,
+                normalizedRequest.Request.SessionId ?? string.Empty,
+                normalizedRequest.Request.ScopeId ?? string.Empty,
+                normalizedInputParts?.Count ?? 0,
+                CountInputFileRefs(normalizedInputParts),
+                firstNormalizedFileRef?.FileId ?? string.Empty,
+                firstNormalizedFileRef?.ArtifactId ?? string.Empty,
+                firstNormalizedFileRef?.MediaType ?? string.Empty);
+
+            var request = AttachResolvedDefinitionBinding(
                 normalizedRequest.Request!,
+                resolvedDefinitionBinding);
+            var result = await chatRunService.ExecuteAsync(
+                request,
                 async (frame, token) =>
                 {
                     await writer.WriteAsync(frame, token);
@@ -296,6 +322,13 @@ public static class WorkflowCapabilityEndpoints
         }
     }
 
+    private static WorkflowChatRunRequest AttachResolvedDefinitionBinding(
+        WorkflowChatRunRequest request,
+        WorkflowDefinitionBinding? resolvedDefinitionBinding) =>
+        resolvedDefinitionBinding == null
+            ? request
+            : request with { ResolvedDefinitionBinding = resolvedDefinitionBinding };
+
     private static async Task HandleHttpChat(
         HttpContext http,
         HttpChatInput input,
@@ -313,11 +346,7 @@ public static class WorkflowCapabilityEndpoints
         try
         {
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
-            var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
-                http,
-                serviceProvider?.GetService<IExternalIdentityBindingQueryPort>(),
-                logger,
-                ct);
+            var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
             if (!callerCredential.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(callerCredential.Error);
@@ -485,6 +514,20 @@ public static class WorkflowCapabilityEndpoints
             {
                 scope.MarkResult(StatusCodes.Status400BadRequest);
                 return Results.BadRequest(new { error = "actorId, runId and stepId are required." });
+            }
+
+            if (input.ToolApproval != null &&
+                (string.IsNullOrWhiteSpace(input.ToolApproval.ExecutionId) ||
+                 string.IsNullOrWhiteSpace(input.ToolApproval.ToolCallId) ||
+                 string.IsNullOrWhiteSpace(input.ToolApproval.ApprovalRequestId)))
+            {
+                scope.MarkResult(StatusCodes.Status400BadRequest);
+                return Results.BadRequest(new
+                {
+                    code = "INVALID_TOOL_APPROVAL_RESUME_REQUEST",
+                    message = "toolApproval.executionId, toolApproval.toolCallId and " +
+                              "toolApproval.approvalRequestId are required together when toolApproval is provided.",
+                });
             }
 
             var dispatch = await resumeService.DispatchAsync(
@@ -743,7 +786,7 @@ public static class WorkflowCapabilityEndpoints
                 return Results.Unauthorized();
             }
 
-            var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+            var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
             if (!callerCredential.Succeeded)
             {
                 scope.MarkResult(StatusCodes.Status400BadRequest);
@@ -833,6 +876,27 @@ public static class WorkflowCapabilityEndpoints
                 }),
             },
         };
+
+    private static int CountInputFileRefs(IReadOnlyList<ChatInputContentPart>? inputParts) =>
+        inputParts?.Count(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef)) ?? 0;
+
+    private static ChatInputFileRef? FirstInputFileRef(IReadOnlyList<ChatInputContentPart>? inputParts) =>
+        inputParts?.FirstOrDefault(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef))?.FileRef;
+
+    private static bool HasFileRefIdentity(ChatInputFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId) ||
+        !string.IsNullOrWhiteSpace(fileRef.Uri);
+
+    private static int CountInputFileRefs(IReadOnlyList<WorkflowChatInputPart>? inputParts) =>
+        inputParts?.Count(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef)) ?? 0;
+
+    private static FileArtifactRef? FirstInputFileRef(IReadOnlyList<WorkflowChatInputPart>? inputParts) =>
+        inputParts?.FirstOrDefault(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef))?.FileRef;
+
+    private static bool HasFileRefIdentity(FileArtifactRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
 
     private static WorkflowToolApprovalResumeCommand? ToToolApprovalResumeCommand(
         WorkflowToolApprovalResumeInput? input)
@@ -1160,6 +1224,13 @@ public static class WorkflowCapabilityEndpoints
         {
             ArgumentNullException.ThrowIfNull(ex);
 
+            if (FindException<CommandObservationTimeoutException>(ex) != null)
+            {
+                return (
+                    "RUN_OBSERVATION_TIMEOUT",
+                    "Run was accepted but did not become observable before the deadline.");
+            }
+
             return IsCompatibilityFailure(ex)
                 ? (
                     CompatibilityErrorCode,
@@ -1175,11 +1246,25 @@ public static class WorkflowCapabilityEndpoints
 
             for (var current = ex; current != null; current = current.InnerException)
             {
+                if (current is WorkflowExpectedExecutionModeCompatibilityException)
+                    return true;
                 if (current.Message.Contains(DescriptorMissingMarker, StringComparison.Ordinal))
                     return true;
             }
 
             return false;
+        }
+
+        private static TException? FindException<TException>(Exception ex)
+            where TException : Exception
+        {
+            for (var current = ex; current != null; current = current.InnerException)
+            {
+                if (current is TException matched)
+                    return matched;
+            }
+
+            return null;
         }
     }
 

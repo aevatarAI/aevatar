@@ -139,6 +139,18 @@ public sealed class NyxIdChatConversationCurrentStateProjector
             SafeMessage = task.SafeMessage,
             CreatedAt = task.CreatedAt?.Clone(),
             UpdatedAt = task.UpdatedAt?.Clone(),
+            SchemaVersion = task.SchemaVersion,
+            ActorId = task.ActorId,
+            PlanId = task.PlanId,
+            PlanRevision = task.PlanRevision,
+            Title = task.Title,
+            Gate = task.Gate == null
+                ? null
+                : new NyxIdChatConversationPlanGateDocument
+                {
+                    Mode = ToWireName(task.Gate.Mode),
+                    Reason = task.Gate.Reason,
+                },
         };
         document.Steps.AddRange(task.Steps
             .OrderBy(static step => step.Order)
@@ -166,7 +178,99 @@ public sealed class NyxIdChatConversationCurrentStateProjector
             AvailableActions = ToAvailableActions(step.AvailableActions),
             UpdatedAt = step.UpdatedAt?.Clone(),
             Operation = ToOperation(step.Operation),
+            Source = ToSource(step.Source),
+            AddedBy = ToWireName(step.AddedBy),
+            DependsOn = { step.DependsOn },
+            Estimate = step.Estimate == null
+                ? null
+                : new NyxIdChatConversationStepEstimateDocument
+                {
+                    Kind = ToWireName(step.Estimate.Kind),
+                    Seconds = step.Estimate.Seconds,
+                },
+            Substeps =
+            {
+                step.Substeps.Select(static substep => new NyxIdChatConversationSubstepDocument
+                {
+                    SubstepId = substep.SubstepId,
+                    Title = substep.Title,
+                    Status = ToWireName(substep.Status),
+                }),
+            },
         };
+
+    private static NyxIdChatConversationStepSourceDocument? ToSource(
+        NyxIdChatStepSource? source) =>
+        source?.SourceCase switch
+        {
+            NyxIdChatStepSource.SourceOneofCase.Llm =>
+                new NyxIdChatConversationStepSourceDocument
+                {
+                    Llm = new NyxIdChatConversationLLMStepSourceDocument
+                    {
+                        Model = source.Llm.Model,
+                    },
+                },
+            NyxIdChatStepSource.SourceOneofCase.Tool =>
+                new NyxIdChatConversationStepSourceDocument
+                {
+                    Tool = ToToolSource(source.Tool),
+                },
+            NyxIdChatStepSource.SourceOneofCase.BrowserAction =>
+                new NyxIdChatConversationStepSourceDocument
+                {
+                    BrowserAction = new NyxIdChatConversationBrowserActionStepSourceDocument
+                    {
+                        Action = ToWireName(source.BrowserAction.Action),
+                        ActionRequestId = source.BrowserAction.ActionRequestId,
+                    },
+                },
+            NyxIdChatStepSource.SourceOneofCase.Postcondition =>
+                new NyxIdChatConversationStepSourceDocument
+                {
+                    Postcondition = new NyxIdChatConversationPostconditionStepSourceDocument
+                    {
+                        ActionRequestId = source.Postcondition.ActionRequestId,
+                        Check = source.Postcondition.Check,
+                    },
+                },
+            NyxIdChatStepSource.SourceOneofCase.Input =>
+                new NyxIdChatConversationStepSourceDocument
+                {
+                    Input = new NyxIdChatConversationInputStepSourceDocument
+                    {
+                        RequestId = source.Input.RequestId,
+                    },
+                },
+            NyxIdChatStepSource.SourceOneofCase.Approval =>
+                new NyxIdChatConversationStepSourceDocument
+                {
+                    Approval = new NyxIdChatConversationApprovalStepSourceDocument
+                    {
+                        ApprovalRequestId = source.Approval.ApprovalRequestId,
+                    },
+                },
+            NyxIdChatStepSource.SourceOneofCase.Web =>
+                new NyxIdChatConversationStepSourceDocument
+                {
+                    Web = new NyxIdChatConversationWebStepSourceDocument(),
+                },
+            _ => null,
+        };
+
+    private static NyxIdChatConversationToolStepSourceDocument ToToolSource(
+        NyxIdChatToolStepSource source)
+    {
+        var document = new NyxIdChatConversationToolStepSourceDocument
+        {
+            ToolName = source.ToolName,
+            ServiceSlug = source.ServiceSlug,
+            ServiceId = source.ServiceId,
+        };
+        if (source.HasReadinessCapabilityId)
+            document.ReadinessCapabilityId = source.ReadinessCapabilityId;
+        return document;
+    }
 
     private static NyxIdChatConversationAvailableActionsDocument? ToAvailableActions(
         NyxIdChatAvailableActions? actions) =>
@@ -445,6 +549,37 @@ public sealed class NyxIdChatConversationCurrentStateProjector
         NyxIdChatStepKind.BrowserAction => "browser_action",
         NyxIdChatStepKind.Postcondition => "postcondition",
         NyxIdChatStepKind.Input => "input",
+        NyxIdChatStepKind.Approval => "approval",
+        NyxIdChatStepKind.Web => "web",
+        _ => string.Empty,
+    };
+
+    private static string ToWireName(NyxIdChatPlanGateMode mode) => mode switch
+    {
+        NyxIdChatPlanGateMode.Auto => "auto",
+        NyxIdChatPlanGateMode.Confirm => "confirm",
+        _ => string.Empty,
+    };
+
+    private static string ToWireName(NyxIdChatStepAddedBy addedBy) => addedBy switch
+    {
+        NyxIdChatStepAddedBy.Initial => "initial",
+        NyxIdChatStepAddedBy.Replan => "replan",
+        NyxIdChatStepAddedBy.Steering => "steering",
+        _ => string.Empty,
+    };
+
+    private static string ToWireName(NyxIdChatStepEstimateKind kind) => kind switch
+    {
+        NyxIdChatStepEstimateKind.Duration => "duration",
+        _ => string.Empty,
+    };
+
+    private static string ToWireName(NyxIdChatSubstepStatus status) => status switch
+    {
+        NyxIdChatSubstepStatus.Running => "running",
+        NyxIdChatSubstepStatus.Done => "done",
+        NyxIdChatSubstepStatus.Failed => "failed",
         _ => string.Empty,
     };
 

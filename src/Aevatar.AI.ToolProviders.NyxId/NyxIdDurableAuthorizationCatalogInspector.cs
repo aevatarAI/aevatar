@@ -53,18 +53,27 @@ internal sealed class NyxIdDurableAuthorizationCatalogInspector(
             .Take(2)
             .ToArray();
         if (matches.Length != 1 ||
-            !IsUsableGrant(matches[0], userServiceId, serviceSlugSnapshot))
+            !IsUsableGrant(matches[0], userServiceId, serviceSlugSnapshot) ||
+            !NyxIdAuthorizationCatalogIntegrity.TryResolveServiceAuthorityWindow(
+                snapshot!,
+                matches[0],
+                out var observedAtUtc,
+                out var freshUntilUtc))
         {
             return null;
         }
+
+        var now = timeProvider.GetUtcNow();
+        if (observedAtUtc > now || freshUntilUtc <= now)
+            return null;
 
         return new ExternalCapabilitySourceStamp
         {
             SourceKind = ExternalCapabilitySourceKind.DurableAuthorizationCatalog,
             SourceId = NyxIdAuthorizationCatalogActorIds.Build(owner),
             SourceVersion = snapshot.StateVersion,
-            ObservedAt = Timestamp.FromDateTimeOffset(snapshot.ObservedAtUtc),
-            FreshUntil = Timestamp.FromDateTimeOffset(snapshot.FreshUntilUtc),
+            ObservedAt = Timestamp.FromDateTimeOffset(observedAtUtc),
+            FreshUntil = Timestamp.FromDateTimeOffset(freshUntilUtc),
             ContentDigest = snapshot.ContentDigest,
         };
     }
@@ -86,14 +95,16 @@ internal sealed class NyxIdDurableAuthorizationCatalogInspector(
             string.IsNullOrWhiteSpace(snapshot.ContentDigest) ||
             !string.Equals(
                 snapshot.ContentDigest,
-                NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(snapshot.Owner, snapshot.Services),
+                NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+                    snapshot.Owner,
+                    snapshot.Services,
+                    snapshot.GatewayLLMTarget),
                 StringComparison.Ordinal))
         {
             return false;
         }
 
-        var now = timeProvider.GetUtcNow();
-        return snapshot.ObservedAtUtc <= now && snapshot.FreshUntilUtc > now;
+        return true;
     }
 
     private static bool IsUsableGrant(

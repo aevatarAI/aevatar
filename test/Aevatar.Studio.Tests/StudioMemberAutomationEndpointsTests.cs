@@ -249,6 +249,72 @@ public sealed class StudioMemberAutomationEndpointsTests
         AssertNoCredentialMaterial(value);
     }
 
+    [Theory]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.NyxIdOperationGrantRequired,
+        StatusCodes.Status409Conflict,
+        "TEAM_AUTOMATION_NYXID_OPERATION_GRANT_REQUIRED",
+        "NyxID requires an operation-scoped approval grant before this automation can be scheduled.",
+        false)]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.NyxIdOperationApprovalRequired,
+        StatusCodes.Status409Conflict,
+        "TEAM_AUTOMATION_NYXID_OPERATION_APPROVAL_REQUIRED",
+        "NyxID requires per-request approval before this operation can run on a schedule.",
+        false)]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.NyxIdOperationDenied,
+        StatusCodes.Status403Forbidden,
+        "TEAM_AUTOMATION_NYXID_OPERATION_DENIED",
+        "NyxID policy denies this scheduled operation.",
+        false)]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.NyxIdOperationAuthorityContractUnavailable,
+        StatusCodes.Status503ServiceUnavailable,
+        "TEAM_AUTOMATION_NYXID_OPERATION_AUTHORITY_CONTRACT_UNAVAILABLE",
+        "NyxID operation authorization cannot be previewed without executing the external request.",
+        false)]
+    public async Task Preflight_WhenNyxIdOperationPolicyBlocks_ShouldReturnSanitizedTypedResult(
+        ScheduledInvocationAuthorizationFailureCode failureCode,
+        int expectedStatusCode,
+        string expectedCode,
+        string expectedMessage,
+        bool expectedRetryable)
+    {
+        var schedules = new StubSchedules
+        {
+            PreflightResult = new StudioMemberWorkflowAuthorizationResult(
+                false,
+                null,
+                failureCode,
+                "private-operation-authorization-detail"),
+        };
+
+        var result = await StudioMemberAutomationEndpoints.HandlePreflightAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            new StudioMemberAutomationPreflightRequest(
+                "0 9 * * *",
+                "UTC",
+                "run daily digest",
+                "Daily digest",
+                true),
+            schedules,
+            new StubBindingQuery(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(expectedStatusCode);
+        var value = Value(result);
+        StringProperty(value, "code").Should().Be(expectedCode);
+        StringProperty(value, "message").Should().Be(expectedMessage);
+        value.GetType().GetProperty("retryable")?.GetValue(value).Should().Be(expectedRetryable);
+        JsonSerializer.Serialize(value).Should().NotContain("private-operation-authorization-detail");
+        AssertNoCredentialMaterial(value);
+    }
+
     [Fact]
     public async Task Preflight_WhenNyxIdBindingIsMissing_ShouldReturnTypedConflictWithoutSecrets()
     {
@@ -358,6 +424,47 @@ public sealed class StudioMemberAutomationEndpointsTests
         schedules.LastCreate.ProvisioningBearerToken.Should().Be("fresh-owner-bearer");
         schedules.LastCreate.AuthenticatedOwner.Owner.OwnerSubject.Should().Be("nyx-owner-alpha");
         schedules.LastConfirmedPermissionDigest.Should().Be("permission-digest-alpha");
+    }
+
+    [Fact]
+    public async Task Create_WhenScopePlanIsDenied_ShouldReturnTypedForbidden()
+    {
+        var schedules = new StubSchedules
+        {
+            Exception = new StudioScheduledCredentialMaterializationException(
+                "api_key_scope_plan_denied",
+                effectsCleaned: true,
+                new InvalidOperationException("api_key_scope_plan_denied"),
+                failureCode: "api_key_scope_plan_denied"),
+        };
+
+        var result = await StudioMemberAutomationEndpoints.HandleCreateAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            new StudioMemberAutomationMutationRequest(
+                "0 9 * * *",
+                "UTC",
+                "run daily digest",
+                "Daily digest",
+                true,
+                "permission-digest-alpha",
+                "scheduled-invocation-auth/v1",
+                "dedicated_scheduled_invocation_agent_key",
+                "op-create",
+                "idem-create"),
+            schedules,
+            new StubBindingQuery(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status403Forbidden);
+        var response = Value(result);
+        StringProperty(response, "code").Should().Be("api_key_scope_plan_denied");
+        StringProperty(response, "message").Should()
+            .Be("NyxID denied the requested Agent Key scope for this caller.");
+        AssertNoCredentialMaterial(response);
     }
 
     [Fact]
@@ -950,7 +1057,7 @@ public sealed class StudioMemberAutomationEndpointsTests
                     request.MemberId,
                     ScheduleId,
                     "svc-alpha",
-                    "/workflow/observatory",
+                    "/admin#/observatory",
                     "pending")
                 {
                     OperationId = request.OperationId ?? "op-alpha",
@@ -960,6 +1067,12 @@ public sealed class StudioMemberAutomationEndpointsTests
         }
 
         public Task<StudioMemberWorkflowScheduleResult> ReauthorizeAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest,
+            CancellationToken ct = default) =>
+            CreateAsync(request, confirmedPermissionDigest, ct);
+
+        public Task<StudioMemberWorkflowScheduleResult> ReplaceAsync(
             StudioMemberWorkflowScheduleRequest request,
             string confirmedPermissionDigest,
             CancellationToken ct = default) =>

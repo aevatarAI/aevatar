@@ -386,10 +386,53 @@ function getToken(){ const raw=localStorage.getItem(TOKEN_KEY); if(!raw) return 
 function setToken(t){ localStorage.setItem(TOKEN_KEY, JSON.stringify(t)); }
 function clearToken(){ localStorage.removeItem(TOKEN_KEY); }
 function isEmbeddedInAdmin(){ try { return window.parent && window.parent !== window && window.frameElement && window.frameElement.getAttribute("data-console-frame") === "1"; } catch(e){ return false; } }
-function notifyAdminShellAuth(type, reason){
+function notifyAdminShellAuth(type, reason, rejectedAccessToken){
   if(!isEmbeddedInAdmin()) return false;
-  window.parent.postMessage({ source:"aevatar-backend-console-suite", type, reason: reason || "" }, location.origin);
+  window.parent.postMessage({ source:"aevatar-backend-console-suite", type, reason: reason || "", rejectedAccessToken:rejectedAccessToken || "" }, location.origin);
   return true;
+}
+function replacementToken(rejectedAccessToken){
+  const current=getToken();
+  return current&&current.access_token&&current.access_token!==rejectedAccessToken ? current : null;
+}
+async function requestAdminShellTokenRefresh(rejectedAccessToken){
+  const existing=replacementToken(rejectedAccessToken); if(existing) return existing;
+  if(!isEmbeddedInAdmin()) return null;
+  const requestId="auth-"+Date.now().toString(36)+"-"+randomString(10);
+  return await new Promise(resolve=>{
+    let timer=null,settled=false;
+    function finish(){
+      if(settled) return; settled=true;
+      window.removeEventListener("message",onMessage);
+      if(timer!==null) clearTimeout(timer);
+      resolve(replacementToken(rejectedAccessToken));
+    }
+    function onMessage(ev){
+      const msg=ev.data||{};
+      if(ev.origin===location.origin&&ev.source===window.parent&&msg.source==="aevatar-backend-console-suite"&&msg.type==="auth-refresh-result"&&msg.requestId===requestId) finish();
+    }
+    window.addEventListener("message",onMessage);
+    timer=setTimeout(finish,10000);
+    window.parent.postMessage({source:"aevatar-backend-console-suite",type:"auth-refresh-request",requestId,rejectedAccessToken},location.origin);
+  });
+}
+async function fetchWithConsoleAuth(path,options){
+  let token=getToken(); if(!token||!token.access_token) throw new Error("not-authenticated");
+  options=options||{};
+  function request(activeToken){
+    const headers=Object.assign({},options.headers||{},{Authorization:"Bearer "+activeToken.access_token});
+    return fetch(path,Object.assign({},options,{headers}));
+  }
+  let res=await request(token);
+  if(res.status!==401) return res;
+  let replacement=replacementToken(token.access_token);
+  if(!replacement) replacement=await requestAdminShellTokenRefresh(token.access_token);
+  if(replacement&&replacement.access_token!==token.access_token){
+    token=replacement; res=await request(token);
+    if(res.status!==401) return res;
+  }
+  signOutSilent(token.access_token);
+  const error=new Error("unauthorized"); error.status=401; throw error;
 }
 
 async function beginLogin(){
@@ -403,7 +446,6 @@ async function beginLogin(){
   u.searchParams.set("client_id", CFG.clientId);
   u.searchParams.set("redirect_uri", CFG.redirectUri);
   u.searchParams.set("scope", CFG.scope);
-  CFG.resources.forEach(resource => u.searchParams.append("resource", resource));
   u.searchParams.set("state", st);
   u.searchParams.set("code_challenge", challenge);
   u.searchParams.set("code_challenge_method", "S256");
@@ -424,7 +466,6 @@ async function completeLoginIfCallback(){
   form.set("redirect_uri", CFG.redirectUri);
   form.set("client_id", CFG.clientId);
   form.set("code_verifier", pending.verifier);
-  CFG.resources.forEach(resource => form.append("resource", resource));
   const res = await fetch(CFG.authority + "/oauth/token", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: form.toString() });
   sessionStorage.removeItem(PKCE_KEY);
   if(!res.ok){ console.warn("cqrs: token exchange failed", res.status); return false; }
@@ -443,15 +484,15 @@ async function fetchUserInfo(){
 function toAccount(info){ return info ? { label: info.email || info.preferred_username || info.sub || "已登录" } : null; }
 
 function signOut(){ clearToken(); if(notifyAdminShellAuth("auth-required", "已登出 NyxID，请重新登录。")) return; beginLogin(); }
-function signOutSilent(){ clearToken(); state.signedIn = false; if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。")) return; render(); }
+function signOutSilent(rejectedAccessToken){ const current=getToken(); if(rejectedAccessToken&&current&&current.access_token!==rejectedAccessToken) return false;
+  if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。",rejectedAccessToken)) return true;
+  clearToken(); state.signedIn=false;
+  render(); return true; }
 
 /* scope-gated bearer fetch helper. Attaches Bearer; 401 -> re-login. Callers inspect res.status
    themselves for non-401 handling (403 forbidden, error detail). */
 async function authFetch(path){
-  const token = getToken(); if(!token) throw new Error("not-authenticated");
-  const res = await fetch(path, { headers:{ Authorization:"Bearer " + token.access_token } });
-  if(res.status === 401){ signOutSilent(); throw new Error("unauthorized"); }
-  return res;
+  return await fetchWithConsoleAuth(path);
 }
 
 /* ===========================================================================
@@ -531,8 +572,8 @@ const ICON={
    the host page passes its own active key.
    =========================================================================== */
 const SUITE_NAV=[
-  {k:"observatory",href:"/workflow/observatory",label:"观测台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'},
-  {k:"studio",href:"/workflow/studio",label:"Studio",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>'},
+  {k:"observatory",href:"/admin#/observatory",label:"观测台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'},
+  {k:"studio",href:"/workflow/studio",label:"工作台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>'},
   {k:"schedules",href:"/schedules",label:"定时任务",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>'},
   {k:"channels",href:"/channels",label:"渠道",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.6"/><path d="M12 4.5v4.9M12 14.6v4.9M4.5 12h4.9M14.6 12h4.9"/></svg>'},
   {k:"voice",href:"/voice",label:"语音",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>'},
