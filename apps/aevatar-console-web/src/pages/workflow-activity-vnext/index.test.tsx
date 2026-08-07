@@ -174,6 +174,7 @@ jest.mock('@/shared/studio/api', () => ({
     getWorkflow: jest.fn(),
     getWorkflowDraft: jest.fn(),
     getWorkflowDraftFile: jest.fn(),
+    listMembers: jest.fn(),
     listWorkflowDrafts: jest.fn(),
     parseYaml: jest.fn(),
     previewExplicitRequests: jest.fn(),
@@ -181,6 +182,7 @@ jest.mock('@/shared/studio/api', () => ({
     saveAndBindWorkflow: jest.fn(),
     saveUserLlmSettings: jest.fn(),
     serializeYaml: jest.fn(),
+    updateMemberDisplayName: jest.fn(),
     updateWorkflowDraft: jest.fn(),
   },
 }));
@@ -304,6 +306,7 @@ const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
   getWorkflow: jest.Mock;
   getWorkflowDraft: jest.Mock;
   getWorkflowDraftFile: jest.Mock;
+  listMembers: jest.Mock;
   listWorkflowDrafts: jest.Mock;
   parseYaml: jest.Mock;
   previewExplicitRequests: jest.Mock;
@@ -311,6 +314,7 @@ const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
   saveAndBindWorkflow: jest.Mock;
   saveUserLlmSettings: jest.Mock;
   serializeYaml: jest.Mock;
+  updateMemberDisplayName: jest.Mock;
   updateWorkflowDraft: jest.Mock;
 };
 const mockCreateWorkflowRevisionIdentityCandidate = jest.requireMock(
@@ -354,6 +358,16 @@ describe('Workflow Activity vNext catalogue', () => {
       targetActorId: 'deployment-manager-alpha',
       commandId: 'cmd-archive-alpha',
       correlationId: 'corr-archive-alpha',
+    });
+    mockStudioApi.listMembers.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      members: [],
+      nextPageToken: null,
+    });
+    mockStudioApi.updateMemberDisplayName.mockResolvedValue({
+      status: 'accepted',
+      scopeId: 'scope-alpha',
+      memberId: 'm-alpha',
     });
   });
 
@@ -847,6 +861,74 @@ describe('Workflow Activity vNext catalogue', () => {
     );
     expect(await screen.findByText('APAC support triage')).toBeVisible();
     expect(mockStudioApi.getWorkflowDraft).toHaveBeenCalledTimes(3);
+    expect(mockConsoleToast.success).toHaveBeenCalledWith('Workflow renamed');
+  });
+
+  it('renames a published-only member through its explicit workflow binding identity', async () => {
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
+    mockStudioApi.listMembers.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      members: [
+        {
+          memberId: 'm-alpha',
+          scopeId: 'scope-alpha',
+          displayName: 'Published workflow',
+          description: '',
+          implementationKind: 'workflow',
+          implementationRef: {
+            implementationKind: 'workflow',
+            workflowId: 'wf-alpha',
+          },
+          lifecycleStage: 'bind_ready',
+          publishedServiceId: 'svc-alpha',
+          lastBoundRevisionId: 'rev-alpha',
+          teamId: 't-alpha',
+          createdAt: '2026-08-06T09:00:00Z',
+          updatedAt: '2026-08-06T10:00:00Z',
+        },
+      ],
+      nextPageToken: null,
+    });
+    mockScopesApi.listWorkflows.mockResolvedValue([
+      {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-alpha',
+        displayName: 'Published workflow',
+        serviceKey: 'scope-alpha:default:default:svc-alpha',
+        workflowName: 'published_workflow',
+        actorId: 'actor-alpha',
+        activeRevisionId: 'rev-alpha',
+        deploymentId: 'dep-alpha',
+        deploymentStatus: 'Active',
+        updatedAt: '2026-08-06T10:00:00Z',
+      },
+    ]);
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const publishedRow = (
+      await screen.findByText('Published workflow')
+    ).closest('tr');
+    fireEvent.click(
+      within(publishedRow as HTMLElement).getByRole('button', {
+        name: 'More actions for Published workflow in Workspace',
+      }),
+    );
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Workflow name' }), {
+      target: { value: 'Published workflow renamed' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+
+    await waitFor(() =>
+      expect(mockStudioApi.updateMemberDisplayName).toHaveBeenCalledWith({
+        scopeId: 'scope-alpha',
+        memberId: 'm-alpha',
+        displayName: 'Published workflow renamed',
+      }),
+    );
+    expect(mockStudioApi.getWorkflowDraft).not.toHaveBeenCalled();
+    expect(await screen.findByText('Published workflow renamed')).toBeVisible();
     expect(mockConsoleToast.success).toHaveBeenCalledWith('Workflow renamed');
   });
 

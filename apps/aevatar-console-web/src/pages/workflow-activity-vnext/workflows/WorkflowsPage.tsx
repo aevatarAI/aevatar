@@ -22,7 +22,11 @@ import {
   scopeServiceNamespace,
 } from '@/shared/runs/scopeConsole';
 import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
-import type { StudioWorkflowDraftSummary } from '@/shared/studio/models';
+import type {
+  StudioMemberRoster,
+  StudioMemberSummary,
+  StudioWorkflowDraftSummary,
+} from '@/shared/studio/models';
 import AevatarContentSkeleton from '@/shared/ui/AevatarContentSkeleton';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
@@ -48,6 +52,7 @@ type WorkflowRow = {
   readonly description: string;
   readonly hasCommittedSource: boolean;
   readonly hasDraftSource: boolean;
+  readonly memberId: string;
   readonly name: string;
   readonly ownershipLabel: string;
   readonly stepCount?: number;
@@ -67,6 +72,7 @@ function toDraftRow(
     deploymentStatus: committed?.deploymentStatus ?? '',
     hasCommittedSource: Boolean(committed),
     hasDraftSource: true,
+    memberId: committed?.memberId ?? '',
     name: item.name,
     ownershipLabel:
       item.directoryLabel.trim() ||
@@ -77,7 +83,10 @@ function toDraftRow(
   };
 }
 
-function toCommittedRow(item: ScopeWorkflowSummary): WorkflowRow {
+function toCommittedRow(
+  item: ScopeWorkflowSummary,
+  member?: StudioMemberSummary,
+): WorkflowRow {
   return {
     activeRevisionId: item.activeRevisionId.trim(),
     description: '',
@@ -85,7 +94,8 @@ function toCommittedRow(item: ScopeWorkflowSummary): WorkflowRow {
     deploymentStatus: item.deploymentStatus.trim(),
     hasCommittedSource: true,
     hasDraftSource: false,
-    name: item.displayName || item.workflowName,
+    memberId: member?.memberId.trim() ?? '',
+    name: member?.displayName.trim() || item.displayName || item.workflowName,
     ownershipLabel: t(
       'workflowActivityVNext.workflows.workspaceOwner',
       'Workspace',
@@ -179,6 +189,11 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     queryFn: () => scopesApi.listWorkflows(scopeId),
     retry: false,
   });
+  const members = useQuery({
+    queryKey: ['workflow-activity-vnext', 'members', scopeId],
+    queryFn: () => studioApi.listMembers(scopeId),
+    retry: false,
+  });
 
   React.useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -199,10 +214,33 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     () => new Set((drafts.data ?? []).map((item) => item.workflowId)),
     [drafts.data],
   );
+  const membersByWorkflowId = React.useMemo(() => {
+    const resolved = new Map<string, StudioMemberSummary | null>();
+    for (const member of members.data?.members ?? []) {
+      if (
+        member.implementationKind !== 'workflow' ||
+        member.implementationRef?.implementationKind !== 'workflow'
+      )
+        continue;
+      const boundWorkflowId = member.implementationRef.workflowId?.trim() ?? '';
+      if (!boundWorkflowId) continue;
+      resolved.set(
+        boundWorkflowId,
+        resolved.has(boundWorkflowId) ? null : member,
+      );
+    }
+    return resolved;
+  }, [members.data]);
   const rows = React.useMemo(() => {
     const merged = new Map<string, WorkflowRow>();
     for (const item of committed.data ?? [])
-      merged.set(item.workflowId, toCommittedRow(item));
+      merged.set(
+        item.workflowId,
+        toCommittedRow(
+          item,
+          membersByWorkflowId.get(item.workflowId) ?? undefined,
+        ),
+      );
     for (const item of drafts.data ?? [])
       merged.set(
         item.workflowId,
@@ -227,7 +265,14 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           Date.parse(right.updatedAtUtc ?? '') -
           Date.parse(left.updatedAtUtc ?? ''),
       );
-  }, [committed.data, draftWorkflowIds, drafts.data, query, view]);
+  }, [
+    committed.data,
+    draftWorkflowIds,
+    drafts.data,
+    membersByWorkflowId,
+    query,
+    view,
+  ]);
   const totalFailure = drafts.isError && committed.isError;
   const filtersActive = Boolean(query.trim()) || view !== 'active';
   const renameDuplicates = React.useMemo(() => {
@@ -278,6 +323,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const retry = () => {
     void drafts.refetch();
     void committed.refetch();
+    void members.refetch();
   };
 
   const copyWorkflowReference = async (row: WorkflowRow) => {
@@ -317,39 +363,63 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     if (!renameTarget || !workflowName || renaming) return;
     setRenaming(true);
     try {
-      const draft = await studioApi.getWorkflowDraft(
-        renameTarget.workflowId,
-        scopeId,
-      );
-      const parsed = await studioApi.parseYaml({ yaml: draft.yaml });
-      if (!parsed.document)
-        throw new Error('Workflow YAML could not be parsed');
-      const serialized = await studioApi.serializeYaml({
-        document: {
-          ...parsed.document,
-          name: workflowName,
-        },
-      });
-      await studioApi.updateWorkflowDraft({
-        directoryId: draft.directoryId,
-        fileName: draft.fileName,
-        layout: draft.layout,
-        scopeId,
-        workflowId: renameTarget.workflowId,
-        workflowName,
-        yaml: serialized.yaml,
-      });
-      const observation = await observeDraftMaterialization({
-        workflowId: renameTarget.workflowId,
-        read: (workflowId) => studioApi.getWorkflowDraft(workflowId, scopeId),
-        isNotFound: (candidate) => isStudioApiStatus(candidate, 404),
-        isObserved: (candidate) => candidate.name.trim() === workflowName,
-      });
-      if (observation.kind === 'delayed') {
-        throw new Error('Workflow rename was not observed');
+      if (renameTarget.hasDraftSource) {
+        const draft = await studioApi.getWorkflowDraft(
+          renameTarget.workflowId,
+          scopeId,
+        );
+        const parsed = await studioApi.parseYaml({ yaml: draft.yaml });
+        if (!parsed.document)
+          throw new Error('Workflow YAML could not be parsed');
+        const serialized = await studioApi.serializeYaml({
+          document: {
+            ...parsed.document,
+            name: workflowName,
+          },
+        });
+        await studioApi.updateWorkflowDraft({
+          directoryId: draft.directoryId,
+          fileName: draft.fileName,
+          layout: draft.layout,
+          scopeId,
+          workflowId: renameTarget.workflowId,
+          workflowName,
+          yaml: serialized.yaml,
+        });
+        const observation = await observeDraftMaterialization({
+          workflowId: renameTarget.workflowId,
+          read: (workflowId) => studioApi.getWorkflowDraft(workflowId, scopeId),
+          isNotFound: (candidate) => isStudioApiStatus(candidate, 404),
+          isObserved: (candidate) => candidate.name.trim() === workflowName,
+        });
+        if (observation.kind === 'delayed') {
+          throw new Error('Workflow rename was not observed');
+        }
+        const refreshed = await drafts.refetch();
+        if (refreshed.isError) throw refreshed.error;
+      } else if (renameTarget.memberId) {
+        await studioApi.updateMemberDisplayName({
+          scopeId,
+          memberId: renameTarget.memberId,
+          displayName: workflowName,
+        });
+        queryClient.setQueryData<StudioMemberRoster | undefined>(
+          ['workflow-activity-vnext', 'members', scopeId],
+          (current) =>
+            current
+              ? {
+                  ...current,
+                  members: current.members.map((member) =>
+                    member.memberId === renameTarget.memberId
+                      ? { ...member, displayName: workflowName }
+                      : member,
+                  ),
+                }
+              : current,
+        );
+      } else {
+        throw new Error('Workflow has no rename authority');
       }
-      const refreshed = await drafts.refetch();
-      if (refreshed.isError) throw refreshed.error;
       setRenameTarget(null);
       setRenameName('');
       toast.success(
@@ -734,7 +804,8 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                 const description = row.description.trim();
                 const isArchived = isWorkflowArchived(row);
                 const isPublished = Boolean(row.activeRevisionId);
-                const showRenameAction = row.hasDraftSource;
+                const showRenameAction =
+                  row.hasDraftSource || Boolean(row.memberId);
                 const showDeleteDraftAction =
                   row.hasDraftSource && (view === 'drafts' || !isPublished);
                 const showArchiveAction =
