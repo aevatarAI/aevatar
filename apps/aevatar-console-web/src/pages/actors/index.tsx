@@ -51,6 +51,7 @@ import {
   truncateMiddle,
 } from "@/shared/ui/compactText";
 import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
+import AevatarContentSkeleton from "@/shared/ui/AevatarContentSkeleton";
 import {
   buildAevatarPanelStyle,
   buildAevatarTagStyle,
@@ -1486,7 +1487,15 @@ export const TopologyExplorerPage: React.FC<{
             title={t("pages.actors.index.traceable.objects.2", "Traceable objects")}
             extra={<Tag color="default">{t("pages.actors.index.real.time", "real time")}</Tag>}
           >
-            {displayActors.length > 0 ? (
+            {actorsQuery.isLoading ? (
+              <AevatarContentSkeleton
+                ariaLabel={t("pages.actors.index.reading", "Reading traceable objects")}
+                columnWidths={["1.4fr", "1fr", "1fr", "1.2fr", 160]}
+                rows={4}
+                tableMinWidth={actorTableMinWidth}
+                variant="table"
+              />
+            ) : displayActors.length > 0 ? (
               <div className="topology-actor-table-shell" style={actorTableShellStyle}>
                 <Table<DisplayActorRecord>
                   className="topology-actor-table"

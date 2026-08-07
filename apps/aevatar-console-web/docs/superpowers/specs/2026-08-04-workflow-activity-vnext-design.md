@@ -140,8 +140,10 @@ identity.
   other IDs must never be used to reconstruct it.
 - `workflowId` identifies a workspace draft or scope Workflow definition. It
   is not a member ID and is not automatically callable.
-- `definitionActorId` comes from `ScopeWorkflowDetail.source` and is the only
-  reviewed identity suitable for the Activity `definition` filter.
+- `workflowId` from a catalogue row is the URL-owned Workflow filter context.
+  Activity resolves that exact scoped identity through `ScopeWorkflowDetail`;
+  only the returned `definitionActorId` may become the observatory
+  `definition` request filter.
 - `memberId` remains Team-member authority. The vNext draft routes do not
   invent one or route through member APIs.
 - `publishedServiceId` is a callable runtime identity. It must be supplied by
@@ -309,7 +311,7 @@ The Excalidraw frame order is the review order and acceptance checklist:
 | 06 Template - populated Workflow draft | A chosen template creates an independent editable draft | Templates are versioned frontend product content unless an authoritative catalogue already exists; they are never pretend backend records |
 | 07 Run - unified execution dialog | Confirm target, input, connections, and external effects | Show only facts supported by the current document and capability preview; do not claim that Activity has already saved the Run |
 | 08 Running draft - Studio canvas and Run console | Keep the editor context while streaming accepted/running output | Show `Accepted` or `Running`, then separately show `Observed in Activity` only after the observatory returns the Run |
-| 09 Activity - filtered by Workflow | Enter Activity with a Workflow filter | Resolve `definitionActorId` from Workflow detail; never filter by display name or guessed actor ID |
+| 09 Activity - filtered by Workflow | Enter Activity with the row's `workflowId` visible in the URL and page | Resolve `definitionActorId` from Workflow detail before querying Runs; never filter by display name or guessed actor ID, and never fall back to global Runs when resolution fails |
 | 10 Activity - all retained Runs | Newest-first scope ledger with server filters | The endpoint is bounded by `take`; call it recent retained Runs, never claim a complete lifetime total |
 | 11 Run detail - immutable record | Input, output/error, diagnostics, steps, timeline, graph, statistics, and usage | Detail-level duration and usage are derived only from detail DTO fields; the source record is read-only |
 | 12 Failed Run - recovery creates a new record | Explain failure and preview Retry or Run again | Fork returns a new accepted receipt; it never edits the source Run and durable lineage is not claimed |
@@ -342,6 +344,12 @@ immutable source until the user explicitly saves a draft copy. That first
 save uses draft creation, not draft update. The create response's
 `workflowId` becomes canonical after materialization, and the editor replaces
 the route if it differs from the committed source ID.
+
+Each catalogue row keeps exactly three persistent actions: primary `Open`,
+neutral `View activity`, and neutral `More actions`. `Rename`, `Copy workflow
+reference`, and `Delete draft` belong in the overflow menu. `Delete draft` is
+the final item, separated from ordinary actions, presented as dangerous, and
+opens the existing confirmation before any mutation occurs.
 
 `Run` follows this policy:
 
@@ -468,11 +476,16 @@ approval data live in detail and do not form a stable list filter contract.
 
 ### Workflow Filter
 
-Opening Activity from a Workflow resolves its
-`ScopeWorkflowDetail.source.definitionActorId`, then sends that exact value as
-the observatory `definition` filter. If the source is not available, the UI
-opens unfiltered Activity and explains that the Workflow-specific filter is
-unavailable. It must not substitute Workflow name or parse any actor string.
+Opening Activity from a catalogue row immediately encodes that row's exact
+`workflowId` in the Activity URL. Activity keeps that filter visible and
+removable, resolves the exact scoped Workflow detail, then sends only its
+`ScopeWorkflowDetail.source.definitionActorId` as the observatory `definition`
+filter. Refresh, copied URLs, back, and forward therefore restore the same
+Workflow context. If the URL identity is missing, the detail request fails, or
+the source has no definition identity, the UI shows an honest invalid, error,
+or unavailable state and does not issue an unfiltered Runs query. Removing the
+filter returns to global Activity. The UI must not substitute Workflow name,
+`memberId`, `publishedServiceId`, or a parsed actor string.
 
 ### Immutable Run Detail
 
@@ -517,9 +530,11 @@ menu that preserves the same section labels and focus behavior.
 
 Normal state contains two decisions: Preferred service and Default model.
 Changing service refreshes the valid model choices. Dirty state alone reveals
-the sticky Discard and Save changes bar. Save uses the existing LLM settings
-contract and follows accepted-to-observed semantics; success appears only when
-the authoritative query observes the selected values.
+the shell-fixed Restore and Save changes dock. Settings keeps the shell footer
+slot mounted in clean and dirty states so showing the dock does not remount the
+form or move focus. Save uses the existing LLM settings contract and follows
+accepted-to-observed semantics; success appears only when the authoritative
+query observes the selected values.
 
 Fallback, provider unavailable, and catalogue unavailable are exceptional
 states with direct recovery actions. The UI must not silently select and save
@@ -663,7 +678,7 @@ hierarchy and density while using production tokens and real data states.
 | Fork | Failed | Source remains unchanged; inputs preserved | Retry request |
 | Settings | Loading | Stable controls without default invention | Wait |
 | Settings | Clean | Quiet current values | Edit |
-| Settings | Dirty | Sticky Discard and Save changes | Save or discard |
+| Settings | Dirty | Shell-fixed Restore and Save changes dock | Save or restore |
 | Settings | Save accepted | Confirming saved values | Continue observing |
 | Settings | Save failed | Preserve dirty choices | Retry or discard |
 | Settings | Catalogue unavailable | Existing choice remains visible | Retry catalogue |
@@ -686,8 +701,9 @@ hierarchy and density while using production tokens and real data states.
   do not optimistically synthesize authoritative IDs or projection versions.
 - Save and Run failures keep user-authored input. A retry repeats only the
   user's explicit action.
-- `Open Activity` from a Workflow uses an authoritative definition filter when
-  available. `Back to Workflow` appears only when the Run response provides a
+- `Open Activity` from a Workflow carries the catalogue row's authoritative
+  `workflowId` in the URL and resolves the definition filter at the Activity
+  boundary. `Back to Workflow` appears only when the Run response provides a
   trustworthy association; name matching is insufficient.
 - Browser back closes modal/detail layers before leaving the owning workbench
   when those layers are URL-addressable.
@@ -1042,8 +1058,10 @@ are true:
   never inferred from one another.
 - Run shows Accepted/Running separately from Activity observation and never
   fabricates an Activity record.
-- Activity filters use only supported server parameters and authoritative
-  definition identity.
+- Activity URLs preserve the catalogue row's authoritative `workflowId`, and
+  Activity sends only the resolved definition identity through supported
+  server parameters. Missing or invalid Workflow context never falls back to
+  an unfiltered Runs query.
 - Activity list rows contain only summary facts; duration, usage, diagnostics,
   and outputs appear only from Run detail.
 - Run detail is immutable, and Retry/Run again always create a new accepted

@@ -233,4 +233,28 @@ describe('workflowActivityApi', () => {
       'runId must not be blank',
     );
   });
+
+  it('preserves typed failure guidance for actionable run toasts', async () => {
+    global.fetch = jest.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          code: 'RATE_LIMITED',
+          correlationId: 'corr-alpha',
+          message: 'The request quota has been reached.',
+          retryAfterSeconds: 17,
+        },
+        429,
+      ),
+    ) as typeof global.fetch;
+
+    await expect(
+      workflowActivityApi.getRun('scope-alpha', 'run-alpha'),
+    ).rejects.toMatchObject({
+      code: 'RATE_LIMITED',
+      correlationId: 'corr-alpha',
+      message: 'The request quota has been reached.',
+      retryAfterSeconds: 17,
+      status: 429,
+    });
+  });
 });

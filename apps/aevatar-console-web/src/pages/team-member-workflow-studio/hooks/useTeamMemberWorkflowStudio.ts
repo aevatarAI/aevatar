@@ -269,8 +269,6 @@ type TeamMemberWorkflowStudioState = {
   readonly save: () => void;
   readonly savePending: boolean;
   readonly savePlaceholderReason: string;
-  readonly workflowActionError: string;
-  readonly clearWorkflowActionError: () => void;
   readonly draftRunPanelOpen: boolean;
   readonly selectedEdgeId: string;
   readonly selectedNodeId: string;
@@ -1184,7 +1182,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     React.useState<StudioMemberBindingRunStatusResponse | null>(null);
   const [publishError, setPublishError] = React.useState('');
   const [publishErrorVisible, setPublishErrorVisible] = React.useState(true);
-  const [workflowActionError, setWorkflowActionError] = React.useState('');
   const [nodeLibraryOpen, setNodeLibraryOpen] = React.useState(false);
   const [draftRunPanelOpen, setDraftRunPanelOpen] = React.useState(false);
   const [yamlPanelOpen, setYamlPanelOpen] = React.useState(false);
@@ -1768,21 +1765,12 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       return saveOutcome;
     },
     onError: () => {
-      setWorkflowActionError(
-        t(
-          'teamMemberWorkflowStudio.alerts.draftSaveFailed.description',
-          "We couldn't save the workflow draft. Review your changes and try again.",
-        ),
-      );
       toast.error(
         t(
           'teamMemberWorkflowStudio.toast.draftSaveFailed',
           'Could not save the workflow draft. Review the details and try again.',
         ),
       );
-    },
-    onMutate: () => {
-      setWorkflowActionError('');
     },
     onSuccess: (saveOutcome, variables) => {
       markSavedDraft(
@@ -1815,12 +1803,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       if (
         !(error instanceof PublishWorkflowStatusError && !error.showAsError)
       ) {
-        setWorkflowActionError(
-          t(
-            'teamMemberWorkflowStudio.alerts.saveAndPublishFailed.description',
-            "We couldn't validate and publish the workflow. Review the workflow and try again.",
-          ),
-        );
         toast.error(
           t(
             'teamMemberWorkflowStudio.toast.saveAndPublishFailed',
@@ -1828,9 +1810,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           ),
         );
       }
-    },
-    onMutate: () => {
-      setWorkflowActionError('');
     },
     onSuccess: ({ materializedWorkflow, savedDraft }, variables) => {
       markSavedDraft(savedDraft, ['published'], variables.draftRevision);
@@ -1958,17 +1937,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     onError: (error) => {
       const memberLinkPending =
         error instanceof CreatedWorkflowMemberLinkPendingError;
-      setWorkflowActionError(
-        memberLinkPending
-          ? t(
-              'teamMemberWorkflowStudio.alerts.memberLinkFailed.description',
-              "We couldn't finish linking the workflow member. Your draft is still available. Save again to retry.",
-            )
-          : t(
-              'teamMemberWorkflowStudio.alerts.memberCreateFailed.description',
-              "We couldn't create the workflow member. Review your changes and try again.",
-            ),
-      );
       toast.error(
         memberLinkPending
           ? t(
@@ -1980,9 +1948,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
               'Could not create the workflow member. Review the details and try again.',
             ),
       );
-    },
-    onMutate: () => {
-      setWorkflowActionError('');
     },
     onSuccess: ({ memberId, savedDraft, workflowId }) => {
       setPendingCreatedWorkflowMemberLink(null);
@@ -2080,21 +2045,12 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       };
     },
     onError: () => {
-      setWorkflowActionError(
-        t(
-          'teamMemberWorkflowStudio.alerts.draftSaveFailed.description',
-          "We couldn't save the workflow draft. Review your changes and try again.",
-        ),
-      );
       toast.error(
         t(
           'teamMemberWorkflowStudio.toast.draftSaveFailed',
           'Could not save the workflow draft. Review the details and try again.',
         ),
       );
-    },
-    onMutate: () => {
-      setWorkflowActionError('');
     },
     onSuccess: ({ savedDraft, workflowId }) => {
       cacheSavedWorkflowDraft(savedDraft);
@@ -3616,8 +3572,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       createWorkflowMemberMutation.isPending ||
       createUnlinkedMemberDraftMutation.isPending,
     savePlaceholderReason,
-    workflowActionError,
-    clearWorkflowActionError: () => setWorkflowActionError(''),
     draftRunPanelOpen,
     selectedEdgeId,
     selectedNodeId,

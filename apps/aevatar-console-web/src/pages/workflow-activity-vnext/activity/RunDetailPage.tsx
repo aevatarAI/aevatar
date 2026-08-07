@@ -8,9 +8,16 @@ import {
   workflowActivityApi,
 } from '@/shared/api/workflowActivityApi';
 import { t } from '@/shared/i18n/messages';
-import type { WorkflowRunForkAcceptedReceipt } from '@/shared/models/workflowActivity';
+import type {
+  WorkflowActivityRunDetail,
+  WorkflowRunForkAcceptedReceipt,
+} from '@/shared/models/workflowActivity';
 import { history } from '@/shared/navigation/history';
-import { buildWorkflowActivitySectionHref } from '../navigation';
+import { useConsoleToast } from '@/shared/ui/ConsoleToast';
+import {
+  buildWorkflowActivityRunHref,
+  buildWorkflowActivitySectionHref,
+} from '../navigation';
 import TableScrollRegion from '../TableScrollRegion';
 import TechnicalDetails from '../TechnicalDetails';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
@@ -21,6 +28,12 @@ import {
   getStepDisplayName,
   getTimelineEventLabel,
 } from './runDetailPresentation';
+import {
+  classifyRunFailure,
+  type RunFailureAction,
+  type RunFailureEvidence,
+  RunFailureToastContent,
+} from './runFailurePresentation';
 import { getRunOriginLabel, getRunStatusPresentation } from './runPresentation';
 import { resolveRunRecovery } from './runRecovery';
 
@@ -44,6 +57,45 @@ function failureTitle(error: unknown): string {
     }
   }
   return t('workflowActivityVNext.run.unavailable', 'Run unavailable');
+}
+
+function readApiFailure(error: unknown): RunFailureEvidence | null {
+  if (error instanceof WorkflowActivityApiError) {
+    return {
+      code: error.code,
+      correlationId: error.correlationId,
+      message: error.message,
+      retryAfterSeconds: error.retryAfterSeconds,
+      status: error.status,
+    };
+  }
+  if (error instanceof Error) return { message: error.message };
+  return null;
+}
+
+function readCommittedRunFailure(
+  run: WorkflowActivityRunDetail | undefined,
+): RunFailureEvidence | null {
+  if (!run) return null;
+  const status = run.summary.status.trim().toLowerCase();
+  if (status === 'cancelled' || status === 'canceled') {
+    return {
+      code: 'RUN_CANCELLED',
+      message: t('workflowActivityVNext.failure.cancelled', 'Run cancelled.'),
+    };
+  }
+  if (run.summary.success !== false && status !== 'failed') return null;
+
+  const primaryDiagnostic = run.diagnostics.find(
+    (diagnostic) => diagnostic.severity.trim().toLowerCase() === 'error',
+  );
+  return {
+    code: primaryDiagnostic?.code,
+    message:
+      primaryDiagnostic?.message ||
+      run.finalError ||
+      run.steps.find((step) => step.error)?.error,
+  };
 }
 
 function RunFailureSummary({
@@ -190,6 +242,7 @@ const RunDetailPage: React.FC<{
   readonly runId: string;
   readonly scopeId: string;
 }> = ({ runId, scopeId }) => {
+  const toast = useConsoleToast();
   const detail = useQuery({
     queryKey: ['workflow-activity-vnext', 'run-detail', scopeId, runId],
     queryFn: () => workflowActivityApi.getRun(scopeId, runId),
@@ -201,7 +254,6 @@ const RunDetailPage: React.FC<{
     retry: false,
   });
   const [forking, setForking] = React.useState(false);
-  const [forkError, setForkError] = React.useState('');
   const [receipt, setReceipt] =
     React.useState<WorkflowRunForkAcceptedReceipt | null>(null);
   const [pendingRecovery, setPendingRecovery] = React.useState<{
@@ -209,12 +261,68 @@ const RunDetailPage: React.FC<{
     readonly stepId: string;
   } | null>(null);
   const [activeTab, setActiveTab] = React.useState('overview');
+  const shownFailureKeys = React.useRef(new Set<string>());
+
+  const failurePresentation = React.useMemo(() => {
+    const evidence = detail.error
+      ? readApiFailure(detail.error)
+      : readCommittedRunFailure(detail.data);
+    return evidence ? classifyRunFailure(evidence) : null;
+  }, [detail.data, detail.error]);
+
+  const performFailureAction = React.useCallback(
+    (action: RunFailureAction) => {
+      const activityHref = buildWorkflowActivitySectionHref(
+        scopeId,
+        'activity',
+      );
+      switch (action) {
+        case 'sign_in': {
+          const returnTo = buildWorkflowActivityRunHref(scopeId, runId);
+          history.push(`/login?redirect=${encodeURIComponent(returnTo)}`);
+          return;
+        }
+        case 'open_settings':
+          history.push(buildWorkflowActivitySectionHref(scopeId, 'settings'));
+          return;
+        case 'back_to_activity':
+        case 'open_activity':
+          history.push(activityHref);
+          return;
+        case 'reload':
+        case 'retry':
+          void detail.refetch();
+          void graph.refetch();
+          return;
+        case 'review_input':
+          return;
+      }
+    },
+    [detail, graph, runId, scopeId],
+  );
+
+  React.useEffect(() => {
+    if (!failurePresentation) return;
+    const key = `run-failure:${runId}:${failurePresentation.category}`;
+    if (shownFailureKeys.current.has(key)) return;
+    shownFailureKeys.current.add(key);
+    toast[failurePresentation.intent](
+      <RunFailureToastContent
+        onAction={
+          failurePresentation.action === 'review_input'
+            ? undefined
+            : performFailureAction
+        }
+        presentation={failurePresentation}
+      />,
+      { duration: failurePresentation.duration, key },
+    );
+  }, [failurePresentation, performFailureAction, runId, toast]);
 
   const recovery = resolveRunRecovery(detail.data?.steps ?? [], graph.data);
   const fork = async (startAtStepId: string): Promise<boolean> => {
     if (forking) return false;
     setForking(true);
-    setForkError('');
     try {
       setReceipt(
         await workflowActivityApi.forkRun({
@@ -224,8 +332,13 @@ const RunDetailPage: React.FC<{
         }),
       );
       return true;
-    } catch (error) {
-      setForkError(errorMessage(error));
+    } catch {
+      toast.error(
+        t(
+          'workflowActivityVNext.run.startFailed',
+          "The new run couldn't be started",
+        ),
+      );
       return false;
     } finally {
       setForking(false);
@@ -390,17 +503,6 @@ const RunDetailPage: React.FC<{
           </Button>
         </Space>
       </div>
-      {forkError ? (
-        <Alert
-          description={<TechnicalDetails>{forkError}</TechnicalDetails>}
-          message={t(
-            'workflowActivityVNext.run.startFailed',
-            "The new run couldn't be started",
-          )}
-          showIcon
-          type="error"
-        />
-      ) : null}
       {receipt ? (
         <Alert
           action={
@@ -1036,17 +1138,6 @@ const RunDetailPage: React.FC<{
             },
           ]}
         />
-        {forkError ? (
-          <Alert
-            description={<TechnicalDetails>{forkError}</TechnicalDetails>}
-            message={t(
-              'workflowActivityVNext.run.startFailed',
-              "The new run couldn't be started",
-            )}
-            showIcon
-            type="error"
-          />
-        ) : null}
       </Modal>
     </WorkflowActivityVNextShell>
   );
