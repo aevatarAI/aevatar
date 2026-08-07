@@ -3,6 +3,7 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.Tools;
 using FluentAssertions;
 
 namespace Aevatar.AI.Tests;
@@ -25,7 +26,7 @@ public sealed class NyxIdServiceAccountsToolTests
                   }
                   """);
         using var client = CreateClient(handler);
-        var tool = await DiscoverToolAsync(client);
+        var tool = CreateTool(client);
         using var _ = PushSourceReadableBearer();
 
         var list = await tool.ExecuteAsync(
@@ -58,7 +59,7 @@ public sealed class NyxIdServiceAccountsToolTests
     {
         var handler = new RecordingHandler();
         using var client = CreateClient(handler);
-        var tool = await DiscoverToolAsync(client);
+        var tool = CreateTool(client);
         using var _ = PushSourceReadableBearer();
 
         string[] results =
@@ -83,7 +84,7 @@ public sealed class NyxIdServiceAccountsToolTests
     {
         var handler = new RecordingHandler();
         using var client = CreateClient(handler);
-        var tool = await DiscoverToolAsync(client);
+        var tool = CreateTool(client);
         using var _ = PushSourceReadableBearer();
 
         var result = await tool.ExecuteAsync("""{"action":"show"}""");
@@ -97,7 +98,7 @@ public sealed class NyxIdServiceAccountsToolTests
     {
         var handler = new RecordingHandler();
         using var client = CreateClient(handler);
-        var tool = await DiscoverToolAsync(client);
+        var tool = CreateTool(client);
         using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
         {
             Credentials = new AgentToolCredentials(
@@ -118,7 +119,7 @@ public sealed class NyxIdServiceAccountsToolTests
     {
         var handler = new RecordingHandler();
         using var client = CreateClient(handler);
-        var tool = await DiscoverToolAsync(client);
+        var tool = CreateTool(client);
 
         tool.ApprovalMode.Should().Be(ToolApprovalMode.NeverRequire);
         tool.IsReadOnly.Should().BeTrue();
@@ -156,7 +157,7 @@ public sealed class NyxIdServiceAccountsToolTests
             """;
         var handler = new RecordingHandler(_ => response);
         using var client = CreateClient(handler);
-        var tool = await DiscoverToolAsync(client);
+        var tool = CreateTool(client);
         using var _ = PushSourceReadableBearer();
 
         var error = await tool.ExecuteAsync("""{"action":"list"}""");
@@ -230,7 +231,7 @@ public sealed class NyxIdServiceAccountsToolTests
             """;
         var handler = new RecordingHandler(_ => listResponse);
         using var client = CreateClient(handler);
-        var tool = await DiscoverToolAsync(client);
+        var tool = CreateTool(client);
         using var _ = PushSourceReadableBearer();
 
         var list = await tool.ExecuteAsync("""{"action":"list"}""");
@@ -312,10 +313,8 @@ public sealed class NyxIdServiceAccountsToolTests
             "(?i)(name|description|secret_prefix|client_secret|created_by|unknown|must-not-pass|sensitive)");
     }
 
-    private static async Task<IAgentTool> DiscoverToolAsync(NyxIdApiClient client) =>
-        (await new NyxIdAssistantToolSource(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
-            client).DiscoverToolsAsync()).Single(tool => tool.Name == "nyxid_service_accounts");
+    private static IAgentTool CreateTool(NyxIdApiClient client) =>
+        new NyxIdServiceAccountsTool(client);
 
     private static IDisposable PushSourceReadableBearer() =>
         AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
