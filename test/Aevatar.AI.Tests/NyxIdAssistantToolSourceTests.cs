@@ -26,7 +26,6 @@ public sealed class NyxIdAssistantToolSourceTests
         "nyxid_service_pools",
         "nyxid_developer_apps",
         "nyxid_oauth_bindings",
-        "nyxid_service_accounts",
         "nyxid_approvals",
         "nyxid_endpoints",
         "nyxid_external_keys",
@@ -53,7 +52,6 @@ public sealed class NyxIdAssistantToolSourceTests
         "nyxid_service_pools",
         "nyxid_developer_apps",
         "nyxid_oauth_bindings",
-        "nyxid_service_accounts",
         "nyxid_approvals",
         "nyxid_endpoints",
         "nyxid_external_keys",
@@ -74,6 +72,9 @@ public sealed class NyxIdAssistantToolSourceTests
         var names = tools.Select(static tool => tool.Name).ToArray();
 
         names.Should().Equal(PinnedAssistantToolNames);
+        names.Should().NotContain(
+            "nyxid_service_accounts",
+            "NyxID restricts service-account reads to platform or organization administrators");
 
         foreach (var name in ManagementReadToolNames)
         {

@@ -837,7 +837,6 @@ public sealed class NyxIdChatConversationGAgentTests
         [
             "nyxid_developer_apps",
             "nyxid_oauth_bindings",
-            "nyxid_service_accounts",
         ];
         var handler = new RecordingNyxIdReadHandler();
         var options = new NyxIdToolOptions { BaseUrl = "https://nyxid.test" };
@@ -920,6 +919,7 @@ public sealed class NyxIdChatConversationGAgentTests
         var firstTools = firstRequest.Tools!;
         firstTools.Select(static tool => tool.Name).Should().Contain(expectedToolNames);
         firstTools.Select(static tool => tool.Name).Should().Contain(activatedToolNames);
+        firstTools.Should().NotContain(static tool => tool.Name == "nyxid_service_accounts");
         firstTools.Should().NotContain(static tool => tool.Name == "forged_ordinary_tool");
         firstTools.Should().NotContain(static tool => tool.Name == "nyxid_proxy");
         var activatedTools = firstTools

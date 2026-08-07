@@ -61,7 +61,6 @@ public sealed class NyxIdAssistantToolSource : IAgentToolSource
             new NyxIdServicePoolsTool(_client),
             new NyxIdDeveloperAppsTool(_client),
             new NyxIdOAuthBindingsTool(_client),
-            new NyxIdServiceAccountsTool(_client),
             ReadOnly(
                 new NyxIdApprovalsTool(_client),
                 ["list", "show", "configs", "grants"],

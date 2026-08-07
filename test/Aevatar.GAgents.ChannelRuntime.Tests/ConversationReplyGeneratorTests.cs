@@ -1057,7 +1057,6 @@ public sealed class ConversationReplyGeneratorTests
             "nyxid_profile",
             "nyxid_providers",
             "nyxid_require_service",
-            "nyxid_service_accounts",
             "nyxid_service_pools",
             "nyxid_services",
             "nyxid_sessions",
