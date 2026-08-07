@@ -133,6 +133,58 @@ pnpm --dir apps/aevatar-console-web build
 - Do not add or preserve hidden `/teams/:scopeId...` compatibility routes.
   Parse paths by resource name, not by fragile segment indexes.
 
+## Workflow Activity vNext Baseline
+
+- Before changing any route, page, component, hook, query, adapter, model,
+  style, locale, or test for
+  `/scopes/:scopeId/workflow-activity-vnext`, read all three of these sources
+  completely:
+  `docs/design-baselines/workflow-activity-vnext/README.md` and
+  `docs/superpowers/specs/2026-08-04-workflow-activity-vnext-design.md` and
+  `docs/superpowers/specs/2026-08-04-workflow-activity-vnext-user-paths.md`.
+- Treat
+  `docs/design-baselines/workflow-activity-vnext/aevatar-workflow-activity-vnext.excalidraw`
+  as the primary visual, information-architecture, and interaction reference.
+  Treat the design specification as the normative route, product identity,
+  API, state, and backend-compatibility contract. Treat the user-path
+  specification as the normative journey, decision, recovery, and completion
+  evidence contract.
+- The PNG and HTML prototypes are reference artifacts, not runtime data
+  sources. Never copy their hard-coded records, `localStorage` persistence,
+  timers, simulated receipts, or successful-looking defaults into production
+  code.
+- Production remote state must come from real API responses or real user
+  actions acknowledged by those APIs. When an API is pending, empty,
+  unavailable, delayed, or failed, render that exact state; do not insert mock
+  or fixture fallback data.
+- Keep mock and fixture data in clearly named test-only files. Production
+  routes, components, hooks, queries, and API adapters must not import them.
+- Reuse the existing protected-route, `/login`, `/auth/callback`,
+  `NyxIDAuthClient`, sanitized `returnTo`, session restoration, sign-in,
+  sign-out, and service-access review behavior. Do not create a vNext auth
+  route, provider, callback, token cache, session store, or identity fallback.
+- Reuse the existing Umi locale configuration, `ConsoleLanguageSwitch`,
+  `getLocale`/`setLocale`, message helpers, and `en-US`/`zh-CN` catalogues. Add
+  every new vNext message to both catalogues; do not create a vNext locale
+  context, storage key, or hard-coded visible-copy path.
+- Login, callback, language, and account presentation may adopt the vNext
+  visual system, but auth, redirect, callback, session, language, persistence,
+  error, and accessibility behavior must remain unchanged. If vNext hides the
+  global header, reuse its existing language/account actions inside the local
+  shell rather than cloning their logic.
+- Include the design-baseline declaration from
+  `docs/design-baselines/workflow-activity-vnext/README.md` in every vNext
+  implementation task and pull request so the Excalidraw hash, contract
+  documents, user paths, and real-API-only data-source rule are reviewable.
+- Run
+  `python3 docs/design-baselines/workflow-activity-vnext/verify-baseline.py`
+  from `apps/aevatar-console-web/` before and after changing the baseline. The
+  verifier must confirm the declared hash, deterministic generator output, and
+  exact 17-frame inventory.
+- Keep this feature frontend-only and isolated to its new route namespace.
+  Do not change backend code or alter existing Workflow, Run, Settings, Studio,
+  Team, member, redirect, or menu behavior to implement it.
+
 ## UI and Interaction
 
 - For page, component, console, playground, or visual-polish work, follow
@@ -148,6 +200,17 @@ pnpm --dir apps/aevatar-console-web build
   magic values.
 - Treat the console as an operational tool: prioritize scannability, clear
   hierarchy, predictable navigation, and efficient repeated actions.
+- Default user-facing surfaces must show only information needed to understand
+  the current task, result, or next action. Do not expose backend architecture,
+  transport, storage, or consistency terminology such as `read model`,
+  `projection`, `materialization`, `receipt`, raw actor/command/correlation
+  identifiers, state versions/watermarks, DTO or endpoint names, or query
+  sampling limits in page titles, descriptions, helper copy, primary tables,
+  empty states, or primary error messages. Preserve truthful loading, accepted,
+  delayed, and failed semantics in plain product language. When raw values are
+  genuinely useful for support or debugging, place them behind an explicit,
+  user-opened technical-details disclosure instead of making them the default
+  interface.
 - Preserve responsive behavior, keyboard access, focus visibility, semantic
   controls, and readable contrast. Verify dense real content and narrow mobile
   widths without overlap, clipping, or inaccessible actions.
@@ -156,6 +219,34 @@ pnpm --dir apps/aevatar-console-web build
   system applies.
 - Use established icon libraries and control patterns. Add accessible names or
   tooltips for icon-only or unfamiliar actions.
+
+### Action Feedback and Toasts
+
+- Use the shared `ConsoleToastProvider` and `useConsoleToast` from
+  `src/shared/ui/ConsoleToast.tsx` for transient user-action feedback. Do not
+  introduce new direct `antd` `message` or `notification` calls inside React
+  product surfaces. Non-React transport error boundaries retain their existing
+  handling unless the boundary receives a deliberate React-safe migration.
+- A success toast is evidence of a completed user-visible action, not of a
+  click, request dispatch, `202 Accepted` response, local optimistic update,
+  or background observation still in progress. Show it only after the API
+  contract has reached the state the copy claims.
+- Keep a toast short, localized, and action-oriented. Do not put endpoint
+  names, DTO fields, request IDs, raw backend errors, or recovery diagnostics
+  in it; expose those through the surface's existing technical-details path.
+- Report transient API request failures through the shared error toast. Do not
+  add page-wide warning or error banners above otherwise usable content, and
+  do not render an error while another request required to classify the same
+  state is still pending.
+- Use persistent inline state, alerts, or panels for loading, accepted,
+  observing, delayed, retryable, authorization, forbidden, and primary-content
+  failures where the user needs a durable next step. A toast must not be the
+  only evidence of a durable status or recovery action.
+- Emit at most one toast for one user action. Avoid success toasts for local
+  form edits that still require an explicit page-level save. Migrate touched
+  user-feedback paths to the shared abstraction while preserving legacy
+  behavior outside the requested surface unless a deliberate migration is in
+  scope.
 
 ## Change and Review Hygiene
 

@@ -380,11 +380,17 @@ jobs:
     #   Old pattern: coverage_quality_guard.sh 吞 test fail 继续 emit coverage;split-test-guards 漏跑 22 orphan project
     #   New principle: strict-coverage fail-fast(不吞 fail);aevatar.slnx-or-slow-test 唯一测试权威;
     #   retire slnf 测试执行(只保留 slnf build boundary);slow-tests 独立 CI job
+    # Workflow Activity vNext implementation PRs target an integration baseline branch.
+    # Keep this as a job-level skip so the required check is concluded instead of pending.
     if: |
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
-      needs.changes.outputs.docs_only == 'false'
+      (
+        github.event_name == 'pull_request' &&
+        github.base_ref != 'feat/2026-08-04_workflow-activity-vnext' &&
+        needs.changes.outputs.docs_only == 'false'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 35
     services:

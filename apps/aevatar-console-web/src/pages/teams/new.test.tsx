@@ -1,23 +1,21 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { setLocale } from '@umijs/max';
-import { message } from 'antd';
 import React from 'react';
-import { studioApi } from '@/shared/studio/api';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
 import TeamCreatePage from './new';
 
-jest.mock('antd', () => {
-  const actual = jest.requireActual('antd');
+const mockConsoleToast = {
+  error: jest.fn(),
+  info: jest.fn(),
+  success: jest.fn(),
+  warning: jest.fn(),
+};
+
+jest.mock('@/shared/ui/ConsoleToast', () => {
+  const actual = jest.requireActual('@/shared/ui/ConsoleToast');
   return {
     ...actual,
-    message: {
-      ...actual.message,
-      success: jest.fn(),
-      info: jest.fn(),
-      warning: jest.fn(),
-      error: jest.fn(),
-      destroy: jest.fn(),
-    },
+    useConsoleToast: () => mockConsoleToast,
   };
 });
 
@@ -59,21 +57,34 @@ describe('TeamCreatePage', () => {
   it('renders the simplified Team create page', async () => {
     renderWithQueryClient(React.createElement(TeamCreatePage));
 
-    const breadcrumb = await screen.findByRole('navigation', { name: '面包屑' });
+    const breadcrumb = await screen.findByRole('navigation', {
+      name: '面包屑',
+    });
     expect(screen.getAllByRole('navigation')).toHaveLength(1);
     expect(breadcrumb).toHaveTextContent('团队');
     expect(breadcrumb).toHaveTextContent('创建团队');
-    const teamsBreadcrumbLink = within(breadcrumb).getByRole('link', { name: '团队' });
-    expect(teamsBreadcrumbLink).toHaveAttribute('href', '/scopes/scope-a/teams');
-    expect(screen.getByRole('heading', { level: 2, name: '创建团队' })).toBeTruthy();
+    const teamsBreadcrumbLink = within(breadcrumb).getByRole('link', {
+      name: '团队',
+    });
+    expect(teamsBreadcrumbLink).toHaveAttribute(
+      'href',
+      '/scopes/scope-a/teams',
+    );
+    expect(
+      screen.getByRole('heading', { level: 2, name: '创建团队' }),
+    ).toBeTruthy();
     expect(screen.getByText('团队信息')).toBeTruthy();
     expect(screen.getByLabelText('队名')).toBeTruthy();
     expect(screen.getByLabelText('团队描述')).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: '创建团队' }).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByRole('button', { name: '创建团队' }).length,
+    ).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: '返回我的团队' })).toBeTruthy();
     expect(screen.queryByText('工作空间上下文')).toBeNull();
     expect(screen.queryByText('StudioTeam')).toBeNull();
-    expect(screen.queryByRole('button', { name: '继续在 Studio 中编辑' })).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: '继续在 Studio 中编辑' }),
+    ).toBeNull();
     expect(screen.queryByRole('button', { name: '查看 Behaviors' })).toBeNull();
     expect(screen.queryByText('已保存草稿')).toBeNull();
 
@@ -100,7 +111,9 @@ describe('TeamCreatePage', () => {
       json: async () => teamResponse,
     } as Response);
 
-    const { queryClient } = renderWithQueryClient(React.createElement(TeamCreatePage));
+    const { queryClient } = renderWithQueryClient(
+      React.createElement(TeamCreatePage),
+    );
 
     fireEvent.change(await screen.findByLabelText('队名'), {
       target: { value: '订单助手团队' },
@@ -132,11 +145,48 @@ describe('TeamCreatePage', () => {
     const params = new URLSearchParams(window.location.search);
     expect(params.get('scopeId')).toBeNull();
     expect(params.get('teamId')).toBeNull();
-    expect(message.success).toHaveBeenCalledWith('已创建团队。');
+    expect(mockConsoleToast.success).toHaveBeenCalledWith('已创建团队。');
+  });
+
+  it('uses a localized generic error toast without exposing server details when creation fails', async () => {
+    fetchMock.mockReset();
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          enabled: false,
+          scopeId: 'scope-a',
+          scopeSource: 'nyxid',
+        }),
+      } as Response)
+      .mockRejectedValueOnce(
+        new Error('backend request correlation: hidden-detail'),
+      );
+
+    renderWithQueryClient(React.createElement(TeamCreatePage));
+
+    fireEvent.change(await screen.findByLabelText('队名'), {
+      target: { value: '订单助手团队' },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: '创建团队' })[0]);
+
+    await waitFor(() => {
+      expect(mockConsoleToast.error).toHaveBeenCalledWith('创建团队失败。');
+    });
+    expect(mockConsoleToast.error).not.toHaveBeenCalledWith(
+      'backend request correlation: hidden-detail',
+    );
+    expect(window.location.pathname).toBe('/scopes/scope-a/teams/new');
   });
 
   it('ignores scopeId=new query hints on scoped create links and creates under the route scope', async () => {
-    window.history.replaceState({}, '', '/scopes/scope-a/teams/new?scopeId=new&teamName=test');
+    window.history.replaceState(
+      {},
+      '',
+      '/scopes/scope-a/teams/new?scopeId=new&teamName=test',
+    );
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -163,7 +213,9 @@ describe('TeamCreatePage', () => {
     expect(await screen.findByLabelText('队名')).toHaveValue('test');
     await waitFor(() => {
       expect(window.location.pathname).toBe('/scopes/scope-a/teams/new');
-      expect(new URLSearchParams(window.location.search).get('scopeId')).toBeNull();
+      expect(
+        new URLSearchParams(window.location.search).get('scopeId'),
+      ).toBeNull();
     });
 
     fireEvent.change(screen.getByLabelText('团队描述'), {
@@ -200,7 +252,9 @@ describe('TeamCreatePage', () => {
 
     await waitFor(() => {
       expect(window.location.pathname).toBe('/scopes/scope-a/teams/new');
-      expect(new URLSearchParams(window.location.search).get('scopeId')).toBeNull();
+      expect(
+        new URLSearchParams(window.location.search).get('scopeId'),
+      ).toBeNull();
     });
     const params = new URLSearchParams(window.location.search);
     expect(window.location.pathname).toBe('/scopes/scope-a/teams/new');

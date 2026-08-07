@@ -1,9 +1,10 @@
-import { CheckOutlined, CopyOutlined } from "@ant-design/icons";
-import { Alert, Button, Space, Spin, Tag, message } from "antd";
-import React from "react";
-import { t } from "@/shared/i18n/messages";
-import type { StudioValidationFinding } from "@/shared/studio/models";
-import WorkflowStudioSidePanel from "./WorkflowStudioSidePanel";
+import { CheckOutlined, CopyOutlined } from '@ant-design/icons';
+import { Alert, Button, Space, Spin, Tag } from 'antd';
+import React from 'react';
+import { t } from '@/shared/i18n/messages';
+import type { StudioValidationFinding } from '@/shared/studio/models';
+import { useConsoleToast } from '@/shared/ui/ConsoleToast';
+import WorkflowStudioSidePanel from './WorkflowStudioSidePanel';
 
 type WorkflowStudioYamlPanelProps = {
   readonly applying: boolean;
@@ -22,57 +23,59 @@ type WorkflowStudioYamlPanelProps = {
   readonly width: number;
 };
 
-type DiagnosticLevel = "error" | "warning" | "info";
+type DiagnosticLevel = 'error' | 'warning' | 'info';
 
 function fallbackCopy(text: string): boolean {
-  const textarea = document.createElement("textarea");
+  const textarea = document.createElement('textarea');
   textarea.value = text;
-  textarea.setAttribute("readonly", "true");
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
   document.body.appendChild(textarea);
   textarea.select();
 
   try {
-    return document.execCommand("copy");
+    return document.execCommand('copy');
   } finally {
     document.body.removeChild(textarea);
   }
 }
 
 function normalizeDiagnosticLevel(
-  level: StudioValidationFinding["level"],
+  level: StudioValidationFinding['level'],
 ): DiagnosticLevel {
-  if (typeof level === "number") {
-    return level >= 2 ? "error" : level === 1 ? "warning" : "info";
+  if (typeof level === 'number') {
+    return level >= 2 ? 'error' : level === 1 ? 'warning' : 'info';
   }
 
-  const normalized = String(level || "").trim().toLowerCase();
-  if (normalized === "2" || normalized === "error") {
-    return "error";
+  const normalized = String(level || '')
+    .trim()
+    .toLowerCase();
+  if (normalized === '2' || normalized === 'error') {
+    return 'error';
   }
 
-  if (normalized === "1" || normalized === "warning" || normalized === "warn") {
-    return "warning";
+  if (normalized === '1' || normalized === 'warning' || normalized === 'warn') {
+    return 'warning';
   }
 
-  return "info";
+  return 'info';
 }
 
 function formatDiagnosticLevel(level: DiagnosticLevel): string {
   switch (level) {
-    case "error":
-      return t("teamMemberWorkflowStudio.yamlPanel.error", "Error");
-    case "warning":
-      return t("teamMemberWorkflowStudio.yamlPanel.warning", "Warning");
+    case 'error':
+      return t('teamMemberWorkflowStudio.yamlPanel.error', 'Error');
+    case 'warning':
+      return t('teamMemberWorkflowStudio.yamlPanel.warning', 'Warning');
     default:
-      return t("teamMemberWorkflowStudio.yamlPanel.info", "Info");
+      return t('teamMemberWorkflowStudio.yamlPanel.info', 'Info');
   }
 }
 
 function findSequenceItemLine(
   lines: readonly string[],
-  sectionName: "roles" | "steps",
+  sectionName: 'roles' | 'steps',
   itemIndex: number,
 ): number | null {
   const sectionLineIndex = lines.findIndex((line) =>
@@ -85,7 +88,7 @@ function findSequenceItemLine(
   let seenItems = -1;
   for (let index = sectionLineIndex + 1; index < lines.length; index += 1) {
     const line = lines[index];
-    if (/^\S/.test(line) && !line.trimStart().startsWith("-")) {
+    if (/^\S/.test(line) && !line.trimStart().startsWith('-')) {
       break;
     }
 
@@ -104,13 +107,13 @@ function resolveDiagnosticLine(
   yaml: string,
   finding: StudioValidationFinding,
 ): number | null {
-  const path = finding.path?.trim() ?? "";
-  if (!path || path === "/") {
+  const path = finding.path?.trim() ?? '';
+  if (!path || path === '/') {
     return null;
   }
 
-  const lines = yaml.split("\n");
-  if (path === "/name") {
+  const lines = yaml.split('\n');
+  if (path === '/name') {
     const nameLineIndex = lines.findIndex((line) => /^\s*name\s*:/.test(line));
     return nameLineIndex >= 0 ? nameLineIndex + 1 : null;
   }
@@ -119,7 +122,7 @@ function resolveDiagnosticLine(
   if (sequenceMatch) {
     return findSequenceItemLine(
       lines,
-      sequenceMatch[1] as "roles" | "steps",
+      sequenceMatch[1] as 'roles' | 'steps',
       Number(sequenceMatch[2]),
     );
   }
@@ -128,56 +131,58 @@ function resolveDiagnosticLine(
 }
 
 const editorShellStyle: React.CSSProperties = {
-  border: "1px solid #d9dce3",
+  border: '1px solid #d9dce3',
   borderRadius: 6,
-  display: "grid",
-  flex: "1 1 0%",
-  gridTemplateColumns: "44px minmax(0, 1fr)",
+  display: 'grid',
+  flex: '1 1 0%',
+  gridTemplateColumns: '44px minmax(0, 1fr)',
   minHeight: 0,
-  overflow: "hidden",
-  width: "100%",
+  overflow: 'hidden',
+  width: '100%',
 };
 
 const lineNumberGutterStyle: React.CSSProperties = {
-  background: "#f8fafc",
-  borderRight: "1px solid #e5e7eb",
-  color: "#64748b",
-  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+  background: '#f8fafc',
+  borderRight: '1px solid #e5e7eb',
+  color: '#64748b',
+  fontFamily:
+    'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
   fontSize: 12,
-  lineHeight: "20px",
+  lineHeight: '20px',
   minHeight: 0,
-  overflow: "hidden",
-  padding: "8px 8px 8px 0",
-  textAlign: "right",
-  userSelect: "none",
+  overflow: 'hidden',
+  padding: '8px 8px 8px 0',
+  textAlign: 'right',
+  userSelect: 'none',
 };
 
 const textareaStyle: React.CSSProperties = {
   border: 0,
   borderRadius: 0,
-  boxSizing: "border-box",
-  color: "#111827",
-  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+  boxSizing: 'border-box',
+  color: '#111827',
+  fontFamily:
+    'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
   fontSize: 12,
-  height: "100%",
-  lineHeight: "20px",
+  height: '100%',
+  lineHeight: '20px',
   minHeight: 0,
-  outline: "none",
-  overflow: "auto",
-  padding: "8px 11px",
-  resize: "none",
+  outline: 'none',
+  overflow: 'auto',
+  padding: '8px 11px',
+  resize: 'none',
   tabSize: 2,
-  whiteSpace: "pre",
-  width: "100%",
+  whiteSpace: 'pre',
+  width: '100%',
 };
 
 const diagnosticsListStyle: React.CSSProperties = {
-  border: "1px solid #e5e7eb",
+  border: '1px solid #e5e7eb',
   borderRadius: 6,
-  display: "grid",
+  display: 'grid',
   gap: 6,
   maxHeight: 116,
-  overflow: "auto",
+  overflow: 'auto',
   padding: 8,
 };
 
@@ -197,9 +202,13 @@ const WorkflowStudioYamlPanel: React.FC<WorkflowStudioYamlPanelProps> = ({
   open,
   width,
 }) => {
-  const [messageApi, contextHolder] = message.useMessage();
+  const toast = useConsoleToast();
   const gutterRef = React.useRef<HTMLDivElement | null>(null);
-  const lineCount = Math.max(1, buffer.split("\n").length);
+  const lineCount = Math.max(1, buffer.split('\n').length);
+  const lineNumbers = React.useMemo(
+    () => Array.from({ length: lineCount }, (_, lineIndex) => lineIndex + 1),
+    [lineCount],
+  );
   const showEditorLoading = Boolean(editorLoading && !buffer.trim() && !error);
   const applyDisabled = Boolean(
     applying ||
@@ -219,19 +228,20 @@ const WorkflowStudioYamlPanel: React.FC<WorkflowStudioYamlPanelProps> = ({
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(buffer);
       } else if (!fallbackCopy(buffer)) {
-        throw new Error("Clipboard is unavailable.");
+        throw new Error('Clipboard is unavailable.');
       }
-      messageApi.success(
-        t("teamMemberWorkflowStudio.yamlPanel.copySuccess", "YAML copied."),
+      toast.success(
+        t('teamMemberWorkflowStudio.yamlPanel.copySuccess', 'YAML copied.'),
       );
-    } catch (copyError) {
-      messageApi.error(
-        copyError instanceof Error
-          ? copyError.message
-          : t("teamMemberWorkflowStudio.yamlPanel.copyFailed", "Failed to copy YAML."),
+    } catch {
+      toast.error(
+        t(
+          'teamMemberWorkflowStudio.yamlPanel.copyFailed',
+          'Failed to copy YAML.',
+        ),
       );
     }
-  }, [buffer, messageApi]);
+  }, [buffer, toast]);
 
   if (!open) {
     return null;
@@ -240,28 +250,27 @@ const WorkflowStudioYamlPanel: React.FC<WorkflowStudioYamlPanelProps> = ({
   return (
     <WorkflowStudioSidePanel
       ariaLabel={t(
-        "teamMemberWorkflowStudio.yamlPanel.sectionAria",
-        "Workflow YAML panel",
+        'teamMemberWorkflowStudio.yamlPanel.sectionAria',
+        'Workflow YAML panel',
       )}
       bodyStyle={{
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
       }}
       closeAriaLabel={t(
-        "teamMemberWorkflowStudio.yamlPanel.closeAria",
-        "Close YAML editor",
+        'teamMemberWorkflowStudio.yamlPanel.closeAria',
+        'Close YAML editor',
       )}
       closeDisabled={applying}
       onClose={onClose}
       subtitle={t(
-        "teamMemberWorkflowStudio.yamlPanel.subtitle",
-        "Draft source buffer",
+        'teamMemberWorkflowStudio.yamlPanel.subtitle',
+        'Draft source buffer',
       )}
-      title={t("teamMemberWorkflowStudio.yamlPanel.title", "Edit YAML")}
+      title={t('teamMemberWorkflowStudio.yamlPanel.title', 'Edit YAML')}
       width={width}
     >
-      {contextHolder}
       <Space align="center" size={8} wrap>
         <Button
           disabled={!buffer.trim()}
@@ -269,64 +278,71 @@ const WorkflowStudioYamlPanel: React.FC<WorkflowStudioYamlPanelProps> = ({
           onClick={() => void copyYaml()}
           size="small"
         >
-          {t("teamMemberWorkflowStudio.yamlPanel.copy", "Copy")}
+          {t('teamMemberWorkflowStudio.yamlPanel.copy', 'Copy')}
         </Button>
         {loading ? <Spin size="small" /> : null}
         {hasUnappliedChanges ? (
           <Tag color="gold">
-            {t(
-              "teamMemberWorkflowStudio.yamlPanel.unapplied",
-              "Unapplied",
-            )}
+            {t('teamMemberWorkflowStudio.yamlPanel.unapplied', 'Unapplied')}
           </Tag>
         ) : null}
       </Space>
       {error ? <Alert message={error} showIcon type="error" /> : null}
       {diagnostics.length > 0 ? (
-        <div
+        <ul
           aria-label={t(
-            "teamMemberWorkflowStudio.yamlPanel.diagnosticsAria",
-            "YAML diagnostics",
+            'teamMemberWorkflowStudio.yamlPanel.diagnosticsAria',
+            'YAML diagnostics',
           )}
-          role="list"
-          style={diagnosticsListStyle}
+          style={{ ...diagnosticsListStyle, listStyle: 'none', margin: 0 }}
         >
-          {diagnostics.map((finding, index) => {
+          {diagnostics.map((finding) => {
             const level = normalizeDiagnosticLevel(finding.level);
             const lineNumber = resolveDiagnosticLine(buffer, finding);
             return (
-              <div
-                key={`${finding.path ?? "/"}:${finding.code ?? ""}:${index}`}
-                role="listitem"
+              <li
+                key={`${finding.path ?? '/'}:${finding.code ?? ''}:${finding.message}:${lineNumber ?? ''}`}
                 style={{
-                  alignItems: "start",
-                  display: "grid",
+                  alignItems: 'start',
+                  display: 'grid',
                   gap: 6,
-                  gridTemplateColumns: "auto minmax(0, 1fr)",
+                  gridTemplateColumns: 'auto minmax(0, 1fr)',
                 }}
               >
-                <Tag color={level === "error" ? "red" : level === "warning" ? "gold" : "blue"}>
+                <Tag
+                  color={
+                    level === 'error'
+                      ? 'red'
+                      : level === 'warning'
+                        ? 'gold'
+                        : 'blue'
+                  }
+                >
                   {formatDiagnosticLevel(level)}
                 </Tag>
-                <span style={{ color: "#111827", fontSize: 12, minWidth: 0 }}>
+                <span style={{ color: '#111827', fontSize: 12, minWidth: 0 }}>
                   {lineNumber
-                    ? t("teamMemberWorkflowStudio.yamlPanel.line", "Line {line}", {
-                        line: lineNumber,
-                      })
-                    : finding.path || "/"}{" "}
+                    ? t(
+                        'teamMemberWorkflowStudio.yamlPanel.line',
+                        'Line {line}',
+                        {
+                          line: lineNumber,
+                        },
+                      )
+                    : finding.path || '/'}{' '}
                   {finding.message}
                 </span>
-              </div>
+              </li>
             );
           })}
-        </div>
+        </ul>
       ) : null}
       {showEditorLoading ? (
         <div
           style={{
             ...editorShellStyle,
-            alignItems: "center",
-            justifyContent: "center",
+            alignItems: 'center',
+            justifyContent: 'center',
           }}
         >
           <Spin />
@@ -334,16 +350,15 @@ const WorkflowStudioYamlPanel: React.FC<WorkflowStudioYamlPanelProps> = ({
       ) : (
         <div style={editorShellStyle}>
           <div aria-hidden="true" ref={gutterRef} style={lineNumberGutterStyle}>
-            {Array.from({ length: lineCount }, (_, index) => (
-              <div key={index + 1}>{index + 1}</div>
+            {lineNumbers.map((lineNumber) => (
+              <div key={lineNumber}>{lineNumber}</div>
             ))}
           </div>
           <textarea
             aria-label={t(
-              "teamMemberWorkflowStudio.yamlPanel.editorAria",
-              "Workflow YAML editor",
+              'teamMemberWorkflowStudio.yamlPanel.editorAria',
+              'Workflow YAML editor',
             )}
-            autoFocus
             onChange={(event) => {
               if (!applying) {
                 onBufferChange(event.target.value);
@@ -362,10 +377,13 @@ const WorkflowStudioYamlPanel: React.FC<WorkflowStudioYamlPanelProps> = ({
           />
         </div>
       )}
-      <footer style={{ flex: "0 0 auto" }}>
-        <Space align="center" style={{ justifyContent: "flex-end", width: "100%" }}>
+      <footer style={{ flex: '0 0 auto' }}>
+        <Space
+          align="center"
+          style={{ justifyContent: 'flex-end', width: '100%' }}
+        >
           <Button disabled={applying} onClick={onClose}>
-            {t("teamMemberWorkflowStudio.yamlPanel.cancel", "Cancel")}
+            {t('teamMemberWorkflowStudio.yamlPanel.cancel', 'Cancel')}
           </Button>
           <Button
             disabled={applyDisabled}
@@ -375,22 +393,19 @@ const WorkflowStudioYamlPanel: React.FC<WorkflowStudioYamlPanelProps> = ({
             title={
               hasConflict
                 ? t(
-                    "teamMemberWorkflowStudio.yamlPanel.conflictTitle",
-                    "Reopen Edit YAML from the current canvas before applying.",
+                    'teamMemberWorkflowStudio.yamlPanel.conflictTitle',
+                    'Reopen Edit YAML from the current canvas before applying.',
                   )
                 : hasBlockingFindings
                   ? t(
-                      "teamMemberWorkflowStudio.yamlPanel.fixErrors",
-                      "Resolve error-level diagnostics before applying.",
+                      'teamMemberWorkflowStudio.yamlPanel.fixErrors',
+                      'Resolve error-level diagnostics before applying.',
                     )
                   : undefined
             }
             type="primary"
           >
-            {t(
-              "teamMemberWorkflowStudio.yamlPanel.apply",
-              "Apply to draft",
-            )}
+            {t('teamMemberWorkflowStudio.yamlPanel.apply', 'Apply to draft')}
           </Button>
         </Space>
       </footer>
