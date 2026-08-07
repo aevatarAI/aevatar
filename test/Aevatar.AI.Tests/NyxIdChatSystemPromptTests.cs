@@ -158,6 +158,8 @@ public class NyxIdChatSystemPromptTests
         skillCall.Should().BeGreaterThanOrEqualTo(0);
         inventoryCall.Should().BeGreaterThan(skillCall);
         prompt.Should().Contain("route the read through the catalog/service-inspection path");
+        prompt.Should().Contain("establishes current sender-specific service facts");
+        prompt.Should().Contain("execution tools only run supplied work and cannot establish that inventory");
         prompt.Should().Contain("typed inventory result as the authority for the current sender");
         prompt.Should().Contain("temporary read failure");
         prompt.Should().Contain("binding is explicitly missing or revoked");
@@ -168,13 +170,13 @@ public class NyxIdChatSystemPromptTests
     }
 
     [Fact]
-    public void ComposedPrompt_ShouldDescribeBothExecutionVerbsWithTargetAwareApproval()
+    public void KernelIndex_ShouldDescribeBothExecutionVerbsWithTargetAwareApproval()
     {
-        var prompt = ComposedAgentPrompt();
+        var prompt = NyxIdChatSystemPrompt.Value.Content;
 
         prompt.Should().Contain("caller-provided exact Python, JavaScript, TypeScript, or Bash source");
         prompt.Should().Contain("Delegate a natural-language task to Codex");
-        prompt.Should().Contain("`managed_sandbox` for the fixed isolated runtime");
+        prompt.Should().Contain("`managed_sandbox` for the fixed isolated runtime without human approval");
         prompt.Should().Contain("`private_ssh` for a real user host");
         prompt.Should().Contain("`private_ssh` requires approval");
         prompt.Should().NotContain("deterministic sandbox computation");

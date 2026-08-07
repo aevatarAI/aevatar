@@ -27,7 +27,7 @@ public sealed class NyxIdCodexExecToolTests
         tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
         tool.RequiresApproval("{}").Should().BeTrue();
         tool.Description.Should().Contain("Delegate a natural-language task to Codex");
-        tool.Description.Should().Contain("managed_sandbox for a fixed isolated runtime");
+        tool.Description.Should().Contain("managed_sandbox for the fixed isolated runtime without human approval");
         tool.Description.Should().Contain("private_ssh for a real user host");
         tool.Description.Should().Contain("private_ssh requires approval");
         tool.Description.Should().NotContain("always requires approval");
@@ -50,13 +50,15 @@ public sealed class NyxIdCodexExecToolTests
     [Fact]
     public void ApprovalPolicy_RequiresPrivateSshButAllowsManagedSandbox()
     {
-        var tool = new NyxIdCodexExecTool(CreateDummyClient());
+        IAgentTool tool = new NyxIdCodexExecTool(CreateDummyClient());
 
         tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
         tool.RequiresApproval("""{"target":{"kind":"private_ssh"}}""").Should().BeTrue();
         tool.RequiresApproval("""{"target":{"kind":"managed_sandbox"}}""").Should().BeFalse();
         tool.RequiresApproval("{}").Should().BeTrue();
         tool.RequiresApproval("""{"target":{"kind":"unknown"}}""").Should().BeTrue();
+        tool.GetCallSafety(PrivateSshArgumentsJson).RequiresApproval.Should().BeTrue();
+        tool.GetCallSafety(ManagedArgumentsJson).RequiresApproval.Should().BeFalse();
     }
 
     [Fact]

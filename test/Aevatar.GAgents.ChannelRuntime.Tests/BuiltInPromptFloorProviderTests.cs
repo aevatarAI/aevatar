@@ -66,11 +66,27 @@ public sealed class BuiltInPromptFloorProviderTests
         skillCall.Should().BeGreaterThanOrEqualTo(0);
         inventoryCall.Should().BeGreaterThan(skillCall);
         floor.Should().Contain("route the read through the catalog/service-inspection path");
+        floor.Should().Contain("establishes current sender-specific service facts");
+        floor.Should().Contain("execution tools only run supplied work and cannot establish that inventory");
         floor.Should().Contain("typed inventory result as the authority for the current sender");
         floor.Should().NotContain("Do not call `code_execute`");
         floor.Should().NotContain("typed-tool exception");
         floor.Should().NotContain("call `nyxid_service_inventory` directly");
         floor.Should().NotContain("Do not call `use_skill`");
+    }
+
+    [Fact]
+    public void Floor_PairsExactSourceExecutionWithTargetAwareCodexDelegation()
+    {
+        var floor = FloorContent();
+
+        floor.Should().Contain("caller-provided exact Python, JavaScript, TypeScript, or Bash source");
+        floor.Should().Contain("Delegate a natural-language task to Codex");
+        floor.Should().Contain("`managed_sandbox` for the fixed isolated runtime without human approval");
+        floor.Should().Contain("`private_ssh` for a real user host");
+        floor.Should().Contain("`private_ssh` requires approval");
+        floor.Should().NotContain("deterministic sandbox computation");
+        floor.Should().NotContain("`codex_exec` always requires approval");
     }
 
     [Fact]

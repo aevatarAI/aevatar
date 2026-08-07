@@ -51,7 +51,7 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
         "Execute caller-provided exact source code in a one-shot remote code runtime. " +
         "Supports Python, JavaScript, TypeScript, and Bash. " +
         "Returns stdout, stderr, and exit code. " +
-        "Use it for an explicit program; delegate a natural-language task to codex_exec instead.";
+        "Use it when the caller supplied an explicit program; use codex_exec to delegate a natural-language task to an agent.";
 
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 

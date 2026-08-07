@@ -60,7 +60,7 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
         tool.Description.Should().Contain("caller-provided exact source code");
         tool.Description.Should().Contain("one-shot remote code runtime");
         tool.Description.Should().Contain("stdout, stderr, and exit code");
-        tool.Description.Should().Contain("delegate a natural-language task to codex_exec");
+        tool.Description.Should().Contain("use codex_exec to delegate a natural-language task to an agent");
         tool.Description.Should().NotContain("deterministic");
         tool.ApprovalMode.Should().Be(ToolApprovalMode.NeverRequire);
     }

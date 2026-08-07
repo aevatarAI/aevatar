@@ -4,7 +4,7 @@ status: active
 owner: eanzhao
 ---
 
-# Sandbox Execution
+# Sandbox Execution Entry Selection
 
 Aevatar exposes two execution verbs because they represent different user actions. Their
 similar output fields do not make them one capability, and callers must select the verb from
@@ -46,49 +46,11 @@ describe all `codex_exec` calls as approved or approval-free.
 - Natural-language task for an isolated agent: choose `codex_exec.managed_sandbox`.
 - Natural-language task that must act on a real host: choose `codex_exec.private_ssh` and obtain
   approval.
-- Connected-service inventory or catalog inspection is not an execution task. Use the typed
-  NyxID catalog/service-inspection path supplied by the current tool schemas and loaded skill.
+- Connected-service inventory or catalog inspection is not an execution task. Load the current
+  discovery skill and use the typed NyxID catalog/service-inspection capability because it
+  establishes sender-specific service facts; execution tools do not.
 
-The final tool schemas remain the authority for availability in the current turn. Prompt text and
-this guide explain selection but do not grant either capability. The managed target's transport,
-credential, lifecycle, and failure contracts are defined in
-[Managed Codex Execution](managed-codex-execution.md).
-
-## Execution Boundaries
-
-The two verbs share no route identity or credential. A host may point both NyxID services at the
-same upstream deployment, but it must resolve two different exact UserService IDs from structured
-NyxID contracts.
-
-| Boundary | NyxID service | Required policy | Upstream path | Aevatar credential to NyxID |
-|---|---|---|---|---|
-| Exact source execution | `chrono-sandbox` | `forward_access_token=false`, `inject_delegation_token=true`, exact scope `sandbox:execute` | `/execute` | Source-readable caller bearer |
-| Managed Codex delegation | `chrono-managed-codex` | `forward_access_token=false`, `inject_delegation_token=true`, exact scope `proxy:*` | `/codex/execute` | Operator-managed agent key in `X-API-Key` |
-
-```mermaid
-%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
-flowchart LR
-    A["Exact source + caller bearer"] --> B["code_execute"]
-    B --> C["ICodeExecutionPort"]
-    C --> D["NyxID exact code UserService"]
-    D --> E["POST /execute"]
-    F["Natural-language task + managed agent key"] --> G["codex_exec managed_sandbox"]
-    G --> H["ICodexExecutionPort"]
-    H --> I["NyxID exact managed UserService"]
-    I --> J["POST /codex/execute"]
-```
-
-Route selection must not parse connected-service display text, inspect ID prefixes, use substring
-matching, assume ID equality, or retry another identity or path. Missing, duplicated, or
-policy-mismatched identities fail closed. In particular, `/execute` never falls back to `/run`, and
-the managed route never falls back to `chrono-sandbox`.
-
-Both result contracts retain the completed process payload. A non-zero exit is a typed failure and
-still carries stdout, stderr or output, exit code, diagnostic ID, and elapsed time into the tool
-result and receipt. Failures before a process result exists carry only the typed safe failure.
-
-For managed execution, deadline ownership follows this strict order: the upstream execution budget
-is 180 seconds, Aevatar's complete-lifecycle deadline is 300 seconds, the NyxID/ingress deadline is
-at least 315 seconds, and the outer workflow budget is 360 seconds. A shorter intermediary timeout
-is an infrastructure defect; callers must not reinterpret its gateway response as a Codex terminal
-failure.
+Do not choose between these tools from an approval label, service identity, or similar output
+fields. Choose from the user's input and intended execution location. The final tool schemas remain
+the authority for availability in the current turn; prompt text and this guide explain selection
+but do not grant either capability or alter its runtime policy.

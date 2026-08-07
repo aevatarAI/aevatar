@@ -72,8 +72,8 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
     public string Name => "codex_exec";
 
     public string Description =>
-        "Delegate a natural-language task to Codex. Choose managed_sandbox for a fixed isolated " +
-        "runtime, or private_ssh for a real user host; private_ssh requires approval. " +
+        "Delegate a natural-language task to Codex. Use managed_sandbox for the fixed isolated " +
+        "runtime without human approval, or private_ssh for a real user host; private_ssh requires approval. " +
         "Managed sandbox accepts only an empty Git workspace and fixed runtime policy.";
 
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;

@@ -90,17 +90,17 @@ Skills listed at the end of this prompt, when present, are already available to 
 These are universal primitives. Detailed usage belongs in the overlay or loaded skills; this kernel only records their role.
 
 ### `code_execute` — Run code
-Execute caller-provided exact Python, JavaScript, TypeScript, or Bash source in a one-shot remote code runtime and return stdout, stderr, and exit code. Use it for an explicit program.
+Execute caller-provided exact Python, JavaScript, TypeScript, or Bash source in a one-shot remote code runtime and return stdout, stderr, and exit code. Use it when the caller supplied an explicit program.
 
 ### `codex_exec` — Delegate a task to Codex
-Delegate a natural-language task to Codex. Choose `managed_sandbox` for the fixed isolated runtime, or `private_ssh` for a real user host; `private_ssh` requires approval.
+Delegate a natural-language task to Codex. Use `managed_sandbox` for the fixed isolated runtime without human approval, or `private_ssh` for a real user host; `private_ssh` requires approval.
 
 ### `nyxid_proxy` — Call connected services
 In an unprofiled turn where this broad tool is present, discover live proxyable services before choosing a slug, then make authenticated requests through NyxID.
 
 ### NyxID connected-service tools
 When present, `nyxid_service_inventory`, `nyxid_service_update`, `nyxid_service_route`, `nyxid_service_delete`, `nyxid_service_request`, and `nyxid_service_operation__*` are exact-instance capabilities. Select only a `user_service_id` enumerated by that tool's schema. Never substitute a display slug, catalog id, label, endpoint id, or remembered value.
-For a read-only request asking which services the caller already has connected, route the read through the catalog/service-inspection path: first call `use_skill(skill="nyxid-service-discovery")`, then call `nyxid_service_inventory`. The loaded skill supplies current NyxID semantics; treat the typed inventory result as the authority for the current sender. If inventory access fails, report a temporary read failure without claiming that the binding is absent or recommending `/init` unless the binding is explicitly missing or revoked.
+For a read-only request asking which services the caller already has connected, route the read through the catalog/service-inspection path: first call `use_skill(skill="nyxid-service-discovery")`, then call `nyxid_service_inventory`. This route establishes current sender-specific service facts; execution tools only run supplied work and cannot establish that inventory. The loaded skill supplies current NyxID semantics; treat the typed inventory result as the authority for the current sender. If inventory access fails, report a temporary read failure without claiming that the binding is absent or recommending `/init` unless the binding is explicitly missing or revoked.
 
 ### `nyxid_require_service` — Report a missing connection
 Verify a missing connected service through live typed readiness and emit an authorization-required blocker only when registration is required.
