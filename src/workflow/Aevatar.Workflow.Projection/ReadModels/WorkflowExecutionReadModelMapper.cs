@@ -40,11 +40,89 @@ public sealed class WorkflowExecutionReadModelMapper
             ActivityCurrentStep = MapActivityCurrentStep(source.ActivityCurrentStep),
             ActivityFirstFailure = MapActivityFirstFailure(source.ActivityFirstFailure),
             ActivityWaiting = MapActivityWaiting(source.ActivityWaiting),
+            RecoveryCapability = MapRecoveryCapability(source.RecoveryCapability),
         };
         if (source.HasDurationMs)
             snapshot.DurationMs = source.DurationMs;
         return snapshot;
     }
+
+    private static WorkflowRunRecoveryCapability MapRecoveryCapability(
+        WorkflowRunRecoveryCapabilityReadModel? source)
+    {
+        if (source == null)
+            return new WorkflowRunRecoveryCapability();
+
+        return new WorkflowRunRecoveryCapability
+        {
+            WorkflowDefinitionRevisionId = source.WorkflowDefinitionRevisionId ?? string.Empty,
+            WorkflowDefinitionVersion = source.WorkflowDefinitionVersion,
+            RetryFailedStep = MapRecoveryActionCapability(source.RetryFailedStep),
+            RunAgain = MapRecoveryActionCapability(source.RunAgain),
+        };
+    }
+
+    private static WorkflowRecoveryActionCapability MapRecoveryActionCapability(
+        WorkflowRecoveryActionCapabilityReadModel? source)
+    {
+        if (source == null)
+            return new WorkflowRecoveryActionCapability
+            {
+                Eligibility = WorkflowRecoveryEligibility.Unavailable,
+                UnavailableReasonCode = WorkflowRecoveryUnavailableReasonCode.LegacyUnavailable,
+                UnavailableReason = "Recovery capability is unavailable for this legacy run.",
+            };
+
+        var capability = new WorkflowRecoveryActionCapability
+        {
+            Eligibility = MapRecoveryEligibility(source.Eligibility),
+            UnavailableReasonCode = MapRecoveryUnavailableReasonCode(source.UnavailableReasonCode),
+            UnavailableReason = source.UnavailableReason ?? string.Empty,
+            StartingStepId = source.StartingStepId ?? string.Empty,
+            ReusesPriorStepOutputs = source.ReusesPriorStepOutputs,
+            MayIncurModelOrToolCost = source.MayIncurModelOrToolCost,
+        };
+        capability.RecommendedActions.Add(source.RecommendedActions.Select(MapRecoveryRecommendedAction));
+        return capability;
+    }
+
+    private static WorkflowRecoveryEligibility MapRecoveryEligibility(
+        WorkflowRecoveryEligibilityReadModel value) =>
+        value switch
+        {
+            WorkflowRecoveryEligibilityReadModel.Eligible => WorkflowRecoveryEligibility.Eligible,
+            WorkflowRecoveryEligibilityReadModel.Ineligible => WorkflowRecoveryEligibility.Ineligible,
+            WorkflowRecoveryEligibilityReadModel.Unavailable => WorkflowRecoveryEligibility.Unavailable,
+            _ => WorkflowRecoveryEligibility.Unspecified,
+        };
+
+    private static WorkflowRecoveryUnavailableReasonCode MapRecoveryUnavailableReasonCode(
+        WorkflowRecoveryUnavailableReasonCodeReadModel value) =>
+        value switch
+        {
+            WorkflowRecoveryUnavailableReasonCodeReadModel.None => WorkflowRecoveryUnavailableReasonCode.None,
+            WorkflowRecoveryUnavailableReasonCodeReadModel.SourceRunNotTerminal => WorkflowRecoveryUnavailableReasonCode.SourceRunNotTerminal,
+            WorkflowRecoveryUnavailableReasonCodeReadModel.MissingSourceFact => WorkflowRecoveryUnavailableReasonCode.MissingSourceFact,
+            WorkflowRecoveryUnavailableReasonCodeReadModel.AuthorizationFailure => WorkflowRecoveryUnavailableReasonCode.AuthorizationFailure,
+            WorkflowRecoveryUnavailableReasonCodeReadModel.ConfigurationFailure => WorkflowRecoveryUnavailableReasonCode.ConfigurationFailure,
+            WorkflowRecoveryUnavailableReasonCodeReadModel.WorkflowDefinitionUnavailable => WorkflowRecoveryUnavailableReasonCode.WorkflowDefinitionUnavailable,
+            WorkflowRecoveryUnavailableReasonCodeReadModel.LegacyUnavailable => WorkflowRecoveryUnavailableReasonCode.LegacyUnavailable,
+            _ => WorkflowRecoveryUnavailableReasonCode.Unspecified,
+        };
+
+    private static WorkflowRecoveryRecommendedAction MapRecoveryRecommendedAction(
+        WorkflowRecoveryRecommendedActionReadModel value) =>
+        value switch
+        {
+            WorkflowRecoveryRecommendedActionReadModel.Retry => WorkflowRecoveryRecommendedAction.Retry,
+            WorkflowRecoveryRecommendedActionReadModel.RunAgain => WorkflowRecoveryRecommendedAction.RunAgain,
+            WorkflowRecoveryRecommendedActionReadModel.FixAccess => WorkflowRecoveryRecommendedAction.FixAccess,
+            WorkflowRecoveryRecommendedActionReadModel.ChangeConfiguration => WorkflowRecoveryRecommendedAction.ChangeConfiguration,
+            WorkflowRecoveryRecommendedActionReadModel.EditWorkflow => WorkflowRecoveryRecommendedAction.EditWorkflow,
+            WorkflowRecoveryRecommendedActionReadModel.EditInput => WorkflowRecoveryRecommendedAction.EditInput,
+            WorkflowRecoveryRecommendedActionReadModel.TechnicalDetails => WorkflowRecoveryRecommendedAction.TechnicalDetails,
+            _ => WorkflowRecoveryRecommendedAction.Unspecified,
+        };
 
     public WorkflowActorProjectionState ToActorProjectionState(WorkflowExecutionCurrentStateDocument source)
     {

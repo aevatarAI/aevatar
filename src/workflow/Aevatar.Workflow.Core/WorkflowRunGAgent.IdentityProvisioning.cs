@@ -27,6 +27,8 @@ public sealed partial class WorkflowRunGAgent
                 binding.RunOrigin,
                 binding.ScheduleId,
                 binding.WorkflowId,
+                binding.RevisionId,
+                binding.DefinitionVersion,
                 binding.CapabilityAdmissionPlan,
                 binding.ExpectedExecutionMode);
         }

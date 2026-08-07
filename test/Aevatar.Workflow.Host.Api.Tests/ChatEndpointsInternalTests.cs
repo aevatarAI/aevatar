@@ -2590,7 +2590,8 @@ public sealed class ChatEndpointsInternalTests
                     true,
                     "cmd-1",
                     "corr-1",
-                    new DateTimeOffset(2026, 6, 8, 0, 0, 0, TimeSpan.Zero))),
+                    new DateTimeOffset(2026, 6, 8, 0, 0, 0, TimeSpan.Zero),
+                    "new-run-routable")),
         };
 
         var result = await WorkflowCapabilityEndpoints.HandleForkRun(
@@ -2619,11 +2620,12 @@ public sealed class ChatEndpointsInternalTests
         await result.ExecuteAsync(http);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-        http.Response.Headers.Location.ToString().Should().Be("/api/workflow-actors/new-run-actor/current-state");
+        http.Response.Headers.Location.ToString().Should().Be("/api/workflow/observatory/runs/new-run-routable");
         var body = await ReadBodyAsync(http.Response);
+        body.Should().Contain("\"newRunId\":\"new-run-routable\"");
         body.Should().Contain("\"newRunActorId\":\"new-run-actor\"");
         body.Should().Contain("\"acceptedCommandId\":\"cmd-1\"");
-        body.Should().Contain("\"statusUrl\":\"/api/workflow-actors/new-run-actor/current-state\"");
+        body.Should().Contain("\"statusUrl\":\"/api/workflow/observatory/runs/new-run-routable\"");
         service.Commands.Should().ContainSingle();
         service.Commands.Single().SourceRunId.Should().Be("source-run");
         service.Commands.Single().StartAtStepId.Should().Be("step-b");

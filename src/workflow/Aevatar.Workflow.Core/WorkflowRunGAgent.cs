@@ -477,6 +477,8 @@ public sealed partial class WorkflowRunGAgent
         string? runOrigin,
         string? scheduleId,
         string? workflowId,
+        string? revisionId,
+        long definitionVersion,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
         ExternalCapabilityExecutionMode expectedExecutionMode,
         CancellationToken ct = default)
@@ -507,6 +509,8 @@ public sealed partial class WorkflowRunGAgent
             RunOrigin = runOrigin?.Trim() ?? string.Empty,
             ScheduleId = scheduleId?.Trim() ?? string.Empty,
             WorkflowId = workflowId?.Trim() ?? string.Empty,
+            RevisionId = revisionId?.Trim() ?? string.Empty,
+            DefinitionVersion = Math.Max(0, definitionVersion),
             CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
             ExpectedExecutionMode = expectedExecutionMode,
         };
@@ -535,6 +539,8 @@ public sealed partial class WorkflowRunGAgent
             request.RunOrigin,
             request.ScheduleId,
             request.WorkflowId,
+            request.RevisionId,
+            request.DefinitionVersion,
             request.CapabilityAdmissionPlan,
             request.ExpectedExecutionMode);
 
@@ -2232,6 +2238,12 @@ public sealed partial class WorkflowRunGAgent
         next.WorkflowId = string.IsNullOrWhiteSpace(evt.WorkflowId)
             ? current.WorkflowId
             : evt.WorkflowId.Trim();
+        next.RevisionId = string.IsNullOrWhiteSpace(evt.RevisionId)
+            ? current.RevisionId
+            : evt.RevisionId.Trim();
+        next.DefinitionVersion = evt.DefinitionVersion <= 0
+            ? current.DefinitionVersion
+            : evt.DefinitionVersion;
         next.CapabilityAdmissionPlan = evt.CapabilityAdmissionPlan?.Clone();
         next.ExpectedExecutionMode = evt.ExpectedExecutionMode;
         next.Status = "bound";
@@ -3699,6 +3711,8 @@ public sealed partial class WorkflowRunGAgent
             RunOrigin = State.RunOrigin ?? string.Empty,
             ScheduleId = State.ScheduleId ?? string.Empty,
             WorkflowId = State.WorkflowId ?? string.Empty,
+            RevisionId = State.RevisionId ?? string.Empty,
+            DefinitionVersion = Math.Max(0, State.DefinitionVersion),
             CapabilityAdmissionPlan = State.CapabilityAdmissionPlan?.Clone(),
             ExpectedExecutionMode = State.ExpectedExecutionMode,
             InlineWorkflowYamls = { State.InlineWorkflowYamls },

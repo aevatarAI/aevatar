@@ -2,9 +2,11 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Security;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Projection.Observability;
 using Aevatar.Workflow.Projection.ReadModels;
 using Google.Protobuf.WellKnownTypes;
+using YamlDotNet.Core;
 
 namespace Aevatar.Workflow.Projection.Projectors;
 
@@ -14,7 +16,12 @@ public sealed class WorkflowExecutionCurrentStateProjector
         WorkflowRunState,
         WorkflowExecutionCurrentStateDocument>
 {
+    private const string FailedStatus = "failed";
+    private const string CompletedStatus = "completed";
+    private const string StoppedStatus = "stopped";
+
     private readonly WorkflowRunForkSeedReadModelMapper _forkSeedMapper = new();
+    private readonly WorkflowParser _workflowParser = new();
 
     public WorkflowExecutionCurrentStateProjector(
         IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument> writeDispatcher,
@@ -52,6 +59,8 @@ public sealed class WorkflowExecutionCurrentStateProjector
             DefinitionActorId = state.DefinitionActorId ?? string.Empty,
             RunId = string.IsNullOrWhiteSpace(state.RunId) ? context.RootActorId : state.RunId,
             WorkflowId = state.WorkflowId ?? string.Empty,
+            RevisionId = state.RevisionId ?? string.Empty,
+            DefinitionVersion = Math.Max(0, state.DefinitionVersion),
             WorkflowName = state.WorkflowName ?? string.Empty,
             Status = ResolveCurrentStateStatus(state),
             ScopeId = state.ScopeId ?? string.Empty,
@@ -89,6 +98,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
                 StringComparer.Ordinal),
             ForkSeedCompletedStepIds = seedSnapshot.CompletedStepIds.ToList(),
             ForkSeedLastFailedStepId = seedSnapshot.LastFailedStepId,
+            RecoveryCapability = BuildRecoveryCapability(state, seedSnapshot),
             ForkSeedIdempotencies = seedSnapshot.IdempotencyByStepId.ToDictionary(
                 x => x.Key,
                 x => MapStepIdempotency(x.Value),
@@ -375,5 +385,241 @@ public sealed class WorkflowExecutionCurrentStateProjector
             "failed" => false,
             _ => null,
         };
+    }
+
+    // Implement (issue #3251):
+    //   Behavior: recovery availability is a typed read-model fact, not UI inference from failure text or actor ids.
+    //   Why this shape: the projector has committed run state plus fork seed facts and can publish conservative capabilities.
+    private WorkflowRunRecoveryCapabilityReadModel BuildRecoveryCapability(
+        WorkflowRunState state,
+        WorkflowRunForkSeedProjectionSnapshot seedSnapshot)
+    {
+        var revisionId = state.RevisionId ?? string.Empty;
+        var definitionVersion = Math.Max(0, state.DefinitionVersion);
+        return new WorkflowRunRecoveryCapabilityReadModel
+        {
+            WorkflowDefinitionRevisionId = revisionId,
+            WorkflowDefinitionVersion = definitionVersion,
+            RetryFailedStep = BuildRetryFailedStepCapability(state, seedSnapshot),
+            RunAgain = BuildRunAgainCapability(state, seedSnapshot),
+        };
+    }
+
+    private WorkflowRecoveryActionCapabilityReadModel BuildRetryFailedStepCapability(
+        WorkflowRunState state,
+        WorkflowRunForkSeedProjectionSnapshot seedSnapshot)
+    {
+        var status = Normalize(state.Status);
+        var failureClass = ClassifyFailure(state);
+        if (failureClass.ReasonCode != WorkflowRecoveryUnavailableReasonCodeReadModel.None)
+            return Ineligible(failureClass.ReasonCode, failureClass.Reason, failureClass.RecommendedAction);
+
+        if (!string.Equals(status, FailedStatus, StringComparison.OrdinalIgnoreCase))
+        {
+            return Ineligible(
+                WorkflowRecoveryUnavailableReasonCodeReadModel.SourceRunNotTerminal,
+                "Retry from failed step is available only after a failed terminal run.",
+                WorkflowRecoveryRecommendedActionReadModel.TechnicalDetails);
+        }
+
+        if (string.IsNullOrWhiteSpace(seedSnapshot.WorkflowYaml))
+        {
+            return Unavailable(
+                WorkflowRecoveryUnavailableReasonCodeReadModel.MissingSourceFact,
+                "The source workflow definition is not available for retry.",
+                WorkflowRecoveryRecommendedActionReadModel.EditWorkflow);
+        }
+
+        if (string.IsNullOrWhiteSpace(seedSnapshot.LastFailedStepId))
+        {
+            return Unavailable(
+                WorkflowRecoveryUnavailableReasonCodeReadModel.LegacyUnavailable,
+                "The failed step was not materialized for this run.",
+                WorkflowRecoveryRecommendedActionReadModel.TechnicalDetails);
+        }
+
+        return Eligible(
+            WorkflowRecoveryRecommendedActionReadModel.Retry,
+            seedSnapshot.LastFailedStepId,
+            reusesPriorStepOutputs: true,
+            mayIncurModelOrToolCost: true);
+    }
+
+    private WorkflowRecoveryActionCapabilityReadModel BuildRunAgainCapability(
+        WorkflowRunState state,
+        WorkflowRunForkSeedProjectionSnapshot seedSnapshot)
+    {
+        var status = Normalize(state.Status);
+        var failureClass = ClassifyFailure(state);
+        if (failureClass.ReasonCode != WorkflowRecoveryUnavailableReasonCodeReadModel.None)
+            return Ineligible(failureClass.ReasonCode, failureClass.Reason, failureClass.RecommendedAction);
+
+        if (status is not (FailedStatus or CompletedStatus or StoppedStatus))
+        {
+            return Ineligible(
+                WorkflowRecoveryUnavailableReasonCodeReadModel.SourceRunNotTerminal,
+                "Run again is available only after the source run reaches a terminal state.",
+                WorkflowRecoveryRecommendedActionReadModel.TechnicalDetails);
+        }
+
+        if (string.IsNullOrWhiteSpace(seedSnapshot.WorkflowYaml))
+        {
+            return Unavailable(
+                WorkflowRecoveryUnavailableReasonCodeReadModel.WorkflowDefinitionUnavailable,
+                "The source workflow definition is not available for run again.",
+                WorkflowRecoveryRecommendedActionReadModel.EditWorkflow);
+        }
+
+        if (!TryResolveEntryStepId(seedSnapshot.WorkflowYaml, out var entryStepId))
+        {
+            return Unavailable(
+                WorkflowRecoveryUnavailableReasonCodeReadModel.WorkflowDefinitionUnavailable,
+                "The source workflow definition entry step is not available for run again.",
+                WorkflowRecoveryRecommendedActionReadModel.EditWorkflow);
+        }
+
+        return Eligible(
+            WorkflowRecoveryRecommendedActionReadModel.RunAgain,
+            entryStepId,
+            reusesPriorStepOutputs: false,
+            mayIncurModelOrToolCost: true);
+    }
+
+    private bool TryResolveEntryStepId(string workflowYaml, out string entryStepId)
+    {
+        try
+        {
+            entryStepId = _workflowParser.Parse(workflowYaml).EntryStepId?.Trim() ?? string.Empty;
+            return !string.IsNullOrWhiteSpace(entryStepId);
+        }
+        catch (InvalidOperationException)
+        {
+            entryStepId = string.Empty;
+            return false;
+        }
+        catch (YamlException)
+        {
+            entryStepId = string.Empty;
+            return false;
+        }
+    }
+
+    private static WorkflowRecoveryActionCapabilityReadModel Eligible(
+        WorkflowRecoveryRecommendedActionReadModel recommendedAction,
+        string startingStepId,
+        bool reusesPriorStepOutputs,
+        bool mayIncurModelOrToolCost)
+    {
+        var capability = new WorkflowRecoveryActionCapabilityReadModel
+        {
+            Eligibility = WorkflowRecoveryEligibilityReadModel.Eligible,
+            UnavailableReasonCode = WorkflowRecoveryUnavailableReasonCodeReadModel.None,
+            StartingStepId = WorkflowAuditTextSanitizer.Sanitize(startingStepId),
+            ReusesPriorStepOutputs = reusesPriorStepOutputs,
+            MayIncurModelOrToolCost = mayIncurModelOrToolCost,
+        };
+        capability.RecommendedActions.Add(recommendedAction);
+        return capability;
+    }
+
+    private static WorkflowRecoveryActionCapabilityReadModel Ineligible(
+        WorkflowRecoveryUnavailableReasonCodeReadModel reasonCode,
+        string unavailableReason,
+        WorkflowRecoveryRecommendedActionReadModel recommendedAction) =>
+        NotEligible(
+            WorkflowRecoveryEligibilityReadModel.Ineligible,
+            reasonCode,
+            unavailableReason,
+            recommendedAction);
+
+    private static WorkflowRecoveryActionCapabilityReadModel Unavailable(
+        WorkflowRecoveryUnavailableReasonCodeReadModel reasonCode,
+        string unavailableReason,
+        WorkflowRecoveryRecommendedActionReadModel recommendedAction) =>
+        NotEligible(
+            WorkflowRecoveryEligibilityReadModel.Unavailable,
+            reasonCode,
+            unavailableReason,
+            recommendedAction);
+
+    private static WorkflowRecoveryActionCapabilityReadModel NotEligible(
+        WorkflowRecoveryEligibilityReadModel eligibility,
+        WorkflowRecoveryUnavailableReasonCodeReadModel reasonCode,
+        string unavailableReason,
+        WorkflowRecoveryRecommendedActionReadModel recommendedAction)
+    {
+        var capability = new WorkflowRecoveryActionCapabilityReadModel
+        {
+            Eligibility = eligibility,
+            UnavailableReasonCode = reasonCode,
+            UnavailableReason = WorkflowAuditTextSanitizer.SanitizeForDisplay(unavailableReason, 240),
+        };
+        capability.RecommendedActions.Add(recommendedAction);
+        return capability;
+    }
+
+    private static WorkflowFailureClassification ClassifyFailure(WorkflowRunState state)
+    {
+        var error = state.FinalError ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(error))
+            return WorkflowFailureClassification.None;
+
+        if (ContainsAny(
+                error,
+                "authorization",
+                "unauthorized",
+                "forbidden",
+                "credential",
+                "access denied",
+                "grant"))
+        {
+            return new WorkflowFailureClassification(
+                WorkflowRecoveryUnavailableReasonCodeReadModel.AuthorizationFailure,
+                "Access must be fixed before this run can be recovered.",
+                WorkflowRecoveryRecommendedActionReadModel.FixAccess);
+        }
+
+        if (ContainsAny(
+                error,
+                "configuration",
+                "not configured",
+                "missing configuration",
+                "invalid configuration",
+                "requires configuration",
+                "workflow_input_file_binding_failed"))
+        {
+            return new WorkflowFailureClassification(
+                WorkflowRecoveryUnavailableReasonCodeReadModel.ConfigurationFailure,
+                "Configuration must be changed before this run can be recovered.",
+                WorkflowRecoveryRecommendedActionReadModel.ChangeConfiguration);
+        }
+
+        return WorkflowFailureClassification.None;
+    }
+
+    private static bool ContainsAny(string value, params string[] candidates)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (value.Contains(candidate, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static string Normalize(string? value) =>
+        value?.Trim() ?? string.Empty;
+
+    private readonly record struct WorkflowFailureClassification(
+        WorkflowRecoveryUnavailableReasonCodeReadModel ReasonCode,
+        string Reason,
+        WorkflowRecoveryRecommendedActionReadModel RecommendedAction)
+    {
+        public static WorkflowFailureClassification None =>
+            new(
+                WorkflowRecoveryUnavailableReasonCodeReadModel.None,
+                string.Empty,
+                WorkflowRecoveryRecommendedActionReadModel.Unspecified);
     }
 }

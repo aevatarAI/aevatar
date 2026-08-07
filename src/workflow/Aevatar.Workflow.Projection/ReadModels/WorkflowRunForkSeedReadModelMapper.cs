@@ -32,7 +32,9 @@ public sealed class WorkflowRunForkSeedReadModelMapper
                 x => x.Key,
                 x => ToView(x.Value),
                 StringComparer.Ordinal),
-            source.CapabilityAdmissionPlan?.Clone());
+            source.CapabilityAdmissionPlan?.Clone(),
+            source.RevisionId ?? string.Empty,
+            source.DefinitionVersion);
     }
 
     public WorkflowRunForkSeedProjectionSnapshot ToProjectionSnapshot(WorkflowRunState state)
@@ -56,6 +58,8 @@ public sealed class WorkflowRunForkSeedReadModelMapper
             completedStepIds,
             lastFailedStepId,
             state.ScopeId ?? string.Empty,
+            state.RevisionId ?? string.Empty,
+            state.DefinitionVersion,
             kernelState?.InputFileRefs.Select(static fileRef => fileRef.Clone()).ToList() ?? [],
             kernelState?.IdempotencyByStepId.ToDictionary(
                 x => x.Key,
@@ -112,5 +116,7 @@ public sealed record WorkflowRunForkSeedProjectionSnapshot(
     IReadOnlyList<string> CompletedStepIds,
     string LastFailedStepId,
     string ScopeId,
+    string RevisionId,
+    long DefinitionVersion,
     IReadOnlyList<WorkflowFileRef> InputFileRefs,
     IReadOnlyDictionary<string, WorkflowStepIdempotencyState> IdempotencyByStepId);

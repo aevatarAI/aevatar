@@ -320,6 +320,10 @@ message BindWorkflowRunDefinitionEvent
   // Authoritative draft/workspace workflow identity carried from the definition binding.
   // Empty means the run is legacy or not backed by a draft workflow identity.
   string workflow_id = 11;
+  // Exact definition revision used by this run. Empty for legacy or ad-hoc runs.
+  string revision_id = 12;
+  // Authoritative committed definition version/watermark used by this run. Zero means unavailable.
+  int64 definition_version = 13;
 }
 
 // Idempotent provisioning command for a stable Run actor identity. The first
@@ -664,6 +668,7 @@ message WorkflowDefinitionSnapshot
   map<string, string> inline_workflow_yamls = 4;
   string scope_id = 5;
   int32 definition_version = 6;
+  string revision_id = 7;
 }
 message SubWorkflowDefinitionResolveRequestedEvent
 {

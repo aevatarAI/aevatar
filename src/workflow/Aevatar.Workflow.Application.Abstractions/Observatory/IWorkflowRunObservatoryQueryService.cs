@@ -1,3 +1,5 @@
+using Aevatar.Workflow.Application.Abstractions.Queries;
+
 namespace Aevatar.Workflow.Application.Abstractions.Observatory;
 
 // 06-19-workflow-run-observatory (C2): read-only, scope-gated run viewer query port.
@@ -118,6 +120,8 @@ public sealed class WorkflowActivityRunFeedRow
     public double? DurationMs { get; init; }
 
     public long StateVersion { get; init; }
+
+    public WorkflowRunRecoveryCapability RecoveryCapability { get; init; } = new();
 }
 
 public sealed class WorkflowActivityRunInitiatorSummary
@@ -221,6 +225,8 @@ public sealed class ObservatoryRunDetail
     public ObservatoryRunStatistics Statistics { get; init; } = new();
 
     public ObservatoryUsageTotals UsageTotals { get; init; } = new();
+
+    public WorkflowRunRecoveryCapability RecoveryCapability { get; init; } = new();
 }
 
 public sealed class ObservatoryRunDiagnostic

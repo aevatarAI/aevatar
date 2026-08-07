@@ -87,12 +87,14 @@ public sealed record WorkflowDefinitionBinding(
     string SourceKind = "",
     WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null,
     string WorkflowId = "",
-    string RevisionId = "");
+    string RevisionId = "",
+    long DefinitionVersion = 0);
 
 public sealed record WorkflowRunCreationReceipt(
     string ActorId,
     string DefinitionActorId,
-    IReadOnlyList<string> CreatedActorIds);
+    IReadOnlyList<string> CreatedActorIds,
+    string RunId = "");
 
 public sealed record WorkflowDefinitionProvisioningReceipt(
     string ActorId,
@@ -161,7 +163,9 @@ public sealed record WorkflowRunForkSeedView(
     string FinalError,
     string ScopeId = "",
     IReadOnlyDictionary<string, WorkflowStepIdempotencyView>? IdempotencyByStepId = null,
-    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null)
+    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null,
+    string RevisionId = "",
+    long DefinitionVersion = 0)
 {
     public WorkflowRunForkSeedView()
         : this(
@@ -176,7 +180,9 @@ public sealed record WorkflowRunForkSeedView(
             string.Empty,
             string.Empty,
             new Dictionary<string, WorkflowStepIdempotencyView>(StringComparer.Ordinal),
-            null)
+            null,
+            string.Empty,
+            0)
     {
     }
 }

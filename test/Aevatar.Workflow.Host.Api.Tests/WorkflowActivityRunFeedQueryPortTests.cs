@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -65,6 +66,59 @@ public sealed class WorkflowActivityRunFeedQueryPortTests
         snapshot.ActivityCurrentStep.StepId.Should().Be("step-current");
         snapshot.ActivityFirstFailure.Message.Should().Be("first failure");
         snapshot.ActivityWaiting.WaitingKind.Should().Be("signal");
+    }
+
+    [Fact]
+    public void WorkflowExecutionReadModelMapper_ShouldExposeTypedRecoveryCapability()
+    {
+        var mapper = new WorkflowExecutionReadModelMapper();
+        var snapshot = mapper.ToActorSnapshot(new WorkflowExecutionCurrentStateDocument
+        {
+            RootActorId = "actor-recovery",
+            RunId = "run-recovery",
+            Status = "failed",
+            RecoveryCapability = new WorkflowRunRecoveryCapabilityReadModel
+            {
+                WorkflowDefinitionRevisionId = "rev-recovery",
+                WorkflowDefinitionVersion = 12,
+                RetryFailedStep = new WorkflowRecoveryActionCapabilityReadModel
+                {
+                    Eligibility = WorkflowRecoveryEligibilityReadModel.Eligible,
+                    UnavailableReasonCode = WorkflowRecoveryUnavailableReasonCodeReadModel.None,
+                    StartingStepId = "step-failed",
+                    ReusesPriorStepOutputs = true,
+                    MayIncurModelOrToolCost = true,
+                    RecommendedActions =
+                    {
+                        WorkflowRecoveryRecommendedActionReadModel.Retry,
+                    },
+                },
+                RunAgain = new WorkflowRecoveryActionCapabilityReadModel
+                {
+                    Eligibility = WorkflowRecoveryEligibilityReadModel.Ineligible,
+                    UnavailableReasonCode = WorkflowRecoveryUnavailableReasonCodeReadModel.ConfigurationFailure,
+                    UnavailableReason = "Configuration must be changed before this run can be recovered.",
+                    RecommendedActions =
+                    {
+                        WorkflowRecoveryRecommendedActionReadModel.ChangeConfiguration,
+                    },
+                },
+            },
+        });
+
+        snapshot.RecoveryCapability.WorkflowDefinitionRevisionId.Should().Be("rev-recovery");
+        snapshot.RecoveryCapability.WorkflowDefinitionVersion.Should().Be(12);
+        snapshot.RecoveryCapability.RetryFailedStep.Eligibility.Should().Be(WorkflowRecoveryEligibility.Eligible);
+        snapshot.RecoveryCapability.RetryFailedStep.UnavailableReasonCode.Should().Be(WorkflowRecoveryUnavailableReasonCode.None);
+        snapshot.RecoveryCapability.RetryFailedStep.StartingStepId.Should().Be("step-failed");
+        snapshot.RecoveryCapability.RetryFailedStep.ReusesPriorStepOutputs.Should().BeTrue();
+        snapshot.RecoveryCapability.RetryFailedStep.MayIncurModelOrToolCost.Should().BeTrue();
+        snapshot.RecoveryCapability.RetryFailedStep.RecommendedActions.Should().ContainSingle()
+            .Which.Should().Be(WorkflowRecoveryRecommendedAction.Retry);
+        snapshot.RecoveryCapability.RunAgain.Eligibility.Should().Be(WorkflowRecoveryEligibility.Ineligible);
+        snapshot.RecoveryCapability.RunAgain.UnavailableReasonCode.Should().Be(WorkflowRecoveryUnavailableReasonCode.ConfigurationFailure);
+        snapshot.RecoveryCapability.RunAgain.RecommendedActions.Should().ContainSingle()
+            .Which.Should().Be(WorkflowRecoveryRecommendedAction.ChangeConfiguration);
     }
 
     [Fact]

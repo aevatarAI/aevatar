@@ -9,6 +9,52 @@ import "google/protobuf/wrappers.proto";
 import "workflow_execution_messages.proto";
 import "workflow_external_action.proto";
 
+enum WorkflowRecoveryEligibility {
+  WORKFLOW_RECOVERY_ELIGIBILITY_UNSPECIFIED = 0;
+  WORKFLOW_RECOVERY_ELIGIBILITY_ELIGIBLE = 1;
+  WORKFLOW_RECOVERY_ELIGIBILITY_INELIGIBLE = 2;
+  WORKFLOW_RECOVERY_ELIGIBILITY_UNAVAILABLE = 3;
+}
+
+enum WorkflowRecoveryUnavailableReasonCode {
+  WORKFLOW_RECOVERY_UNAVAILABLE_REASON_CODE_UNSPECIFIED = 0;
+  WORKFLOW_RECOVERY_UNAVAILABLE_REASON_CODE_NONE = 1;
+  WORKFLOW_RECOVERY_UNAVAILABLE_REASON_CODE_SOURCE_RUN_NOT_TERMINAL = 2;
+  WORKFLOW_RECOVERY_UNAVAILABLE_REASON_CODE_MISSING_SOURCE_FACT = 3;
+  WORKFLOW_RECOVERY_UNAVAILABLE_REASON_CODE_AUTHORIZATION_FAILURE = 4;
+  WORKFLOW_RECOVERY_UNAVAILABLE_REASON_CODE_CONFIGURATION_FAILURE = 5;
+  WORKFLOW_RECOVERY_UNAVAILABLE_REASON_CODE_WORKFLOW_DEFINITION_UNAVAILABLE = 6;
+  WORKFLOW_RECOVERY_UNAVAILABLE_REASON_CODE_LEGACY_UNAVAILABLE = 7;
+}
+
+enum WorkflowRecoveryRecommendedAction {
+  WORKFLOW_RECOVERY_RECOMMENDED_ACTION_UNSPECIFIED = 0;
+  WORKFLOW_RECOVERY_RECOMMENDED_ACTION_RETRY = 1;
+  WORKFLOW_RECOVERY_RECOMMENDED_ACTION_RUN_AGAIN = 2;
+  WORKFLOW_RECOVERY_RECOMMENDED_ACTION_FIX_ACCESS = 3;
+  WORKFLOW_RECOVERY_RECOMMENDED_ACTION_CHANGE_CONFIGURATION = 4;
+  WORKFLOW_RECOVERY_RECOMMENDED_ACTION_EDIT_WORKFLOW = 5;
+  WORKFLOW_RECOVERY_RECOMMENDED_ACTION_EDIT_INPUT = 6;
+  WORKFLOW_RECOVERY_RECOMMENDED_ACTION_TECHNICAL_DETAILS = 7;
+}
+
+message WorkflowRecoveryActionCapability {
+  WorkflowRecoveryEligibility eligibility = 1;
+  WorkflowRecoveryUnavailableReasonCode unavailable_reason_code = 2;
+  string unavailable_reason = 3;
+  repeated WorkflowRecoveryRecommendedAction recommended_actions = 4;
+  string starting_step_id = 5;
+  bool reuses_prior_step_outputs = 6;
+  bool may_incur_model_or_tool_cost = 7;
+}
+
+message WorkflowRunRecoveryCapability {
+  WorkflowRecoveryActionCapability retry_failed_step = 1;
+  WorkflowRecoveryActionCapability run_again = 2;
+  string workflow_definition_revision_id = 3;
+  int64 workflow_definition_version = 4;
+}
+
 message WorkflowActorSnapshot {
   string actor_id = 1;
   string workflow_name = 2;
@@ -42,6 +88,7 @@ message WorkflowActorSnapshot {
   WorkflowRunActivityFailureSnapshot activity_first_failure = 30;
   WorkflowRunActivityWaitingSnapshot activity_waiting = 31;
   string run_id = 32;
+  WorkflowRunRecoveryCapability recovery_capability = 33;
 }
 
 message WorkflowRunActivityInitiatorSnapshot {
