@@ -2615,12 +2615,16 @@ describe('Workflow Activity vNext editor', () => {
 
   afterEach(() => cleanupTestQueryClients());
 
-  it('keeps the editor header focused on the workflow name', async () => {
+  it('keeps the editor header focused on one inline workflow name', async () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
-    expect(
-      await screen.findByDisplayValue('Committed source'),
-    ).toBeInTheDocument();
+    await screen.findByDisplayValue('Committed source');
+    const workflowNameEditors = screen.getAllByRole('textbox', {
+      name: 'Workflow name',
+    });
+
+    expect(workflowNameEditors).toHaveLength(1);
+    expect(workflowNameEditors[0].closest('h1')).not.toBeNull();
     expect(
       screen.queryByText('Build, test, and refine this workflow.'),
     ).not.toBeInTheDocument();

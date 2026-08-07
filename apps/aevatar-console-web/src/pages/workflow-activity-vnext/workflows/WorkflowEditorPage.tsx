@@ -742,6 +742,17 @@ const WorkflowEditorPage: React.FC<{
   return (
     <WorkflowActivityVNextShell
       activeSection="workflows"
+      heading={
+        <Input
+          aria-label={t('workflowActivityVNext.new.name', 'Workflow name')}
+          className="wa-vnext__editor-name"
+          disabled={editorWriteLocked}
+          onChange={(event) => editor.updateTitle(event.target.value)}
+          ref={workflowNameRef}
+          value={editor.workflowTitle}
+          variant="borderless"
+        />
+      }
       headerActions={
         <>
           <Button
@@ -824,14 +835,6 @@ const WorkflowEditorPage: React.FC<{
       }
     >
       <div className="wa-vnext__toolbar wa-vnext__editor-toolbar">
-        <Input
-          aria-label={t('workflowActivityVNext.new.name', 'Workflow name')}
-          className="wa-vnext__editor-name"
-          disabled={editorWriteLocked}
-          onChange={(event) => editor.updateTitle(event.target.value)}
-          ref={workflowNameRef}
-          value={editor.workflowTitle}
-        />
         <div className="wa-vnext__editor-toolbar-meta">
           <span
             aria-atomic="true"
