@@ -1,14 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
-import React from 'react';
-import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import { scopesApi } from '@/shared/api/scopesApi';
-import type { ScopeServiceRevisionCatalogSnapshot } from '@/shared/models/runtime/scopeServices';
 import type { ScopeWorkflowDetail } from '@/shared/models/scopes';
-import type { StudioScopeBindingRevision } from '@/shared/studio/models';
 
 export const WORKFLOW_PUBLICATION_OBSERVATION_DELAYS_MS = [
   0, 300, 700, 1200, 2000,
 ] as const;
+
+export const WORKFLOW_PUBLICATION_RETRY_INTERVAL_MS = 1500;
 
 const DELAYED_WORKFLOW_CONFLICT_CODES = new Set([
   'USER_WORKFLOW_NOT_READY',
@@ -16,7 +14,6 @@ const DELAYED_WORKFLOW_CONFLICT_CODES = new Set([
 ]);
 
 export type WorkflowPublicationReceipt = {
-  readonly publishedServiceId: string;
   readonly scopeId: string;
   readonly workflowId: string;
   readonly revisionId: string;
@@ -24,10 +21,6 @@ export type WorkflowPublicationReceipt = {
 
 export type WorkflowPublicationObservationInput = {
   readonly delaysMs?: readonly number[];
-  readonly readRevisions: (
-    scopeId: string,
-    serviceId: string,
-  ) => Promise<ScopeServiceRevisionCatalogSnapshot>;
   readonly readWorkflow: (
     scopeId: string,
     workflowId: string,
@@ -39,8 +32,7 @@ export type WorkflowPublicationObservationInput = {
 export type WorkflowPublicationObservationResult =
   | {
       readonly kind: 'observed';
-      readonly catalog: ScopeServiceRevisionCatalogSnapshot;
-      readonly revision: StudioScopeBindingRevision;
+      readonly publishedServiceId: string;
       readonly workflow: ScopeWorkflowDetail;
     }
   | { readonly kind: 'delayed' };
@@ -84,18 +76,15 @@ function codeOf(error: unknown): string | undefined {
   return undefined;
 }
 
-function normalizeStatus(value: string): string {
-  return value.toLowerCase().replace(/[\s_-]+/g, '');
-}
-
-function isTerminalRevisionFailure(
-  revision: StudioScopeBindingRevision,
-): boolean {
-  const status = normalizeStatus(revision.status);
+function isDelayedWorkflowRead(error: unknown): boolean {
+  const status = statusOf(error);
   return (
-    status === 'preparationfailed' ||
-    status === 'retired' ||
-    Boolean(revision.failureReason.trim())
+    status === 404 ||
+    status === 408 ||
+    status === 425 ||
+    status === 429 ||
+    (status !== undefined && status >= 500 && status < 600) ||
+    (status === 409 && DELAYED_WORKFLOW_CONFLICT_CODES.has(codeOf(error) ?? ''))
   );
 }
 
@@ -120,108 +109,26 @@ function assertAcceptedWorkflowIdentity(
   }
 }
 
-function assertAcceptedCatalogIdentity(
-  receipt: WorkflowPublicationReceipt,
-  catalog: ScopeServiceRevisionCatalogSnapshot,
-): void {
-  if (
-    catalog.scopeId !== receipt.scopeId ||
-    catalog.serviceId !== receipt.publishedServiceId
-  ) {
-    throw new Error(
-      'The observed service catalog does not match the accepted service.',
-    );
-  }
-}
-
-function assertRevisionImplementsWorkflow(
-  workflow: ScopeWorkflowDetail,
-  revision: StudioScopeBindingRevision,
-): void {
-  if (
-    workflow.workflow &&
-    revision.workflowDefinitionActorId !== workflow.workflow.actorId
-  ) {
-    throw new Error(
-      'The accepted service revision does not implement the observed workflow.',
-    );
-  }
-}
-
 function matchesAcceptedPublication(
   receipt: WorkflowPublicationReceipt,
   workflow: ScopeWorkflowDetail,
-  catalog: ScopeServiceRevisionCatalogSnapshot,
-  revision: StudioScopeBindingRevision,
 ): boolean {
   return (
     workflow.available === true &&
     workflow.scopeId === receipt.scopeId &&
     workflow.workflow?.scopeId === receipt.scopeId &&
-    workflow.workflow?.workflowId === receipt.workflowId &&
-    catalog.scopeId === receipt.scopeId &&
-    catalog.serviceId === receipt.publishedServiceId &&
-    catalog.activeServingRevisionId === receipt.revisionId &&
-    revision.revisionId === receipt.revisionId &&
-    revision.implementationKind === 'workflow' &&
-    normalizeStatus(revision.status) === 'published' &&
-    revision.isActiveServing === true &&
-    revision.isServingTarget === true &&
-    revision.allocationWeight > 0 &&
-    revision.workflowDefinitionActorId === workflow.workflow?.actorId &&
-    normalizeStatus(revision.servingState) === 'active'
+    workflow.workflow.workflowId === receipt.workflowId &&
+    workflow.workflow.activeRevisionId === receipt.revisionId
   );
 }
 
-function isDelayedWorkflowRead(error: unknown): boolean {
-  const status = statusOf(error);
-  return (
-    status === 404 ||
-    (status === 409 && DELAYED_WORKFLOW_CONFLICT_CODES.has(codeOf(error) ?? ''))
-  );
-}
-
-function observationError(
-  workflowResult: PromiseSettledResult<ScopeWorkflowDetail>,
-  catalogResult: PromiseSettledResult<ScopeServiceRevisionCatalogSnapshot>,
-): unknown | null {
-  const errors: unknown[] = [];
-  if (workflowResult.status === 'rejected') errors.push(workflowResult.reason);
-  if (catalogResult.status === 'rejected') errors.push(catalogResult.reason);
-
-  const unauthorized = errors.find((error) => statusOf(error) === 401);
-  if (unauthorized) return unauthorized;
-
-  const forbidden = errors.find((error) => statusOf(error) === 403);
-  if (forbidden) return forbidden;
-
-  if (
-    workflowResult.status === 'rejected' &&
-    !isDelayedWorkflowRead(workflowResult.reason)
-  ) {
-    return workflowResult.reason;
-  }
-  if (
-    catalogResult.status === 'rejected' &&
-    statusOf(catalogResult.reason) !== 404
-  ) {
-    return catalogResult.reason;
-  }
-
-  return null;
-}
-
-function isDelayedObservation(
-  workflowResult: PromiseSettledResult<ScopeWorkflowDetail>,
-  catalogResult: PromiseSettledResult<ScopeServiceRevisionCatalogSnapshot>,
-): boolean {
-  const catalogStatus =
-    catalogResult.status === 'rejected' ? statusOf(catalogResult.reason) : 0;
-  return (
-    (workflowResult.status === 'rejected' &&
-      isDelayedWorkflowRead(workflowResult.reason)) ||
-    catalogStatus === 404
-  );
+function normalizePublishedServiceId(
+  publishedServiceId: string | null | undefined,
+): string | null {
+  const normalized = publishedServiceId?.trim();
+  return normalized && normalized.toLowerCase() !== 'default'
+    ? normalized
+    : null;
 }
 
 export async function observeWorkflowPublication(
@@ -233,59 +140,30 @@ export async function observeWorkflowPublication(
   for (const delayMs of delays) {
     if (delayMs > 0) await wait(delayMs);
 
-    const [workflowResult, catalogResult] = await Promise.allSettled([
-      input.readWorkflow(input.receipt.scopeId, input.receipt.workflowId),
-      input.readRevisions(
+    let workflow: ScopeWorkflowDetail;
+    try {
+      workflow = await input.readWorkflow(
         input.receipt.scopeId,
-        input.receipt.publishedServiceId,
-      ),
-    ]);
-    const error = observationError(workflowResult, catalogResult);
-    if (error) throw error;
-
-    const workflow =
-      workflowResult.status === 'fulfilled' ? workflowResult.value : null;
-    const catalog =
-      catalogResult.status === 'fulfilled' ? catalogResult.value : null;
-    if (workflow) assertAcceptedWorkflowIdentity(input.receipt, workflow);
-    if (catalog) assertAcceptedCatalogIdentity(input.receipt, catalog);
-
-    const revision = catalog?.revisions.find(
-      (candidate) => candidate.revisionId === input.receipt.revisionId,
-    );
-    if (revision && isTerminalRevisionFailure(revision)) {
-      throw new Error(
-        'The accepted workflow publication reached a terminal revision state.',
+        input.receipt.workflowId,
       );
-    }
-    if (workflow && revision) {
-      assertRevisionImplementsWorkflow(workflow, revision);
-    }
-
-    if (isDelayedObservation(workflowResult, catalogResult)) continue;
-    if (
-      workflowResult.status !== 'fulfilled' ||
-      catalogResult.status !== 'fulfilled'
-    ) {
-      continue;
+    } catch (error) {
+      if (isDelayedWorkflowRead(error)) continue;
+      throw error;
     }
 
-    if (!revision) continue;
-    if (
-      matchesAcceptedPublication(
-        input.receipt,
-        workflowResult.value,
-        catalogResult.value,
-        revision,
-      )
-    ) {
-      return {
-        kind: 'observed',
-        workflow: workflowResult.value,
-        catalog: catalogResult.value,
-        revision,
-      };
-    }
+    assertAcceptedWorkflowIdentity(input.receipt, workflow);
+    if (!matchesAcceptedPublication(input.receipt, workflow)) continue;
+
+    const publishedServiceId = normalizePublishedServiceId(
+      workflow.workflow?.publishedServiceId,
+    );
+    if (!publishedServiceId) continue;
+
+    return {
+      kind: 'observed',
+      publishedServiceId,
+      workflow,
+    };
   }
 
   return { kind: 'delayed' };
@@ -322,7 +200,6 @@ export function useWorkflowPublication(
       receipt?.scopeId ?? '',
       receipt?.workflowId ?? '',
       receipt?.revisionId ?? '',
-      receipt?.publishedServiceId ?? '',
     ],
     queryFn: () => {
       if (!receipt) {
@@ -333,10 +210,13 @@ export function useWorkflowPublication(
         receipt,
         readWorkflow: (scopeId, workflowId) =>
           scopesApi.getWorkflowDetail(scopeId, workflowId),
-        readRevisions: (scopeId, serviceId) =>
-          scopeRuntimeApi.getServiceRevisions(scopeId, serviceId),
       });
     },
+    refetchInterval: (observationQuery) =>
+      observationQuery.state.data?.kind === 'delayed'
+        ? WORKFLOW_PUBLICATION_RETRY_INTERVAL_MS
+        : false,
+    refetchIntervalInBackground: true,
     retry: false,
   });
   const phase = resolveWorkflowPublicationPhase({
@@ -347,20 +227,13 @@ export function useWorkflowPublication(
     isPending: query.isPending,
   });
 
-  const retry = React.useCallback(async () => {
-    if (!enabled) return null;
-    const result = await query.refetch();
-    return result.data ?? null;
-  }, [enabled, query]);
-
   return {
     error: query.error,
     phase,
-    receipt,
-    retry,
-    revision:
+    publishedServiceId:
       phase === 'observed' && query.data?.kind === 'observed'
-        ? query.data.revision
+        ? query.data.publishedServiceId
         : null,
+    receipt,
   } as const;
 }

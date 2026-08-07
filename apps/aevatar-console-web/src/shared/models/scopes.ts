@@ -6,6 +6,7 @@ export interface ScopeWorkflowSummary {
   workflowName: string;
   actorId: string;
   activeRevisionId: string;
+  readonly publishedServiceId?: string | null;
   deploymentId: string;
   deploymentStatus: string;
   updatedAt: string;

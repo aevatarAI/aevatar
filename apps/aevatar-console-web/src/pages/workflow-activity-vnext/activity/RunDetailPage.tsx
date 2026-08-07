@@ -886,14 +886,6 @@ const RunDetailPage: React.FC<{
         open={Boolean(pendingRecovery)}
         title={t('workflowActivityVNext.run.confirmTitle', 'Confirm new run')}
       >
-        <Alert
-          message={t(
-            'workflowActivityVNext.run.sourceImmutable',
-            "This starts a new run. The original run won't change.",
-          )}
-          showIcon
-          type="info"
-        />
         <Descriptions
           column={1}
           items={[

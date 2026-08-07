@@ -12,11 +12,11 @@ import { scopesApi } from '@/shared/api/scopesApi';
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
 import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
-import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import type {
   StudioValidationFinding,
   StudioWorkflowSaveResult,
 } from '@/shared/studio/models';
+import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { useDraftMaterialization } from '../hooks/useDraftMaterialization';
 import {
   buildWorkflowActivityEditorHref,
@@ -306,20 +306,6 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
       scopeId={scopeId}
       title={t('workflowActivityVNext.new.title', 'New workflow')}
     >
-      {workspace.isPending ? (
-        <Alert
-          description={t(
-            'workflowActivityVNext.new.workspaceLoadingDescription',
-            'Choose a creation method now. Your input stays on this page while the current workspace save location loads.',
-          )}
-          message={t(
-            'workflowActivityVNext.new.workspaceLoading',
-            'Loading save locations…',
-          )}
-          showIcon
-          type="info"
-        />
-      ) : null}
       {workspace.isError ? (
         <Alert
           action={

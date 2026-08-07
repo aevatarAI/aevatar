@@ -1413,6 +1413,71 @@ describe('studioApi host-session requests', () => {
     });
   });
 
+  it('publishes a workflow from an accepted upsert receipt without requiring a service identity', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-alpha',
+        serviceKey: 'scope-alpha:default:default:svc-workflow-alpha',
+        revisionId: 'rev-alpha',
+        definitionActorIdPrefix: 'workflow-definition-alpha',
+        expectedActorId: 'actor-alpha',
+        expectedDeploymentId: 'deployment-alpha',
+        acceptedAtUtc: '2026-08-07T00:00:00Z',
+        commandHandles: [],
+        readModelUrl: '/api/scopes/scope-alpha/workflows/wf-alpha',
+        acceptanceStage: 'accepted',
+        propagationStage: 'readmodel_propagating',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    const result = await studioApi.publishWorkflow({
+      scopeId: 'scope-alpha',
+      workflowId: 'wf-alpha',
+      revisionId: 'rev-alpha',
+      workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
+      workflowName: 'Workflow Alpha',
+      displayName: 'Workflow Alpha',
+      explicitRequestConfirmations: [],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-alpha',
+        revisionId: 'rev-alpha',
+      }),
+    );
+    expect(result).not.toHaveProperty('publishedServiceId');
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe('/api/scopes/scope-alpha/workflows/wf-alpha');
+    expect(init?.method).toBe('PUT');
+    expect(JSON.parse(String(init?.body))).toEqual({
+      revisionId: 'rev-alpha',
+      workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
+      workflowName: 'Workflow Alpha',
+      displayName: 'Workflow Alpha',
+    });
+  });
+
   it('binds a GAgent to the default service using the scope binding endpoint', async () => {
     persistAuthSession({
       tokens: {
