@@ -33,11 +33,19 @@ The catalogue selector will contain only the backend-supported views:
 - `All workflows` maps to `view=all`.
 - `Drafts` maps to `view=drafts`.
 
+The product meaning of `Drafts` is unpublished workflow drafts. The current
+backend `view=drafts` transport is broader: it returns every row with a draft
+source, including published workflows that retain an editable draft. Until the
+backend contract exposes the narrower product view, the page excludes rows
+with an active committed revision from the Drafts presentation. This adapter
+must preserve the backend cursor even when every row on a loaded page is
+excluded, so later unpublished drafts remain reachable through pagination.
+
 The old `Active workflows` and `Archived` catalogue filters will be removed. Existing URL values outside `all|drafts`, including `active` and `archived`, will resolve to `all`. Archived workflows remain visible in `All workflows` and retain their row-level Archived status.
 
 Search text remains visible immediately and is written to the URL. A short debounce controls the server query. The query key contains `scopeId`, backend view, and debounced search text. React Query cancels the obsolete request when any of those values changes.
 
-The page will use cursor-based infinite querying with `take=50`. It will render returned pages in backend order and expose a Load more command while `nextPageToken` is present. The client may flatten loaded pages for rendering, but it must not join, filter, or sort catalogue rows.
+The page will use cursor-based infinite querying with `take=50`. It will render returned pages in backend order and expose a Load more command while `nextPageToken` is present. The client may flatten loaded pages for rendering. It must not join or sort catalogue rows, and the only permitted row filter is the Drafts semantic adapter described above.
 
 ## Row Mapping And Actions
 
@@ -56,9 +64,9 @@ Rename and Delete continue to use their existing command paths. After successful
 
 ## Loading And Failure States
 
-The two-source partial-failure model will be deleted. The first catalogue page has one loading state, one failure state, and one retry action.
+The two-source partial-failure model will be deleted. The first catalogue page has one loading state, one failure state, and one retry action. A manual catalogue refresh reuses the table loading state while the authoritative page is refetched.
 
-Loading another page keeps existing rows visible and disables the Load more command while the request is pending. A next-page failure keeps existing rows visible, reports the failure beside the pagination action, and allows the same command to retry.
+Loading another page keeps existing rows visible and disables the Load more command while the request is pending; it must not switch the table back to its loading skeleton. A next-page failure keeps existing rows visible, reports the failure beside the pagination action, and allows the same command to retry.
 
 An empty `items` result is authoritative for the selected backend view and search query.
 

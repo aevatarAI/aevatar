@@ -574,6 +574,122 @@ describe('Workflow Activity vNext catalogue', () => {
     );
   });
 
+  it('excludes published workflows from the Drafts product view', async () => {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows?view=drafts';
+    mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
+      createCatalogueResponse([
+        createCatalogueRow({
+          workflowId: 'wf-draft-alpha',
+          name: 'Support triage draft',
+        }),
+        createCatalogueRow({
+          workflowId: 'wf-published-alpha',
+          name: 'Published support workflow',
+          committed: {
+            serviceKey: 'service-key-alpha',
+            workflowName: 'published_support_workflow',
+            actorId: 'actor-alpha',
+            activeRevisionId: 'rev-alpha',
+            deploymentId: 'dep-alpha',
+            deploymentStatus: 'Active',
+          },
+        }),
+      ]),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(await screen.findByText('Support triage draft')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Published support workflow'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('keeps Drafts pagination available when a page contains only published workflows', async () => {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows?view=drafts';
+    mockScopesApi.queryWorkflowCatalogue.mockImplementation(
+      (input: { cursor?: string }) =>
+        Promise.resolve(
+          input.cursor === 'page-2'
+            ? createCatalogueResponse([
+                createCatalogueRow({
+                  workflowId: 'wf-draft-beta',
+                  name: 'Billing draft',
+                }),
+              ])
+            : createCatalogueResponse(
+                [
+                  createCatalogueRow({
+                    workflowId: 'wf-published-alpha',
+                    name: 'Published support workflow',
+                    committed: {
+                      serviceKey: 'service-key-alpha',
+                      workflowName: 'published_support_workflow',
+                      actorId: 'actor-alpha',
+                      activeRevisionId: 'rev-alpha',
+                      deploymentId: 'dep-alpha',
+                      deploymentStatus: 'Active',
+                    },
+                  }),
+                ],
+                'page-2',
+              ),
+        ),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(
+      await screen.findByText('No matching workflows'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('Published support workflow'),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+
+    expect(await screen.findByText('Billing draft')).toBeInTheDocument();
+  });
+
+  it('shows table loading while manually refreshing the catalogue', async () => {
+    let resolveRefresh!: (
+      response: ReturnType<typeof createCatalogueResponse>,
+    ) => void;
+    mockScopesApi.queryWorkflowCatalogue
+      .mockResolvedValueOnce(
+        createCatalogueResponse([
+          createCatalogueRow({
+            workflowId: 'wf-draft-alpha',
+            name: 'Support triage',
+          }),
+        ]),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveRefresh = resolve;
+          }),
+      );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(await screen.findByText('Support triage')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh workflows' }));
+
+    await waitFor(() =>
+      expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledTimes(2),
+    );
+    expect(screen.getByText('Loading workflows')).toHaveClass(
+      'aevatar-loading-visually-hidden',
+    );
+
+    act(() => resolveRefresh(createCatalogueResponse([])));
+    expect(await screen.findByText('No workflows yet')).toBeInTheDocument();
+  });
+
   it('debounces search despite URL synchronization and aborts an obsolete request', async () => {
     let supportSignal: AbortSignal | undefined;
     mockScopesApi.queryWorkflowCatalogue.mockImplementation(
@@ -627,17 +743,17 @@ describe('Workflow Activity vNext catalogue', () => {
   });
 
   it('loads the next backend page and appends it without reordering', async () => {
+    let resolveNextPage!: (
+      response: ReturnType<typeof createCatalogueResponse>,
+    ) => void;
     mockScopesApi.queryWorkflowCatalogue.mockImplementation(
       (input: { cursor?: string }) =>
-        Promise.resolve(
-          input.cursor === 'page-2'
-            ? createCatalogueResponse([
-                createCatalogueRow({
-                  workflowId: 'wf-second',
-                  name: 'Second page row',
-                }),
-              ])
-            : createCatalogueResponse(
+        input.cursor === 'page-2'
+          ? new Promise((resolve) => {
+              resolveNextPage = resolve;
+            })
+          : Promise.resolve(
+              createCatalogueResponse(
                 [
                   createCatalogueRow({
                     workflowId: 'wf-first',
@@ -646,13 +762,35 @@ describe('Workflow Activity vNext catalogue', () => {
                 ],
                 'page-2',
               ),
-        ),
+            ),
     );
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
     expect(await screen.findByText('First page row')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+
+    await waitFor(() =>
+      expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledTimes(2),
+    );
+    await waitFor(() =>
+      expect(screen.getByText('Load more').closest('button')).toHaveClass(
+        'ant-btn-loading',
+      ),
+    );
+    expect(screen.getByText('First page row')).toBeInTheDocument();
+    expect(screen.queryByText('Loading workflows')).not.toBeInTheDocument();
+
+    act(() =>
+      resolveNextPage(
+        createCatalogueResponse([
+          createCatalogueRow({
+            workflowId: 'wf-second',
+            name: 'Second page row',
+          }),
+        ]),
+      ),
+    );
     expect(await screen.findByText('Second page row')).toBeInTheDocument();
     expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledWith(
       expect.objectContaining({ cursor: 'page-2', take: 50 }),

@@ -224,12 +224,20 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     history.replace(`${location.pathname}${nextSearch}`);
   }, [location.pathname, location.search, query, view]);
 
-  const loading = catalogue.isPending;
+  const loading =
+    catalogue.isPending ||
+    (catalogue.isFetching && !catalogue.isFetchingNextPage);
   const rows = React.useMemo(() => {
     return (catalogue.data?.pages ?? []).flatMap((page) =>
-      page.items.map(toWorkflowRow),
+      page.items
+        .filter(
+          (item) =>
+            view !== 'drafts' ||
+            (item.hasDraftSource && !item.committed?.activeRevisionId.trim()),
+        )
+        .map(toWorkflowRow),
     );
-  }, [catalogue.data?.pages]);
+  }, [catalogue.data?.pages, view]);
   const filtersActive = Boolean(query.trim()) || view !== 'all';
   const renameDuplicates = React.useMemo(() => {
     if (!renameTarget) return false;
@@ -926,7 +934,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           </table>
         </TableScrollRegion>
       )}
-      {rows.length > 0 && catalogue.hasNextPage ? (
+      {catalogue.hasNextPage ? (
         <div className="wa-vnext__pagination-actions">
           {catalogue.isFetchNextPageError ? (
             <p role="alert">
