@@ -17,8 +17,11 @@ command, and observes the authoritative binding run. Workflow Activity vNext
 requires a separately saved draft and currently constructs explicit request
 confirmations without using the shared confirmation helper.
 
-This design separates the immediate UI correction from the later publication
-contract decision.
+This design covers both the notification correction and the approved
+publication model: users work only with Workflow resources, while each
+Workflow owns one system-managed Team and one system-managed Member that remain
+hidden from the product UI. Publication reuses the existing member binding-run
+contract without changing backend endpoints.
 
 ## Semantic Mismatch
 
@@ -53,17 +56,22 @@ This change will:
    toasts.
 6. Preserve recovery actions such as `Retry` and `Check again` inside the
    corresponding toast or an existing command/status control.
-7. Keep the current Publish submission and observation implementation unchanged
-   until the frontend and backend agree on the contract described below.
+7. Replace Workflow Activity vNext's workflow publication submission with the
+   existing member binding-run publication orchestration.
+8. Provision one hidden Team and one hidden workflow Member for every newly
+   created Workflow, using only existing Team and Member endpoints.
+9. Keep the hidden resource identities explicit and recoverable through typed
+   member read-model fields.
 
 This change will not:
 
-- switch Workflow Activity vNext to a member API;
-- change the Publish endpoint or accepted response;
-- add `publishedServiceId` to `ScopeWorkflowUpsertResult`;
+- change any backend endpoint or response contract;
+- expose Team or Member creation, selection, navigation, or terminology to the
+  Workflow user;
+- derive `memberId`, `workflowId`, or `publishedServiceId` from one another;
 - change warning severity or make non-blocking warnings block Publish;
 - add a new service-selection dialog;
-- claim that an accepted command is already published.
+- claim that an accepted binding command is already published.
 
 ## Error And Warning Presentation
 
@@ -98,178 +106,123 @@ top-right console notification surface.
 
 ## Correct Publish Product Flow
 
-The following flow is the target contract for frontend/backend discussion. It
-is not implemented by this change.
+### Resource Model
 
-### Resource Identities
+The user creates and operates only a Workflow. Internally, every Workflow owns
+one distinct system-managed Team and one distinct system-managed workflow
+Member:
 
-- `memberId` identifies Team Member authority. Only member endpoints accept it.
-- `workflowId` identifies an editable workflow draft or definition. Workflow
-  draft and workflow publication endpoints accept it.
-- `publishedServiceId` identifies the callable published service. Service
-  revision and invocation queries accept it.
-- `revisionId` identifies one immutable publication attempt/artifact revision.
-- `commandId` and `correlationId` trace a command; they are not resource IDs.
+```text
+Workflow A -> hidden Team A -> hidden Member A -> Published Service A
+Workflow B -> hidden Team B -> hidden Member B -> Published Service B
+```
+
+The hidden resources are not shared between Workflows. They do not appear as
+creation steps, selectors, navigation destinations, labels, or settings in the
+Workflow product surface.
+
+- `workflowId` identifies the editable draft or definition.
+- `teamId` identifies the hidden Team owned by exactly one Workflow.
+- `memberId` identifies the hidden Member and is the binding authority.
+- `publishedServiceId` identifies the callable published service.
+- `revisionId` identifies one immutable publication attempt.
 
 No frontend code may derive one identity from another by equality, prefix,
-route position, service key parsing, or naming convention.
+route position, service key parsing, or naming convention. Each ID comes from
+its own existing API response.
 
-### 1. Prepare The Exact Draft
+### 1. Provision Hidden Authorities
+
+Creating a Workflow remains one user command. The frontend orchestrates these
+existing APIs behind that command:
+
+1. Create the Workflow draft and receive `workflowId`.
+2. Create a dedicated Team and receive `teamId`.
+3. Create a workflow Member assigned to that Team and receive `memberId`.
+4. Patch the Member's typed implementation reference with
+   `implementationKind = workflow` and the exact `workflowId`.
+5. Open the Workflow editor without exposing Team or Member concepts.
+
+The typed `implementationRef.workflowId` is the durable lookup relationship.
+Reloading or entering from the Workflow list resolves the backing Member by
+that field, never by an ID convention. Provisioning retries must reuse an
+already-linked Member instead of creating a second hidden resource pair.
+
+### 2. Prepare The Exact Draft
 
 When the user selects Publish:
 
 1. Apply or explicitly reject unapplied node-inspector changes.
-2. Serialize the current document and validate the serialized result.
-3. Block only on error-level findings. Emit warning findings as warning toasts.
-4. If the document is dirty, save it through the workflow draft API.
-5. Observe the exact saved draft/version before publishing, or let a single
-   backend command atomically accept the saved content and publication intent.
+2. If the document is dirty, serialize, validate, and save it through the
+   workflow draft API.
+3. Block only on error-level findings and emit warning findings as warning
+   toasts.
+4. Publish the exact serialized bytes that were validated and saved.
 
-The published bytes must be the same bytes that were validated and reviewed.
+### 3. Review Explicit Requests
 
-### 2. Review Explicit Requests
+Generate a fresh opaque `revisionId` and call the existing typed explicit
+request preview endpoint with `scopeId`, `workflowId`, `revisionId`, and the
+exact Workflow YAML.
 
-The frontend generates a fresh opaque `revisionId` candidate and calls the
-typed explicit-request preview endpoint with `scopeId`, `workflowId`,
-`revisionId`, and the exact workflow YAML.
+- Continue immediately when there are no explicit requests.
+- Reuse `confirmInteractiveExplicitRequestPreview` when confirmation is needed.
+- Treat cancellation as idle, without an error toast.
 
-- If there are no explicit requests, continue without a dialog.
-- If explicit requests exist, reuse
-  `confirmInteractiveExplicitRequestPreview`.
-- If the user cancels, return to idle without an error toast.
-- The backend must verify confirmations against the same workflow and revision;
-  the frontend confirmation is not authority by itself.
+### 4. Dispatch The Existing Member Binding Command
 
-### 3. Dispatch A Workflow Publish Command
-
-Workflow Activity vNext dispatches a workflow publication command, not a member
-binding command. A suggested request contract is:
+Resolve the Workflow's backing `memberId` and call:
 
 ```text
-scopeId
-workflowId
+PUT /api/scopes/:scopeId/members/:memberId/binding
+```
+
+The body carries the draft identity separately:
+
+```text
 revisionId
-workflowName
-displayName
-workflowYaml or savedDraftVersion
+workflow.workflowId
+workflow.workflowYamls[]
 explicitRequestConfirmations[]
 ```
 
-The response is an honest accepted receipt:
+Workflow Activity vNext must not call
+`PUT /api/scopes/:scopeId/workflows/:workflowId` for Publish. The accepted
+member binding response means only that the binding run was accepted for
+dispatch; it does not mean publication succeeded.
+
+### 5. Observe The Binding Run
+
+Poll the exact run returned by the accepted receipt:
 
 ```text
-acceptanceStage = accepted
-scopeId
-workflowId
-revisionId
-acceptedAtUtc
-commandHandles[] {
-  stage
-  targetActorId
-  commandId
-  correlationId
-}
-readModelUrl
+GET /api/scopes/:scopeId/members/:memberId/binding-runs/:bindingRunId
 ```
 
-The accepted response means only that the command entered the target actor
-inbox. It must not imply that the revision is committed, projected, serving, or
-readable.
+- Active states remain `accepted`, `admission_pending`, `admitted`,
+  `platform_binding_pending`, and `member_notification_pending`.
+- `succeeded` triggers a member refetch, a success toast, and enables published
+  actions from the returned `publishedServiceId`.
+- `failed` or `rejected` triggers one error toast with the authoritative reason.
+- Observation delay triggers a warning toast and `Check status`; it never
+  dispatches another Publish command.
 
-If the backend can authoritatively allocate `publishedServiceId` before
-dispatch, it may return that opaque ID. The frontend must not require it in the
-accepted receipt. The current `feature/integrate` contract does not return it.
+### 6. Retry And Recovery
 
-### 4. Commit And Project Authoritative State
+- A refresh resolves the backing Member through typed
+  `implementationRef.workflowId`.
+- An accepted run is only observed; it is not resubmitted.
+- A terminally failed run may be followed by a new attempt with a new
+  `revisionId`.
+- Partial hidden-resource provisioning is recoverable: retries reuse the Team
+  and Member identities already returned or materialized for the Workflow.
 
-The workflow authority commits the publication state and emits the committed
-fact into the standard projection pipeline. The projection materializes a typed
-workflow publication read model containing at least:
+### 7. Delete And Archive
 
-```text
-scopeId
-workflowId
-revisionId
-publicationState
-publishedServiceId
-definitionActorId
-failureCode/failureReason when terminally failed
-authoritativeStateVersion
-updatedAtUtc
-```
-
-Recommended states are `accepted`, `preparing`, `published`, and `failed`.
-`accepted` may remain command-side only if the read model starts at
-`preparing`.
-
-The most direct API is either:
-
-```text
-GET /api/scopes/:scopeId/workflows/:workflowId
-```
-
-with a typed current publication sub-message, or:
-
-```text
-GET /api/scopes/:scopeId/workflows/:workflowId/publications/:revisionId
-```
-
-backed by the same workflow-owned current-state projection. The query must not
-prime projections or replay the event store.
-
-### 5. Observe Without Re-Publishing
-
-After receiving an accepted receipt, the frontend polls or subscribes to the
-exact `scopeId + workflowId + revisionId` publication state.
-
-- `preparing`: show `Publishing` in the command/status control.
-- `published`: store the typed `publishedServiceId`, show a success toast, and
-  enable run/invoke only when the serving revision is available.
-- `failed`: show one error toast with the authoritative failure reason and allow
-  a new Publish attempt.
-- observation timeout: show a warning toast and expose `Check status`; do not
-  submit another publish command.
-- `401/403`: show an authorization error toast and require the corresponding
-  authentication or permission recovery.
-
-If the workflow read model exposes only `publishedServiceId`, the frontend may
-then query the exact service revision catalog to confirm that `revisionId` is
-active and serving. A typed publication state on the workflow read model is
-preferred because it avoids making the frontend infer one business state from
-two independently delayed query replicas.
-
-### 6. Idempotency And Retry
-
-- Before an accepted receipt exists, the same `revisionId` and idempotency key
-  may be retried according to the command contract.
-- After an accepted receipt exists, `Check status` only re-observes; it never
-  dispatches a duplicate Publish command.
-- A new Publish attempt uses a new `revisionId` only after the prior attempt is
-  terminally failed or the user has changed the saved document.
-- Repeated projection writes are idempotent and older authoritative versions
-  cannot overwrite newer ones.
-
-## Why Team Member Publish Cannot Be Copied Literally
-
-Team Member Studio publishes member authority by calling
-`bindMemberWorkflow(scopeId, memberId, workflowId, ...)` and observing a member
-binding run. Workflow Activity vNext edits a workflow resource and does not
-have a canonical `memberId` in its route or draft contract. Calling the member
-endpoint with `workflowId` would violate the repository identity rules.
-
-The reusable part is the orchestration pattern:
-
-```text
-save exact draft
--> serialize and validate
--> preview explicit requests
--> obtain required confirmations
--> dispatch the correct resource command
--> observe authoritative status
--> toast success/failure
-```
-
-Only the resource-specific dispatch and observation adapters differ.
+Deleting a Workflow must also clean up its one-to-one hidden Member and Team
+through existing endpoints. Cleanup uses the explicit resolved IDs and never
+constructs one ID from another. A failed cleanup is reported as a toast and is
+retryable so the product does not silently leave unreachable hidden resources.
 
 ## Test Contract For The Immediate UI Change
 
