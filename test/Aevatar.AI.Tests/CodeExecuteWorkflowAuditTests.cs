@@ -85,6 +85,50 @@ public sealed class CodeExecuteWorkflowAuditTests
         terminalAudit.Failure.Category.Should().Be(AuditFailureCategory.Execution);
     }
 
+    [Fact]
+    public async Task DuplicateWorkflowDelivery_ShouldNotReplayOneShotCodeExecution()
+    {
+        var port = new CompletedFailureCodeExecutionPort();
+        var tool = new NyxIdCodeExecuteTool(port);
+        var executor = new RecordingToolExecutionPort(new AdmittedAgentToolExecutor(
+            new StartOnceAdmissionLedger(),
+            new RecordingAuditTrailAppender(),
+            new StableAuditIdentityHasher()));
+        var source = new AgentWorkflowToolSourceAdapter(
+            [new SingleToolSource(tool)],
+            executor);
+        var workflowTool = (await source.GetToolsAsync()).Should().ContainSingle().Subject;
+        var request = new WorkflowToolExecutionRequest(
+            ArgumentsJson: """{"language":"python","code":"raise RuntimeError()"}""",
+            RunId: "run-code-redelivery",
+            StepId: "step-code-redelivery",
+            ExecutionId: "execution-code-redelivery",
+            CallId: "call-code-redelivery",
+            ScopeId: "scope-code-redelivery",
+            CallerCredential: new WorkflowCallerCredential
+            {
+                BearerToken = "source-readable-bearer",
+                Kind = NyxIdCallerCredentialKind.SourceReadableUserBearer,
+            });
+
+        var first = await workflowTool.ExecuteAsync(request);
+        var redelivery = await workflowTool.ExecuteAsync(request);
+
+        first.Failure.Should().NotBeNull();
+        first.Failure!.ErrorCode.Should().Be("EXECUTION_FAILED");
+        redelivery.Failure.Should().Be(new WorkflowToolExecutionFailure(
+            "outcome_uncertain",
+            "OUTCOME_UNCERTAIN: the prior external effect cannot be proven complete or safe to replay.",
+            TerminalInvoked: false,
+            Retryable: false));
+        port.CallCount.Should().Be(1);
+        executor.Requests.Should().HaveCount(3);
+        executor.Requests.Select(static candidate => candidate.ExecutionAttemptKind).Should().Equal(
+            AgentToolExecutionAttemptKind.Initial,
+            AgentToolExecutionAttemptKind.Initial,
+            AgentToolExecutionAttemptKind.ActorRecovery);
+    }
+
     private sealed class CompletedFailureCodeExecutionPort : ICodeExecutionPort
     {
         public int CallCount { get; private set; }
@@ -130,10 +174,13 @@ public sealed class CodeExecuteWorkflowAuditTests
     {
         public AgentToolExecutionOutcome? Outcome { get; private set; }
 
+        public List<AgentToolExecutionRequest> Requests { get; } = [];
+
         public async Task<AgentToolExecutionOutcome> ExecuteAsync(
             AgentToolExecutionRequest request,
             CancellationToken ct = default)
         {
+            Requests.Add(request);
             Outcome = await inner.ExecuteAsync(request, ct);
             return Outcome;
         }
@@ -147,6 +194,23 @@ public sealed class CodeExecuteWorkflowAuditTests
         {
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(new AgentToolAdmissionResult(AgentToolAdmissionStatus.Started));
+        }
+    }
+
+    private sealed class StartOnceAdmissionLedger : IAgentToolAdmissionLedger
+    {
+        private bool _started;
+
+        public Task<AgentToolAdmissionResult> TryStartAsync(
+            AgentToolAdmissionFact fact,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var status = _started
+                ? AgentToolAdmissionStatus.Duplicate
+                : AgentToolAdmissionStatus.Started;
+            _started = true;
+            return Task.FromResult(new AgentToolAdmissionResult(status));
         }
     }
 

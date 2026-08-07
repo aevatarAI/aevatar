@@ -60,6 +60,15 @@ public sealed class NyxIdCodexExecToolTests
     }
 
     [Fact]
+    public void ReplayContract_ManagedAndPrivateTargets_AreNonReplayable()
+    {
+        IAgentTool tool = new NyxIdCodexExecTool(CreateDummyClient());
+
+        tool.ResolveReplayPolicy(ManagedArgumentsJson).Should().Be(AgentToolReplayPolicy.NonReplayable);
+        tool.ResolveReplayPolicy(PrivateSshArgumentsJson).Should().Be(AgentToolReplayPolicy.NonReplayable);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_BuildsTypedSshRequest()
     {
         var executor = new RecordingSshExecutor();

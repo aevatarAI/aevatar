@@ -93,6 +93,12 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
         };
     }
 
+    // Both targets run caller-directed work outside this actor turn. Managed sandbox
+    // isolation removes Aevatar-owned state access, but it does not make arbitrary
+    // delegated work safe to repeat after an ambiguous transport timeout.
+    public AgentToolReplayPolicy ResolveReplayPolicy(string argumentsJson) =>
+        AgentToolReplayPolicy.NonReplayable;
+
     // The receipt may claim only terminal facts already verified in the result payload:
     // managed status=="succeeded", or a private SSH exit_code==0 that did not time out.
     // Anything ambiguous stays null so the shared receipt boundary keeps it Unknown.

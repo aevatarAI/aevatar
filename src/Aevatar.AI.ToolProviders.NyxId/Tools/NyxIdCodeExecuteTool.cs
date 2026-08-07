@@ -55,6 +55,12 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
 
     public bool IsReadOnly => true;
 
+    // The sandbox is isolated from Aevatar-owned state, but caller-provided code can
+    // still perform arbitrary network effects. A transport timeout therefore leaves
+    // the execution outcome uncertain and must not authorize an automatic replay.
+    public AgentToolReplayPolicy ResolveReplayPolicy(string argumentsJson) =>
+        AgentToolReplayPolicy.NonReplayable;
+
     public string ParametersSchema => """
         {
           "type": "object",

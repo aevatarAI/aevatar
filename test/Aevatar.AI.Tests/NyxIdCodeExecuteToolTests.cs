@@ -66,7 +66,7 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
     }
 
     [Fact]
-    public void ReplayContract_IsolatedCodeRuntime_IsReadOnlyRetryable()
+    public void ReplayContract_OneShotCodeRuntime_IsNonReplayable()
     {
         IAgentTool tool = CreateTool(CodeExecutionOutcome.Succeeded(
             new CodeExecutionResult(string.Empty, string.Empty, 0),
@@ -77,7 +77,7 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
             RequiresApproval: null,
             IsReadOnly: true,
             IsDestructive: false));
-        tool.ResolveReplayPolicy(arguments).Should().Be(AgentToolReplayPolicy.ReadOnlyRetryable);
+        tool.ResolveReplayPolicy(arguments).Should().Be(AgentToolReplayPolicy.NonReplayable);
     }
 
     [Fact]
