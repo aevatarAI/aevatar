@@ -112,6 +112,7 @@ export const workflowActivityVNextCss = `
 .wa-vnext__toolbar-search { flex: 0 1 320px; max-width: 100%; width: 320px; }
 .wa-vnext__toolbar-filters { justify-content: flex-end; }
 .wa-vnext__toolbar-filters .ant-select { min-width: 150px; }
+.wa-vnext__pagination-actions { display: flex; justify-content: center; min-height: 32px; padding-top: 16px; }
 .wa-vnext__table-wrap {
   border: 1px solid var(--wa-line);
   border-radius: var(--wa-radius);

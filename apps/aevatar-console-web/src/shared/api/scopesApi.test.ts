@@ -167,9 +167,7 @@ describe('scopesApi workflow catalogue', () => {
       },
     });
     expect(response.items[1]?.committed).toBeNull();
-    expect(response.freshness.refreshWatermarkUtc).toBe(
-      '2026-08-04T10:00:00Z',
-    );
+    expect(response.freshness.refreshWatermarkUtc).toBe('2026-08-04T10:00:00Z');
     expect(response.search.maximumQueryLength).toBe(128);
   });
 });
