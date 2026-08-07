@@ -237,7 +237,7 @@ summary:focus-visible {
 .toolbar-button strong {
   min-width: 16px;
   color: var(--text-soft);
-  font-size: 9.5px;
+  font-size: 11px;
   text-align: center;
 }
 
@@ -346,7 +346,7 @@ summary:focus-visible {
   background: transparent;
   color: var(--tertiary);
   padding: 0 5px;
-  font-size: 9px;
+  font-size: 11px;
   text-transform: none;
 }
 
@@ -363,13 +363,13 @@ summary:focus-visible {
 }
 
 .history-filter strong {
-  min-width: 14px;
+  min-width: 16px;
   border-radius: 999px;
   background: var(--surface-hover);
   color: var(--muted);
-  padding: 0 4px;
-  font-size: 8px;
-  line-height: 15px;
+  padding: 0 5px;
+  font-size: 10px;
+  line-height: 16px;
   text-align: center;
 }
 
@@ -417,9 +417,8 @@ summary:focus-visible {
   min-width: 0;
   align-items: center;
   gap: 9px;
-  border: 0;
-  border-radius: var(--radius);
   border: 1px solid var(--border);
+  border-radius: var(--radius);
   background: var(--panel);
   padding: 8px;
   color: var(--text-soft);
@@ -433,7 +432,7 @@ summary:focus-visible {
   flex: 0 0 28px;
   place-items: center;
   border: 1px solid var(--border-strong);
-  border-radius: 7px;
+  border-radius: var(--radius);
   color: var(--accent);
 }
 
@@ -545,13 +544,13 @@ summary:focus-visible {
 
 .history-session-copy small {
   color: var(--tertiary);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .history-attention-summary {
   overflow: hidden;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -582,7 +581,7 @@ summary:focus-visible {
 .history-error {
   color: var(--tertiary);
   padding: 8px 10px;
-  font-size: 9.5px;
+  font-size: 11px;
   line-height: 1.45;
 }
 
@@ -596,11 +595,11 @@ summary:focus-visible {
 .history-retry {
   width: fit-content;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: transparent;
   color: var(--text-soft);
   padding: 3px 8px;
-  font-size: 9.5px;
+  font-size: 11px;
 }
 
 .sidebar-footer {
@@ -638,7 +637,7 @@ summary:focus-visible {
 
 .runtime-badge small {
   color: var(--tertiary);
-  font-size: 9.5px;
+  font-size: 11px;
 }
 
 .chat-column {
@@ -722,15 +721,14 @@ summary:focus-visible {
   border-bottom: 1px solid var(--border);
   background: transparent;
   color: var(--text-soft);
-  padding: 8px 4px;
+  padding: 8px 6px;
   text-align: left;
+  transition: background-color 0.14s ease, color 0.14s ease;
 }
 
 .quick-actions button:hover {
   background: color-mix(in srgb, var(--accent-soft) 58%, transparent);
   color: var(--text);
-  padding-right: 0;
-  padding-left: 8px;
 }
 
 .quick-actions svg {
@@ -837,9 +835,9 @@ summary:focus-visible {
 }
 
 .readiness-row {
-  min-height: 48px;
-  border-bottom: 1px solid var(--border);
-  padding: 8px 0;
+  min-height: 52px;
+  border-bottom: 1px solid var(--hairline, var(--border));
+  padding: 9px 0;
 }
 
 .readiness-copy {
@@ -852,7 +850,7 @@ summary:focus-visible {
 
 .readiness-copy strong {
   color: var(--text-soft);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .readiness-copy small,
@@ -860,12 +858,12 @@ summary:focus-visible {
 .readiness-note,
 .readiness-panel > small {
   color: var(--tertiary);
-  font-size: 9.5px;
+  font-size: 12px;
 }
 
 .readiness-status {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -886,7 +884,7 @@ summary:focus-visible {
 .readiness-optional > summary {
   cursor: pointer;
   color: var(--tertiary);
-  font-size: 9.5px;
+  font-size: 12px;
   padding: 4px 0;
   list-style-position: inside;
 }
@@ -911,7 +909,7 @@ summary:focus-visible {
   background: var(--panel);
   color: var(--accent);
   padding: 0 7px;
-  font-size: 9.5px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -929,7 +927,7 @@ summary:focus-visible {
   height: 28px;
   place-items: center;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius);
   background: var(--surface);
   color: var(--muted);
   font-size: 10px;
@@ -1296,7 +1294,7 @@ summary:focus-visible {
   border-radius: 50%;
   background: var(--surface);
   font-family: var(--mono);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .cc-progress-marker svg {
@@ -1625,7 +1623,7 @@ summary:focus-visible {
 .authorization-service-summary em {
   color: var(--tertiary);
   font-family: var(--mono);
-  font-size: 8.5px;
+  font-size: 11px;
   font-style: normal;
 }
 
@@ -1776,7 +1774,7 @@ summary:focus-visible {
 .tool-duration {
   color: var(--tertiary);
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .tool-row:not(.done):not(.error) .tool-state-icon svg {
@@ -1825,7 +1823,7 @@ summary:focus-visible {
   color: var(--muted);
   padding: 8px;
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 11px;
   white-space: pre-wrap;
 }
 
@@ -1838,7 +1836,7 @@ summary:focus-visible {
 .approve-button,
 .deny-button {
   height: 30px;
-  border-radius: 7px;
+  border-radius: var(--radius);
   padding: 0 11px;
   font-size: 11px;
   font-weight: 600;
@@ -1943,7 +1941,7 @@ summary:focus-visible {
 
 .composer-service-header small {
   color: var(--tertiary);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .composer-service-header .icon-button {
@@ -2015,7 +2013,7 @@ summary:focus-visible {
   overflow: hidden;
   color: var(--tertiary);
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2168,7 +2166,7 @@ summary:focus-visible {
 
 .actor-task-progress {
   color: var(--tertiary);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .actor-task-toggle {
@@ -2373,7 +2371,7 @@ summary:focus-visible {
 
 .needs-you-option-copy small {
   color: var(--muted);
-  font-size: 9.5px;
+  font-size: 11px;
   overflow-wrap: anywhere;
 }
 
@@ -2488,7 +2486,7 @@ summary:focus-visible {
 }
 
 .actor-recovery-item small {
-  font-size: 9.5px;
+  font-size: 11px;
 }
 
 .actor-steps,
@@ -2530,7 +2528,7 @@ summary:focus-visible {
 .actor-state-notice,
 .actor-control-receipt {
   margin-top: 8px;
-  border-radius: 7px;
+  border-radius: var(--radius);
   background: var(--surface);
   padding: 8px 10px;
   color: var(--muted);
@@ -2562,7 +2560,7 @@ summary:focus-visible {
   gap: 7px;
   margin-bottom: 7px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius);
   background: var(--panel);
   color: var(--muted);
   padding: 0 7px 0 9px;
@@ -2629,7 +2627,7 @@ summary:focus-visible {
   margin-left: auto;
   color: var(--tertiary);
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 11px;
   text-transform: uppercase;
 }
 
@@ -2691,7 +2689,7 @@ summary:focus-visible {
   margin-left: 3px;
   color: var(--tertiary);
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .inspector-body {
@@ -2738,7 +2736,7 @@ summary:focus-visible {
   height: 28px;
   place-items: center;
   border: 1px solid var(--border-strong);
-  border-radius: 7px;
+  border-radius: var(--radius);
   color: var(--muted);
 }
 
@@ -2779,7 +2777,7 @@ summary:focus-visible {
 
 .route-node small {
   color: var(--tertiary);
-  font-size: 9.5px;
+  font-size: 11px;
 }
 
 .route-line {
@@ -2792,7 +2790,7 @@ summary:focus-visible {
 .route-state {
   color: var(--tertiary);
   font-family: var(--mono);
-  font-size: 8.5px;
+  font-size: 10px;
 }
 
 .route-state.ok {
@@ -2813,8 +2811,8 @@ summary:focus-visible {
 
 .facts-list > div {
   display: grid;
-  min-height: 28px;
-  grid-template-columns: 65px minmax(0, 1fr);
+  min-height: 32px;
+  grid-template-columns: 72px minmax(0, 1fr);
   align-items: center;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
 }
@@ -2825,14 +2823,14 @@ summary:focus-visible {
 
 .facts-list dt {
   color: var(--tertiary);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .facts-list dd {
   margin: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 9.5px;
+  font-size: 12px;
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2846,12 +2844,12 @@ summary:focus-visible {
 
 .empty-list {
   color: var(--tertiary);
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .inspector-step {
   display: grid;
-  min-height: 32px;
+  min-height: 34px;
   grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
   gap: 7px;
@@ -2880,15 +2878,15 @@ summary:focus-visible {
 }
 
 .step-dot svg {
-  width: 9px;
-  height: 9px;
+  width: 10px;
+  height: 10px;
 }
 
 .inspector-step strong {
   overflow: hidden;
   color: var(--text-soft);
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 450;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2897,7 +2895,7 @@ summary:focus-visible {
 .inspector-step small {
   color: var(--tertiary);
   font-family: var(--mono);
-  font-size: 8.5px;
+  font-size: 10px;
 }
 
 .usage-grid {
@@ -2920,42 +2918,42 @@ summary:focus-visible {
 
 .usage-grid span {
   color: var(--tertiary);
-  font-size: 8.5px;
+  font-size: 10px;
 }
 
 .usage-grid strong {
   margin-top: 3px;
   color: var(--muted);
-  font-size: 9.5px;
+  font-size: 12px;
   font-weight: 450;
 }
 
 .event-toolbar {
   display: flex;
-  height: 38px;
+  height: 40px;
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--border);
   color: var(--tertiary);
   padding: 0 13px;
-  font-size: 9.5px;
+  font-size: 11px;
 }
 
 .event-toolbar button {
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .event-list {
-  padding: 5px 12px 16px;
+  padding: 12px 12px 16px;
 }
 
 .event-empty {
   color: var(--tertiary);
   padding: 16px 2px;
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .event-row {
@@ -2964,14 +2962,14 @@ summary:focus-visible {
 
 .event-row summary {
   display: grid;
-  min-height: 34px;
-  grid-template-columns: 54px minmax(0, 1fr) 54px;
+  min-height: 38px;
+  grid-template-columns: 64px minmax(0, 1fr) 60px;
   align-items: center;
   gap: 7px;
   color: var(--muted);
   cursor: pointer;
   font-family: var(--mono);
-  font-size: 8.5px;
+  font-size: 10px;
   list-style: none;
 }
 
@@ -2982,7 +2980,7 @@ summary:focus-visible {
 .event-row .event-kind {
   overflow: hidden;
   color: var(--text-soft);
-  font-size: 9px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3000,7 +2998,7 @@ summary:focus-visible {
   color: var(--tertiary);
   padding: 8px;
   font-family: var(--mono);
-  font-size: 8.5px;
+  font-size: 10px;
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
@@ -3098,12 +3096,12 @@ summary:focus-visible {
 
 .auth-account-row strong {
   color: var(--text-soft);
-  font-size: 11.5px;
+  font-size: 13px;
 }
 
 .auth-account-row small {
   color: var(--tertiary);
-  font-size: 9.5px;
+  font-size: 11px;
 }
 
 .compact-button {
@@ -3129,13 +3127,13 @@ summary:focus-visible {
 
 .dialog-section-title strong {
   color: var(--text-soft);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .dialog-section-title small,
 .dialog-section-title > span {
   color: var(--tertiary);
-  font-size: 9.5px;
+  font-size: 11px;
 }
 
 .service-access-list {
@@ -3193,12 +3191,12 @@ summary:focus-visible {
 
 .service-access-copy small {
   color: var(--tertiary);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .service-access-status {
   color: var(--tertiary);
-  font-size: 9px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -3217,7 +3215,7 @@ summary:focus-visible {
   background: transparent;
   color: var(--text-soft);
   padding: 0 9px;
-  font-size: 9.5px;
+  font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
 }
@@ -3236,7 +3234,7 @@ summary:focus-visible {
 .service-access-empty {
   color: var(--tertiary);
   padding: 18px 2px;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .service-access-error {
@@ -3252,7 +3250,7 @@ summary:focus-visible {
 .advanced-settings summary {
   color: var(--muted);
   cursor: pointer;
-  font-size: 10.5px;
+  font-size: 13px;
 }
 
 .advanced-settings[open] summary {
@@ -3270,7 +3268,7 @@ summary:focus-visible {
   display: block;
   margin-bottom: 6px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 13px;
   font-weight: 550;
 }
 
@@ -3315,14 +3313,14 @@ summary:focus-visible {
 
 .segmented-control strong {
   color: var(--text-soft);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .segmented-control small {
   color: var(--tertiary);
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .form-field {
@@ -3336,11 +3334,11 @@ summary:focus-visible {
   width: 100%;
   height: 36px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius);
   background: var(--bg);
   color: var(--text-soft);
   padding: 0 10px;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .form-field input:focus,
@@ -3352,7 +3350,7 @@ summary:focus-visible {
   display: block;
   margin-top: 5px;
   color: var(--tertiary);
-  font-size: 9.5px;
+  font-size: 11px;
 }
 
 .form-row {
@@ -3386,13 +3384,13 @@ summary:focus-visible {
 
 .connection-test strong {
   color: var(--text-soft);
-  font-size: 10.5px;
+  font-size: 13px;
 }
 
 .connection-test small {
   overflow: visible;
   color: var(--tertiary);
-  font-size: 9px;
+  font-size: 11px;
   text-overflow: clip;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -3402,7 +3400,7 @@ summary:focus-visible {
 .secondary-button,
 .primary-button {
   height: 32px;
-  border-radius: 7px;
+  border-radius: var(--radius);
   padding: 0 12px;
   font-size: 11px;
   font-weight: 600;
@@ -3752,7 +3750,11 @@ summary:focus-visible {
   }
 }
 
-/* ── Admin Studio transcript layout ─────────────────────────────────────── */
+/* ── Admin Studio transcript layout ───────────────────────────────────────
+   The Admin surface composes a wider, calmer scale (15px base, 1400px workspace,
+   264px sidebar, 900px conversation) on top of the portable shell above. This block
+   only adds/redefines tokens and rules; it does not introduce a second theme. The
+   accent palette collapses onto a single blue token family. */
 
 :root {
   --bg: #f4f5f7;
@@ -3772,7 +3774,6 @@ summary:focus-visible {
   --overlay-strong: rgba(17, 24, 39, 0.07);
   --accent: #2563eb;
   --accent-strong: #1d4ed8;
-  --accent-secondary: #2563eb;
   --accent-soft: #eef3ff;
   --success: #15a34a;
   --success-soft: #eafaf0;
@@ -3792,7 +3793,7 @@ summary:focus-visible {
   --topbar-h: 56px;
   --radius: 6px;
   --radius-lg: 8px;
-  --radius-xl: 8px;
+  --radius-xl: 12px;
 }
 
 body {
@@ -3945,12 +3946,12 @@ body:has(.settings-dialog[open]) #servicesButton,
 .session-item:hover,
 .history-row:hover,
 .history-row.active {
-  border-left-color: var(--accent-secondary);
+  border-left-color: var(--accent);
   background: var(--overlay);
 }
 
 .session-item.active {
-  border-left-color: var(--accent-secondary);
+  border-left-color: var(--accent);
   background: transparent;
 }
 
@@ -4101,10 +4102,11 @@ body:has(.settings-dialog[open]) #servicesButton,
 }
 
 .empty-state {
-  width: min(100%, var(--conversation-max-width));
+  width: min(calc(100% - var(--conversation-inline-gutter)), var(--conversation-max-width));
+  margin: 0 auto;
   align-items: flex-start;
   justify-content: flex-start;
-  padding: 58px 24px 40px;
+  padding: 58px 0 40px;
   text-align: left;
 }
 
@@ -4133,7 +4135,7 @@ body:has(.settings-dialog[open]) #servicesButton,
 }
 
 .quick-actions {
-  width: min(100%, 760px);
+  width: 100%;
   margin-top: 34px;
   border-top-color: var(--hairline);
 }
@@ -4150,7 +4152,7 @@ body:has(.settings-dialog[open]) #servicesButton,
 }
 
 .readiness-panel {
-  width: min(100%, 760px);
+  width: 100%;
   border-color: var(--hairline);
   border-radius: var(--radius-xl);
   box-shadow: none;
@@ -4237,7 +4239,7 @@ body:has(.settings-dialog[open]) #servicesButton,
 }
 
 .message-content {
-  gap: 18px;
+  gap: 16px;
 }
 
 .connect-card,
@@ -4369,7 +4371,7 @@ body:has(.settings-dialog[open]) #servicesButton,
   margin-top: 0;
   margin-bottom: 0;
   overflow: hidden;
-  border-color: var(--border);
+  border-color: var(--hairline);
   background: var(--panel);
   padding: 0;
 }
@@ -4468,7 +4470,7 @@ body:has(.settings-dialog[open]) #servicesButton,
   margin: 0;
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   background: color-mix(in srgb, var(--bg) 92%, transparent);
-  padding: 16px 0 14px;
+  padding: 16px 0 20px;
   backdrop-filter: blur(20px);
 }
 
@@ -4485,8 +4487,8 @@ body:has(.settings-dialog[open]) #servicesButton,
   justify-content: space-between;
   gap: 14px;
   margin-bottom: 10px;
-  border-left: 2px solid var(--accent-secondary);
-  padding: 4px 0 4px 14px;
+  border-left: 2px solid var(--accent);
+  padding: 6px 0 6px 14px;
 }
 
 .composer-input-request-copy {
@@ -4574,7 +4576,7 @@ body:has(.settings-dialog[open]) #servicesButton,
   min-width: 0;
   height: 40px;
   flex: 0 0 40px;
-  gap: 6px;
+  gap: 8px;
 }
 
 .composer-icon,
@@ -4713,7 +4715,7 @@ body:has(.settings-dialog[open]) #servicesButton,
   height: 28px;
   gap: 5px;
   padding: 0 7px;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .history-filter svg {
@@ -4727,7 +4729,7 @@ body:has(.settings-dialog[open]) #servicesButton,
 
 .runtime-badge small,
 .history-empty {
-  font-size: 10.5px;
+  font-size: 11px;
 }
 
 .primary-button,
@@ -5093,7 +5095,7 @@ body:has(.settings-dialog[open]) #servicesButton,
    share the message rows' column edges at every width, and never render an
    assistant row whose body has no content yet (orphan avatar). */
 .thread {
-  padding-top: 20px;
+  padding-top: 32px;
 }
 
 .actor-task {
