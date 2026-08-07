@@ -1314,6 +1314,40 @@ public sealed class SubWorkflowOrchestratorTests
     }
 
     [Fact]
+    public void ApplySubWorkflowInvocationRegistered_ShouldAppendTypedSubWorkflowChildLineage()
+    {
+        var state = SubWorkflowOrchestrator.ApplySubWorkflowInvocationRegistered(
+            new WorkflowRunState
+            {
+                RunId = "run-parent-alpha",
+            },
+            new SubWorkflowInvocationRegisteredEvent
+            {
+                InvocationId = "invoke-sub-001",
+                ParentRunId = "run-parent-alpha",
+                ParentStepId = "step-call-child",
+                WorkflowName = "sub_flow",
+                ChildActorId = "actor-child-delta",
+                ChildRunId = "run-child-beta",
+                Lifecycle = WorkflowCallLifecycle.Transient,
+                DefinitionActorId = "workflow-definition:sub_flow",
+                DefinitionVersion = 2,
+                RootRunId = "run-root-omega",
+                Depth = 1,
+            });
+
+        state.Lineage.Availability.Should().Be(WorkflowRunLineageAvailability.Available);
+        state.Lineage.SubWorkflow.Availability.Should().Be(WorkflowRunLineageAvailability.Available);
+        state.Lineage.RetryFork.Availability.Should().Be(WorkflowRunLineageAvailability.Unavailable);
+        var child = state.Lineage.SubWorkflow.ChildRuns.Should().ContainSingle().Subject;
+        child.RunId.Should().Be("run-child-beta");
+        child.ActorId.Should().Be("actor-child-delta");
+        child.RelationshipId.Should().Be("invoke-sub-001");
+        child.StepId.Should().Be("step-call-child");
+        child.RelationKind.Should().Be(WorkflowRunLineageRelationKind.SubWorkflow);
+    }
+
+    [Fact]
     public void PruneIdleSubWorkflowBindings_ShouldKeepReferencedAndPendingSingletons()
     {
         var state = new WorkflowRunState();

@@ -133,6 +133,7 @@ message WorkflowExecutionCurrentStateDocument {
   WorkflowRunRecoveryCapabilityReadModel recovery_capability = 44;
   string revision_id = 45;
   int64 definition_version = 46;
+  aevatar.workflow.WorkflowRunLineage lineage = 47;
 }
 
 message WorkflowRunActivityInitiatorReadModel {

@@ -202,6 +202,7 @@ message WorkflowRunState
   string revision_id = 52;
   int64 definition_version = 53;
   aevatar.workflow.WorkflowRecoveryFailureKind terminal_recovery_failure_kind = 54;
+  aevatar.workflow.WorkflowRunLineage lineage = 55;
 }
 
 message WorkflowRunInitiatorState

@@ -67,6 +67,7 @@ owner: eanzhao
    - 通过依赖推导（`IWorkflowModuleDependencyExpander`）确定所需模块，经 `WorkflowModuleFactory` 创建并安装
    - 收到 `ChatRequestEvent` envelope 后发布 `StartWorkflowEvent`
    - fork/resume-from-step seed 只走 request-level `WorkflowChatRequestEvent.fork_seed -> StartWorkflowEvent.fork_seed`；run bind 只表达 definition/run binding，不携带 seed。
+   - run lineage 是 `WorkflowRunGAgent` owned committed fact，不从 route、actor id、graph/topology、workflow name 或 ID 前缀推断。`WorkflowRunLineage` 分离 retry/fork 与 `workflow_call` parent/child 关系，并始终使用可路由 public `runId`；actor address 只作为可选寻址信息保留。legacy 或未携带 lineage 的 run 必须显式返回 unavailable/legacy-unavailable。
    - 由 `WorkflowExecutionKernel` 推进 `StepRequestEvent -> StepCompletedEvent -> WorkflowCompletedEvent`
 
 ```

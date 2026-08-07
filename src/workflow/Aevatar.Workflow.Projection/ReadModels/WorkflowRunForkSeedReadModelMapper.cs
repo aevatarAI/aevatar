@@ -34,7 +34,8 @@ public sealed class WorkflowRunForkSeedReadModelMapper
                 StringComparer.Ordinal),
             source.CapabilityAdmissionPlan?.Clone(),
             source.RevisionId ?? string.Empty,
-            source.DefinitionVersion);
+            source.DefinitionVersion,
+            ResolveOriginalRunId(source.Lineage, source.RunId));
     }
 
     public WorkflowRunForkSeedProjectionSnapshot ToProjectionSnapshot(WorkflowRunState state)
@@ -106,6 +107,17 @@ public sealed class WorkflowRunForkSeedReadModelMapper
             source.StepId ?? string.Empty,
             source.LogicalAttempt,
             source.IdempotencyKey ?? string.Empty);
+
+    private static string ResolveOriginalRunId(
+        Aevatar.Workflow.Abstractions.WorkflowRunLineage? lineage,
+        string? runId)
+    {
+        var originalRunId = lineage?.RetryFork?.OriginalRunId?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(originalRunId))
+            return originalRunId;
+
+        return runId?.Trim() ?? string.Empty;
+    }
 }
 
 public sealed record WorkflowRunForkSeedProjectionSnapshot(
