@@ -385,6 +385,7 @@ public sealed partial class WorkflowRunGAgent
         RebuildCompiledWorkflowCache();
         await base.OnActivateAsync(ct);
         InstallCognitiveModules();
+        await RecoverToolCallDurablePublicationsAsync(ct);
 
         if (string.Equals(State.Status, RunningStatus, StringComparison.OrdinalIgnoreCase))
             await SendWorkflowRunStartedNotificationAsync(ct);
@@ -410,6 +411,60 @@ public sealed partial class WorkflowRunGAgent
     {
         await base.OnCommittedStatePublicationRecoveredAsync(envelope, ct);
         await DispatchPendingInteractiveActionContinuationsAsync(ct);
+        await RecoverToolCallDurablePublicationsAsync(ct);
+    }
+
+    private async Task RecoverToolCallDurablePublicationsAsync(CancellationToken ct)
+    {
+        var packed = State.ExecutionStates.GetValueOrDefault(ToolCallModule.ModuleStateKey);
+        if (packed == null || !packed.Is(ToolCallModuleState.Descriptor))
+            return;
+
+        var state = packed.Unpack<ToolCallModuleState>();
+        foreach (var retry in ToolCallModule.BuildPendingPublicationRetries(state))
+        {
+            try
+            {
+                await ScheduleSelfDurableTimeoutAsync(
+                    ToolCallModule.BuildPublicationRetryCallbackId(retry),
+                    ToolCallModule.DurablePublicationRetryDelay,
+                    retry,
+                    ToolCallModule.BuildPublicationRetryOptions(retry),
+                    ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception scheduleException)
+            {
+                Logger.LogWarning(
+                    scheduleException,
+                    "Workflow tool publication recovery scheduling failed; falling back to a typed self continuation. actor={ActorId} run={RunId} step={StepId} kind={PublicationKind}",
+                    Id,
+                    retry.RunId,
+                    retry.StepId,
+                    retry.PublicationKind);
+                try
+                {
+                    await PublishAsync(
+                        retry.Clone(),
+                        TopologyAudience.Self,
+                        ct,
+                        ToolCallModule.BuildPublicationRetryOptions(retry));
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception continuationException)
+                {
+                    throw new WorkflowDurablePublicationPendingException(
+                        "Durable workflow tool publication recovery remains pending during activation.",
+                        continuationException);
+                }
+            }
+        }
     }
 
     public async Task BindWorkflowRunDefinitionAsync(
