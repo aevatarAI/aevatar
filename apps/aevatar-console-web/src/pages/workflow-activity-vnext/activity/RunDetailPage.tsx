@@ -26,7 +26,7 @@ import {
   type RunFailureEvidence,
   RunFailureToastContent,
 } from './runFailurePresentation';
-import { getRunStatusPresentation } from './runPresentation';
+import { getRunOriginLabel, getRunStatusPresentation } from './runPresentation';
 import { resolveRunRecovery } from './runRecovery';
 
 function errorMessage(error: unknown): string {
@@ -320,7 +320,7 @@ const RunDetailPage: React.FC<{
           >
             {statusPresentation.label}
           </span>
-          <span>{run.summary.runOrigin || '-'}</span>
+          <span>{getRunOriginLabel(run.summary.runOrigin)}</span>
         </Space>
         <Space wrap>
           <Button
@@ -463,7 +463,7 @@ const RunDetailPage: React.FC<{
             {
               key: 'origin',
               label: t('workflowActivityVNext.activity.columnOrigin', 'Source'),
-              children: run.summary.runOrigin || '-',
+              children: getRunOriginLabel(run.summary.runOrigin),
             },
             {
               key: 'input',

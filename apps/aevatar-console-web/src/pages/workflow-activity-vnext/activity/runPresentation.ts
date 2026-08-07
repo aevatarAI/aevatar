@@ -72,3 +72,20 @@ export function isRunStatusTerminal(status: string): boolean {
     normalized === 'stopped'
   );
 }
+
+export function getRunOriginLabel(origin: string): string {
+  switch (origin.trim().toLowerCase()) {
+    case 'ad-hoc-chat':
+      return t('workflowActivityVNext.activity.originChat', 'Chat');
+    case 'draft':
+      return t('workflowActivityVNext.activity.originEditor', 'Editor');
+    case 'member-invoke':
+      return t('workflowActivityVNext.activity.originMember', 'Team member');
+    case 'service-invoke':
+      return t('workflowActivityVNext.activity.originService', 'Service');
+    case 'schedule':
+      return t('workflowActivityVNext.activity.originSchedule', 'Schedule');
+    default:
+      return t('workflowActivityVNext.common.unknown', 'Unknown');
+  }
+}

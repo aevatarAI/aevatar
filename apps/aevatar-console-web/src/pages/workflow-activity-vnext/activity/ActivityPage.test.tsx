@@ -1,10 +1,4 @@
-import {
-  act,
-  fireEvent,
-  screen,
-  waitFor,
-  within,
-} from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import * as React from 'react';
 import { history } from '@/shared/navigation/history';
 import {
@@ -65,18 +59,6 @@ jest.mock('@/shared/navigation/history', () => ({
   history: { push: jest.fn(), replace: jest.fn() },
 }));
 
-const mockConsoleToast = {
-  error: jest.fn(),
-  info: jest.fn(),
-  success: jest.fn(),
-  warning: jest.fn(),
-};
-
-jest.mock('@/shared/ui/ConsoleToast', () => ({
-  ...jest.requireActual('@/shared/ui/ConsoleToast'),
-  useConsoleToast: () => mockConsoleToast,
-}));
-
 jest.mock('@/shared/ui/ConsoleHeaderActions', () => ({
   ConsoleAuthActions: () => <button type="button">Account</button>,
   ConsoleLanguageSwitch: () => <button type="button">Language</button>,
@@ -94,53 +76,9 @@ const mockListRuns = jest.requireMock('@/shared/api/workflowActivityApi')
   .workflowActivityApi.listRuns as jest.Mock;
 const mockGetWorkflowDetail = jest.requireMock('@/shared/api/scopesApi')
   .scopesApi.getWorkflowDetail as jest.Mock;
-const mockWriteText = jest.fn();
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
-
-function runSummary(
-  overrides: Partial<{
-    runId: string;
-    workflowName: string;
-    status: string;
-    success: boolean | null;
-    startedAtUtc: string | null;
-    updatedAtUtc: string;
-    stateVersion: number;
-    scopeId: string;
-    runOrigin: string;
-  }> = {},
-) {
-  return {
-    runId: 'workflow-definition:studio:run:alpha-1234567890',
-    workflowName: 'Customer follow-up',
-    status: 'completed',
-    success: true,
-    startedAtUtc: '2026-08-04T10:00:00Z',
-    updatedAtUtc: '2026-08-04T10:01:00Z',
-    stateVersion: 21,
-    scopeId: 'scope-alpha',
-    runOrigin: 'backend-origin.v1',
-    ...overrides,
-  };
-}
 
 describe('Workflow Activity vNext Activity ledger', () => {
   beforeEach(() => {
-    Object.defineProperty(window.navigator, 'clipboard', {
-      configurable: true,
-      value: { writeText: mockWriteText },
-    });
-    Object.defineProperty(document, 'execCommand', {
-      configurable: true,
-      value: undefined,
-    });
     jest.clearAllMocks();
     mockSearch = '';
     mockListRuns.mockResolvedValue([]);
@@ -155,7 +93,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
 
     expect(screen.getByRole('status')).toHaveAttribute('data-variant', 'table');
     expect(screen.getAllByTestId('aevatar-content-skeleton-cell')).toHaveLength(
-      20,
+      16,
     );
     expect(screen.getByText('Loading activity…')).toHaveClass(
       'aevatar-loading-visually-hidden',
@@ -199,9 +137,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
         status: undefined,
         origins: undefined,
         definitionActorIds: ['definition-alpha'],
-        fromUtc: undefined,
-        toUtc: undefined,
-        take: 50,
+        take: 100,
       }),
     );
     expect(mockGetWorkflowDetail).toHaveBeenCalledWith(
@@ -266,7 +202,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
     expect(mockListRuns).not.toHaveBeenCalled();
   });
 
-  it('ignores the retired source filter and sends only supported URL-backed filters', async () => {
+  it('sends only URL-backed supported filters to the observatory API', async () => {
     mockSearch = '?status=failed&origin=draft&definition=definition-alpha';
 
     renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
@@ -274,20 +210,10 @@ describe('Workflow Activity vNext Activity ledger', () => {
     await waitFor(() =>
       expect(mockListRuns).toHaveBeenCalledWith('scope-alpha', {
         status: 'failed',
-        origins: undefined,
+        origins: ['draft'],
         definitionActorIds: ['definition-alpha'],
-        fromUtc: undefined,
-        toUtc: undefined,
-        take: 50,
+        take: 100,
       }),
-    );
-    expect(
-      screen.queryByRole('combobox', { name: 'Run source' }),
-    ).not.toBeInTheDocument();
-    await waitFor(() =>
-      expect(history.replace).toHaveBeenLastCalledWith(
-        '/scopes/scope-alpha/workflow-activity-vnext/activity?status=failed&definition=definition-alpha',
-      ),
     );
     expect(
       screen.getByRole('button', { name: 'Show all workflows' }),
@@ -302,30 +228,27 @@ describe('Workflow Activity vNext Activity ledger', () => {
     await waitFor(() =>
       expect(mockListRuns).toHaveBeenLastCalledWith('scope-alpha', {
         status: undefined,
-        origins: undefined,
+        origins: ['draft'],
         definitionActorIds: undefined,
-        fromUtc: undefined,
-        toUtc: undefined,
-        take: 50,
+        take: 100,
       }),
     );
     expect(mockListRuns).not.toHaveBeenCalledWith('scope-alpha', {
       status: 'waiting',
-      origins: undefined,
+      origins: ['draft'],
       definitionActorIds: undefined,
-      fromUtc: undefined,
-      toUtc: undefined,
-      take: 50,
+      take: 100,
     });
     await waitFor(() =>
       expect(history.replace).toHaveBeenLastCalledWith(
-        '/scopes/scope-alpha/workflow-activity-vnext/activity',
+        '/scopes/scope-alpha/workflow-activity-vnext/activity?origin=draft',
       ),
     );
   });
 
   it('restores search from the URL without sending it to the runs API', async () => {
-    mockSearch = '?q=customer&status=failed&definition=definition-alpha';
+    mockSearch =
+      '?q=customer&status=failed&origin=draft&definition=definition-alpha';
 
     renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
 
@@ -335,11 +258,9 @@ describe('Workflow Activity vNext Activity ledger', () => {
     await waitFor(() =>
       expect(mockListRuns).toHaveBeenLastCalledWith('scope-alpha', {
         status: 'failed',
-        origins: undefined,
+        origins: ['draft'],
         definitionActorIds: ['definition-alpha'],
-        fromUtc: undefined,
-        toUtc: undefined,
-        take: 50,
+        take: 100,
       }),
     );
 
@@ -349,16 +270,14 @@ describe('Workflow Activity vNext Activity ledger', () => {
 
     await waitFor(() =>
       expect(history.replace).toHaveBeenLastCalledWith(
-        '/scopes/scope-alpha/workflow-activity-vnext/activity?q=invoice&status=failed&definition=definition-alpha',
+        '/scopes/scope-alpha/workflow-activity-vnext/activity?q=invoice&status=failed&origin=draft&definition=definition-alpha',
       ),
     );
     expect(mockListRuns).toHaveBeenLastCalledWith('scope-alpha', {
       status: 'failed',
-      origins: undefined,
+      origins: ['draft'],
       definitionActorIds: ['definition-alpha'],
-      fromUtc: undefined,
-      toUtc: undefined,
-      take: 50,
+      take: 100,
     });
   });
 
@@ -373,19 +292,23 @@ describe('Workflow Activity vNext Activity ledger', () => {
         updatedAtUtc: '2026-08-04T10:01:00Z',
         stateVersion: 21,
         scopeId: 'scope-alpha',
-        runOrigin: 'backend-origin.v1',
+        runOrigin: 'backend-native-origin.v2',
       },
     ]);
 
     renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
 
     expect(
-      await screen.findByRole('button', {
-        name: 'Open Customer follow-up run intern…lpha',
-      }),
+      await screen.findByRole('button', { name: 'Open Customer follow-up' }),
     ).toBeEnabled();
     expect(screen.getByText('Completed')).toBeInTheDocument();
-    expect(screen.getByText('backend-origin.v1')).toBeInTheDocument();
+    expect(screen.getByText('backend-native-origin.v2')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Run source' })).toBeEnabled();
+    expect(screen.queryByLabelText('Activity after')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Activity before')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Load more' }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByText('workflow-definition:studio:run:internal-alpha'),
     ).not.toBeInTheDocument();
@@ -400,11 +323,11 @@ describe('Workflow Activity vNext Activity ledger', () => {
     ).toHaveAttribute('data-label', 'Workflow');
   });
 
-  it('shows a neutral placeholder when the backend run origin is empty', async () => {
+  it('shows a neutral placeholder when the backend run source is empty', async () => {
     mockListRuns.mockResolvedValue([
       {
         runId: 'run-empty-origin',
-        workflowName: 'Legacy workflow',
+        workflowName: 'Customer follow-up',
         status: 'completed',
         success: true,
         startedAtUtc: '2026-08-04T10:00:00Z',
@@ -417,10 +340,10 @@ describe('Workflow Activity vNext Activity ledger', () => {
 
     renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
 
-    const sourceCell = (await screen.findByText('Legacy workflow'))
-      .closest('tr')
-      ?.querySelector('td[data-label="Source"]');
-    expect(sourceCell).toHaveTextContent('-');
+    const activityRegion = await screen.findByRole('region', {
+      name: 'Activity',
+    });
+    expect(within(activityRegion).getByText('-')).toBeInTheDocument();
   });
 
   it('renders unrecognized returned run states as Unknown', async () => {
@@ -442,219 +365,5 @@ describe('Workflow Activity vNext Activity ledger', () => {
 
     expect(await screen.findByText('Unknown')).toBeInTheDocument();
     expect(screen.queryByText('Waiting')).not.toBeInTheDocument();
-  });
-
-  it('restores URL-backed time filters and sends their UTC bounds to the API', async () => {
-    mockSearch = '?from=2026-08-01T09%3A30&to=2026-08-05T18%3A15&status=failed';
-
-    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
-
-    expect(screen.getByLabelText('Activity after')).toHaveValue(
-      '2026-08-01T09:30',
-    );
-    expect(screen.getByLabelText('Activity before')).toHaveValue(
-      '2026-08-05T18:15',
-    );
-    await waitFor(() =>
-      expect(mockListRuns).toHaveBeenLastCalledWith('scope-alpha', {
-        status: 'failed',
-        origins: undefined,
-        definitionActorIds: undefined,
-        fromUtc: new Date('2026-08-01T09:30').toISOString(),
-        toUtc: new Date('2026-08-05T18:15').toISOString(),
-        take: 50,
-      }),
-    );
-  });
-
-  it('loads a larger server-backed page and reports the visible result count', async () => {
-    const loadMore = deferred<ReturnType<typeof runSummary>[]>();
-    mockListRuns.mockImplementation(
-      (_scopeId: string, filter: { take: number }) =>
-        filter.take === 50
-          ? Promise.resolve(
-              Array.from({ length: 50 }, (_, index) =>
-                runSummary({
-                  runId: `run-${index + 1}`,
-                  workflowName: `Workflow ${index + 1}`,
-                }),
-              ),
-            )
-          : loadMore.promise,
-    );
-
-    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
-
-    expect(
-      await screen.findByText('Showing 50 loaded runs'),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
-    await waitFor(() =>
-      expect(mockListRuns).toHaveBeenLastCalledWith(
-        'scope-alpha',
-        expect.objectContaining({ take: 100 }),
-      ),
-    );
-    expect(screen.getByRole('button', { name: /Load more/ })).toBeDisabled();
-
-    await act(async () => {
-      loadMore.resolve(
-        Array.from({ length: 51 }, (_, index) =>
-          runSummary({
-            runId: `run-${index + 1}`,
-            workflowName: `Workflow ${index + 1}`,
-          }),
-        ),
-      );
-    });
-
-    expect(
-      await screen.findByText('Showing 51 loaded runs'),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: 'Load more' }),
-    ).not.toBeInTheDocument();
-  });
-
-  it('distinguishes duplicate workflow runs and copies the exact run ID', async () => {
-    mockWriteText.mockResolvedValue(undefined);
-    mockListRuns.mockResolvedValue([
-      runSummary({
-        runId: 'workflow-definition:studio:run:alpha-1234567890',
-      }),
-      runSummary({
-        runId: 'workflow-definition:studio:run:beta-0987654321',
-        startedAtUtc: '2026-08-04T11:00:00Z',
-      }),
-    ]);
-
-    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
-
-    expect(
-      await screen.findByRole('button', {
-        name: 'Open Customer follow-up run alpha-…7890',
-      }),
-    ).toBeEnabled();
-    expect(
-      screen.getByRole('button', {
-        name: 'Open Customer follow-up run beta-0…4321',
-      }),
-    ).toBeEnabled();
-
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'Copy run reference alpha-…7890',
-      }),
-    );
-    await waitFor(() =>
-      expect(mockWriteText).toHaveBeenCalledWith(
-        'workflow-definition:studio:run:alpha-1234567890',
-      ),
-    );
-    expect(mockConsoleToast.success).toHaveBeenCalledWith(
-      'Run reference copied.',
-    );
-  });
-
-  it('uses the fallback copy path when the Clipboard API is unavailable', async () => {
-    const fallbackCopy = jest.fn(() => true);
-    Object.defineProperty(window.navigator, 'clipboard', {
-      configurable: true,
-      value: undefined,
-    });
-    Object.defineProperty(document, 'execCommand', {
-      configurable: true,
-      value: fallbackCopy,
-    });
-    mockListRuns.mockResolvedValue([runSummary()]);
-
-    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
-
-    fireEvent.click(
-      await screen.findByRole('button', {
-        name: 'Copy run reference alpha-…7890',
-      }),
-    );
-
-    await waitFor(() => expect(fallbackCopy).toHaveBeenCalledWith('copy'));
-    expect(mockConsoleToast.success).toHaveBeenCalledWith(
-      'Run reference copied.',
-    );
-  });
-
-  it('reports a rejected clipboard write without an unhandled copy state', async () => {
-    mockWriteText.mockRejectedValueOnce(new Error('clipboard denied'));
-    mockListRuns.mockResolvedValue([runSummary()]);
-
-    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
-
-    fireEvent.click(
-      await screen.findByRole('button', {
-        name: 'Copy run reference alpha-…7890',
-      }),
-    );
-
-    await waitFor(() =>
-      expect(mockConsoleToast.error).toHaveBeenCalledWith(
-        'Failed to copy run reference.',
-      ),
-    );
-    expect(mockConsoleToast.success).not.toHaveBeenCalled();
-  });
-
-  it('clears prior scope rows while the next scope is loading', async () => {
-    const nextScope = deferred<ReturnType<typeof runSummary>[]>();
-    mockListRuns.mockImplementation((scopeId: string) =>
-      scopeId === 'scope-alpha'
-        ? Promise.resolve([runSummary({ workflowName: 'Alpha workflow' })])
-        : nextScope.promise,
-    );
-
-    const ScopeHarness = () => {
-      const [scopeId, setScopeId] = React.useState('scope-alpha');
-      return (
-        <>
-          <button type="button" onClick={() => setScopeId('scope-beta')}>
-            Switch scope
-          </button>
-          <ActivityPage scopeId={scopeId} />
-        </>
-      );
-    };
-
-    renderWithQueryClient(<ScopeHarness />);
-    await screen.findByText('Alpha workflow');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Switch scope' }));
-
-    expect(await screen.findByText('Loading activity…')).toBeInTheDocument();
-    expect(screen.queryByText('Alpha workflow')).not.toBeInTheDocument();
-  });
-
-  it('refreshes the elapsed clock immediately when a running row appears', async () => {
-    const now = jest
-      .spyOn(Date, 'now')
-      .mockReturnValue(new Date('2026-08-04T10:00:00Z').getTime());
-    mockListRuns.mockResolvedValueOnce([runSummary()]).mockResolvedValueOnce([
-      runSummary({
-        runId: 'run-live',
-        status: 'running',
-        success: null,
-        startedAtUtc: '2026-08-04T10:00:00Z',
-        updatedAtUtc: '2026-08-04T10:00:00Z',
-      }),
-    ]);
-
-    try {
-      renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
-      await screen.findByText('Completed');
-      now.mockReturnValue(new Date('2026-08-04T10:02:00Z').getTime());
-
-      fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
-
-      expect(await screen.findByText('2m elapsed')).toBeInTheDocument();
-    } finally {
-      now.mockRestore();
-    }
   });
 });

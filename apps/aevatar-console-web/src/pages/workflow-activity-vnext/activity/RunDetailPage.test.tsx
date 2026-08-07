@@ -378,19 +378,6 @@ describe('Workflow Activity vNext run detail recovery', () => {
     expect(screen.queryByText('run-source-alpha')).not.toBeInTheDocument();
   });
 
-  it('shows the backend run origin without translating it', async () => {
-    const run = buildRunDetail();
-    run.summary.runOrigin = 'backend-origin.v1';
-    mockWorkflowActivityApi.getRun.mockResolvedValue(run);
-
-    renderWithQueryClient(
-      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
-    );
-
-    expect(await screen.findAllByText('backend-origin.v1')).toHaveLength(2);
-    expect(screen.queryByText('Unknown')).not.toBeInTheDocument();
-  });
-
   it('names a forbidden detail response without inventing run facts', async () => {
     const { WorkflowActivityApiError } = jest.requireMock(
       '@/shared/api/workflowActivityApi',
