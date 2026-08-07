@@ -57,6 +57,8 @@ public sealed class NyxIdAssistantToolSource : IAgentToolSource
             ReadOnly(new NyxIdServicesTool(_client), ["list", "show"], "list", "id"),
             ReadOnly(new NyxIdApiKeysTool(_client), ["list", "show"], "list", "id", "org"),
             ReadOnly(new NyxIdNodesTool(_client), ["list", "show"], "list", "id"),
+            new NyxIdNodeCredentialsTool(_client),
+            new NyxIdServicePoolsTool(_client),
             ReadOnly(
                 new NyxIdApprovalsTool(_client),
                 ["list", "show", "configs", "grants"],
@@ -169,7 +171,8 @@ internal sealed class NyxIdAssistantReadOnlyActionTool :
         if (!IsAllowed(argumentsJson))
             return RejectedJson;
 
-        var token = AgentToolRequestContext.NyxIdAccessToken;
+        var token = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
+            AgentToolRequestContext.Current?.Credentials);
         if (string.IsNullOrWhiteSpace(token))
             return MissingTokenJson;
 

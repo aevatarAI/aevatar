@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Net;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -7,6 +9,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Tools;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Audit;
@@ -822,6 +825,175 @@ public sealed class NyxIdChatConversationGAgentTests
         var finishedFrames = frames.Where(static frame => frame.RunFinished is not null).ToArray();
         finishedFrames.Should().ContainSingle().Which.RunFinished.Status
             .Should().Be(RunCompletionStatus.Blocked);
+    }
+
+    [Fact]
+    public async Task UnprofiledHumanSessionTurn_ShouldInvokePinnedAccountStatusAndSessionsWithoutApproval()
+    {
+        const string conversationActorId = "conversation-pinned-class-r";
+        const string sourceReadableBearer = "source-readable-bearer";
+        string[] expectedToolNames = ["nyxid_account", "nyxid_status", "nyxid_sessions"];
+        var handler = new RecordingNyxIdReadHandler();
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyxid.test" };
+        using var apiClient = new NyxIdApiClient(options, new HttpClient(handler));
+        var assistantSource = new NyxIdAssistantToolSource(options, apiClient);
+        var provider = new PinnedClassRToolCallProvider(expectedToolNames);
+        var eventStore = new InMemoryEventStoreForTests();
+        var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        using var services = BuildEventSourcingServices(eventStore);
+        var agent = CreateController(services, conversationActorId, dispatch);
+        await agent.ActivateAsync();
+        var start = CreateStartTurnCommand();
+        start.ConversationActorId = conversationActorId;
+        start.Prompt = "Show my NyxID account, status, and active sessions.";
+        start.LlmControl.NyxIdAccessToken = sourceReadableBearer;
+        start.ToolContext.Credentials.NyxIdAccessToken = sourceReadableBearer;
+        start.ToolContext.Credentials.NyxIdCredentialKind =
+            AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer;
+        start.ToolContext.Channel = new AgentToolChannelContextPayload
+        {
+            Platform = NyxIdChatServiceDefaults.ServiceId,
+        };
+        SetOwner(start, "owner-alpha");
+
+        await agent.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatConversationCreateCommand
+            {
+                ScopeId = start.ScopeId,
+                CreatedLocally = true,
+                RequestedActorId = conversationActorId,
+                FirstTurn = start,
+            }));
+
+        var replyGenerator = new NyxIdConversationReplyGenerator(
+            provider,
+            new BuiltInPromptFloorProvider(),
+            toolSources: [new FixedToolSource([new CanonicalProfileTool("forged_ordinary_tool")])],
+            toolExecutionPort: services.GetRequiredService<IAgentToolExecutionPort>(),
+            nyxIdChatToolSources: [assistantSource]);
+        var generationExecutor = new AgentRunReplyGenerationExecutor(
+            new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask),
+            replyGenerator,
+            interactiveReplyCollector: null,
+            relayOptions: null,
+            logger: NullLogger<AgentRunReplyGenerationExecutor>.Instance);
+        var turnExecutor = new NyxIdChatTurnOperationExecutor(generationExecutor);
+        var session = new NyxIdChatTransientExecutionSession();
+        var inputCases = new List<NyxIdChatOperationDispatchCommand.InputOneofCase>();
+
+        for (var operationIndex = 0; operationIndex < 7; operationIndex++)
+        {
+            dispatch.OperationCalls.Should().HaveCountGreaterThan(
+                operationIndex,
+                $"operation {operationIndex + 1} must be dispatched by the authoritative controller");
+            var command = dispatch.OperationCalls[operationIndex].Envelope.Payload
+                .Unpack<NyxIdChatOperationDispatchCommand>();
+            inputCases.Add(command.InputCase);
+            var execution = await turnExecutor.ExecuteAsync(
+                command,
+                session,
+                static (_, _) => Task.CompletedTask,
+                CancellationToken.None);
+            await agent.HandleEventAsync(CreateEnvelope(conversationActorId, execution.Result));
+        }
+
+        dispatch.OperationCalls.Should().HaveCount(7);
+        inputCases.Should().Equal(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.Llm,
+            NyxIdChatOperationDispatchCommand.InputOneofCase.Tool,
+            NyxIdChatOperationDispatchCommand.InputOneofCase.Llm,
+            NyxIdChatOperationDispatchCommand.InputOneofCase.Tool,
+            NyxIdChatOperationDispatchCommand.InputOneofCase.Llm,
+            NyxIdChatOperationDispatchCommand.InputOneofCase.Tool,
+            NyxIdChatOperationDispatchCommand.InputOneofCase.Llm);
+
+        provider.Requests.Should().HaveCount(4);
+        var firstRequest = provider.Requests[0];
+        firstRequest.Tools.Should().NotBeNull();
+        var firstTools = firstRequest.Tools!;
+        firstTools.Select(static tool => tool.Name).Should().Contain(expectedToolNames);
+        firstTools.Should().NotContain(static tool => tool.Name == "forged_ordinary_tool");
+        firstTools.Should().NotContain(static tool => tool.Name == "nyxid_proxy");
+        var requestedTools = firstTools
+            .Where(tool => expectedToolNames.Contains(tool.Name, StringComparer.Ordinal))
+            .ToArray();
+        requestedTools.Should().HaveCount(3);
+        requestedTools.Should().OnlyContain(static tool =>
+            tool.ApprovalMode == ToolApprovalMode.NeverRequire &&
+            tool.IsReadOnly &&
+            !tool.IsDestructive &&
+            tool.GetCallSafety("{}").IsReadOnly &&
+            !tool.GetCallSafety("{}").IsDestructive);
+        foreach (var tool in requestedTools)
+        {
+            tool.Should().BeAssignableTo<IAgentToolCapabilityDescriptor>();
+            ((IAgentToolCapabilityDescriptor)tool).Capabilities.Should()
+                .Contain(AgentToolCapabilities.RequiresHumanSession);
+        }
+        for (var index = 0; index < expectedToolNames.Length; index++)
+        {
+            provider.Requests[index + 1].Messages.Should().ContainSingle(message =>
+                message.Role == "tool" &&
+                message.ToolCallId == $"call-{expectedToolNames[index]}");
+        }
+
+        handler.Requests.Should().HaveCount(6);
+        handler.Requests.Select(static request => request.PathAndQuery).Should().BeEquivalentTo(
+            "/api/v1/users/me",
+            "/api/v1/users/me",
+            "/api/v1/keys",
+            "/api/v1/api-keys",
+            "/api/v1/nodes",
+            "/api/v1/sessions");
+        handler.Requests.Should().OnlyContain(request =>
+            request.Method == HttpMethod.Get && request.BearerToken == sourceReadableBearer);
+
+        var committed = await eventStore.GetEventsAsync(conversationActorId);
+        var reconciliations = committed
+            .Where(static item => item.EventData.Is(NyxIdChatOperationReconciledEvent.Descriptor))
+            .Select(static item => item.EventData.Unpack<NyxIdChatOperationReconciledEvent>())
+            .ToArray();
+        var toolReconciliations = reconciliations
+            .Where(static item =>
+                item.Result.ResultCase == NyxIdChatOperationResultSignal.ResultOneofCase.Tool)
+            .ToArray();
+        toolReconciliations.Should().HaveCount(3);
+        toolReconciliations.Select(static item => item.Result.Tool.Receipt.ToolName)
+            .Should().Equal(expectedToolNames);
+        toolReconciliations.Should().OnlyContain(static item =>
+            item.Result.Tool.Receipt.Status == AgentToolReceiptStatus.Success &&
+            item.Result.Tool.Receipt.ApprovalMode == AgentToolReceiptApprovalMode.NeverRequire &&
+            item.Result.Tool.Receipt.Effect == AgentToolReceiptEffect.ReadOnly &&
+            !item.Result.Tool.Receipt.IsDestructive &&
+            string.IsNullOrEmpty(item.Result.Tool.Receipt.ApprovalRequestId) &&
+            item.Result.Tool.Receipt.AuthorizationRequired == null);
+        var durableToolCalls = reconciliations
+            .Where(static item =>
+                item.Result.ResultCase == NyxIdChatOperationResultSignal.ResultOneofCase.Llm)
+            .SelectMany(static item => item.Result.Llm.ToolCalls)
+            .ToArray();
+        durableToolCalls.Should().HaveCount(3);
+        durableToolCalls.Should().OnlyContain(static call =>
+            call.Safety != null &&
+            call.Safety.IsReadOnly &&
+            !call.Safety.IsDestructive &&
+            !call.Safety.MayChangeExternalState);
+        committed.Should().NotContain(static item =>
+            item.EventData.Is(NyxIdChatActionRequestedEvent.Descriptor));
+
+        agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Succeeded);
+        agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Succeeded);
+        agent.State.ActiveTask.Steps.Where(static step => step.Kind == NyxIdChatStepKind.Tool)
+            .Should().HaveCount(3).And.OnlyContain(static step =>
+                step.Status == NyxIdChatStepStatus.Done);
+        agent.State.PendingApproval.Should().BeNull();
+        agent.State.PendingActions.Should().BeEmpty();
+        agent.State.PendingInput.Should().BeNull();
+        committed.Should().OnlyContain(item =>
+            !Encoding.UTF8.GetString(item.EventData.ToByteArray())
+                .Contains(sourceReadableBearer, StringComparison.Ordinal));
+        agent.State.ToString().Should().NotContain(sourceReadableBearer);
     }
 
     [Fact]
@@ -4470,6 +4642,95 @@ public sealed class NyxIdChatConversationGAgentTests
             };
         }
     }
+
+    private sealed class PinnedClassRToolCallProvider(
+        IReadOnlyList<string> toolNames) : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "pinned-class-r-test";
+        public List<LLMRequest> Requests { get; } = [];
+
+        public ILLMProvider GetProvider(string name) => this;
+        public ILLMProvider GetDefault() => this;
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var round = Requests.Count;
+            Requests.Add(request);
+            if (round < toolNames.Count)
+            {
+                var toolName = toolNames[round];
+                yield return new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = $"call-{toolName}",
+                        Name = toolName,
+                        ArgumentsJson = "{}",
+                    },
+                };
+                await Task.CompletedTask;
+                yield return new LLMStreamChunk
+                {
+                    FinishReason = "tool_calls",
+                    IsLast = true,
+                };
+                yield break;
+            }
+
+            yield return new LLMStreamChunk
+            {
+                DeltaContent = "NyxID account reads completed.",
+            };
+            await Task.CompletedTask;
+            yield return new LLMStreamChunk
+            {
+                FinishReason = "stop",
+                IsLast = true,
+            };
+        }
+    }
+
+    private sealed class RecordingNyxIdReadHandler : HttpMessageHandler
+    {
+        private readonly ConcurrentQueue<RecordedNyxIdReadRequest> _requests = new();
+
+        public IReadOnlyCollection<RecordedNyxIdReadRequest> Requests => _requests.ToArray();
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _requests.Enqueue(new RecordedNyxIdReadRequest(
+                request.Method,
+                request.RequestUri?.PathAndQuery ?? string.Empty,
+                request.Headers.Authorization?.Parameter ?? string.Empty));
+            var responseJson = request.RequestUri?.AbsolutePath switch
+            {
+                "/api/v1/users/me" =>
+                    "{\"id\":\"user-alpha\",\"email\":\"user@example.test\",\"status\":\"active\"}",
+                "/api/v1/keys" => "{\"keys\":[]}",
+                "/api/v1/api-keys" => "{\"api_keys\":[]}",
+                "/api/v1/nodes" => "{\"nodes\":[]}",
+                "/api/v1/sessions" => "{\"sessions\":[]}",
+                _ => "{\"error\":\"unexpected_route\"}",
+            };
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseJson, Encoding.UTF8, "application/json"),
+                RequestMessage = request,
+            });
+        }
+    }
+
+    private sealed record RecordedNyxIdReadRequest(
+        HttpMethod Method,
+        string PathAndQuery,
+        string BearerToken);
 
     private static NyxIdAssistantActionRegistry CreateActionRegistry() =>
         NyxIdAssistantActionRegistry.Load("""

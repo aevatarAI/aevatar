@@ -1411,6 +1411,37 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeAsync_HumanSessionToolWithRawProxyDelegation_ShouldBeRejected()
+    {
+        var humanSessionTool = new CapabilityTool(
+            "task",
+            [AgentToolCapabilities.RequiresHumanSession]);
+        var tools = new IAgentTool[] { humanSessionTool };
+        var fetcher = new RecordingFetcher(SuccessfulFetch());
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                fetcher)
+            .MaterializeAsync(
+                SealProfile(BuildProfile(withAlias: true)),
+                "/alpha",
+                "proxy-delegation",
+                tools,
+                ToolContext(
+                    "proxy-delegation",
+                    AgentToolNyxIdCredentialKind.ProxyDelegation),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEmpty();
+        catalog.RouteOwnedTools.Should().BeEmpty();
+        catalog.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ToolCapabilityRejected &&
+            diagnostic.Detail == "task");
+        fetcher.CallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task MaterializeAsync_NyxIdChatProfile_ShouldHideRawProxyWithoutLosingTypedTools()
     {
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
@@ -1528,10 +1559,13 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             SkillSha256,
             skillMarkdown);
 
-    private static AgentToolExecutionContext ToolContext(string? accessToken = "token") =>
+    private static AgentToolExecutionContext ToolContext(
+        string? accessToken = "token",
+        AgentToolNyxIdCredentialKind credentialKind =
+            AgentToolNyxIdCredentialKind.SourceReadableUserBearer) =>
         AgentToolExecutionContext.Empty with
         {
-            Credentials = new AgentToolCredentials(accessToken, null, null),
+            Credentials = new AgentToolCredentials(accessToken, null, null, credentialKind),
         };
 
     private static IReadOnlyList<IAgentTool> NewTools(params string[] names) =>

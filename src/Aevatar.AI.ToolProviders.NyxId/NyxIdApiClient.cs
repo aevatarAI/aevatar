@@ -829,8 +829,40 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> GetNodeAsync(string token, string id, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/nodes/{Uri.EscapeDataString(id)}", ct);
 
+    public Task<string> ListPendingNodeCredentialsAsync(
+        string token,
+        string nodeId,
+        bool? includeHistory,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(nodeId);
+        var path = $"/api/v1/nodes/{Uri.EscapeDataString(nodeId.Trim())}/credentials/pending";
+        if (includeHistory.HasValue)
+            path += $"?include_history={includeHistory.Value.ToString().ToLowerInvariant()}";
+        return GetAsync(token, path, ct);
+    }
+
     public Task<string> DeleteNodeAsync(string token, string id, CancellationToken ct) =>
         DeleteAsync(token, $"/api/v1/nodes/{Uri.EscapeDataString(id)}", ct);
+
+    // ─── Service pools ───
+
+    public Task<string> ListServicePoolsAsync(
+        string token,
+        string? organizationOwnerId,
+        CancellationToken ct)
+    {
+        var path = "/api/v1/service-pools";
+        if (!string.IsNullOrWhiteSpace(organizationOwnerId))
+            path += "?org_id=" + Uri.EscapeDataString(organizationOwnerId.Trim());
+        return GetAsync(token, path, ct);
+    }
+
+    public Task<string> GetServicePoolAsync(string token, string poolId, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(poolId);
+        return GetAsync(token, $"/api/v1/service-pools/{Uri.EscapeDataString(poolId.Trim())}", ct);
+    }
 
     // ─── Approvals ───
 
