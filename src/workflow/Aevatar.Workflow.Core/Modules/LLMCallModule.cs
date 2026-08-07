@@ -182,7 +182,13 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         var publisherActorId = envelope.Route?.PublisherActorId ?? ctx.AgentId;
         if (!evt.Success)
         {
-            await PublishFailedCompletionAsync(pending, string.IsNullOrWhiteSpace(evt.Error) ? "LLM call failed." : evt.Error, publisherActorId, ctx, ct);
+            await PublishFailedCompletionAsync(
+                pending,
+                string.IsNullOrWhiteSpace(evt.Error) ? "LLM call failed." : evt.Error,
+                publisherActorId,
+                evt.RecoveryFailureKind,
+                ctx,
+                ct);
             await RemovePendingAsync(sessionId, pending, ctx, ct);
             return;
         }
@@ -474,11 +480,21 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         string workerId,
         IWorkflowExecutionContext ctx,
         CancellationToken ct) =>
+        PublishFailedCompletionAsync(pending, error, workerId, WorkflowRecoveryFailureKind.Unspecified, ctx, ct);
+
+    private static Task PublishFailedCompletionAsync(
+        PendingLlmCallState pending,
+        string error,
+        string workerId,
+        WorkflowRecoveryFailureKind recoveryFailureKind,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct) =>
         PublishFailedCompletionAsync(
             pending.StepId,
             pending.RunId,
             error,
             workerId,
+            recoveryFailureKind,
             ctx,
             ct);
 
@@ -489,6 +505,23 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         string workerId,
         IWorkflowExecutionContext ctx,
         CancellationToken ct) =>
+        PublishFailedCompletionAsync(
+            stepId,
+            runId,
+            error,
+            workerId,
+            WorkflowRecoveryFailureKind.Unspecified,
+            ctx,
+            ct);
+
+    private static Task PublishFailedCompletionAsync(
+        string stepId,
+        string runId,
+        string error,
+        string workerId,
+        WorkflowRecoveryFailureKind recoveryFailureKind,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct) =>
         ctx.PublishAsync(
             new StepCompletedEvent
             {
@@ -497,6 +530,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 Success = false,
                 Error = error,
                 WorkerId = string.IsNullOrWhiteSpace(workerId) ? ctx.AgentId : workerId,
+                RecoveryFailureKind = recoveryFailureKind,
             },
             TopologyAudience.Self,
             ct);

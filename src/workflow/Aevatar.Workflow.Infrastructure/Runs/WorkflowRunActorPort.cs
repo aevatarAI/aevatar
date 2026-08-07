@@ -125,7 +125,10 @@ internal sealed class WorkflowRunActorPort :
                 runActor.Id,
                 definitionResolution.ActorId,
                 createdActorIds,
-                runActor.Id);
+                // Fix (review round 1, F2):
+                //   CreateRunAsync previously copied the technical actor id into RunId.
+                //   No authoritative routable run id exists here, so leave RunId empty for honest fallback.
+                RunId: string.Empty);
         }
         catch
         {
@@ -229,7 +232,10 @@ internal sealed class WorkflowRunActorPort :
                 runActor.Id,
                 definitionResolution.ActorId,
                 createdActorIds,
-                runActor.Id);
+                // Fix (review round 1, F2):
+                //   EnsureRunAsync has a caller-supplied routable run identity.
+                //   Populate RunId from the normalized request, not by reading the actor address back.
+                RunId: normalizedRunId);
         }
         catch
         {
