@@ -1,4 +1,4 @@
-import { validateActionRequest } from "./protocol.js";
+import { validateActionRequest } from "./protocol.js?v=20260807-readiness-composer-layout";
 
 const ACTOR_EVENT_TYPES = new Set([
   "task_snapshot",

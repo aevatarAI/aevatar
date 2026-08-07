@@ -68,8 +68,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("class=\"site-header\"");
             html.Should().Contain("id=\"composerForm\"");
             html.Should().Contain("生产环境 · 操作会影响真实数据，高风险操作需要确认");
-            html.Should().Contain("app.js?v=20260806-studio-sidebar-focus");
-            html.Should().Contain("styles.css?v=20260807-pane-scroll-fix");
+            html.Should().Contain("app.js?v=20260807-readiness-composer-layout");
+            html.Should().Contain("styles.css?v=20260807-readiness-composer-layout");
             html.Should().NotContain("class=\"brand-mark\"");
             html.Should().NotContain("Aevatar Studio · 工作流实录");
             html.Should().NotContain("从意图到交付的真实对话");

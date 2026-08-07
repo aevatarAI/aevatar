@@ -1,4 +1,4 @@
-import "./transport.js";
+import "./transport.js?v=20260807-readiness-composer-layout";
 import {
   consumeSse,
   mergeUsage,
@@ -9,21 +9,21 @@ import {
   redact,
   safeJson,
   validateActionContinuation,
-} from "./protocol.js";
+} from "./protocol.js?v=20260807-readiness-composer-layout";
 import {
   buildConnectCardBlock,
   connectCardSteps,
   connectorInitial,
   splitMessageSegments,
-} from "./blocks.js";
+} from "./blocks.js?v=20260807-readiness-composer-layout";
 import {
   actorCan,
   applyCurrentStateResult,
   createActorProjection,
   reduceActorEvent,
   restoreCachedAction,
-} from "./actor-state.js";
-import { describeReadinessFailure } from "./readiness.js";
+} from "./actor-state.js?v=20260807-readiness-composer-layout";
+import { describeReadinessFailure } from "./readiness.js?v=20260807-readiness-composer-layout";
 
 const PREFERENCES_KEY = "aevatar-studio:assistant-preferences:v4";
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;

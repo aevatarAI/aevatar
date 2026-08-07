@@ -166,7 +166,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
         var styles = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantStyles);
 
-        app.Should().Contain("import \"./transport.js\"");
+        app.Should().Contain("import \"./transport.js?v=20260807-readiness-composer-layout\"");
         app.Should().Contain("async function sendPrompt(");
         app.Should().Contain("async function loadConversations(");
         app.Should().Contain("async function refreshActorState(");
@@ -236,8 +236,13 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("app.js?v=20260806-studio-sidebar-focus");
-        html.Should().Contain("styles.css?v=20260807-pane-scroll-fix");
+        html.Should().Contain("app.js?v=20260807-readiness-composer-layout");
+        html.Should().Contain("styles.css?v=20260807-readiness-composer-layout");
+        app.Should().Contain("transport.js?v=20260807-readiness-composer-layout");
+        app.Should().Contain("readiness.js?v=20260807-readiness-composer-layout");
+        transport.Should().Contain("readiness.js?v=20260807-readiness-composer-layout");
+        actorState.Should().Contain("protocol.js?v=20260807-readiness-composer-layout");
+        blocks.Should().Contain("protocol.js?v=20260807-readiness-composer-layout");
         html.Should().Contain("<span class=\"brand-name\">Aevatar Studio</span>");
         html.Should().NotContain("class=\"brand-mark\"");
         styles.Should().Contain("color-scheme: only light");
@@ -253,6 +258,8 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         styles.Should().Contain("scrollbar-gutter: stable");
         styles.Should().Contain(".thread::-webkit-scrollbar-thumb");
         styles.Should().Contain("scrollbar-color: var(--tertiary) var(--surface)");
+        styles.Should().Contain("min-height: 108px;\n  flex-direction: column;");
+        styles.Should().Contain("width: 100%;\n  min-width: 0;\n  height: 40px;");
         styles.Should().Contain(".recent-session-list {\n  min-height: 0;\n  flex: 1 1 0;");
         styles.Should().NotContain("min-height: 480px");
         styles.Should().NotContain("data-theme");
