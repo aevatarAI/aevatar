@@ -8,9 +8,11 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Input, Select, Space, Typography } from 'antd';
 import React from 'react';
+import { scopesApi } from '@/shared/api/scopesApi';
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
-import { studioApi } from '@/shared/studio/api';
+import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
+import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import type {
   StudioValidationFinding,
   StudioWorkflowSaveResult,
@@ -26,7 +28,7 @@ import {
   BUNDLED_WORKFLOW_TEMPLATES,
   createBlankWorkflowYaml,
   hasBlockingFindings,
-  slugifyWorkflowFileName,
+  resolveAvailableWorkflowFileName,
   type WorkflowCreationMode,
 } from './workflowCreation';
 
@@ -84,8 +86,6 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
   const [name, setName] = React.useState('');
   const [prompt, setPrompt] = React.useState('');
   const [yaml, setYaml] = React.useState('');
-  const [generatedYaml, setGeneratedYaml] = React.useState('');
-  const [generatedReady, setGeneratedReady] = React.useState(false);
   const [templateId, setTemplateId] = React.useState(
     BUNDLED_WORKFLOW_TEMPLATES[0]?.id ?? '',
   );
@@ -95,18 +95,46 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
   >([]);
   const [submitting, setSubmitting] = React.useState(false);
   const [failure, setFailure] = React.useState('');
+  const toast = useConsoleToast();
   const materialization = useDraftMaterialization(scopeId);
   const workspace = useQuery({
     queryKey: ['workflow-activity-vnext', 'workspace', scopeId],
     queryFn: () => studioApi.getWorkspaceSettings(scopeId),
     retry: false,
   });
+  const existingWorkflows = useQuery({
+    queryKey: ['workflow-activity-vnext', 'drafts', scopeId],
+    queryFn: () => studioApi.listWorkflowDrafts(scopeId),
+    retry: false,
+  });
+  const existingCommittedWorkflows = useQuery({
+    queryKey: ['workflow-activity-vnext', 'committed', scopeId],
+    queryFn: () => scopesApi.listWorkflows(scopeId),
+    retry: false,
+  });
 
   React.useEffect(() => {
-    if (!directoryId && workspace.data?.directories[0]?.directoryId) {
-      setDirectoryId(workspace.data.directories[0].directoryId);
+    if (!workspace.data) return;
+    if (
+      directoryId &&
+      workspace.data.directories.some(
+        (item) => item.directoryId === directoryId,
+      )
+    ) {
+      return;
     }
+    setDirectoryId(workspace.data.directories[0]?.directoryId ?? '');
   }, [directoryId, workspace.data]);
+
+  React.useEffect(() => {
+    if (!failure) return;
+    toast.error(
+      t(
+        'workflowActivityVNext.new.createFailed',
+        "Workflow couldn't be created",
+      ),
+    );
+  }, [failure, toast]);
 
   const navigateToWorkflow = React.useCallback(
     (workflowId: string) =>
@@ -126,21 +154,39 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
     [materialization.observe, navigateToWorkflow],
   );
 
-  const persist = async (nextYaml: string, suggestedName?: string) => {
-    const workflowName = (name || suggestedName || '').trim();
-    if (!workflowName || !directoryId || submitting) return;
+  const persistDraft = async (nextYaml: string, workflowName: string) => {
+    if (!directoryId) {
+      setFailure(
+        t(
+          'workflowActivityVNext.new.saveTargetRequired',
+          'Choose an available save location before creating the workflow.',
+        ),
+      );
+      return;
+    }
+    await finishSave(
+      await studioApi.createWorkflowDraft({
+        directoryId,
+        fileName: resolveAvailableWorkflowFileName(
+          workflowName,
+          directoryId,
+          existingWorkflows.data ?? [],
+        ),
+        scopeId,
+        workflowName,
+        yaml: nextYaml,
+      }),
+    );
+  };
+
+  const createBlank = async () => {
+    const workflowName = name.trim();
+    if (!workflowName || submitting) return;
     setSubmitting(true);
     setFailure('');
+    setFindings([]);
     try {
-      await finishSave(
-        await studioApi.createWorkflowDraft({
-          directoryId,
-          fileName: slugifyWorkflowFileName(workflowName),
-          scopeId,
-          workflowName,
-          yaml: nextYaml,
-        }),
-      );
+      await persistDraft(createBlankWorkflowYaml(workflowName), workflowName);
     } catch (error) {
       setFailure(errorMessage(error));
     } finally {
@@ -148,7 +194,10 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
     }
   };
 
-  const validateAndPersist = async (nextYaml: string) => {
+  const validateAndPersist = async (
+    nextYaml: string,
+    preferredName?: string,
+  ) => {
     if (!nextYaml.trim() || submitting) return;
     setSubmitting(true);
     setFailure('');
@@ -157,9 +206,11 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
       const parsed = await studioApi.parseYaml({ yaml: nextYaml });
       setFindings(parsed.findings);
       if (hasBlockingFindings(parsed.document, parsed.findings)) return;
-      const parsedName = String(parsed.document?.name ?? '').trim();
-      setSubmitting(false);
-      await persist(nextYaml, parsedName);
+      const workflowName = (
+        preferredName || String(parsed.document?.name ?? '')
+      ).trim();
+      if (!workflowName) return;
+      await persistDraft(nextYaml, workflowName);
     } catch (error) {
       setFailure(errorMessage(error));
     } finally {
@@ -167,24 +218,21 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
     }
   };
 
-  const generate = async () => {
-    if (!prompt.trim() || submitting) return;
+  const generateAndOpen = async () => {
+    const workflowName = name.trim();
+    if (!workflowName || !prompt.trim() || submitting) return;
     setSubmitting(true);
     setFailure('');
     setFindings([]);
-    setGeneratedYaml('');
-    setGeneratedReady(false);
     try {
       const generated = await studioApi.authorWorkflow(
         { prompt },
-        { onText: setGeneratedYaml },
+        { onText: () => undefined },
       );
       const parsed = await studioApi.parseYaml({ yaml: generated });
-      setGeneratedYaml(generated);
       setFindings(parsed.findings);
       if (hasBlockingFindings(parsed.document, parsed.findings)) return;
-      setGeneratedReady(true);
-      if (!name.trim()) setName(String(parsed.document?.name ?? '').trim());
+      await persistDraft(generated, workflowName);
     } catch (error) {
       setFailure(errorMessage(error));
     } finally {
@@ -200,6 +248,20 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
   const selectedTemplate = BUNDLED_WORKFLOW_TEMPLATES.find(
     (item) => item.id === templateId,
   );
+  const normalizedName = name.trim().toLocaleLowerCase();
+  const duplicateName = Boolean(
+    normalizedName &&
+      (existingWorkflows.data?.some(
+        (workflow) =>
+          workflow.name.trim().toLocaleLowerCase() === normalizedName,
+      ) ||
+        existingCommittedWorkflows.data?.some(
+          (workflow) =>
+            (workflow.displayName || workflow.workflowName)
+              .trim()
+              .toLocaleLowerCase() === normalizedName,
+        )),
+  );
   const templateName = t(
     'workflowActivityVNext.new.templateName.incidentTriage',
     'Incident triage',
@@ -208,10 +270,16 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
     'workflowActivityVNext.new.templateDescription.incidentTriage',
     'Classify an incident, prepare a response, and request human approval.',
   );
-  const disabledByWorkspace =
-    workspace.isPending ||
-    workspace.isError ||
-    workspace.data?.directories.length === 0;
+  const templateCopyName = t(
+    'workflowActivityVNext.new.templateCopyName.incidentTriage',
+    'Incident triage copy',
+  );
+  const saveTargetUnavailable = !directoryId;
+  const workspaceAccessDenied =
+    isStudioApiStatus(workspace.error, 401) ||
+    isStudioApiStatus(workspace.error, 403);
+  const reviewAccess = () =>
+    history.push(buildWorkflowActivitySectionHref(scopeId, 'settings'));
   const selectMode = (nextMode: WorkflowCreationMode) => {
     setFailure('');
     setFindings([]);
@@ -240,6 +308,10 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
     >
       {workspace.isPending ? (
         <Alert
+          description={t(
+            'workflowActivityVNext.new.workspaceLoadingDescription',
+            'Choose a creation method now. Your input stays on this page while the current workspace save location loads.',
+          )}
           message={t(
             'workflowActivityVNext.new.workspaceLoading',
             'Loading save locations…',
@@ -251,13 +323,26 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
       {workspace.isError ? (
         <Alert
           action={
-            <Button onClick={() => void workspace.refetch()}>
-              {t('workflowActivityVNext.common.retry', 'Retry')}
-            </Button>
+            <Space wrap>
+              <Button onClick={() => void workspace.refetch()}>
+                {t('workflowActivityVNext.common.retry', 'Retry')}
+              </Button>
+              <Button onClick={reviewAccess}>
+                {t('workflowActivityVNext.new.reviewAccess', 'Review access')}
+              </Button>
+            </Space>
           }
+          description={t(
+            'workflowActivityVNext.new.workspaceUnavailableDescription',
+            'Choose a creation method now. Your input stays on this page while you restore access.',
+          )}
           message={t(
-            'workflowActivityVNext.new.workspaceUnavailable',
-            'Save locations unavailable',
+            workspaceAccessDenied
+              ? 'workflowActivityVNext.new.workspaceUnauthorized'
+              : 'workflowActivityVNext.new.workspaceUnavailable',
+            workspaceAccessDenied
+              ? "You don't have access to a save location in the current workspace."
+              : "The current workspace's save location couldn't be loaded.",
           )}
           showIcon
           type="error"
@@ -265,9 +350,23 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
       ) : null}
       {workspace.data?.directories.length === 0 ? (
         <Alert
+          action={
+            <Space wrap>
+              <Button onClick={() => void workspace.refetch()}>
+                {t('workflowActivityVNext.common.retry', 'Retry')}
+              </Button>
+              <Button onClick={reviewAccess}>
+                {t('workflowActivityVNext.new.reviewAccess', 'Review access')}
+              </Button>
+            </Space>
+          }
+          description={t(
+            'workflowActivityVNext.new.noDirectoriesDescription',
+            'A save location is required to own the workflow. You can prepare your input here while access is restored.',
+          )}
           message={t(
             'workflowActivityVNext.new.noDirectories',
-            'No save location is available. Try again later or contact your administrator.',
+            'No save location is available in the current workspace.',
           )}
           showIcon
           type="warning"
@@ -285,7 +384,6 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
           {modeItems.map((item) => (
             <button
               aria-label={item.label}
-              disabled={disabledByWorkspace}
               className="wa-vnext__creation-option"
               key={item.key}
               onClick={() => selectMode(item.key)}
@@ -304,9 +402,9 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
           ))}
         </fieldset>
       ) : (
-        <section className="wa-vnext__panel">
-          <div className="wa-vnext__form">
-            <Space>
+        <section className="wa-vnext__creation-surface">
+          <div className="wa-vnext__creation-form">
+            <div className="wa-vnext__creation-heading">
               <Button
                 icon={<ArrowLeftOutlined />}
                 onClick={() => setMode(null)}
@@ -317,56 +415,73 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
               <Typography.Title className="wa-vnext__form-title" level={3}>
                 {modeItems.find((item) => item.key === mode)?.label ?? mode}
               </Typography.Title>
-            </Space>
-            <div>
-              <span>
-                {t('workflowActivityVNext.new.directory', 'Save location')}
-              </span>
-              <Select
-                aria-label={t(
-                  'workflowActivityVNext.new.directory',
-                  'Save location',
-                )}
-                onChange={setDirectoryId}
-                options={(workspace.data?.directories ?? []).map((item) => ({
-                  label:
-                    item.isBuiltIn && item.label.trim() === scopeId
-                      ? t(
-                          'workflowActivityVNext.new.defaultWorkspace',
-                          'Default workspace',
-                        )
-                      : item.label,
-                  value: item.directoryId,
-                }))}
-                className="wa-vnext__field-control"
-                value={directoryId || undefined}
-              />
             </div>
-            <div>
-              <span>
-                {t('workflowActivityVNext.new.name', 'Workflow name')}
-              </span>
-              <Input
-                aria-label={t(
-                  'workflowActivityVNext.new.name',
-                  'Workflow name',
-                )}
-                onChange={(event) => setName(event.target.value)}
-                className="wa-vnext__field-control"
-                value={name}
-              />
-            </div>
+            {(workspace.data?.directories.length ?? 0) > 1 ? (
+              <div className="wa-vnext__creation-field">
+                <span>
+                  {t('workflowActivityVNext.new.directory', 'Save to')}
+                </span>
+                <Select
+                  aria-label={t(
+                    'workflowActivityVNext.new.directory',
+                    'Save to',
+                  )}
+                  onChange={setDirectoryId}
+                  options={(workspace.data?.directories ?? []).map((item) => ({
+                    label:
+                      item.isBuiltIn && item.label.trim() === scopeId
+                        ? t(
+                            'workflowActivityVNext.new.defaultWorkspace',
+                            'Default workspace',
+                          )
+                        : item.label,
+                    value: item.directoryId,
+                  }))}
+                  className="wa-vnext__field-control"
+                  disabled={saveTargetUnavailable}
+                  loading={workspace.isPending}
+                  value={directoryId || undefined}
+                />
+              </div>
+            ) : null}
+            {mode === 'blank' || mode === 'describe' ? (
+              <div className="wa-vnext__creation-field">
+                <span>
+                  {t('workflowActivityVNext.new.name', 'Workflow name')}
+                </span>
+                <Input
+                  aria-label={t(
+                    'workflowActivityVNext.new.name',
+                    'Workflow name',
+                  )}
+                  onChange={(event) => setName(event.target.value)}
+                  className="wa-vnext__field-control"
+                  value={name}
+                />
+                {duplicateName ? (
+                  <p className="wa-vnext__duplicate-warning" role="status">
+                    {t(
+                      'workflowActivityVNext.workflows.duplicateNameWarning',
+                      'Another workflow already uses this name. Duplicate names are allowed.',
+                    )}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
 
             {mode === 'describe' ? (
               <>
-                <div>
+                <div className="wa-vnext__creation-field">
                   <span>
-                    {t('workflowActivityVNext.new.goal', 'Automation goal')}
+                    {t(
+                      'workflowActivityVNext.new.goal',
+                      'What should this workflow do?',
+                    )}
                   </span>
                   <Input.TextArea
                     aria-label={t(
                       'workflowActivityVNext.new.goal',
-                      'Automation goal',
+                      'What should this workflow do?',
                     )}
                     onChange={(event) => setPrompt(event.target.value)}
                     rows={5}
@@ -374,71 +489,43 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                     value={prompt}
                   />
                 </div>
-                {generatedYaml ? (
-                  <div>
-                    <span>
-                      {t(
-                        'workflowActivityVNext.new.generatedYaml',
-                        'Generated YAML',
-                      )}
-                    </span>
-                    <Input.TextArea
-                      aria-label={t(
-                        'workflowActivityVNext.new.generatedYaml',
-                        'Generated YAML',
-                      )}
-                      onChange={(event) => {
-                        setGeneratedYaml(event.target.value);
-                        setGeneratedReady(false);
-                      }}
-                      rows={12}
-                      className="wa-vnext__editor-yaml wa-vnext__field-control"
-                      value={generatedYaml}
-                    />
-                  </div>
-                ) : null}
-                <div className="wa-vnext__form-actions">
+                <div className="wa-vnext__creation-actions">
                   <Button
-                    disabled={!prompt.trim()}
+                    disabled={
+                      !name.trim() || !prompt.trim() || saveTargetUnavailable
+                    }
                     loading={submitting}
-                    onClick={() => void generate()}
+                    onClick={() => void generateAndOpen()}
+                    type="primary"
                   >
                     {t(
                       'workflowActivityVNext.new.generate',
-                      'Generate workflow',
+                      'Generate and open',
                     )}
                   </Button>
-                  {generatedYaml && generatedReady ? (
-                    <Button
-                      disabled={!name.trim()}
-                      loading={submitting}
-                      onClick={() => void persist(generatedYaml)}
-                      type="primary"
-                    >
-                      {t(
-                        'workflowActivityVNext.new.createGenerated',
-                        'Create workflow',
-                      )}
-                    </Button>
-                  ) : null}
                 </div>
               </>
             ) : null}
 
             {mode === 'blank' ? (
-              <Button
-                disabled={!name.trim()}
-                loading={submitting}
-                onClick={() => void persist(createBlankWorkflowYaml(name))}
-                type="primary"
-              >
-                {t('workflowActivityVNext.new.createBlank', 'Create workflow')}
-              </Button>
+              <div className="wa-vnext__creation-actions">
+                <Button
+                  disabled={!name.trim() || saveTargetUnavailable}
+                  loading={submitting}
+                  onClick={() => void createBlank()}
+                  type="primary"
+                >
+                  {t(
+                    'workflowActivityVNext.new.createBlank',
+                    'Create and open',
+                  )}
+                </Button>
+              </div>
             ) : null}
 
             {mode === 'import' ? (
               <>
-                <div>
+                <div className="wa-vnext__creation-field">
                   <span>
                     {t('workflowActivityVNext.new.yaml', 'Workflow YAML')}
                   </span>
@@ -453,23 +540,25 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                     value={yaml}
                   />
                 </div>
-                <Button
-                  disabled={!yaml.trim()}
-                  loading={submitting}
-                  onClick={() => void validateAndPersist(yaml)}
-                  type="primary"
-                >
-                  {t(
-                    'workflowActivityVNext.new.validateCreate',
-                    'Validate and create',
-                  )}
-                </Button>
+                <div className="wa-vnext__creation-actions">
+                  <Button
+                    disabled={!yaml.trim() || saveTargetUnavailable}
+                    loading={submitting}
+                    onClick={() => void validateAndPersist(yaml)}
+                    type="primary"
+                  >
+                    {t(
+                      'workflowActivityVNext.new.validateCreate',
+                      'Import and open',
+                    )}
+                  </Button>
+                </div>
               </>
             ) : null}
 
             {mode === 'template' ? (
               <>
-                <div>
+                <div className="wa-vnext__creation-field">
                   <span>
                     {t('workflowActivityVNext.new.template', 'Template')}
                   </span>
@@ -488,27 +577,32 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                   />
                 </div>
                 {selectedTemplate ? (
-                  <div>
+                  <div className="wa-vnext__creation-template-preview">
                     <strong>{templateName}</strong>
                     <p className="wa-vnext__creation-option-description">
                       {templateDescription}
                     </p>
                   </div>
                 ) : null}
-                <Button
-                  disabled={!selectedTemplate || !name.trim()}
-                  loading={submitting}
-                  onClick={() =>
-                    selectedTemplate &&
-                    void validateAndPersist(selectedTemplate.yaml)
-                  }
-                  type="primary"
-                >
-                  {t(
-                    'workflowActivityVNext.new.createTemplate',
-                    'Create from template',
-                  )}
-                </Button>
+                <div className="wa-vnext__creation-actions">
+                  <Button
+                    disabled={!selectedTemplate || saveTargetUnavailable}
+                    loading={submitting}
+                    onClick={() =>
+                      selectedTemplate &&
+                      void validateAndPersist(
+                        selectedTemplate.yaml,
+                        templateCopyName,
+                      )
+                    }
+                    type="primary"
+                  >
+                    {t(
+                      'workflowActivityVNext.new.createTemplate',
+                      'Use template and open',
+                    )}
+                  </Button>
+                </div>
               </>
             ) : null}
 
@@ -532,17 +626,6 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                   />
                 ))}
               </div>
-            ) : null}
-            {failure ? (
-              <Alert
-                description={<TechnicalDetails>{failure}</TechnicalDetails>}
-                message={t(
-                  'workflowActivityVNext.new.createFailed',
-                  "Workflow couldn't be created",
-                )}
-                showIcon
-                type="error"
-              />
             ) : null}
             {materialization.phase !== 'idle' && materialization.receipt ? (
               <div

@@ -15,11 +15,13 @@ import {
 } from '@/pages/settings/userLlmSelection';
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
-import { studioApi } from '@/shared/studio/api';
+import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
 import TechnicalDetails from '../TechnicalDetails';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
+import AccountPanel from './AccountPanel';
+import { buildAccountIdentity } from './accountIdentity';
 
 type SettingsSection = 'ai' | 'account' | 'advanced';
 type SavePhase =
@@ -32,18 +34,6 @@ type SavePhase =
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function formatDateTime(value: string | null | undefined): string {
-  if (!value)
-    return t('workflowActivityVNext.common.unavailable', 'Unavailable');
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? value
-    : new Intl.DateTimeFormat(getLocale(), {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-      }).format(date);
 }
 
 function readSection(search: string): SettingsSection {
@@ -119,6 +109,13 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     queryFn: () => studioApi.getUserConfigRuntime(),
     retry: false,
   });
+  const accountIdentity = React.useMemo(
+    () =>
+      auth.data
+        ? buildAccountIdentity(auth.data, Date.now(), getLocale())
+        : null,
+    [auth.data],
+  );
   const [draft, setDraft] = React.useState<UserLlmSelectionDraft | undefined>(
     undefined,
   );
@@ -473,43 +470,6 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           </div>
         )}
       </div>
-      {dirty ? (
-        <div className="wa-vnext__settings-savebar" role="status">
-          <div>
-            <strong>
-              {t('workflowActivityVNext.settings.unsaved', 'Unsaved changes')}
-            </strong>
-            <span>
-              {t(
-                'workflowActivityVNext.settings.unsavedDescription',
-                'Your AI defaults have not been saved.',
-              )}
-            </span>
-          </div>
-          <Space wrap>
-            <Button
-              disabled={savePhase === 'saving' || savePhase === 'accepted'}
-              onClick={discard}
-            >
-              {t(
-                'workflowActivityVNext.settings.discard',
-                'Restore saved settings',
-              )}
-            </Button>
-            <Button
-              disabled={
-                !llm.data?.capabilities.canSave || savePhase === 'accepted'
-              }
-              icon={<SaveOutlined />}
-              loading={savePhase === 'saving'}
-              onClick={() => void save()}
-              type="primary"
-            >
-              {t('workflowActivityVNext.settings.save', 'Save changes')}
-            </Button>
-          </Space>
-        </div>
-      ) : null}
       {savePhase !== 'idle' ? (
         <Alert
           message={
@@ -554,74 +514,33 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         'Loading account session',
       )}
     />
+  ) : auth.isError && isStudioApiStatus(auth.error, 403) ? (
+    <div className="wa-vnext__state wa-vnext__state--compact" role="alert">
+      <div>
+        <h3>
+          {t('workflowActivityVNext.settings.unauthorized', 'Unauthorized')}
+        </h3>
+        <p>
+          {t(
+            'workflowActivityVNext.settings.unauthorizedDescription',
+            'Your current session cannot view account or capability details.',
+          )}
+        </p>
+      </div>
+    </div>
   ) : auth.isError ? (
     <SettingsErrorState
       error={auth.error}
       onRetry={() => void auth.refetch()}
-      title={t(
-        'workflowActivityVNext.settings.accountUnavailable',
-        'Account session unavailable',
-      )}
+      title={t('workflowActivityVNext.settings.notLoaded', 'Not loaded')}
     />
-  ) : (
-    <div className="wa-vnext__settings-facts">
-      <Descriptions
-        bordered
-        column={{ xs: 1, sm: 2, md: 2, lg: 2, xl: 2, xxl: 2 }}
-        items={[
-          {
-            key: 'status',
-            label: t(
-              'workflowActivityVNext.settings.authenticated',
-              'Signed in',
-            ),
-            children: auth.data?.authenticated
-              ? t('workflowActivityVNext.common.yes', 'Yes')
-              : t('workflowActivityVNext.common.no', 'No'),
-          },
-          {
-            key: 'name',
-            label: t('workflowActivityVNext.settings.name', 'Name'),
-            children:
-              auth.data?.profile?.name ||
-              auth.data?.name ||
-              t('workflowActivityVNext.common.unavailable', 'Unavailable'),
-          },
-          {
-            key: 'email',
-            label: t('workflowActivityVNext.settings.email', 'Email'),
-            children:
-              auth.data?.profile?.email ||
-              auth.data?.email ||
-              t('workflowActivityVNext.common.unavailable', 'Unavailable'),
-          },
-          {
-            key: 'provider',
-            label: t(
-              'workflowActivityVNext.settings.provider',
-              'Sign-in method',
-            ),
-            children:
-              auth.data?.providerDisplayName ||
-              auth.data?.session?.providerDisplayName ||
-              t('workflowActivityVNext.common.unavailable', 'Unavailable'),
-          },
-          {
-            key: 'roles',
-            label: t('workflowActivityVNext.settings.roles', 'Access'),
-            children: auth.data?.profile?.roles.length
-              ? auth.data.profile.roles.join(', ')
-              : t('workflowActivityVNext.common.unavailable', 'Unavailable'),
-          },
-          {
-            key: 'expiry',
-            label: t('workflowActivityVNext.settings.expires', 'Expires'),
-            children: formatDateTime(auth.data?.session?.expiresAtUtc),
-          },
-        ]}
-      />
-    </div>
-  );
+  ) : auth.data && accountIdentity ? (
+    <AccountPanel
+      identity={accountIdentity}
+      onRefresh={() => void auth.refetch()}
+      returnTo={`${location.pathname}?section=account`}
+    />
+  ) : null;
 
   const runtimePanel = runtime.isPending ? (
     <SettingsLoadingState
@@ -726,14 +645,78 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     },
   ];
   const active = sections.find((item) => item.key === section) ?? sections[0];
+  const settingsFooter = (
+    <>
+      {dirty ? (
+        <div className="wa-vnext__settings-footer">
+          <section
+            aria-label={t(
+              'workflowActivityVNext.settings.unsavedActionsAria',
+              'Unsaved settings actions',
+            )}
+            className="wa-vnext__settings-savebar"
+          >
+            <div aria-live="polite" role="status">
+              <strong>
+                {t('workflowActivityVNext.settings.unsaved', 'Unsaved changes')}
+              </strong>
+              <span>
+                {t(
+                  'workflowActivityVNext.settings.unsavedDescription',
+                  'Your AI defaults have not been saved.',
+                )}
+              </span>
+            </div>
+            <Space className="wa-vnext__settings-actions" wrap>
+              <Button
+                disabled={savePhase === 'saving' || savePhase === 'accepted'}
+                onClick={discard}
+              >
+                {t(
+                  'workflowActivityVNext.settings.discard',
+                  'Restore saved settings',
+                )}
+              </Button>
+              <Button
+                disabled={
+                  !llm.data?.capabilities.canSave || savePhase === 'accepted'
+                }
+                icon={<SaveOutlined />}
+                loading={savePhase === 'saving'}
+                onClick={() => void save()}
+                type="primary"
+              >
+                {t('workflowActivityVNext.settings.save', 'Save changes')}
+              </Button>
+            </Space>
+          </section>
+        </div>
+      ) : null}
+    </>
+  );
 
   return (
     <WorkflowActivityVNextShell
+      accountPrincipal={
+        accountIdentity
+          ? {
+              authenticated:
+                accountIdentity.sessionState === 'active' ||
+                accountIdentity.sessionState === 'expiring_soon',
+              displayName:
+                accountIdentity.displayName.kind === 'value'
+                  ? accountIdentity.displayName.value
+                  : t('workflowActivityVNext.settings.account', 'Account'),
+              picture: accountIdentity.picture,
+            }
+          : null
+      }
       activeSection="settings"
       description={t(
         'workflowActivityVNext.settings.description',
         'Personal defaults and access.',
       )}
+      footer={settingsFooter}
       scopeId={scopeId}
       title={t('workflowActivityVNext.settings.title', 'Settings')}
       onNavigate={requestNavigation}

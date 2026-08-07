@@ -7,16 +7,22 @@ import {
   RocketOutlined,
   SaveOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Input, Modal, Segmented, Space } from 'antd';
+import { Alert, Button, Input, Modal, Popover, Segmented, Space } from 'antd';
 import React from 'react';
 import WorkflowStudioCanvasRegion from '@/pages/team-member-workflow-studio/components/WorkflowStudioCanvasRegion';
 import WorkflowStudioNodeLibrary from '@/pages/team-member-workflow-studio/components/WorkflowStudioNodeLibrary';
+import { formatUtcDateTime } from '@/shared/datetime/dateTime';
 import { t } from '@/shared/i18n/messages';
 import { getLocationSnapshot, history } from '@/shared/navigation/history';
 import { studioApi } from '@/shared/studio/api';
 import { createWorkflowRevisionIdentityCandidate } from '@/shared/studio/explicitRequestConfirmation';
 import type { StudioExplicitRequestPreview } from '@/shared/studio/models';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
+import {
+  getRunStatusPresentation,
+  isRunStatusInProgress,
+  isRunStatusTerminal,
+} from '../activity/runPresentation';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
 import { useWorkflowEditor } from '../hooks/useWorkflowEditor';
 import {
@@ -36,6 +42,7 @@ import WorkflowNodeInspector, {
 import WorkflowPublishDialog, {
   type WorkflowPublishConfirmationInput,
 } from './WorkflowPublishDialog';
+import WorkflowPublishedRunDrawer from './WorkflowPublishedRunDrawer';
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -61,11 +68,18 @@ type PublicationStage =
   | 'failed';
 
 type PendingWorkflowPublication = {
+  readonly documentVersion: number;
   readonly preview: StudioExplicitRequestPreview;
   readonly serviceId: string;
   readonly workflowId: string;
   readonly workflowName: string;
   readonly workflowYaml: string;
+};
+
+type PublishReadinessIssue = {
+  readonly id: string;
+  readonly message: string;
+  readonly resolve: () => void;
 };
 
 function hasNonBlankIdentifier(value: unknown): value is string {
@@ -122,6 +136,8 @@ const WorkflowEditorPage: React.FC<{
   const [publicationError, setPublicationError] = React.useState<unknown>(null);
   const [publicationReceipt, setPublicationReceipt] =
     React.useState<WorkflowPublicationReceipt | null>(null);
+  const [publishedDocumentVersion, setPublishedDocumentVersion] =
+    React.useState<number | null>(null);
   const [pendingPublication, setPendingPublication] =
     React.useState<PendingWorkflowPublication | null>(null);
   const [runPanelOpen, setRunPanelOpen] = React.useState(false);
@@ -129,12 +145,30 @@ const WorkflowEditorPage: React.FC<{
     React.useState<PendingNavigation | null>(null);
   const [hasUnappliedNodeChanges, setHasUnappliedNodeChanges] =
     React.useState(false);
+  const workflowNameRef = React.useRef<React.ElementRef<typeof Input>>(null);
+  const saveStatusRef = React.useRef<HTMLSpanElement>(null);
   const inspectorRef = React.useRef<WorkflowNodeInspectorHandle>(null);
   const publicationReviewGenerationRef = React.useRef(0);
-  const publicationToastRef = React.useRef('');
   const runRequested = new URLSearchParams(location.search).get('run') === '1';
   const editorWriteLocked = editor.saving || editor.structuralMutationPending;
   const publication = useWorkflowPublication(publicationReceipt);
+  const publicationObserved = publication.phase === 'observed';
+  const publicationStale = Boolean(
+    publicationReceipt &&
+      publishedDocumentVersion !== null &&
+      publishedDocumentVersion !== editor.documentVersion,
+  );
+  const publishedInvocationTarget =
+    publicationReceipt && publicationObserved && !publicationStale
+      ? publicationReceipt
+      : null;
+  const canOpenPublishedRun = Boolean(
+    publishedInvocationTarget &&
+      editor.canRun &&
+      !editor.dirty &&
+      !editorWriteLocked &&
+      !hasUnappliedNodeChanges,
+  );
 
   const invalidatePublicationReview = React.useCallback(() => {
     publicationReviewGenerationRef.current += 1;
@@ -145,13 +179,14 @@ const WorkflowEditorPage: React.FC<{
     setPendingPublication(null);
     setPublicationError(null);
     setPublicationReceipt(null);
+    setPublishedDocumentVersion(null);
     setPublicationStage('idle');
     setPublishDialogOpen(false);
   }, [invalidatePublicationReview]);
 
   React.useEffect(() => {
-    if (runRequested && editor.canRun) setRunPanelOpen(true);
-  }, [editor.canRun, runRequested]);
+    if (runRequested && canOpenPublishedRun) setRunPanelOpen(true);
+  }, [canOpenPublishedRun, runRequested]);
 
   React.useEffect(() => {
     if (editorWriteLocked) setNodeLibraryOpen(false);
@@ -180,21 +215,6 @@ const WorkflowEditorPage: React.FC<{
     previousPublicationRouteRef.current = publicationRouteKey;
     clearPublication();
   }, [clearPublication, publicationRouteKey]);
-
-  React.useEffect(() => {
-    if (publication.phase !== 'observed' || !publicationReceipt) return;
-    const receiptKey = [
-      publicationReceipt.scopeId,
-      publicationReceipt.workflowId,
-      publicationReceipt.revisionId,
-      publicationReceipt.serviceId,
-    ].join('\u0000');
-    if (publicationToastRef.current === receiptKey) return;
-    publicationToastRef.current = receiptKey;
-    toast.success(
-      t('workflowActivityVNext.publish.observed', 'Workflow published'),
-    );
-  }, [publication.phase, publicationReceipt, toast]);
 
   React.useEffect(() => {
     const incomingRouteTarget =
@@ -276,9 +296,10 @@ const WorkflowEditorPage: React.FC<{
 
   const requestNodeSelect = React.useCallback(
     (nodeId: string) => {
+      if (nodeId === editor.selectedNodeId) return;
       requestInspectorDiscard(() => editor.selectNode(nodeId));
     },
-    [editor.selectNode, requestInspectorDiscard],
+    [editor.selectNode, editor.selectedNodeId, requestInspectorDiscard],
   );
 
   const requestEditorMode = React.useCallback(
@@ -300,22 +321,40 @@ const WorkflowEditorPage: React.FC<{
   }, [editorWriteLocked, hasUnappliedNodeChanges]);
 
   const saveWorkflow = React.useCallback(async () => {
-    const saved = await editor.save();
-    if (saved) {
-      toast.success(
-        t('workflowActivityVNext.editor.saveSuccess', 'Workflow saved'),
-      );
-    }
-    return saved;
-  }, [editor.save, toast]);
+    return editor.save();
+  }, [editor.save]);
+
+  React.useEffect(() => {
+    if (!editor.saveError) return;
+    toast.error(
+      t(
+        'workflowActivityVNext.editor.saveFailed',
+        "Workflow couldn't be saved",
+      ),
+    );
+  }, [editor.saveError, toast]);
+
+  React.useEffect(() => {
+    if (!editor.nodeInsertionError) return;
+    toast.error(
+      <Space size="small">
+        <span>
+          {t('workflowActivityVNext.editor.addNodeFailed', "Couldn't add node")}
+        </span>
+        <Button
+          onClick={() => void editor.retryNodeInsertion()}
+          size="small"
+          type="link"
+        >
+          {t('workflowActivityVNext.common.retry', 'Retry')}
+        </Button>
+      </Space>,
+    );
+  }, [editor.nodeInsertionError, editor.retryNodeInsertion, toast]);
 
   const retryMaterialization = React.useCallback(async () => {
-    if (await editor.retryMaterialization()) {
-      toast.success(
-        t('workflowActivityVNext.editor.saveSuccess', 'Workflow saved'),
-      );
-    }
-  }, [editor.retryMaterialization, toast]);
+    await editor.retryMaterialization();
+  }, [editor.retryMaterialization]);
 
   const reviewPublication = React.useCallback(
     async (
@@ -369,6 +408,7 @@ const WorkflowEditorPage: React.FC<{
 
         if (!isCurrentReview()) return preview;
         setPendingPublication({
+          documentVersion: preparation.documentVersion,
           preview,
           serviceId: selectedServiceId,
           workflowId: preparation.workflowId,
@@ -391,7 +431,11 @@ const WorkflowEditorPage: React.FC<{
   const publishReviewedWorkflow = React.useCallback(
     async (input: WorkflowPublishConfirmationInput): Promise<void> => {
       const review = pendingPublication;
-      if (!review || !confirmationsMatchPreview(input, review)) {
+      if (
+        !review ||
+        editor.documentVersion !== review.documentVersion ||
+        !confirmationsMatchPreview(input, review)
+      ) {
         const error = new Error(
           'The publication confirmation does not match the reviewed workflow.',
         );
@@ -438,11 +482,12 @@ const WorkflowEditorPage: React.FC<{
         }
 
         setPublicationReceipt({
+          publishedServiceId: binding.serviceId,
           scopeId: result.scopeId,
-          serviceId: binding.serviceId,
           revisionId: result.revisionId,
           workflowId: result.workflowId,
         });
+        setPublishedDocumentVersion(review.documentVersion);
         setPendingPublication(null);
         setPublicationStage('accepted');
         setPublishDialogOpen(false);
@@ -452,7 +497,7 @@ const WorkflowEditorPage: React.FC<{
         throw error;
       }
     },
-    [activeScopeId, pendingPublication],
+    [activeScopeId, editor.documentVersion, pendingPublication],
   );
 
   const returnPublicationToSelection = React.useCallback(() => {
@@ -579,6 +624,22 @@ const WorkflowEditorPage: React.FC<{
     editor.runPhase === 'accepted' ||
     editor.runObservationUnresolved ||
     editor.runAwaitingIdentification;
+  const observedRun = editor.runObservation.run;
+  const observedStatus = observedRun
+    ? getRunStatusPresentation(observedRun.summary.status)
+    : null;
+  const observedRunInProgress = observedRun
+    ? isRunStatusInProgress(observedRun.summary.status)
+    : false;
+  const observedRunTerminal = observedRun
+    ? isRunStatusTerminal(observedRun.summary.status)
+    : false;
+  const currentStep = observedRun?.steps.find(
+    (step) => step.requestedAtUtc && !step.completedAtUtc,
+  );
+  const runDetailsHref = editor.sseRunId
+    ? buildWorkflowActivityRunHref(activeScopeId, editor.sseRunId)
+    : '';
   const publicationPhase = publicationReceipt
     ? publication.phase
     : publicationStage;
@@ -587,28 +648,208 @@ const WorkflowEditorPage: React.FC<{
   const publicationActionPending =
     publicationStage === 'reviewing' ||
     publicationStage === 'submitting' ||
-    publicationObservationPending;
+    publication.phase === 'observing';
   const canRetryPublicationObservation =
     publicationReceipt !== null &&
     (publication.phase === 'delayed' ||
       publication.phase === 'failed' ||
       publication.phase === 'unauthorized' ||
       publication.phase === 'forbidden');
-  const canPublish =
-    Boolean(editor.workflow.draftExists) &&
-    editor.canRun &&
-    !editor.dirty &&
-    !editorWriteLocked &&
-    !editor.receiptPending &&
-    !hasUnappliedNodeChanges &&
-    !publicationActionPending;
+  const revealPublicationStatus = () => {
+    document
+      .getElementById('workflow-publication-status')
+      ?.scrollIntoView?.({ block: 'nearest' });
+  };
+  const blockingFindings = editor.findings.filter(
+    (finding) => String(finding.level).toLowerCase() === 'error',
+  );
+  const publishReadinessIssues: PublishReadinessIssue[] = [];
+  if (!editor.workflow.draftExists) {
+    publishReadinessIssues.push({
+      id: 'draft',
+      message: t(
+        'workflowActivityVNext.publish.saveBeforePublishing',
+        'Save this workflow before publishing.',
+      ),
+      resolve: () => void saveWorkflow(),
+    });
+  }
+  if (editor.dirty) {
+    publishReadinessIssues.push({
+      id: 'dirty',
+      message: t(
+        'workflowActivityVNext.publish.saveChangesBeforePublishing',
+        'Save your changes before publishing.',
+      ),
+      resolve: () => void saveWorkflow(),
+    });
+  }
+  if (hasUnappliedNodeChanges) {
+    publishReadinessIssues.push({
+      id: 'node-configuration',
+      message: t(
+        'workflowActivityVNext.publish.applyNodeChanges',
+        'Apply or discard node configuration before publishing.',
+      ),
+      resolve: () => setMode('canvas'),
+    });
+  }
+  for (const [findingIndex, finding] of blockingFindings.entries()) {
+    const stepMatch = finding.path?.match(/^\/steps\/(\d+)(?:\/|$)/);
+    const stepId = stepMatch
+      ? editor.document?.steps?.[Number(stepMatch[1])]?.id
+      : undefined;
+    publishReadinessIssues.push({
+      id: `finding-${finding.code}-${finding.path ?? findingIndex}`,
+      message: finding.message,
+      resolve: () => {
+        if (finding.path === '/name') {
+          workflowNameRef.current?.focus();
+          return;
+        }
+        if (stepId) {
+          setMode('canvas');
+          editor.selectNode(`step:${stepId}`);
+          return;
+        }
+        setMode('yaml');
+      },
+    });
+  }
+  if (!editor.document?.steps?.length && blockingFindings.length === 0) {
+    publishReadinessIssues.push({
+      id: 'steps',
+      message: t(
+        'workflowActivityVNext.publish.addExecutableStep',
+        'Add at least one executable step before publishing.',
+      ),
+      resolve: () => {
+        setMode('canvas');
+        setNodeLibraryOpen(true);
+      },
+    });
+  }
+  if (editor.validating || editor.saving) {
+    publishReadinessIssues.push({
+      id: 'save-in-progress',
+      message: t(
+        'workflowActivityVNext.publish.waitForSave',
+        'Wait for workflow validation and saving to finish.',
+      ),
+      resolve: () => saveStatusRef.current?.focus(),
+    });
+  } else if (editor.structuralMutationPending) {
+    publishReadinessIssues.push({
+      id: 'editor-update-in-progress',
+      message: t(
+        'workflowActivityVNext.publish.waitForEditorUpdate',
+        'Wait for the workflow step update to finish.',
+      ),
+      resolve: () => setMode('canvas'),
+    });
+  } else if (editor.receiptPending) {
+    publishReadinessIssues.push({
+      id: 'save-observation',
+      message: t(
+        'workflowActivityVNext.publish.waitForSavedDraft',
+        'Wait for the saved draft to become readable.',
+      ),
+      resolve: () => saveStatusRef.current?.focus(),
+    });
+  }
+  if (publicationActionPending) {
+    publishReadinessIssues.push({
+      id: 'publication-in-progress',
+      message: t(
+        'workflowActivityVNext.publish.waitForPublication',
+        'Wait for the current publication to finish.',
+      ),
+      resolve: revealPublicationStatus,
+    });
+  } else if (publicationObservationPending) {
+    publishReadinessIssues.push({
+      id: 'publication-unresolved',
+      message: t(
+        'workflowActivityVNext.publish.resolvePublication',
+        'Resolve the current publication status before publishing again.',
+      ),
+      resolve: revealPublicationStatus,
+    });
+  }
+  const publicationCurrent = publicationObserved && !publicationStale;
+  const canPublish = publishReadinessIssues.length === 0 && !publicationCurrent;
+  const publishLabel = publicationCurrent
+    ? t('workflowActivityVNext.publish.published', 'Published')
+    : publicationActionPending
+      ? t('workflowActivityVNext.publish.publishing', 'Publishing')
+      : publishReadinessIssues.length > 0
+        ? publishReadinessIssues.length === 1
+          ? t(
+              'workflowActivityVNext.publish.blockedOne',
+              'Publish blocked · 1 issue',
+            )
+          : t(
+              'workflowActivityVNext.publish.blocked',
+              'Publish blocked · {count} issues',
+              { count: publishReadinessIssues.length },
+            )
+        : t('workflowActivityVNext.editor.publish', 'Publish');
+  const runDisabledReason = publicationStale
+    ? t(
+        'workflowActivityVNext.editor.publishLatestBeforeRun',
+        'Save and publish the latest changes before running.',
+      )
+    : !publicationReceipt
+      ? t(
+          'workflowActivityVNext.editor.publishBeforeRun',
+          'Publish this workflow before running it.',
+        )
+      : !publicationObserved
+        ? t(
+            'workflowActivityVNext.editor.waitForPublishedRun',
+            'Wait for the published revision to become available.',
+          )
+        : editor.dirty || hasUnappliedNodeChanges
+          ? t(
+              'workflowActivityVNext.editor.publishLatestBeforeRun',
+              'Save and publish the latest changes before running.',
+            )
+          : !editor.canRun
+            ? t(
+                'workflowActivityVNext.editor.runUnavailable',
+                'Add at least one valid step before running.',
+              )
+            : editorWriteLocked
+              ? t(
+                  'workflowActivityVNext.editor.waitForEditorBeforeRun',
+                  'Wait for the workflow update to finish.',
+                )
+              : undefined;
+  const saveStatus = editor.validating
+    ? t('workflowActivityVNext.editor.validating', 'Validating workflow…')
+    : editor.saving || editor.receiptPending
+      ? t('workflowActivityVNext.editor.savingProgress', 'Saving workflow…')
+      : editor.saveError
+        ? t('workflowActivityVNext.editor.saveStatusFailed', 'Save failed')
+        : editor.dirty
+          ? t('workflowActivityVNext.editor.unsavedChanges', 'Unsaved changes')
+          : t('workflowActivityVNext.editor.savedAt', 'Saved at {updatedAt}', {
+              updatedAt: formatUtcDateTime(editor.workflow.updatedAtUtc),
+            });
+  const publishButton = (
+    <Button
+      aria-disabled={!canPublish}
+      icon={<RocketOutlined />}
+      onClick={() => {
+        if (canPublish) setPublishDialogOpen(true);
+      }}
+    >
+      {publishLabel}
+    </Button>
+  );
   return (
     <WorkflowActivityVNextShell
       activeSection="workflows"
-      description={t(
-        'workflowActivityVNext.editor.description',
-        'Build, test, and refine this workflow.',
-      )}
       headerActions={
         <>
           <Button
@@ -646,55 +887,41 @@ const WorkflowEditorPage: React.FC<{
             {t('workflowActivityVNext.editor.save', 'Save workflow')}
           </Button>
           <Button
-            disabled={
-              !editor.canRun ||
-              editorWriteLocked ||
-              hasUnappliedNodeChanges ||
-              editor.runObservationUnresolved
-            }
+            disabled={!canOpenPublishedRun}
             icon={<PlayCircleOutlined />}
             onClick={() => setRunPanelOpen(true)}
-            title={
-              !editor.canRun
-                ? t(
-                    'workflowActivityVNext.editor.runUnavailable',
-                    'Add at least one valid step before running.',
-                  )
-                : hasUnappliedNodeChanges
-                  ? t(
-                      'workflowActivityVNext.nodeInspector.applyBeforeSave',
-                      'Apply changes before saving this workflow.',
-                    )
-                  : undefined
-            }
+            title={runDisabledReason}
           >
             {t('workflowActivityVNext.common.run', 'Run')}
           </Button>
-          <Button
-            disabled={!canPublish}
-            icon={<RocketOutlined />}
-            onClick={() => setPublishDialogOpen(true)}
-            title={
-              !editor.workflow.draftExists
-                ? t(
-                    'workflowActivityVNext.publish.saveBeforePublishing',
-                    'Save this workflow before publishing.',
-                  )
-                : editor.dirty
-                  ? t(
-                      'workflowActivityVNext.publish.saveChangesBeforePublishing',
-                      'Save your changes before publishing.',
-                    )
-                  : !editor.canRun
-                    ? t(
-                        'workflowActivityVNext.editor.runUnavailable',
-                        'Add at least one valid step before running.',
-                      )
-                    : undefined
-            }
-          >
-            {t('workflowActivityVNext.editor.publish', 'Publish')}
-          </Button>
+          {publishReadinessIssues.length > 0 ? (
+            <Popover
+              content={
+                <section
+                  aria-label={t(
+                    'workflowActivityVNext.publish.readinessIssues',
+                    'Publish readiness issues',
+                  )}
+                  className="wa-vnext__publish-readiness"
+                >
+                  <ul>
+                    {publishReadinessIssues.map((issue) => (
+                      <li key={issue.id}>
+                        <Button onClick={issue.resolve} type="link">
+                          {issue.message}
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              }
+              trigger={['hover', 'focus', 'click']}
+            >
+              {publishButton}
+            </Popover>
+          ) : (
+            publishButton
+          )}
         </>
       }
       onNavigate={requestNavigation}
@@ -710,17 +937,23 @@ const WorkflowEditorPage: React.FC<{
           className="wa-vnext__editor-name"
           disabled={editorWriteLocked}
           onChange={(event) => editor.updateTitle(event.target.value)}
+          ref={workflowNameRef}
           value={editor.workflowTitle}
         />
         <div className="wa-vnext__editor-toolbar-meta">
           <span
-            className={`wa-vnext__status wa-vnext__status--${editor.dirty ? 'pending' : 'succeeded'}`}
+            aria-atomic="true"
+            aria-label={t(
+              'workflowActivityVNext.editor.saveStatusAria',
+              'Workflow save status',
+            )}
+            aria-live="polite"
+            className={`wa-vnext__status wa-vnext__status--${editor.saveError ? 'failed' : editor.dirty || editor.validating || editor.saving || editor.receiptPending ? 'pending' : 'succeeded'}`}
+            ref={saveStatusRef}
+            role="status"
+            tabIndex={-1}
           >
-            {editor.structuralMutationPending
-              ? t('workflowActivityVNext.editor.updatingNode', 'Updating node…')
-              : editor.dirty
-                ? t('workflowActivityVNext.editor.unsaved', 'Unsaved')
-                : t('workflowActivityVNext.editor.saved', 'Saved')}
+            {saveStatus}
           </span>
           <Segmented
             aria-label={`${t('workflowActivityVNext.editor.canvas', 'Canvas')} / ${t(
@@ -746,38 +979,6 @@ const WorkflowEditorPage: React.FC<{
           />
         </div>
       </div>
-      {editor.saveError ? (
-        <Alert
-          description={<TechnicalDetails>{editor.saveError}</TechnicalDetails>}
-          message={t(
-            'workflowActivityVNext.editor.saveFailed',
-            "Workflow couldn't be saved",
-          )}
-          showIcon
-          type="error"
-        />
-      ) : null}
-      {editor.nodeInsertionError ? (
-        <Alert
-          action={
-            <Button
-              disabled={editorWriteLocked}
-              onClick={() => void editor.retryNodeInsertion()}
-            >
-              {t('workflowActivityVNext.common.retry', 'Retry')}
-            </Button>
-          }
-          description={
-            <TechnicalDetails>{editor.nodeInsertionError}</TechnicalDetails>
-          }
-          message={t(
-            'workflowActivityVNext.editor.addNodeFailed',
-            "Couldn't add node",
-          )}
-          showIcon
-          type="error"
-        />
-      ) : null}
       {editor.materialization.phase !== 'idle' &&
       editor.materialization.receipt ? (
         <Alert
@@ -888,6 +1089,28 @@ const WorkflowEditorPage: React.FC<{
                                 'workflowActivityVNext.publish.failedDescription',
                                 'Review the workflow or try publishing again.',
                               )}
+              {publicationPhase === 'observed' && publicationReceipt ? (
+                <dl className="wa-vnext__publication-identities">
+                  <div>
+                    <dt>
+                      {t(
+                        'workflowActivityVNext.publish.workflowId',
+                        'Workflow ID',
+                      )}
+                    </dt>
+                    <dd>{publicationReceipt.workflowId}</dd>
+                  </div>
+                  <div>
+                    <dt>
+                      {t(
+                        'workflowActivityVNext.publish.publishedServiceId',
+                        'Published service ID',
+                      )}
+                    </dt>
+                    <dd>{publicationReceipt.publishedServiceId}</dd>
+                  </div>
+                </dl>
+              ) : null}
               {publicationError || publication.error ? (
                 <TechnicalDetails>
                   {errorMessage(publicationError ?? publication.error)}
@@ -937,6 +1160,7 @@ const WorkflowEditorPage: React.FC<{
                               "Publication couldn't be confirmed",
                             )
           }
+          id="workflow-publication-status"
           showIcon
           type={
             publicationPhase === 'observed'
@@ -1047,193 +1271,275 @@ const WorkflowEditorPage: React.FC<{
           value={editor.yaml}
         />
       )}
-      {runPanelOpen ? (
-        <section
-          aria-label={t('workflowActivityVNext.editor.runPanel', 'Test run')}
-          className="wa-vnext__panel wa-vnext__run-panel"
-        >
-          <Space className="wa-vnext__run-panel-content" orientation="vertical">
-            <strong>
-              {t('workflowActivityVNext.editor.runPanel', 'Test run')}
-            </strong>
-            <Input.TextArea
-              aria-label={t(
-                'workflowActivityVNext.editor.runInput',
-                'Test input',
-              )}
-              disabled={runBusy || editorWriteLocked}
-              onChange={(event) => editor.setRunInput(event.target.value)}
-              rows={4}
-              value={editor.runInput}
-            />
-            <Space>
-              <Button
-                disabled={runBusy || !editor.canRun || editorWriteLocked}
-                loading={editor.runPhase === 'submitting'}
-                onClick={() => void editor.run()}
-                type="primary"
-              >
-                {t('workflowActivityVNext.editor.submitRun', 'Start run')}
-              </Button>
-              <Button onClick={() => setRunPanelOpen(false)}>
-                {t('workflowActivityVNext.common.close', 'Close')}
-              </Button>
-              <Button
-                onClick={() =>
-                  requestNavigation(
-                    buildWorkflowActivitySectionHref(activeScopeId, 'activity'),
+      <WorkflowPublishedRunDrawer
+        input={editor.runInput}
+        inputDisabled={runBusy || editorWriteLocked || observedRunInProgress}
+        inputError={editor.runInputError}
+        onClose={() => setRunPanelOpen(false)}
+        onInputChange={editor.setRunInput}
+        onOpenActivity={() =>
+          requestNavigation(
+            buildWorkflowActivitySectionHref(activeScopeId, 'activity'),
+          )
+        }
+        onStart={() => {
+          if (publishedInvocationTarget) {
+            void editor.run(publishedInvocationTarget);
+          }
+        }}
+        open={runPanelOpen && publishedInvocationTarget !== null}
+        startDisabled={
+          runBusy ||
+          observedRunInProgress ||
+          !publishedInvocationTarget ||
+          !editor.canRun ||
+          !editor.runInput.trim() ||
+          editorWriteLocked
+        }
+        starting={editor.runPhase === 'submitting'}
+        target={publishedInvocationTarget}
+      >
+        {editor.runPhase !== 'idle' && !observedRun ? (
+          <Alert
+            message={
+              editor.runPhase === 'submitting'
+                ? t(
+                    'workflowActivityVNext.editor.runSubmitting',
+                    'Starting run…',
                   )
-                }
-              >
-                {t(
-                  'workflowActivityVNext.editor.openActivity',
-                  'Open Activity',
-                )}
-              </Button>
-            </Space>
-            {editor.runPhase !== 'idle' ? (
-              <Alert
-                message={
-                  editor.runPhase === 'submitting'
+                : editor.runPhase === 'accepted'
+                  ? t(
+                      'workflowActivityVNext.editor.runAccepted',
+                      'Run accepted',
+                    )
+                  : editor.runPhase === 'stream_ended'
                     ? t(
-                        'workflowActivityVNext.editor.runSubmitting',
-                        'Starting run…',
+                        'workflowActivityVNext.editor.streamEnded',
+                        'Live updates ended. Open Activity to check the latest status.',
                       )
-                    : editor.runPhase === 'accepted'
+                    : t('workflowActivityVNext.editor.runFailed', 'Run failed')
+            }
+            description={
+              editor.runError ? (
+                <TechnicalDetails>{editor.runError}</TechnicalDetails>
+              ) : undefined
+            }
+            showIcon
+            type={editor.runPhase === 'failed' ? 'error' : 'info'}
+          />
+        ) : null}
+        {editor.sseRunId ? (
+          <Alert
+            action={
+              <Space wrap>
+                <Button
+                  href={runDetailsHref}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    requestNavigation(runDetailsHref);
+                  }}
+                  type={
+                    editor.runObservation.phase === 'observed'
+                      ? 'primary'
+                      : 'default'
+                  }
+                >
+                  {t(
+                    'workflowActivityVNext.editor.openRunDetails',
+                    'Open run details',
+                  )}
+                </Button>
+                {editor.runObservation.phase === 'observed' &&
+                observedRunInProgress ? (
+                  <Button onClick={() => void editor.runObservation.retry()}>
+                    {t(
+                      'workflowActivityVNext.editor.checkLatestStatus',
+                      'Check latest status',
+                    )}
+                  </Button>
+                ) : editor.runObservation.phase !== 'observing' &&
+                  editor.runObservation.phase !== 'observed' ? (
+                  <Button onClick={() => void editor.runObservation.retry()}>
+                    {t(
+                      'workflowActivityVNext.editor.retryActivityObservation',
+                      'Check again',
+                    )}
+                  </Button>
+                ) : null}
+              </Space>
+            }
+            description={
+              <>
+                {editor.runObservation.phase === 'observed'
+                  ? t(
+                      'workflowActivityVNext.editor.activityObservedDescription',
+                      'You can review its details and progress.',
+                    )
+                  : editor.runObservation.phase === 'observing'
+                    ? t(
+                        'workflowActivityVNext.editor.activityObservingDescription',
+                        'Checking for this run now.',
+                      )
+                    : editor.runObservation.phase === 'delayed'
                       ? t(
-                          'workflowActivityVNext.editor.runAccepted',
-                          'Preparing run…',
+                          'workflowActivityVNext.editor.activityDelayedDescription',
+                          'Try again to check the latest status.',
                         )
-                      : editor.runPhase === 'stream_ended'
+                      : editor.runObservation.phase === 'unauthorized'
                         ? t(
-                            'workflowActivityVNext.editor.streamEnded',
-                            'Live updates ended. Open Activity to check the latest status.',
+                            'workflowActivityVNext.state.unauthorized',
+                            'Sign in to continue',
+                          )
+                        : editor.runObservation.phase === 'forbidden'
+                          ? t(
+                              'workflowActivityVNext.state.forbidden',
+                              "You don't have access to this workspace",
+                            )
+                          : t(
+                              'workflowActivityVNext.editor.activityUnavailableDescription',
+                              'Try again to check the latest status.',
+                            )}
+                {editor.runObservation.error ? (
+                  <TechnicalDetails>
+                    {errorMessage(editor.runObservation.error)}
+                  </TechnicalDetails>
+                ) : null}
+              </>
+            }
+            message={
+              editor.runObservation.phase === 'observed'
+                ? t(
+                    'workflowActivityVNext.editor.activityObserved',
+                    'Observed in Activity',
+                  )
+                : editor.runObservation.phase === 'observing'
+                  ? t(
+                      'workflowActivityVNext.editor.activityObserving',
+                      'Checking Activity for this run…',
+                    )
+                  : editor.runObservation.phase === 'delayed'
+                    ? t(
+                        'workflowActivityVNext.editor.activityDelayed',
+                        'This run is taking longer to appear in Activity',
+                      )
+                    : editor.runObservation.phase === 'unauthorized'
+                      ? t(
+                          'workflowActivityVNext.state.unauthorized',
+                          'Sign in to continue',
+                        )
+                      : editor.runObservation.phase === 'forbidden'
+                        ? t(
+                            'workflowActivityVNext.state.forbidden',
+                            "You don't have access to this workspace",
                           )
                         : t(
-                            'workflowActivityVNext.editor.runFailed',
-                            'Run failed',
+                            'workflowActivityVNext.editor.activityUnavailable',
+                            'Activity unavailable',
                           )
-                }
-                description={
-                  editor.runError ? (
-                    <TechnicalDetails>{editor.runError}</TechnicalDetails>
-                  ) : undefined
-                }
-                showIcon
-                type={editor.runPhase === 'failed' ? 'error' : 'info'}
-              />
+            }
+            showIcon
+            type={
+              editor.runObservation.phase === 'observed'
+                ? 'success'
+                : editor.runObservation.phase === 'delayed'
+                  ? 'warning'
+                  : editor.runObservation.phase === 'observing'
+                    ? 'info'
+                    : 'error'
+            }
+          />
+        ) : null}
+        {observedRun && observedStatus ? (
+          <section
+            aria-label={t(
+              'workflowActivityVNext.editor.runResult',
+              'Run result',
+            )}
+            className="wa-vnext__run-result"
+          >
+            <div className="wa-vnext__run-result-heading">
+              <span
+                className={`wa-vnext__status wa-vnext__status--${observedStatus.className}`}
+              >
+                {observedStatus.label}
+              </span>
+              <code className="wa-vnext__mono">
+                {observedRun.summary.runId}
+              </code>
+            </div>
+            {currentStep ? (
+              <p>
+                <strong>
+                  {t(
+                    'workflowActivityVNext.editor.currentStep',
+                    'Current step',
+                  )}
+                </strong>{' '}
+                <code className="wa-vnext__mono">{currentStep.stepId}</code>
+              </p>
             ) : null}
-            {editor.sseRunId ? (
-              <Alert
-                action={
-                  editor.runObservation.phase === 'observed' ? (
-                    <Button
-                      onClick={() =>
-                        requestNavigation(
-                          buildWorkflowActivityRunHref(
-                            activeScopeId,
-                            editor.sseRunId,
-                          ),
-                        )
-                      }
-                      type="primary"
-                    >
-                      {t('workflowActivityVNext.editor.viewRun', 'View run')}
-                    </Button>
-                  ) : editor.runObservation.phase ===
-                    'observing' ? undefined : (
-                    <Button onClick={() => void editor.runObservation.retry()}>
-                      {t(
-                        'workflowActivityVNext.editor.retryActivityObservation',
-                        'Check again',
-                      )}
-                    </Button>
-                  )
-                }
-                description={
-                  <>
-                    {editor.runObservation.phase === 'observed'
-                      ? t(
-                          'workflowActivityVNext.editor.activityObservedDescription',
-                          'You can review its details and progress.',
-                        )
-                      : editor.runObservation.phase === 'observing'
-                        ? t(
-                            'workflowActivityVNext.editor.activityObservingDescription',
-                            'Checking for this run now.',
-                          )
-                        : editor.runObservation.phase === 'delayed'
-                          ? t(
-                              'workflowActivityVNext.editor.activityDelayedDescription',
-                              'Try again to check the latest status.',
-                            )
-                          : editor.runObservation.phase === 'unauthorized'
-                            ? t(
-                                'workflowActivityVNext.state.unauthorized',
-                                'Sign in to continue',
-                              )
-                            : editor.runObservation.phase === 'forbidden'
-                              ? t(
-                                  'workflowActivityVNext.state.forbidden',
-                                  "You don't have access to this workspace",
-                                )
-                              : t(
-                                  'workflowActivityVNext.editor.activityUnavailableDescription',
-                                  'Try again to check the latest status.',
-                                )}
-                    {editor.runObservation.error ? (
-                      <TechnicalDetails>
-                        {errorMessage(editor.runObservation.error)}
-                      </TechnicalDetails>
-                    ) : null}
-                  </>
-                }
-                message={
-                  editor.runObservation.phase === 'observed'
-                    ? t(
-                        'workflowActivityVNext.editor.activityObserved',
-                        'Observed in Activity',
-                      )
-                    : editor.runObservation.phase === 'observing'
-                      ? t(
-                          'workflowActivityVNext.editor.activityObserving',
-                          'Checking Activity for this run…',
-                        )
-                      : editor.runObservation.phase === 'delayed'
-                        ? t(
-                            'workflowActivityVNext.editor.activityDelayed',
-                            'This run is taking longer to appear in Activity',
-                          )
-                        : editor.runObservation.phase === 'unauthorized'
-                          ? t(
-                              'workflowActivityVNext.state.unauthorized',
-                              'Sign in to continue',
-                            )
-                          : editor.runObservation.phase === 'forbidden'
-                            ? t(
-                                'workflowActivityVNext.state.forbidden',
-                                "You don't have access to this workspace",
-                              )
-                            : t(
-                                'workflowActivityVNext.editor.activityUnavailable',
-                                'Activity unavailable',
-                              )
-                }
-                showIcon
-                type={
-                  editor.runObservation.phase === 'observed'
-                    ? 'success'
-                    : editor.runObservation.phase === 'delayed'
-                      ? 'warning'
-                      : editor.runObservation.phase === 'observing'
-                        ? 'info'
-                        : 'error'
-                }
-              />
+            {editor.lastRunSnapshot ? (
+              <div className="wa-vnext__run-snapshot">
+                <strong>
+                  {t(
+                    'workflowActivityVNext.editor.submittedInput',
+                    'Submitted input',
+                  )}
+                </strong>
+                <span>{editor.lastRunSnapshot.input}</span>
+                <small>
+                  {t(
+                    'workflowActivityVNext.editor.snapshotNotice',
+                    'Run again uses this exact input with the current published revision.',
+                  )}
+                </small>
+              </div>
             ) : null}
-          </Space>
-        </section>
-      ) : null}
+            {observedRun.finalOutput ? (
+              <div className="wa-vnext__run-outcome">
+                <strong>
+                  {t(
+                    'workflowActivityVNext.editor.outputSummary',
+                    'Output summary',
+                  )}
+                </strong>
+                <p>{observedRun.finalOutput}</p>
+              </div>
+            ) : null}
+            {observedRun.finalError ? (
+              <div className="wa-vnext__run-outcome">
+                <strong>
+                  {t(
+                    'workflowActivityVNext.editor.failureSummary',
+                    'Failure summary',
+                  )}
+                </strong>
+                <p>{observedRun.finalError}</p>
+              </div>
+            ) : null}
+            {observedRunTerminal ? (
+              <Button
+                disabled={
+                  runBusy || editorWriteLocked || !publishedInvocationTarget
+                }
+                onClick={() => {
+                  if (publishedInvocationTarget) {
+                    void editor.runAgain(publishedInvocationTarget);
+                  }
+                }}
+              >
+                {t('workflowActivityVNext.editor.runAgain', 'Run again')}
+              </Button>
+            ) : null}
+            <p className="wa-vnext__run-details-note">
+              {t(
+                'workflowActivityVNext.editor.fullDetailsNotice',
+                'Open run details for the full timeline, diagnostics, and recovery actions.',
+              )}
+            </p>
+          </section>
+        ) : null}
+      </WorkflowPublishedRunDrawer>
       <WorkflowPublishDialog
         onCancel={clearPublication}
         onPublish={publishReviewedWorkflow}

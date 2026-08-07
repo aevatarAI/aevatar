@@ -589,6 +589,41 @@ export const missionWallStyles = `
   padding: 56px;
 }
 
+.mission-wall-stage-skeleton {
+  background:
+    linear-gradient(var(--wall-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--wall-grid) 1px, transparent 1px),
+    var(--wall-canvas);
+  background-size: 34px 34px, 34px 34px, auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 18px;
+}
+
+.mission-wall-stage-skeleton > div[aria-hidden="true"],
+.mission-wall-stage-skeleton .aevatar-content-skeleton-canvas {
+  height: 100%;
+  min-height: 0;
+}
+
+.mission-wall-stage-skeleton .aevatar-content-skeleton-canvas-surface {
+  background: var(--wall-panel-soft) !important;
+  border-color: var(--wall-line) !important;
+  flex: 1;
+  min-height: 0 !important;
+}
+
+.mission-wall-stage-skeleton .aevatar-content-skeleton-node {
+  background: var(--wall-panel-strong) !important;
+  border-color: var(--wall-line-strong) !important;
+}
+
+.mission-wall-stage-skeleton .aevatar-content-skeleton-connector,
+.mission-wall-stage-skeleton .ant-skeleton-button,
+.mission-wall-stage-skeleton .ant-skeleton-input {
+  background: var(--wall-line-strong) !important;
+}
+
 .mission-wall-state-panel__kicker {
   color: var(--wall-live);
   font-size: 12px;

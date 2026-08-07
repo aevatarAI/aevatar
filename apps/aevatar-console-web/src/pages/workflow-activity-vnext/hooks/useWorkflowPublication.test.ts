@@ -11,7 +11,7 @@ const receipt: WorkflowPublicationReceipt = {
   scopeId: 'scope-alpha',
   workflowId: 'wf-publication-alpha',
   revisionId: 'rev-publication-alpha',
-  serviceId: 'svc-publication-alpha',
+  publishedServiceId: 'svc-publication-alpha',
 };
 
 function workflowDetail(
@@ -27,6 +27,9 @@ function workflowDetail(
     workflow: {
       scopeId,
       workflowId,
+      publishedServiceId: receipt.publishedServiceId,
+      serviceAppId: 'workflow-app',
+      serviceNamespace: 'workflow-namespace',
       displayName: 'Publication workflow',
       serviceKey: 'workflow-publication',
       workflowName: 'Publication workflow',
@@ -78,7 +81,7 @@ function revisionCatalog(
 ): ScopeServiceRevisionCatalogSnapshot {
   return {
     scopeId: receipt.scopeId,
-    serviceId: receipt.serviceId,
+    serviceId: receipt.publishedServiceId,
     serviceKey: 'service-publication',
     displayName: 'Publication service',
     defaultServingRevisionId: receipt.revisionId,

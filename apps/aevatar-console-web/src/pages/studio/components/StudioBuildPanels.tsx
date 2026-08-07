@@ -71,6 +71,7 @@ import type {
   ScriptValidationResult,
 } from '@/shared/studio/scriptsModels';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
+import ConsoleOperationNotice from '@/shared/ui/ConsoleOperationNotice';
 import { describeError } from '@/shared/ui/errorText';
 import {
   AEVATAR_INTERACTIVE_BUTTON_CLASS,
@@ -1232,9 +1233,7 @@ export const StudioWorkflowBuildPanel: React.FC<
       try {
         await onInsertStep(stepType);
         setStepTypePickerOpen(false);
-      } catch (error) {
-        const visibleMessage = describeError(error);
-        setStepMutationError(visibleMessage);
+      } catch {
         toast.error(workflowActionFailure);
       } finally {
         stepMutationPendingRef.current = false;
@@ -1264,9 +1263,7 @@ export const StudioWorkflowBuildPanel: React.FC<
     setStepMutationError('');
     try {
       await onApplyStepDraft(currentStepDraft);
-    } catch (error) {
-      const visibleMessage = describeError(error);
-      setStepMutationError(visibleMessage);
+    } catch {
       toast.error(workflowActionFailure);
     } finally {
       stepMutationPendingRef.current = false;
@@ -1313,9 +1310,7 @@ export const StudioWorkflowBuildPanel: React.FC<
     setStepMutationError('');
     try {
       await onRemoveSelectedStep();
-    } catch (error) {
-      const visibleMessage = describeError(error);
-      setStepMutationError(visibleMessage);
+    } catch {
       toast.error(workflowActionFailure);
     } finally {
       stepMutationPendingRef.current = false;
@@ -1337,9 +1332,7 @@ export const StudioWorkflowBuildPanel: React.FC<
       setStepMutationError('');
       try {
         await onDeleteWorkflowNodes(normalizedNodeIds);
-      } catch (error) {
-        const visibleMessage = describeError(error);
-        setStepMutationError(visibleMessage);
+      } catch {
         toast.error(workflowActionFailure);
       } finally {
         stepMutationPendingRef.current = false;
@@ -1434,19 +1427,13 @@ export const StudioWorkflowBuildPanel: React.FC<
             </Button>
           </Space>
         </div>
-        {saveNotice ? (
-          <Alert
-            message={saveNotice.message}
-            showIcon
-            type={
-              saveNotice.type === 'success'
-                ? 'success'
-                : saveNotice.type === 'info'
-                  ? 'info'
-                  : 'error'
-            }
-          />
-        ) : null}
+        <ConsoleOperationNotice
+          errorMessage={t(
+            'pages.studio.studiobuildpanels.workflowSaveFailed',
+            'Could not save workflow. Try again.',
+          )}
+          notice={saveNotice}
+        />
       </div>
 
       <div

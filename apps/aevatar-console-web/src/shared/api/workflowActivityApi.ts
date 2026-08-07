@@ -38,12 +38,24 @@ const JSON_HEADERS = {
 
 export class WorkflowActivityApiError extends Error {
   readonly code?: string;
+  readonly correlationId?: string;
+  readonly retryAfterSeconds?: number;
   readonly status: number;
 
-  constructor(message: string, status: number, code?: string) {
+  constructor(
+    message: string,
+    status: number,
+    code?: string,
+    guidance?: {
+      readonly correlationId?: string;
+      readonly retryAfterSeconds?: number;
+    },
+  ) {
     super(message);
     this.name = 'WorkflowActivityApiError';
     this.code = code;
+    this.correlationId = guidance?.correlationId;
+    this.retryAfterSeconds = guidance?.retryAfterSeconds;
     this.status = status;
   }
 }
@@ -544,6 +556,10 @@ async function requestActivityJson<T>(
       details.message,
       details.status,
       details.code,
+      {
+        correlationId: details.correlationId,
+        retryAfterSeconds: details.retryAfterSeconds,
+      },
     );
   }
   return decode(await response.json());
