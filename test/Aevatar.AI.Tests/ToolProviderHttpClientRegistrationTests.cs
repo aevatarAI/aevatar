@@ -793,7 +793,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
     }
 
     [Fact]
-    public async Task AddNyxIdTools_WithSshOptIn_DiscoversToolsThatAlwaysRequireApproval()
+    public async Task AddNyxIdTools_WithSshOptIn_DiscoversCodeExecuteAndCodexTools()
     {
         var services = new ServiceCollection();
 
@@ -809,7 +809,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
         var tools = await source.DiscoverToolsAsync();
         var sshExec = tools.Should().ContainSingle(tool => tool is NyxIdSshExecTool).Subject;
         var codexExec = tools.Should().ContainSingle(tool => tool is NyxIdCodexExecTool).Subject;
-        tools.Should().NotContain(tool => tool is NyxIdCodeExecuteTool);
+        tools.Should().ContainSingle(tool => tool is NyxIdCodeExecuteTool);
         codexExec.Name.Should().Be("codex_exec");
         sshExec.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
         sshExec.IsDestructive.Should().BeTrue();
@@ -823,7 +823,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
     }
 
     [Fact]
-    public async Task AddNyxIdTools_WithManagedPort_DiscoversCodexWithoutSshTool()
+    public async Task AddNyxIdTools_WithManagedPort_DiscoversCodeExecuteAndCodexWithoutSshTool()
     {
         var services = new ServiceCollection();
         services.AddSingleton<ICodexExecutionPort>(new ManagedCodexPortStub());
@@ -839,7 +839,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
 
         tools.Should().NotContain(tool => tool is NyxIdSshExecTool);
         var codexExec = tools.Should().ContainSingle(tool => tool is NyxIdCodexExecTool).Subject;
-        tools.Should().NotContain(tool => tool is NyxIdCodeExecuteTool);
+        tools.Should().ContainSingle(tool => tool is NyxIdCodeExecuteTool);
         codexExec.RequiresApproval("""{"target":{"kind":"managed_sandbox"},"workspace":{"kind":"empty_git"},"prompt":"check"}""")
             .Should().BeFalse();
     }

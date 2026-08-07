@@ -80,21 +80,22 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             tools.Add(new NyxIdSshExecTool(sshExecutor, _options));
         }
 
-        AddCodeExecutionTool(tools);
+        tools.Add(new NyxIdCodeExecuteTool(_client, _logger, _options.SandboxServiceSlug));
+        AddCodexExecutionTool(tools);
 
         _logger.LogInformation(
-            "NyxID tools registered ({Count} tools, base URL: {BaseUrl}, ssh_exec={SshEnabled}, managed_codex_exec={ManagedCodexEnabled}, code_execution_tool={CodeExecutionTool})",
+            "NyxID tools registered ({Count} tools, base URL: {BaseUrl}, ssh_exec={SshEnabled}, managed_codex_exec={ManagedCodexEnabled}, code_execute={CodeExecuteRegistered}, codex_exec={CodexExecRegistered})",
             tools.Count,
             _options.BaseUrl,
             _options.EnableSshExecTool,
             _options.EnableManagedCodexExecTool,
-            tools.Single(static tool =>
-                tool is NyxIdCodeExecuteTool or NyxIdCodexExecTool).Name);
+            tools.Any(static tool => tool is NyxIdCodeExecuteTool),
+            tools.Any(static tool => tool is NyxIdCodexExecTool));
 
         return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
     }
 
-    private void AddCodeExecutionTool(List<IAgentTool> tools)
+    private void AddCodexExecutionTool(List<IAgentTool> tools)
     {
         var ports = new List<ICodexExecutionPort>();
         if (_options.EnableSshExecTool)
@@ -118,8 +119,9 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             ports.Add(managedPorts[0]);
         }
 
-        tools.Add(ports.Count > 0
-            ? new NyxIdCodexExecTool(ports, _options)
-            : new NyxIdCodeExecuteTool(_client, _logger, _options.SandboxServiceSlug));
+        if (ports.Count > 0)
+        {
+            tools.Add(new NyxIdCodexExecTool(ports, _options));
+        }
     }
 }
