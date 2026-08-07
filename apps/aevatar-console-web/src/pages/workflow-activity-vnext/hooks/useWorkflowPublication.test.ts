@@ -28,6 +28,8 @@ function workflowDetail(
       scopeId,
       workflowId,
       publishedServiceId: receipt.publishedServiceId,
+      serviceAppId: 'workflow-app',
+      serviceNamespace: 'workflow-namespace',
       displayName: 'Publication workflow',
       serviceKey: 'workflow-publication',
       workflowName: 'Publication workflow',
