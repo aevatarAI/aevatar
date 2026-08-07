@@ -2616,7 +2616,26 @@ public sealed partial class WorkflowRunGAgent
         next.ExecutionContext = new WorkflowRunExecutionContextState();
         next.PendingSubWorkflowDefinitionResolutions.Clear();
         next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
+        NormalizeTerminalWorkflowExecutionState(next);
         return next;
+    }
+
+    private static void NormalizeTerminalWorkflowExecutionState(WorkflowRunState state)
+    {
+        if (!state.ExecutionStates.TryGetValue(WorkflowExecutionKernel.ModuleStateKey, out var packed) ||
+            !packed.Is(WorkflowExecutionKernelState.Descriptor))
+        {
+            return;
+        }
+
+        var kernelState = packed.Unpack<WorkflowExecutionKernelState>();
+        if (WorkflowExecutionKernel.NormalizeTerminalState(kernelState))
+        {
+            state.ExecutionStates.Remove(WorkflowExecutionKernel.ModuleStateKey);
+            return;
+        }
+
+        state.ExecutionStates[WorkflowExecutionKernel.ModuleStateKey] = Any.Pack(kernelState);
     }
 
     private static WorkflowRunState ApplyWorkflowRunStopped(WorkflowRunState current, WorkflowRunStoppedEvent evt)

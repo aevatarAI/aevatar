@@ -782,6 +782,50 @@ public sealed class WorkflowProjectionMaterializationTests
     }
 
     [Fact]
+    public async Task WorkflowRunInsightReportArtifactProjector_ShouldIgnoreRelayedChildStateRoot()
+    {
+        var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
+        var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
+        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, graphWriter);
+        var context = new WorkflowExecutionMaterializationContext
+        {
+            RootActorId = "actor-1",
+            ProjectionKind = "workflow-execution-materialization",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                1,
+                new StepRequestEvent
+                {
+                    RunId = "run-1",
+                    StepId = "parent-step",
+                    StepType = "tool_call",
+                },
+                BuildState("running")));
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                31,
+                new StepRequestEvent
+                {
+                    RunId = "child-run",
+                    StepId = "child-step",
+                    StepType = "workflow_call",
+                },
+                BuildState("failed", runId: "child-run", finalError: "child failed"),
+                publisherActorId: "child-run"));
+
+        reportStore.UpsertCount.Should().Be(1);
+        graphWriter.UpsertCount.Should().Be(1);
+        var report = reportStore.Stored["actor-1"];
+        report.StateVersion.Should().Be(1);
+        report.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Running);
+        report.Steps.Select(x => x.StepId).Should().Equal("parent-step");
+    }
+
+    [Fact]
     public void WorkflowMaterializationLeases_And_Codecs_ShouldCoverLifecycleBranches()
     {
         var materializationLease = new WorkflowExecutionMaterializationRuntimeLease(new WorkflowExecutionMaterializationContext
@@ -821,14 +865,15 @@ public sealed class WorkflowProjectionMaterializationTests
         long version,
         IMessage payload,
         WorkflowRunState state,
-        string? eventId = null)
+        string? eventId = null,
+        string publisherActorId = "actor-1")
     {
         var timestamp = DateTimeOffset.Parse($"2026-03-17T10:{version:00}:00+00:00");
         return new EventEnvelope
         {
             Id = $"outer-{version}",
             Timestamp = Timestamp.FromDateTimeOffset(timestamp),
-            Route = EnvelopeRouteSemantics.CreateObserverPublication("actor-1"),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication(publisherActorId),
             Payload = Any.Pack(new CommittedStateEventPublished
             {
                 StateEvent = new StateEvent
