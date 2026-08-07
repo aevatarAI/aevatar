@@ -779,6 +779,20 @@ public sealed class ToolProviderHttpClientRegistrationTests
     }
 
     [Fact]
+    public async Task AddNyxIdTools_WithoutCodexTarget_DiscoversOnlyCodeExecute()
+    {
+        var services = new ServiceCollection();
+        services.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
+
+        await using var provider = services.BuildServiceProvider();
+        var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().ContainSingle(tool => tool is NyxIdCodeExecuteTool);
+        tools.Should().NotContain(tool => tool is NyxIdCodexExecTool);
+    }
+
+    [Fact]
     public async Task AddNyxIdTools_WithSshOptIn_DiscoversToolsThatAlwaysRequireApproval()
     {
         var services = new ServiceCollection();
@@ -795,6 +809,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
         var tools = await source.DiscoverToolsAsync();
         var sshExec = tools.Should().ContainSingle(tool => tool is NyxIdSshExecTool).Subject;
         var codexExec = tools.Should().ContainSingle(tool => tool is NyxIdCodexExecTool).Subject;
+        tools.Should().NotContain(tool => tool is NyxIdCodeExecuteTool);
         codexExec.Name.Should().Be("codex_exec");
         sshExec.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
         sshExec.IsDestructive.Should().BeTrue();
@@ -824,6 +839,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
 
         tools.Should().NotContain(tool => tool is NyxIdSshExecTool);
         var codexExec = tools.Should().ContainSingle(tool => tool is NyxIdCodexExecTool).Subject;
+        tools.Should().NotContain(tool => tool is NyxIdCodeExecuteTool);
         codexExec.RequiresApproval("""{"target":{"kind":"managed_sandbox"},"workspace":{"kind":"empty_git"},"prompt":"check"}""")
             .Should().BeFalse();
     }

@@ -36,7 +36,7 @@ NyxID 若未来自行引入 token grant 与 durable binding grant 的双快照�
 
 历史 Aevatar authorize URL 没有把 exact external subject 写入 NyxID binding。NyxID 的 in-place grant review 会联合校验 OAuth client、authenticated user、`binding_grant_id` 与 binding 中已经保存的 external subject；因此给旧 binding 的 review URL 临时补 external subject 仍会因“缺失 subject”或“subject 不匹配”失败，不能完成迁移。当前 channel contract 改为：
 
-- `/oauth/authorize` 始终发送 `external_subject_platform`、可选的 `external_subject_tenant`、`external_subject_external_user_id` 与配置化必需 resources，让 NyxID 签发带 exact subject 的新 binding。
+- `/oauth/authorize` 始终发送 `external_subject_platform`、可选的 `external_subject_tenant` 与 `external_subject_external_user_id`，让 NyxID 签发带 exact subject 的新 binding；resource 语义以后文 2026-08-05 update 为准。
 - 已有 binding 的 `SHA-256(binding_id)` 只放入 HMAC state 作为 callback CAS 预期值，不发送浏览器参数 `binding_grant_id`；raw binding id 也不进入浏览器 URL。
 - callback 必须确认 state hash 仍匹配当前 readmodel binding，并确认新登录 NyxID owner 与旧 binding owner 相同。正常 owner 来自 binding readmodel；仅当迁移 2026-07-17 以前、缺少 `owner_scope_id` 的 binding 时，才通过 owning-client `GET /oauth/bindings/{binding_id}` 读取 NyxID 权威 owner。
 - callback 在采用新 binding 前必须按 incoming binding id 试签一次 `proxy` capability，并验证 token 覆盖全部配置化必需 services。scope/service 不完整返回 409，binding 已失效返回 502，NyxID 校验暂不可用返回 503；三类失败都撤销 incoming binding，且不投递 commit/replacement。部署切换期间仍返回 `binding_updated=true` 的旧链接也必须对当前 binding 做同样试签后才能报告成功。
@@ -80,7 +80,7 @@ Studio Consent 的产品语义是“用户从 NyxID 已有且自己可授权的 
 - Studio 浏览器不再从环境变量维护默认 service,也不在 `/oauth/authorize` 拼装 `resource`.默认预选由 NyxID OAuth Client 的 `default_service_catalog_slugs` 负责,最终授权集合由用户在 Consent 页面确认.
 - `/api/auth/nyxid/config` 只返回 Studio 登录所需的 authority、client id 与 scope,不再暴露服务器内部的必需 resource 集合,避免把运行时最低依赖误解为用户授权上限.
 - Studio finalization 提供默认值为 `false` 的 typed `serviceAccessReview` 请求字段,供未来前端在用户主动发起授权审查时传入 `true`.前端应以 `prompt=consent` 进入 NyxID 的权威 Consent 页面;service picker 可以选择 NyxID catalog 中的已有资源,但服务端必须重新校验选择结果,Aevatar 不实现第二套授权事实源.
-- channel `/init` 的 `/oauth/authorize` 仍显式请求配置化的运行必需 resource 集合:核心 `aevatar`、`Aevatar:NyxId:DefaultRoute`、`Aevatar:Ornn:NyxIdSlug`、`Aevatar:NyxId:SandboxServiceSlug` 以及 `Aevatar:NyxId:AdditionalRequiredServiceSlugs`;该 resource flow 是 channel 的最低能力 grant,与 Studio 的完整用户选择边界分开解释.
+- channel `/init` 的 `/oauth/authorize` 与 Studio 一样不发送 `resource`，保留用户在 NyxID Consent 页面确认的完整 service grant；配置化必需集合只用于 token-exchange 后的最低运行能力校验。
 - authorization-code exchange 必须省略 `resource`,直接继承 authorization code 中已经完成的 Consent service 边界,不得由 callback/finalization 再次缩窄.
 - broker 的短期 token-exchange 省略 `resource`,继承完整 binding grant.若 token 未枚举全部必需 `resources`,broker 结合 token 已签名的 All Services/显式 service ID grant 与 NyxID 权威 user-service catalog 校验最低集合,并继续把原始完整 token 交给 runtime.
 - Studio finalization 只在显式 `serviceAccessReview` 或现有 binding 已失效时替换 binding.新 binding 必须先按 ID 完成一次短期 token 校验;actor 通过 `expected_previous_binding_id` 做 compare-and-swap,提交 replacement 后才撤销旧 binding.清理失败保存在 actor-owned `pending_retirement_binding_ids`,激活时继续对账,不使用进程内 registry.

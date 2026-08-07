@@ -96,7 +96,7 @@ public static class WorkflowCapabilityEndpoints
         ArgumentNullException.ThrowIfNull(chatRunService);
         ArgumentNullException.ThrowIfNull(multipartParser);
 
-        var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+        var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
         if (!callerCredential.Succeeded)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(callerCredential.Error);
@@ -210,11 +210,7 @@ public static class WorkflowCapabilityEndpoints
         try
         {
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
-            var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
-                http,
-                serviceProvider?.GetService<IExternalIdentityBindingQueryPort>(),
-                logger,
-                ct);
+            var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
             if (!callerCredential.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(callerCredential.Error);
@@ -350,11 +346,7 @@ public static class WorkflowCapabilityEndpoints
         try
         {
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
-            var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
-                http,
-                serviceProvider?.GetService<IExternalIdentityBindingQueryPort>(),
-                logger,
-                ct);
+            var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
             if (!callerCredential.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(callerCredential.Error);
@@ -794,7 +786,7 @@ public static class WorkflowCapabilityEndpoints
                 return Results.Unauthorized();
             }
 
-            var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+            var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
             if (!callerCredential.Succeeded)
             {
                 scope.MarkResult(StatusCodes.Status400BadRequest);

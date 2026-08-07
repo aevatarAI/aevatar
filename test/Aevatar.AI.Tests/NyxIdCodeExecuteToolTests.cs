@@ -144,7 +144,7 @@ public class NyxIdCodeExecuteToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ProxyDelegation_UsesExecutionDelegationCredentialForSandbox()
+    public async Task ExecuteAsync_ProxyDelegation_UsesSourceReadableCredentialForSandbox()
     {
         var handler = new CaptureHandler();
         using var httpClient = new HttpClient(handler);
@@ -160,6 +160,36 @@ public class NyxIdCodeExecuteToolTests
                 null,
                 AgentToolNyxIdCredentialKind.ProxyDelegation,
                 "source-readable-alpha"),
+        };
+
+        try
+        {
+            await tool.ExecuteAsync("""{"language":"python","code":"print(1)"}""");
+
+            handler.AuthorizationBearer.Should().Be("source-readable-alpha");
+        }
+        finally
+        {
+            ClearMetadata();
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ProxyDelegationWithoutSourceReadableCredential_UsesExecutionCredential()
+    {
+        var handler = new CaptureHandler();
+        using var httpClient = new HttpClient(handler);
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            httpClient);
+        var tool = new NyxIdCodeExecuteTool(client);
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "proxy-delegation-alpha",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.ProxyDelegation),
         };
 
         try

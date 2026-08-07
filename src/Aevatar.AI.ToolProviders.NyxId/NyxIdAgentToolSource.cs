@@ -59,7 +59,6 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
                 _fileArtifactIngress,
                 _options.EffectiveProxyFileArtifactMaxBytes,
                 _options.ManagedWorkflowAdmissionMode),
-            new NyxIdCodeExecuteTool(_client, _logger, _options.SandboxServiceSlug),
             new NyxIdApiKeysTool(_client),
             new NyxIdNodesTool(_client),
             new NyxIdApprovalsTool(_client),
@@ -81,19 +80,21 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             tools.Add(new NyxIdSshExecTool(sshExecutor, _options));
         }
 
-        AddCodexExecTool(tools);
+        AddCodeExecutionTool(tools);
 
         _logger.LogInformation(
-            "NyxID tools registered ({Count} tools, base URL: {BaseUrl}, ssh_exec={SshEnabled}, managed_codex_exec={ManagedCodexEnabled})",
+            "NyxID tools registered ({Count} tools, base URL: {BaseUrl}, ssh_exec={SshEnabled}, managed_codex_exec={ManagedCodexEnabled}, code_execution_tool={CodeExecutionTool})",
             tools.Count,
             _options.BaseUrl,
             _options.EnableSshExecTool,
-            _options.EnableManagedCodexExecTool);
+            _options.EnableManagedCodexExecTool,
+            tools.Single(static tool =>
+                tool is NyxIdCodeExecuteTool or NyxIdCodexExecTool).Name);
 
         return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
     }
 
-    private void AddCodexExecTool(List<IAgentTool> tools)
+    private void AddCodeExecutionTool(List<IAgentTool> tools)
     {
         var ports = new List<ICodexExecutionPort>();
         if (_options.EnableSshExecTool)
@@ -117,7 +118,8 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             ports.Add(managedPorts[0]);
         }
 
-        if (ports.Count > 0)
-            tools.Add(new NyxIdCodexExecTool(ports, _options));
+        tools.Add(ports.Count > 0
+            ? new NyxIdCodexExecTool(ports, _options)
+            : new NyxIdCodeExecuteTool(_client, _logger, _options.SandboxServiceSlug));
     }
 }

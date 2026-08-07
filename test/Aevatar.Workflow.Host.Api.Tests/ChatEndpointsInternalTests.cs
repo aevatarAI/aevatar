@@ -8,6 +8,7 @@ using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Credentials;
 using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
@@ -1012,6 +1013,44 @@ public sealed class ChatEndpointsInternalTests
             Platform = "nyxid",
             Tenant = string.Empty,
             ExternalUserId = "nyx-user-alpha",
+        });
+    }
+
+    [Fact]
+    public async Task WorkflowCallerCredentialExtractor_DelegationOnly_ShouldIssueBoundSourceReadableToken()
+    {
+        var bindingQueryPort = new RecordingBindingQueryPort("bnd-sender-alpha");
+        var tokenProvider = new RecordingCallerAccessTokenProvider("source-readable-alpha");
+        var http = CreateHttpContext();
+        http.RequestServices = CreateRequestServices(
+            bindingQueryPort: bindingQueryPort,
+            callerAccessTokenProvider: tokenProvider);
+        http.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-alpha";
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("sub", "nyx-user-alpha"),
+        ], "nyxid"));
+
+        var result = await WorkflowCallerCredentialExtractor.ExtractAsync(
+            http,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.Credential.Should().NotBeNull();
+        result.Credential!.BearerToken.Should().Be("delegation-alpha");
+        result.Credential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        result.Credential.SourceReadableUserBearerToken.Should().Be("source-readable-alpha");
+        result.NyxIdCredentialSelection!.Kind.Should().Be(
+            NyxIdCallerCredentialKind.SourceReadableUserBearer);
+        result.NyxIdCredentialSelection.SourceReadableUserBearerToken.Should().Be(
+            "source-readable-alpha");
+        tokenProvider.Authority.Should().BeEquivalentTo(new Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority
+        {
+            Platform = "nyxid",
+            Tenant = string.Empty,
+            ExternalUserId = "nyx-user-alpha",
+            Scope = "proxy",
+            BindingId = "bnd-sender-alpha",
         });
     }
 
@@ -2793,7 +2832,8 @@ public sealed class ChatEndpointsInternalTests
     private static IServiceProvider CreateRequestServices(
         string? authenticationEnabled = null,
         string environmentName = "Production",
-        IExternalIdentityBindingQueryPort? bindingQueryPort = null)
+        IExternalIdentityBindingQueryPort? bindingQueryPort = null,
+        IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
     {
         var configurationValues = new Dictionary<string, string?>(StringComparer.Ordinal);
         if (authenticationEnabled != null)
@@ -2811,6 +2851,8 @@ public sealed class ChatEndpointsInternalTests
             });
         if (bindingQueryPort != null)
             services.AddSingleton(bindingQueryPort);
+        if (callerAccessTokenProvider != null)
+            services.AddSingleton(callerAccessTokenProvider);
 
         return services.BuildServiceProvider();
     }
@@ -2860,6 +2902,20 @@ public sealed class ChatEndpointsInternalTests
         {
             Subject = externalSubject.Clone();
             throw _exception;
+        }
+    }
+
+    private sealed class RecordingCallerAccessTokenProvider(string accessToken)
+        : IWorkflowCallerAccessTokenProvider
+    {
+        public Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority? Authority { get; private set; }
+
+        public Task<string> IssueAsync(
+            Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority authority,
+            CancellationToken ct = default)
+        {
+            Authority = authority;
+            return Task.FromResult(accessToken);
         }
     }
 
