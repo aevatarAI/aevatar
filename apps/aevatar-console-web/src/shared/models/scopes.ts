@@ -9,6 +9,9 @@ export interface ScopeWorkflowSummary {
   activeRevisionId: string;
   deploymentId: string;
   deploymentStatus: string;
+  serviceAppId: string;
+  serviceNamespace: string;
+  publishedServiceId: string;
   updatedAt: string;
 }
 

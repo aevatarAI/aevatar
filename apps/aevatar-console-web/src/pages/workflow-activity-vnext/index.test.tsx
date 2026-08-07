@@ -277,12 +277,33 @@ jest.mock(
     __esModule: true,
     default: ({
       nodes,
+      onConnectNodes,
+      onDeleteEdges,
+      onDeleteNodes,
+      onEdgeSelect,
+      onNodeLayoutChange,
       onNodeSelect,
     }: {
       nodes: readonly { readonly id: string }[];
+      onConnectNodes?: (sourceNodeId: string, targetNodeId: string) => void;
+      onDeleteEdges?: (edgeIds: string[]) => Promise<void> | void;
+      onDeleteNodes?: (nodeIds: string[]) => Promise<void> | void;
+      onEdgeSelect?: (edgeId: string) => void;
+      onNodeLayoutChange?: (
+        nodes: readonly {
+          readonly id: string;
+          readonly position?: { readonly x: number; readonly y: number };
+        }[],
+      ) => void;
       onNodeSelect?: (nodeId: string) => void;
     }) => (
-      <div data-testid="workflow-studio-canvas">
+      <div
+        data-connectable={String(Boolean(onConnectNodes))}
+        data-deletable={String(Boolean(onDeleteEdges && onDeleteNodes))}
+        data-edge-selectable={String(Boolean(onEdgeSelect))}
+        data-layout-editable={String(Boolean(onNodeLayoutChange))}
+        data-testid="workflow-studio-canvas"
+      >
         {nodes.map((node) => (
           <button
             key={node.id}
@@ -292,6 +313,13 @@ jest.mock(
             Select {node.id}
           </button>
         ))}
+        <button
+          disabled={!onConnectNodes || nodes.length < 2}
+          onClick={() => onConnectNodes?.(nodes[0].id, nodes[1].id)}
+          type="button"
+        >
+          Connect first two nodes
+        </button>
       </div>
     ),
   }),
@@ -2696,7 +2724,6 @@ describe('Workflow Activity vNext editor', () => {
     mockStudioApi.publishWorkflow.mockResolvedValue({
       scopeId: 'scope-alpha',
       workflowId: 'wf-draft-alpha',
-      publishedServiceId: 'svc-alpha',
       serviceKey: 'service-alpha',
       revisionId: 'rev-preview-alpha',
       acceptanceStage: 'accepted',
@@ -2712,9 +2739,12 @@ describe('Workflow Activity vNext editor', () => {
         serviceKey: 'workflow-alpha',
         workflowName: 'Workflow alpha',
         actorId: 'actor-workflow-alpha',
-        activeRevisionId: 'workflow-revision-alpha',
+        activeRevisionId: 'rev-preview-alpha',
         deploymentId: 'deployment-workflow-alpha',
         deploymentStatus: 'Available',
+        serviceAppId: 'studio',
+        serviceNamespace: 'workflow-publications',
+        publishedServiceId: 'svc-alpha',
         updatedAt: '2026-08-06T10:00:00Z',
       },
       source: null,
@@ -2837,16 +2867,9 @@ describe('Workflow Activity vNext editor', () => {
       returnedWorkflowId: 'wf-returned-other',
       mismatch: 'workflow ID',
     },
-    {
-      returnedRevisionId: 'rev-preview-alpha',
-      returnedWorkflowId: 'wf-draft-alpha',
-      returnedPublishedServiceId: '',
-      mismatch: 'published service ID',
-    },
   ])('keeps a returned $mismatch mismatch visible without starting observation', async ({
     returnedRevisionId,
     returnedWorkflowId,
-    returnedPublishedServiceId = 'svc-alpha',
   }) => {
     mockLocation =
       '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha';
@@ -2914,7 +2937,6 @@ describe('Workflow Activity vNext editor', () => {
       scopeId: 'scope-alpha',
       workflowId: returnedWorkflowId,
       revisionId: returnedRevisionId,
-      publishedServiceId: returnedPublishedServiceId,
       serviceKey: 'tenant-alpha/app-alpha/scope-alpha/svc-alpha',
       acceptanceStage: 'accepted',
       propagationStage: 'readmodel_propagating',
@@ -3000,7 +3022,6 @@ describe('Workflow Activity vNext editor', () => {
       scopeId: 'scope-alpha',
       workflowId: 'wf-draft-alpha',
       revisionId: 'rev-preview-alpha',
-      publishedServiceId: 'svc-alpha',
       serviceKey: 'tenant-alpha/app-alpha/scope-alpha/svc-alpha',
       acceptanceStage: 'accepted',
       propagationStage: 'readmodel_propagating',
@@ -3019,9 +3040,12 @@ describe('Workflow Activity vNext editor', () => {
         serviceKey: 'workflow-alpha',
         workflowName: 'Workflow alpha',
         actorId: 'actor-workflow-alpha',
-        activeRevisionId: 'workflow-revision-alpha',
+        activeRevisionId: 'rev-preview-alpha',
         deploymentId: 'deployment-workflow-alpha',
         deploymentStatus: 'Available',
+        serviceAppId: 'studio',
+        serviceNamespace: 'workflow-publications',
+        publishedServiceId: 'svc-alpha',
         updatedAt: '2026-08-06T10:00:00Z',
       },
       source: null,
@@ -3158,9 +3182,12 @@ describe('Workflow Activity vNext editor', () => {
           serviceKey: 'workflow-alpha',
           workflowName: 'Workflow alpha',
           actorId: 'actor-workflow-alpha',
-          activeRevisionId: 'workflow-revision-alpha',
+          activeRevisionId: 'rev-preview-alpha',
           deploymentId: 'deployment-workflow-alpha',
           deploymentStatus: 'Available',
+          serviceAppId: 'studio',
+          serviceNamespace: 'workflow-publications',
+          publishedServiceId: 'svc-alpha',
           updatedAt: '2026-08-06T10:00:00Z',
         },
         source: null,
@@ -3227,7 +3254,7 @@ describe('Workflow Activity vNext editor', () => {
       'scope-alpha',
       'wf-draft-alpha',
     );
-    expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenCalledTimes(2);
+    expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenCalledTimes(1);
     expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenLastCalledWith(
       'scope-alpha',
       'svc-alpha',
@@ -3262,11 +3289,7 @@ describe('Workflow Activity vNext editor', () => {
       'scope-alpha',
       'wf-draft-alpha',
     );
-    expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenCalledTimes(2);
-    expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenLastCalledWith(
-      'scope-alpha',
-      'svc-alpha',
-    );
+    expect(mockScopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
     expect(mockStudioApi.previewExplicitRequests).toHaveBeenCalledTimes(1);
     expect(mockStudioApi.publishWorkflow).toHaveBeenCalledTimes(1);
   });
@@ -3294,7 +3317,6 @@ describe('Workflow Activity vNext editor', () => {
         scopeId: 'scope-alpha',
         workflowId: 'wf-draft-alpha',
         revisionId: receiptRevisionId,
-        publishedServiceId: 'svc-alpha',
         serviceKey: 'tenant-alpha/app-alpha/scope-alpha/svc-alpha',
         acceptanceStage: 'accepted',
         propagationStage: 'readmodel_propagating',
@@ -3303,7 +3325,6 @@ describe('Workflow Activity vNext editor', () => {
         scopeId: 'scope-alpha',
         workflowId: 'wf-draft-alpha',
         revisionId: freshRevisionId,
-        publishedServiceId: 'svc-alpha',
         serviceKey: 'tenant-alpha/app-alpha/scope-alpha/svc-alpha',
         acceptanceStage: 'accepted',
         propagationStage: 'readmodel_propagating',
@@ -3322,9 +3343,12 @@ describe('Workflow Activity vNext editor', () => {
           serviceKey: 'workflow-alpha',
           workflowName: 'Workflow alpha',
           actorId: 'actor-workflow-alpha',
-          activeRevisionId: 'workflow-revision-beta',
+          activeRevisionId: freshRevisionId,
           deploymentId: 'deployment-workflow-alpha',
           deploymentStatus: 'Available',
+          serviceAppId: 'studio',
+          serviceNamespace: 'workflow-publications',
+          publishedServiceId: 'svc-alpha',
           updatedAt: '2026-08-06T10:00:00Z',
         },
         source: null,
@@ -3428,7 +3452,7 @@ describe('Workflow Activity vNext editor', () => {
         await jest.advanceTimersByTimeAsync(0);
       });
       expect(mockScopesApi.getWorkflowDetail).toHaveBeenCalledTimes(1);
-      expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenCalledTimes(1);
+      expect(mockScopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
       await act(async () => {
         await jest.advanceTimersByTimeAsync(5_000);
       });
@@ -3446,11 +3470,7 @@ describe('Workflow Activity vNext editor', () => {
         'scope-alpha',
         'wf-draft-alpha',
       );
-      expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenCalledTimes(10);
-      expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenLastCalledWith(
-        'scope-alpha',
-        'svc-alpha',
-      );
+      expect(mockScopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
       expect(mockStudioApi.previewExplicitRequests).toHaveBeenCalledTimes(1);
       expect(mockStudioApi.publishWorkflow).toHaveBeenCalledTimes(1);
     } finally {
@@ -3829,6 +3849,61 @@ describe('Workflow Activity vNext editor', () => {
         name: 'Select step:step-root',
       }),
     ).toBeInTheDocument();
+  });
+
+  it('reuses the complete Studio canvas editing contract', async () => {
+    const sourceDocument = {
+      name: 'committed_source',
+      roles: [],
+      steps: [
+        { id: 'step-root', type: 'conditional' },
+        { id: 'step-next', type: 'transform' },
+      ],
+    };
+    mockStudioApi.getWorkflow.mockResolvedValue({
+      workflowId: 'wf-committed-source',
+      name: 'Committed source',
+      fileName: 'committed-source.yaml',
+      filePath: '',
+      directoryId: '',
+      directoryLabel: '',
+      yaml: 'name: committed_source\nroles: []\nsteps: []\n',
+      updatedAtUtc: '2026-08-04T10:00:00Z',
+      document: sourceDocument,
+      draftExists: false,
+      findings: [],
+    });
+    mockStudioApi.serializeYaml.mockImplementation(async ({ document }) => ({
+      yaml: 'name: committed_source\nroles: []\nsteps: []\n',
+      document,
+      findings: [],
+    }));
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const canvas = await screen.findByTestId('workflow-studio-canvas');
+    expect(canvas).toHaveAttribute('data-connectable', 'true');
+    expect(canvas).toHaveAttribute('data-deletable', 'true');
+    expect(canvas).toHaveAttribute('data-edge-selectable', 'true');
+    expect(canvas).toHaveAttribute('data-layout-editable', 'true');
+
+    fireEvent.click(
+      within(canvas).getByRole('button', { name: 'Connect first two nodes' }),
+    );
+
+    await waitFor(() =>
+      expect(mockStudioApi.serializeYaml).toHaveBeenCalledWith({
+        document: expect.objectContaining({
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'step-root',
+              branches: { true: 'step-next' },
+              next: null,
+            }),
+          ]),
+        }),
+      }),
+    );
   });
 
   it('keeps the Canvas/YAML editor view switch discoverable and keyboard operable', async () => {

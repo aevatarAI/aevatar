@@ -11,8 +11,8 @@ const receipt: WorkflowPublicationReceipt = {
   scopeId: 'scope-alpha',
   workflowId: 'wf-publication-alpha',
   revisionId: 'rev-publication-alpha',
-  publishedServiceId: 'svc-publication-alpha',
 };
+const publishedServiceId = 'svc-publication-alpha';
 
 function workflowDetail(
   scopeId = receipt.scopeId,
@@ -32,9 +32,12 @@ function workflowDetail(
       serviceKey: 'workflow-publication',
       workflowName: 'Publication workflow',
       actorId,
-      activeRevisionId: 'workflow-revision-alpha',
+      activeRevisionId: receipt.revisionId,
       deploymentId: 'deployment-workflow-alpha',
       deploymentStatus: 'Available',
+      serviceAppId: 'studio',
+      serviceNamespace: 'workflow-publications',
+      publishedServiceId,
       updatedAt: '2026-08-06T10:00:00Z',
     },
     source: null,
@@ -79,7 +82,7 @@ function revisionCatalog(
 ): ScopeServiceRevisionCatalogSnapshot {
   return {
     scopeId: receipt.scopeId,
-    serviceId: receipt.publishedServiceId,
+    serviceId: publishedServiceId,
     serviceKey: 'service-publication',
     displayName: 'Publication service',
     defaultServingRevisionId: receipt.revisionId,
@@ -125,16 +128,18 @@ describe('observeWorkflowPublication', () => {
     });
 
     await Promise.resolve();
-    expect(revisionsRead).toHaveBeenCalledWith(
-      'scope-alpha',
-      'svc-publication-alpha',
-    );
+    expect(revisionsRead).not.toHaveBeenCalled();
     resolveWorkflow(workflowDetail());
 
     await expect(observation).resolves.toMatchObject({
       kind: 'observed',
+      publishedServiceId,
       revision: { revisionId: 'rev-publication-alpha' },
     });
+    expect(revisionsRead).toHaveBeenCalledWith(
+      'scope-alpha',
+      'svc-publication-alpha',
+    );
     expect(workflowRead).toHaveBeenCalledWith(
       'scope-alpha',
       'wf-publication-alpha',
@@ -179,10 +184,7 @@ describe('observeWorkflowPublication', () => {
       ['scope-alpha', 'wf-publication-alpha'],
       ['scope-alpha', 'wf-publication-alpha'],
     ]);
-    expect(revisionsRead.mock.calls).toEqual([
-      ['scope-alpha', 'svc-publication-alpha'],
-      ['scope-alpha', 'svc-publication-alpha'],
-    ]);
+    expect(revisionsRead).not.toHaveBeenCalled();
   });
 
   it('treats a receipt-bound service revision catalog 404 as observation delay', async () => {
@@ -201,6 +203,28 @@ describe('observeWorkflowPublication', () => {
       'scope-alpha',
       'svc-publication-alpha',
     );
+  });
+
+  it('waits for the workflow read model to expose its published service identity', async () => {
+    const detail = workflowDetail();
+    const revisionsRead = jest.fn();
+
+    await expect(
+      observeWorkflowPublication({
+        receipt,
+        readWorkflow: async () => ({
+          ...detail,
+          workflow: {
+            ...detail.workflow,
+            publishedServiceId: '',
+          },
+        }),
+        readRevisions: revisionsRead,
+        wait: async () => undefined,
+        delaysMs: [0],
+      }),
+    ).resolves.toEqual({ kind: 'delayed' });
+    expect(revisionsRead).not.toHaveBeenCalled();
   });
 
   it('delays only the recognized workflow projection conflict codes', async () => {
@@ -244,6 +268,7 @@ describe('observeWorkflowPublication', () => {
       {
         workflow: workflowDetail('scope-other', 'wf-other'),
         catalog: revisionCatalog([serviceRevision()]),
+        expectedRevisionCalls: 0,
       },
       {
         workflow: {
@@ -254,6 +279,7 @@ describe('observeWorkflowPublication', () => {
           },
         },
         catalog: revisionCatalog([serviceRevision()]),
+        expectedRevisionCalls: 0,
       },
       {
         workflow: workflowDetail(),
@@ -261,6 +287,7 @@ describe('observeWorkflowPublication', () => {
           scopeId: 'scope-other',
           serviceId: 'svc-other',
         }),
+        expectedRevisionCalls: 1,
       },
     ];
 
@@ -278,7 +305,9 @@ describe('observeWorkflowPublication', () => {
         }),
       ).rejects.toThrow('does not match');
       expect(workflowRead).toHaveBeenCalledTimes(1);
-      expect(revisionsRead).toHaveBeenCalledTimes(1);
+      expect(revisionsRead).toHaveBeenCalledTimes(
+        candidate.expectedRevisionCalls,
+      );
     }
   });
 
@@ -356,9 +385,7 @@ describe('observeWorkflowPublication', () => {
     ['failure reason', serviceRevision({ failureReason: 'artifact rejected' })],
     ['Retired', serviceRevision({ status: ' RETIRED ' })],
   ])('stops when the accepted revision reaches terminal %s state', async (_, revision) => {
-    const workflowRead = jest
-      .fn()
-      .mockRejectedValue(httpStatusError(409, 'USER_WORKFLOW_NOT_READY'));
+    const workflowRead = jest.fn().mockResolvedValue(workflowDetail());
     const revisionsRead = jest
       .fn()
       .mockResolvedValue(revisionCatalog([revision]));

@@ -1972,11 +1972,6 @@ function decodeStudioPublishWorkflowResult(
       ['workflowId', 'WorkflowId'],
       'StudioPublishWorkflowAcceptedResult.workflowId',
     ),
-    publishedServiceId: readString(
-      record,
-      ['publishedServiceId', 'PublishedServiceId'],
-      'StudioPublishWorkflowAcceptedResult.publishedServiceId',
-    ),
     serviceKey: readString(
       record,
       ['serviceKey', 'ServiceKey'],

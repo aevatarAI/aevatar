@@ -589,6 +589,9 @@ describe('studioApi host-session requests', () => {
               activeRevisionId: 'rev-draft',
               deploymentId: 'dep-draft',
               deploymentStatus: 'Running',
+              serviceAppId: 'studio',
+              serviceNamespace: 'workflow-publications',
+              publishedServiceId: 'svc-workflow-draft',
               updatedAt: '2026-04-15T00:00:00Z',
             },
             {
@@ -601,6 +604,9 @@ describe('studioApi host-session requests', () => {
               activeRevisionId: 'rev-published',
               deploymentId: 'dep-published',
               deploymentStatus: 'Running',
+              serviceAppId: 'studio',
+              serviceNamespace: 'workflow-publications',
+              publishedServiceId: 'svc-workflow-published',
               updatedAt: '2026-04-14T00:00:00Z',
             },
           ],
@@ -686,6 +692,9 @@ describe('studioApi host-session requests', () => {
                 activeRevisionId: 'rev-1',
                 deploymentId: 'dep-1',
                 deploymentStatus: 'Pending',
+                serviceAppId: 'studio',
+                serviceNamespace: 'workflow-publications',
+                publishedServiceId: 'svc-workflow-1',
                 updatedAt: '2026-04-16T00:00:00Z',
               },
               source: {
@@ -752,6 +761,9 @@ describe('studioApi host-session requests', () => {
           activeRevisionId: 'rev-2',
           deploymentId: 'dep-1',
           deploymentStatus: 'Running',
+          serviceAppId: 'studio',
+          serviceNamespace: 'workflow-publications',
+          publishedServiceId: 'svc-workflow-1',
           updatedAt: '2026-04-17T00:00:00Z',
         },
         source: {
@@ -1432,7 +1444,6 @@ describe('studioApi host-session requests', () => {
       json: async () => ({
         scopeId: 'scope-alpha',
         workflowId: 'wf-alpha',
-        publishedServiceId: 'svc-workflow-alpha',
         serviceKey: 'scope-alpha:default:default:svc-workflow-alpha',
         revisionId: 'rev-alpha',
         definitionActorIdPrefix: 'workflow-definition-alpha',
@@ -1461,7 +1472,6 @@ describe('studioApi host-session requests', () => {
       expect.objectContaining({
         scopeId: 'scope-alpha',
         workflowId: 'wf-alpha',
-        publishedServiceId: 'svc-workflow-alpha',
         revisionId: 'rev-alpha',
       }),
     );

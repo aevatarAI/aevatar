@@ -69,6 +69,21 @@ function decodeScopeWorkflowSummary(
       ['deploymentStatus', 'DeploymentStatus'],
       `${label}.deploymentStatus`,
     ),
+    serviceAppId: readString(
+      record,
+      ['serviceAppId', 'ServiceAppId'],
+      `${label}.serviceAppId`,
+    ),
+    serviceNamespace: readString(
+      record,
+      ['serviceNamespace', 'ServiceNamespace'],
+      `${label}.serviceNamespace`,
+    ),
+    publishedServiceId: readString(
+      record,
+      ['publishedServiceId', 'PublishedServiceId'],
+      `${label}.publishedServiceId`,
+    ),
     updatedAt: readString(
       record,
       ['updatedAt', 'UpdatedAt'],

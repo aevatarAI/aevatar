@@ -300,7 +300,6 @@ export interface StudioSaveAndBindWorkflowAcceptedResult {
 export interface StudioPublishWorkflowAcceptedResult {
   readonly scopeId: string;
   readonly workflowId: string;
-  readonly publishedServiceId: string;
   readonly serviceKey: string;
   readonly revisionId: string;
   readonly acceptanceStage: string;

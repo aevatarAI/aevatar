@@ -97,10 +97,7 @@ public sealed record ScopeWorkflowUpsertResult(
     string AcceptanceStage = "accepted",
     string PropagationStage = "readmodel_propagating",
     string DisplayName = "",
-    string WorkflowName = "")
-{
-    public string PublishedServiceId { get; init; } = string.Empty;
-}
+    string WorkflowName = "");
 
 public sealed record ScopeWorkflowSaveAndBindResult(
     string ScopeId,

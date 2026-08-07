@@ -20,6 +20,9 @@ function workflowSummary(
     activeRevisionId: `rev-${workflowId}`,
     deploymentId: `dep-${workflowId}`,
     deploymentStatus,
+    serviceAppId: 'studio',
+    serviceNamespace: 'workflow-publications',
+    publishedServiceId: `svc-${workflowId}`,
     updatedAt: '2026-08-06T10:00:00Z',
   };
 }

@@ -30,6 +30,7 @@ import {
   removeStep,
   removeStepConnection,
   type StudioStepInspectorDraft,
+  suggestBranchLabelForStep,
 } from '@/shared/studio/document';
 import {
   buildExecutionTrace,
@@ -3202,10 +3203,18 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         return;
       }
 
+      const sourceStep = editableDocument.steps?.find(
+        (step) => trimOptional(step.id) === sourceStepId,
+      );
+      const branchLabel = suggestBranchLabelForStep(
+        trimOptional(sourceStep?.type),
+        sourceStep?.branches ?? {},
+      );
       const result = connectStepToTarget(
         editableDocument,
         sourceStepId,
         targetStepId,
+        branchLabel,
       );
       setEditableDocument(result.document);
       setSelectedEdgeId('');

@@ -1,12 +1,11 @@
 import { Alert, Spin } from 'antd';
 import React from 'react';
 import { t } from '@/shared/i18n/messages';
-import WorkflowStudioCanvas from './components/WorkflowStudioCanvas';
 import WorkflowStudioDraftRunPanel from './components/WorkflowStudioDraftRunPanel';
+import WorkflowStudioEditorSurface from './components/WorkflowStudioEditorSurface';
 import WorkflowStudioExecutionPanel from './components/WorkflowStudioExecutionPanel';
 import WorkflowStudioHeader from './components/WorkflowStudioHeader';
 import WorkflowStudioNodeDetailPanel from './components/WorkflowStudioNodeDetailPanel';
-import WorkflowStudioNodeLibrary from './components/WorkflowStudioNodeLibrary';
 import WorkflowStudioYamlPanel from './components/WorkflowStudioYamlPanel';
 import { useTeamMemberWorkflowStudio } from './hooks/useTeamMemberWorkflowStudio';
 
@@ -331,12 +330,14 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
             <Spin />
           </div>
         ) : (
-          <WorkflowStudioCanvas
+          <WorkflowStudioEditorSurface
             edges={studio.graph.edges}
             emptyDescription={studio.emptyDescription}
+            nodeLibraryOpen={studio.nodeLibraryOpen}
             nodes={studio.graph.nodes}
             onAddFirstStep={studio.openNodeLibrary}
             onCanvasSelect={studio.selectCanvas}
+            onCloseNodeLibrary={studio.closeNodeLibrary}
             onConnectNodes={studio.connectNodes}
             onDeleteEdges={(edgeIds) => {
               if (edgeIds.includes(studio.selectedEdgeId)) {
@@ -349,17 +350,25 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
               }
             }}
             onEdgeSelect={studio.selectEdge}
+            onInsertNode={studio.insertNode}
             onNodeLayoutChange={studio.moveNodes}
             onNodeSelect={studio.selectNode}
             selectedEdgeId={studio.selectedEdgeId}
             selectedNodeId={studio.selectedNodeId}
-          />
+          >
+            {studio.draftRunPanelOpen || studio.yamlPanelOpen ? null : (
+              <WorkflowStudioNodeDetailPanel
+                error={studio.selectedStepConfigurationError}
+                onClose={studio.selectCanvas}
+                onConfigurationChange={studio.updateSelectedStepConfiguration}
+                onConfigurationErrorChange={
+                  studio.setSelectedStepConfigurationError
+                }
+                stepDraft={studio.selectedStepDraft}
+              />
+            )}
+          </WorkflowStudioEditorSurface>
         )}
-        <WorkflowStudioNodeLibrary
-          onClose={studio.closeNodeLibrary}
-          onInsertNode={studio.insertNode}
-          open={studio.nodeLibraryOpen}
-        />
         {sidePanelOpen ? (
           <hr
             aria-label={t(
@@ -423,17 +432,6 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
           open={studio.yamlPanelOpen}
           width={sidePanelWidth}
         />
-        {studio.draftRunPanelOpen || studio.yamlPanelOpen ? null : (
-          <WorkflowStudioNodeDetailPanel
-            error={studio.selectedStepConfigurationError}
-            onClose={studio.selectCanvas}
-            onConfigurationChange={studio.updateSelectedStepConfiguration}
-            onConfigurationErrorChange={
-              studio.setSelectedStepConfigurationError
-            }
-            stepDraft={studio.selectedStepDraft}
-          />
-        )}
       </section>
       {executionPanelOpen ? (
         <hr

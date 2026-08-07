@@ -190,10 +190,7 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
             commandHandles,
             BuildReadModelUrl(normalizedScopeId, normalizedWorkflowId),
             DisplayName: desiredDisplayName,
-            WorkflowName: ScopeWorkflowCapabilityConventions.NormalizeOptional(request.WorkflowName))
-        {
-            PublishedServiceId = identity.ServiceId,
-        };
+            WorkflowName: ScopeWorkflowCapabilityConventions.NormalizeOptional(request.WorkflowName));
     }
 
     private static string BuildReadModelUrl(string scopeId, string workflowId) =>

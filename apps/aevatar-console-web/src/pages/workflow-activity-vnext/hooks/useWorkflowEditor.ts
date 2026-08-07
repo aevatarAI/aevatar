@@ -8,9 +8,13 @@ import { getLocationSnapshot, history } from '@/shared/navigation/history';
 import { studioApi } from '@/shared/studio/api';
 import {
   applyStepInspectorDraft,
+  connectStepToTarget,
   createStepInspectorDraft,
   insertStepByType,
   materializeImplicitSequentialTransitions,
+  removeStepConnection,
+  removeSteps,
+  suggestBranchLabelForStep,
 } from '@/shared/studio/document';
 import {
   buildStudioGraphElements,
@@ -161,8 +165,10 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
   const [runError, setRunError] = React.useState('');
   const [sseRunId, setSseRunId] = React.useState('');
   const [selectedNodeId, setSelectedNodeId] = React.useState('');
+  const [selectedEdgeId, setSelectedEdgeId] = React.useState('');
   const [selectedStepConfigurationError, setSelectedStepConfigurationError] =
     React.useState('');
+  const [canvasMutationError, setCanvasMutationError] = React.useState('');
   const runControllerRef = React.useRef<AbortController | null>(null);
   const runInFlightRef = React.useRef(false);
   const runGenerationRef = React.useRef(0);
@@ -233,6 +239,8 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     setSaveError('');
     setStructuralMutationError('');
     setFailedNodeType(null);
+    setCanvasMutationError('');
+    setSelectedEdgeId('');
     setSelectedNodeId('');
     setSelectedStepConfigurationError('');
     if (source.data.document) return;
@@ -372,6 +380,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       setStructuralMutationPending(false);
       setStructuralMutationError('');
       setFailedNodeType(null);
+      setCanvasMutationError('');
       setSaveError('');
       setRunInput('');
       setRunInputError('');
@@ -381,6 +390,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       sseRunIdRef.current = '';
       setSseRunId('');
       setSelectedNodeId('');
+      setSelectedEdgeId('');
       setSelectedStepConfigurationError('');
     },
     [materialization.reset],
@@ -504,7 +514,8 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         const current = document ?? (await parseCurrentYaml());
         if (!current || generation !== structuralMutationGenerationRef.current)
           return false;
-        const explicitDocument = materializeImplicitSequentialTransitions(current);
+        const explicitDocument =
+          materializeImplicitSequentialTransitions(current);
         const selectedStepId = selectedNodeId.startsWith('step:')
           ? selectedNodeId.slice('step:'.length).trim()
           : '';
@@ -550,6 +561,130 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
   const graph = React.useMemo(
     () => buildStudioGraphElements(document, layout),
     [document, layout],
+  );
+  const applyCanvasDocumentMutation = React.useCallback(
+    async (
+      mutate: (current: StudioWorkflowDocument) => {
+        document: StudioWorkflowDocument;
+        nodeId: string;
+      },
+    ): Promise<boolean> => {
+      if (savingRef.current || structuralMutationPendingRef.current)
+        return false;
+      const generation = ++structuralMutationGenerationRef.current;
+      structuralMutationPendingRef.current = true;
+      setStructuralMutationPending(true);
+      setCanvasMutationError('');
+      try {
+        const current = document ?? (await parseCurrentYaml());
+        if (!current || generation !== structuralMutationGenerationRef.current)
+          return false;
+        const result = mutate(current);
+        const serialized = await studioApi.serializeYaml({
+          document: result.document,
+        });
+        if (generation !== structuralMutationGenerationRef.current)
+          return false;
+        setDocument(serialized.document);
+        setYaml(serialized.yaml);
+        setFindings(serialized.findings);
+        setSelectedEdgeId('');
+        setSelectedNodeId(result.nodeId);
+        setSelectedStepConfigurationError('');
+        markLocalEdit();
+        return true;
+      } catch (error) {
+        if (generation === structuralMutationGenerationRef.current) {
+          setCanvasMutationError(toErrorMessage(error));
+        }
+        return false;
+      } finally {
+        if (generation === structuralMutationGenerationRef.current) {
+          structuralMutationPendingRef.current = false;
+          setStructuralMutationPending(false);
+        }
+      }
+    },
+    [document, markLocalEdit, parseCurrentYaml],
+  );
+  const connectNodes = React.useCallback(
+    (sourceNodeId: string, targetNodeId: string) =>
+      applyCanvasDocumentMutation((current) => {
+        const currentGraph = buildStudioGraphElements(current, layout);
+        const sourceStepId = currentGraph.nodes.find(
+          (node) => node.id === sourceNodeId,
+        )?.data.stepId;
+        const targetStepId = currentGraph.nodes.find(
+          (node) => node.id === targetNodeId,
+        )?.data.stepId;
+        if (!sourceStepId || !targetStepId || sourceStepId === targetStepId) {
+          return { document: current, nodeId: sourceNodeId };
+        }
+        const sourceStep = current.steps?.find(
+          (step) => String(step.id ?? '').trim() === sourceStepId,
+        );
+        const branchLabel = suggestBranchLabelForStep(
+          String(sourceStep?.type ?? '').trim(),
+          sourceStep?.branches ?? {},
+        );
+        return connectStepToTarget(
+          current,
+          sourceStepId,
+          targetStepId,
+          branchLabel,
+        );
+      }),
+    [applyCanvasDocumentMutation, layout],
+  );
+  const deleteNodes = React.useCallback(
+    (nodeIds: readonly string[]) =>
+      applyCanvasDocumentMutation((current) => {
+        const currentGraph = buildStudioGraphElements(current, layout);
+        const stepIds = nodeIds
+          .map(
+            (nodeId) =>
+              currentGraph.nodes.find((node) => node.id === nodeId)?.data
+                .stepId,
+          )
+          .filter((stepId): stepId is string => Boolean(stepId));
+        return removeSteps(current, stepIds);
+      }),
+    [applyCanvasDocumentMutation, layout],
+  );
+  const deleteEdges = React.useCallback(
+    (edgeIds: readonly string[]) =>
+      applyCanvasDocumentMutation((current) => {
+        const currentGraph = buildStudioGraphElements(current, layout);
+        let result = { document: current, nodeId: selectedNodeId };
+        for (const edgeId of edgeIds) {
+          const edge = currentGraph.edges.find((entry) => entry.id === edgeId);
+          const sourceStepId = currentGraph.nodes.find(
+            (node) => node.id === edge?.source,
+          )?.data.stepId;
+          const targetStepId = currentGraph.nodes.find(
+            (node) => node.id === edge?.target,
+          )?.data.stepId;
+          if (!sourceStepId || !targetStepId) continue;
+          result = removeStepConnection(
+            result.document,
+            sourceStepId,
+            targetStepId,
+            edge?.data?.branchLabel ?? null,
+          );
+        }
+        return result;
+      }),
+    [applyCanvasDocumentMutation, layout, selectedNodeId],
+  );
+  const moveNodes = React.useCallback(
+    (nodes: ReturnType<typeof buildStudioGraphElements>['nodes']) => {
+      if (savingRef.current || structuralMutationPendingRef.current) return;
+      setLayout((current) =>
+        buildStudioWorkflowLayout(workflowTitle, nodes, current),
+      );
+      markLocalEdit();
+    },
+    [markLocalEdit, workflowTitle],
   );
   const selectedStepDraft = React.useMemo(() => {
     const selectedStepId = selectedNodeId.startsWith('step:')
@@ -788,9 +923,14 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     document,
     findings,
     graph,
+    canvasMutationError,
+    connectNodes,
+    deleteEdges,
+    deleteNodes,
     loading: source.isPending,
     loadError: source.error,
     materialization,
+    moveNodes,
     nodeInsertionError: structuralMutationError,
     preparePublication,
     receiptPending,
@@ -813,13 +953,21 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     structuralMutationPending,
     sseRunId,
     selectedNodeId,
+    selectedEdgeId,
     selectedStepConfigurationError,
     selectedStepDraft,
     selectCanvas: () => {
+      setSelectedEdgeId('');
+      setSelectedNodeId('');
+      setSelectedStepConfigurationError('');
+    },
+    selectEdge: (edgeId: string) => {
+      setSelectedEdgeId(edgeId);
       setSelectedNodeId('');
       setSelectedStepConfigurationError('');
     },
     selectNode: (nodeId: string) => {
+      setSelectedEdgeId('');
       setSelectedNodeId(nodeId);
       setSelectedStepConfigurationError('');
     },

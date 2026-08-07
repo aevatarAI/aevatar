@@ -9,8 +9,7 @@ import {
 } from '@ant-design/icons';
 import { Alert, Button, Input, Modal, Segmented, Space, Tooltip } from 'antd';
 import React from 'react';
-import WorkflowStudioCanvasRegion from '@/pages/team-member-workflow-studio/components/WorkflowStudioCanvasRegion';
-import WorkflowStudioNodeLibrary from '@/pages/team-member-workflow-studio/components/WorkflowStudioNodeLibrary';
+import WorkflowStudioEditorSurface from '@/pages/team-member-workflow-studio/components/WorkflowStudioEditorSurface';
 import { formatUtcDateTime } from '@/shared/datetime/dateTime';
 import { t } from '@/shared/i18n/messages';
 import { getLocationSnapshot, history } from '@/shared/navigation/history';
@@ -113,8 +112,14 @@ const WorkflowEditorPage: React.FC<{
       publishedDocumentVersion !== editor.documentVersion,
   );
   const publishedInvocationTarget =
-    publicationReceipt && publicationObserved && !publicationStale
-      ? publicationReceipt
+    publicationReceipt &&
+    publicationObserved &&
+    !publicationStale &&
+    publication.publishedServiceId
+      ? {
+          ...publicationReceipt,
+          publishedServiceId: publication.publishedServiceId,
+        }
       : null;
   const canOpenPublishedRun = Boolean(
     publishedInvocationTarget &&
@@ -305,6 +310,16 @@ const WorkflowEditorPage: React.FC<{
     );
   }, [editor.nodeInsertionError, editor.retryNodeInsertion, toast]);
 
+  React.useEffect(() => {
+    if (!editor.canvasMutationError) return;
+    toast.error(
+      t(
+        'workflowActivityVNext.editor.canvasUpdateFailed',
+        "Couldn't update workflow",
+      ),
+    );
+  }, [editor.canvasMutationError, toast]);
+
   const retryMaterialization = React.useCallback(async () => {
     await editor.retryMaterialization();
   }, [editor.retryMaterialization]);
@@ -382,8 +397,7 @@ const WorkflowEditorPage: React.FC<{
         !hasNonBlankIdentifier(result.workflowId) ||
         result.workflowId !== preparation.workflowId ||
         !hasNonBlankIdentifier(result.revisionId) ||
-        result.revisionId !== preview.revisionId ||
-        !hasNonBlankIdentifier(result.publishedServiceId)
+        result.revisionId !== preview.revisionId
       ) {
         throw new Error(
           'The accepted publication response does not match the submitted workflow.',
@@ -391,7 +405,6 @@ const WorkflowEditorPage: React.FC<{
       }
 
       setPublicationReceipt({
-        publishedServiceId: result.publishedServiceId,
         scopeId: result.scopeId,
         revisionId: result.revisionId,
         workflowId: result.workflowId,
@@ -975,7 +988,7 @@ const WorkflowEditorPage: React.FC<{
         </div>
       ) : null}
       {mode === 'canvas' ? (
-        <WorkflowStudioCanvasRegion
+        <WorkflowStudioEditorSurface
           ariaLabel={t(
             'workflowActivityVNext.editor.canvasAria',
             'Workflow canvas',
@@ -987,11 +1000,39 @@ const WorkflowEditorPage: React.FC<{
           )}
           addFirstStepDisabled={editorWriteLocked}
           nodes={editor.graph.nodes}
+          nodeLibraryOpen={nodeLibraryOpen && !editorWriteLocked}
           onAddFirstStep={() => {
             if (!editorWriteLocked) setNodeLibraryOpen(true);
           }}
           onCanvasSelect={requestCanvasSelect}
+          onConnectNodes={(sourceNodeId, targetNodeId) => {
+            requestInspectorDiscard(() => {
+              void editor.connectNodes(sourceNodeId, targetNodeId);
+            });
+          }}
+          onCloseNodeLibrary={() => setNodeLibraryOpen(false)}
+          onDeleteEdges={(edgeIds) => {
+            requestInspectorDiscard(() => {
+              void editor.deleteEdges(edgeIds);
+            });
+          }}
+          onDeleteNodes={(nodeIds) => {
+            requestInspectorDiscard(() => {
+              void editor.deleteNodes(nodeIds);
+            });
+          }}
+          onEdgeSelect={(edgeId) => {
+            requestInspectorDiscard(() => editor.selectEdge(edgeId));
+          }}
+          onInsertNode={(stepType) => {
+            requestInspectorDiscard(() => {
+              void editor.addNode(stepType);
+              setNodeLibraryOpen(false);
+            });
+          }}
+          onNodeLayoutChange={editor.moveNodes}
           onNodeSelect={requestNodeSelect}
+          selectedEdgeId={editor.selectedEdgeId}
           selectedNodeId={editor.selectedNodeId}
           style={{
             border: '1px solid var(--wa-line)',
@@ -1010,16 +1051,6 @@ const WorkflowEditorPage: React.FC<{
           >
             {t('workflowActivityVNext.editor.addNode', 'Add node')}
           </Button>
-          <WorkflowStudioNodeLibrary
-            onClose={() => setNodeLibraryOpen(false)}
-            onInsertNode={(stepType) => {
-              requestInspectorDiscard(() => {
-                void editor.addNode(stepType);
-                setNodeLibraryOpen(false);
-              });
-            }}
-            open={nodeLibraryOpen && !editorWriteLocked}
-          />
           <WorkflowNodeInspector
             disabled={editorWriteLocked}
             error={editor.selectedStepConfigurationError}
@@ -1032,7 +1063,7 @@ const WorkflowEditorPage: React.FC<{
             onUnappliedChangesChange={setHasUnappliedNodeChanges}
             stepDraft={editor.selectedStepDraft}
           />
-        </WorkflowStudioCanvasRegion>
+        </WorkflowStudioEditorSurface>
       ) : (
         <Input.TextArea
           aria-label={t('workflowActivityVNext.new.yaml', 'Workflow YAML')}
