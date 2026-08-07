@@ -356,9 +356,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.new.templateName.incidentTriage': '事件分流',
     'workflowActivityVNext.new.title': '新建工作流',
     'workflowActivityVNext.new.validateCreate': '导入并打开',
-    'workflowActivityVNext.new.workspaceLoading': '正在加载保存位置…',
-    'workflowActivityVNext.new.workspaceLoadingDescription':
-      '现在可以先选择创建方式；当前工作区的保存位置加载期间，你的输入会保留在此页面。',
     'workflowActivityVNext.new.workspaceUnavailable': '保存位置不可用',
     'workflowActivityVNext.new.workspaceUnavailableDescription':
       '现在可以先选择创建方式；恢复访问权限期间，你的输入会保留在此页面。',
