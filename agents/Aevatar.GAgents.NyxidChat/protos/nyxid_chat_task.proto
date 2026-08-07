@@ -967,6 +967,10 @@ message NyxIdChatTurnGAgentState {
   google.protobuf.Timestamp delivered_at = 10;
   repeated NyxIdChatOperationKey delivered_operations = 11;
   bool may_change_external_state = 12;
+  // New admissions set NOT_STARTED. Legacy admissions remain UNSPECIFIED and
+  // recover conservatively because they predate the durable dispatch waterline.
+  NyxIdChatEffectEvidence effect_dispatch_waterline = 13;
+  google.protobuf.Timestamp effect_dispatch_started_at = 14;
 }
 
 message NyxIdChatTurnOperationAdmittedEvent {
@@ -974,6 +978,12 @@ message NyxIdChatTurnOperationAdmittedEvent {
   NyxIdChatStepKind operation_kind = 2;
   google.protobuf.Timestamp admitted_at = 3;
   bool may_change_external_state = 4;
+  NyxIdChatEffectEvidence effect_dispatch_waterline = 5;
+}
+
+message NyxIdChatTurnEffectDispatchStartedEvent {
+  NyxIdChatOperationKey key = 1;
+  google.protobuf.Timestamp started_at = 2;
 }
 
 message NyxIdChatTurnOperationCompletedEvent {

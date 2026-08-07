@@ -196,6 +196,8 @@ public static class ServiceCollectionExtensions
                     catalogQueryPort,
                     sp.GetRequiredService<TimeProvider>())
                 : new UnavailableNyxIdActionPostconditionPort());
+        services.TryAddSingleton<INyxIdChatDelegationCredentialLifecyclePort,
+            NyxIdChatDelegationCredentialLifecyclePort>();
         services.TryAddSingleton<INyxIdChatTurnOperationExecutor, NyxIdChatTurnOperationExecutor>();
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IAgentToolReceiptRenderer, AgentToolReceiptRenderer>();

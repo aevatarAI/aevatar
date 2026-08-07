@@ -41,6 +41,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         _operationExecutor = operationExecutor ?? throw new ArgumentNullException(nameof(operationExecutor));
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        _executionSession.MarkEffectDispatchStartedAsync = MarkEffectDispatchStartedAsync;
     }
 
     protected override NyxIdChatTurnGAgentState TransitionState(
@@ -49,6 +50,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         StateTransitionMatcher
             .Match(current, evt)
             .On<NyxIdChatTurnOperationAdmittedEvent>(ApplyAdmitted)
+            .On<NyxIdChatTurnEffectDispatchStartedEvent>(ApplyEffectDispatchStarted)
             .On<NyxIdChatTurnOperationCompletedEvent>(ApplyCompleted)
             .On<NyxIdChatTurnOperationDeliveredEvent>(ApplyDelivered)
             .OrCurrent();
@@ -93,12 +95,16 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
 
         var kind = ResolveKind(command);
         var admittedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
+        var mayChangeExternalState = command.Tool?.MayChangeExternalState == true ||
+                                     command.ToolApprovalContinuation?.MayChangeExternalState == true;
         await PersistDomainEventAsync(new NyxIdChatTurnOperationAdmittedEvent
         {
             Key = command.Key.Clone(),
             OperationKind = kind,
-            MayChangeExternalState = command.Tool?.MayChangeExternalState == true ||
-                                     command.ToolApprovalContinuation?.MayChangeExternalState == true,
+            MayChangeExternalState = mayChangeExternalState,
+            EffectDispatchWaterline = mayChangeExternalState
+                ? NyxIdChatEffectEvidence.NotStarted
+                : NyxIdChatEffectEvidence.NotApplied,
             AdmittedAt = admittedAt,
         }, CancellationToken.None);
 
@@ -110,7 +116,10 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
                     _executionSession,
                     (progress, token) => DispatchProgressAsync(command.Key, progress, token),
                     CancellationToken.None);
-            result = NormalizeResult(command, execution.Result);
+            result = NormalizeResult(
+                command,
+                execution.Result,
+                EffectMayHaveChanged(State));
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -126,8 +135,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
                 {
                     FailureCode = ExecutionFailedCode,
                     SafeMessage = ExecutionFailedMessage,
-                    ExternalEffect = command.Tool?.MayChangeExternalState == true ||
-                                     command.ToolApprovalContinuation?.MayChangeExternalState == true
+                    ExternalEffect = EffectMayHaveChanged(State)
                         ? NyxIdChatEffectEvidence.MayHaveChanged
                         : NyxIdChatEffectEvidence.NotApplied,
                 },
@@ -172,10 +180,10 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         var effect = completedUndelivered
             ? NormalizeEffect(
                 State.ExternalEffect,
-                State.MayChangeExternalState
+                EffectMayHaveChanged(State)
                     ? NyxIdChatEffectEvidence.MayHaveChanged
                     : NyxIdChatEffectEvidence.NotApplied)
-            : State.MayChangeExternalState
+            : EffectMayHaveChanged(State)
                 ? NyxIdChatEffectEvidence.MayHaveChanged
                 : NyxIdChatEffectEvidence.NotApplied;
         var result = new NyxIdChatOperationResultSignal
@@ -248,6 +256,25 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             .DispatchAsync(admittedKey.ConversationActorId, envelope, ct);
     }
 
+    private async Task MarkEffectDispatchStartedAsync(
+        NyxIdChatOperationKey key,
+        CancellationToken ct)
+    {
+        if (State.AdmittedOperation is null ||
+            !KeysEqual(State.AdmittedOperation, key) ||
+            !State.MayChangeExternalState ||
+            State.EffectDispatchWaterline == NyxIdChatEffectEvidence.MayHaveChanged)
+        {
+            return;
+        }
+
+        await PersistDomainEventAsync(new NyxIdChatTurnEffectDispatchStartedEvent
+        {
+            Key = key.Clone(),
+            StartedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+        }, ct);
+    }
+
     private async Task DispatchResultAsync(
         string conversationActorId,
         NyxIdChatOperationResultSignal result)
@@ -279,7 +306,8 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
 
     private static NyxIdChatOperationResultSignal NormalizeResult(
         NyxIdChatOperationDispatchCommand command,
-        NyxIdChatOperationResultSignal? result)
+        NyxIdChatOperationResultSignal? result,
+        bool effectMayHaveChanged)
     {
         if (result is not null && KeysEqual(command.Key, result.Key))
             return result.Clone();
@@ -291,8 +319,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             {
                 FailureCode = ResultKeyMismatchCode,
                 SafeMessage = ResultKeyMismatchMessage,
-                ExternalEffect = command.Tool?.MayChangeExternalState == true ||
-                                 command.ToolApprovalContinuation?.MayChangeExternalState == true
+                ExternalEffect = effectMayHaveChanged
                     ? NyxIdChatEffectEvidence.MayHaveChanged
                     : NyxIdChatEffectEvidence.NotApplied,
             },
@@ -370,10 +397,28 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         next.SafeMessage = string.Empty;
         next.ExternalEffect = NyxIdChatEffectEvidence.NotStarted;
         next.MayChangeExternalState = evt.MayChangeExternalState;
+        next.EffectDispatchWaterline = evt.EffectDispatchWaterline;
+        next.EffectDispatchStartedAt = null;
         next.ResultDelivered = false;
         next.AdmittedAt = evt.AdmittedAt?.Clone();
         next.CompletedAt = null;
         next.DeliveredAt = null;
+        return next;
+    }
+
+    private static NyxIdChatTurnGAgentState ApplyEffectDispatchStarted(
+        NyxIdChatTurnGAgentState current,
+        NyxIdChatTurnEffectDispatchStartedEvent evt)
+    {
+        if (!KeysEqual(current.AdmittedOperation, evt.Key) ||
+            !current.MayChangeExternalState)
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.EffectDispatchWaterline = NyxIdChatEffectEvidence.MayHaveChanged;
+        next.EffectDispatchStartedAt = evt.StartedAt?.Clone();
         return next;
     }
 
@@ -458,6 +503,10 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         NyxIdChatEffectEvidence value,
         NyxIdChatEffectEvidence fallback) =>
         value == NyxIdChatEffectEvidence.Unspecified ? fallback : value;
+
+    private static bool EffectMayHaveChanged(NyxIdChatTurnGAgentState state) =>
+        state.MayChangeExternalState &&
+        state.EffectDispatchWaterline != NyxIdChatEffectEvidence.NotStarted;
 
     private long CurrentCommittedVersion() =>
         (EventSourcing ?? throw new InvalidOperationException(

@@ -18,6 +18,16 @@ public sealed record NyxIdSessionRefreshResult(
     int? ExpiresIn = null,
     string? Detail = null);
 
+public sealed record NyxIdDelegationRefreshResult(
+    bool Succeeded,
+    string? AccessToken = null,
+    string? TokenType = null,
+    long? ExpiresIn = null,
+    string? Scope = null,
+    string? Detail = null,
+    int HttpStatus = 0,
+    string? ProviderErrorCode = null);
+
 public sealed record NyxIdProxyBinaryResponse(
     bool Succeeded,
     byte[] Content,
@@ -79,6 +89,8 @@ internal sealed record NyxIdProxyError(
 /// <summary>HTTP client for calling NyxID REST API endpoints.</summary>
 public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 {
+    internal const int DelegationRefreshMaxResponseBytes = 16 * 1024;
+
     private enum ProxyCredentialTransport
     {
         AuthorizationBearer,
@@ -247,6 +259,180 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             _logger.LogWarning(ex, "NyxID session refresh returned invalid JSON");
             return new NyxIdSessionRefreshResult(false, Detail: "invalid_refresh_response invalid_json");
         }
+    }
+
+    public async Task<NyxIdDelegationRefreshResult> RefreshDelegationAsync(
+        string delegationToken,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(delegationToken))
+            return new NyxIdDelegationRefreshResult(false, Detail: "missing_delegation_token");
+
+        var url = $"{GetBaseUrl()}/api/v1/delegation/refresh";
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", delegationToken.Trim());
+        var response = await SendTextResponseAsync(
+            request,
+            DelegationRefreshMaxResponseBytes,
+            ct);
+        if (!response.Succeeded)
+        {
+            if (response.Detail is "content_length_exceeds_max_bytes" or "content_exceeds_max_bytes")
+            {
+                return new NyxIdDelegationRefreshResult(
+                    false,
+                    Detail: "delegation_refresh_response_too_large",
+                    HttpStatus: response.HttpStatus);
+            }
+
+            return DelegationRefreshFailure(response.Content, response.HttpStatus);
+        }
+
+        if (TryReadDelegationRefreshError(response.Content, response.HttpStatus, out var refreshFailure))
+            return refreshFailure;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response.Content);
+            var root = document.RootElement;
+            var accessToken = TryGetString(root, "access_token");
+            var tokenType = TryGetString(root, "token_type");
+            if (string.IsNullOrWhiteSpace(accessToken) ||
+                string.IsNullOrWhiteSpace(tokenType) ||
+                !string.Equals(tokenType, "Bearer", StringComparison.OrdinalIgnoreCase) ||
+                !root.TryGetProperty("expires_in", out var expiresInProperty) ||
+                expiresInProperty.ValueKind != JsonValueKind.Number ||
+                !expiresInProperty.TryGetInt64(out var expiresIn) ||
+                expiresIn <= 0 ||
+                !root.TryGetProperty("scope", out var scopeProperty) ||
+                scopeProperty.ValueKind != JsonValueKind.String)
+            {
+                return new NyxIdDelegationRefreshResult(
+                    false,
+                    Detail: "invalid_delegation_refresh_response");
+            }
+
+            return new NyxIdDelegationRefreshResult(
+                true,
+                accessToken,
+                tokenType,
+                expiresIn,
+                scopeProperty.GetString() ?? string.Empty);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "NyxID delegation refresh returned invalid JSON");
+            return new NyxIdDelegationRefreshResult(
+                false,
+                Detail: "invalid_delegation_refresh_response");
+        }
+    }
+
+    private static NyxIdDelegationRefreshResult DelegationRefreshFailure(
+        string response,
+        int httpStatus)
+    {
+        TryReadProviderErrorCode(response, out var providerErrorCode);
+        var detail = httpStatus > 0
+            ? $"nyx_status={httpStatus}"
+            : "delegation_refresh_transport_failure";
+        if (providerErrorCode is not null)
+            detail += $" provider_error={providerErrorCode}";
+
+        return new NyxIdDelegationRefreshResult(
+            false,
+            Detail: detail,
+            HttpStatus: httpStatus,
+            ProviderErrorCode: providerErrorCode);
+    }
+
+    private static bool TryReadDelegationRefreshError(
+        string response,
+        int fallbackHttpStatus,
+        out NyxIdDelegationRefreshResult failure)
+    {
+        failure = default!;
+        if (string.IsNullOrWhiteSpace(response))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("error", out var errorProperty) ||
+                errorProperty.ValueKind is not (JsonValueKind.True or JsonValueKind.String))
+            {
+                return false;
+            }
+
+            var status = TryGetInt(root, "status") ?? fallbackHttpStatus;
+            failure = DelegationRefreshFailure(response, status);
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadProviderErrorCode(string response, out string? errorCode)
+    {
+        errorCode = null;
+        if (string.IsNullOrWhiteSpace(response))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            var candidate = TryGetString(root, "error");
+            if (candidate is null && TryGetInt(root, "error_code") is { } numericCode)
+                candidate = numericCode.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (candidate is null &&
+                root.TryGetProperty("body", out var bodyProperty) &&
+                bodyProperty.ValueKind == JsonValueKind.String)
+            {
+                candidate = TryReadNestedProviderErrorCode(bodyProperty.GetString());
+            }
+
+            errorCode = NormalizeProviderErrorCode(candidate);
+            return errorCode is not null;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static string? TryReadNestedProviderErrorCode(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            return TryGetString(document.RootElement, "error") ??
+                   TryGetInt(document.RootElement, "error_code")?.ToString(
+                       System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch (JsonException)
+        {
+            return body;
+        }
+    }
+
+    private static string? NormalizeProviderErrorCode(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var normalized = value.Trim();
+        return normalized.Length <= 64 &&
+               normalized.All(static character =>
+                   char.IsAsciiLetterOrDigit(character) || character is '_' or '-' or '.')
+            ? normalized
+            : null;
     }
 
     // ─── Proxy ───

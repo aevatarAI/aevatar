@@ -41,6 +41,8 @@ public sealed class NyxIdChatNeedsYouContinuationTests
                     Credentials = new AgentToolCredentialsPayload
                     {
                         NyxIdAccessToken = "refreshed-input-token",
+                        NyxIdCredentialKind =
+                            AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
                     },
                 },
                 SelectedOptions =
@@ -103,6 +105,7 @@ public sealed class NyxIdChatNeedsYouContinuationTests
                 RequestId = "input-free-text",
                 ToolCallId = "call-ask-user-alpha",
                 Answer = new NyxIdChatInputAnswer { FreeText = rawAnswer },
+                ToolContext = ReplacementToolContext("refreshed-input-free-text-token"),
             },
         };
 
@@ -123,6 +126,40 @@ public sealed class NyxIdChatNeedsYouContinuationTests
         response.RootElement.GetProperty("type").GetString().Should().Be("ask_user_response");
         response.RootElement.GetProperty("free_text").GetString().Should().Be(rawAnswer);
         response.RootElement.TryGetProperty("selected_options", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task InputContinuationWithoutReplacementCredentials_ShouldFailClosed()
+    {
+        var generation = new AskUserGenerationExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(generation);
+        var session = new NyxIdChatTransientExecutionSession();
+        await executor.ExecuteAsync(
+            InitialLlmCommand(),
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        var execution = await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = Key("step-input-missing-credentials", "operation-input-missing-credentials"),
+                InputContinuation = new NyxIdChatInputContinuationInput
+                {
+                    RequestId = "input-missing-credentials",
+                    ToolCallId = "call-ask-user-alpha",
+                    Answer = new NyxIdChatInputAnswer { FreeText = "continue" },
+                },
+            },
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        execution.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Failure);
+        execution.Result.Failure.FailureCode.Should().Be(
+            NyxIdChatTurnOperationExecutor.ToolAuthorizationMismatchCode);
+        generation.LlmStates.Should().ContainSingle();
     }
 
     [Fact]
@@ -239,6 +276,41 @@ public sealed class NyxIdChatNeedsYouContinuationTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
+    public async Task ApprovalContinuationWithoutReplacementCredentials_ShouldFailClosed(
+        bool approved)
+    {
+        var generation = new ApprovalGenerationExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(generation);
+        var session = new NyxIdChatTransientExecutionSession();
+        await executor.ExecuteAsync(
+            InitialLlmCommand(),
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+        await executor.ExecuteAsync(
+            ToolCommand(),
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+        var resolution = ResolveApproval(approved);
+        resolution.NextCommand!.ToolApprovalContinuation.ToolContext = null;
+
+        var execution = await executor.ExecuteAsync(
+            resolution.NextCommand,
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        execution.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Failure);
+        execution.Result.Failure.FailureCode.Should().Be(
+            NyxIdChatTurnOperationExecutor.ToolAuthorizationMismatchCode);
+        generation.ToolExecutions.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
     public async Task ContinuationAfterCapabilityLoss_ShouldFailClosed(bool approval)
     {
         var executor = new NyxIdChatTurnOperationExecutor(new AskUserGenerationExecutor());
@@ -295,6 +367,8 @@ public sealed class NyxIdChatNeedsYouContinuationTests
                     Credentials = new AgentToolCredentialsPayload
                     {
                         NyxIdAccessToken = "initial-token",
+                        NyxIdCredentialKind =
+                            AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
                     },
                 },
             },
@@ -330,11 +404,24 @@ public sealed class NyxIdChatNeedsYouContinuationTests
                     Credentials = new AgentToolCredentialsPayload
                     {
                         NyxIdAccessToken = "refreshed-approval-token",
+                        NyxIdCredentialKind =
+                            AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
                     },
                 },
             },
             currentStateVersion: 10,
             Now());
+
+    private static AgentToolExecutionContextPayload ReplacementToolContext(string accessToken) =>
+        new()
+        {
+            Credentials = new AgentToolCredentialsPayload
+            {
+                NyxIdAccessToken = accessToken,
+                NyxIdCredentialKind =
+                    AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
+            },
+        };
 
     private static NyxIdChatNeedsYouDecision<NyxIdChatInputResolutionState> ResolveInput()
     {

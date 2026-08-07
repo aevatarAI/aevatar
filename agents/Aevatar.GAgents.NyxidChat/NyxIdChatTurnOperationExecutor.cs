@@ -30,6 +30,8 @@ public sealed class NyxIdChatTransientExecutionSession
     internal NyxIdChatOperationKey? AuthorizationSourceKey { get; set; }
     internal AgentProfileTurnCatalog? TurnCatalog { get; set; }
     internal long ProgressSequence { get; set; }
+    internal Func<NyxIdChatOperationKey, CancellationToken, Task>?
+        MarkEffectDispatchStartedAsync { get; set; }
 
     internal bool TryMarkToolStartPublished(string callId) =>
         _publishedToolStartCallIds.Add(callId);
@@ -44,6 +46,7 @@ public sealed class NyxIdChatTurnOperationExecutor
     internal const string ToolCapabilityLostCode = "NYXID_CHAT_TOOL_CAPABILITY_LOST";
     internal const string ToolAuthorizationMismatchCode = "NYXID_CHAT_TOOL_AUTHORIZATION_MISMATCH";
     internal const string ToolReceiptRequiredCode = "NYXID_CHAT_TOOL_RECEIPT_REQUIRED";
+    internal const string DelegationRefreshFailedCode = "NYXID_CHAT_DELEGATION_REFRESH_FAILED";
     private const string InvalidExecutionResultCode = "NYXID_CHAT_INVALID_EXECUTION_RESULT";
     private const string UnsupportedOperationCode = "NYXID_CHAT_OPERATION_NOT_SUPPORTED";
     private const string ToolCapabilityLostMessage =
@@ -52,6 +55,8 @@ public sealed class NyxIdChatTurnOperationExecutor
         "The tool command did not match the exact authorized tool call.";
     private const string ToolReceiptRequiredMessage =
         "The effect-capable tool did not return the required outcome receipt.";
+    private const string DelegationRefreshFailedMessage =
+        "The delegated NyxID credential could not be refreshed.";
     private const string InvalidExecutionResultMessage =
         "The operation executor returned an invalid typed result.";
     private const string UnsupportedOperationMessage =
@@ -64,17 +69,26 @@ public sealed class NyxIdChatTurnOperationExecutor
     private readonly IAgentRunReplyGenerationExecutorPort _generationExecutor;
     private readonly INyxIdActionPostconditionPort _actionPostconditionPort;
     private readonly AgentProfileTurnCatalogMaterializer? _turnCatalogMaterializer;
+    private readonly INyxIdChatDelegationCredentialLifecyclePort _delegationCredentialLifecycle;
 
     public NyxIdChatTurnOperationExecutor(
         IAgentRunReplyGenerationExecutorPort generationExecutor)
-        : this(generationExecutor, new UnavailableNyxIdActionPostconditionPort(), null)
+        : this(
+            generationExecutor,
+            new UnavailableNyxIdActionPostconditionPort(),
+            null,
+            new NyxIdChatDelegationCredentialLifecyclePort(TimeProvider.System))
     {
     }
 
     public NyxIdChatTurnOperationExecutor(
         IAgentRunReplyGenerationExecutorPort generationExecutor,
         INyxIdActionPostconditionPort actionPostconditionPort)
-        : this(generationExecutor, actionPostconditionPort, null)
+        : this(
+            generationExecutor,
+            actionPostconditionPort,
+            null,
+            new NyxIdChatDelegationCredentialLifecyclePort(TimeProvider.System))
     {
     }
 
@@ -82,11 +96,26 @@ public sealed class NyxIdChatTurnOperationExecutor
         IAgentRunReplyGenerationExecutorPort generationExecutor,
         INyxIdActionPostconditionPort actionPostconditionPort,
         AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer)
+        : this(
+            generationExecutor,
+            actionPostconditionPort,
+            turnCatalogMaterializer,
+            new NyxIdChatDelegationCredentialLifecyclePort(TimeProvider.System))
+    {
+    }
+
+    public NyxIdChatTurnOperationExecutor(
+        IAgentRunReplyGenerationExecutorPort generationExecutor,
+        INyxIdActionPostconditionPort actionPostconditionPort,
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle)
     {
         _generationExecutor = generationExecutor ?? throw new ArgumentNullException(nameof(generationExecutor));
         _actionPostconditionPort = actionPostconditionPort ??
                                    throw new ArgumentNullException(nameof(actionPostconditionPort));
         _turnCatalogMaterializer = turnCatalogMaterializer;
+        _delegationCredentialLifecycle = delegationCredentialLifecycle ??
+                                         throw new ArgumentNullException(nameof(delegationCredentialLifecycle));
     }
 
     public async Task<NyxIdChatTurnOperationExecution> ExecuteAsync(
@@ -214,13 +243,18 @@ public sealed class NyxIdChatTurnOperationExecutor
         var request = isContinuation
             ? session.Request!.Clone()
             : BuildReplyRequest(command);
+        if (await EnsureDelegationCredentialAsync(command.Key, session, request, ct).ConfigureAwait(false) is
+            { } credentialFailure)
+        {
+            return credentialFailure;
+        }
         if (!isContinuation && session.TurnCatalog is null)
         {
             session.TurnCatalog = command.Key.OperationGeneration > 1 &&
                                   (command.Llm.AgentProfile is not null ||
                                    command.Llm.AgentProfileTurnAuthority is not null)
                 ? RestrictedEmptyCatalog()
-                : await MaterializeTurnCatalogAsync(command.Llm, ct).ConfigureAwait(false);
+                : await MaterializeTurnCatalogAsync(command.Llm, request, ct).ConfigureAwait(false);
         }
         var runId = isContinuation
             ? session.StepState!.RunId
@@ -340,15 +374,32 @@ public sealed class NyxIdChatTurnOperationExecutor
                 NyxIdChatEffectEvidence.NotStarted);
         }
 
+        if (await EnsureDelegationCredentialAsync(
+                command.Key,
+                session,
+                session.Request,
+                ct)
+            .ConfigureAwait(false) is { } credentialFailure)
+        {
+            return credentialFailure;
+        }
+        if (authorizedToolStep is not null &&
+            session.StepState?.ToolContext?.Credentials is { } currentCredentials)
+        {
+            authorizedToolStep = authorizedToolStep.WithRefreshedCredentials(currentCredentials);
+        }
+
+        var currentStepState = session.StepState!;
+        var currentRequest = session.Request!;
         var workItem = new AgentRunReplyStepExecutionRequest(
-            session.StepState.RunId,
+            currentStepState.RunId,
             NyxIdChatTurnActorIds.ForTurn(
                 command.Key.ConversationActorId,
                 command.Key.TurnId),
-            session.StepState.Attempt,
-            session.StepState.NextStepIndex,
-            session.Request.Clone(),
-            session.StepState.Clone(),
+            currentStepState.Attempt,
+            currentStepState.NextStepIndex,
+            currentRequest.Clone(),
+            currentStepState.Clone(),
             TurnCatalog: session.TurnCatalog);
         if (!session.AuthorizedToolStep.Matches(workItem))
         {
@@ -357,6 +408,12 @@ public sealed class NyxIdChatTurnOperationExecutor
                 ToolAuthorizationMismatchCode,
                 ToolAuthorizationMismatchMessage,
                 NyxIdChatEffectEvidence.NotStarted);
+        }
+
+        if (command.Tool.MayChangeExternalState &&
+            session.MarkEffectDispatchStartedAsync is { } markEffectDispatchStartedAsync)
+        {
+            await markEffectDispatchStartedAsync(command.Key, ct).ConfigureAwait(false);
         }
 
         await ReportToolStartedOnceAsync(
@@ -491,7 +548,15 @@ public sealed class NyxIdChatTurnOperationExecutor
         }
 
         var responseJson = BuildInputResponseJson(input);
-        RefreshCredentials(session, input.ToolContext?.Credentials);
+        if (!RefreshCredentials(session, input.ToolContext?.Credentials))
+        {
+            ClearAuthorization(session);
+            return Failure(
+                command.Key,
+                ToolAuthorizationMismatchCode,
+                ToolAuthorizationMismatchMessage,
+                NyxIdChatEffectEvidence.NotStarted);
+        }
         var result = new AgentRunToolStepResult { AdvanceRound = true };
         result.ResultMessages.Add(AgentRunReplyStepMappers.ToProto(
             ToolCallLoop.BuildToolResultMessage(
@@ -532,6 +597,28 @@ public sealed class NyxIdChatTurnOperationExecutor
                 NyxIdChatEffectEvidence.NotStarted);
         }
 
+        if (session.StepState is null ||
+            session.Request is null ||
+            session.StepState.PendingToolCalls.Count != 1 ||
+            (approval.Approved && session.AuthorizedToolStep is null))
+        {
+            return Failure(
+                command.Key,
+                ToolCapabilityLostCode,
+                ToolCapabilityLostMessage,
+                NyxIdChatEffectEvidence.NotStarted);
+        }
+
+        if (!RefreshCredentials(session, approval.ToolContext?.Credentials))
+        {
+            ClearAuthorization(session);
+            return Failure(
+                command.Key,
+                ToolAuthorizationMismatchCode,
+                ToolAuthorizationMismatchMessage,
+                NyxIdChatEffectEvidence.NotStarted);
+        }
+
         if (!approval.Approved)
         {
             var pendingCall = session.StepState?.PendingToolCalls.Count == 1
@@ -560,24 +647,12 @@ public sealed class NyxIdChatTurnOperationExecutor
             });
         }
 
-        if (session.AuthorizedToolStep is null ||
-            session.StepState is null ||
-            session.Request is null ||
-            session.StepState.PendingToolCalls.Count != 1)
-        {
-            return Failure(
-                command.Key,
-                ToolCapabilityLostCode,
-                ToolCapabilityLostMessage,
-                NyxIdChatEffectEvidence.NotStarted);
-        }
-
         AgentRunAuthorizedToolStep approvedCapability;
         try
         {
-            approvedCapability = session.AuthorizedToolStep.WithApprovalGrant(
+            approvedCapability = session.AuthorizedToolStep!.WithApprovalGrant(
                 approval.ApprovalRequestId,
-                approval.ToolContext?.Credentials);
+                session.StepState.ToolContext?.Credentials);
         }
         catch (InvalidOperationException)
         {
@@ -632,20 +707,130 @@ public sealed class NyxIdChatTurnOperationExecutor
             }),
         };
 
-    private static void RefreshCredentials(
+    private async Task<NyxIdChatTurnOperationExecution?> EnsureDelegationCredentialAsync(
+        NyxIdChatOperationKey key,
+        NyxIdChatTransientExecutionSession session,
+        NeedsLlmReplyEvent request,
+        CancellationToken ct)
+    {
+        var credentials = request.ToolContext?.Credentials ??
+                          session.StepState?.ToolContext?.Credentials;
+        if (credentials?.NyxIdCredentialKind !=
+            AgentToolNyxIdCredentialKindPayload.ProxyDelegation)
+        {
+            return null;
+        }
+
+        var toolToken = Normalize(credentials.NyxIdAccessToken);
+        var llmToken = Normalize(request.LlmControl?.NyxIdAccessToken);
+        if (toolToken is not null &&
+            llmToken is not null &&
+            !string.Equals(toolToken, llmToken, StringComparison.Ordinal))
+        {
+            ClearAuthorization(session);
+            return Failure(
+                key,
+                DelegationRefreshFailedCode,
+                DelegationRefreshFailedMessage,
+                NyxIdChatEffectEvidence.NotApplied);
+        }
+
+        var token = toolToken ?? llmToken;
+        if (token is null)
+        {
+            ClearAuthorization(session);
+            return Failure(
+                key,
+                DelegationRefreshFailedCode,
+                DelegationRefreshFailedMessage,
+                NyxIdChatEffectEvidence.NotApplied);
+        }
+
+        var resolution = await _delegationCredentialLifecycle
+            .ResolveAsync(token, ct)
+            .ConfigureAwait(false);
+        if (!resolution.Succeeded || string.IsNullOrWhiteSpace(resolution.AccessToken))
+        {
+            ClearAuthorization(session);
+            return Failure(
+                key,
+                DelegationRefreshFailedCode,
+                DelegationRefreshFailedMessage,
+                NyxIdChatEffectEvidence.NotApplied);
+        }
+
+        ApplyDelegationCredential(
+            session,
+            request,
+            credentials,
+            resolution.AccessToken.Trim());
+        return null;
+    }
+
+    private static void ApplyDelegationCredential(
+        NyxIdChatTransientExecutionSession session,
+        NeedsLlmReplyEvent request,
+        AgentToolCredentialsPayload sourceCredentials,
+        string accessToken)
+    {
+        var credentials = sourceCredentials.Clone();
+        credentials.NyxIdAccessToken = accessToken;
+        credentials.NyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.ProxyDelegation;
+        credentials.SourceReadableNyxIdAccessToken = string.Empty;
+
+        request.ToolContext ??= new AgentToolExecutionContextPayload();
+        request.ToolContext.Credentials = credentials.Clone();
+        request.LlmControl ??= new LLMControlContextPayload();
+        request.LlmControl.NyxIdAccessToken = accessToken;
+
+        if (session.Request is not null)
+            session.Request = request.Clone();
+        if (session.StepState is not null)
+        {
+            session.StepState = session.StepState.Clone();
+            session.StepState.ToolContext ??= new AgentToolExecutionContextPayload();
+            session.StepState.ToolContext.Credentials = credentials.Clone();
+            session.StepState.LlmControl ??= new LLMControlContextPayload();
+            session.StepState.LlmControl.NyxIdAccessToken = accessToken;
+        }
+        if (session.AuthorizedToolStep is not null)
+            session.AuthorizedToolStep = session.AuthorizedToolStep.WithRefreshedCredentials(credentials);
+    }
+
+    private static bool RefreshCredentials(
         NyxIdChatTransientExecutionSession session,
         AgentToolCredentialsPayload? credentials)
     {
         if (credentials is null || session.Request is null || session.StepState is null)
-            return;
+            return false;
+
+        var current = session.Request.ToolContext?.Credentials ??
+                      session.StepState.ToolContext?.Credentials;
+        if (current is null ||
+            current.NyxIdCredentialKind == AgentToolNyxIdCredentialKindPayload.Unspecified ||
+            credentials.NyxIdCredentialKind != current.NyxIdCredentialKind ||
+            string.IsNullOrWhiteSpace(credentials.NyxIdAccessToken))
+        {
+            return false;
+        }
 
         session.Request = session.Request.Clone();
         session.Request.ToolContext ??= new AgentToolExecutionContextPayload();
         session.Request.ToolContext.Credentials = credentials.Clone();
+        session.Request.LlmControl ??= new LLMControlContextPayload();
+        if (!string.IsNullOrWhiteSpace(credentials.NyxIdAccessToken))
+            session.Request.LlmControl.NyxIdAccessToken = credentials.NyxIdAccessToken;
         session.StepState = session.StepState.Clone();
         session.StepState.ToolContext ??= new AgentToolExecutionContextPayload();
         session.StepState.ToolContext.Credentials = credentials.Clone();
+        session.StepState.LlmControl ??= new LLMControlContextPayload();
+        if (!string.IsNullOrWhiteSpace(credentials.NyxIdAccessToken))
+            session.StepState.LlmControl.NyxIdAccessToken = credentials.NyxIdAccessToken;
+        return true;
     }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static NyxIdChatToolCall BuildToolCall(
         AgentRunToolCall call,
@@ -779,6 +964,7 @@ public sealed class NyxIdChatTurnOperationExecutor
 
     private async Task<AgentProfileTurnCatalog?> MaterializeTurnCatalogAsync(
         NyxIdChatLLMOperationInput input,
+        NeedsLlmReplyEvent request,
         CancellationToken ct)
     {
         var profile = input.AgentProfile;
@@ -788,9 +974,8 @@ public sealed class NyxIdChatTurnOperationExecutor
         if (profile is null || authority is null || _turnCatalogMaterializer is null)
             return RestrictedEmptyCatalog();
 
-        var request = input.Request;
-        var toolContext = LLMControlContextMapper.FromPayload(request?.LlmControl)
-            .ToToolContext(AgentToolExecutionContextMapper.FromPayload(request?.ToolContext));
+        var toolContext = LLMControlContextMapper.FromPayload(request.LlmControl)
+            .ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
         try
         {
             return (await _turnCatalogMaterializer.MaterializeCommittedAsync(

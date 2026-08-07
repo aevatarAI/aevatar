@@ -152,7 +152,20 @@ Milestone 40 使用 ADR-0048 的 Tier B approval fallback。effect handler 同�
 
 只读 `nyxid_service_inventory` 也可由 `ChannelNyxIdConnectedServiceInventoryToolSource` 显式挂入 channel reply generator。该 wrapper 在模型真正调用时才以 current sender authority 读取 `/api/v1/keys`；不得替换为 bot-owner token、sandbox CLI login 或进程级 cache。自然语言 inventory 走 `AgentRun -> ChatStreamAsync -> use_skill("nyxid") -> nyxid_service_inventory -> sender /keys -> streamed answer`，不引入 phrase matcher、direct query adapter 或 `code_execute`。
 
-## 7. 审计与架构边界
+## 7. NyxID Chat turn credential lifecycle
+
+NyxID Chat ingress 把 caller credential 明确分为两类，后续 turn operation 不得改变其 kind：
+
+- `SourceReadableUserBearer` 是 caller 自己的 bearer。Aevatar 只把它用于本次 human-session turn，不调用 delegation refresh，也不在 bearer 失效后改用 delegation、organization token 或其他 bearer。
+- `ProxyDelegation` 是 NyxID proxy 注入的短期 delegation token。run-scoped turn actor 在每次 catalog、LLM 或 tool external operation 之前读取 JWT `exp`；剩余时间不超过 120 秒时，通过现有 `POST /api/v1/delegation/refresh` 主动刷新。该 POST 使用当前 delegation bearer，且不发送 request body。
+
+JWT payload 只用于决定 refresh 时机，不被 Aevatar 当作身份或权限证明；NyxID refresh endpoint 仍负责签名、issuer、audience、actor、consent 与 scope 校验。刷新成功后，turn actor 在同一 transient execution session 中一起替换 request/step-state 的 typed tool credential 与 LLM control，并替换已授权 exact tool capability 携带的 credential。token 不进入 actor state、committed event、read model 或 process-local registry。
+
+刷新发生在 affected operation dispatch 之前，并有独立的 10 秒上限。effect-capable tool admission 先提交 actor-owned `effect_dispatch_waterline=not_started`；只有刷新成功并且 exact capability 校验完成后，才在真正调用 tool 前提交 `may_have_changed` 水位。进程若在 refresh 期间重启，恢复结果因此是 `not_applied`，不会把尚未发生的 effect dispatch 误报为不确定；缺少该水位的历史 admission 仍保守恢复为 `may_have_changed`。无 token、carrier token conflict、JWT 无合法 `exp`、NyxID 拒绝、transport failure 或 malformed success response 都返回 `NYXID_CHAT_DELEGATION_REFRESH_FAILED`，`externalEffect=not_applied`，且不调用 catalog、LLM 或 tool。Aevatar 不在下游 401 后用旧 token 重试，也不 fallback 到普通 bearer；后续 retry/skip/stop 只能由 actor 根据 committed effect evidence 与可重建输入计算，不提供固定 action 集合。
+
+NyxID 当前 refresh contract 还有两项 provider-owned 限制，Aevatar 不绕过或掩盖：包含 `account:read` 的 delegation 明确不可刷新；service-injected token 当前把 service slug 写入 `act.sub`，而 refresh 实现按 OAuth client ID 解析该字段，因此标准 proxy token 可能被拒绝。此时 turn 诚实进入上述 typed failure，需要新的同-kind proxied request；不能据 fixture 或 assistant 文案宣称 long-run refresh 已线上成功。
+
+## 8. 审计与架构边界
 
 - 外部 JSON 只在 NyxID adapter 边界解析；内部稳定执行语义使用 Protobuf/typed records。
 - Aevatar 不新增 NyxID endpoint，不绕过 proxy 直连下游，不保留 raw OpenAPI fallback。
@@ -160,11 +173,11 @@ Milestone 40 使用 ADR-0048 的 Tier B approval fallback。effect handler 同�
 - platform tool audit 只消费 typed execution context、credential source 与 receipt，默认不记录完整 arguments/result。
 - `aevatar.nyxid.proxy.admission.decisions` 只使用 bounded enum/bool tags，不追加 credential 或用户内容。
 
-## 8. `QuotaLedger` profile
+## 9. `QuotaLedger` profile
 
 `QuotaLedger` 是外部 REST service profile，契约见 [approval-quota-ledger.openapi.yaml](../contracts/approval-quota-ledger.openapi.yaml)，权威口径见 [approval-quota-ledger.md](approval-quota-ledger.md)。它的 operations 可通过 exact MCP selector 进入 workflow admission；普通 current-turn 不因该 OpenAPI 的历史 marker 自动暴露 operation。余额、reservation 与 deduction transaction 始终由外部 ledger 或渠道原生账本拥有。
 
-## 9. 相关代码
+## 10. 相关代码
 
 - `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/NyxIdMcpOperationCatalog.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/NyxIdOperationAdmissionProofBuilder.cs`
@@ -180,3 +193,4 @@ Milestone 40 使用 ADR-0048 的 Tier B approval fallback。effect handler 同�
 - `src/Aevatar.AI.Abstractions/ToolProviders/IAgentToolExecutionPort.cs`
 - `src/Aevatar.AI.Core/Tools/AdmittedAgentToolExecutor.cs`
 - `agents/Aevatar.GAgents.NyxidChat/ChannelNyxIdConnectedServiceInventoryToolSource.cs`
+- `agents/Aevatar.GAgents.NyxidChat/NyxIdChatDelegationCredentialLifecycle.cs`

@@ -207,6 +207,60 @@ public sealed class NyxIdChatTurnGAgentTests
     }
 
     [Fact]
+    public async Task EffectToolCommand_ShouldCommitDispatchWaterlineBeforeToolExecution()
+    {
+        var generationExecutor = new StreamingCapabilityReplyExecutor();
+        var operationExecutor = new NyxIdChatTurnOperationExecutor(generationExecutor);
+        var eventStore = new InMemoryEventStoreForTests();
+        var dispatch = new RecordingDispatchPort();
+        using var services = BuildEventSourcingServices(eventStore);
+        var agent = CreateAgent(services, operationExecutor, dispatch);
+        await agent.ActivateAsync();
+        await agent.HandleEventAsync(CreateEnvelope(
+            "turn-actor-alpha",
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = CreateKey(),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    Request = new ChatRequestEvent
+                    {
+                        Prompt = "authorize the effect tool",
+                        SessionId = "turn-alpha",
+                    },
+                },
+            }));
+        var tool = new NyxIdChatOperationDispatchCommand
+        {
+            Key = CreateKey("step-tool-alpha", "operation-tool-alpha", 1),
+            Tool = new NyxIdChatToolOperationInput
+            {
+                CallId = "call-alpha",
+                ToolName = "tool-alpha",
+                ArgumentsJson = "{\"value\":1}",
+                MayChangeExternalState = true,
+            },
+        };
+
+        await agent.HandleEventAsync(CreateEnvelope("turn-actor-alpha", tool));
+
+        generationExecutor.ToolExecutions.Should().Be(1);
+        agent.State.EffectDispatchWaterline.Should().Be(
+            NyxIdChatEffectEvidence.MayHaveChanged);
+        agent.State.EffectDispatchStartedAt.Should().NotBeNull();
+        (await eventStore.GetEventsAsync("turn-actor-alpha"))
+            .Select(static item => item.EventData.TypeUrl)
+            .Should().Equal(
+                Any.Pack(new NyxIdChatTurnOperationAdmittedEvent()).TypeUrl,
+                Any.Pack(new NyxIdChatTurnOperationCompletedEvent()).TypeUrl,
+                Any.Pack(new NyxIdChatTurnOperationDeliveredEvent()).TypeUrl,
+                Any.Pack(new NyxIdChatTurnOperationAdmittedEvent()).TypeUrl,
+                Any.Pack(new NyxIdChatTurnEffectDispatchStartedEvent()).TypeUrl,
+                Any.Pack(new NyxIdChatTurnOperationCompletedEvent()).TypeUrl,
+                Any.Pack(new NyxIdChatTurnOperationDeliveredEvent()).TypeUrl);
+    }
+
+    [Fact]
     public async Task ToolCommand_AfterActorRestart_ShouldFailNotStartedWithoutReauthorizingOrExecuting()
     {
         var generationExecutor = new CapabilityGeneratingReplyExecutor();

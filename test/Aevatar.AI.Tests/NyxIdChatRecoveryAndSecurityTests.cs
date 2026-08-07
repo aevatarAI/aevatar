@@ -287,18 +287,46 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         NyxIdChatTurnOperationAdmittedEvent.Descriptor
             .FindFieldByName("may_change_external_state")
             .Should().NotBeNull();
+        NyxIdChatTurnGAgentState.Descriptor.FindFieldByName("effect_dispatch_waterline")
+            .Should().NotBeNull();
+        NyxIdChatTurnEffectDispatchStartedEvent.Descriptor.FindFieldByName("started_at")
+            .Should().NotBeNull();
     }
 
     [Theory]
-    [InlineData(NyxIdChatStepKind.Llm, NyxIdChatEffectEvidence.NotApplied)]
-    [InlineData(NyxIdChatStepKind.Tool, NyxIdChatEffectEvidence.MayHaveChanged)]
+    [InlineData(
+        NyxIdChatStepKind.Llm,
+        NyxIdChatEffectEvidence.NotApplied,
+        NyxIdChatEffectEvidence.NotApplied,
+        1)]
+    [InlineData(
+        NyxIdChatStepKind.Tool,
+        NyxIdChatEffectEvidence.NotStarted,
+        NyxIdChatEffectEvidence.NotApplied,
+        1)]
+    [InlineData(
+        NyxIdChatStepKind.Tool,
+        NyxIdChatEffectEvidence.MayHaveChanged,
+        NyxIdChatEffectEvidence.MayHaveChanged,
+        2)]
+    [InlineData(
+        NyxIdChatStepKind.Tool,
+        NyxIdChatEffectEvidence.Unspecified,
+        NyxIdChatEffectEvidence.MayHaveChanged,
+        1)]
     public async Task TurnActivation_WithAdmittedOperation_ShouldReconcileWithoutExecutingAgain(
         NyxIdChatStepKind operationKind,
-        NyxIdChatEffectEvidence expectedEffect)
+        NyxIdChatEffectEvidence dispatchWaterline,
+        NyxIdChatEffectEvidence expectedEffect,
+        int admittedEventCount)
     {
         const string turnActorId = "turn-actor-alpha";
         var eventStore = new InMemoryEventStoreForTests();
-        await PersistTurnAdmissionAsync(eventStore, turnActorId, operationKind);
+        await PersistTurnAdmissionAsync(
+            eventStore,
+            turnActorId,
+            operationKind,
+            dispatchWaterline);
         using var services = BuildEventSourcingServices(eventStore);
         var executor = new RecordingTurnOperationExecutor();
         var dispatch = new RecordingActorDispatchPort();
@@ -314,12 +342,12 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         publication.Audience.Should().Be(TopologyAudience.Self);
         publication.Options!.Propagation!.CorrelationId.Should().Be("operation-alpha");
         publication.Options.Delivery!.OperationId.Should().Be(
-            "operation-alpha:turn-recovery:1");
+            $"operation-alpha:turn-recovery:{admittedEventCount}");
         var recoveryEnvelope = CreateSelfEnvelope(turnActorId, publication);
         var recovery = recoveryEnvelope.Payload.Unpack<NyxIdChatRecoveryRequestedSignal>();
         recovery.Kind.Should().Be(
             NyxIdChatRecoveryKind.InterruptedOperationReconciliation);
-        recovery.ExpectedStateVersion.Should().Be(1);
+        recovery.ExpectedStateVersion.Should().Be(admittedEventCount);
         publisher.PublishCalls.Clear();
 
         await agent.HandleEventAsync(recoveryEnvelope);
@@ -336,7 +364,7 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         agent.State.Phase.Should().Be(expectedEffect == NyxIdChatEffectEvidence.MayHaveChanged
             ? NyxIdChatOperationPhase.Uncertain
             : NyxIdChatOperationPhase.Failed);
-        (await eventStore.GetEventsAsync(turnActorId)).Should().HaveCount(3);
+        (await eventStore.GetEventsAsync(turnActorId)).Should().HaveCount(admittedEventCount + 2);
     }
 
     [Fact]
@@ -745,27 +773,53 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
     private static Task PersistTurnAdmissionAsync(
         IEventStore eventStore,
         string actorId,
-        NyxIdChatStepKind operationKind) =>
-        eventStore.AppendAsync(
-            actorId,
-            [
-                new StateEvent
+        NyxIdChatStepKind operationKind,
+        NyxIdChatEffectEvidence dispatchWaterline)
+    {
+        var key = CreateOperationKey();
+        var events = new List<StateEvent>
+        {
+            new()
+            {
+                EventId = "turn-admission-alpha",
+                AgentId = actorId,
+                Version = 1,
+                Timestamp = Timestamp.FromDateTimeOffset(FixedNow),
+                EventType = NyxIdChatTurnOperationAdmittedEvent.Descriptor.FullName,
+                EventData = Any.Pack(new NyxIdChatTurnOperationAdmittedEvent
                 {
-                    EventId = "turn-admission-alpha",
-                    AgentId = actorId,
-                    Version = 1,
-                    Timestamp = Timestamp.FromDateTimeOffset(FixedNow),
-                    EventType = NyxIdChatTurnOperationAdmittedEvent.Descriptor.FullName,
-                    EventData = Any.Pack(new NyxIdChatTurnOperationAdmittedEvent
-                    {
-                        Key = CreateOperationKey(),
-                        OperationKind = operationKind,
-                        MayChangeExternalState = operationKind == NyxIdChatStepKind.Tool,
-                        AdmittedAt = Timestamp.FromDateTimeOffset(FixedNow),
-                    }),
-                },
-            ],
+                    Key = key.Clone(),
+                    OperationKind = operationKind,
+                    MayChangeExternalState = operationKind == NyxIdChatStepKind.Tool,
+                    EffectDispatchWaterline = dispatchWaterline == NyxIdChatEffectEvidence.MayHaveChanged
+                        ? NyxIdChatEffectEvidence.NotStarted
+                        : dispatchWaterline,
+                    AdmittedAt = Timestamp.FromDateTimeOffset(FixedNow),
+                }),
+            },
+        };
+        if (dispatchWaterline == NyxIdChatEffectEvidence.MayHaveChanged)
+        {
+            events.Add(new StateEvent
+            {
+                EventId = "turn-effect-dispatch-alpha",
+                AgentId = actorId,
+                Version = 2,
+                Timestamp = Timestamp.FromDateTimeOffset(FixedNow),
+                EventType = NyxIdChatTurnEffectDispatchStartedEvent.Descriptor.FullName,
+                EventData = Any.Pack(new NyxIdChatTurnEffectDispatchStartedEvent
+                {
+                    Key = key.Clone(),
+                    StartedAt = Timestamp.FromDateTimeOffset(FixedNow),
+                }),
+            });
+        }
+
+        return eventStore.AppendAsync(
+            actorId,
+            events,
             expectedVersion: 0);
+    }
 
     private static Task PersistCompletedUndeliveredTurnAsync(
         IEventStore eventStore,
