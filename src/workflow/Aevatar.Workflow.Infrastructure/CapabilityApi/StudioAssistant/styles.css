@@ -857,6 +857,7 @@ summary:focus-visible {
 
 .readiness-copy small,
 .readiness-empty,
+.readiness-note,
 .readiness-panel > small {
   color: var(--tertiary);
   font-size: 9.5px;

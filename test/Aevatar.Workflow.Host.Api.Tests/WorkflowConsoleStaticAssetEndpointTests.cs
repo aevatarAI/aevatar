@@ -37,6 +37,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         html.Should().Contain("client-example");
         html.Should().Contain("console:test");
         html.Should().Contain("https://api.example.test/api/v1/proxy/s/aevatar");
+        html.Should().Contain("\"nyxidWeb\":\"https://web.example.test\"");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
         html.Should().NotContain("https://nyx.chrono-ai.fun");
         html.Should().NotContain("37a93189-2734-406e-bca1-7dbdf25c5a53");
@@ -166,7 +167,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
         var styles = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantStyles);
 
-        app.Should().Contain("import \"./transport.js?v=20260807-readiness-composer-layout\"");
+        app.Should().Contain("import \"./transport.js?v=20260807-readiness-contract-fix\"");
         app.Should().Contain("async function sendPrompt(");
         app.Should().Contain("async function loadConversations(");
         app.Should().Contain("async function refreshActorState(");
@@ -236,13 +237,13 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("app.js?v=20260807-readiness-composer-layout");
-        html.Should().Contain("styles.css?v=20260807-readiness-composer-layout");
-        app.Should().Contain("transport.js?v=20260807-readiness-composer-layout");
-        app.Should().Contain("readiness.js?v=20260807-readiness-composer-layout");
-        transport.Should().Contain("readiness.js?v=20260807-readiness-composer-layout");
-        actorState.Should().Contain("protocol.js?v=20260807-readiness-composer-layout");
-        blocks.Should().Contain("protocol.js?v=20260807-readiness-composer-layout");
+        html.Should().Contain("app.js?v=20260807-readiness-contract-fix");
+        html.Should().Contain("styles.css?v=20260807-readiness-contract-fix");
+        app.Should().Contain("transport.js?v=20260807-readiness-contract-fix");
+        app.Should().Contain("readiness.js?v=20260807-readiness-contract-fix");
+        transport.Should().Contain("readiness.js?v=20260807-readiness-contract-fix");
+        actorState.Should().Contain("protocol.js?v=20260807-readiness-contract-fix");
+        blocks.Should().Contain("protocol.js?v=20260807-readiness-contract-fix");
         html.Should().Contain("<span class=\"brand-name\">Aevatar Studio</span>");
         html.Should().NotContain("class=\"brand-mark\"");
         styles.Should().Contain("color-scheme: only light");
@@ -456,9 +457,26 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             assert.match(missingEndpoint.summary, /尚未提供/);
             assert.match(missingEndpoint.guidance, /部署 assistant readiness 接口/);
 
-            const invalid = context.describeReadinessFailure({status:502,code:'READINESS_INVALID'});
-            assert.match(invalid.freshness, /格式不兼容/);
-            assert.match(invalid.guidance, /契约版本一致/);
+            const invalid = context.describeReadinessFailure({
+              status:502, code:'READINESS_INVALID',
+              reason:'Capability has unknown fields: platformEvidence'
+            });
+            assert.equal(invalid.freshness, '契约不匹配');
+            assert.match(invalid.summary, /契约不一致：Capability has unknown fields: platformEvidence/);
+            assert.match(invalid.guidance, /nyxid-assistant-readiness\.v1/);
+            assert.equal(invalid.action, 'retry');
+
+            const invalidWithoutReason = context.describeReadinessFailure({status:502,code:'READINESS_INVALID'});
+            assert.equal(invalidWithoutReason.summary, 'NyxID readiness 响应与 Studio 契约不一致。');
+
+            const secretReason = context.describeReadinessFailure({
+              status:502, code:'READINESS_INVALID', reason:'Bearer leaked-token-value'
+            });
+            assert.doesNotMatch(secretReason.summary, /leaked-token-value/);
+
+            const upstreamBadGateway = context.describeReadinessFailure({status:502});
+            assert.match(upstreamBadGateway.summary, /暂时无法提供/);
+            assert.equal(upstreamBadGateway.freshness, '服务暂时不可用');
 
             const unavailable = context.describeReadinessFailure({status:503});
             assert.match(unavailable.summary, /暂时无法提供/);
@@ -474,10 +492,72 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         var result = await RunNodeAsync(script, readiness);
 
         result.ExitCode.Should().Be(0, result.Error + result.Output);
+        readiness.Should().NotContain("状态格式不兼容");
+        readiness.Should().NotContain("无法识别的运行状态");
+        readiness.Should().NotContain("契约版本一致");
     }
 
     [Fact]
-    public async Task WorkflowStudio_ReadinessAsset_ShouldRejectUnsafeOrOpenEndedEvidence()
+    public async Task WorkflowStudio_ReadinessAsset_ShouldAcceptTheDeployedNyxIdContractAcrossSplitHosts()
+    {
+        var readiness = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantReadiness);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
+            const context = { URL, Date, Set, Error };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            // Same shape as the live nyxid-assistant-readiness.v1 response: the
+            // managementUrl origin is NyxID's web frontend, which differs from the
+            // OIDC authority (API host) in a split-host deployment.
+            const fixture = {
+              revision:'nyxid-assistant-readiness.v1',
+              evaluatedAt:'2026-08-07T06:50:21.842990344Z',
+              capabilities:[{
+                capabilityId:'api-github', label:'GitHub', required:false, status:'cannot_use',
+                connectionState:'connected', grantState:'missing', requestedScopes:['repo'],
+                managementUrl:'https://nyx-web.example.test/keys', reasonCode:'grant_missing'
+              }]
+            };
+
+            const splitHost = context.normalizeReadinessSnapshot(fixture, {
+              managementOrigins:['https://nyx-web.example.test', 'https://nyx-api.example.test']
+            });
+            assert.equal(splitHost.revision, 'nyxid-assistant-readiness.v1');
+            assert.equal(splitHost.evaluatedAt, '2026-08-07T06:50:21.842Z');
+            assert.equal(splitHost.capabilities[0].status, 'cannot_use');
+            assert.equal(splitHost.capabilities[0].grantState, 'missing');
+            assert.equal(splitHost.capabilities[0].reasonCode, 'grant_missing');
+            assert.equal(splitHost.capabilities[0].managementUrl, 'https://nyx-web.example.test/keys');
+            assert.deepEqual(JSON.parse(JSON.stringify(splitHost.managementUrlDrops)), []);
+
+            // A console that only trusts the API origin keeps the capability facts
+            // and drops the unproven link instead of rejecting the snapshot.
+            const apiOnly = context.normalizeReadinessSnapshot(fixture, {
+              managementOrigins:['https://nyx-api.example.test']
+            });
+            assert.equal(apiOnly.capabilities[0].status, 'cannot_use');
+            assert.equal(apiOnly.capabilities[0].managementUrl, null);
+            assert.deepEqual(JSON.parse(JSON.stringify(apiOnly.managementUrlDrops)), [{
+              capabilityId:'api-github', origin:'https://nyx-web.example.test'
+            }]);
+
+            const nullLink = context.normalizeReadinessSnapshot({
+              ...fixture, capabilities:[{...fixture.capabilities[0], managementUrl:null}]
+            }, {managementOrigins:['https://nyx-web.example.test']});
+            assert.equal(nullLink.capabilities[0].managementUrl, null);
+            assert.deepEqual(JSON.parse(JSON.stringify(nullLink.managementUrlDrops)), []);
+            """;
+
+        var result = await RunNodeAsync(script, readiness);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_ReadinessAsset_ShouldRejectIncompatiblePayloadsWithSafeSpecificReasons()
     {
         var readiness = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantReadiness);
         const string script = """
@@ -489,29 +569,142 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             vm.runInContext(source, context);
 
             const fixture = {
-              revision:'rev-alpha', evaluatedAt:'2026-08-01T01:02:03Z', capabilities:[{
-                capabilityId:'api-github', label:'GitHub', required:false, status:'available',
-                connectionState:'connected', grantState:'granted', requestedScopes:['repo:read'],
-                managementUrl:'https://nyx.example/keys/github', reasonCode:null
+              revision:'nyxid-assistant-readiness.v1',
+              evaluatedAt:'2026-08-07T06:50:21.842990344Z',
+              capabilities:[{
+                capabilityId:'api-github', label:'GitHub', required:false, status:'cannot_use',
+                connectionState:'connected', grantState:'missing', requestedScopes:['repo'],
+                managementUrl:'https://nyx-web.example.test/keys', reasonCode:'grant_missing'
               }]
             };
-            const normalized = context.normalizeReadinessSnapshot(fixture, {nyxidWebUrl:'https://nyx.example'});
-            assert.equal(normalized.capabilities[0].status, 'available');
-            assert.equal(normalized.evaluatedAt, '2026-08-01T01:02:03.000Z');
-            assert.throws(() => context.normalizeReadinessSnapshot({
-              ...fixture, capabilities:[{...fixture.capabilities[0], managementUrl:'https://evil.example/keys'}]
-            }, {nyxidWebUrl:'https://nyx.example'}), /not allowed/);
-            assert.throws(() => context.normalizeReadinessSnapshot({
-              ...fixture, accessToken:'secret'
-            }, {nyxidWebUrl:'https://nyx.example'}), /secret fields/);
-            assert.throws(() => context.normalizeReadinessSnapshot({
-              ...fixture, capabilities:[{...fixture.capabilities[0], status:'maybe'}]
-            }, {nyxidWebUrl:'https://nyx.example'}), /status is invalid/);
+            const origins = {managementOrigins:['https://nyx-web.example.test']};
+            const capture = (mutated) => {
+              try {
+                context.normalizeReadinessSnapshot(mutated, origins);
+                assert.fail('expected rejection');
+              } catch (error) {
+                assert.equal(error.code, 'READINESS_INVALID');
+                return error;
+              }
+            };
+
+            const unknownField = capture({...fixture, platformEvidence:{}});
+            assert.equal(unknownField.reason, 'Readiness snapshot has unknown fields: platformEvidence');
+            const unknownCapabilityField = capture({
+              ...fixture, capabilities:[{...fixture.capabilities[0], evidenceKind:'platform'}]
+            });
+            assert.equal(unknownCapabilityField.reason, 'Capability has unknown fields: evidenceKind');
+
+            const withoutGrantState = {...fixture.capabilities[0]};
+            delete withoutGrantState.grantState;
+            assert.equal(capture({...fixture, capabilities:[withoutGrantState]}).reason, 'grantState is missing');
+            assert.equal(
+              capture({...fixture, capabilities:[{...fixture.capabilities[0], status:'maybe'}]}).reason,
+              'status is invalid');
+            assert.equal(
+              capture({...fixture, capabilities:[{...fixture.capabilities[0], managementUrl:'http://nyx-web.example.test/keys'}]}).reason,
+              'managementUrl must be https');
+            assert.equal(
+              capture({...fixture, capabilities:[{...fixture.capabilities[0], managementUrl:'not a url'}]}).reason,
+              'managementUrl is invalid');
+
+            const secretField = capture({...fixture, accessToken:'nyx_0123456789abcdef'});
+            assert.equal(secretField.reason, 'Readiness snapshot contains secret fields');
+            assert.doesNotMatch(String(secretField.message), /nyx_0123456789abcdef/);
+            const secretValue = capture({
+              ...fixture, capabilities:[{...fixture.capabilities[0], label:'Bearer nyx-secret-value'}]
+            });
+            assert.equal(secretValue.reason, 'Readiness snapshot contains secret values');
+            assert.doesNotMatch(String(secretValue.message), /nyx-secret-value/);
             """;
 
         var result = await RunNodeAsync(script, readiness);
 
         result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_FirstTurn_ShouldOnlyBlockOnMissingRequiredCapabilities()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('function firstTurnReadinessBlocked()');
+            const end = source.indexOf('\nasync function loadServices(', start);
+            assert.notEqual(start, -1, 'firstTurnReadinessBlocked must exist in the served Studio app');
+            assert.notEqual(end, -1, 'loadServices must follow firstTurnReadinessBlocked');
+
+            const context = {
+              state:{
+                config:{surface:'nyxid-chat'},
+                actorId:null,
+                readiness:{loading:false, error:null, snapshot:null}
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end), context);
+            const blocked = () => vm.runInContext('firstTurnReadinessBlocked()', context);
+
+            context.state.readiness = {loading:true, error:null, snapshot:null};
+            assert.equal(blocked(), true, 'an in-flight check holds the first turn');
+
+            context.state.readiness = {loading:false, error:null, snapshot:null};
+            assert.equal(blocked(), true, 'an unchecked session holds the first turn');
+
+            // The optional api-github capability may be unusable (grant_missing)
+            // without holding the first run.
+            context.state.readiness = {loading:false, error:null, snapshot:{capabilities:[{
+              capabilityId:'api-github', required:false, status:'cannot_use'
+            }]}};
+            assert.equal(blocked(), false);
+
+            context.state.readiness = {loading:false, error:null, snapshot:{capabilities:[{
+              capabilityId:'model', required:true, status:'missing'
+            }]}};
+            assert.equal(blocked(), true, 'a missing required capability holds the first turn');
+
+            // A failed advisory check must not deadlock the chat.
+            context.state.readiness = {loading:false, error:{status:502}, snapshot:null};
+            assert.equal(blocked(), false);
+
+            context.state.actorId = 'conversation-alpha';
+            context.state.readiness = {loading:true, error:null, snapshot:null};
+            assert.equal(blocked(), false, 'existing conversations never re-gate');
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_AssetCacheKeys_ShouldStayConsistentAcrossHtmlAndTransitiveImports()
+    {
+        var html = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetStudioPage);
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
+        var actorState = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantActorState);
+        var blocks = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantBlocks);
+
+        var versions = new[] { html, app, transport, actorState, blocks }
+            .SelectMany(source => System.Text.RegularExpressions.Regex.Matches(
+                source,
+                @"\.(?:js|css)\?v=([A-Za-z0-9-]+)")
+                .Select(match => match.Groups[1].Value))
+            .ToList();
+
+        versions.Should().NotBeEmpty();
+        versions.Distinct().Should().ContainSingle(
+            "every stylesheet, module, and transitive import must share one cache key so a stale readiness.js can never pair with a newer page");
+        html.Should().Contain("styles.css?v=");
+        html.Should().Contain("app.js?v=");
+        app.Should().Contain("transport.js?v=");
+        app.Should().Contain("readiness.js?v=");
+        transport.Should().Contain("readiness.js?v=");
+        actorState.Should().Contain("protocol.js?v=");
+        blocks.Should().Contain("protocol.js?v=");
     }
 
     [Fact]
@@ -996,6 +1189,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
                 ["Aevatar:BackendConsole:OidcClientId"] = "client-example",
                 ["Aevatar:BackendConsole:OidcScope"] = "openid profile",
                 ["Aevatar:BackendConsole:NyxApiBaseUrl"] = "https://api.example.test",
+                ["Aevatar:NyxId:Authority"] = "https://web.example.test",
                 ["Aevatar:BackendConsole:StorageKey"] = "console:test",
             })
             .Build();

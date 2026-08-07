@@ -60,11 +60,15 @@ export function describeReadinessFailure(error) {
       actionLabel: "部署后重新检查",
     };
   }
-  if (status === 502 || code === "READINESS_INVALID") {
+  if (code === "READINESS_INVALID") {
+    const reason = safeContractReason(error?.reason || error?.message);
     return {
-      freshness: "状态格式不兼容",
-      summary: "NyxID 返回了当前 Studio 无法识别的运行状态。",
-      guidance: "请先重新检查；若仍出现，请管理员确认 Aevatar 与 NyxID 的 readiness 契约版本一致。",
+      freshness: "契约不匹配",
+      summary: reason
+        ? `NyxID readiness 响应与 Studio 契约不一致：${reason}。`
+        : "NyxID readiness 响应与 Studio 契约不一致。",
+      guidance: "请管理员比对 Aevatar 与 NyxID 部署的 readiness 契约版本" +
+        "（nyxid-assistant-readiness.v1），修正后重新检查。",
       action: "retry",
       actionLabel: "重新检查",
     };
@@ -96,15 +100,22 @@ export function describeReadinessFailure(error) {
   };
 }
 
+export function safeContractReason(value) {
+  const reason = String(value || "").replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+  if (!reason || reason.length > 200 || SECRET_VALUE.test(reason)) return "";
+  return reason;
+}
+
 export class ReadinessValidationError extends Error {
   constructor(message) {
     super(message);
     this.name = "ReadinessValidationError";
     this.code = "READINESS_INVALID";
+    this.reason = message;
   }
 }
 
-export function normalizeReadinessSnapshot(input, { nyxidWebUrl }) {
+export function normalizeReadinessSnapshot(input, { managementOrigins }) {
   const snapshot = object(input, "Readiness snapshot");
   rejectSecrets(snapshot);
   exactKeys(snapshot, SNAPSHOT_KEYS, "Readiness snapshot");
@@ -112,7 +123,8 @@ export function normalizeReadinessSnapshot(input, { nyxidWebUrl }) {
   const evaluatedAt = timestamp(snapshot.evaluatedAt);
   if (!Array.isArray(snapshot.capabilities)) invalid("capabilities must be an array");
 
-  const origin = new URL(nyxidWebUrl).origin;
+  const allowedOrigins = trustedOrigins(managementOrigins);
+  const managementUrlDrops = [];
   const identities = new Set();
   const capabilities = snapshot.capabilities.map((inputCapability) => {
     const capability = object(inputCapability, "Capability");
@@ -137,6 +149,8 @@ export function normalizeReadinessSnapshot(input, { nyxidWebUrl }) {
         (connectionState !== "connected" || !new Set(["granted", "not_required"]).has(grantState))) {
       status = "missing";
     }
+    const management = managementUrl(capability.managementUrl, allowedOrigins);
+    if (management.dropped) managementUrlDrops.push({ capabilityId, origin: management.origin });
     return {
       capabilityId,
       label: boundedString(capability.label, "label", 160),
@@ -145,13 +159,13 @@ export function normalizeReadinessSnapshot(input, { nyxidWebUrl }) {
       connectionState,
       grantState,
       requestedScopes,
-      managementUrl: managementUrl(capability.managementUrl, origin),
+      managementUrl: management.url,
       reasonCode: capability.reasonCode == null
         ? null
         : boundedString(capability.reasonCode, "reasonCode", 128),
     };
   });
-  return { revision, evaluatedAt, capabilities };
+  return { revision, evaluatedAt, capabilities, managementUrlDrops };
 }
 
 function object(value, name) {
@@ -160,10 +174,19 @@ function object(value, name) {
 }
 
 function exactKeys(value, allowed, name) {
-  if (Object.keys(value).some((key) => !allowed.has(key))) invalid(`${name} has unknown fields`);
+  const unknown = Object.keys(value).filter((key) => !allowed.has(key));
+  if (unknown.length) invalid(`${name} has unknown fields: ${fieldList(unknown)}`);
+}
+
+function fieldList(keys) {
+  const shown = keys.slice(0, 3).map((key) =>
+    /^[\w.-]{1,48}$/.test(key) ? key : "unrecognized-key");
+  const extra = keys.length - shown.length;
+  return extra > 0 ? `${shown.join(", ")} (+${extra} more)` : shown.join(", ");
 }
 
 function boundedString(value, name, maximum) {
+  if (value === undefined || value === null) invalid(`${name} is missing`);
   const normalized = typeof value === "string" ? value.trim() : "";
   if (!normalized || normalized.length > maximum) invalid(`${name} is invalid`);
   return normalized;
@@ -182,20 +205,42 @@ function boolean(value, name) {
 }
 
 function enumeration(value, allowed, name) {
+  if (value === undefined || value === null) invalid(`${name} is missing`);
   if (!allowed.has(value)) invalid(`${name} is invalid`);
   return value;
 }
 
-function managementUrl(value, origin) {
-  if (value == null) return null;
+function trustedOrigins(values) {
+  const origins = new Set();
+  for (const value of Array.isArray(values) ? values : []) {
+    try {
+      const parsed = new URL(String(value || ""));
+      if (parsed.protocol === "https:") origins.add(parsed.origin);
+    } catch {
+      // Console host configuration, not payload evidence; an unusable entry
+      // only narrows the trusted set.
+    }
+  }
+  return origins;
+}
+
+// NyxID derives managementUrl from its own FRONTEND_URL configuration, which
+// this console cannot know authoritatively. A well-formed https link on an
+// untrusted origin therefore hides the link instead of invalidating the
+// capability facts; only a malformed or non-https value is a contract breach.
+function managementUrl(value, allowedOrigins) {
+  if (value == null) return { url: null, dropped: false, origin: "" };
   let parsed;
   try {
     parsed = new URL(boundedString(value, "managementUrl", 2048));
   } catch {
     invalid("managementUrl is invalid");
   }
-  if (parsed.protocol !== "https:" || parsed.origin !== origin) invalid("managementUrl is not allowed");
-  return parsed.toString();
+  if (parsed.protocol !== "https:") invalid("managementUrl must be https");
+  if (!allowedOrigins.has(parsed.origin)) {
+    return { url: null, dropped: true, origin: parsed.origin };
+  }
+  return { url: parsed.toString(), dropped: false, origin: parsed.origin };
 }
 
 function rejectSecrets(value) {

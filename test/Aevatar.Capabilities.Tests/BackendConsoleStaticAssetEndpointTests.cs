@@ -65,11 +65,12 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         }
         else if (path == "/admin/studio")
         {
+            html.Should().Contain("\"nyxidWeb\":\"https://web.example.test\"");
             html.Should().Contain("class=\"site-header\"");
             html.Should().Contain("id=\"composerForm\"");
             html.Should().Contain("生产环境 · 操作会影响真实数据，高风险操作需要确认");
-            html.Should().Contain("app.js?v=20260807-readiness-composer-layout");
-            html.Should().Contain("styles.css?v=20260807-readiness-composer-layout");
+            html.Should().Contain("app.js?v=20260807-readiness-contract-fix");
+            html.Should().Contain("styles.css?v=20260807-readiness-contract-fix");
             html.Should().NotContain("class=\"brand-mark\"");
             html.Should().NotContain("Aevatar Studio · 工作流实录");
             html.Should().NotContain("从意图到交付的真实对话");
@@ -2845,6 +2846,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         builder.Configuration["Aevatar:BackendConsole:OidcClientId"] = "client-example";
         builder.Configuration["Aevatar:BackendConsole:OidcScope"] = "openid profile";
         builder.Configuration["Aevatar:BackendConsole:NyxApiBaseUrl"] = "https://api.example.test";
+        builder.Configuration["Aevatar:BackendConsole:NyxWebBaseUrl"] = "https://web.example.test";
         builder.Configuration["Aevatar:BackendConsole:StorageKey"] = "console:test";
         builder.Configuration["Aevatar:BackendConsole:DefaultReturnPath"] = "/admin";
         builder.Services.AddBackendConsoleStaticAssets(builder.Configuration);

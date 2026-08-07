@@ -1,4 +1,4 @@
-import "./transport.js?v=20260807-readiness-composer-layout";
+import "./transport.js?v=20260807-readiness-contract-fix";
 import {
   consumeSse,
   mergeUsage,
@@ -9,21 +9,21 @@ import {
   redact,
   safeJson,
   validateActionContinuation,
-} from "./protocol.js?v=20260807-readiness-composer-layout";
+} from "./protocol.js?v=20260807-readiness-contract-fix";
 import {
   buildConnectCardBlock,
   connectCardSteps,
   connectorInitial,
   splitMessageSegments,
-} from "./blocks.js?v=20260807-readiness-composer-layout";
+} from "./blocks.js?v=20260807-readiness-contract-fix";
 import {
   actorCan,
   applyCurrentStateResult,
   createActorProjection,
   reduceActorEvent,
   restoreCachedAction,
-} from "./actor-state.js?v=20260807-readiness-composer-layout";
-import { describeReadinessFailure } from "./readiness.js?v=20260807-readiness-composer-layout";
+} from "./actor-state.js?v=20260807-readiness-contract-fix";
+import { describeReadinessFailure } from "./readiness.js?v=20260807-readiness-contract-fix";
 
 const PREFERENCES_KEY = "aevatar-studio:assistant-preferences:v4";
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
@@ -660,6 +660,7 @@ function resumePendingFirstTurn() {
 
 function readinessNeedsRefresh() {
   return Boolean(state.pendingFirstTurn) ||
+    Boolean(state.readiness.error) ||
     state.readiness.snapshot?.capabilities?.some((capability) =>
       capability.status !== "available") === true;
 }
@@ -755,6 +756,17 @@ function renderReadiness() {
     }
     return row;
   }));
+  const managementUrlDrops = Array.isArray(snapshot.managementUrlDrops)
+    ? snapshot.managementUrlDrops
+    : [];
+  if (managementUrlDrops.length) {
+    dom.readinessList.append(el(
+      "div",
+      "readiness-note",
+      `已隐藏 ${managementUrlDrops.map((drop) => drop.capabilityId).join("、")} 的管理链接：` +
+        "其地址不在此控制台信任的 NyxID 域名内。",
+    ));
+  }
   const blocked = capabilities.some((capability) =>
     capability.required && capability.status !== "available");
   dom.readinessSummary.textContent = blocked
@@ -766,9 +778,12 @@ function renderReadiness() {
 function firstTurnReadinessBlocked() {
   if (state.config.surface !== "nyxid-chat" || state.actorId) return false;
   if (state.readiness.loading) return true;
+  // The readiness check is an advisory pre-flight: when it cannot complete,
+  // the first turn proceeds and the run surfaces its own authority errors.
+  if (state.readiness.error) return false;
   const capabilities = state.readiness.snapshot?.capabilities;
-  return !Array.isArray(capabilities) || capabilities.length === 0 ||
-    capabilities.some((capability) => capability.required && capability.status !== "available");
+  if (!Array.isArray(capabilities)) return true;
+  return capabilities.some((capability) => capability.required && capability.status !== "available");
 }
 
 async function loadServices() {
@@ -3204,6 +3219,7 @@ async function responseError(response) {
     const error = new Error(payload.message || payload.detail || payload.error || `HTTP ${response.status}`);
     error.code = payload.code || "";
     error.status = response.status;
+    error.reason = typeof payload.reason === "string" ? payload.reason : "";
     error.serviceId = payload.serviceId || payload.service_id || "";
     error.serviceSlug = payload.serviceSlug || payload.service_slug || "";
     error.resource = payload.resource || payload.resourceUri || payload.resource_uri || "";

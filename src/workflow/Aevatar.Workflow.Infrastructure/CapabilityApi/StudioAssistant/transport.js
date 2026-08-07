@@ -1,4 +1,4 @@
-import { normalizeReadinessSnapshot } from "./readiness.js?v=20260807-readiness-composer-layout";
+import { normalizeReadinessSnapshot } from "./readiness.js?v=20260807-readiness-contract-fix";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const backendConfig = globalThis.__AEVATAR_ASSISTANT_CONFIG__ || {};
@@ -9,7 +9,7 @@ const config = Object.freeze({
   scope: String(backendConfig.scope || "").trim(),
   resources: uniqueStrings(backendConfig.resources),
   nyxidApi: trimBaseUrl(backendConfig.nyxidApi || backendConfig.authority),
-  nyxidWeb: trimBaseUrl(backendConfig.authority),
+  nyxidWeb: trimBaseUrl(backendConfig.nyxidWeb || backendConfig.authority),
   storageKey: String(backendConfig.storageKey || "aevatar-console:nyxid:pkce"),
   redirectUri: `${location.origin}/auto/callback`,
 });
@@ -446,7 +446,7 @@ async function studioFetch(input, init = {}) {
       proxyBaseUrl: config.resources[0] || "",
       ornnWebUrl: "",
       nyxidWebUrl: config.nyxidWeb,
-      servicesUrl: config.authority ? new URL("/keys", config.authority).toString() : "",
+      servicesUrl: config.nyxidWeb ? new URL("/keys", config.nyxidWeb).toString() : "",
       environment: "production",
       transportLocked: true,
     });
@@ -463,12 +463,13 @@ async function studioFetch(input, init = {}) {
     if (!result.response.ok) return result.response;
     try {
       return jsonResponse(normalizeReadinessSnapshot(result.payload, {
-        nyxidWebUrl: config.nyxidWeb,
+        managementOrigins: [config.nyxidWeb, config.authority, config.nyxidApi],
       }));
     } catch (error) {
       return jsonResponse({
         code: error?.code || "READINESS_INVALID",
         message: "NyxID readiness evidence is invalid.",
+        reason: typeof error?.reason === "string" ? error.reason : "",
       }, 502);
     }
   }
