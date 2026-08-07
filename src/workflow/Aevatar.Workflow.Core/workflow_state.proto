@@ -199,6 +199,8 @@ message WorkflowRunState
   google.protobuf.Timestamp completed_at_utc = 49;
   optional double duration_ms = 50;
   WorkflowRunInitiatorState initiator = 51;
+  string revision_id = 52;
+  int64 definition_version = 53;
 }
 
 message WorkflowRunInitiatorState

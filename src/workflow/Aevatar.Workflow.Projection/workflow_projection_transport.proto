@@ -8,6 +8,52 @@ import "workflow_execution_messages.proto";
 import "workflow_external_action.proto";
 import "workflow_capability_admission.proto";
 
+enum WorkflowRecoveryEligibilityReadModel {
+  WORKFLOW_RECOVERY_ELIGIBILITY_READ_MODEL_UNSPECIFIED = 0;
+  WORKFLOW_RECOVERY_ELIGIBILITY_READ_MODEL_ELIGIBLE = 1;
+  WORKFLOW_RECOVERY_ELIGIBILITY_READ_MODEL_INELIGIBLE = 2;
+  WORKFLOW_RECOVERY_ELIGIBILITY_READ_MODEL_UNAVAILABLE = 3;
+}
+
+enum WorkflowRecoveryUnavailableReasonCodeReadModel {
+  WORKFLOW_RECOVERY_UNAVAILABLE_REASON_CODE_READ_MODEL_UNSPECIFIED = 0;
+  WORKFLOW_RECOVERY_UNAVAILABLE_REASON_CODE_READ_MODEL_NONE = 1;
+  WORKFLOW_RECOVERY_UNAVAILABLE_REASON_CODE_READ_MODEL_SOURCE_RUN_NOT_TERMINAL = 2;
+  WORKFLOW_RECOVERY_UNAVAILABLE_REASON_CODE_READ_MODEL_MISSING_SOURCE_FACT = 3;
+  WORKFLOW_RECOVERY_UNAVAILABLE_REASON_CODE_READ_MODEL_AUTHORIZATION_FAILURE = 4;
+  WORKFLOW_RECOVERY_UNAVAILABLE_REASON_CODE_READ_MODEL_CONFIGURATION_FAILURE = 5;
+  WORKFLOW_RECOVERY_UNAVAILABLE_REASON_CODE_READ_MODEL_WORKFLOW_DEFINITION_UNAVAILABLE = 6;
+  WORKFLOW_RECOVERY_UNAVAILABLE_REASON_CODE_READ_MODEL_LEGACY_UNAVAILABLE = 7;
+}
+
+enum WorkflowRecoveryRecommendedActionReadModel {
+  WORKFLOW_RECOVERY_RECOMMENDED_ACTION_READ_MODEL_UNSPECIFIED = 0;
+  WORKFLOW_RECOVERY_RECOMMENDED_ACTION_READ_MODEL_RETRY = 1;
+  WORKFLOW_RECOVERY_RECOMMENDED_ACTION_READ_MODEL_RUN_AGAIN = 2;
+  WORKFLOW_RECOVERY_RECOMMENDED_ACTION_READ_MODEL_FIX_ACCESS = 3;
+  WORKFLOW_RECOVERY_RECOMMENDED_ACTION_READ_MODEL_CHANGE_CONFIGURATION = 4;
+  WORKFLOW_RECOVERY_RECOMMENDED_ACTION_READ_MODEL_EDIT_WORKFLOW = 5;
+  WORKFLOW_RECOVERY_RECOMMENDED_ACTION_READ_MODEL_EDIT_INPUT = 6;
+  WORKFLOW_RECOVERY_RECOMMENDED_ACTION_READ_MODEL_TECHNICAL_DETAILS = 7;
+}
+
+message WorkflowRecoveryActionCapabilityReadModel {
+  WorkflowRecoveryEligibilityReadModel eligibility = 1;
+  WorkflowRecoveryUnavailableReasonCodeReadModel unavailable_reason_code = 2;
+  string unavailable_reason = 3;
+  repeated WorkflowRecoveryRecommendedActionReadModel recommended_actions = 4;
+  string starting_step_id = 5;
+  bool reuses_prior_step_outputs = 6;
+  bool may_incur_model_or_tool_cost = 7;
+}
+
+message WorkflowRunRecoveryCapabilityReadModel {
+  WorkflowRecoveryActionCapabilityReadModel retry_failed_step = 1;
+  WorkflowRecoveryActionCapabilityReadModel run_again = 2;
+  string workflow_definition_revision_id = 3;
+  int64 workflow_definition_version = 4;
+}
+
 message WorkflowRunInsightReportDocument {
   string id = 1;
   int64 state_version = 2;
@@ -84,6 +130,9 @@ message WorkflowExecutionCurrentStateDocument {
   WorkflowRunActivityStepReadModel activity_current_step = 41;
   WorkflowRunActivityFailureReadModel activity_first_failure = 42;
   WorkflowRunActivityWaitingReadModel activity_waiting = 43;
+  WorkflowRunRecoveryCapabilityReadModel recovery_capability = 44;
+  string revision_id = 45;
+  int64 definition_version = 46;
 }
 
 message WorkflowRunActivityInitiatorReadModel {

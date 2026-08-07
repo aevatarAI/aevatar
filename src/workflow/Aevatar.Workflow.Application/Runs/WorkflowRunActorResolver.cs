@@ -296,7 +296,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 SourceKind: sourceBinding.SourceKind,
                 CapabilityAdmissionPlan: sourceBinding.CapabilityAdmissionPlan?.Clone(),
                 WorkflowId: sourceBinding.WorkflowId,
-                RevisionId: sourceBinding.RevisionId),
+                RevisionId: sourceBinding.RevisionId,
+                DefinitionVersion: Math.Max(0, sourceBinding.SourceVersion)),
             wrapAsFallbackTrigger: true,
             ct);
 
@@ -373,7 +374,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 SourceKind: resolvedDefinitionBinding.SourceKind?.Trim() ?? string.Empty,
                 CapabilityAdmissionPlan: resolvedDefinitionBinding.CapabilityAdmissionPlan?.Clone(),
                 WorkflowId: resolvedDefinitionBinding.WorkflowId?.Trim() ?? string.Empty,
-                RevisionId: resolvedDefinitionBinding.RevisionId?.Trim() ?? string.Empty),
+                RevisionId: resolvedDefinitionBinding.RevisionId?.Trim() ?? string.Empty,
+                DefinitionVersion: Math.Max(0, resolvedDefinitionBinding.DefinitionVersion)),
             wrapAsFallbackTrigger: false,
             ct);
 

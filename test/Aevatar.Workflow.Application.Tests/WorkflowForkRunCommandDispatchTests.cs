@@ -228,7 +228,9 @@ public sealed class WorkflowForkRunCommandDispatchTests
                 {
                     ["step-b"] = new("source-run", "step-b", 2, "source-run:step-b:2"),
                 },
-                scopeId: "scope-1"),
+                scopeId: "scope-1",
+                revisionId: "rev-source",
+                definitionVersion: 23),
         };
         var runPort = new RecordingRunProvisioningPort();
         var dispatchPort = new RecordingActorDispatchPort();
@@ -258,6 +260,7 @@ public sealed class WorkflowForkRunCommandDispatchTests
         {
             SourceRunId = "source-run",
             NewRunActorId = "run-created",
+            NewRunId = "run-routable",
             WorkflowName = "edited",
             Accepted = true,
             CommandId = "cmd-1857",
@@ -271,6 +274,8 @@ public sealed class WorkflowForkRunCommandDispatchTests
         binding.WorkflowYaml.Should().Be(editedYaml);
         binding.ScopeId.Should().Be("scope-1");
         binding.InlineWorkflowYamls.Should().Contain("child", childYaml);
+        binding.RevisionId.Should().Be("rev-source");
+        binding.DefinitionVersion.Should().Be(23);
 
         dispatchPort.Dispatches.Should().ContainSingle();
         dispatchPort.Dispatches.Single().ActorId.Should().Be("run-created");
@@ -394,7 +399,9 @@ public sealed class WorkflowForkRunCommandDispatchTests
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
         IReadOnlyDictionary<string, string>? variables = null,
         string scopeId = "",
-        IReadOnlyDictionary<string, WorkflowStepIdempotencyView>? idempotencyByStepId = null) =>
+        IReadOnlyDictionary<string, WorkflowStepIdempotencyView>? idempotencyByStepId = null,
+        string revisionId = "",
+        long definitionVersion = 0) =>
         new WorkflowRunForkSeedView(
             SourceRunId: "source-run",
             Status: status,
@@ -410,7 +417,9 @@ public sealed class WorkflowForkRunCommandDispatchTests
             LastFailedStepId: "step-b",
             FinalError: status.Equals("failed", StringComparison.OrdinalIgnoreCase) ? "boom" : string.Empty,
             ScopeId: scopeId,
-            IdempotencyByStepId: idempotencyByStepId ?? new Dictionary<string, WorkflowStepIdempotencyView>(StringComparer.Ordinal));
+            IdempotencyByStepId: idempotencyByStepId ?? new Dictionary<string, WorkflowStepIdempotencyView>(StringComparer.Ordinal),
+            RevisionId: revisionId,
+            DefinitionVersion: definitionVersion);
 
     private static string WorkflowYaml(string name) =>
         $$"""
@@ -461,7 +470,8 @@ public sealed class WorkflowForkRunCommandDispatchTests
             return Task.FromResult(new WorkflowRunCreationReceipt(
                 "run-created",
                 "definition-created",
-                ["definition-created", "run-created"]));
+                ["definition-created", "run-created"],
+                "run-routable"));
         }
 
         public Task DestroyAsync(string actorId, CancellationToken ct = default)

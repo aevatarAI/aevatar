@@ -230,6 +230,7 @@ public sealed class WorkflowRunObservatoryQueryService
                 Timeline = [],
                 Diagnostics = BuildDiagnostics(snapshot, report: null, steps: [], viewEvents: []),
                 UsageTotals = new ObservatoryUsageTotals(),
+                RecoveryCapability = CloneRecoveryCapability(snapshot),
             };
         }
 
@@ -264,6 +265,7 @@ public sealed class WorkflowRunObservatoryQueryService
             Timeline = viewEvents,
             Statistics = ToStatistics(report.Summary),
             UsageTotals = WorkflowRunObservatoryTimelineMapper.ToUsageTotals(report.Usage),
+            RecoveryCapability = CloneRecoveryCapability(snapshot),
         };
     }
 
@@ -405,8 +407,12 @@ public sealed class WorkflowRunObservatoryQueryService
             //   Read the optional snapshot field so completed-without-start stays unavailable.
             DurationMs = completedAtUtc == null || !snapshot.HasDurationMs ? null : snapshot.DurationMs,
             StateVersion = snapshot.StateVersion,
+            RecoveryCapability = CloneRecoveryCapability(snapshot),
         };
     }
+
+    private static WorkflowRunRecoveryCapability CloneRecoveryCapability(WorkflowActorSnapshot snapshot) =>
+        snapshot.RecoveryCapability?.Clone() ?? new WorkflowRunRecoveryCapability();
 
     private static WorkflowActivityRunInitiatorSummary ToActivityInitiatorSummary(
         WorkflowRunActivityInitiatorSnapshot? source) =>

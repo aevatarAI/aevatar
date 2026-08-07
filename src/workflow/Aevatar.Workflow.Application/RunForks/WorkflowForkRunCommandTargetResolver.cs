@@ -91,7 +91,9 @@ internal sealed class WorkflowForkRunCommandTargetResolver
                     InlineWorkflowYamls: inlineWorkflowYamls,
                     ExpectedExecutionMode: seedView.ExpectedExecutionMode,
                     ScopeId: scopeId,
-                    CapabilityAdmissionPlan: seedView.CapabilityAdmissionPlan?.Clone()),
+                    CapabilityAdmissionPlan: seedView.CapabilityAdmissionPlan?.Clone(),
+                    RevisionId: seedView.RevisionId,
+                    DefinitionVersion: Math.Max(0, seedView.DefinitionVersion)),
                 ct).ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -105,6 +107,7 @@ internal sealed class WorkflowForkRunCommandTargetResolver
             sourceRunId,
             startAtStepId,
             creationReceipt.ActorId,
+            creationReceipt.RunId,
             validation.WorkflowName,
             BuildChatRunRequest(
                 command,

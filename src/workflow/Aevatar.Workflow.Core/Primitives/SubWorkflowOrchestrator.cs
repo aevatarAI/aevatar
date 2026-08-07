@@ -1491,6 +1491,8 @@ internal sealed class SubWorkflowOrchestrator
                 ? state.ScopeId ?? string.Empty
                 : definition.ScopeId,
             InlineWorkflowYamls = { inlineWorkflowYamls },
+            RevisionId = definition.RevisionId ?? string.Empty,
+            DefinitionVersion = Math.Max(0, definition.DefinitionVersion),
             ExpectedExecutionMode = state.ExpectedExecutionMode,
         };
 
