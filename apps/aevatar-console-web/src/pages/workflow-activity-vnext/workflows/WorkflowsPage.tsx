@@ -734,6 +734,10 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                 const description = row.description.trim();
                 const isArchived = isWorkflowArchived(row);
                 const isPublished = Boolean(row.activeRevisionId);
+                const showDraftActions =
+                  row.hasDraftSource && (view === 'drafts' || !isPublished);
+                const showArchiveAction =
+                  view !== 'drafts' && canArchiveWorkflow(row);
                 const workflowName = (
                   <span className="wa-vnext__title">{row.name}</span>
                 );
@@ -860,7 +864,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                         <Dropdown
                           menu={{
                             items: [
-                              ...(row.hasDraftSource
+                              ...(showDraftActions
                                 ? [
                                     {
                                       icon: <EditOutlined />,
@@ -880,10 +884,10 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                                   'Copy workflow reference',
                                 ),
                               },
-                              ...(row.hasDraftSource || canArchiveWorkflow(row)
+                              ...(showDraftActions || showArchiveAction
                                 ? [{ type: 'divider' as const }]
                                 : []),
-                              ...(row.hasDraftSource
+                              ...(showDraftActions
                                 ? [
                                     {
                                       danger: true,
@@ -896,7 +900,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                                     },
                                   ]
                                 : []),
-                              ...(canArchiveWorkflow(row)
+                              ...(showArchiveAction
                                 ? [
                                     {
                                       danger: true,

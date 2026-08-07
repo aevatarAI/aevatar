@@ -691,8 +691,8 @@ describe('Workflow Activity vNext catalogue', () => {
       }),
     );
     expect(
-      await screen.findByRole('menuitem', { name: 'Rename' }),
-    ).toBeInTheDocument();
+      (await screen.findAllByRole('menuitem')).map((item) => item.textContent),
+    ).toEqual(['Copy workflow reference', 'Archive']);
     fireEvent.click(
       screen.getByRole('menuitem', { name: 'Copy workflow reference' }),
     );
@@ -837,7 +837,7 @@ describe('Workflow Activity vNext catalogue', () => {
     expect(mockConsoleToast.success).toHaveBeenCalledWith('Workflow renamed');
   });
 
-  it('keeps archived workflows out of Active and offers Archive for active published rows', async () => {
+  it('keeps archived workflows out of Active and scopes published rows to published actions', async () => {
     mockStudioApi.listWorkflowDrafts.mockResolvedValue([
       {
         workflowId: 'wf-draft-alpha',
@@ -850,6 +850,18 @@ describe('Workflow Activity vNext catalogue', () => {
         stepCount: 1,
         hasLayout: true,
         updatedAtUtc: '2026-08-06T09:00:00Z',
+      },
+      {
+        workflowId: 'wf-active-alpha',
+        name: 'Active workflow',
+        description: 'Editable source for the published workflow',
+        fileName: 'active.yaml',
+        filePath: '/active.yaml',
+        directoryId: 'directory-alpha',
+        directoryLabel: 'Workflows',
+        stepCount: 2,
+        hasLayout: true,
+        updatedAtUtc: '2026-08-06T11:00:00Z',
       },
     ]);
     mockScopesApi.listWorkflows.mockResolvedValue([
@@ -889,12 +901,12 @@ describe('Workflow Activity vNext catalogue', () => {
     const activeActions = within(
       activeName.closest('tr') as HTMLElement,
     ).getByRole('button', {
-      name: 'More actions for Active workflow in Workspace',
+      name: 'More actions for Active workflow in Workflows',
     });
     fireEvent.click(activeActions);
     expect(
-      await screen.findByRole('menuitem', { name: 'Archive' }),
-    ).toBeInTheDocument();
+      (await screen.findAllByRole('menuitem')).map((item) => item.textContent),
+    ).toEqual(['Copy workflow reference', 'Archive']);
   });
 
   it('restores the Archived view without offering Archive again', async () => {
@@ -1271,6 +1283,8 @@ describe('Workflow Activity vNext catalogue', () => {
   });
 
   it('deletes only the editable draft and refreshes authoritative draft membership', async () => {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows?view=drafts';
     let draftRows = [
       {
         workflowId: 'wf-draft-alpha',
@@ -1329,14 +1343,8 @@ describe('Workflow Activity vNext catalogue', () => {
     await waitFor(() =>
       expect(mockStudioApi.listWorkflowDrafts).toHaveBeenCalledTimes(2),
     );
-    expect(
-      await screen.findByText('Committed support source'),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', {
-        name: 'More actions for Committed support source in Workspace',
-      }),
-    ).toBeEnabled();
+    expect(screen.queryByText('Support triage')).not.toBeInTheDocument();
+    expect(mockServicesApi.deactivateDeployment).not.toHaveBeenCalled();
   });
 
   it('keeps the draft and offers retry when deletion fails', async () => {
@@ -1575,6 +1583,16 @@ describe('Workflow Activity vNext catalogue', () => {
       screen.getByRole('searchbox', { name: 'Search workflows' }),
     ).toHaveValue('support');
     expect(screen.getByText('Drafts')).toBeInTheDocument();
+
+    const draftActions = within(
+      screen.getByText('Support triage').closest('tr') as HTMLElement,
+    ).getByRole('button', {
+      name: 'More actions for Support triage in Workflows',
+    });
+    fireEvent.click(draftActions);
+    expect(
+      (await screen.findAllByRole('menuitem')).map((item) => item.textContent),
+    ).toEqual(['Rename', 'Copy workflow reference', 'Delete draft']);
 
     fireEvent.mouseDown(
       screen.getByRole('combobox', { name: 'Workflow view' }),
