@@ -1,3 +1,65 @@
+export type ScopeWorkflowCatalogueView = 'all' | 'drafts';
+
+export interface ScopeWorkflowCatalogueActionCapability {
+  available: boolean;
+  unavailableReason: string | null;
+}
+
+export interface ScopeWorkflowCatalogueRowCapabilities {
+  open: ScopeWorkflowCatalogueActionCapability;
+  activity: ScopeWorkflowCatalogueActionCapability;
+  rename: ScopeWorkflowCatalogueActionCapability;
+  delete: ScopeWorkflowCatalogueActionCapability;
+}
+
+export interface ScopeWorkflowCatalogueCommittedFacts {
+  serviceKey: string;
+  workflowName: string;
+  actorId: string;
+  activeRevisionId: string;
+  deploymentId: string;
+  deploymentStatus: string;
+}
+
+export interface ScopeWorkflowCatalogueRow {
+  scopeId: string;
+  workflowId: string;
+  name: string;
+  description: string;
+  hasDraftSource: boolean;
+  hasCommittedSource: boolean;
+  updatedAtUtc: string;
+  updatedAtSource: string;
+  capabilities: ScopeWorkflowCatalogueRowCapabilities;
+  sourceWatermarkUtc: string;
+  committed: ScopeWorkflowCatalogueCommittedFacts | null;
+}
+
+export interface ScopeWorkflowCatalogueResponse {
+  items: ScopeWorkflowCatalogueRow[];
+  nextPageToken: string | null;
+  freshness: {
+    refreshWatermarkUtc: string | null;
+    sourceVersionSemantics: string;
+  };
+  search: {
+    searchableFields: string[];
+    caseSemantics: string;
+    unicodeNormalization: string;
+    maximumQueryLength: number;
+    emptyQuerySemantics: string;
+    workflowIdSemantics: string;
+  };
+}
+
+export interface ScopeWorkflowCatalogueQuery {
+  scopeId: string;
+  view: ScopeWorkflowCatalogueView;
+  query?: string;
+  cursor?: string;
+  take?: number;
+}
+
 export interface ScopeWorkflowSummary {
   scopeId: string;
   workflowId: string;
