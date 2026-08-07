@@ -26,7 +26,7 @@ describe('ConsoleToast', () => {
     const content = <span>Request failed</span>;
     jest.spyOn(App, 'useApp').mockReturnValue({
       notification,
-    } as ReturnType<typeof App.useApp>);
+    } as unknown as ReturnType<typeof App.useApp>);
 
     const { result } = renderHook(() => useConsoleToast());
     act(() => {
@@ -65,7 +65,7 @@ describe('ConsoleToast', () => {
     const notification = createNotificationStub();
     jest.spyOn(App, 'useApp').mockReturnValue({
       notification,
-    } as ReturnType<typeof App.useApp>);
+    } as unknown as ReturnType<typeof App.useApp>);
 
     const { result } = renderHook(() => useConsoleToast());
     act(() => {
