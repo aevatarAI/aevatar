@@ -12,6 +12,7 @@ function workflowSummary(
   return {
     scopeId: 'scope-alpha',
     workflowId,
+    publishedServiceId: `svc-${workflowId}`,
     displayName: 'Workflow',
     serviceKey: `scope-alpha:default:default:${workflowId}`,
     workflowName: 'workflow',

@@ -214,33 +214,40 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     () => new Set((drafts.data ?? []).map((item) => item.workflowId)),
     [drafts.data],
   );
-  const membersByWorkflowId = React.useMemo(() => {
-    const resolved = new Map<string, StudioMemberSummary | null>();
+  const memberIndexes = React.useMemo(() => {
+    const byPublishedServiceId = new Map<string, StudioMemberSummary | null>();
+    const byWorkflowId = new Map<string, StudioMemberSummary | null>();
     for (const member of members.data?.members ?? []) {
       if (
         member.implementationKind !== 'workflow' ||
         member.implementationRef?.implementationKind !== 'workflow'
       )
         continue;
+      const publishedServiceId = member.publishedServiceId.trim();
+      if (publishedServiceId) {
+        byPublishedServiceId.set(
+          publishedServiceId,
+          byPublishedServiceId.has(publishedServiceId) ? null : member,
+        );
+      }
       const boundWorkflowId = member.implementationRef.workflowId?.trim() ?? '';
       if (!boundWorkflowId) continue;
-      resolved.set(
+      byWorkflowId.set(
         boundWorkflowId,
-        resolved.has(boundWorkflowId) ? null : member,
+        byWorkflowId.has(boundWorkflowId) ? null : member,
       );
     }
-    return resolved;
+    return { byPublishedServiceId, byWorkflowId };
   }, [members.data]);
   const rows = React.useMemo(() => {
     const merged = new Map<string, WorkflowRow>();
-    for (const item of committed.data ?? [])
-      merged.set(
-        item.workflowId,
-        toCommittedRow(
-          item,
-          membersByWorkflowId.get(item.workflowId) ?? undefined,
-        ),
-      );
+    for (const item of committed.data ?? []) {
+      const publishedServiceId = item.publishedServiceId?.trim() ?? '';
+      const member = publishedServiceId
+        ? memberIndexes.byPublishedServiceId.get(publishedServiceId)
+        : memberIndexes.byWorkflowId.get(item.workflowId);
+      merged.set(item.workflowId, toCommittedRow(item, member ?? undefined));
+    }
     for (const item of drafts.data ?? [])
       merged.set(
         item.workflowId,
@@ -269,7 +276,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     committed.data,
     draftWorkflowIds,
     drafts.data,
-    membersByWorkflowId,
+    memberIndexes,
     query,
     view,
   ]);
