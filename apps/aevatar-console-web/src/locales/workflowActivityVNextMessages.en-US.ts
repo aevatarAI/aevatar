@@ -83,6 +83,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.backAria': 'Back to workflows',
   'workflowActivityVNext.editor.canvas': 'Canvas',
   'workflowActivityVNext.editor.canvasAria': 'Workflow canvas',
+  'workflowActivityVNext.editor.canvasUpdateFailed': "Couldn't update workflow",
   'workflowActivityVNext.editor.description':
     'Build, test, and refine this workflow.',
   'workflowActivityVNext.editor.discardLeave': 'Discard and leave',
@@ -281,6 +282,8 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.nav.settings': 'Settings',
   'workflowActivityVNext.nav.workflows': 'Workflows',
   'workflowActivityVNext.new.back': 'Back to workflows',
+  'workflowActivityVNext.new.backingAuthorityDescription':
+    'System-managed authority for one Workflow.',
   'workflowActivityVNext.new.changeMethod': 'Change method',
   'workflowActivityVNext.new.chooserAria': 'Workflow creation methods',
   'workflowActivityVNext.new.createBlank': 'Create and open',

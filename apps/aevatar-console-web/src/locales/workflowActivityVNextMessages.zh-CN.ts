@@ -87,6 +87,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.editor.backAria': '返回工作流列表',
     'workflowActivityVNext.editor.canvas': '画布',
     'workflowActivityVNext.editor.canvasAria': '工作流画布',
+    'workflowActivityVNext.editor.canvasUpdateFailed': '无法更新工作流',
     'workflowActivityVNext.editor.description': '构建、测试并完善这个工作流。',
     'workflowActivityVNext.editor.discardLeave': '放弃并离开',
     'workflowActivityVNext.editor.emptyCanvas':
@@ -264,6 +265,8 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.nav.settings': '设置',
     'workflowActivityVNext.nav.workflows': '工作流',
     'workflowActivityVNext.new.back': '返回工作流列表',
+    'workflowActivityVNext.new.backingAuthorityDescription':
+      '每个工作流专用的系统管理权限资源。',
     'workflowActivityVNext.new.changeMethod': '更换创建方式',
     'workflowActivityVNext.new.chooserAria': '工作流创建方式',
     'workflowActivityVNext.new.createBlank': '创建并打开',

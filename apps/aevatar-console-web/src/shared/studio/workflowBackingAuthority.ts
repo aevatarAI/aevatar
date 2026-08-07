@@ -1,3 +1,4 @@
+import { t } from '@/shared/i18n/messages';
 import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
 import type {
   StudioMemberDetail,
@@ -225,7 +226,10 @@ export async function provisionWorkflowBackingAuthority(input: {
   const createdTeam = await api.createTeam({
     scopeId,
     displayName: workflowName,
-    description: 'System-managed authority for one Workflow.',
+    description: t(
+      'workflowActivityVNext.new.backingAuthorityDescription',
+      'System-managed authority for one Workflow.',
+    ),
   });
   const teamId = trim(createdTeam.teamId);
   if (!teamId) {
