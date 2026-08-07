@@ -296,6 +296,29 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         exception.Message.Should().NotContain(RawKey);
     }
 
+    [Theory]
+    // 无可解析上游码时，失败原因必须仍可归因：形态诊断是区分「网关自身 502」与
+    // 「chrono 报错但我们没解析出来」的唯一线索，且不得泄漏 body/凭据/标识。
+    [InlineData("", "empty")]
+    [InlineData("<html>502 Bad Gateway</html>", "non_json")]
+    [InlineData("[]", "json_non_object")]
+    [InlineData("""{"detail":"gateway"}""", "json_without_error")]
+    [InlineData("""{"error":true,"status":502,"body":{"error":{"code":"X"}}}""", "nested_body_object")]
+    [InlineData("""{"error":{"code":"CODEX_TURN_FAILED"}}""", "json_error_code")]
+    public void ClassifyBodyShape_LabelsProxyFailureBodiesWithoutExposingContent(
+        string body,
+        string expectedShape)
+    {
+        var classify = typeof(NyxIdManagedCodexChronoTransport).GetMethod(
+            "ClassifyBodyShape",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        classify.Should().NotBeNull("shape diagnostics are the only attribution signal when no upstream code resolves");
+
+        var shape = (string)classify!.Invoke(null, [body])!;
+
+        shape.Should().Be(expectedShape);
+    }
+
     [Fact]
     public async Task ExecuteAsync_WhenChronoReturnsUnknownFailure_DoesNotExposeUpstreamContent()
     {

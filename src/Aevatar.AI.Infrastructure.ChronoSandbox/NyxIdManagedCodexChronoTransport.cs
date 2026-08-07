@@ -5,6 +5,8 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.AI.Infrastructure.ChronoSandbox;
@@ -13,7 +15,8 @@ internal sealed class NyxIdManagedCodexChronoTransport(
     IOptions<ManagedCodexOptions> options,
     INyxIdApiClientFactory clientFactory,
     ISecretVault secretVault,
-    TimeProvider timeProvider) : IManagedCodexChronoTransport
+    TimeProvider timeProvider,
+    ILogger<NyxIdManagedCodexChronoTransport>? logger = null) : IManagedCodexChronoTransport
 {
     private readonly ManagedCodexOptions _options =
         options?.Value ?? throw new ArgumentNullException(nameof(options));
@@ -23,6 +26,7 @@ internal sealed class NyxIdManagedCodexChronoTransport(
         secretVault ?? throw new ArgumentNullException(nameof(secretVault));
     private readonly TimeProvider _timeProvider =
         timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+    private readonly ILogger _logger = logger ?? NullLogger<NyxIdManagedCodexChronoTransport>.Instance;
     private static readonly HashSet<string> AllowedUpstreamFailureCodes =
         new(StringComparer.Ordinal)
         {
@@ -261,7 +265,7 @@ internal sealed class NyxIdManagedCodexChronoTransport(
         actual.Version == expected.Version &&
         string.Equals(actual.Fingerprint, expected.Fingerprint, StringComparison.Ordinal);
 
-    private static CodexExecutionResult ParseResponse(string response, string rawKey)
+    private CodexExecutionResult ParseResponse(string response, string rawKey)
     {
         try
         {
@@ -328,9 +332,19 @@ internal sealed class NyxIdManagedCodexChronoTransport(
         }
     }
 
-    private static ManagedCodexTransportException ProxyFailure(int status, string? response = null)
+    private ManagedCodexTransportException ProxyFailure(int status, string? response = null)
     {
         var upstreamCode = TryGetAllowedUpstreamFailureCode(response);
+        // Bounded shape diagnostics only. Without them a proxy failure carrying no recognizable
+        // upstream code is indistinguishable from one whose body we simply failed to parse, and
+        // triage cannot tell a gateway-level fault from a chrono-reported one. Never log the body,
+        // upstream message, credential, service id or run id.
+        _logger.LogWarning(
+            "Managed Codex proxy failure. status={Status} bodyBytes={BodyBytes} bodyShape={BodyShape} upstreamCodeResolved={Resolved}",
+            status,
+            response?.Length ?? 0,
+            ClassifyBodyShape(response),
+            upstreamCode is not null);
         // A typed upstream code names the actual failing stage, so it classifies the failure.
         // HTTP status alone cannot: chrono-sandbox returns 429 only for the capacity permit and
         // uses 502 for provisioning/OpenSandbox faults, so status-only mapping reports "capacity
@@ -368,6 +382,57 @@ internal sealed class NyxIdManagedCodexChronoTransport(
                 upstreamCode ?? "managed_proxy_failed",
                 "Managed Codex proxy request failed."),
         };
+    }
+
+    /// <summary>
+    /// Classifies a proxy failure body into a fixed, non-sensitive shape label. The labels are a
+    /// closed set derived from structure only — no upstream content is read into the result.
+    /// </summary>
+    private static string ClassifyBodyShape(string? response)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+            return "empty";
+
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(response);
+        }
+        catch (JsonException)
+        {
+            return "non_json";
+        }
+
+        using (document)
+        {
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return "json_non_object";
+            // chrono's own error shape is {"error":{"code":...}}. NyxID wraps upstream failures as
+            // {"error":true,"status":N,"body":...}, so a non-object `error` must fall through to the
+            // nested body — that nesting is exactly what distinguishes a gateway-level failure from
+            // a chrono-reported one.
+            if (root.TryGetProperty("error", out var error) &&
+                error.ValueKind == JsonValueKind.Object)
+            {
+                return error.TryGetProperty("code", out var code) &&
+                       code.ValueKind == JsonValueKind.String
+                    ? "json_error_code"
+                    : "json_error_untyped";
+            }
+
+            if (!root.TryGetProperty("body", out var body))
+                return error.ValueKind == JsonValueKind.Undefined
+                    ? "json_without_error"
+                    : "json_error_untyped";
+
+            return body.ValueKind switch
+            {
+                JsonValueKind.Object => "nested_body_object",
+                JsonValueKind.String => "nested_body_string",
+                _ => "nested_body_other",
+            };
+        }
     }
 
     /// <summary>
