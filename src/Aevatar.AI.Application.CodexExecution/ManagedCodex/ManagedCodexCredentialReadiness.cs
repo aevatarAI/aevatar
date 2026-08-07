@@ -166,15 +166,15 @@ public static class ManagedCodexCredentialReadiness
     private static bool ServiceBindingMatches(
         ManagedCodexCredentialDescriptor credential) =>
         !string.IsNullOrWhiteSpace(credential.ApiKeyId) &&
-        !string.IsNullOrWhiteSpace(credential.ManagedCodexUserServiceId) &&
+        !string.IsNullOrWhiteSpace(credential.ChronoSandboxUserServiceId) &&
         !string.IsNullOrWhiteSpace(credential.ChronoLlmUserServiceId) &&
         !string.Equals(
-            credential.ManagedCodexUserServiceId,
+            credential.ChronoSandboxUserServiceId,
             credential.ChronoLlmUserServiceId,
             StringComparison.Ordinal) &&
         string.Equals(
-            credential.ManagedCodexServiceSlug,
-            ManagedCodexOptions.ManagedCodexServiceSlug,
+            credential.ChronoSandboxServiceSlug,
+            ManagedCodexOptions.ChronoSandboxServiceSlug,
             StringComparison.Ordinal);
 
     private static ManagedCodexCredentialReadinessAssessment NotReady(

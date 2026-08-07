@@ -865,9 +865,9 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
                 CreatedAtUnixMs = 1,
                 ExpiresAtUnixMs = ExpiresAt.ToUnixTimeMilliseconds(),
             },
-            ManagedCodexUserServiceId = "user-service-sandbox",
+            ChronoSandboxUserServiceId = "user-service-sandbox",
             ChronoLlmUserServiceId = "user-service-llm",
-            ManagedCodexServiceSlug = "chrono-managed-codex",
+            ChronoSandboxServiceSlug = "chrono-sandbox",
             ExpiresAt = Timestamp.FromDateTimeOffset(ExpiresAt),
             Status = ManagedCodexCredentialStatus.Active,
         };

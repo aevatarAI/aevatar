@@ -358,7 +358,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
                         RemoteKey(
                             current.ApiKeyId,
                             current.ExpiresAt.ToDateTimeOffset(),
-                            ["us-managed-codex", "us-llm"]),
+                            ["us-sandbox", "us-llm"]),
                     };
                 }
 
@@ -896,7 +896,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
                 [],
-                [RemoteKey("key-unadopted", Now.AddDays(30), ["us-managed-codex", "us-llm"])]);
+                [RemoteKey("key-unadopted", Now.AddDays(30), ["us-sandbox", "us-llm"])]);
         nyxId.CreateApiKeyAsync(
                 "user-bearer",
                 Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
@@ -962,7 +962,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         var activeKey = RemoteKey(
             "key-reconcile-timeout",
             Now.AddDays(30),
-            ["us-managed-codex", "us-llm"]);
+            ["us-sandbox", "us-llm"]);
         var nyxId = Substitute.For<IManagedCodexNyxIdCredentialPort>();
         nyxId.GetCurrentUserIdAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns("user-a");
@@ -1010,12 +1010,20 @@ public sealed class ManagedCodexCredentialLifecycleTests
             Arg.Any<CancellationToken>());
     }
 
-    [Fact]
-    public async Task ProvisionAsync_WithExactManagedCodexPolicy_CreatesExactKeyAndPersistsOnlyTheVaultReference()
+    [Theory]
+    [InlineData(false, "proxy:*")]
+    [InlineData(true, "proxy:*")]
+    [InlineData(false, "proxy:* sandbox:execute")]
+    [InlineData(true, "sandbox:execute proxy:*")]
+    public async Task ProvisionAsync_WithTransitionalSandboxPolicy_CreatesExactKeyAndPersistsOnlyTheVaultReference(
+        bool forwardAccessToken,
+        string delegationScope)
     {
         var handler = new RoutingHandler(
             MeResponse(),
-            UserServicesResponse(forwardAccessToken: false),
+            UserServicesResponse(
+                forwardAccessToken: forwardAccessToken,
+                delegationScope: delegationScope),
             """{"keys":[]}""",
             IssuedKeyResponse("key-1", RawKey),
             ApiKeyListResponse("key-1", Now.AddDays(30)));
@@ -1051,7 +1059,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
             .EnumerateArray()
             .Select(static item => item.GetString())
             .Should()
-            .BeEquivalentTo(["us-managed-codex", "us-llm"], options => options.WithStrictOrdering());
+            .BeEquivalentTo(["us-sandbox", "us-llm"], options => options.WithStrictOrdering());
         body.RootElement.GetProperty("allow_all_nodes").GetBoolean().Should().BeFalse();
         body.RootElement.GetProperty("allowed_node_ids").GetArrayLength().Should().Be(0);
         stored.Should().NotBeNull();
@@ -1060,7 +1068,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         stored.Secret.Should().Be(RawKey);
         committed.Should().NotBeNull();
         committed!.ApiKeyId.Should().Be("key-1");
-        committed.ManagedCodexUserServiceId.Should().Be("us-managed-codex");
+        committed.ChronoSandboxUserServiceId.Should().Be("us-sandbox");
         committed.ChronoLlmUserServiceId.Should().Be("us-llm");
         committed.SecretReference.Ref.Should().Be(stored.RequestedRef);
         committed.ToString().Should().NotContain(RawKey);
@@ -1072,7 +1080,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
     public async Task ProvisionAsync_WhenPersistedServiceIdsAreReversed_AcceptsExactSet()
     {
         var handler = SuccessfulProvisionHandler(
-            persistedAllowedServiceIds: ["us-llm", "us-managed-codex"]);
+            persistedAllowedServiceIds: ["us-llm", "us-sandbox"]);
 
         var result = await CreateSuccessfulLifecycle(handler).ProvisionAsync(
             "user-bearer",
@@ -1085,7 +1093,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
     public async Task ProvisionAsync_WhenPersistedKeyHasExtraService_RejectsIt()
     {
         var handler = SuccessfulProvisionHandler(
-            persistedAllowedServiceIds: ["us-managed-codex", "us-llm", "us-extra"]);
+            persistedAllowedServiceIds: ["us-sandbox", "us-llm", "us-extra"]);
 
         var act = () => CreateSuccessfulLifecycle(handler).ProvisionAsync(
             "user-bearer",
@@ -1113,7 +1121,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
                     RemoteKey(
                         "   ",
                         Now.AddDays(30),
-                        ["us-managed-codex", "us-llm"]),
+                        ["us-sandbox", "us-llm"]),
                 ]);
         nyxId.CreateApiKeyAsync(
                 "user-bearer",
@@ -1185,7 +1193,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 "proxy",
                 "codex",
                 false,
-                ["us-managed-codex", "us-llm"],
+                ["us-sandbox", "us-llm"],
                 false,
                 []),
             CancellationToken.None);
@@ -1196,7 +1204,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         update.RootElement.GetProperty("allowed_service_ids")
             .EnumerateArray()
             .Select(static value => value.GetString())
-            .Should().Equal("us-managed-codex", "us-llm");
+            .Should().Equal("us-sandbox", "us-llm");
     }
 
     [Theory]
@@ -1252,13 +1260,13 @@ public sealed class ManagedCodexCredentialLifecycleTests
         var reconciled = await InvokeReconcilePolicyAsync(
             lifecycle,
             current,
-            RemoteKey("key-a", expiresAt, ["us-managed-codex"]));
+            RemoteKey("key-a", expiresAt, ["us-sandbox"]));
 
         handler.Methods.Should().Equal(HttpMethod.Put, HttpMethod.Get);
         handler.Paths.Should().Equal("/api/v1/api-keys/key-a", "/api/v1/api-keys");
         reconciled.ApiKeyId.Should().Be("key-a");
         reconciled.SecretReference.Should().BeEquivalentTo(current.SecretReference);
-        reconciled.ManagedCodexUserServiceId.Should().Be("us-managed-codex");
+        reconciled.ChronoSandboxUserServiceId.Should().Be("us-sandbox");
         reconciled.ChronoLlmUserServiceId.Should().Be("us-llm");
         await commands.Received(1).CommitPolicyReconciledAsync(
             "key-a",
@@ -1267,7 +1275,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 descriptor.SecretReference.Ref == "sec-a" &&
                 descriptor.SecretReference.Version == 1 &&
                 descriptor.SecretReference.Fingerprint == "fingerprint" &&
-                descriptor.ManagedCodexUserServiceId == "us-managed-codex" &&
+                descriptor.ChronoSandboxUserServiceId == "us-sandbox" &&
                 descriptor.ChronoLlmUserServiceId == "us-llm"),
             Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
             Arg.Any<CancellationToken>());
@@ -1281,7 +1289,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
             ApiKeyListResponse(
                 "key-a",
                 expiresAt,
-                allowedServiceIds: ["us-llm", "us-managed-codex"]));
+                allowedServiceIds: ["us-llm", "us-sandbox"]));
         var current = Descriptor("key-a", "sec-a", version: 1);
         current.ChronoLlmUserServiceId = "us-llm-old";
         var vault = Substitute.For<ISecretVault>();
@@ -1301,7 +1309,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         var reconciled = await InvokeReconcilePolicyAsync(
             lifecycle,
             current,
-            RemoteKey("key-a", expiresAt, ["us-managed-codex", "us-llm"]));
+            RemoteKey("key-a", expiresAt, ["us-sandbox", "us-llm"]));
 
         handler.Methods.Should().Equal(HttpMethod.Get);
         handler.Paths.Should().Equal("/api/v1/api-keys");
@@ -1347,7 +1355,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         var act = () => InvokeReconcilePolicyAsync(
             lifecycle,
             current,
-            RemoteKey("key-a", expiresAt, ["us-managed-codex"]));
+            RemoteKey("key-a", expiresAt, ["us-sandbox"]));
 
         (await act.Should()
             .ThrowAsync<ManagedCodexCredentialLifecycleException>())
@@ -1376,11 +1384,11 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 RemoteKey(
                     "key-a",
                     expiresAt,
-                    ["us-managed-codex", "us-llm"]),
+                    ["us-sandbox", "us-llm"]),
                 RemoteKey(
                     "   ",
                     expiresAt,
-                    ["us-managed-codex", "us-llm"]),
+                    ["us-sandbox", "us-llm"]),
             ]);
         var vault = Substitute.For<ISecretVault>();
         vault.ResolveAsync(
@@ -1403,7 +1411,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         var act = () => InvokeReconcilePolicyAsync(
             lifecycle,
             current,
-            RemoteKey("key-a", expiresAt, ["us-managed-codex"]));
+            RemoteKey("key-a", expiresAt, ["us-sandbox"]));
 
         (await act.Should()
             .ThrowAsync<ManagedCodexCredentialLifecycleException>())
@@ -1424,28 +1432,28 @@ public sealed class ManagedCodexCredentialLifecycleTests
     {
         var handlerA = new RoutingHandler(
             MeResponse("user-a"),
-            UserServicesResponse("us-managed-codex-a", "us-llm-a"),
+            UserServicesResponse("us-sandbox-a", "us-llm-a"),
             """{"keys":[]}""",
             IssuedKeyResponse(
                 "key-a",
                 "raw-key-a",
-                allowedServiceIds: ["us-managed-codex-a", "us-llm-a"]),
+                allowedServiceIds: ["us-sandbox-a", "us-llm-a"]),
             ApiKeyListResponse(
                 "key-a",
                 Now.AddDays(30),
-                allowedServiceIds: ["us-managed-codex-a", "us-llm-a"]));
+                allowedServiceIds: ["us-sandbox-a", "us-llm-a"]));
         var handlerB = new RoutingHandler(
             MeResponse("user-b"),
-            UserServicesResponse("us-managed-codex-b", "us-llm-b"),
+            UserServicesResponse("us-sandbox-b", "us-llm-b"),
             """{"keys":[]}""",
             IssuedKeyResponse(
                 "key-b",
                 "raw-key-b",
-                allowedServiceIds: ["us-managed-codex-b", "us-llm-b"]),
+                allowedServiceIds: ["us-sandbox-b", "us-llm-b"]),
             ApiKeyListResponse(
                 "key-b",
                 Now.AddDays(30),
-                allowedServiceIds: ["us-managed-codex-b", "us-llm-b"]));
+                allowedServiceIds: ["us-sandbox-b", "us-llm-b"]));
         var vault = Substitute.For<ISecretVault>();
         vault.PutAsync(Arg.Any<StoreSecretRequest>(), Arg.Any<CancellationToken>())
             .Returns(call => Task.FromResult(new StoreSecretResult(Reference(
@@ -1477,8 +1485,8 @@ public sealed class ManagedCodexCredentialLifecycleTests
             .Should().Equal(
                 "managed-codex-credential:nyxid::user-a",
                 "managed-codex-credential:nyxid::user-b");
-        committed.Select(static descriptor => descriptor.ManagedCodexUserServiceId)
-            .Should().Equal("us-managed-codex-a", "us-managed-codex-b");
+        committed.Select(static descriptor => descriptor.ChronoSandboxUserServiceId)
+            .Should().Equal("us-sandbox-a", "us-sandbox-b");
         committed.Select(static descriptor => descriptor.ChronoLlmUserServiceId)
             .Should().Equal("us-llm-a", "us-llm-b");
         committed.Should().OnlyContain(static descriptor =>
@@ -1487,10 +1495,10 @@ public sealed class ManagedCodexCredentialLifecycleTests
 
     [Theory]
     [InlineData(false, true, false, true, "proxy:*", "managed_user_services_unavailable")]
-    [InlineData(true, true, true, true, "proxy:*", "managed_codex_delegation_misconfigured")]
-    [InlineData(true, true, false, false, "proxy:*", "managed_codex_delegation_misconfigured")]
-    [InlineData(true, true, false, true, "llm:proxy", "managed_codex_delegation_misconfigured")]
-    [InlineData(true, true, false, true, "admin", "managed_codex_delegation_misconfigured")]
+    [InlineData(true, true, false, false, "proxy:*", "chrono_sandbox_delegation_misconfigured")]
+    [InlineData(true, true, false, true, "llm:proxy", "chrono_sandbox_delegation_misconfigured")]
+    [InlineData(true, true, false, true, "admin", "chrono_sandbox_delegation_misconfigured")]
+    [InlineData(true, true, false, true, "proxy:* sandbox:execute admin", "chrono_sandbox_delegation_misconfigured")]
     [InlineData(true, false, false, true, "proxy:*", "managed_user_services_unavailable")]
     public async Task ProvisionAsync_WhenRequiredServiceIsInactiveOrMisconfigured_FailsBeforeIssuingKey(
         bool sandboxActive,
@@ -1523,7 +1531,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
 
     [Theory]
     [InlineData("", "us-llm")]
-    [InlineData("us-managed-codex", "")]
+    [InlineData("us-sandbox", "")]
     [InlineData("us-shared", "us-shared")]
     public async Task ProvisionAsync_WhenRequiredServiceIdsAreNotDistinctAndStable_FailsBeforeIssuingKey(
         string sandboxId,
@@ -1680,8 +1688,8 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 allowAllNodes,
                 includeNode: includeNode,
                 allowedServiceIds: includeExtraService
-                    ? ["us-managed-codex", "us-llm", "us-extra"]
-                    : ["us-managed-codex", "us-llm"]),
+                    ? ["us-sandbox", "us-llm", "us-extra"]
+                    : ["us-sandbox", "us-llm"]),
             """{"message":"deleted"}"""
         );
         var vault = Substitute.For<ISecretVault>();
@@ -1872,13 +1880,13 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 [RemoteKey(
                     current.ApiKeyId,
                     expiresAt,
-                    ["us-managed-codex", "us-llm"])],
+                    ["us-sandbox", "us-llm"])],
                 [
                     issued.Key,
                     RemoteKey(
                         "   ",
                         expiresAt,
-                        ["us-managed-codex", "us-llm"]),
+                        ["us-sandbox", "us-llm"]),
                 ]);
         nyxId.RotateApiKeyAsync(
                 "user-bearer",
@@ -1959,7 +1967,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
             .Returns([RemoteKey(
                 current.ApiKeyId,
                 expiresAt,
-                ["us-managed-codex", "us-llm"])]);
+                ["us-sandbox", "us-llm"])]);
         nyxId.RotateApiKeyAsync(
                 "user-bearer",
                 current.ApiKeyId,
@@ -2064,7 +2072,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         var observedActorKey = RemoteKey(
             "key-actor-current",
             expiresAt,
-            ["us-managed-codex"]);
+            ["us-sandbox"]);
         var replacement = IssuedKey("key-replacement", expiresAt);
         var nyxId = Substitute.For<IManagedCodexNyxIdCredentialPort>();
         nyxId.GetCurrentUserIdAsync("user-bearer", Arg.Any<CancellationToken>())
@@ -2143,7 +2151,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         var observedActorKey = RemoteKey(
             "key-actor-current",
             expiresAt,
-            ["us-managed-codex", "us-llm"]);
+            ["us-sandbox", "us-llm"]);
         var replacement = IssuedKey("key-replacement", expiresAt);
         var query = Substitute.For<IManagedCodexCredentialQueryPort>();
         query.ResolveAsync(
@@ -2251,7 +2259,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         var observedMalformedKey = RemoteKey(
             "   ",
             expiresAt,
-            ["us-managed-codex", "us-llm"]);
+            ["us-sandbox", "us-llm"]);
         var replacement = IssuedKey("key-replacement", expiresAt);
         var projected = current.Clone();
         if (operation == "provision")
@@ -2402,7 +2410,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
             .Returns([RemoteKey(
                 "   ",
                 current.ExpiresAt.ToDateTimeOffset(),
-                ["us-managed-codex", "us-llm"])]);
+                ["us-sandbox", "us-llm"])]);
         nyxId.RevokeApiKeyAsync(
                 "user-bearer",
                 Arg.Any<string>(),
@@ -3018,10 +3026,10 @@ public sealed class ManagedCodexCredentialLifecycleTests
 
         using var body = JsonDocument.Parse(handler.RequestBodies.Single());
         body.RootElement.GetProperty("allowed_service_ids").EnumerateArray()
-            .Select(static item => item.GetString()).Should().Equal("us-managed-codex", "us-llm");
+            .Select(static item => item.GetString()).Should().Equal("us-sandbox", "us-llm");
         await commands.Received(1).CommitProvisionedAsync(
             Arg.Is<ManagedCodexCredentialDescriptor>(descriptor =>
-                descriptor.ManagedCodexUserServiceId == "us-managed-codex" &&
+                descriptor.ChronoSandboxUserServiceId == "us-sandbox" &&
                 descriptor.ChronoLlmUserServiceId == "us-llm"),
             Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
             Arg.Any<CancellationToken>());
@@ -3055,7 +3063,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
             IssuedKeyResponse(
                 "key-1",
                 RawKey,
-                allowedServiceIds: ["us-managed-codex", "us-llm"]),
+                allowedServiceIds: ["us-sandbox", "us-llm"]),
             ApiKeyListResponse(
                 "key-1",
                 Now.AddDays(30),
@@ -3098,7 +3106,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         method.Should().NotBeNull();
         var eligibility = Activator.CreateInstance(
             method!.GetParameters()[4].ParameterType,
-            "us-managed-codex",
+            "us-sandbox",
             "us-llm");
         eligibility.Should().NotBeNull();
         var task = method!.Invoke(
@@ -3168,9 +3176,9 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 Version = version,
                 ExpiresAtUnixMs = Now.AddDays(30).ToUnixTimeMilliseconds(),
             },
-            ManagedCodexUserServiceId = "us-managed-codex",
+            ChronoSandboxUserServiceId = "us-sandbox",
             ChronoLlmUserServiceId = "us-llm",
-            ManagedCodexServiceSlug = "chrono-managed-codex",
+            ChronoSandboxServiceSlug = "chrono-sandbox",
             ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(Now.AddDays(30)),
             Status = ManagedCodexCredentialStatus.Active,
         };
@@ -3229,14 +3237,14 @@ public sealed class ManagedCodexCredentialLifecycleTests
             RemoteKey(
                 id,
                 expiresAt ?? Now.AddDays(30),
-                ["us-managed-codex", "us-llm"]),
+                ["us-sandbox", "us-llm"]),
             new ManagedCodexOpaqueSecret(RawKey));
 
     private static IReadOnlyList<ManagedCodexNyxIdService> EligibleServices() =>
     [
         new(
-            "us-managed-codex",
-            "chrono-managed-codex",
+            "us-sandbox",
+            "chrono-sandbox",
             true,
             "personal",
             null,
@@ -3258,7 +3266,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         JsonSerializer.Serialize(new { id = userId });
 
     private static string UserServicesResponse(
-        string sandboxId = "us-managed-codex",
+        string sandboxId = "us-sandbox",
         string llmId = "us-llm",
         bool sandboxActive = true,
         bool llmActive = true,
@@ -3274,7 +3282,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 new
                 {
                     id = sandboxId,
-                    slug = "chrono-managed-codex",
+                    slug = "chrono-sandbox",
                     is_active = sandboxActive,
                     forward_access_token = forwardAccessToken,
                     inject_delegation_token = injectDelegationToken,
@@ -3306,8 +3314,8 @@ public sealed class ManagedCodexCredentialLifecycleTests
               {
                 "services": [
                   {
-                    "id": "us-managed-codex-a",
-                    "slug": "chrono-managed-codex",
+                    "id": "us-sandbox-a",
+                    "slug": "chrono-sandbox",
                     "is_active": true,
                     "forward_access_token": false,
                     "inject_delegation_token": true,
@@ -3315,8 +3323,8 @@ public sealed class ManagedCodexCredentialLifecycleTests
                     "credential_source": { "type": "personal" }
                   },
                   {
-                    "id": "us-managed-codex-b",
-                    "slug": "chrono-managed-codex",
+                    "id": "us-sandbox-b",
+                    "slug": "chrono-sandbox",
                     "is_active": true,
                     "forward_access_token": false,
                     "inject_delegation_token": true,
@@ -3336,8 +3344,8 @@ public sealed class ManagedCodexCredentialLifecycleTests
               {
                 "services": [
                   {
-                    "id": "us-managed-codex",
-                    "slug": "chrono-managed-codex",
+                    "id": "us-sandbox",
+                    "slug": "chrono-sandbox",
                     "is_active": true,
                     "forward_access_token": false,
                     "inject_delegation_token": true,
@@ -3365,8 +3373,8 @@ public sealed class ManagedCodexCredentialLifecycleTests
         {
           "services": [
             {
-              "id": "us-managed-codex-org",
-              "slug": "chrono-managed-codex",
+              "id": "us-sandbox-org",
+              "slug": "chrono-sandbox",
               "is_active": true,
               "forward_access_token": false,
               "inject_delegation_token": true,
@@ -3374,8 +3382,8 @@ public sealed class ManagedCodexCredentialLifecycleTests
               "credential_source": { "type": "org", "org_id": "org-a", "allowed": true }
             },
             {
-              "id": "us-managed-codex",
-              "slug": "chrono-managed-codex",
+              "id": "us-sandbox",
+              "slug": "chrono-sandbox",
               "is_active": true,
               "forward_access_token": false,
               "inject_delegation_token": true,
@@ -3397,8 +3405,8 @@ public sealed class ManagedCodexCredentialLifecycleTests
         {
           "services": [
             {
-              "id": "us-managed-codex-org",
-              "slug": "chrono-managed-codex",
+              "id": "us-sandbox-org",
+              "slug": "chrono-sandbox",
               "is_active": true,
               "forward_access_token": false,
               "inject_delegation_token": true,
@@ -3429,7 +3437,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
             name = "aevatar-managed-codex",
             full_key = fullKey,
             scopes,
-            allowed_service_ids = allowedServiceIds ?? ["us-managed-codex", "us-llm"],
+            allowed_service_ids = allowedServiceIds ?? ["us-sandbox", "us-llm"],
             allowed_node_ids = includeNode ? new[] { "node-1" } : [],
             allow_all_services = allowAllServices,
             allow_all_nodes = allowAllNodes,
@@ -3451,7 +3459,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
                     scopes = "proxy",
                     platform = "codex",
                     is_active = isActive,
-                    allowed_service_ids = allowedServiceIds ?? ["us-managed-codex", "us-llm"],
+                    allowed_service_ids = allowedServiceIds ?? ["us-sandbox", "us-llm"],
                     allowed_node_ids = Array.Empty<string>(),
                     allow_all_services = false,
                     allow_all_nodes = false,

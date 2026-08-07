@@ -25,7 +25,7 @@ public sealed class ManagedCodexEligibilityOptions
 public sealed class ManagedCodexOptions
 {
     public const string SectionName = "Aevatar:CodexExecution:ManagedSandbox";
-    public const string ManagedCodexServiceSlug = "chrono-managed-codex";
+    public const string ChronoSandboxServiceSlug = "chrono-sandbox";
     public const string ChronoLlmServiceSlug = "chrono-llm-public";
     public const string ChronoExecutionPath = "/codex/execute";
     internal const int MutationLeaseSafetySeconds = 10;
@@ -45,7 +45,7 @@ public sealed class ManagedCodexOptions
     public int MutationCompletionSeconds { get; set; } = 240;
 
     /// <summary>
-    /// Complete-lifecycle grace added to chrono-managed-codex's execution timeout. It covers sandbox
+    /// Complete-lifecycle grace added to chrono-sandbox's execution timeout. It covers sandbox
     /// teardown and the return path so Aevatar can receive chrono's terminal response instead of
     /// racing it to a less informative local timeout.
     /// </summary>

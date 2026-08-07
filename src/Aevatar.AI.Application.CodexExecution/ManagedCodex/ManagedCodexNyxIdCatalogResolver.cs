@@ -1,11 +1,14 @@
 namespace Aevatar.AI.Application.CodexExecution;
 
 internal sealed record ManagedCodexNyxIdEligibility(
-    string ManagedCodexUserServiceId,
+    string ChronoSandboxUserServiceId,
     string ChronoLlmUserServiceId);
 
 internal sealed class ManagedCodexNyxIdCatalogResolver
 {
+    private const string SharedDelegationScope = "proxy:*";
+    private const string CodeDelegationScope = "sandbox:execute";
+
     public async Task<ManagedCodexNyxIdEligibility> ResolveAsync(
         IManagedCodexNyxIdCredentialPort port,
         string bearerToken,
@@ -13,11 +16,11 @@ internal sealed class ManagedCodexNyxIdCatalogResolver
     {
         ArgumentNullException.ThrowIfNull(port);
         var services = await port.ListUserServicesAsync(bearerToken, ct).ConfigureAwait(false);
-        var managedCodexMatches = services
+        var sandboxMatches = services
             .Where(static service =>
                 string.Equals(
                     service.Slug,
-                    ManagedCodexOptions.ManagedCodexServiceSlug,
+                    ManagedCodexOptions.ChronoSandboxServiceSlug,
                     StringComparison.Ordinal) &&
                 string.Equals(service.CredentialSourceType, "personal", StringComparison.Ordinal))
             .ToArray();
@@ -28,37 +31,55 @@ internal sealed class ManagedCodexNyxIdCatalogResolver
                 StringComparison.Ordinal))
             .ToArray();
 
-        if (managedCodexMatches.Length != 1 || llmMatches.Length != 1)
+        if (sandboxMatches.Length != 1 || llmMatches.Length != 1)
         {
             throw Failure(
                 "managed_user_services_unavailable",
                 "The user's required managed Codex services are not uniquely available.");
         }
 
-        var managedCodex = managedCodexMatches[0];
+        var sandbox = sandboxMatches[0];
         var llm = llmMatches[0];
-        var managedCodexId = managedCodex.Id?.Trim() ?? string.Empty;
+        var sandboxId = sandbox.Id?.Trim() ?? string.Empty;
         var llmId = llm.Id?.Trim() ?? string.Empty;
-        if (!IsUsable(managedCodex) ||
+        if (!IsUsable(sandbox) ||
             !IsUsable(llm) ||
-            string.IsNullOrWhiteSpace(managedCodexId) ||
+            string.IsNullOrWhiteSpace(sandboxId) ||
             string.IsNullOrWhiteSpace(llmId) ||
-            string.Equals(managedCodexId, llmId, StringComparison.Ordinal))
+            string.Equals(sandboxId, llmId, StringComparison.Ordinal))
         {
             throw Failure(
                 "managed_user_services_unavailable",
                 "The user's required managed Codex services are not usable.");
         }
-        if (managedCodex.ForwardAccessToken != false ||
-            managedCodex.InjectDelegationToken != true ||
-            !string.Equals(managedCodex.DelegationTokenScope, "proxy:*", StringComparison.Ordinal))
+        // Managed execution uses X-API-Key and sends no Authorization header, so the shared
+        // service's bearer-forwarding policy only applies to ordinary /execute calls.
+        if (sandbox.InjectDelegationToken != true ||
+            !HasAllowedDelegationScopes(sandbox.DelegationTokenScope))
         {
             throw Failure(
-                "managed_codex_delegation_misconfigured",
-                "The chrono-managed-codex NyxID delegation policy is not ready for managed Codex.");
+                "chrono_sandbox_delegation_misconfigured",
+                "The chrono-sandbox NyxID delegation policy is not ready for managed Codex.");
         }
 
-        return new ManagedCodexNyxIdEligibility(managedCodexId, llmId);
+        return new ManagedCodexNyxIdEligibility(sandboxId, llmId);
+    }
+
+    private static bool HasAllowedDelegationScopes(string? scope)
+    {
+        if (string.IsNullOrWhiteSpace(scope))
+            return false;
+
+        var scopes = scope.Split(
+            (char[]?)null,
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return scopes.Length switch
+        {
+            1 => string.Equals(scopes[0], SharedDelegationScope, StringComparison.Ordinal),
+            2 => scopes.Contains(SharedDelegationScope, StringComparer.Ordinal) &&
+                 scopes.Contains(CodeDelegationScope, StringComparer.Ordinal),
+            _ => false,
+        };
     }
 
     private static bool IsUsable(ManagedCodexNyxIdService service) =>

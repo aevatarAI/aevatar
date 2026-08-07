@@ -72,8 +72,8 @@ message ManagedCodexCredentialDescriptor {
   aevatar.gagents.channel.abstractions.ExternalSubjectRef owner = 1;
   string api_key_id = 2;
   aevatar.credentials.SecretReference secret_reference = 3;
-  string managed_codex_user_service_id = 4;
-  string managed_codex_service_slug = 5;
+  string chrono_sandbox_user_service_id = 4;
+  string chrono_sandbox_service_slug = 5;
   google.protobuf.Timestamp expires_at = 6;
   ManagedCodexCredentialStatus status = 7;
   string chrono_llm_user_service_id = 8;

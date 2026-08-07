@@ -326,9 +326,9 @@ public sealed class ManagedCodexExecutionCoordinatorTests
                 Version = 1,
                 ExpiresAtUnixMs = expiresAt.ToUnixTimeMilliseconds(),
             },
-            ManagedCodexUserServiceId = "us-managed-codex",
+            ChronoSandboxUserServiceId = "us-sandbox",
             ChronoLlmUserServiceId = "us-llm",
-            ManagedCodexServiceSlug = ManagedCodexOptions.ManagedCodexServiceSlug,
+            ChronoSandboxServiceSlug = ManagedCodexOptions.ChronoSandboxServiceSlug,
             ExpiresAt = Timestamp.FromDateTimeOffset(expiresAt),
             Status = ManagedCodexCredentialStatus.Active,
         };

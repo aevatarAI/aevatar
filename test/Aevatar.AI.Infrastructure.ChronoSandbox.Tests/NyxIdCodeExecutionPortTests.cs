@@ -12,18 +12,16 @@ public sealed class NyxIdCodeExecutionPortTests
 {
     private const string BearerToken = "caller-bearer";
     private const string CodeServiceId = "us-code-alpha";
-    private const string ManagedServiceId = "us-managed-alpha";
 
     [Fact]
     public async Task ExecuteAsync_ResolvesExactCodeServiceAndUsesBearerProxyExecution()
     {
-        CodeServiceId.Should().NotBe(ManagedServiceId, "code and managed execution are isolated identities");
         var handler = new SequenceHandler(
             JsonResponse(Inventory(
-                Service(ManagedServiceId, "chrono-managed-codex", false, true, "proxy:*"),
-                Service("us-code-forwarding", "chrono-sandbox", true, true, "sandbox:execute"),
-                Service("us-code-wrong-scope", "chrono-sandbox", false, true, "proxy:*"),
-                Service(CodeServiceId, "chrono-sandbox", false, true, "sandbox:execute"))),
+                Service("us-code-no-forward", "chrono-sandbox", false, true, "proxy:*"),
+                Service("us-code-no-delegation", "chrono-sandbox", true, false, "proxy:*"),
+                Service("us-code-wrong-scope", "chrono-sandbox", true, true, "sandbox:execute"),
+                Service(CodeServiceId, "chrono-sandbox", true, true, "proxy:*"))),
             JsonResponse(
                 """
                 {
@@ -105,10 +103,12 @@ public sealed class NyxIdCodeExecutionPortTests
     }
 
     [Theory]
-    [InlineData(true, true, "sandbox:execute")]
-    [InlineData(false, false, "sandbox:execute")]
     [InlineData(false, true, "proxy:*")]
-    public async Task ExecuteAsync_WhenCodeServiceViolatesDelegationPolicy_FailsClosedBeforeProxy(
+    [InlineData(true, false, "proxy:*")]
+    [InlineData(true, true, "sandbox:execute")]
+    [InlineData(true, true, "proxy:* admin")]
+    [InlineData(true, true, "proxy:* sandbox:execute admin")]
+    public async Task ExecuteAsync_WhenSharedServiceViolatesExecutionPolicy_FailsClosedBeforeProxy(
         bool forwardAccessToken,
         bool injectDelegationToken,
         string delegationTokenScope)
@@ -133,6 +133,89 @@ public sealed class NyxIdCodeExecutionPortTests
         });
         handler.Requests.Should().ContainSingle();
         handler.Requests[0].PathAndQuery.Should().Be("/api/v1/user-services");
+    }
+
+    [Theory]
+    [InlineData("proxy:*")]
+    [InlineData("proxy:* sandbox:execute")]
+    [InlineData("sandbox:execute proxy:*")]
+    public async Task ExecuteAsync_WhenSharedServiceHasAllowedScopeSet_UsesExactRoute(
+        string delegationTokenScope)
+    {
+        var handler = new SequenceHandler(
+            JsonResponse(Inventory(Service(
+                CodeServiceId,
+                "chrono-sandbox",
+                true,
+                true,
+                delegationTokenScope))),
+            JsonResponse(
+                """
+                {
+                  "success": true,
+                  "output": {
+                    "stdout": "ok",
+                    "stderr": "",
+                    "exit_code": 0
+                  }
+                }
+                """));
+        var port = CreatePort(handler);
+
+        var outcome = await port.ExecuteAsync(Request(CodeServiceId));
+
+        outcome.Failure.Should().BeNull();
+        outcome.ResolvedRoute!.UserServiceId.Should().Be(CodeServiceId);
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests[1].PathAndQuery.Should().Be(
+            "/api/v1/proxy/s/chrono-sandbox/execute?_nyxid_via=us-code-alpha");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenSharedServiceIsInactive_FailsClosedBeforeProxy()
+    {
+        var handler = new SequenceHandler(JsonResponse(Inventory(Service(
+            CodeServiceId,
+            "chrono-sandbox",
+            true,
+            true,
+            "proxy:*",
+            isActive: false))));
+        var port = CreatePort(handler);
+
+        var outcome = await port.ExecuteAsync(Request(CodeServiceId));
+
+        AssertRouteUnavailable(outcome, handler);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenSharedServiceIsNotPersonal_FailsClosedBeforeProxy()
+    {
+        var handler = new SequenceHandler(JsonResponse(Inventory(Service(
+            CodeServiceId,
+            "chrono-sandbox",
+            true,
+            true,
+            "proxy:*",
+            credentialSourceType: "platform"))));
+        var port = CreatePort(handler);
+
+        var outcome = await port.ExecuteAsync(Request(CodeServiceId));
+
+        AssertRouteUnavailable(outcome, handler);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenMultipleSharedServicesMatch_FailsClosedBeforeProxy()
+    {
+        var handler = new SequenceHandler(JsonResponse(Inventory(
+            Service("us-code-alpha", "chrono-sandbox", true, true, "proxy:*"),
+            Service("us-code-beta", "chrono-sandbox", true, true, "proxy:* sandbox:execute"))));
+        var port = CreatePort(handler);
+
+        var outcome = await port.ExecuteAsync(Request(userServiceId: null));
+
+        AssertRouteUnavailable(outcome, handler);
     }
 
     [Fact]
@@ -330,9 +413,9 @@ public sealed class NyxIdCodeExecutionPortTests
             JsonResponse(Inventory(Service(
                 CodeServiceId,
                 "chrono-sandbox",
-                false,
                 true,
-                "sandbox:execute"))),
+                true,
+                "proxy:*"))),
             static _ => throw new OperationCanceledException("transport timeout"));
         var port = CreatePort(handler);
 
@@ -393,9 +476,9 @@ public sealed class NyxIdCodeExecutionPortTests
             JsonResponse(Inventory(Service(
                 CodeServiceId,
                 "chrono-sandbox",
-                false,
                 true,
-                "sandbox:execute"))),
+                true,
+                "proxy:*"))),
             proxyResponse);
 
     private static SequenceHandler HandlerWithProxyResponse(HttpResponseMessage proxyResponse) =>
@@ -417,16 +500,34 @@ public sealed class NyxIdCodeExecutionPortTests
         string slug,
         bool forwardAccessToken,
         bool injectDelegationToken,
-        string delegationTokenScope) =>
+        string delegationTokenScope,
+        bool isActive = true,
+        string credentialSourceType = "personal") =>
         new
         {
             id,
             slug,
-            is_active = true,
+            is_active = isActive,
             forward_access_token = forwardAccessToken,
             inject_delegation_token = injectDelegationToken,
             delegation_token_scope = delegationTokenScope,
+            credential_source = new { type = credentialSourceType },
         };
+
+    private static void AssertRouteUnavailable(
+        CodeExecutionOutcome outcome,
+        SequenceHandler handler)
+    {
+        outcome.Result.Should().BeNull();
+        outcome.ResolvedRoute.Should().BeNull();
+        outcome.Failure.Should().BeEquivalentTo(new
+        {
+            Kind = CodeExecutionFailureKind.TargetNotConfigured,
+            Code = "code_execution_route_unavailable",
+        });
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].PathAndQuery.Should().Be("/api/v1/user-services");
+    }
 
     private sealed class TestNyxIdApiClientFactory(NyxIdApiClient client) : INyxIdApiClientFactory
     {

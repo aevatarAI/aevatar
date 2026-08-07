@@ -44,7 +44,7 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         result.ExitCode.Should().Be(0);
         result.DiagnosticId.Should().Be("chrono-1");
         handler.PathAndQuery.Should().Be(
-            "/api/v1/proxy/s/chrono-managed-codex/codex/execute?_nyxid_via=us-managed-codex");
+            "/api/v1/proxy/s/chrono-sandbox/codex/execute?_nyxid_via=us-sandbox");
         handler.Authorization.Should().BeNull();
         handler.ApiKeys.Should().Equal(RawKey);
         using var body = JsonDocument.Parse(handler.Body!);
@@ -219,7 +219,7 @@ public sealed class NyxIdManagedCodexChronoTransportTests
 
         var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
         // Sandbox creation / workspace preparation are provisioning stages, not capacity
-        // rejections: chrono-managed-codex returns CODEX_CAPACITY_UNAVAILABLE with 429 and reserves
+        // rejections: chrono-sandbox returns CODEX_CAPACITY_UNAVAILABLE with 429 and reserves
         // 502 for provisioning faults, so classifying by HTTP status alone misreports them.
         exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.ProvisioningFailed);
         exception.Failure.Code.Should().Be("managed_upstream_codex_sandbox_creation_failed");
@@ -254,7 +254,7 @@ public sealed class NyxIdManagedCodexChronoTransportTests
 
         var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
         // Sandbox creation / workspace preparation are provisioning stages, not capacity
-        // rejections: chrono-managed-codex returns CODEX_CAPACITY_UNAVAILABLE with 429 and reserves
+        // rejections: chrono-sandbox returns CODEX_CAPACITY_UNAVAILABLE with 429 and reserves
         // 502 for provisioning faults, so classifying by HTTP status alone misreports them.
         exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.ProvisioningFailed);
         exception.Failure.Code.Should().Be("managed_upstream_codex_workspace_preparation_failed");
@@ -263,15 +263,46 @@ public sealed class NyxIdManagedCodexChronoTransportTests
     }
 
     [Theory]
-    // chrono-managed-codex 只在容量许可被拒时返回 CODEX_CAPACITY_UNAVAILABLE，且走 429；
+    // chrono-sandbox 只在容量许可被拒时返回 CODEX_CAPACITY_UNAVAILABLE，且走 429；
     // 502 携带的是 provisioning / OpenSandbox 家族的码。按 HTTP 状态一刀切成
     // CapacityUnavailable 会把「沙箱创建失败」误报为「容量不足」，把排障引向错误方向。
+    [InlineData("CODEX_AGENT_MESSAGE_MISSING", CodexExecutionFailureKind.MalformedOutput)]
+    [InlineData("CODEX_CALLER_CREDENTIAL_FORWARDED", CodexExecutionFailureKind.AdmissionDenied)]
+    [InlineData("CODEX_CLEANUP_UNCONFIRMED", CodexExecutionFailureKind.CleanupFailed)]
+    [InlineData("CODEX_COMMAND_FAILED", CodexExecutionFailureKind.TerminalFailure)]
+    [InlineData("CODEX_COMMAND_TIMEOUT", CodexExecutionFailureKind.TimedOut)]
+    [InlineData("CODEX_CONFIG_INVALID", CodexExecutionFailureKind.ReadinessFailed)]
+    [InlineData("CODEX_DELEGATION_ACTOR_INVALID", CodexExecutionFailureKind.AdmissionDenied)]
+    [InlineData("CODEX_DELEGATION_AUDIENCE_INVALID", CodexExecutionFailureKind.AdmissionDenied)]
+    [InlineData("CODEX_DELEGATION_DUPLICATED", CodexExecutionFailureKind.AdmissionDenied)]
+    [InlineData("CODEX_DELEGATION_EXPIRED", CodexExecutionFailureKind.AdmissionDenied)]
+    [InlineData("CODEX_DELEGATION_INVALID", CodexExecutionFailureKind.AdmissionDenied)]
+    [InlineData("CODEX_DELEGATION_ISSUER_INVALID", CodexExecutionFailureKind.AdmissionDenied)]
+    [InlineData("CODEX_DELEGATION_MARKER_INVALID", CodexExecutionFailureKind.AdmissionDenied)]
+    [InlineData("CODEX_DELEGATION_MISSING", CodexExecutionFailureKind.AdmissionDenied)]
+    [InlineData("CODEX_DELEGATION_NOT_YET_VALID", CodexExecutionFailureKind.AdmissionDenied)]
+    [InlineData("CODEX_DELEGATION_SCOPE_INVALID", CodexExecutionFailureKind.AdmissionDenied)]
+    [InlineData("CODEX_DELEGATION_SUBJECT_INVALID", CodexExecutionFailureKind.AdmissionDenied)]
+    [InlineData("CODEX_DELEGATION_TYPE_INVALID", CodexExecutionFailureKind.AdmissionDenied)]
+    [InlineData("CODEX_DELEGATION_VERIFIER_UNAVAILABLE", CodexExecutionFailureKind.ReadinessFailed)]
+    [InlineData("CODEX_EXECD_TERMINAL_MISSING", CodexExecutionFailureKind.MalformedOutput)]
+    [InlineData("CODEX_EXECUTION_TIMEOUT", CodexExecutionFailureKind.TimedOut)]
+    [InlineData("CODEX_FEATURE_DISABLED", CodexExecutionFailureKind.TargetNotConfigured)]
     [InlineData("CODEX_SANDBOX_CREATION_FAILED", CodexExecutionFailureKind.ProvisioningFailed)]
     [InlineData("CODEX_WORKSPACE_PREPARATION_FAILED", CodexExecutionFailureKind.ProvisioningFailed)]
     [InlineData("CODEX_OPENSANDBOX_UNAVAILABLE", CodexExecutionFailureKind.ProvisioningFailed)]
     [InlineData("CODEX_OPENSANDBOX_TIMEOUT", CodexExecutionFailureKind.TimedOut)]
+    [InlineData("CODEX_OUTPUT_INVALID", CodexExecutionFailureKind.MalformedOutput)]
+    [InlineData("CODEX_OUTPUT_TOO_LARGE", CodexExecutionFailureKind.MalformedOutput)]
+    [InlineData("CODEX_PROMPT_INVALID", CodexExecutionFailureKind.AdmissionDenied)]
+    [InlineData("CODEX_PROMPT_TOO_LARGE", CodexExecutionFailureKind.AdmissionDenied)]
+    [InlineData("CODEX_REQUEST_INVALID", CodexExecutionFailureKind.AdmissionDenied)]
     [InlineData("CODEX_SANDBOX_READY_TIMEOUT", CodexExecutionFailureKind.TimedOut)]
     [InlineData("CODEX_CAPACITY_UNAVAILABLE", CodexExecutionFailureKind.CapacityUnavailable)]
+    [InlineData("CODEX_TIMEOUT_INVALID", CodexExecutionFailureKind.AdmissionDenied)]
+    [InlineData("CODEX_TURN_FAILED", CodexExecutionFailureKind.TerminalFailure)]
+    [InlineData("CODEX_TURN_TERMINAL_MISSING", CodexExecutionFailureKind.MalformedOutput)]
+    [InlineData("CODEX_WORKSPACE_INVALID", CodexExecutionFailureKind.AdmissionDenied)]
     public async Task ExecuteAsync_WhenUpstreamCodeIsTyped_ClassifiesByUpstreamCauseNotHttpStatus(
         string upstreamCode,
         CodexExecutionFailureKind expectedKind)
@@ -340,9 +371,40 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         var act = () => transport.ExecuteAsync(Request(), Descriptor());
 
         var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
-        exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.CapacityUnavailable);
+        exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.TerminalFailure);
         exception.Failure.Code.Should().Be("managed_proxy_unavailable");
         exception.Message.Should().NotContain(RawKey);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.TooManyRequests, CodexExecutionFailureKind.CapacityUnavailable)]
+    [InlineData(HttpStatusCode.BadGateway, CodexExecutionFailureKind.TerminalFailure)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, CodexExecutionFailureKind.TerminalFailure)]
+    public async Task ExecuteAsync_WhenProxyFailureHasNoTypedCode_ClassifiesOnly429AsCapacity(
+        HttpStatusCode statusCode,
+        CodexExecutionFailureKind expectedKind)
+    {
+        var handler = new RecordingHandler("""{"detail":"gateway"}""", statusCode);
+        var (transport, _) = CreateTransport(handler);
+
+        var act = () => transport.ExecuteAsync(Request(), Descriptor());
+
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
+        exception.Failure.Kind.Should().Be(expectedKind);
+        exception.Failure.Code.Should().Be("managed_proxy_unavailable");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenProxyTransportFailsWithoutHttpStatus_ReturnsTerminalFailure()
+    {
+        var (transport, _) = CreateTransport(
+            new ThrowingHandler(new HttpRequestException("transport failed")));
+
+        var act = () => transport.ExecuteAsync(Request(), Descriptor());
+
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
+        exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.TerminalFailure);
+        exception.Failure.Code.Should().Be("managed_proxy_unavailable");
     }
 
     [Fact]
@@ -513,9 +575,9 @@ public sealed class NyxIdManagedCodexChronoTransportTests
             Version = 1,
             ExpiresAtUnixMs = Now.AddDays(30).ToUnixTimeMilliseconds(),
         },
-        ManagedCodexUserServiceId = "us-managed-codex",
+        ChronoSandboxUserServiceId = "us-sandbox",
         ChronoLlmUserServiceId = "us-llm",
-        ManagedCodexServiceSlug = "chrono-managed-codex",
+        ChronoSandboxServiceSlug = "chrono-sandbox",
         ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(Now.AddDays(30)),
         Status = ManagedCodexCredentialStatus.Active,
     };
@@ -599,6 +661,14 @@ public sealed class NyxIdManagedCodexChronoTransportTests
             {
                 Content = content,
             });
+    }
+
+    private sealed class ThrowingHandler(Exception exception) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromException<HttpResponseMessage>(exception);
     }
 
     private sealed class ThrowOnReadContent : HttpContent

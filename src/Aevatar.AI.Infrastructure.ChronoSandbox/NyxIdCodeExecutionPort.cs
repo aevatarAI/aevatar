@@ -11,7 +11,9 @@ internal sealed class NyxIdCodeExecutionPort(
 {
     private const long MaxResponseBytes = 1_048_576;
     private const string ExecutionPath = "/execute";
-    private const string RequiredDelegationScope = "sandbox:execute";
+    private const string SharedDelegationScope = "proxy:*";
+    private const string CodeDelegationScope = "sandbox:execute";
+    private const string PersonalCredentialSourceType = "personal";
     private const string RequiredServiceSlug = CodeExecutionContract.ServiceSlug;
     private static readonly HashSet<string> AllowedCompletedFailureCodes =
         new(StringComparer.Ordinal)
@@ -161,12 +163,13 @@ internal sealed class NyxIdCodeExecutionPort(
                 (string.IsNullOrWhiteSpace(candidate.UserServiceId) ||
                  string.Equals(service.Id, candidate.UserServiceId.Trim(), StringComparison.Ordinal)) &&
                 service.IsActive &&
-                service.ForwardAccessToken == false &&
-                service.InjectDelegationToken == true &&
                 string.Equals(
-                    service.DelegationTokenScope,
-                    RequiredDelegationScope,
-                    StringComparison.Ordinal))
+                    service.CredentialSourceType,
+                    PersonalCredentialSourceType,
+                    StringComparison.Ordinal) &&
+                service.ForwardAccessToken == true &&
+                service.InjectDelegationToken == true &&
+                HasAllowedDelegationScopes(service.DelegationTokenScope))
             .ToArray();
 
         return matches.Length == 1
@@ -189,6 +192,23 @@ internal sealed class NyxIdCodeExecutionPort(
         _ => throw new ArgumentOutOfRangeException(nameof(language), language, null),
     };
 
+    private static bool HasAllowedDelegationScopes(string? scope)
+    {
+        if (string.IsNullOrWhiteSpace(scope))
+            return false;
+
+        var scopes = scope.Split(
+            (char[]?)null,
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return scopes.Length switch
+        {
+            1 => string.Equals(scopes[0], SharedDelegationScope, StringComparison.Ordinal),
+            2 => scopes.Contains(SharedDelegationScope, StringComparer.Ordinal) &&
+                 scopes.Contains(CodeDelegationScope, StringComparer.Ordinal),
+            _ => false,
+        };
+    }
+
     private static IEnumerable<CodeUserService> EnumerateServices(JsonElement root)
     {
         foreach (var collectionName in new[] { "services", "keys", "items", "data" })
@@ -207,10 +227,18 @@ internal sealed class NyxIdCodeExecutionPort(
                 var slug = ReadString(service, "slug", "service_slug");
                 if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(slug))
                     continue;
+                var credentialSource =
+                    service.TryGetProperty("credential_source", out var credentialSourceElement) &&
+                    credentialSourceElement.ValueKind == JsonValueKind.Object
+                        ? credentialSourceElement
+                        : default;
                 yield return new CodeUserService(
                     id,
                     slug,
                     ReadBoolean(service, "is_active") == true,
+                    credentialSource.ValueKind == JsonValueKind.Object
+                        ? ReadString(credentialSource, "type")
+                        : null,
                     ReadBoolean(service, "forward_access_token"),
                     ReadBoolean(service, "inject_delegation_token"),
                     ReadString(service, "delegation_token_scope"));
@@ -410,6 +438,7 @@ internal sealed class NyxIdCodeExecutionPort(
         string Id,
         string Slug,
         bool IsActive,
+        string? CredentialSourceType,
         bool? ForwardAccessToken,
         bool? InjectDelegationToken,
         string? DelegationTokenScope);
