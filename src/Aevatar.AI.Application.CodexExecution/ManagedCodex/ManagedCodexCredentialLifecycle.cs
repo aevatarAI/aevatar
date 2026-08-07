@@ -670,7 +670,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             owner,
             persistedKey.Id,
             reference,
-            eligibility.ChronoSandboxUserServiceId,
+            eligibility.ManagedCodexUserServiceId,
             eligibility.ChronoLlmUserServiceId,
             expiresAt);
         var obsoleteCredentialCleanups = BuildObservedObsoleteCleanups(
@@ -751,13 +751,13 @@ public sealed class ManagedCodexCredentialLifecycle(
                 preMutationCt)
             .ConfigureAwait(false);
         if (!string.Equals(
-                current.Credential.ChronoSandboxUserServiceId,
-                eligibility.ChronoSandboxUserServiceId,
+                current.Credential.ManagedCodexUserServiceId,
+                eligibility.ManagedCodexUserServiceId,
                 StringComparison.Ordinal))
         {
             throw Failure(
-                "chrono_sandbox_service_changed",
-                "The user's chrono-sandbox service changed; revoke and provision a new scoped credential.");
+                "managed_codex_service_changed",
+                "The user's chrono-managed-codex service changed; revoke and provision a new scoped credential.");
         }
 
         ValidateActiveDescriptor(current.Credential, owner, _timeProvider.GetUtcNow());
@@ -900,7 +900,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             owner,
             persistedKey.Id,
             newReference,
-            eligibility.ChronoSandboxUserServiceId,
+            eligibility.ManagedCodexUserServiceId,
             eligibility.ChronoLlmUserServiceId,
             expiresAt);
         var obsoleteCredentialCleanups = BuildObservedObsoleteCleanups(
@@ -1096,8 +1096,8 @@ public sealed class ManagedCodexCredentialLifecycle(
                     var exactDescriptor =
                         IsReady(currentCredential, owner, _timeProvider.GetUtcNow()) &&
                         string.Equals(
-                            currentCredential.ChronoSandboxUserServiceId,
-                            eligibility.ChronoSandboxUserServiceId,
+                            currentCredential.ManagedCodexUserServiceId,
+                            eligibility.ManagedCodexUserServiceId,
                             StringComparison.Ordinal) &&
                         string.Equals(
                             currentCredential.ChronoLlmUserServiceId,
@@ -1375,7 +1375,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             owner,
             remote.Id,
             repair.RemoteReference!,
-            repair.Eligibility.ChronoSandboxUserServiceId,
+            repair.Eligibility.ManagedCodexUserServiceId,
             repair.Eligibility.ChronoLlmUserServiceId,
             remote.ExpiresAt!.Value);
         if (IsCommandableCurrent(repair.Current, owner))
@@ -1584,7 +1584,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             owner,
             persistedKey.Id,
             reference,
-            eligibility.ChronoSandboxUserServiceId,
+            eligibility.ManagedCodexUserServiceId,
             eligibility.ChronoLlmUserServiceId,
             expiresAt);
     }
@@ -1749,7 +1749,7 @@ public sealed class ManagedCodexCredentialLifecycle(
 
         if (HasExactServiceIds(
                 key.AllowedServiceIds,
-                eligibility.ChronoSandboxUserServiceId,
+                eligibility.ManagedCodexUserServiceId,
                 eligibility.ChronoLlmUserServiceId))
         {
             return true;
@@ -1758,7 +1758,7 @@ public sealed class ManagedCodexCredentialLifecycle(
         return key.AllowedServiceIds is { Count: 1 } &&
                string.Equals(
                    key.AllowedServiceIds[0],
-                   eligibility.ChronoSandboxUserServiceId,
+                   eligibility.ManagedCodexUserServiceId,
                    StringComparison.Ordinal);
     }
 
@@ -2001,7 +2001,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             "codex",
             false,
             [
-                eligibility.ChronoSandboxUserServiceId,
+                eligibility.ManagedCodexUserServiceId,
                 eligibility.ChronoLlmUserServiceId,
             ],
             false,
@@ -2015,7 +2015,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             "codex",
             false,
             [
-                eligibility.ChronoSandboxUserServiceId,
+                eligibility.ManagedCodexUserServiceId,
                 eligibility.ChronoLlmUserServiceId,
             ],
             false,
@@ -2096,7 +2096,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             owner,
             activeKey.Id,
             reference,
-            eligibility.ChronoSandboxUserServiceId,
+            eligibility.ManagedCodexUserServiceId,
             eligibility.ChronoLlmUserServiceId,
             activeKey.ExpiresAt!.Value);
         using var recording = outcomeDeadline.BeginRecording();
@@ -2159,7 +2159,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             owner,
             activeKey.Id,
             reference,
-            eligibility.ChronoSandboxUserServiceId,
+            eligibility.ManagedCodexUserServiceId,
             eligibility.ChronoLlmUserServiceId,
             activeKey.ExpiresAt!.Value);
         using var recording = outcomeDeadline.BeginRecording();
@@ -2231,7 +2231,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             owner,
             currentApiKeyId,
             reference,
-            eligibility.ChronoSandboxUserServiceId,
+            eligibility.ManagedCodexUserServiceId,
             eligibility.ChronoLlmUserServiceId,
             persisted.ExpiresAt!.Value);
         await CommitPolicyReconciledForReconciliationAsync(
@@ -2925,7 +2925,7 @@ public sealed class ManagedCodexCredentialLifecycle(
         ExternalSubjectRef owner,
         string apiKeyId,
         SecretReference reference,
-        string chronoSandboxUserServiceId,
+        string managedCodexUserServiceId,
         string chronoLlmUserServiceId,
         DateTimeOffset expiresAt) =>
         new()
@@ -2933,9 +2933,9 @@ public sealed class ManagedCodexCredentialLifecycle(
             Owner = owner.Clone(),
             ApiKeyId = apiKeyId,
             SecretReference = reference.Clone(),
-            ChronoSandboxUserServiceId = chronoSandboxUserServiceId,
+            ManagedCodexUserServiceId = managedCodexUserServiceId,
             ChronoLlmUserServiceId = chronoLlmUserServiceId,
-            ChronoSandboxServiceSlug = ManagedCodexOptions.ChronoSandboxServiceSlug,
+            ManagedCodexServiceSlug = ManagedCodexOptions.ManagedCodexServiceSlug,
             ExpiresAt = Timestamp.FromDateTimeOffset(expiresAt.ToUniversalTime()),
             Status = ManagedCodexCredentialStatus.Active,
         };
@@ -3003,7 +3003,7 @@ public sealed class ManagedCodexCredentialLifecycle(
         !key.AllowAllServices &&
         HasExactServiceIds(
             key.AllowedServiceIds,
-            eligibility.ChronoSandboxUserServiceId,
+            eligibility.ManagedCodexUserServiceId,
             eligibility.ChronoLlmUserServiceId) &&
         !key.AllowAllNodes &&
         key.AllowedNodeIds is { Count: 0 };

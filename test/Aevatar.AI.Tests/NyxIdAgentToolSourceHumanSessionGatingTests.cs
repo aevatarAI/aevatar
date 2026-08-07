@@ -4,6 +4,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
@@ -40,7 +41,8 @@ public class NyxIdAgentToolSourceHumanSessionGatingTests
     {
         var source = new NyxIdAgentToolSource(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
-            new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example" }, new HttpClient()));
+            new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example" }, new HttpClient()),
+            codeExecutionPorts: [new StubCodeExecutionPort()]);
 
         var tools = await source.DiscoverToolsAsync();
 
@@ -62,4 +64,17 @@ public class NyxIdAgentToolSourceHumanSessionGatingTests
     private static bool DeclaresHumanSession(IAgentTool tool) =>
         tool is IAgentToolCapabilityDescriptor descriptor &&
         descriptor.Capabilities.Contains(AgentToolCapabilities.RequiresHumanSession);
+
+    private sealed class StubCodeExecutionPort : ICodeExecutionPort
+    {
+        public Task<CodeExecutionOutcome> ExecuteAsync(
+            CodeExecutionRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(CodeExecutionOutcome.Succeeded(
+                new CodeExecutionResult(string.Empty, string.Empty, 0),
+                new CodeExecutionRouteIdentity(
+                    "chrono-sandbox",
+                    "svc-code-alpha",
+                    CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog)));
+    }
 }

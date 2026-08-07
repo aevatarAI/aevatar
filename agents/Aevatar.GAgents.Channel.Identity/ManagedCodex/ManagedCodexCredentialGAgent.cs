@@ -388,13 +388,13 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
                 StringComparison.Ordinal) ||
             string.IsNullOrWhiteSpace(candidate.SecretReference.Fingerprint) ||
             candidate.SecretReference.Version <= 0 ||
-            string.IsNullOrWhiteSpace(candidate.ChronoSandboxUserServiceId) ||
+            string.IsNullOrWhiteSpace(candidate.ManagedCodexUserServiceId) ||
             string.IsNullOrWhiteSpace(candidate.ChronoLlmUserServiceId) ||
             string.Equals(
-                candidate.ChronoSandboxUserServiceId.Trim(),
+                candidate.ManagedCodexUserServiceId.Trim(),
                 candidate.ChronoLlmUserServiceId.Trim(),
                 StringComparison.Ordinal) ||
-            !string.Equals(candidate.ChronoSandboxServiceSlug, "chrono-sandbox", StringComparison.Ordinal) ||
+            !string.Equals(candidate.ManagedCodexServiceSlug, "chrono-managed-codex", StringComparison.Ordinal) ||
             candidate.ExpiresAt is null ||
             candidate.SecretReference.ExpiresAtUnixMs !=
                 candidate.ExpiresAt.ToDateTimeOffset().ToUnixTimeMilliseconds() ||
@@ -406,7 +406,7 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
 
         credential = candidate.Clone();
         credential.ApiKeyId = credential.ApiKeyId.Trim();
-        credential.ChronoSandboxUserServiceId = credential.ChronoSandboxUserServiceId.Trim();
+        credential.ManagedCodexUserServiceId = credential.ManagedCodexUserServiceId.Trim();
         credential.ChronoLlmUserServiceId = credential.ChronoLlmUserServiceId.Trim();
         return true;
     }

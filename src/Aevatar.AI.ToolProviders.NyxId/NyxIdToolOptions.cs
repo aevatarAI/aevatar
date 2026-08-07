@@ -11,7 +11,6 @@ public sealed class NyxIdToolOptions
 {
     public const long DefaultProxyFileArtifactMaxBytes = 25L * 1024 * 1024;
     public const long HardProxyFileArtifactMaxBytes = 100L * 1024 * 1024;
-    public const string DefaultSandboxServiceSlug = "chrono-sandbox";
 
     /// <summary>
     /// Transport ceiling for a single NyxID HTTP call. Must stay above the longest per-call
@@ -30,13 +29,6 @@ public sealed class NyxIdToolOptions
 
     /// <summary>NyxID REST API base URL. Defaults to <see cref="DefaultBaseUrl"/>.</summary>
     public string? BaseUrl { get; set; } = DefaultBaseUrl;
-
-    /// <summary>
-    /// NyxID service slug used by <c>code_execute</c> when no <c>codex_exec</c>
-    /// target is enabled. Hosts that expose the tool through a per-user OAuth
-    /// binding must request this same service as an RFC 8707 resource.
-    /// </summary>
-    public string SandboxServiceSlug { get; set; } = DefaultSandboxServiceSlug;
 
     /// <summary>
     /// When <c>true</c>, expose the <c>ssh_exec</c> tool to the LLM. This option is

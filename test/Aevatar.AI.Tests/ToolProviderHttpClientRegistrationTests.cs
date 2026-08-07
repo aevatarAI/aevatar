@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Tools;
@@ -779,9 +780,10 @@ public sealed class ToolProviderHttpClientRegistrationTests
     }
 
     [Fact]
-    public async Task AddNyxIdTools_WithoutCodexTarget_DiscoversOnlyCodeExecute()
+    public async Task AddNyxIdTools_WithCodePortWithoutCodexTarget_DiscoversOnlyCodeExecute()
     {
         var services = new ServiceCollection();
+        services.AddSingleton<ICodeExecutionPort>(new CodeExecutionPortStub());
         services.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
 
         await using var provider = services.BuildServiceProvider();
@@ -796,6 +798,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
     public async Task AddNyxIdTools_WithSshOptIn_DiscoversCodeExecuteAndCodexTools()
     {
         var services = new ServiceCollection();
+        services.AddSingleton<ICodeExecutionPort>(new CodeExecutionPortStub());
 
         services.AddNyxIdTools(options =>
         {
@@ -826,6 +829,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
     public async Task AddNyxIdTools_WithManagedPort_DiscoversCodeExecuteAndCodexWithoutSshTool()
     {
         var services = new ServiceCollection();
+        services.AddSingleton<ICodeExecutionPort>(new CodeExecutionPortStub());
         services.AddSingleton<ICodexExecutionPort>(new ManagedCodexPortStub());
         services.AddNyxIdTools(options =>
         {
@@ -860,6 +864,20 @@ public sealed class ToolProviderHttpClientRegistrationTests
         var act = () => source.DiscoverToolsAsync();
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*exactly one managed-sandbox ICodexExecutionPort*");
+    }
+
+    [Fact]
+    public async Task AddNyxIdTools_WithoutCodePort_DoesNotExposeCodeExecute()
+    {
+        var services = new ServiceCollection();
+        services.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
+
+        await using var provider = services.BuildServiceProvider();
+        var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().NotContain(tool => tool is NyxIdCodeExecuteTool);
     }
 
     [Fact]
@@ -938,4 +956,17 @@ file sealed class ManagedCodexPortStub : ICodexExecutionPort
         await Task.CompletedTask;
         yield break;
     }
+}
+
+file sealed class CodeExecutionPortStub : ICodeExecutionPort
+{
+    public Task<CodeExecutionOutcome> ExecuteAsync(
+        CodeExecutionRequest request,
+        CancellationToken ct = default) =>
+        Task.FromResult(CodeExecutionOutcome.Succeeded(
+            new CodeExecutionResult(string.Empty, string.Empty, 0),
+            new CodeExecutionRouteIdentity(
+                request.Route.ServiceSlug,
+                "svc-code-alpha",
+                CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog)));
 }

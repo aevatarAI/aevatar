@@ -42,11 +42,11 @@ public sealed class ManagedCodexCredentialReadinessTests
         _nyxId.GetCurrentUserIdAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns("user-a");
         _nyxId.ListUserServicesAsync("user-bearer", Arg.Any<CancellationToken>())
-            .Returns(UserServices("us-sandbox", "us-llm"));
+            .Returns(UserServices("us-managed-codex", "us-llm"));
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
                 Keys(),
-                Keys(Key("key-new", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-new", ["us-managed-codex", "us-llm"])));
         _nyxId.CreateApiKeyAsync(
                 "user-bearer",
                 Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
@@ -384,8 +384,8 @@ public sealed class ManagedCodexCredentialReadinessTests
             .Returns(Snapshot(legacy, stateVersion: 3));
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
-                Keys(Key("key-a", ["us-sandbox"])),
-                Keys(Key("key-a", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-a", ["us-managed-codex"])),
+                Keys(Key("key-a", ["us-managed-codex", "us-llm"])));
         _commands.ConfirmReadinessAsync(
                 Owner("user-a"),
                 Arg.Is<ManagedCodexCredentialDescriptor>(descriptor =>
@@ -418,7 +418,7 @@ public sealed class ManagedCodexCredentialReadinessTests
             "key-a",
             Arg.Is<ManagedCodexNyxIdApiKeyPolicyUpdateRequest>(request =>
                 request.AllowedServiceIds.Count == 2 &&
-                request.AllowedServiceIds.Contains("us-sandbox") &&
+                request.AllowedServiceIds.Contains("us-managed-codex") &&
                 request.AllowedServiceIds.Contains("us-llm")),
             Arg.Any<CancellationToken>());
         await _commands.Received(1).CommitPolicyReconciledAsync(
@@ -439,7 +439,7 @@ public sealed class ManagedCodexCredentialReadinessTests
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
                 Keys(),
-                Keys(Key("key-fresh", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-fresh", ["us-managed-codex", "us-llm"])));
         _nyxId.CreateApiKeyAsync(
                 "user-bearer",
                 Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
@@ -477,8 +477,8 @@ public sealed class ManagedCodexCredentialReadinessTests
             .Returns(Snapshot(ReadyDescriptor(), stateVersion: 3));
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
-                Keys(Key("key-a", ["us-sandbox", "us-llm"])),
-                Keys(Key("key-replacement", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-a", ["us-managed-codex", "us-llm"])),
+                Keys(Key("key-replacement", ["us-managed-codex", "us-llm"])));
         _nyxId.CreateApiKeyAsync(
                 "user-bearer",
                 Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
@@ -518,7 +518,7 @@ public sealed class ManagedCodexCredentialReadinessTests
         SecretResolutionFailureReason failureReason)
     {
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
-            .Returns(Keys(Key("key-recover", ["us-sandbox", "us-llm"])));
+            .Returns(Keys(Key("key-recover", ["us-managed-codex", "us-llm"])));
         _vault.ResolveAsync(
                 Arg.Any<ResolveSecretRequest>(),
                 Arg.Any<CancellationToken>())
@@ -563,8 +563,8 @@ public sealed class ManagedCodexCredentialReadinessTests
             .Returns(projected);
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
-                Keys(Key("key-a", ["us-sandbox", "us-llm"])),
-                Keys(Key("key-replacement", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-a", ["us-managed-codex", "us-llm"])),
+                Keys(Key("key-replacement", ["us-managed-codex", "us-llm"])));
         _nyxId.CreateApiKeyAsync(
                 "user-bearer",
                 Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
@@ -610,8 +610,8 @@ public sealed class ManagedCodexCredentialReadinessTests
             .Returns(projected);
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
-                Keys(Key("key-a", ["us-sandbox", "us-llm"])),
-                Keys(Key("key-replacement", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-a", ["us-managed-codex", "us-llm"])),
+                Keys(Key("key-replacement", ["us-managed-codex", "us-llm"])));
         _nyxId.CreateApiKeyAsync(
                 "user-bearer",
                 Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
@@ -705,8 +705,8 @@ public sealed class ManagedCodexCredentialReadinessTests
             .Returns(projected);
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
-                Keys(Key("key-a", ["us-sandbox", "us-llm"])),
-                Keys(Key("key-replacement", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-a", ["us-managed-codex", "us-llm"])),
+                Keys(Key("key-replacement", ["us-managed-codex", "us-llm"])));
         _nyxId.CreateApiKeyAsync(
                 "user-bearer",
                 Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
@@ -750,8 +750,8 @@ public sealed class ManagedCodexCredentialReadinessTests
             .Returns(projected);
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
-                Keys(Key("key-a", ["us-sandbox", "us-llm"])),
-                Keys(Key("key-replacement", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-a", ["us-managed-codex", "us-llm"])),
+                Keys(Key("key-replacement", ["us-managed-codex", "us-llm"])));
         _nyxId.CreateApiKeyAsync(
                 "user-bearer",
                 Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
@@ -830,8 +830,8 @@ public sealed class ManagedCodexCredentialReadinessTests
             .Returns(Snapshot(ReadyDescriptor(), stateVersion: 3));
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
-                Keys(Key("key-a", ["us-sandbox", "us-llm"])),
-                Keys(Key("key-replacement", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-a", ["us-managed-codex", "us-llm"])),
+                Keys(Key("key-replacement", ["us-managed-codex", "us-llm"])));
         _nyxId.CreateApiKeyAsync(
                 "user-bearer",
                 Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
@@ -879,7 +879,7 @@ public sealed class ManagedCodexCredentialReadinessTests
         _query.ResolveAsync(Owner("user-a"), Arg.Any<CancellationToken>())
             .Returns(projected);
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
-            .Returns(Keys(Key("   ", ["us-sandbox", "us-llm"])));
+            .Returns(Keys(Key("   ", ["us-managed-codex", "us-llm"])));
         _observation.PublishAfterDispatch(Snapshot(
             ReadyDescriptor(),
             stateVersion: 5,
@@ -933,7 +933,7 @@ public sealed class ManagedCodexCredentialReadinessTests
                 Keys(),
                 Keys(
                     issued.Key,
-                    Key("   ", ["us-sandbox", "us-llm"])));
+                    Key("   ", ["us-managed-codex", "us-llm"])));
         _nyxId.CreateApiKeyAsync(
                 "user-bearer",
                 Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
@@ -980,8 +980,8 @@ public sealed class ManagedCodexCredentialReadinessTests
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
                 Keys(Key("key-orphan", ["wrong-service"])),
-                Keys(Key("key-new", ["us-sandbox", "us-llm"])),
-                Keys(Key("   ", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-new", ["us-managed-codex", "us-llm"])),
+                Keys(Key("   ", ["us-managed-codex", "us-llm"])));
         _nyxId.CreateApiKeyAsync(
                 "user-bearer",
                 Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
@@ -1073,9 +1073,9 @@ public sealed class ManagedCodexCredentialReadinessTests
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
                 Keys(
-                    Key("key-orphan-a", ["us-sandbox", "us-llm"]),
-                    Key("key-orphan-b", ["us-sandbox", "us-llm"])),
-                Keys(Key("key-fresh", ["us-sandbox", "us-llm"])));
+                    Key("key-orphan-a", ["us-managed-codex", "us-llm"]),
+                    Key("key-orphan-b", ["us-managed-codex", "us-llm"])),
+                Keys(Key("key-fresh", ["us-managed-codex", "us-llm"])));
         _nyxId.CreateApiKeyAsync(
                 "user-bearer",
                 Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
@@ -1235,7 +1235,7 @@ public sealed class ManagedCodexCredentialReadinessTests
                 Keys(
                     Key("key-orphan-a", ["wrong-service"]),
                     Key("key-orphan-b", ["wrong-service"])),
-                Keys(Key("key-fresh", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-fresh", ["us-managed-codex", "us-llm"])));
         _nyxId.CreateApiKeyAsync(
                 "user-bearer",
                 Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
@@ -1304,7 +1304,7 @@ public sealed class ManagedCodexCredentialReadinessTests
                 Arg.Any<CancellationToken>())
             .Returns(
                 Keys(Key("key-orphan", ["wrong-service"])),
-                Keys(Key("key-fresh", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-fresh", ["us-managed-codex", "us-llm"])));
         _nyxId.CreateApiKeyAsync(
                 "user-bearer",
                 Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
@@ -1374,8 +1374,8 @@ public sealed class ManagedCodexCredentialReadinessTests
             .Returns(Snapshot(ReadyDescriptor(), stateVersion: 3));
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(Keys(
-                Key("key-orphan", ["us-sandbox", "us-llm"]),
-                Key("key-a", ["us-sandbox", "us-llm"])));
+                Key("key-orphan", ["us-managed-codex", "us-llm"]),
+                Key("key-a", ["us-managed-codex", "us-llm"])));
         PublishConfirmedCredential(stateVersion: 4);
 
         var ready = await _lifecycle.EnsureReadyAsync(
@@ -1686,7 +1686,7 @@ public sealed class ManagedCodexCredentialReadinessTests
         _nyxId.ListApiKeysAsync(
                 "user-bearer",
                 Arg.Any<CancellationToken>())
-            .Returns(Keys(Key("key-a", ["us-sandbox", "us-llm"])));
+            .Returns(Keys(Key("key-a", ["us-managed-codex", "us-llm"])));
         _nyxId.RevokeApiKeyAsync(
                 "user-bearer",
                 "key-old",
@@ -1722,7 +1722,7 @@ public sealed class ManagedCodexCredentialReadinessTests
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
                 Keys(),
-                Keys(Key("key-new", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-new", ["us-managed-codex", "us-llm"])));
         _nyxId.CreateApiKeyAsync(
                 "user-bearer",
                 Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
@@ -1787,7 +1787,7 @@ public sealed class ManagedCodexCredentialReadinessTests
         _query.ResolveAsync(Owner("user-a"), Arg.Any<CancellationToken>())
             .Returns(projected);
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
-            .Returns(Keys(Key("key-a", ["us-sandbox", "us-llm"])));
+            .Returns(Keys(Key("key-a", ["us-managed-codex", "us-llm"])));
         _nyxId.RevokeApiKeyAsync(
                 "user-bearer",
                 "key-old",
@@ -1940,7 +1940,7 @@ public sealed class ManagedCodexCredentialReadinessTests
         _query.ResolveAsync(Owner("user-a"), Arg.Any<CancellationToken>())
             .Returns(Snapshot(ReadyDescriptor(), stateVersion: 3));
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
-            .Returns(Keys(Key("key-a", ["us-sandbox", "us-llm"])));
+            .Returns(Keys(Key("key-a", ["us-managed-codex", "us-llm"])));
         _vault.ResolveAsync(
                 Arg.Any<ResolveSecretRequest>(),
                 Arg.Any<CancellationToken>())
@@ -2014,8 +2014,8 @@ public sealed class ManagedCodexCredentialReadinessTests
             .Returns(lagging);
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(Keys(
-                Key("key-old", ["us-sandbox", "us-llm"]),
-                Key("key-new", ["us-sandbox", "us-llm"])));
+                Key("key-old", ["us-managed-codex", "us-llm"]),
+                Key("key-new", ["us-managed-codex", "us-llm"])));
         PublishConfirmedCredential(stateVersion: 6);
         _observation.Publish(trigger);
 
@@ -2079,7 +2079,7 @@ public sealed class ManagedCodexCredentialReadinessTests
         _nyxId.ListApiKeysAsync(
                 "user-bearer",
                 Arg.Any<CancellationToken>())
-            .Returns(Keys(Key("key-a", ["us-sandbox", "us-llm"])));
+            .Returns(Keys(Key("key-a", ["us-managed-codex", "us-llm"])));
         PublishConfirmedCredential(stateVersion: 6);
         var lifecycle = CreateLifecycle(options: options);
 
@@ -2163,7 +2163,7 @@ public sealed class ManagedCodexCredentialReadinessTests
                 Arg.Any<CancellationToken>())
             .Returns(
                 Keys(Key("key-actor-current", ["wrong-service"])),
-                Keys(Key("key-fresh", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-fresh", ["us-managed-codex", "us-llm"])));
         _nyxId.CreateApiKeyAsync(
                 "user-bearer",
                 Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
@@ -2243,8 +2243,8 @@ public sealed class ManagedCodexCredentialReadinessTests
                 "user-bearer",
                 Arg.Any<CancellationToken>())
             .Returns(
-                Keys(Key("key-pending", ["us-sandbox", "us-llm"])),
-                Keys(Key("key-distinct", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-pending", ["us-managed-codex", "us-llm"])),
+                Keys(Key("key-distinct", ["us-managed-codex", "us-llm"])));
         _nyxId.CreateApiKeyAsync(
                 "user-bearer",
                 Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
@@ -2288,8 +2288,8 @@ public sealed class ManagedCodexCredentialReadinessTests
             .Returns(Snapshot(ReadyDescriptor(), stateVersion: 3));
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
-                Keys(Key("key-a", ["us-sandbox", "us-llm"])),
-                Keys(Key("key-replacement", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-a", ["us-managed-codex", "us-llm"])),
+                Keys(Key("key-replacement", ["us-managed-codex", "us-llm"])));
         _vault.ResolveAsync(
                 Arg.Any<ResolveSecretRequest>(),
                 Arg.Any<CancellationToken>())
@@ -2355,8 +2355,8 @@ public sealed class ManagedCodexCredentialReadinessTests
             .Returns(Snapshot(ReadyDescriptor(), stateVersion: 3));
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
-                Keys(Key("key-a", ["us-sandbox", "us-llm"])),
-                Keys(Key("key-replacement", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-a", ["us-managed-codex", "us-llm"])),
+                Keys(Key("key-replacement", ["us-managed-codex", "us-llm"])));
         _vault.ResolveAsync(
                 Arg.Any<ResolveSecretRequest>(),
                 Arg.Any<CancellationToken>())
@@ -2445,7 +2445,7 @@ public sealed class ManagedCodexCredentialReadinessTests
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
                 Keys(),
-                Keys(Key("key-new", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-new", ["us-managed-codex", "us-llm"])));
         _nyxId.CreateApiKeyAsync(
                 "user-bearer",
                 Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
@@ -2511,7 +2511,7 @@ public sealed class ManagedCodexCredentialReadinessTests
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
                 Keys(),
-                Keys(Key("key-new", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-new", ["us-managed-codex", "us-llm"])));
         _vault.PutAsync(
                 Arg.Any<StoreSecretRequest>(),
                 Arg.Any<CancellationToken>())
@@ -2581,7 +2581,7 @@ public sealed class ManagedCodexCredentialReadinessTests
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
                 Keys(),
-                Keys(Key("key-new", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-new", ["us-managed-codex", "us-llm"])));
         _vault.PutAsync(
                 Arg.Any<StoreSecretRequest>(),
                 Arg.Any<CancellationToken>())
@@ -2635,7 +2635,7 @@ public sealed class ManagedCodexCredentialReadinessTests
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
                 Keys(),
-                Keys(Key("key-new", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-new", ["us-managed-codex", "us-llm"])));
         _vault.PutAsync(
                 Arg.Any<StoreSecretRequest>(),
                 Arg.Any<CancellationToken>())
@@ -2906,7 +2906,7 @@ public sealed class ManagedCodexCredentialReadinessTests
                 return listAttempt switch
                 {
                     1 => Keys(Key("key-orphan", ["wrong-service"])),
-                    2 => Keys(Key("key-new", ["us-sandbox", "us-llm"])),
+                    2 => Keys(Key("key-new", ["us-managed-codex", "us-llm"])),
                     _ => throw CleanupFailure(failureKind),
                 };
             });
@@ -2928,7 +2928,7 @@ public sealed class ManagedCodexCredentialReadinessTests
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
                 Keys(Key("key-orphan", ["wrong-service"])),
-                Keys(Key("key-fresh", ["us-sandbox", "us-llm"])));
+                Keys(Key("key-fresh", ["us-managed-codex", "us-llm"])));
         _nyxId.RevokeApiKeyAsync(
                 "user-bearer",
                 "key-orphan",
@@ -3003,9 +3003,9 @@ public sealed class ManagedCodexCredentialReadinessTests
                 $"sec-{apiKeyId}",
                 "managed-codex-credential:nyxid::user-a",
                 Now.AddDays(30)),
-            ChronoSandboxUserServiceId = "us-sandbox",
+            ManagedCodexUserServiceId = "us-managed-codex",
             ChronoLlmUserServiceId = "us-llm",
-            ChronoSandboxServiceSlug = "chrono-sandbox",
+            ManagedCodexServiceSlug = "chrono-managed-codex",
             ExpiresAt = Timestamp.FromDateTimeOffset(Now.AddDays(30)),
             Status = ManagedCodexCredentialStatus.Active,
         };
@@ -3040,7 +3040,7 @@ public sealed class ManagedCodexCredentialReadinessTests
         [
             new ManagedCodexNyxIdService(
                 sandboxId,
-                ManagedCodexOptions.ChronoSandboxServiceSlug,
+                ManagedCodexOptions.ManagedCodexServiceSlug,
                 true,
                 "personal",
                 null,
@@ -3081,7 +3081,7 @@ public sealed class ManagedCodexCredentialReadinessTests
 
     private static ManagedCodexNyxIdIssuedApiKey IssuedKey(string id) =>
         new(
-            Key(id, ["us-sandbox", "us-llm"]),
+            Key(id, ["us-managed-codex", "us-llm"]),
             new ManagedCodexOpaqueSecret(RawKey));
 
     private static string DeterministicSecretRef(

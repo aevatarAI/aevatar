@@ -145,9 +145,9 @@ public class NyxIdChatSystemPromptTests
     }
 
     [Fact]
-    public void Value_ShouldLoadNyxIdServiceDiscoveryBeforeReadingSenderInventory()
+    public void ComposedPrompt_ShouldRouteSenderInventoryThroughPositiveServiceInspection()
     {
-        var prompt = NyxIdChatSystemPrompt.Value.Content;
+        var prompt = ComposedAgentPrompt();
         var skillCall = prompt.IndexOf(
             "first call `use_skill(skill=\"nyxid-service-discovery\")`",
             StringComparison.Ordinal);
@@ -157,14 +157,28 @@ public class NyxIdChatSystemPromptTests
 
         skillCall.Should().BeGreaterThanOrEqualTo(0);
         inventoryCall.Should().BeGreaterThan(skillCall);
-        prompt.Should().Contain("current sender's live inventory");
+        prompt.Should().Contain("route the read through the catalog/service-inspection path");
+        prompt.Should().Contain("typed inventory result as the authority for the current sender");
         prompt.Should().Contain("temporary read failure");
         prompt.Should().Contain("binding is explicitly missing or revoked");
-        prompt.Should().Contain("Do not call `code_execute`");
-        prompt.Should().Contain("`nyxid service list`");
+        prompt.Should().NotContain("Do not call `code_execute`");
         prompt.Should().NotContain("skill=\"nyxid\"");
         prompt.Should().NotContain("call `nyxid_service_inventory` directly");
         prompt.Should().NotContain("Do not load a skill");
+    }
+
+    [Fact]
+    public void ComposedPrompt_ShouldDescribeBothExecutionVerbsWithTargetAwareApproval()
+    {
+        var prompt = ComposedAgentPrompt();
+
+        prompt.Should().Contain("caller-provided exact Python, JavaScript, TypeScript, or Bash source");
+        prompt.Should().Contain("Delegate a natural-language task to Codex");
+        prompt.Should().Contain("`managed_sandbox` for the fixed isolated runtime");
+        prompt.Should().Contain("`private_ssh` for a real user host");
+        prompt.Should().Contain("`private_ssh` requires approval");
+        prompt.Should().NotContain("deterministic sandbox computation");
+        prompt.Should().NotContain("`codex_exec` always requires approval");
     }
 
     [Fact]

@@ -128,8 +128,8 @@ internal sealed class NyxIdManagedCodexChronoTransport(
             CancellationTokenSource.CreateLinkedTokenSource(ct, lifecycleTimeout.Token);
         var response = await secret.UseAsync(rawKey => _clientFactory.CreateClient().ProxyRequestBoundedWithApiKeyAsync(
                 rawKey,
-                ManagedCodexOptions.ChronoSandboxServiceSlug,
-                credential.ChronoSandboxUserServiceId,
+                ManagedCodexOptions.ManagedCodexServiceSlug,
+                credential.ManagedCodexUserServiceId,
                 ManagedCodexOptions.ChronoExecutionPath,
                 HttpMethod.Post.Method,
                 body,
@@ -218,13 +218,13 @@ internal sealed class NyxIdManagedCodexChronoTransport(
                 credential.ExpiresAt.ToDateTimeOffset() <= _timeProvider.GetUtcNow() ||
                 string.IsNullOrWhiteSpace(credential.ApiKeyId) ||
                 !string.Equals(
-                    credential.ChronoSandboxServiceSlug,
-                    ManagedCodexOptions.ChronoSandboxServiceSlug,
+                    credential.ManagedCodexServiceSlug,
+                    ManagedCodexOptions.ManagedCodexServiceSlug,
                     StringComparison.Ordinal) ||
-                string.IsNullOrWhiteSpace(credential.ChronoSandboxUserServiceId) ||
+                string.IsNullOrWhiteSpace(credential.ManagedCodexUserServiceId) ||
                 string.IsNullOrWhiteSpace(credential.ChronoLlmUserServiceId) ||
                 string.Equals(
-                    credential.ChronoSandboxUserServiceId,
+                    credential.ManagedCodexUserServiceId,
                     credential.ChronoLlmUserServiceId,
                     StringComparison.Ordinal) ||
                 credential.SecretReference is null ||
@@ -297,10 +297,14 @@ internal sealed class NyxIdManagedCodexChronoTransport(
             }
 
             var text = Redact(textElement.GetString() ?? string.Empty, rawKey) ?? string.Empty;
-            var exitCode = output.TryGetProperty("exit_code", out var exitCodeElement) &&
-                           exitCodeElement.TryGetInt32(out var parsedExitCode)
-                ? parsedExitCode
-                : (int?)null;
+            if (!output.TryGetProperty("exit_code", out var exitCodeElement) ||
+                !exitCodeElement.TryGetInt32(out var exitCode))
+            {
+                throw Failure(
+                    CodexExecutionFailureKind.MalformedOutput,
+                    "managed_response_invalid",
+                    "Managed Codex returned an invalid response.");
+            }
             var elapsed = output.TryGetProperty("execution_time_ms", out var elapsedElement) &&
                           elapsedElement.TryGetInt64(out var parsedElapsed)
                 ? parsedElapsed
@@ -309,14 +313,6 @@ internal sealed class NyxIdManagedCodexChronoTransport(
                                diagnosticElement.ValueKind == JsonValueKind.String
                 ? Redact(diagnosticElement.GetString(), rawKey)
                 : null;
-            if (exitCode is not 0)
-            {
-                throw Failure(
-                    CodexExecutionFailureKind.TerminalFailure,
-                    "managed_execution_nonzero_exit",
-                    "Managed Codex execution exited unsuccessfully.",
-                    diagnosticId);
-            }
             return new CodexExecutionResult(text, exitCode, diagnosticId, elapsed);
         }
         catch (ManagedCodexTransportException)
@@ -334,7 +330,10 @@ internal sealed class NyxIdManagedCodexChronoTransport(
 
     private ManagedCodexTransportException ProxyFailure(int status, string? response = null)
     {
-        var upstreamCode = TryGetAllowedUpstreamFailureCode(response);
+        var inspection = ChronoProxyFailureInspector.Inspect(response, AllowedUpstreamFailureCodes);
+        var upstreamCode = inspection.UpstreamCode is null
+            ? null
+            : $"managed_upstream_{inspection.UpstreamCode.ToLowerInvariant()}";
         // Bounded shape diagnostics only. Without them a proxy failure carrying no recognizable
         // upstream code is indistinguishable from one whose body we simply failed to parse, and
         // triage cannot tell a gateway-level fault from a chrono-reported one. Never log the body,
@@ -342,17 +341,21 @@ internal sealed class NyxIdManagedCodexChronoTransport(
         _logger.LogWarning(
             "Managed Codex proxy failure. status={Status} bodyBytes={BodyBytes} bodyShape={BodyShape} upstreamCodeResolved={Resolved}",
             status,
-            response?.Length ?? 0,
-            ClassifyBodyShape(response),
+            inspection.BodyBytes,
+            inspection.BodyShape,
             upstreamCode is not null);
         // A typed upstream code names the actual failing stage, so it classifies the failure.
-        // HTTP status alone cannot: chrono-sandbox returns 429 only for the capacity permit and
+        // HTTP status alone cannot: chrono-managed-codex returns 429 only for the capacity permit and
         // uses 502 for provisioning/OpenSandbox faults, so status-only mapping reports "capacity
         // unavailable" for sandbox-creation failures and sends triage the wrong way.
         if (upstreamCode is not null &&
             TryClassifyUpstreamFailure(upstreamCode) is { } upstreamFailure)
         {
-            return Failure(upstreamFailure.Kind, upstreamCode, upstreamFailure.Message);
+            return Failure(
+                upstreamFailure.Kind,
+                upstreamCode,
+                upstreamFailure.Message,
+                inspection.DiagnosticId);
         }
 
         return status switch
@@ -360,27 +363,33 @@ internal sealed class NyxIdManagedCodexChronoTransport(
             401 => Failure(
                 CodexExecutionFailureKind.AdmissionDenied,
                 upstreamCode ?? "managed_proxy_authentication_failed",
-                "Managed Codex proxy authentication failed."),
+                "Managed Codex proxy authentication failed.",
+                inspection.DiagnosticId),
             403 => Failure(
                 CodexExecutionFailureKind.AdmissionDenied,
                 upstreamCode ?? "managed_proxy_authorization_denied",
-                "Managed Codex proxy authorization was denied."),
+                "Managed Codex proxy authorization was denied.",
+                inspection.DiagnosticId),
             404 => Failure(
                 CodexExecutionFailureKind.TargetNotConfigured,
                 upstreamCode ?? "managed_proxy_target_unavailable",
-                "Managed Codex proxy target is unavailable."),
+                "Managed Codex proxy target is unavailable.",
+                inspection.DiagnosticId),
             408 or 504 => Failure(
                 CodexExecutionFailureKind.TimedOut,
                 upstreamCode ?? "managed_proxy_timeout",
-                "Managed Codex proxy request timed out."),
+                "Managed Codex proxy request timed out.",
+                inspection.DiagnosticId),
             429 or 502 or 503 => Failure(
                 CodexExecutionFailureKind.CapacityUnavailable,
                 upstreamCode ?? "managed_proxy_unavailable",
-                "Managed Codex proxy is temporarily unavailable."),
+                "Managed Codex proxy is temporarily unavailable.",
+                inspection.DiagnosticId),
             _ => Failure(
                 CodexExecutionFailureKind.TerminalFailure,
                 upstreamCode ?? "managed_proxy_failed",
-                "Managed Codex proxy request failed."),
+                "Managed Codex proxy request failed.",
+                inspection.DiagnosticId),
         };
     }
 
@@ -388,52 +397,8 @@ internal sealed class NyxIdManagedCodexChronoTransport(
     /// Classifies a proxy failure body into a fixed, non-sensitive shape label. The labels are a
     /// closed set derived from structure only — no upstream content is read into the result.
     /// </summary>
-    private static string ClassifyBodyShape(string? response)
-    {
-        if (string.IsNullOrWhiteSpace(response))
-            return "empty";
-
-        JsonDocument document;
-        try
-        {
-            document = JsonDocument.Parse(response);
-        }
-        catch (JsonException)
-        {
-            return "non_json";
-        }
-
-        using (document)
-        {
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object)
-                return "json_non_object";
-            // chrono's own error shape is {"error":{"code":...}}. NyxID wraps upstream failures as
-            // {"error":true,"status":N,"body":...}, so a non-object `error` must fall through to the
-            // nested body — that nesting is exactly what distinguishes a gateway-level failure from
-            // a chrono-reported one.
-            if (root.TryGetProperty("error", out var error) &&
-                error.ValueKind == JsonValueKind.Object)
-            {
-                return error.TryGetProperty("code", out var code) &&
-                       code.ValueKind == JsonValueKind.String
-                    ? "json_error_code"
-                    : "json_error_untyped";
-            }
-
-            if (!root.TryGetProperty("body", out var body))
-                return error.ValueKind == JsonValueKind.Undefined
-                    ? "json_without_error"
-                    : "json_error_untyped";
-
-            return body.ValueKind switch
-            {
-                JsonValueKind.Object => "nested_body_object",
-                JsonValueKind.String => "nested_body_string",
-                _ => "nested_body_other",
-            };
-        }
-    }
+    private static string ClassifyBodyShape(string? response) =>
+        ChronoProxyFailureInspector.ClassifyBodyShape(response);
 
     /// <summary>
     /// Maps an allowlisted upstream failure code to the stage it actually failed at. Codes are
@@ -460,61 +425,6 @@ internal sealed class NyxIdManagedCodexChronoTransport(
                 "Managed Codex capacity is unavailable upstream."),
             _ => null,
         };
-
-    private static string? TryGetAllowedUpstreamFailureCode(string? response)
-    {
-        if (string.IsNullOrWhiteSpace(response))
-            return null;
-
-        try
-        {
-            using var document = JsonDocument.Parse(response);
-            return TryGetAllowedUpstreamFailureCode(document.RootElement, allowNestedBody: true);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    private static string? TryGetAllowedUpstreamFailureCode(
-        JsonElement root,
-        bool allowNestedBody)
-    {
-        if (root.ValueKind != JsonValueKind.Object)
-            return null;
-
-        if (root.TryGetProperty("error", out var error) &&
-            error.ValueKind == JsonValueKind.Object &&
-            error.TryGetProperty("code", out var codeElement) &&
-            codeElement.ValueKind == JsonValueKind.String &&
-            codeElement.GetString() is { } code &&
-            AllowedUpstreamFailureCodes.Contains(code))
-        {
-            return $"managed_upstream_{code.ToLowerInvariant()}";
-        }
-
-        if (!allowNestedBody || !root.TryGetProperty("body", out var body))
-            return null;
-
-        if (body.ValueKind == JsonValueKind.Object)
-            return TryGetAllowedUpstreamFailureCode(body, allowNestedBody: false);
-
-        if (body.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(body.GetString()))
-            return null;
-
-        try
-        {
-            using var bodyDocument = JsonDocument.Parse(body.GetString()!);
-            return TryGetAllowedUpstreamFailureCode(
-                bodyDocument.RootElement,
-                allowNestedBody: false);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
 
     private static string? Redact(string? value, string rawKey) =>
         value?.Replace(rawKey, "[REDACTED]", StringComparison.Ordinal);

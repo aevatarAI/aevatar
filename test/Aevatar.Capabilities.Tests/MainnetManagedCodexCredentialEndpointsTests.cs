@@ -493,9 +493,9 @@ public sealed class MainnetManagedCodexCredentialEndpointsTests
                 Version = 1,
                 ExpiresAtUnixMs = expiresAt.ToUnixTimeMilliseconds(),
             },
-            ChronoSandboxUserServiceId = "us-sandbox",
+            ManagedCodexUserServiceId = "us-managed-codex",
             ChronoLlmUserServiceId = "us-llm",
-            ChronoSandboxServiceSlug = "chrono-sandbox",
+            ManagedCodexServiceSlug = "chrono-managed-codex",
             ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(expiresAt),
             Status = ManagedCodexCredentialStatus.Active,
         };

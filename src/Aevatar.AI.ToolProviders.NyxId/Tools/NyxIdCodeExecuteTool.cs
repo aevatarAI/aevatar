@@ -1,149 +1,59 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
-using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>
-/// First-class code execution tool. Wraps the chrono-sandbox proxy service
-/// with a clean interface so the agent can run code without needing to
-/// discover services or guess API paths.
+/// Executes caller-provided source through the runtime-neutral code execution boundary.
 /// </summary>
-public sealed class NyxIdCodeExecuteTool : INyxIdBuiltInTool
+public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INyxIdBuiltInTool
 {
-    private readonly NyxIdApiClient _client;
-    private readonly ILogger _logger;
-    private readonly string? _sandboxServiceSlug;
-
-    public NyxIdCodeExecuteTool(
-        NyxIdApiClient client,
-        ILogger? logger = null,
-        string? sandboxServiceSlug = NyxIdToolOptions.DefaultSandboxServiceSlug)
+    private static readonly HashSet<string> CompletedFailureCodes = new(StringComparer.Ordinal)
     {
-        _client = client;
-        _logger = logger ?? NullLogger.Instance;
-        _sandboxServiceSlug = string.IsNullOrWhiteSpace(sandboxServiceSlug)
-            ? null
-            : sandboxServiceSlug.Trim();
-    }
+        "code_execution_failed",
+        "DEPENDENCY_INSTALL_FAILED",
+        "EXECUTION_FAILED",
+    };
+
+    private static readonly HashSet<string> PreExecutionFailureCodes = new(StringComparer.Ordinal)
+    {
+        "code_execution_credential_unavailable",
+        "code_execution_outcome_invalid",
+        "code_execution_request_invalid",
+        "code_execution_response_invalid",
+        "code_execution_response_too_large",
+        "code_execution_route_resolution_failed",
+        "code_execution_route_unavailable",
+        "code_execution_timed_out",
+        "code_execution_transport_unavailable",
+        "INTERNAL_ERROR",
+        "INVALID_REQUEST",
+        "NYXID_PROXY_FORBIDDEN",
+        "NYXID_PROXY_HTTP_404",
+        "NYXID_PROXY_HTTP_429",
+        "NYXID_PROXY_HTTP_502",
+        "NYXID_PROXY_UNAUTHORIZED",
+        "SANDBOX_CREATION_FAILED",
+        "SANDBOX_TIMEOUT",
+        "SANDBOX_UNREACHABLE",
+    };
+
+    private readonly ICodeExecutionPort _executionPort =
+        executionPort ?? throw new ArgumentNullException(nameof(executionPort));
 
     public string Name => "code_execute";
 
     public string Description =>
-        "Execute code in a sandboxed environment. " +
+        "Execute caller-provided exact source code in a one-shot remote code runtime. " +
         "Supports Python, JavaScript, TypeScript, and Bash. " +
-        "Returns stdout, stderr, and exit code.";
+        "Returns stdout, stderr, and exit code. " +
+        "Use it for an explicit program; delegate a natural-language task to codex_exec instead.";
 
-    // Approval intentionally not required (by design): code runs entirely in the
-    // remote, isolated chrono-sandbox service (see class summary) — never on this
-    // host — and only { language, script } is forwarded, so no caller token,
-    // secrets, or env enter the sandbox runtime. The sandbox is the isolation
-    // boundary, so a host-side approval gate adds nothing here. Contrast
-    // NyxIdSshExecTool, which targets a real host and so keeps ApprovalMode.Auto.
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
-    // Workflow authoring restricts this tool to deterministic sandbox computation without
-    // external service calls. The isolated execution has no durable external effect to replay.
     public bool IsReadOnly => true;
-
-    public AgentToolReceipt? CreateResultReceipt(
-        string callId,
-        string toolName,
-        string argumentsJson,
-        string resultJson)
-    {
-        var proxyReceipt = NyxIdProxyReceiptFactory.TryCreate(
-            callId,
-            toolName,
-            _sandboxServiceSlug ?? NyxIdToolOptions.DefaultSandboxServiceSlug,
-            userServiceId: null,
-            serviceLabel: null,
-            resourceUri: "/execute",
-            resultJson);
-        if (proxyReceipt != null)
-            return proxyReceipt;
-
-        try
-        {
-            using var document = JsonDocument.Parse(resultJson);
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object)
-                return null;
-
-            if (root.TryGetProperty("success", out var success))
-                return CreateChronoSandboxReceipt(callId, toolName, root, success);
-
-            var hasError = root.TryGetProperty("error", out _);
-            var exitCodeValue = 0;
-            var hasExitCode = root.TryGetProperty("exit_code", out var exitCode) &&
-                              exitCode.TryGetInt32(out exitCodeValue);
-            var nonZeroExit = hasExitCode && exitCodeValue != 0;
-            if (hasError || nonZeroExit)
-                return CreateFailureReceipt(callId, toolName);
-
-            if (!hasExitCode)
-                return null;
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-
-        return CreateSuccessReceipt(callId, toolName);
-    }
-
-    private AgentToolReceipt? CreateChronoSandboxReceipt(
-        string callId,
-        string toolName,
-        JsonElement root,
-        JsonElement success)
-    {
-        if (success.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
-            !root.TryGetProperty("output", out var output) ||
-            output.ValueKind != JsonValueKind.Object ||
-            !output.TryGetProperty("exit_code", out var exitCode) ||
-            !exitCode.TryGetInt32(out var exitCodeValue))
-        {
-            return null;
-        }
-
-        if (success.GetBoolean())
-        {
-            return exitCodeValue == 0 && !root.TryGetProperty("error", out _)
-                ? CreateSuccessReceipt(callId, toolName)
-                : null;
-        }
-
-        return exitCodeValue != 0 &&
-               root.TryGetProperty("error", out var error) &&
-               error.ValueKind == JsonValueKind.Object
-            ? CreateFailureReceipt(callId, toolName)
-            : null;
-    }
-
-    private AgentToolReceipt CreateSuccessReceipt(string callId, string toolName) =>
-        new()
-        {
-            CallId = callId ?? string.Empty,
-            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
-            Status = AgentToolReceiptStatus.Success,
-            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
-        };
-
-    private AgentToolReceipt CreateFailureReceipt(string callId, string toolName) =>
-        new()
-        {
-            CallId = callId ?? string.Empty,
-            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
-            Status = AgentToolReceiptStatus.Error,
-            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
-            ErrorCode = "CODE_EXECUTE_FAILED",
-            ErrorMessage = "Code execution failed.",
-            ResultJson = "{\"error\":\"CODE_EXECUTE_FAILED\",\"message\":\"Code execution failed.\"}",
-        };
 
     public string ParametersSchema => """
         {
@@ -163,146 +73,286 @@ public sealed class NyxIdCodeExecuteTool : INyxIdBuiltInTool
         }
         """;
 
-    public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+    public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+        (await ExecuteCoreAsync(string.Empty, Name, argumentsJson, ct).ConfigureAwait(false)).ResultJson;
+
+    public Task<AgentToolTerminalOutcome> ExecuteWithOutcomeAsync(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        CancellationToken ct = default) =>
+        ExecuteCoreAsync(callId, toolName, argumentsJson, ct);
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson)
     {
-        var token = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
-                        AgentToolRequestContext.Current?.Credentials)
-                    ?? AgentToolRequestContext.NyxIdAccessToken;
-        if (string.IsNullOrWhiteSpace(token))
-            return """{"error":"No NyxID access token available. User must be authenticated."}""";
-
-        var args = ToolArgs.Parse(argumentsJson);
-        var language = args.Str("language");
-        var code = args.Str("code");
-
-        if (string.IsNullOrWhiteSpace(language) || string.IsNullOrWhiteSpace(code))
-            return """{"error":"Both 'language' and 'code' are required."}""";
-
-        // A connected-service selection wins when present. Otherwise use the
-        // host-owned route that the OAuth binding requested as a resource.
-        var slug = ResolveSandboxSlugFromContext()
-                   ?? _sandboxServiceSlug
-                   ?? await DiscoverSandboxSlugAsync(token, ct);
-
-        if (string.IsNullOrWhiteSpace(slug))
-        {
-            return """{"error":"No sandbox service connected. Use nyxid_catalog to browse available sandbox services, then connect one with nyxid_services."}""";
-        }
-
-        _logger.LogInformation("[code_execute] {Language} via slug={Slug}", language, slug);
-
-        // chrono-sandbox exposes /execute with body { language, script }.
-        // Older sandbox builds expose /run with body { language, code }. We POST the modern
-        // contract first; on a NyxID-proxy 404 (slug exists but upstream returned 404, which
-        // indicates the path doesn't exist on that backend), retry the legacy contract so a
-        // host still pinned to the old sandbox keeps working.
-        var modernBody = JsonSerializer.Serialize(new { language = language, script = code });
-        var modernResult = await _client.ProxyRequestAsync(token, slug, "/execute", "POST", modernBody, null, ct);
-        if (!IsUpstream404(modernResult))
-            return modernResult;
-
-        _logger.LogInformation(
-            "[code_execute] {Slug} returned 404 on /execute; retrying legacy /run contract", slug);
-        var legacyBody = JsonSerializer.Serialize(new { language = language, code = code });
-        return await _client.ProxyRequestAsync(token, slug, "/run", "POST", legacyBody, null, ct);
-    }
-
-    /// <summary>
-    /// NyxID's proxy wraps non-2xx upstream responses as
-    /// <c>{"error":true,"status":N,"body":"..."}</c>. A 404 here means "slug exists but the
-    /// requested path doesn't" — the case where we should retry the legacy contract.
-    /// Service-not-found / catalog-miss surfaces with a different shape and is left alone.
-    /// </summary>
-    private static bool IsUpstream404(string proxyResponse)
-    {
-        if (string.IsNullOrWhiteSpace(proxyResponse))
-            return false;
         try
         {
-            using var doc = JsonDocument.Parse(proxyResponse);
-            var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return false;
-            if (!root.TryGetProperty("error", out var errProp) ||
-                errProp.ValueKind != JsonValueKind.True)
+            using var document = JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("success", out var success) ||
+                success.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
             {
-                return false;
+                return null;
             }
-            return root.TryGetProperty("status", out var statusProp) &&
-                   statusProp.ValueKind == JsonValueKind.Number &&
-                   statusProp.GetInt32() == 404;
+
+            if (success.GetBoolean())
+            {
+                return TryReadResult(root, out var result) && result.ExitCode == 0
+                    ? SuccessReceipt(callId, toolName, resultJson, userServiceId: null)
+                    : null;
+            }
+
+            if (!TryReadNonEmptyString(root, "error", out var error) ||
+                !TryReadNonEmptyString(root, "code", out var code) ||
+                !TryReadNonEmptyString(root, "message", out var message) ||
+                !string.Equals(error, code, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            if (CompletedFailureCodes.Contains(code))
+            {
+                if (!TryReadResult(root, out var failedResult) || failedResult.ExitCode == 0)
+                    return null;
+            }
+            else if (!PreExecutionFailureCodes.Contains(code) || root.TryGetProperty("output", out _))
+            {
+                return null;
+            }
+
+            return FailureReceipt(callId, toolName, resultJson, code, message, userServiceId: null);
         }
         catch (JsonException)
         {
+            return null;
+        }
+    }
+
+    private async Task<AgentToolTerminalOutcome> ExecuteCoreAsync(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        CancellationToken ct)
+    {
+        var args = ToolArgs.Parse(argumentsJson);
+        var language = args.Str("language");
+        var source = args.Str("code");
+        if (string.IsNullOrWhiteSpace(language) || string.IsNullOrWhiteSpace(source))
+        {
+            return TerminalFailure(
+                callId,
+                toolName,
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "code_execution_request_invalid",
+                    "Both 'language' and 'code' are required."));
+        }
+
+        if (!TryParseLanguage(language, out var codeLanguage))
+        {
+            return TerminalFailure(
+                callId,
+                toolName,
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "code_execution_request_invalid",
+                    "Language must be one of: python, javascript, typescript, bash."));
+        }
+
+        var bearerToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
+            AgentToolRequestContext.Current?.Credentials);
+        if (string.IsNullOrWhiteSpace(bearerToken))
+        {
+            return TerminalFailure(
+                callId,
+                toolName,
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "code_execution_credential_unavailable",
+                    "A source-readable NyxID credential is required for code execution."));
+        }
+
+        var outcome = await _executionPort.ExecuteAsync(
+                new CodeExecutionRequest(
+                    codeLanguage,
+                    source,
+                    new CodeExecutionRouteIdentity(
+                        CodeExecutionContract.ServiceSlug,
+                        UserServiceId: null,
+                        CodeExecutionRouteIdentitySource.CodeExecutionContract),
+                    new CodeExecutionCallerContext(bearerToken)),
+                ct)
+            .ConfigureAwait(false);
+        return Terminal(callId, toolName, outcome);
+    }
+
+    private static bool TryParseLanguage(string language, out CodeExecutionLanguage result)
+    {
+        result = language.Trim() switch
+        {
+            "python" => CodeExecutionLanguage.Python,
+            "javascript" => CodeExecutionLanguage.JavaScript,
+            "typescript" => CodeExecutionLanguage.TypeScript,
+            "bash" => CodeExecutionLanguage.Bash,
+            _ => CodeExecutionLanguage.Unspecified,
+        };
+        return result != CodeExecutionLanguage.Unspecified;
+    }
+
+    private static AgentToolTerminalOutcome Terminal(
+        string callId,
+        string toolName,
+        CodeExecutionOutcome outcome)
+    {
+        if (!IsValidOutcome(outcome))
+        {
+            return TerminalFailure(
+                callId,
+                toolName,
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.MalformedOutput,
+                    "code_execution_outcome_invalid",
+                    "Code execution returned an invalid outcome."));
+        }
+
+        var resultJson = SerializeOutcome(outcome);
+        var userServiceId = outcome.ResolvedRoute?.UserServiceId;
+        var receipt = outcome.Failure is null
+            ? SuccessReceipt(callId, toolName, resultJson, userServiceId)
+            : FailureReceipt(
+                callId,
+                toolName,
+                resultJson,
+                outcome.Failure.Code,
+                outcome.Failure.Message,
+                userServiceId);
+        return new AgentToolTerminalOutcome(resultJson, receipt);
+    }
+
+    private static AgentToolTerminalOutcome TerminalFailure(
+        string callId,
+        string toolName,
+        CodeExecutionFailure failure) =>
+        Terminal(callId, toolName, CodeExecutionOutcome.Failed(failure));
+
+    private static bool IsValidOutcome(CodeExecutionOutcome outcome)
+    {
+        if (outcome.Result is null)
+            return outcome.Failure is not null;
+        if (outcome.Failure is null)
+            return outcome.Result.ExitCode == 0 && outcome.ResolvedRoute is not null;
+
+        return outcome.Result.ExitCode != 0 &&
+               outcome.Failure.Kind == CodeExecutionFailureKind.ExecutionFailed &&
+               outcome.ResolvedRoute is not null;
+    }
+
+    private static AgentToolReceipt SuccessReceipt(
+        string callId,
+        string toolName,
+        string resultJson,
+        string? userServiceId) =>
+        NyxIdProxyReceiptFactory.CreateSuccess(callId, toolName, userServiceId, resultJson) ??
+        new AgentToolReceipt
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = string.IsNullOrWhiteSpace(toolName) ? "code_execute" : toolName,
+            Status = AgentToolReceiptStatus.Success,
+            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            ResultJson = resultJson,
+        };
+
+    private static AgentToolReceipt FailureReceipt(
+        string callId,
+        string toolName,
+        string resultJson,
+        string errorCode,
+        string errorMessage,
+        string? userServiceId) =>
+        NyxIdProxyReceiptFactory.CreateError(
+            callId,
+            string.IsNullOrWhiteSpace(toolName) ? "code_execute" : toolName,
+            userServiceId,
+            errorCode,
+            errorMessage,
+            resultJson);
+
+    private static string SerializeOutcome(CodeExecutionOutcome outcome)
+    {
+        var result = outcome.Result;
+        var failure = outcome.Failure;
+        if (failure is null && result is not null)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                success = true,
+                output = Output(result),
+            });
+        }
+
+        if (result is not null)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                success = false,
+                output = Output(result),
+                error = failure!.Code,
+                code = failure.Code,
+                message = failure.Message,
+                diagnostic_id = failure.DiagnosticId,
+            });
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            success = false,
+            error = failure!.Code,
+            code = failure.Code,
+            message = failure.Message,
+            diagnostic_id = failure.DiagnosticId,
+        });
+    }
+
+    private static object Output(CodeExecutionResult result) => new
+    {
+        stdout = result.Stdout,
+        stderr = result.Stderr,
+        exit_code = result.ExitCode,
+        diagnostic_id = result.DiagnosticId,
+        execution_time_ms = result.ElapsedMilliseconds,
+    };
+
+    private static bool TryReadResult(JsonElement root, out CodeExecutionResult result)
+    {
+        result = new CodeExecutionResult(string.Empty, string.Empty, 0);
+        if (!root.TryGetProperty("output", out var output) ||
+            output.ValueKind != JsonValueKind.Object ||
+            !TryReadString(output, "stdout", out var stdout) ||
+            !TryReadString(output, "stderr", out var stderr) ||
+            !output.TryGetProperty("exit_code", out var exitCode) ||
+            !exitCode.TryGetInt32(out var exitCodeValue))
+        {
             return false;
         }
+
+        result = new CodeExecutionResult(stdout, stderr, exitCodeValue);
+        return true;
     }
 
-    /// <summary>
-    /// Extracts sandbox slug from the connected services context injected by the endpoint middleware.
-    /// </summary>
-    private static string? ResolveSandboxSlugFromContext()
+    private static bool TryReadString(JsonElement owner, string name, out string value)
     {
-        var context = AgentToolRequestContext.ConnectedServicesContext;
-        if (string.IsNullOrWhiteSpace(context))
-            return null;
-
-        // Parse the connected services context to find sandbox slug.
-        // The context contains lines like: "- **name** (slug: `chrono-sandbox`)"
-        foreach (var line in context.Split('\n'))
-        {
-            if (!line.Contains("sandbox", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            var slugStart = line.IndexOf("slug: `", StringComparison.Ordinal);
-            if (slugStart < 0) continue;
-            slugStart += "slug: `".Length;
-            var slugEnd = line.IndexOf('`', slugStart);
-            if (slugEnd <= slugStart) continue;
-
-            return line[slugStart..slugEnd];
-        }
-
-        return null;
+        value = string.Empty;
+        if (!owner.TryGetProperty(name, out var element) || element.ValueKind != JsonValueKind.String)
+            return false;
+        value = element.GetString() ?? string.Empty;
+        return true;
     }
 
-    /// <summary>
-    /// Fallback for hosts that explicitly leave the configured sandbox slug empty:
-    /// call DiscoverProxyServices API to find a sandbox service.
-    /// </summary>
-    private async Task<string?> DiscoverSandboxSlugAsync(string token, CancellationToken ct)
-    {
-        try
-        {
-            var json = await _client.DiscoverProxyServicesAsync(token, ct);
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            JsonElement items = root;
-            if (root.ValueKind == JsonValueKind.Object)
-            {
-                if (root.TryGetProperty("services", out var svc)) items = svc;
-                else if (root.TryGetProperty("data", out var data)) items = data;
-            }
-
-            if (items.ValueKind != JsonValueKind.Array)
-                return null;
-
-            foreach (var item in items.EnumerateArray())
-            {
-                var slug = item.TryGetProperty("slug", out var s) ? s.GetString() : null;
-                if (!string.IsNullOrWhiteSpace(slug) &&
-                    slug.Contains("sandbox", StringComparison.OrdinalIgnoreCase))
-                {
-                    _logger.LogInformation("[code_execute] Discovered sandbox slug via fallback: {Slug}", slug);
-                    return slug;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "[code_execute] Fallback sandbox discovery failed");
-        }
-
-        return null;
-    }
+    private static bool TryReadNonEmptyString(JsonElement owner, string name, out string value) =>
+        TryReadString(owner, name, out value) && !string.IsNullOrWhiteSpace(value);
 }

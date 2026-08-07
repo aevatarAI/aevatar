@@ -193,17 +193,17 @@ public sealed class ManagedCodexCredentialReadinessAssessmentTests
                 snapshot.Credential.ApiKeyId = " ";
                 break;
             case ServiceBindingFault.BlankSandboxUserServiceId:
-                snapshot.Credential.ChronoSandboxUserServiceId = " ";
+                snapshot.Credential.ManagedCodexUserServiceId = " ";
                 break;
             case ServiceBindingFault.BlankLlmUserServiceId:
                 snapshot.Credential.ChronoLlmUserServiceId = " ";
                 break;
             case ServiceBindingFault.EqualUserServiceIds:
                 snapshot.Credential.ChronoLlmUserServiceId =
-                    snapshot.Credential.ChronoSandboxUserServiceId;
+                    snapshot.Credential.ManagedCodexUserServiceId;
                 break;
             case ServiceBindingFault.WrongSandboxSlug:
-                snapshot.Credential.ChronoSandboxServiceSlug = "sandbox-alias";
+                snapshot.Credential.ManagedCodexServiceSlug = "sandbox-alias";
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(fault), fault, null);
@@ -266,9 +266,9 @@ public sealed class ManagedCodexCredentialReadinessAssessmentTests
                     Version = 1,
                     ExpiresAtUnixMs = expiresAt.ToUnixTimeMilliseconds(),
                 },
-                ChronoSandboxUserServiceId = "us-sandbox",
+                ManagedCodexUserServiceId = "us-managed-codex",
                 ChronoLlmUserServiceId = "us-llm",
-                ChronoSandboxServiceSlug = ManagedCodexOptions.ChronoSandboxServiceSlug,
+                ManagedCodexServiceSlug = ManagedCodexOptions.ManagedCodexServiceSlug,
                 ExpiresAt = Timestamp.FromDateTimeOffset(expiresAt),
                 Status = ManagedCodexCredentialStatus.Active,
             },

@@ -448,18 +448,20 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         catch (Exception ex)
         {
             LogCodexExecutionFailure(ex, credentialDecision.ExecutionContext.WorkflowRuntime);
+            var failureEvidence = ResolveExceptionFailureEvidence(ex);
             outcome = CreateFailure(
                 tool,
                 toolName,
                 toolCallId,
                 callSafety,
                 isMutation,
-                ResolveExceptionErrorCode(ex),
-                SafeExceptionClass(ex),
+                failureEvidence.Code,
+                failureEvidence.Message,
                 AgentToolExecutionFailureStage.TerminalExecution,
                 terminalInvoked: reconciledOutcome is null,
                 retryable: false,
-                auditCompleted: false);
+                auditCompleted: false,
+                diagnosticId: failureEvidence.DiagnosticId);
             activity?.SetTag("gen_ai.tool.status", "error");
             activity?.SetTag("error.type", ex.GetType().FullName);
             activity?.SetStatus(ActivityStatusCode.Error, outcome.SafeMessage);
@@ -929,9 +931,10 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         AgentToolExecutionFailureStage failureStage,
         bool terminalInvoked,
         bool retryable,
-        bool auditCompleted)
+        bool auditCompleted,
+        string? diagnosticId = null)
     {
-        var resultJson = BuildFailureJson(failureCode, safeMessage, toolName);
+        var resultJson = BuildFailureJson(failureCode, safeMessage, toolName, diagnosticId);
         var receipt = AgentToolReceiptFactory.CreateError(
             tool,
             toolCallId,
@@ -1071,8 +1074,21 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         return Convert.ToHexStringLower(SHA256.HashData(stream.GetBuffer().AsSpan(0, checked((int)stream.Length))));
     }
 
-    private static string BuildFailureJson(string code, string message, string toolName) =>
-        JsonSerializer.Serialize(new { error = code, code, message, tool_name = toolName });
+    private static string BuildFailureJson(
+        string code,
+        string message,
+        string toolName,
+        string? diagnosticId = null) =>
+        diagnosticId is null
+            ? JsonSerializer.Serialize(new { error = code, code, message, tool_name = toolName })
+            : JsonSerializer.Serialize(new
+            {
+                error = code,
+                code,
+                message,
+                diagnostic_id = diagnosticId,
+                tool_name = toolName,
+            });
 
     private static string SafeExceptionClass(Exception ex) => ex.GetType().Name;
 
@@ -1120,9 +1136,9 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         if (exception is not CodexExecutionException codexException)
             return "tool_execution_exception";
 
-        var managedUpstreamCode = ManagedCodexUpstreamErrorCode.Resolve(codexException.Failure.Code);
-        if (managedUpstreamCode is not null)
-            return managedUpstreamCode;
+        var ownedExecutionCode = ToolExecutionAuditErrorCode.Resolve(codexException.Failure.Code);
+        if (ownedExecutionCode is not null)
+            return ownedExecutionCode;
 
         return codexException.Failure.Kind switch
         {
@@ -1141,6 +1157,63 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             _ => "tool_execution_exception",
         };
     }
+
+    private static (string Code, string Message, string? DiagnosticId) ResolveExceptionFailureEvidence(
+        Exception exception)
+    {
+        var code = ResolveExceptionErrorCode(exception);
+        if (exception is not CodexExecutionException codexException)
+            return (code, SafeExceptionClass(exception), null);
+
+        var ownedCode = ToolExecutionAuditErrorCode.Resolve(codexException.Failure.Code);
+        var message = ownedCode is null
+            ? CanonicalCodexFailureMessage(codexException.Failure.Kind)
+            : SafeCodexFailureMessage(codexException.Failure.Message, code);
+        return (
+            code,
+            message,
+            SafeDiagnosticId(codexException.Failure.DiagnosticId));
+    }
+
+    private static string SafeCodexFailureMessage(string? value, string fallback)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrEmpty(normalized) ||
+               normalized.Length > 512 ||
+               normalized.Any(static character => char.IsControl(character))
+            ? fallback
+            : normalized;
+    }
+
+    private static string? SafeDiagnosticId(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrEmpty(normalized) ||
+               normalized.Length > 128 ||
+               normalized.Any(static character =>
+                   !char.IsAsciiLetterOrDigit(character) &&
+                   character is not ('_' or '-' or '.' or ':'))
+            ? null
+            : normalized;
+    }
+
+    private static string CanonicalCodexFailureMessage(CodexExecutionFailureKind kind) =>
+        kind switch
+        {
+            CodexExecutionFailureKind.TargetNotConfigured => "Codex execution target is not configured.",
+            CodexExecutionFailureKind.AdmissionDenied => "Codex execution was not admitted.",
+            CodexExecutionFailureKind.LlmProviderNotConnected => "Codex LLM provider is not connected.",
+            CodexExecutionFailureKind.CapacityUnavailable => "Codex execution capacity is unavailable.",
+            CodexExecutionFailureKind.ProvisioningFailed => "Codex execution provisioning failed.",
+            CodexExecutionFailureKind.ReadinessFailed => "Codex execution target is not ready.",
+            CodexExecutionFailureKind.IsolationUnavailable => "Codex execution isolation is unavailable.",
+            CodexExecutionFailureKind.MalformedOutput => "Codex execution returned malformed output.",
+            CodexExecutionFailureKind.TerminalFailure => "Codex execution failed.",
+            CodexExecutionFailureKind.TimedOut => "Codex execution timed out.",
+            CodexExecutionFailureKind.Cancelled => "Codex execution was cancelled.",
+            CodexExecutionFailureKind.CleanupFailed => "Codex execution cleanup failed.",
+            _ => "Codex execution failed.",
+        };
 
     private static string? NormalizeIdentity(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

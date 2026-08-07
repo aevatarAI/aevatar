@@ -40,7 +40,6 @@ public sealed class BuiltInPromptFloorProviderTests
     [InlineData("then call `nyxid_service_inventory`")]
     [InlineData("temporary read failure")]
     [InlineData("binding is explicitly missing or revoked")]
-    [InlineData("`nyxid service list`")]
     [InlineData("ornn_search_skills")]
     [InlineData("api-github-pat")]
     [InlineData("provider-backed relay registration")]
@@ -66,8 +65,9 @@ public sealed class BuiltInPromptFloorProviderTests
 
         skillCall.Should().BeGreaterThanOrEqualTo(0);
         inventoryCall.Should().BeGreaterThan(skillCall);
-        floor.Should().Contain("current sender's live inventory");
-        floor.Should().Contain("Do not call `code_execute`");
+        floor.Should().Contain("route the read through the catalog/service-inspection path");
+        floor.Should().Contain("typed inventory result as the authority for the current sender");
+        floor.Should().NotContain("Do not call `code_execute`");
         floor.Should().NotContain("typed-tool exception");
         floor.Should().NotContain("call `nyxid_service_inventory` directly");
         floor.Should().NotContain("Do not call `use_skill`");

@@ -427,7 +427,6 @@ public sealed class NyxIdApiAccessContractTests
         services.AddNyxIdTools(options =>
         {
             options.BaseUrl = "https://tools-first.test";
-            options.SandboxServiceSlug = "sandbox-tools-first";
             options.EnableSshExecTool = true;
             options.ProxyFileArtifactMaxBytes = 42_000_000;
         });
@@ -437,7 +436,6 @@ public sealed class NyxIdApiAccessContractTests
         using var provider = services.BuildServiceProvider();
         var options = provider.GetRequiredService<NyxIdToolOptions>();
         options.BaseUrl.Should().Be("https://api-later.test");
-        options.SandboxServiceSlug.Should().Be("sandbox-tools-first");
         options.EnableSshExecTool.Should().BeTrue();
         options.ProxyFileArtifactMaxBytes.Should().Be(42_000_000);
         AssertApiAccessRegistrationsAreSingle(services);
@@ -451,7 +449,6 @@ public sealed class NyxIdApiAccessContractTests
 
         services.AddNyxIdTools(options =>
         {
-            options.SandboxServiceSlug = "sandbox-tools-later";
             options.EnableManagedCodexExecTool = true;
             options.ProxyFileArtifactMaxBytes = 37_000_000;
         });
@@ -459,7 +456,6 @@ public sealed class NyxIdApiAccessContractTests
         using var provider = services.BuildServiceProvider();
         var options = provider.GetRequiredService<NyxIdToolOptions>();
         options.BaseUrl.Should().Be("https://api-first.test");
-        options.SandboxServiceSlug.Should().Be("sandbox-tools-later");
         options.EnableManagedCodexExecTool.Should().BeTrue();
         options.ProxyFileArtifactMaxBytes.Should().Be(37_000_000);
         AssertApiAccessRegistrationsAreSingle(services);

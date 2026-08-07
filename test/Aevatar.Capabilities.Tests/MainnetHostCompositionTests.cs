@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Abstractions.CodexExecution;
+using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.Application.CodexExecution;
 using Aevatar.AI.Infrastructure.ChronoSandbox;
 using Aevatar.AI.Infrastructure.ToolExecution;
@@ -297,9 +298,7 @@ public sealed class MainnetHostCompositionTests
         brokerOptions.RequiredLlmServiceSlug.Should().Be(LlmDefaults.NyxIdRoute);
         brokerOptions.AdditionalRequiredServiceSlugs.Should().Equal(
             OrnnOptions.DefaultNyxIdSlug,
-            NyxIdToolOptions.DefaultSandboxServiceSlug);
-        app.Services.GetRequiredService<NyxIdToolOptions>()
-            .SandboxServiceSlug.Should().Be(NyxIdToolOptions.DefaultSandboxServiceSlug);
+            CodeExecutionContract.ServiceSlug);
         app.Services.GetRequiredService<IServiceRolloutCommandObservationQueryReader>().Should().NotBeNull();
         app.Services.GetRequiredService<INyxIdChatAgentProfileResolver>()
             .Should()
@@ -353,6 +352,7 @@ public sealed class MainnetHostCompositionTests
                 port.TargetKind == CodexExecutionTarget.TargetOneofCase.ManagedSandbox)
             .Which;
         managedCodexPort.Should().BeOfType<ManagedCodexExecutionCoordinator>();
+        app.Services.GetServices<ICodeExecutionPort>().Should().ContainSingle();
         app.Services.GetServices<IHealthProbeExecutor>()
             .Select(static executor => executor.Kind)
             .Should()
@@ -420,7 +420,7 @@ public sealed class MainnetHostCompositionTests
             "github-api",
             "lark-api",
             OrnnOptions.DefaultNyxIdSlug,
-            NyxIdToolOptions.DefaultSandboxServiceSlug);
+            CodeExecutionContract.ServiceSlug);
     }
 
     [Fact]
@@ -480,7 +480,7 @@ public sealed class MainnetHostCompositionTests
             options.EnableCors = false;
         });
         builder.Services.PostConfigure<NyxIdBrokerOptions>(options =>
-            options.AdditionalRequiredServiceSlugs = [NyxIdToolOptions.DefaultSandboxServiceSlug]);
+            options.AdditionalRequiredServiceSlugs = [CodeExecutionContract.ServiceSlug]);
 
         using var app = builder.Build();
         var act = () => app.Services.GetRequiredService<IStartupValidator>().Validate();
@@ -509,8 +509,30 @@ public sealed class MainnetHostCompositionTests
         act.Should()
             .Throw<OptionsValidationException>()
             .WithMessage(
-                $"*AdditionalRequiredServiceSlugs*{NyxIdToolOptions.DefaultSandboxServiceSlug}*" +
-                "Aevatar:NyxId:SandboxServiceSlug*");
+                $"*AdditionalRequiredServiceSlugs*{CodeExecutionContract.ServiceSlug}*" +
+                "code execution contract*");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WithNonCanonicalSandboxSlug_ShouldFailStartupValidation()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:SandboxServiceSlug"] = "hostile-sandbox",
+        });
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var act = () => app.Services.GetRequiredService<IStartupValidator>().Validate();
+
+        act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage("*SandboxServiceSlug*cannot override*chrono-sandbox*");
     }
 
     [Fact]

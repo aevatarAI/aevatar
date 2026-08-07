@@ -168,7 +168,7 @@ public sealed class ToolAuditRecordFactory
     }
 
     private static AuditOutcome MapOutcome(AuditOutcome outcome, AgentToolReceipt receipt) =>
-        ResolveFailureCode(receipt.ErrorCode, receipt.Status) == "codex_execution_cancelled"
+        IsCancelledFailureCode(ResolveFailureCode(receipt.ErrorCode, receipt.Status))
             ? AuditOutcome.Cancelled
             : receipt.Status == AgentToolReceiptStatus.Unspecified
                 ? AuditOutcome.Accepted
@@ -200,11 +200,14 @@ public sealed class ToolAuditRecordFactory
         if (lifecyclePhase != AuditLifecyclePhase.Terminal)
             return AuditTerminalOutcome.Unspecified;
 
-        return ResolveFailureCode(receipt.ErrorCode, receipt.Status) switch
+        var failureCode = ResolveFailureCode(receipt.ErrorCode, receipt.Status);
+        if (IsTimeoutFailureCode(failureCode))
+            return AuditTerminalOutcome.TimedOut;
+        if (IsCancelledFailureCode(failureCode))
+            return AuditTerminalOutcome.Cancelled;
+
+        return failureCode switch
         {
-            "approval_timeout" or "codex_execution_timed_out" or "WEB_FETCH_TIMEOUT" =>
-                AuditTerminalOutcome.TimedOut,
-            "codex_execution_cancelled" => AuditTerminalOutcome.Cancelled,
             _ => outcome switch
             {
                 AuditOutcome.Success => AuditTerminalOutcome.Succeeded,
@@ -214,11 +217,18 @@ public sealed class ToolAuditRecordFactory
         };
     }
 
+    private static bool IsTimeoutFailureCode(string? value) =>
+        value is "approval_timeout" or "codex_execution_timed_out" or "WEB_FETCH_TIMEOUT" ||
+        ToolExecutionAuditErrorCode.IsTimeout(value);
+
+    private static bool IsCancelledFailureCode(string? value) =>
+        value == "codex_execution_cancelled" || ToolExecutionAuditErrorCode.IsCancelled(value);
+
     private static string ResolveFailureCode(string? value, AgentToolReceiptStatus status)
     {
-        var managedUpstreamCode = ManagedCodexUpstreamErrorCode.Resolve(value);
-        if (managedUpstreamCode is not null)
-            return managedUpstreamCode;
+        var ownedExecutionCode = ToolExecutionAuditErrorCode.Resolve(value);
+        if (ownedExecutionCode is not null)
+            return ownedExecutionCode;
 
         var normalized = Normalize(value);
         if (IsOwnedNyxIdProxyFailureCode(normalized) ||
@@ -258,8 +268,7 @@ public sealed class ToolAuditRecordFactory
             "tool_execution_already_started" or
             "tool_execution_error" or
             "tool_execution_exception" or
-            "tool_outcome_unknown" or
-            "CODE_EXECUTE_FAILED" => normalized,
+            "tool_outcome_unknown" => normalized,
             _ => DefaultFailureCode(status),
         };
     }

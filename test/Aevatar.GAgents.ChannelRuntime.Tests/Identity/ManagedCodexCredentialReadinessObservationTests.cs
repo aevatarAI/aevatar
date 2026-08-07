@@ -39,7 +39,7 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
         var published = Snapshot(
             owner,
             "key-a",
-            "us-sandbox-a",
+            "us-managed-codex-a",
             "us-llm-a",
             stateVersion: 4);
         await hub.PublishAsync(
@@ -52,7 +52,7 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
 
         observed.Should().NotBeSameAs(published);
         observed.Credential.ApiKeyId.Should().Be("key-a");
-        observed.Credential.ChronoSandboxUserServiceId.Should().Be("us-sandbox-a");
+        observed.Credential.ManagedCodexUserServiceId.Should().Be("us-managed-codex-a");
         observed.Credential.ChronoLlmUserServiceId.Should().Be("us-llm-a");
         observed.PendingRevocations.Should().ContainSingle()
             .Which.ApiKeyId.Should().Be("key-old-key-a");
@@ -88,7 +88,7 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
         var descriptor = Descriptor(
             owner,
             "key-a",
-            "us-sandbox-a",
+            "us-managed-codex-a",
             "us-llm-a");
 
         await projector.ProjectAsync(
@@ -104,7 +104,7 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
         published.RootActorId.Should().Be(actorId);
         published.SessionId.Should().Be("session-a");
         published.Event.Credential.ApiKeyId.Should().Be("key-a");
-        published.Event.Credential.ChronoSandboxUserServiceId.Should().Be("us-sandbox-a");
+        published.Event.Credential.ManagedCodexUserServiceId.Should().Be("us-managed-codex-a");
         published.Event.Credential.ChronoLlmUserServiceId.Should().Be("us-llm-a");
         published.Event.PendingRevocations.Should().ContainSingle()
             .Which.ApiKeyId.Should().Be("key-old-key-a");
@@ -124,7 +124,7 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
         await projector.ProjectAsync(
             Context("session-a", actorId),
             CommittedEnvelope(
-                Descriptor(owner, "key-a", "us-sandbox-a", "us-llm-a"),
+                Descriptor(owner, "key-a", "us-managed-codex-a", "us-llm-a"),
                 new ManagedCodexCredentialCleanupTrackCompletedEvent
                 {
                     Owner = owner.Clone(),
@@ -151,7 +151,7 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
         await projector.ProjectAsync(
             Context("session-a", actorId),
             CommittedEnvelope(
-                Descriptor(owner, "key-a", "us-sandbox-a", "us-llm-a"),
+                Descriptor(owner, "key-a", "us-managed-codex-a", "us-llm-a"),
                 new ManagedCodexCredentialCleanupQueuedEvent
                 {
                     Owner = owner.Clone(),
@@ -182,7 +182,7 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
             {
                 Payload = Any.Pack(new ManagedCodexCredentialState
                 {
-                    Credential = Descriptor(owner, "key-a", "us-sandbox-a", "us-llm-a"),
+                    Credential = Descriptor(owner, "key-a", "us-managed-codex-a", "us-llm-a"),
                 }),
             });
 
@@ -388,7 +388,7 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
         var snapshot = Snapshot(
             Owner("user-a"),
             "key-a",
-            "us-sandbox-a",
+            "us-managed-codex-a",
             "us-llm-a",
             stateVersion: 4);
 
@@ -437,7 +437,7 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
     private static ManagedCodexCredentialDescriptor Descriptor(
         ExternalSubjectRef owner,
         string apiKeyId,
-        string chronoSandboxUserServiceId,
+        string managedCodexUserServiceId,
         string chronoLlmUserServiceId) =>
         new()
         {
@@ -450,8 +450,8 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
                 OwnerScopeKey = ManagedCodexCredentialActorIdentity.From(owner),
                 Version = 1,
             },
-            ChronoSandboxUserServiceId = chronoSandboxUserServiceId,
-            ChronoSandboxServiceSlug = "chrono-sandbox",
+            ManagedCodexUserServiceId = managedCodexUserServiceId,
+            ManagedCodexServiceSlug = "chrono-managed-codex",
             ChronoLlmUserServiceId = chronoLlmUserServiceId,
             Status = ManagedCodexCredentialStatus.Active,
         };
@@ -459,7 +459,7 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
     private static ManagedCodexCredentialSnapshot Snapshot(
         ExternalSubjectRef owner,
         string apiKeyId,
-        string chronoSandboxUserServiceId,
+        string managedCodexUserServiceId,
         string chronoLlmUserServiceId,
         long stateVersion)
     {
@@ -468,7 +468,7 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
             Credential = Descriptor(
                 owner,
                 apiKeyId,
-                chronoSandboxUserServiceId,
+                managedCodexUserServiceId,
                 chronoLlmUserServiceId),
             StateVersion = stateVersion,
             LastEventId = $"event-{stateVersion}",

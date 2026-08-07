@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Abstractions.CodexExecution;
+using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Microsoft.Extensions.Logging;
@@ -18,18 +19,21 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
     private readonly ILogger _logger;
     private readonly INyxIdProxyFileArtifactIngress? _fileArtifactIngress;
     private readonly IReadOnlyList<ICodexExecutionPort> _codexExecutionPorts;
+    private readonly IReadOnlyList<ICodeExecutionPort> _codeExecutionPorts;
 
     public NyxIdAgentToolSource(
         NyxIdToolOptions options,
         NyxIdApiClient client,
         INyxIdProxyFileArtifactIngress? fileArtifactIngress = null,
         IEnumerable<ICodexExecutionPort>? codexExecutionPorts = null,
+        IEnumerable<ICodeExecutionPort>? codeExecutionPorts = null,
         ILogger<NyxIdAgentToolSource>? logger = null)
     {
         _options = options;
         _client = client;
         _fileArtifactIngress = fileArtifactIngress;
         _codexExecutionPorts = codexExecutionPorts?.ToArray() ?? [];
+        _codeExecutionPorts = codeExecutionPorts?.ToArray() ?? [];
         _logger = logger ?? NullLogger<NyxIdAgentToolSource>.Instance;
     }
 
@@ -80,7 +84,7 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             tools.Add(new NyxIdSshExecTool(sshExecutor, _options));
         }
 
-        tools.Add(new NyxIdCodeExecuteTool(_client, _logger, _options.SandboxServiceSlug));
+        AddCodeExecutionTool(tools);
         AddCodexExecutionTool(tools);
 
         _logger.LogInformation(
@@ -93,6 +97,19 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             tools.Any(static tool => tool is NyxIdCodexExecTool));
 
         return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
+    }
+
+    private void AddCodeExecutionTool(List<IAgentTool> tools)
+    {
+        if (_codeExecutionPorts.Count == 0)
+            return;
+        if (_codeExecutionPorts.Count != 1)
+        {
+            throw new InvalidOperationException(
+                "code_execute requires exactly one ICodeExecutionPort registration.");
+        }
+
+        tools.Add(new NyxIdCodeExecuteTool(_codeExecutionPorts[0]));
     }
 
     private void AddCodexExecutionTool(List<IAgentTool> tools)

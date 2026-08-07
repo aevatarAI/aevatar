@@ -98,7 +98,7 @@ Studio Consent 的产品语义是“用户从 NyxID 已有且自己可授权的 
 
 最终 resource contract 调整为:
 
-- binding 的必需 resource 集合是 `aevatar`、部署默认 LLM、Ornn 与 Sandbox service. Mainnet Host 分别从 `Aevatar:NyxId:DefaultRoute`、`Aevatar:Ornn:NyxIdSlug` 和 `Aevatar:NyxId:SandboxServiceSlug` 注入实际 slug;Sandbox 未配置时使用 tool provider 的默认值 `chrono-sandbox`.`NyxIdBrokerOptions.AdditionalRequiredServiceSlugs` 作为其他 provider 的可配置扩展点,Identity 层不维护第二份 provider 默认值.
+- binding 的必需 resource 集合是 `aevatar`、部署默认 LLM、Ornn 与 Sandbox service. Mainnet Host 从 `Aevatar:NyxId:DefaultRoute`、`Aevatar:Ornn:NyxIdSlug` 注入可配置 provider slug;`code_execute` 的 Sandbox identity 则由执行契约固定为 `chrono-sandbox`,禁止配置改写.`NyxIdBrokerOptions.AdditionalRequiredServiceSlugs` 只作为其他 provider 的可配置扩展点,Identity 层不维护第二份 provider 默认值.
 - channel `/oauth/authorize` 使用配置化必需集合;Studio `/oauth/authorize`、authorization-code exchange、broker token-exchange 与 `/api/auth/nyxid/config` 不携带该集合,以保留用户最终 Consent 边界.
 - broker 收到短期 access token 后必须验证其授权覆盖整个必需集合.优先使用 `resources` claim;Consent-only grant 则结合签名的 `allowed_service_ids/allow_all_services` 与 NyxID user-service catalog 验证.只含 `aevatar` 的 token 不再视为可用 sender capability,但必需集合之外的用户授权必须保留.
 - 历史决定：NyxID binding grant 是服务授权的唯一事实源;aevatar 只持有 opaque `binding_id`. 已绑定 sender 再次 `/init` 时,aevatar 把 `SHA-256(binding_id)` 放入浏览器可见的 `binding_grant_id`,同时发送 exact external subject并把同一哈希封入 HMAC state作为 callback 预期值;raw binding credential不离开服务端.

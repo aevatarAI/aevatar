@@ -7,6 +7,7 @@
     <RootNamespace>Aevatar.Workflow.Host.Api</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\Aevatar.AI.Infrastructure.ChronoSandbox\Aevatar.AI.Infrastructure.ChronoSandbox.csproj" />
     <ProjectReference Include="..\..\Aevatar.Audit.Core\Aevatar.Audit.Core.csproj" />
     <ProjectReference Include="..\..\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
     <ProjectReference Include="..\..\platform\Aevatar.GAgentService.Hosting\Aevatar.GAgentService.Hosting.csproj" />

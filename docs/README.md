@@ -36,6 +36,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Aevatar Observability — OTel Semantic Conventions](canon/observability.md)
 - [Aevatar 项目架构（Maker 插件化基线）](canon/overview.md)
 - [Role 与工作流、Connector 配置指南](canon/role-model.md)
+- [Sandbox Execution](canon/sandbox-execution.md)
 - [Scheduled Workflow Dispatch](canon/scheduled-skill-runners.md)
 - [Aevatar.Scripting 架构文档](canon/scripting.md)
 - [.NET Workflow SDK Quick Start](canon/sdk-dotnet.md)

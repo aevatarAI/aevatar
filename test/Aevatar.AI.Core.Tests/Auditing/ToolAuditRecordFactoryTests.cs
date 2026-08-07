@@ -243,6 +243,16 @@ public sealed class ToolAuditRecordFactoryTests
     [InlineData("NYXID_PROXY_HTTP_502")]
     [InlineData("NYXID_PROXY_UNAUTHORIZED")]
     [InlineData("NYXID_PROXY_FORBIDDEN")]
+    [InlineData("code_execution_request_invalid")]
+    [InlineData("code_execution_response_invalid")]
+    [InlineData("code_execution_failed")]
+    [InlineData("DEPENDENCY_INSTALL_FAILED")]
+    [InlineData("EXECUTION_FAILED")]
+    [InlineData("SANDBOX_CREATION_FAILED")]
+    [InlineData("SANDBOX_TIMEOUT")]
+    [InlineData("managed_execution_nonzero_exit")]
+    [InlineData("managed_response_invalid")]
+    [InlineData("managed_upstream_codex_turn_failed")]
     [InlineData("WEB_FETCH_HTTP_503")]
     [InlineData("WEB_FETCH_DNS_FAILURE")]
     [InlineData("WEB_FETCH_TLS_FAILURE")]
@@ -256,16 +266,43 @@ public sealed class ToolAuditRecordFactoryTests
         record.Failure.Code.Should().Be(failureCode);
         record.Failure.SanitizedMessage.Should().Be(failureCode);
         record.TerminalOutcome.Should().Be(
-            failureCode == "WEB_FETCH_TIMEOUT"
+            failureCode is "WEB_FETCH_TIMEOUT" or "SANDBOX_TIMEOUT"
                 ? AuditTerminalOutcome.TimedOut
                 : AuditTerminalOutcome.Failed);
         record.ToString().Should().NotContain("provider-secret-must-not-appear");
     }
 
     [Theory]
+    [InlineData("code_execution_timed_out")]
+    [InlineData("SANDBOX_TIMEOUT")]
+    [InlineData("managed_proxy_timeout")]
+    [InlineData("managed_upstream_codex_execution_timeout")]
+    public void Create_OwnedTimeoutCode_ShouldMapTimeoutSemantics(string failureCode)
+    {
+        var record = CreateProviderFailureRecord(failureCode);
+
+        record.Outcome.Should().Be(AuditOutcome.Error);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.TimedOut);
+        record.Failure.Category.Should().Be(AuditFailureCategory.Timeout);
+    }
+
+    [Fact]
+    public void Create_OwnedCancellationCode_ShouldMapCancellationSemantics()
+    {
+        var record = CreateProviderFailureRecord("managed_execution_cancelled");
+
+        record.Outcome.Should().Be(AuditOutcome.Cancelled);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Cancelled);
+        record.Failure.Should().BeNull();
+    }
+
+    [Theory]
     [InlineData("NYXID_PROXY_HTTP_502_suffix")]
     [InlineData("NYXID_PROXY_HTTP_50")]
     [InlineData("NYXID_PROXY_UNAUTHORIZED_suffix")]
+    [InlineData("CODE_EXECUTE_FAILED")]
+    [InlineData("code_execution_response_invalid_suffix")]
+    [InlineData("managed_upstream_codex_not_allowlisted")]
     [InlineData("WEB_FETCH_HTTP_503_suffix")]
     [InlineData("WEB_FETCH_HTTP_50")]
     [InlineData("WEB_FETCH_TIMEOUT_suffix")]

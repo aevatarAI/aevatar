@@ -1,0 +1,416 @@
+using System.Text.Json;
+using Aevatar.AI.Abstractions.CodeExecution;
+using Aevatar.AI.ToolProviders.NyxId;
+using Microsoft.Extensions.Logging;
+
+namespace Aevatar.AI.Infrastructure.ChronoSandbox;
+
+internal sealed class NyxIdCodeExecutionPort(
+    INyxIdApiClientFactory clientFactory,
+    ILogger<NyxIdCodeExecutionPort> logger) : ICodeExecutionPort
+{
+    private const long MaxResponseBytes = 1_048_576;
+    private const string ExecutionPath = "/execute";
+    private const string RequiredDelegationScope = "sandbox:execute";
+    private const string RequiredServiceSlug = CodeExecutionContract.ServiceSlug;
+    private static readonly HashSet<string> AllowedCompletedFailureCodes =
+        new(StringComparer.Ordinal)
+        {
+            "DEPENDENCY_INSTALL_FAILED",
+            "EXECUTION_FAILED",
+        };
+    private static readonly HashSet<string> AllowedProxyFailureCodes =
+        new(StringComparer.Ordinal)
+        {
+            "INTERNAL_ERROR",
+            "INVALID_REQUEST",
+            "SANDBOX_CREATION_FAILED",
+            "SANDBOX_TIMEOUT",
+            "SANDBOX_UNREACHABLE",
+        };
+
+    private readonly INyxIdApiClientFactory _clientFactory =
+        clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
+    private readonly ILogger<NyxIdCodeExecutionPort> _logger =
+        logger ?? throw new ArgumentNullException(nameof(logger));
+
+    public async Task<CodeExecutionOutcome> ExecuteAsync(
+        CodeExecutionRequest request,
+        CancellationToken ct = default)
+    {
+        if (request is null ||
+            !Enum.IsDefined(request.Language) ||
+            request.Language == CodeExecutionLanguage.Unspecified ||
+            string.IsNullOrWhiteSpace(request.Source) ||
+            request.Route is null ||
+            !string.Equals(request.Route.ServiceSlug, RequiredServiceSlug, StringComparison.Ordinal))
+        {
+            return Failed(
+                CodeExecutionFailureKind.AdmissionDenied,
+                "code_execution_request_invalid",
+                "The code execution request is invalid.");
+        }
+
+        var bearerToken = request.Caller?.NyxIdAccessToken?.Trim();
+        if (string.IsNullOrWhiteSpace(bearerToken))
+        {
+            return Failed(
+                CodeExecutionFailureKind.AdmissionDenied,
+                "code_execution_credential_unavailable",
+                "A source-readable NyxID credential is required for code execution.");
+        }
+
+        var client = _clientFactory.CreateClient();
+        CodeExecutionRouteIdentity route;
+        try
+        {
+            route = await ResolveRouteAsync(client, bearerToken, request.Route, ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                "Code execution route resolution failed with exception type {ExceptionType}",
+                exception.GetType().Name);
+            return Failed(
+                CodeExecutionFailureKind.TransportUnavailable,
+                "code_execution_route_resolution_failed",
+                "The code execution route could not be resolved.");
+        }
+
+        if (string.IsNullOrWhiteSpace(route.UserServiceId))
+        {
+            return Failed(
+                CodeExecutionFailureKind.TargetNotConfigured,
+                "code_execution_route_unavailable",
+                "The code execution service is not uniquely available.");
+        }
+
+        var body = JsonSerializer.Serialize(new
+        {
+            language = SerializeLanguage(request.Language),
+            script = request.Source,
+        });
+
+        NyxIdProxyTextResponse response;
+        try
+        {
+            response = await client.ProxyRequestBoundedAsync(
+                    bearerToken,
+                    route.ServiceSlug,
+                    route.UserServiceId,
+                    ExecutionPath,
+                    HttpMethod.Post.Method,
+                    body,
+                    extraHeaders: null,
+                    MaxResponseBytes,
+                    ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            return Failed(
+                CodeExecutionFailureKind.TimedOut,
+                "code_execution_timed_out",
+                "Code execution timed out.");
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                "Code execution transport failed with exception type {ExceptionType}",
+                exception.GetType().Name);
+            return Failed(
+                CodeExecutionFailureKind.TransportUnavailable,
+                "code_execution_transport_unavailable",
+                "The code execution transport is unavailable.");
+        }
+
+        if (!response.Succeeded)
+            return ClassifyProxyFailure(response);
+
+        return ParseResponse(response.Content, route);
+    }
+
+    private static async Task<CodeExecutionRouteIdentity> ResolveRouteAsync(
+        NyxIdApiClient client,
+        string bearerToken,
+        CodeExecutionRouteIdentity candidate,
+        CancellationToken ct)
+    {
+        var response = await client.ListUserServicesAsync(bearerToken, ct).ConfigureAwait(false);
+        using var document = JsonDocument.Parse(response);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object ||
+            (root.TryGetProperty("error", out var error) &&
+             error.ValueKind is JsonValueKind.True or JsonValueKind.String))
+        {
+            throw new JsonException("NyxID returned an invalid user-service inventory.");
+        }
+
+        var matches = EnumerateServices(root)
+            .Where(service =>
+                string.Equals(service.Slug, candidate.ServiceSlug.Trim(), StringComparison.Ordinal) &&
+                (string.IsNullOrWhiteSpace(candidate.UserServiceId) ||
+                 string.Equals(service.Id, candidate.UserServiceId.Trim(), StringComparison.Ordinal)) &&
+                service.IsActive &&
+                service.ForwardAccessToken == false &&
+                service.InjectDelegationToken == true &&
+                string.Equals(
+                    service.DelegationTokenScope,
+                    RequiredDelegationScope,
+                    StringComparison.Ordinal))
+            .ToArray();
+
+        return matches.Length == 1
+            ? new CodeExecutionRouteIdentity(
+                matches[0].Slug,
+                matches[0].Id,
+                CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog)
+            : new CodeExecutionRouteIdentity(
+                candidate.ServiceSlug.Trim(),
+                null,
+                CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog);
+    }
+
+    private static string SerializeLanguage(CodeExecutionLanguage language) => language switch
+    {
+        CodeExecutionLanguage.Python => "python",
+        CodeExecutionLanguage.JavaScript => "javascript",
+        CodeExecutionLanguage.TypeScript => "typescript",
+        CodeExecutionLanguage.Bash => "bash",
+        _ => throw new ArgumentOutOfRangeException(nameof(language), language, null),
+    };
+
+    private static IEnumerable<CodeUserService> EnumerateServices(JsonElement root)
+    {
+        foreach (var collectionName in new[] { "services", "keys", "items", "data" })
+        {
+            if (!root.TryGetProperty(collectionName, out var services) ||
+                services.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var service in services.EnumerateArray())
+            {
+                if (service.ValueKind != JsonValueKind.Object)
+                    continue;
+                var id = ReadString(service, "id", "user_service_id");
+                var slug = ReadString(service, "slug", "service_slug");
+                if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(slug))
+                    continue;
+                yield return new CodeUserService(
+                    id,
+                    slug,
+                    ReadBoolean(service, "is_active") == true,
+                    ReadBoolean(service, "forward_access_token"),
+                    ReadBoolean(service, "inject_delegation_token"),
+                    ReadString(service, "delegation_token_scope"));
+            }
+        }
+    }
+
+    private CodeExecutionOutcome ClassifyProxyFailure(NyxIdProxyTextResponse response)
+    {
+        if (response.Detail is "content_length_exceeds_max_bytes" or "content_exceeds_max_bytes")
+        {
+            return Failed(
+                CodeExecutionFailureKind.ResponseTooLarge,
+                "code_execution_response_too_large",
+                "Code execution returned an oversized response.");
+        }
+
+        var inspection = ChronoProxyFailureInspector.Inspect(
+            response.Content,
+            AllowedProxyFailureCodes);
+        _logger.LogWarning(
+            "Code execution proxy failure. status={Status} bodyBytes={BodyBytes} bodyShape={BodyShape} upstreamCodeResolved={Resolved}",
+            response.HttpStatus,
+            inspection.BodyBytes,
+            inspection.BodyShape,
+            inspection.UpstreamCode is not null);
+        if (inspection.UpstreamCode is { } upstreamCode)
+        {
+            var (kind, message) = upstreamCode switch
+            {
+                "INVALID_REQUEST" => (
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "The code execution request was rejected upstream."),
+                "SANDBOX_TIMEOUT" => (
+                    CodeExecutionFailureKind.TimedOut,
+                    "Code execution timed out upstream."),
+                "SANDBOX_CREATION_FAILED" or "SANDBOX_UNREACHABLE" => (
+                    CodeExecutionFailureKind.TransportUnavailable,
+                    "The code execution sandbox is unavailable upstream."),
+                _ => (
+                    CodeExecutionFailureKind.TransportUnavailable,
+                    "Code execution failed upstream."),
+            };
+            return Failed(
+                kind,
+                upstreamCode,
+                message,
+                inspection.DiagnosticId);
+        }
+
+        return response.HttpStatus switch
+        {
+            401 => Failed(
+                CodeExecutionFailureKind.AdmissionDenied,
+                "NYXID_PROXY_UNAUTHORIZED",
+                "The NyxID proxy rejected the code execution credential.",
+                inspection.DiagnosticId),
+            403 => Failed(
+                CodeExecutionFailureKind.AdmissionDenied,
+                "NYXID_PROXY_FORBIDDEN",
+                "The NyxID proxy denied code execution.",
+                inspection.DiagnosticId),
+            404 => Failed(
+                CodeExecutionFailureKind.TargetNotConfigured,
+                "NYXID_PROXY_HTTP_404",
+                "The code execution target is unavailable.",
+                inspection.DiagnosticId),
+            408 or 504 => Failed(
+                CodeExecutionFailureKind.TimedOut,
+                "code_execution_timed_out",
+                "Code execution timed out.",
+                inspection.DiagnosticId),
+            > 0 => Failed(
+                CodeExecutionFailureKind.TransportUnavailable,
+                $"NYXID_PROXY_HTTP_{response.HttpStatus}",
+                "The code execution proxy request failed.",
+                inspection.DiagnosticId),
+            _ => Failed(
+                CodeExecutionFailureKind.TransportUnavailable,
+                "code_execution_transport_unavailable",
+                "The code execution transport is unavailable.",
+                inspection.DiagnosticId),
+        };
+    }
+
+    private static CodeExecutionOutcome ParseResponse(
+        string response,
+        CodeExecutionRouteIdentity route)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("success", out var success) ||
+                success.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
+                !root.TryGetProperty("output", out var output) ||
+                output.ValueKind != JsonValueKind.Object ||
+                !ReadRequiredString(output, "stdout", out var stdout) ||
+                !ReadRequiredString(output, "stderr", out var stderr) ||
+                !output.TryGetProperty("exit_code", out var exitCodeElement) ||
+                !exitCodeElement.TryGetInt32(out var exitCode))
+            {
+                return InvalidResponse();
+            }
+
+            var elapsed = output.TryGetProperty("execution_time_ms", out var elapsedElement) &&
+                          elapsedElement.TryGetInt64(out var elapsedValue)
+                ? elapsedValue
+                : (long?)null;
+            var diagnosticId = ChronoProxyFailureInspector.SanitizeDiagnosticId(
+                ReadString(root, "diagnostic_id"));
+            var result = new CodeExecutionResult(stdout, stderr, exitCode, diagnosticId, elapsed);
+
+            if (success.GetBoolean())
+            {
+                return exitCode == 0 && !root.TryGetProperty("error", out _)
+                    ? CodeExecutionOutcome.Succeeded(result, route)
+                    : InvalidResponse();
+            }
+
+            if (exitCode == 0 ||
+                !root.TryGetProperty("error", out var error) ||
+                error.ValueKind != JsonValueKind.Object)
+            {
+                return InvalidResponse();
+            }
+
+            var upstreamCode = ReadString(error, "code");
+            var code = upstreamCode is not null && AllowedCompletedFailureCodes.Contains(upstreamCode)
+                ? upstreamCode
+                : "code_execution_failed";
+            var message = code switch
+            {
+                "DEPENDENCY_INSTALL_FAILED" => "Code execution dependency preparation failed.",
+                "EXECUTION_FAILED" => "Code execution exited unsuccessfully.",
+                _ => "Code execution failed.",
+            };
+            return CodeExecutionOutcome.CompletedWithFailure(
+                result,
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.ExecutionFailed,
+                    code,
+                    message,
+                    diagnosticId),
+                route);
+        }
+        catch (JsonException)
+        {
+            return InvalidResponse();
+        }
+    }
+
+    private static CodeExecutionOutcome InvalidResponse() =>
+        Failed(
+            CodeExecutionFailureKind.MalformedOutput,
+            "code_execution_response_invalid",
+            "Code execution returned an invalid response.");
+
+    private static CodeExecutionOutcome Failed(
+        CodeExecutionFailureKind kind,
+        string code,
+        string message,
+        string? diagnosticId = null) =>
+        CodeExecutionOutcome.Failed(new CodeExecutionFailure(kind, code, message, diagnosticId));
+
+    private static string? ReadString(JsonElement owner, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (owner.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
+            {
+                var text = value.GetString()?.Trim();
+                if (!string.IsNullOrWhiteSpace(text))
+                    return text;
+            }
+        }
+        return null;
+    }
+
+    private static bool ReadRequiredString(JsonElement owner, string name, out string value)
+    {
+        value = string.Empty;
+        if (!owner.TryGetProperty(name, out var element) || element.ValueKind != JsonValueKind.String)
+            return false;
+        value = element.GetString() ?? string.Empty;
+        return true;
+    }
+
+    private static bool? ReadBoolean(JsonElement owner, string name) =>
+        owner.TryGetProperty(name, out var value) &&
+        value.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? value.GetBoolean()
+            : null;
+
+    private sealed record CodeUserService(
+        string Id,
+        string Slug,
+        bool IsActive,
+        bool? ForwardAccessToken,
+        bool? InjectDelegationToken,
+        string? DelegationTokenScope);
+}

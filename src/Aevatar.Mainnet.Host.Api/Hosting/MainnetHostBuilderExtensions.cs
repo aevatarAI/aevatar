@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -209,10 +210,6 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddRetiredActorCleanup();
         builder.Services.AddChannelRuntime(builder.Configuration);
         builder.Services.AddChannelIdentity(builder.Configuration);
-        var configuredSandboxServiceSlug = builder.Configuration["Aevatar:NyxId:SandboxServiceSlug"];
-        var sandboxServiceSlug = string.IsNullOrWhiteSpace(configuredSandboxServiceSlug)
-            ? NyxIdToolOptions.DefaultSandboxServiceSlug
-            : configuredSandboxServiceSlug.Trim();
         builder.Services.Configure<NyxIdBrokerOptions>(options =>
         {
             var configuredRoute = builder.Configuration["Aevatar:NyxId:DefaultRoute"];
@@ -230,7 +227,7 @@ public static class MainnetHostBuilderExtensions
                 .Where(static serviceSlug => !string.IsNullOrWhiteSpace(serviceSlug))
                 .Select(static serviceSlug => serviceSlug!.Trim())
                 .Append(ornnSlug)
-                .Append(sandboxServiceSlug)
+                .Append(CodeExecutionContract.ServiceSlug)
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
         });
@@ -355,7 +352,6 @@ public static class MainnetHostBuilderExtensions
                                ?? builder.Configuration["Aevatar:Authentication:Authority"];
             if (!string.IsNullOrWhiteSpace(nyxAuthority))
                 o.BaseUrl = nyxAuthority;
-            o.SandboxServiceSlug = sandboxServiceSlug;
             // SSH-backed tools are disabled unless the deployment opts in explicitly.
             // Even when exposed, their contract always requires a durable actor-owned grant.
             if (bool.TryParse(builder.Configuration["Aevatar:NyxId:EnableSshExecTool"], out var enableSsh))

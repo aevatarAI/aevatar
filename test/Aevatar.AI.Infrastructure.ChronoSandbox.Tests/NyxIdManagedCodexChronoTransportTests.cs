@@ -44,7 +44,7 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         result.ExitCode.Should().Be(0);
         result.DiagnosticId.Should().Be("chrono-1");
         handler.PathAndQuery.Should().Be(
-            "/api/v1/proxy/s/chrono-sandbox/codex/execute?_nyxid_via=us-sandbox");
+            "/api/v1/proxy/s/chrono-managed-codex/codex/execute?_nyxid_via=us-managed-codex");
         handler.Authorization.Should().BeNull();
         handler.ApiKeys.Should().Equal(RawKey);
         using var body = JsonDocument.Parse(handler.Body!);
@@ -208,7 +208,8 @@ public sealed class NyxIdManagedCodexChronoTransportTests
               "error": {
                 "code": "CODEX_SANDBOX_CREATION_FAILED",
                 "message": "sensitive {{RawKey}}"
-              }
+              },
+              "diagnostic_id": "managed-diag-1"
             }
             """,
             HttpStatusCode.BadGateway);
@@ -218,11 +219,12 @@ public sealed class NyxIdManagedCodexChronoTransportTests
 
         var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
         // Sandbox creation / workspace preparation are provisioning stages, not capacity
-        // rejections: chrono-sandbox returns CODEX_CAPACITY_UNAVAILABLE with 429 and reserves
+        // rejections: chrono-managed-codex returns CODEX_CAPACITY_UNAVAILABLE with 429 and reserves
         // 502 for provisioning faults, so classifying by HTTP status alone misreports them.
         exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.ProvisioningFailed);
         exception.Failure.Code.Should().Be("managed_upstream_codex_sandbox_creation_failed");
         exception.Failure.Message.Should().Be("Managed Codex sandbox provisioning failed upstream.");
+        exception.Failure.DiagnosticId.Should().Be("managed-diag-1");
         exception.Message.Should().NotContain(RawKey);
     }
 
@@ -252,7 +254,7 @@ public sealed class NyxIdManagedCodexChronoTransportTests
 
         var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
         // Sandbox creation / workspace preparation are provisioning stages, not capacity
-        // rejections: chrono-sandbox returns CODEX_CAPACITY_UNAVAILABLE with 429 and reserves
+        // rejections: chrono-managed-codex returns CODEX_CAPACITY_UNAVAILABLE with 429 and reserves
         // 502 for provisioning faults, so classifying by HTTP status alone misreports them.
         exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.ProvisioningFailed);
         exception.Failure.Code.Should().Be("managed_upstream_codex_workspace_preparation_failed");
@@ -261,7 +263,7 @@ public sealed class NyxIdManagedCodexChronoTransportTests
     }
 
     [Theory]
-    // chrono-sandbox 只在容量许可被拒时返回 CODEX_CAPACITY_UNAVAILABLE，且走 429；
+    // chrono-managed-codex 只在容量许可被拒时返回 CODEX_CAPACITY_UNAVAILABLE，且走 429；
     // 502 携带的是 provisioning / OpenSandbox 家族的码。按 HTTP 状态一刀切成
     // CapacityUnavailable 会把「沙箱创建失败」误报为「容量不足」，把排障引向错误方向。
     [InlineData("CODEX_SANDBOX_CREATION_FAILED", CodexExecutionFailureKind.ProvisioningFailed)]
@@ -380,7 +382,7 @@ public sealed class NyxIdManagedCodexChronoTransportTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenChronoReportsNonzeroExit_ReturnsTypedTerminalFailure()
+    public async Task ExecuteAsync_WhenChronoReportsNonzeroExit_PreservesTheCompleteResult()
     {
         var handler = new RecordingHandler(
             """
@@ -396,13 +398,35 @@ public sealed class NyxIdManagedCodexChronoTransportTests
             """);
         var (transport, _) = CreateTransport(handler);
 
+        var result = await transport.ExecuteAsync(Request(), Descriptor());
+
+        result.Output.Should().Be("command failed");
+        result.ExitCode.Should().Be(17);
+        result.DiagnosticId.Should().Be("chrono-failed");
+        result.ElapsedMilliseconds.Should().Be(9);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenChronoOmitsExitCode_ReturnsTypedMalformedFailure()
+    {
+        var handler = new RecordingHandler(
+            """
+            {
+              "success": true,
+              "output": {
+                "text": "ambiguous",
+                "execution_time_ms": 9
+              },
+              "diagnostic_id": "chrono-malformed"
+            }
+            """);
+        var (transport, _) = CreateTransport(handler);
+
         var act = () => transport.ExecuteAsync(Request(), Descriptor());
 
         var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
-        exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.TerminalFailure);
-        exception.Failure.Code.Should().Be("managed_execution_nonzero_exit");
-        exception.Failure.DiagnosticId.Should().Be("chrono-failed");
-        exception.Message.Should().NotContain("command failed");
+        exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.MalformedOutput);
+        exception.Failure.Code.Should().Be("managed_response_invalid");
     }
 
     [Fact]
@@ -489,9 +513,9 @@ public sealed class NyxIdManagedCodexChronoTransportTests
             Version = 1,
             ExpiresAtUnixMs = Now.AddDays(30).ToUnixTimeMilliseconds(),
         },
-        ChronoSandboxUserServiceId = "us-sandbox",
+        ManagedCodexUserServiceId = "us-managed-codex",
         ChronoLlmUserServiceId = "us-llm",
-        ChronoSandboxServiceSlug = "chrono-sandbox",
+        ManagedCodexServiceSlug = "chrono-managed-codex",
         ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(Now.AddDays(30)),
         Status = ManagedCodexCredentialStatus.Active,
     };
