@@ -272,6 +272,7 @@ public sealed partial class DiscoverServiceApiWorkflowCapabilityTool : ExternalW
             ServiceApiCapabilityResolution.ResultOneofCase.NyxidOperation => "nyxid_operation",
             ServiceApiCapabilityResolution.ResultOneofCase.NyxidRequest => "nyxid_request",
             ServiceApiCapabilityResolution.ResultOneofCase.FallbackExhausted => "fallback_exhausted",
+            ServiceApiCapabilityResolution.ResultOneofCase.ReadinessRequired => "readiness_required",
             _ => "unspecified",
         };
 

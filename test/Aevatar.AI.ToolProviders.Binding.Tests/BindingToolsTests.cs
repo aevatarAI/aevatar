@@ -850,6 +850,49 @@ public class BindingToolsTests
     }
 
     [Fact]
+    public async Task DiscoverServiceApiWorkflowCapabilityTool_ReturnsTypedReadinessRemediation()
+    {
+        var port = new StubServiceApiWorkflowCapabilityDiscoveryPort(ReadinessRequiredResult());
+        var tool = new DiscoverServiceApiWorkflowCapabilityTool(port);
+        AgentToolRequestContext.Current = CapabilityContext(
+            "owner-scope-alpha",
+            "caller-subject-alpha",
+            "caller-bearer-alpha",
+            "organization-bearer-alpha");
+
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                """
+                {
+                  "target_user_service_id": "usvc-alpha",
+                  "service_slug_snapshot": "example-service",
+                  "service_label_snapshot": "Example Service",
+                  "normalized_capability": "send a message",
+                  "descriptor_inventory": [],
+                  "managed_discovery_policy_version": "service_api_skill_discovery.v1",
+                  "admission_policy_version": "nyxid_request_selector.v1",
+                  "capability_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+                """);
+
+            using var document = JsonDocument.Parse(result);
+            var root = document.RootElement;
+            root.GetProperty("result_kind").GetString().Should().Be("readiness_required");
+            var readiness = root.GetProperty("result").GetProperty("readiness_required");
+            readiness.GetProperty("status").GetString().Should()
+                .Be("EXTERNAL_CAPABILITY_READINESS_STATUS_CREDENTIAL_CONNECTION_REQUIRED");
+            readiness.GetProperty("remediations")[0].GetProperty("action_kind").GetString().Should()
+                .Be("EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_CONNECT_CREDENTIAL");
+            root.TryGetProperty("authoring_selector", out _).Should().BeFalse();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task BindingAgentToolSource_RegistersExternalCapabilityToolsConditionally()
     {
         var source = new BindingAgentToolSource(
@@ -1770,6 +1813,28 @@ public class BindingToolsTests
                 Reason = ServiceApiNoReliableSkillReason.NoMatchingSkill,
             },
         };
+
+    private static ServiceApiWorkflowCapabilityDiscoveryResult ReadinessRequiredResult()
+    {
+        var readiness = new ExternalCapabilityReadiness
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            Status = ExternalCapabilityReadinessStatus.CredentialConnectionRequired,
+        };
+        readiness.Remediations.Add(new ExternalCapabilityRemediation
+        {
+            ActionKind = ExternalCapabilityRemediationActionKind.ConnectCredential,
+            Label = "Connect credential",
+            TrustedLocator = "nyxid://user-services/usvc-alpha/credentials",
+        });
+        return new ServiceApiWorkflowCapabilityDiscoveryResult
+        {
+            Resolution = new ServiceApiCapabilityResolution
+            {
+                ReadinessRequired = readiness,
+            },
+        };
+    }
 
     private static ServiceApiCapabilityResolution ResolvedServiceApiRequest()
     {

@@ -378,6 +378,7 @@ message ServiceApiCapabilityResolution {
     ResolvedNyxIdOperation nyxid_operation = 1;
     ResolvedNyxIdRequest nyxid_request = 2;
     ServiceApiFallbackExhausted fallback_exhausted = 3;
+    ExternalCapabilityReadiness readiness_required = 4;
   }
 }
 

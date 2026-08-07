@@ -173,8 +173,18 @@ public sealed partial class ServiceApiWorkflowCapabilityDiscoveryService(
                 },
                 ExternalCapabilityExecutionMode.Interactive),
             cancellationToken);
-        if (readiness.Status != ExternalCapabilityReadinessStatus.Ready ||
-            readiness.SelectedCapability?.CapabilityCase !=
+        if (readiness.Status != ExternalCapabilityReadinessStatus.Ready)
+        {
+            return new ServiceApiWorkflowCapabilityDiscoveryResult
+            {
+                Resolution = new ServiceApiCapabilityResolution
+                {
+                    ReadinessRequired = readiness.Clone(),
+                },
+            };
+        }
+
+        if (readiness.SelectedCapability?.CapabilityCase !=
             ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest ||
             readiness.SelectedCapability.NyxIdUserRequest.Request is null)
         {

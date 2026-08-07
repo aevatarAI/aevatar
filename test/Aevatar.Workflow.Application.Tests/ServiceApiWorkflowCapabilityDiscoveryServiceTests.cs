@@ -219,16 +219,23 @@ public sealed class ServiceApiWorkflowCapabilityDiscoveryServiceTests
     }
 
     [Fact]
-    public async Task DiscoverAsync_ShouldRouteReadinessRejectionToWebFallback()
+    public async Task DiscoverAsync_ShouldPreserveCredentialReadinessWithoutWebFallback()
     {
         var managed = new StubManagedDiscoveryExecutor(ReliableManagedResult());
         var verifier = new StubExactSkillVerifier(ExactServiceApiSkillVerificationResult.Verified(OrnnProvenance()));
-        var readiness = new StubReadinessPort(new ExternalCapabilityReadiness
+        var credentialReadiness = new ExternalCapabilityReadiness
         {
             ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             Status = ExternalCapabilityReadinessStatus.CredentialConnectionRequired,
             SelectedSelector = new ExternalWorkflowCapabilitySelector { NyxIdRequest = NyxIdRequestSelector() },
+        };
+        credentialReadiness.Remediations.Add(new ExternalCapabilityRemediation
+        {
+            ActionKind = ExternalCapabilityRemediationActionKind.ConnectCredential,
+            Label = "Connect credential",
+            TrustedLocator = "nyxid://user-services/usvc-alpha/credentials",
         });
+        var readiness = new StubReadinessPort(credentialReadiness);
         var webFallback = UnusedWebFallback();
         var service = new ServiceApiWorkflowCapabilityDiscoveryService(
             managed,
@@ -242,15 +249,16 @@ public sealed class ServiceApiWorkflowCapabilityDiscoveryServiceTests
 
         result.ResultCase.Should().Be(ServiceApiWorkflowCapabilityDiscoveryResult.ResultOneofCase.Resolution);
         result.Resolution.ResultCase.Should().Be(
-            ServiceApiCapabilityResolution.ResultOneofCase.FallbackExhausted);
-        result.Resolution.FallbackExhausted.Reason.Should().Be(
-            ServiceApiFallbackExhaustedReason.WebResearchFailed);
+            ServiceApiCapabilityResolution.ResultOneofCase.ReadinessRequired);
+        result.Resolution.ReadinessRequired.Status.Should().Be(
+            ExternalCapabilityReadinessStatus.CredentialConnectionRequired);
+        result.Resolution.ReadinessRequired.Remediations.Should().ContainSingle();
+        result.Resolution.ReadinessRequired.Remediations[0].ActionKind.Should().Be(
+            ExternalCapabilityRemediationActionKind.ConnectCredential);
         managed.Calls.Should().Be(1);
         verifier.Calls.Should().Be(1);
         readiness.Calls.Should().Be(1);
-        webFallback.Calls.Should().Be(1);
-        webFallback.LastRequest!.NoReliableApiSkill.Reason.Should().Be(
-            ServiceApiNoReliableSkillReason.RequestShapeAdmissionRejected);
+        webFallback.Calls.Should().Be(0);
     }
 
     [Fact]
