@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -100,6 +101,7 @@ internal sealed class NyxIdCodeExecutionPort(
             script = request.Source,
         });
 
+        var localDiagnosticId = CreateLocalDiagnosticId();
         NyxIdProxyTextResponse response;
         try
         {
@@ -121,27 +123,27 @@ internal sealed class NyxIdCodeExecutionPort(
         }
         catch (OperationCanceledException)
         {
+            LogLocalProxyFailure("timeout", localDiagnosticId);
             return Failed(
                 CodeExecutionFailureKind.TimedOut,
                 "code_execution_timed_out",
                 "Code execution timed out.",
-                CreateLocalDiagnosticId());
+                localDiagnosticId);
         }
-        catch (Exception exception)
+        catch (Exception)
         {
-            _logger.LogWarning(
-                "Code execution transport failed with exception type {ExceptionType}",
-                exception.GetType().Name);
+            LogLocalProxyFailure("transport_exception", localDiagnosticId);
             return Failed(
                 CodeExecutionFailureKind.TransportUnavailable,
                 "code_execution_transport_unavailable",
-                "The code execution transport is unavailable.");
+                "The code execution transport is unavailable.",
+                localDiagnosticId);
         }
 
         if (!response.Succeeded)
-            return ClassifyProxyFailure(response);
+            return ClassifyProxyFailure(response, localDiagnosticId);
 
-        return ParseResponse(response.Content, route);
+        return ParseResponse(response.Content, route, localDiagnosticId);
     }
 
     private static async Task<CodeExecutionRouteIdentity> ResolveRouteAsync(
@@ -254,26 +256,37 @@ internal sealed class NyxIdCodeExecutionPort(
         }
     }
 
-    private CodeExecutionOutcome ClassifyProxyFailure(NyxIdProxyTextResponse response)
+    private CodeExecutionOutcome ClassifyProxyFailure(
+        NyxIdProxyTextResponse response,
+        string localDiagnosticId)
     {
         if (response.Detail is "content_length_exceeds_max_bytes" or "content_exceeds_max_bytes")
         {
+            LogLocalProxyFailure(
+                "response_too_large",
+                localDiagnosticId,
+                response.HttpStatus,
+                "oversized_unread");
             return Failed(
                 CodeExecutionFailureKind.ResponseTooLarge,
                 "code_execution_response_too_large",
                 "Code execution returned an oversized response.",
-                CreateLocalDiagnosticId());
+                localDiagnosticId);
         }
 
         var inspection = ChronoProxyFailureInspector.Inspect(
             response.Content,
             AllowedProxyFailureCodes);
+        var diagnosticId = inspection.DiagnosticId ?? localDiagnosticId;
         _logger.LogWarning(
-            "Code execution proxy failure. status={Status} bodyBytes={BodyBytes} bodyShape={BodyShape} upstreamCodeResolved={Resolved}",
+            "Code execution proxy failure. status={Status} bodyBytes={BodyBytes} bodyShape={BodyShape} upstreamCodeResolved={Resolved} diagnosticId={DiagnosticId} diagnosticSource={DiagnosticSource} failureKind={FailureKind}",
             response.HttpStatus,
             inspection.BodyBytes,
             inspection.BodyShape,
-            inspection.UpstreamCode is not null);
+            inspection.UpstreamCode is not null,
+            diagnosticId,
+            inspection.DiagnosticId is null ? "aevatar" : "upstream",
+            "http_failure");
         if (inspection.UpstreamCode is { } upstreamCode)
         {
             var (kind, message) = upstreamCode switch
@@ -301,7 +314,7 @@ internal sealed class NyxIdCodeExecutionPort(
                 kind,
                 upstreamCode,
                 message,
-                inspection.DiagnosticId);
+                diagnosticId);
         }
 
         return response.HttpStatus switch
@@ -310,38 +323,39 @@ internal sealed class NyxIdCodeExecutionPort(
                 CodeExecutionFailureKind.AdmissionDenied,
                 "NYXID_PROXY_UNAUTHORIZED",
                 "The NyxID proxy rejected the code execution credential.",
-                inspection.DiagnosticId),
+                diagnosticId),
             403 => Failed(
                 CodeExecutionFailureKind.AdmissionDenied,
                 "NYXID_PROXY_FORBIDDEN",
                 "The NyxID proxy denied code execution.",
-                inspection.DiagnosticId),
+                diagnosticId),
             404 => Failed(
                 CodeExecutionFailureKind.TargetNotConfigured,
                 "NYXID_PROXY_HTTP_404",
                 "The code execution target is unavailable.",
-                inspection.DiagnosticId),
+                diagnosticId),
             408 or 504 => Failed(
                 CodeExecutionFailureKind.TimedOut,
                 "code_execution_timed_out",
                 "Code execution timed out.",
-                inspection.DiagnosticId),
+                diagnosticId),
             > 0 => Failed(
                 CodeExecutionFailureKind.TransportUnavailable,
                 $"NYXID_PROXY_HTTP_{response.HttpStatus}",
                 "The code execution proxy request failed.",
-                inspection.DiagnosticId),
+                diagnosticId),
             _ => Failed(
                 CodeExecutionFailureKind.TransportUnavailable,
                 "code_execution_transport_unavailable",
                 "The code execution transport is unavailable.",
-                inspection.DiagnosticId),
+                diagnosticId),
         };
     }
 
-    private static CodeExecutionOutcome ParseResponse(
+    private CodeExecutionOutcome ParseResponse(
         string response,
-        CodeExecutionRouteIdentity route)
+        CodeExecutionRouteIdentity route,
+        string localDiagnosticId)
     {
         try
         {
@@ -357,30 +371,38 @@ internal sealed class NyxIdCodeExecutionPort(
                 !output.TryGetProperty("exit_code", out var exitCodeElement) ||
                 !exitCodeElement.TryGetInt32(out var exitCode))
             {
-                return InvalidResponse();
+                return InvalidResponse(response, localDiagnosticId);
             }
 
             var elapsed = output.TryGetProperty("execution_time_ms", out var elapsedElement) &&
                           elapsedElement.TryGetInt64(out var elapsedValue)
                 ? elapsedValue
                 : (long?)null;
-            var diagnosticId = ChronoProxyFailureInspector.SanitizeDiagnosticId(
+            var succeeded = success.GetBoolean();
+            JsonElement error = default;
+            if (succeeded)
+            {
+                if (exitCode != 0 || root.TryGetProperty("error", out _))
+                    return InvalidResponse(response, localDiagnosticId);
+            }
+            else if (exitCode == 0 ||
+                     !root.TryGetProperty("error", out error) ||
+                     error.ValueKind != JsonValueKind.Object)
+            {
+                return InvalidResponse(response, localDiagnosticId);
+            }
+
+            var upstreamDiagnosticId = ChronoProxyFailureInspector.SanitizeDiagnosticId(
                 ReadString(root, "diagnostic_id"));
+            var diagnosticId = upstreamDiagnosticId ?? localDiagnosticId;
+            if (upstreamDiagnosticId is null)
+            {
+                LogResponseDiagnosticFallback(response, localDiagnosticId);
+            }
             var result = new CodeExecutionResult(stdout, stderr, exitCode, diagnosticId, elapsed);
 
-            if (success.GetBoolean())
-            {
-                return exitCode == 0 && !root.TryGetProperty("error", out _)
-                    ? CodeExecutionOutcome.Succeeded(result, route)
-                    : InvalidResponse();
-            }
-
-            if (exitCode == 0 ||
-                !root.TryGetProperty("error", out var error) ||
-                error.ValueKind != JsonValueKind.Object)
-            {
-                return InvalidResponse();
-            }
+            if (succeeded)
+                return CodeExecutionOutcome.Succeeded(result, route);
 
             var upstreamCode = ReadString(error, "code");
             var code = upstreamCode is not null && AllowedCompletedFailureCodes.Contains(upstreamCode)
@@ -403,15 +425,49 @@ internal sealed class NyxIdCodeExecutionPort(
         }
         catch (JsonException)
         {
-            return InvalidResponse();
+            return InvalidResponse(response, localDiagnosticId);
         }
     }
 
-    private static CodeExecutionOutcome InvalidResponse() =>
-        Failed(
+    private CodeExecutionOutcome InvalidResponse(string response, string localDiagnosticId)
+    {
+        LogLocalProxyFailure(
+            "response_invalid",
+            localDiagnosticId,
+            status: 200,
+            bodyShape: ChronoProxyFailureInspector.ClassifyBodyShape(response),
+            bodyBytes: BodyBytes(response));
+        return Failed(
             CodeExecutionFailureKind.MalformedOutput,
             "code_execution_response_invalid",
-            "Code execution returned an invalid response.");
+            "Code execution returned an invalid response.",
+            localDiagnosticId);
+    }
+
+    private void LogResponseDiagnosticFallback(string response, string localDiagnosticId) =>
+        LogLocalProxyFailure(
+            "diagnostic_missing_or_invalid",
+            localDiagnosticId,
+            status: 200,
+            bodyShape: ChronoProxyFailureInspector.ClassifyBodyShape(response),
+            bodyBytes: BodyBytes(response));
+
+    private void LogLocalProxyFailure(
+        string failureKind,
+        string diagnosticId,
+        int status = 0,
+        string bodyShape = "empty",
+        int bodyBytes = 0) =>
+        _logger.LogWarning(
+            "Code execution proxy failure. status={Status} bodyBytes={BodyBytes} bodyShape={BodyShape} upstreamCodeResolved=false diagnosticId={DiagnosticId} diagnosticSource=aevatar failureKind={FailureKind}",
+            status,
+            bodyBytes,
+            bodyShape,
+            diagnosticId,
+            failureKind);
+
+    private static int BodyBytes(string? response) =>
+        string.IsNullOrEmpty(response) ? 0 : Encoding.UTF8.GetByteCount(response);
 
     private static string CreateLocalDiagnosticId() => $"aevatar-{Guid.NewGuid():N}";
 

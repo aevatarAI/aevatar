@@ -48,8 +48,8 @@ public sealed class ToolAuditRecordFactory
         var scopeId = ResolveScopeId(executionContext);
         var correlation = BuildCorrelation(executionContext, receipt, toolCallId);
         var lifecyclePhase = MapLifecyclePhase(executionPhase, receipt.Status);
-        var terminalOutcome = MapTerminalOutcome(lifecyclePhase, receipt, outcome);
-        var errorCode = ResolveFailureCode(receipt.ErrorCode, receipt.Status);
+        var terminalOutcome = MapTerminalOutcome(lifecyclePhase, receipt, outcome, tool.Name);
+        var errorCode = ResolveFailureCode(receipt.ErrorCode, receipt.Status, tool.Name);
         var targetKind = Normalize(receipt.SubjectKind) ?? "tool";
         var targetId = Normalize(receipt.SubjectId) ?? toolCallId;
         var record = new AuditRecord
@@ -69,7 +69,7 @@ public sealed class ToolAuditRecordFactory
             OperationKind = AuditOperationKind.Tool,
             OperationName = toolName,
             SensitivityLevel = AuditSensitivityLevel.Internal,
-            Outcome = MapOutcome(outcome, receipt),
+            Outcome = MapOutcome(outcome, receipt, tool.Name),
             LifecyclePhase = lifecyclePhase,
             TerminalOutcome = terminalOutcome,
             CapturePlane = AuditCapturePlane.ToolExecution,
@@ -167,8 +167,11 @@ public sealed class ToolAuditRecordFactory
         };
     }
 
-    private static AuditOutcome MapOutcome(AuditOutcome outcome, AgentToolReceipt receipt) =>
-        IsCancelledFailureCode(ResolveFailureCode(receipt.ErrorCode, receipt.Status))
+    private static AuditOutcome MapOutcome(
+        AuditOutcome outcome,
+        AgentToolReceipt receipt,
+        string toolName) =>
+        IsCancelledFailureCode(ResolveFailureCode(receipt.ErrorCode, receipt.Status, toolName))
             ? AuditOutcome.Cancelled
             : receipt.Status == AgentToolReceiptStatus.Unspecified
                 ? AuditOutcome.Accepted
@@ -195,12 +198,13 @@ public sealed class ToolAuditRecordFactory
     private static AuditTerminalOutcome MapTerminalOutcome(
         AuditLifecyclePhase lifecyclePhase,
         AgentToolReceipt receipt,
-        AuditOutcome outcome)
+        AuditOutcome outcome,
+        string toolName)
     {
         if (lifecyclePhase != AuditLifecyclePhase.Terminal)
             return AuditTerminalOutcome.Unspecified;
 
-        var failureCode = ResolveFailureCode(receipt.ErrorCode, receipt.Status);
+        var failureCode = ResolveFailureCode(receipt.ErrorCode, receipt.Status, toolName);
         if (IsTimeoutFailureCode(failureCode))
             return AuditTerminalOutcome.TimedOut;
         if (IsCancelledFailureCode(failureCode))
@@ -224,9 +228,12 @@ public sealed class ToolAuditRecordFactory
     private static bool IsCancelledFailureCode(string? value) =>
         value == "codex_execution_cancelled" || ToolExecutionAuditErrorCode.IsCancelled(value);
 
-    private static string ResolveFailureCode(string? value, AgentToolReceiptStatus status)
+    private static string ResolveFailureCode(
+        string? value,
+        AgentToolReceiptStatus status,
+        string toolName)
     {
-        var ownedExecutionCode = ToolExecutionAuditErrorCode.Resolve(value);
+        var ownedExecutionCode = ToolExecutionAuditErrorCode.ResolveForTool(toolName, value);
         if (ownedExecutionCode is not null)
             return ownedExecutionCode;
 

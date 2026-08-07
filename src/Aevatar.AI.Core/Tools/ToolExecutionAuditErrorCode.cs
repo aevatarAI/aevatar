@@ -2,6 +2,8 @@ namespace Aevatar.AI.Core.Tools;
 
 internal static class ToolExecutionAuditErrorCode
 {
+    private const string CodeExecuteToolName = "code_execute";
+
     private static readonly HashSet<string> TimeoutCodes = new(StringComparer.Ordinal)
     {
         "code_execution_timed_out",
@@ -32,13 +34,11 @@ internal static class ToolExecutionAuditErrorCode
         "code_execution_transport_unavailable",
         "DEPENDENCY_INSTALL_FAILED",
         "EXECUTION_FAILED",
-        "FORBIDDEN",
         "INTERNAL_ERROR",
         "INVALID_REQUEST",
         "SANDBOX_CREATION_FAILED",
         "SANDBOX_TIMEOUT",
         "SANDBOX_UNREACHABLE",
-        "UNAUTHENTICATED",
         "managed_credential_expired",
         "managed_credential_inactive",
         "managed_credential_invalid",
@@ -106,8 +106,21 @@ internal static class ToolExecutionAuditErrorCode
         "NYXID_PROXY_UNAUTHORIZED",
     };
 
+    private static readonly HashSet<string> CodeExecuteOnlyCodes = new(StringComparer.Ordinal)
+    {
+        "FORBIDDEN",
+        "UNAUTHENTICATED",
+    };
+
     public static string? Resolve(string? value) =>
         value is not null && AllowedCodes.Contains(value) ? value : null;
+
+    public static string? ResolveForTool(string? toolName, string? value) =>
+        string.Equals(toolName, CodeExecuteToolName, StringComparison.Ordinal) &&
+        value is not null &&
+        CodeExecuteOnlyCodes.Contains(value)
+            ? value
+            : Resolve(value);
 
     public static bool IsTimeout(string? value) =>
         value is not null && TimeoutCodes.Contains(value);

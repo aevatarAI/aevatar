@@ -4,6 +4,7 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.ToolProviders.NyxId;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.Infrastructure.ChronoSandbox.Tests;
@@ -327,10 +328,13 @@ public sealed class NyxIdCodeExecutionPortTests
         var outcome = await port.ExecuteAsync(Request(CodeServiceId));
 
         outcome.Result.Should().NotBeNull();
-        outcome.Failure.Should().Be(new CodeExecutionFailure(
-            CodeExecutionFailureKind.ExecutionFailed,
-            "code_execution_failed",
-            "Code execution failed."));
+        outcome.Failure.Should().BeEquivalentTo(new
+        {
+            Kind = CodeExecutionFailureKind.ExecutionFailed,
+            Code = "code_execution_failed",
+            Message = "Code execution failed.",
+        });
+        outcome.Failure!.DiagnosticId.Should().MatchRegex("^aevatar-[0-9a-f]{32}$");
     }
 
     [Theory]
@@ -340,7 +344,8 @@ public sealed class NyxIdCodeExecutionPortTests
     [InlineData("{\"success\":true,\"output\":{\"stdout\":\"ok\",\"stderr\":\"\",\"exit_code\":1}}")]
     public async Task ExecuteAsync_WhenProxyOutputIsMalformed_ReturnsTypedFailure(string responseBody)
     {
-        var port = CreatePort(HandlerWithProxyResponse(JsonResponse(responseBody)));
+        var logger = new RecordingLogger<NyxIdCodeExecutionPort>();
+        var port = CreatePort(HandlerWithProxyResponse(JsonResponse(responseBody)), logger);
 
         var outcome = await port.ExecuteAsync(Request(CodeServiceId));
 
@@ -350,6 +355,33 @@ public sealed class NyxIdCodeExecutionPortTests
             Kind = CodeExecutionFailureKind.MalformedOutput,
             Code = "code_execution_response_invalid",
         });
+        outcome.Failure!.DiagnosticId.Should().MatchRegex("^aevatar-[0-9a-f]{32}$");
+        AssertSafeCorrelatedLog(logger, outcome.Failure.DiagnosticId);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenSuccessfulDiagnosticIdIsUnsafe_UsesCorrelatedLocalFallback()
+    {
+        var logger = new RecordingLogger<NyxIdCodeExecutionPort>();
+        var port = CreatePort(HandlerWithProxyResponse(JsonResponse(
+            """
+            {
+              "success": true,
+              "output": {
+                "stdout": "ok",
+                "stderr": "",
+                "exit_code": 0
+              },
+              "diagnostic_id": "unsafe/diagnostic"
+            }
+            """)), logger);
+
+        var outcome = await port.ExecuteAsync(Request(CodeServiceId));
+
+        outcome.Failure.Should().BeNull();
+        outcome.Result!.DiagnosticId.Should().MatchRegex("^aevatar-[0-9a-f]{32}$");
+        AssertSafeCorrelatedLog(logger, outcome.Result.DiagnosticId);
+        logger.Messages.Should().NotContain(message => message.Contains("unsafe/diagnostic"));
     }
 
     [Theory]
@@ -363,9 +395,10 @@ public sealed class NyxIdCodeExecutionPortTests
         CodeExecutionFailureKind expectedKind,
         string expectedCode)
     {
+        var logger = new RecordingLogger<NyxIdCodeExecutionPort>();
         var port = CreatePort(HandlerWithProxyResponse(JsonResponse(
             """{"detail":"untrusted"}""",
-            statusCode)));
+            statusCode)), logger);
 
         var outcome = await port.ExecuteAsync(Request(CodeServiceId));
 
@@ -375,6 +408,8 @@ public sealed class NyxIdCodeExecutionPortTests
             Kind = expectedKind,
             Code = expectedCode,
         });
+        outcome.Failure!.DiagnosticId.Should().MatchRegex("^aevatar-[0-9a-f]{32}$");
+        AssertSafeCorrelatedLog(logger, outcome.Failure.DiagnosticId);
     }
 
     [Fact]
@@ -507,7 +542,8 @@ public sealed class NyxIdCodeExecutionPortTests
                 true,
                 "proxy:*"))),
             static _ => throw new OperationCanceledException("transport timeout"));
-        var port = CreatePort(handler);
+        var logger = new RecordingLogger<NyxIdCodeExecutionPort>();
+        var port = CreatePort(handler, logger);
 
         var outcome = await port.ExecuteAsync(Request(CodeServiceId));
 
@@ -518,6 +554,33 @@ public sealed class NyxIdCodeExecutionPortTests
             Code = "code_execution_timed_out",
         });
         outcome.Failure!.DiagnosticId.Should().MatchRegex("^aevatar-[0-9a-f]{32}$");
+        AssertSafeCorrelatedLog(logger, outcome.Failure.DiagnosticId);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenProxyTransportFails_ReturnsCorrelatedTypedFailure()
+    {
+        var handler = new SequenceHandler(
+            JsonResponse(Inventory(Service(
+                CodeServiceId,
+                "chrono-sandbox",
+                true,
+                true,
+                "proxy:*"))),
+            static _ => throw new HttpRequestException("transport-secret"));
+        var logger = new RecordingLogger<NyxIdCodeExecutionPort>();
+        var port = CreatePort(handler, logger);
+
+        var outcome = await port.ExecuteAsync(Request(CodeServiceId));
+
+        outcome.Failure.Should().BeEquivalentTo(new
+        {
+            Kind = CodeExecutionFailureKind.TransportUnavailable,
+            Code = "code_execution_transport_unavailable",
+        });
+        outcome.Failure!.DiagnosticId.Should().MatchRegex("^aevatar-[0-9a-f]{32}$");
+        AssertSafeCorrelatedLog(logger, outcome.Failure.DiagnosticId);
+        logger.Messages.Should().NotContain(message => message.Contains("transport-secret"));
     }
 
     [Fact]
@@ -528,7 +591,8 @@ public sealed class NyxIdCodeExecutionPortTests
         {
             Content = oversizedContent,
         }));
-        var port = CreatePort(handler);
+        var logger = new RecordingLogger<NyxIdCodeExecutionPort>();
+        var port = CreatePort(handler, logger);
 
         var outcome = await port.ExecuteAsync(Request(CodeServiceId));
 
@@ -539,17 +603,34 @@ public sealed class NyxIdCodeExecutionPortTests
             Code = "code_execution_response_too_large",
         });
         outcome.Failure!.DiagnosticId.Should().MatchRegex("^aevatar-[0-9a-f]{32}$");
+        AssertSafeCorrelatedLog(logger, outcome.Failure.DiagnosticId);
         oversizedContent.ReadAttempted.Should().BeFalse();
     }
 
-    private static NyxIdCodeExecutionPort CreatePort(HttpMessageHandler handler)
+    private static NyxIdCodeExecutionPort CreatePort(
+        HttpMessageHandler handler,
+        ILogger<NyxIdCodeExecutionPort>? logger = null)
     {
         var client = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler));
         return new NyxIdCodeExecutionPort(
             new TestNyxIdApiClientFactory(client),
-            NullLogger<NyxIdCodeExecutionPort>.Instance);
+            logger ?? NullLogger<NyxIdCodeExecutionPort>.Instance);
+    }
+
+    private static void AssertSafeCorrelatedLog(
+        RecordingLogger<NyxIdCodeExecutionPort> logger,
+        string? diagnosticId)
+    {
+        var message = logger.Messages.Should().ContainSingle().Which;
+        message.Should().Contain(diagnosticId);
+        message.Should().NotContain(BearerToken);
+        message.Should().NotContain(CodeServiceId);
+        message.Should().NotContain("print(42)");
+        message.Should().NotContain("untrusted");
+        message.Should().Contain("bodyShape=");
+        message.Should().Contain("diagnosticSource=");
     }
 
     private static CodeExecutionRequest Request(string? userServiceId) =>
@@ -681,5 +762,22 @@ public sealed class NyxIdCodeExecutionPortTests
             length = Headers.ContentLength!.Value;
             return true;
         }
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Messages.Add(formatter(state, exception));
     }
 }

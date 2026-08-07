@@ -240,7 +240,6 @@ public sealed class ToolAuditRecordFactoryTests
     }
 
     [Theory]
-    [InlineData("FORBIDDEN")]
     [InlineData("NYXID_PROXY_HTTP_502")]
     [InlineData("NYXID_PROXY_UNAUTHORIZED")]
     [InlineData("NYXID_PROXY_FORBIDDEN")]
@@ -251,7 +250,6 @@ public sealed class ToolAuditRecordFactoryTests
     [InlineData("EXECUTION_FAILED")]
     [InlineData("SANDBOX_CREATION_FAILED")]
     [InlineData("SANDBOX_TIMEOUT")]
-    [InlineData("UNAUTHENTICATED")]
     [InlineData("managed_execution_nonzero_exit")]
     [InlineData("managed_response_invalid")]
     [InlineData("managed_upstream_codex_turn_failed")]
@@ -272,6 +270,32 @@ public sealed class ToolAuditRecordFactoryTests
                 ? AuditTerminalOutcome.TimedOut
                 : AuditTerminalOutcome.Failed);
         record.ToString().Should().NotContain("provider-secret-must-not-appear");
+    }
+
+    [Theory]
+    [InlineData("FORBIDDEN")]
+    [InlineData("UNAUTHENTICATED")]
+    public void Create_CodeExecuteAuthorizationFailure_ShouldPreserveExactCode(string failureCode)
+    {
+        var record = CreateProviderFailureRecord(failureCode, "code_execute");
+
+        record.ErrorCode.Should().Be(failureCode);
+        record.Failure.Code.Should().Be(failureCode);
+    }
+
+    [Theory]
+    [InlineData("FORBIDDEN")]
+    [InlineData("UNAUTHENTICATED")]
+    public void Create_UnrelatedProviderAuthorizationCode_ShouldRemainUntrusted(string failureCode)
+    {
+        var record = CreateProviderFailureRecord(
+            failureCode,
+            actualToolName: "provider_tool",
+            reportedToolName: "code_execute");
+
+        record.ErrorCode.Should().Be("tool_error");
+        record.Failure.Code.Should().Be("tool_error");
+        record.ToString().Should().NotContain(failureCode);
     }
 
     [Theory]
@@ -345,12 +369,16 @@ public sealed class ToolAuditRecordFactoryTests
     private static ToolAuditRecordFactory CreateFactory() =>
         new(new StableIdentityHasher(), new FixedTimeProvider(Now));
 
-    private static AuditRecord CreateProviderFailureRecord(string failureCode)
+    private static AuditRecord CreateProviderFailureRecord(
+        string failureCode,
+        string actualToolName = "provider_tool",
+        string? reportedToolName = null)
     {
+        var toolName = reportedToolName ?? actualToolName;
         var receipt = new AgentToolReceipt
         {
             CallId = "call-provider",
-            ToolName = "provider_tool",
+            ToolName = toolName,
             Status = AgentToolReceiptStatus.Error,
             ErrorCode = failureCode,
             ErrorMessage = "provider-secret-must-not-appear",
@@ -359,8 +387,8 @@ public sealed class ToolAuditRecordFactoryTests
         return CreateFactory().Create(
             "audit-provider-failure",
             AuditToolExecutionPhase.Terminal,
-            new TestTool("provider_tool"),
-            "provider_tool",
+            new TestTool(actualToolName),
+            toolName,
             "call-provider",
             "arguments-hash",
             new AgentToolCallSafety(false, true, false),

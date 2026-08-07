@@ -6,13 +6,32 @@ namespace Aevatar.AI.Tests;
 public sealed class ToolExecutionAuditErrorCodeTests
 {
     [Theory]
-    [InlineData("FORBIDDEN")]
     [InlineData("NYXID_PROXY_HTTP_429")]
     [InlineData("NYXID_PROXY_HTTP_502")]
-    [InlineData("UNAUTHENTICATED")]
     public void Resolve_CodeExecutionProxyStableCode_ShouldPreserveExactCode(string failureCode)
     {
         ToolExecutionAuditErrorCode.Resolve(failureCode).Should().Be(failureCode);
+    }
+
+    [Theory]
+    [InlineData("FORBIDDEN")]
+    [InlineData("UNAUTHENTICATED")]
+    public void ResolveForTool_CodeExecuteAuthorizationCode_ShouldPreserveExactCode(
+        string failureCode)
+    {
+        ToolExecutionAuditErrorCode.ResolveForTool("code_execute", failureCode)
+            .Should().Be(failureCode);
+    }
+
+    [Theory]
+    [InlineData("FORBIDDEN")]
+    [InlineData("UNAUTHENTICATED")]
+    public void ResolveForTool_UnrelatedProviderAuthorizationCode_ShouldRemainUntrusted(
+        string failureCode)
+    {
+        ToolExecutionAuditErrorCode.ResolveForTool("provider_tool", failureCode)
+            .Should().BeNull();
+        ToolExecutionAuditErrorCode.Resolve(failureCode).Should().BeNull();
     }
 
     [Theory]
